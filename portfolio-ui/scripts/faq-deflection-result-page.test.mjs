@@ -8,6 +8,10 @@ import handler, {
   checkoutUrls,
   resultPath,
   stripeCheckoutKeyConfig,
+  stripeCheckoutIdempotencyKey,
+  stripeCheckoutInlineTerms,
+  stripeCheckoutPriceId,
+  validateInlineCheckoutTerms,
   validateConfiguredPrice,
   validatePayload,
 } from "../api/content-ops/deflection/checkout.js";
@@ -413,6 +417,85 @@ await test("checkout body carries the Stripe metadata contract and one-time pric
   assert.equal(body.get("line_items[0][price_data][unit_amount]"), "150000");
 });
 
+await test("checkout idempotency key is stable per configured report", () => {
+  const first = stripeCheckoutIdempotencyKey({
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    requestId: "content-ops-abc123",
+  });
+  const duplicate = stripeCheckoutIdempotencyKey({
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    requestId: "content-ops-abc123",
+  });
+  const otherReport = stripeCheckoutIdempotencyKey({
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    requestId: "content-ops-def456",
+  });
+
+  assert.equal(first, duplicate);
+  assert.notEqual(first, otherReport);
+  assert.equal(first, "deflection-checkout:2b2b950d-f64b-4852-bc30-f92a34cdf169:content-ops-abc123");
+});
+
+await test("checkout price id uses Atlas authorization before env fallback", () => {
+  const previousPriceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+  process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = "price_env_report";
+  try {
+    assert.equal(
+      stripeCheckoutPriceId({ price_id: "price_atlas_report" }),
+      "price_atlas_report",
+    );
+    assert.equal(stripeCheckoutPriceId({ amount_cents: 150000 }), "price_env_report");
+  } finally {
+    if (previousPriceId === undefined) {
+      delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+    } else {
+      process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = previousPriceId;
+    }
+  }
+});
+
+await test("inline checkout terms use Atlas authorization before env fallback", () => {
+  const previousAmount = process.env.DEFLECTION_REPORT_AMOUNT_CENTS;
+  const previousCurrency = process.env.DEFLECTION_REPORT_CURRENCY;
+  process.env.DEFLECTION_REPORT_AMOUNT_CENTS = "200000";
+  process.env.DEFLECTION_REPORT_CURRENCY = "cad";
+  try {
+    assert.deepEqual(
+      stripeCheckoutInlineTerms({ amount_cents: 150000, currency: "USD" }),
+      { amount: 150000, currency: "usd" },
+    );
+    assert.deepEqual(
+      stripeCheckoutInlineTerms({ amount_cents: 149999, currency: "usd" }),
+      { amount: 149999, currency: "usd" },
+    );
+    assert.deepEqual(
+      validateInlineCheckoutTerms({ amount: 149999, currency: "usd" }),
+      {
+        ok: false,
+        message: "configured inline Checkout amount must be usd and at least 150000 cents",
+      },
+    );
+    assert.deepEqual(
+      validateInlineCheckoutTerms({ amount: 150000, currency: "eur" }),
+      {
+        ok: false,
+        message: "configured inline Checkout amount must be usd and at least 150000 cents",
+      },
+    );
+  } finally {
+    if (previousAmount === undefined) {
+      delete process.env.DEFLECTION_REPORT_AMOUNT_CENTS;
+    } else {
+      process.env.DEFLECTION_REPORT_AMOUNT_CENTS = previousAmount;
+    }
+    if (previousCurrency === undefined) {
+      delete process.env.DEFLECTION_REPORT_CURRENCY;
+    } else {
+      process.env.DEFLECTION_REPORT_CURRENCY = previousCurrency;
+    }
+  }
+});
+
 await test("configured Stripe Price must validate against webhook floor before Checkout", async () => {
   const previousFetch = globalThis.fetch;
   const previousPriceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
@@ -453,13 +536,34 @@ await test("restricted Checkout key skips configured Price read preflight", asyn
   const previousRak = process.env.ATLAS_SAAS_STRIPE_RAK;
   const previousPriceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
   const previousAccountId = process.env.ATLAS_ACCOUNT_ID;
+  const previousAtlasBaseUrl = process.env.ATLAS_API_BASE_URL;
+  const previousAtlasToken = process.env.ATLAS_B2B_JWT;
   const calls = [];
   process.env.STRIPE_SECRET_KEY = "sk_live_full_secret";
   process.env.ATLAS_SAAS_STRIPE_RAK = "rk_test_checkout_only";
   process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = "price_deflection_report";
   process.env.ATLAS_ACCOUNT_ID = "2b2b950d-f64b-4852-bc30-f92a34cdf169";
+  process.env.ATLAS_API_BASE_URL = "https://atlas.example.com";
+  process.env.ATLAS_B2B_JWT = "secret-service-token";
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
+    if (url === "https://atlas.example.com/api/v1/content-ops/deflection-reports/content-ops-abc123/checkout-authorization") {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            request_id: "content-ops-abc123",
+            status: "authorized",
+            checkout: {
+              amount_cents: 150000,
+              currency: "usd",
+              price_id: "price_deflection_report",
+            },
+          };
+        },
+      };
+    }
     return {
       ok: true,
       status: 200,
@@ -505,13 +609,232 @@ await test("restricted Checkout key skips configured Price read preflight", asyn
     } else {
       process.env.ATLAS_ACCOUNT_ID = previousAccountId;
     }
+    if (previousAtlasBaseUrl === undefined) {
+      delete process.env.ATLAS_API_BASE_URL;
+    } else {
+      process.env.ATLAS_API_BASE_URL = previousAtlasBaseUrl;
+    }
+    if (previousAtlasToken === undefined) {
+      delete process.env.ATLAS_B2B_JWT;
+    } else {
+      process.env.ATLAS_B2B_JWT = previousAtlasToken;
+    }
   }
 
   assert.equal(res.statusCode, 200);
   assert.deepEqual(JSON.parse(res.body), { url: "https://checkout.stripe.com/c/session" });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://api.stripe.com/v1/checkout/sessions");
-  assert.equal(calls[0].options.body.get("line_items[0][price]"), "price_deflection_report");
+  assert.equal(calls.length, 2);
+  assert.equal(
+    calls[0].url,
+    "https://atlas.example.com/api/v1/content-ops/deflection-reports/content-ops-abc123/checkout-authorization",
+  );
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers.Authorization, "Bearer secret-service-token");
+  assert.equal(calls[1].url, "https://api.stripe.com/v1/checkout/sessions");
+  assert.equal(calls[1].options.body.get("line_items[0][price]"), "price_deflection_report");
+});
+
+await test("fallback Checkout validates the Atlas-authorized Stripe Price before creating session", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousSecret = process.env.STRIPE_SECRET_KEY;
+  const previousRak = process.env.ATLAS_SAAS_STRIPE_RAK;
+  const previousPriceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+  const previousAccountId = process.env.ATLAS_ACCOUNT_ID;
+  const previousAtlasBaseUrl = process.env.ATLAS_API_BASE_URL;
+  const previousAtlasToken = process.env.ATLAS_B2B_JWT;
+  const calls = [];
+  process.env.STRIPE_SECRET_KEY = "sk_test_123";
+  delete process.env.ATLAS_SAAS_STRIPE_RAK;
+  process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = "price_env_report";
+  process.env.ATLAS_ACCOUNT_ID = "2b2b950d-f64b-4852-bc30-f92a34cdf169";
+  process.env.ATLAS_API_BASE_URL = "https://atlas.example.com";
+  process.env.ATLAS_B2B_JWT = "secret-service-token";
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === "https://atlas.example.com/api/v1/content-ops/deflection-reports/content-ops-abc123/checkout-authorization") {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            request_id: "content-ops-abc123",
+            status: "authorized",
+            checkout: {
+              amount_cents: 150000,
+              currency: "usd",
+              price_id: "price_atlas_low",
+            },
+          };
+        },
+      };
+    }
+    if (url === "https://api.stripe.com/v1/prices/price_atlas_low") {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { active: true, currency: "usd", unit_amount: 149999 };
+        },
+      };
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const req = {
+    method: "POST",
+    headers: {
+      host: "portfolio.example.com",
+      "x-forwarded-proto": "https",
+    },
+    body: {
+      request_id: "content-ops-abc123",
+    },
+  };
+  const res = mockResponse();
+
+  try {
+    await handler(req, res);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousSecret === undefined) {
+      delete process.env.STRIPE_SECRET_KEY;
+    } else {
+      process.env.STRIPE_SECRET_KEY = previousSecret;
+    }
+    if (previousRak === undefined) {
+      delete process.env.ATLAS_SAAS_STRIPE_RAK;
+    } else {
+      process.env.ATLAS_SAAS_STRIPE_RAK = previousRak;
+    }
+    if (previousPriceId === undefined) {
+      delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+    } else {
+      process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = previousPriceId;
+    }
+    if (previousAccountId === undefined) {
+      delete process.env.ATLAS_ACCOUNT_ID;
+    } else {
+      process.env.ATLAS_ACCOUNT_ID = previousAccountId;
+    }
+    if (previousAtlasBaseUrl === undefined) {
+      delete process.env.ATLAS_API_BASE_URL;
+    } else {
+      process.env.ATLAS_API_BASE_URL = previousAtlasBaseUrl;
+    }
+    if (previousAtlasToken === undefined) {
+      delete process.env.ATLAS_B2B_JWT;
+    } else {
+      process.env.ATLAS_B2B_JWT = previousAtlasToken;
+    }
+  }
+
+  assert.equal(res.statusCode, 503);
+  assert.deepEqual(JSON.parse(res.body), {
+    error: "checkout_price_not_configured",
+    details: "configured Stripe Price must be active, usd, and at least 150000 cents",
+  });
+  assert.deepEqual(calls.map((call) => call.url), [
+    "https://atlas.example.com/api/v1/content-ops/deflection-reports/content-ops-abc123/checkout-authorization",
+    "https://api.stripe.com/v1/prices/price_atlas_low",
+  ]);
+});
+
+await test("handler rejects Atlas inline checkout terms below floor or outside usd", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousSecret = process.env.STRIPE_SECRET_KEY;
+  const previousRak = process.env.ATLAS_SAAS_STRIPE_RAK;
+  const previousPriceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+  const previousAccountId = process.env.ATLAS_ACCOUNT_ID;
+  const previousAtlasBaseUrl = process.env.ATLAS_API_BASE_URL;
+  const previousAtlasToken = process.env.ATLAS_B2B_JWT;
+  const calls = [];
+  process.env.STRIPE_SECRET_KEY = "sk_test_123";
+  process.env.ATLAS_SAAS_STRIPE_RAK = "rk_test_checkout_only";
+  delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+  process.env.ATLAS_ACCOUNT_ID = "2b2b950d-f64b-4852-bc30-f92a34cdf169";
+  process.env.ATLAS_API_BASE_URL = "https://atlas.example.com";
+  process.env.ATLAS_B2B_JWT = "secret-service-token";
+
+  try {
+    for (const checkout of [
+      { amount_cents: 149999, currency: "usd" },
+      { amount_cents: 150000, currency: "eur" },
+    ]) {
+      calls.length = 0;
+      globalThis.fetch = async (url, options) => {
+        calls.push({ url, options });
+        if (url === "https://atlas.example.com/api/v1/content-ops/deflection-reports/content-ops-abc123/checkout-authorization") {
+          return {
+            ok: true,
+            status: 200,
+            async json() {
+              return {
+                request_id: "content-ops-abc123",
+                status: "authorized",
+                checkout,
+              };
+            },
+          };
+        }
+        throw new Error(`Stripe should not be called for inline terms: ${url}`);
+      };
+
+      const req = {
+        method: "POST",
+        headers: {
+          host: "portfolio.example.com",
+          "x-forwarded-proto": "https",
+        },
+        body: {
+          request_id: "content-ops-abc123",
+        },
+      };
+      const res = mockResponse();
+
+      await handler(req, res);
+
+      assert.equal(res.statusCode, 503);
+      assert.deepEqual(JSON.parse(res.body), {
+        error: "checkout_price_not_configured",
+        details: "configured inline Checkout amount must be usd and at least 150000 cents",
+      });
+      assert.deepEqual(calls.map((call) => call.url), [
+        "https://atlas.example.com/api/v1/content-ops/deflection-reports/content-ops-abc123/checkout-authorization",
+      ]);
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousSecret === undefined) {
+      delete process.env.STRIPE_SECRET_KEY;
+    } else {
+      process.env.STRIPE_SECRET_KEY = previousSecret;
+    }
+    if (previousRak === undefined) {
+      delete process.env.ATLAS_SAAS_STRIPE_RAK;
+    } else {
+      process.env.ATLAS_SAAS_STRIPE_RAK = previousRak;
+    }
+    if (previousPriceId === undefined) {
+      delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+    } else {
+      process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = previousPriceId;
+    }
+    if (previousAccountId === undefined) {
+      delete process.env.ATLAS_ACCOUNT_ID;
+    } else {
+      process.env.ATLAS_ACCOUNT_ID = previousAccountId;
+    }
+    if (previousAtlasBaseUrl === undefined) {
+      delete process.env.ATLAS_API_BASE_URL;
+    } else {
+      process.env.ATLAS_API_BASE_URL = previousAtlasBaseUrl;
+    }
+    if (previousAtlasToken === undefined) {
+      delete process.env.ATLAS_B2B_JWT;
+    } else {
+      process.env.ATLAS_B2B_JWT = previousAtlasToken;
+    }
+  }
 });
 
 await test("checkout key config prefers restricted key and rejects live secret fallback", () => {
@@ -621,13 +944,34 @@ await test("handler creates Stripe Checkout without calling privileged ATLAS pai
   const previousRak = process.env.ATLAS_SAAS_STRIPE_RAK;
   const previousPriceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
   const previousAccountId = process.env.ATLAS_ACCOUNT_ID;
+  const previousAtlasBaseUrl = process.env.ATLAS_API_BASE_URL;
+  const previousAtlasToken = process.env.ATLAS_B2B_JWT;
   const calls = [];
   process.env.STRIPE_SECRET_KEY = "sk_test_123";
   process.env.ATLAS_SAAS_STRIPE_RAK = "rk_test_checkout_only";
   process.env.ATLAS_ACCOUNT_ID = "2b2b950d-f64b-4852-bc30-f92a34cdf169";
+  process.env.ATLAS_API_BASE_URL = "https://atlas.example.com";
+  process.env.ATLAS_B2B_JWT = "secret-service-token";
   delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
+    if (url === "https://atlas.example.com/api/v1/content-ops/deflection-reports/content-ops-abc123/checkout-authorization") {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            request_id: "content-ops-abc123",
+            status: "authorized",
+            checkout: {
+              amount_cents: 150000,
+              currency: "usd",
+              price_id: "price_deflection_report",
+            },
+          };
+        },
+      };
+    }
     return {
       ok: true,
       status: 200,
@@ -673,18 +1017,124 @@ await test("handler creates Stripe Checkout without calling privileged ATLAS pai
     } else {
       process.env.ATLAS_ACCOUNT_ID = previousAccountId;
     }
+    if (previousAtlasBaseUrl === undefined) {
+      delete process.env.ATLAS_API_BASE_URL;
+    } else {
+      process.env.ATLAS_API_BASE_URL = previousAtlasBaseUrl;
+    }
+    if (previousAtlasToken === undefined) {
+      delete process.env.ATLAS_B2B_JWT;
+    } else {
+      process.env.ATLAS_B2B_JWT = previousAtlasToken;
+    }
   }
 
   assert.equal(res.statusCode, 200);
   assert.deepEqual(JSON.parse(res.body), { url: "https://checkout.stripe.com/c/session" });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://api.stripe.com/v1/checkout/sessions");
+  assert.equal(calls.length, 2);
   assert.equal(
-    calls[0].options.headers.Authorization,
+    calls[0].url,
+    "https://atlas.example.com/api/v1/content-ops/deflection-reports/content-ops-abc123/checkout-authorization",
+  );
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[1].url, "https://api.stripe.com/v1/checkout/sessions");
+  assert.equal(
+    calls[1].options.headers.Authorization,
     `Basic ${Buffer.from("rk_test_checkout_only:").toString("base64")}`,
   );
-  assert.equal(calls[0].options.body.get("metadata[source]"), CHECKOUT_SOURCE);
-  assert.equal(calls[0].options.body.get("metadata[request_id]"), "content-ops-abc123");
+  assert.equal(
+    calls[1].options.headers["Idempotency-Key"],
+    "deflection-checkout:2b2b950d-f64b-4852-bc30-f92a34cdf169:content-ops-abc123",
+  );
+  assert.equal(calls[1].options.body.get("metadata[source]"), CHECKOUT_SOURCE);
+  assert.equal(calls[1].options.body.get("metadata[request_id]"), "content-ops-abc123");
+  assert.equal(calls[1].options.body.get("line_items[0][price]"), "price_deflection_report");
+});
+
+await test("handler refuses unauthorized checkout states before calling Stripe", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousSecret = process.env.STRIPE_SECRET_KEY;
+  const previousRak = process.env.ATLAS_SAAS_STRIPE_RAK;
+  const previousAccountId = process.env.ATLAS_ACCOUNT_ID;
+  const previousAtlasBaseUrl = process.env.ATLAS_API_BASE_URL;
+  const previousAtlasToken = process.env.ATLAS_B2B_JWT;
+  const calls = [];
+  process.env.STRIPE_SECRET_KEY = "sk_test_123";
+  process.env.ATLAS_SAAS_STRIPE_RAK = "rk_test_checkout_only";
+  process.env.ATLAS_ACCOUNT_ID = "2b2b950d-f64b-4852-bc30-f92a34cdf169";
+  process.env.ATLAS_API_BASE_URL = "https://atlas.example.com";
+  process.env.ATLAS_B2B_JWT = "secret-service-token";
+
+  try {
+    for (const denied of [
+      { status: 409, detail: "Deflection report is already paid." },
+      { status: 404, detail: "Deflection report not found." },
+    ]) {
+      calls.length = 0;
+      globalThis.fetch = async (url, options) => {
+        calls.push({ url, options });
+        if (url.includes("checkout-authorization")) {
+          return {
+            ok: false,
+            status: denied.status,
+            async json() {
+              return { detail: denied.detail };
+            },
+          };
+        }
+        throw new Error("Stripe should not be called when authorization fails");
+      };
+
+      const req = {
+        method: "POST",
+        headers: {
+          host: "portfolio.example.com",
+          "x-forwarded-proto": "https",
+        },
+        body: {
+          request_id: "content-ops-abc123",
+        },
+      };
+      const res = mockResponse();
+
+      await handler(req, res);
+
+      assert.equal(res.statusCode, denied.status);
+      assert.deepEqual(JSON.parse(res.body), {
+        error: "checkout_not_authorized",
+        details: denied.detail,
+      });
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].url, /checkout-authorization$/);
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousSecret === undefined) {
+      delete process.env.STRIPE_SECRET_KEY;
+    } else {
+      process.env.STRIPE_SECRET_KEY = previousSecret;
+    }
+    if (previousRak === undefined) {
+      delete process.env.ATLAS_SAAS_STRIPE_RAK;
+    } else {
+      process.env.ATLAS_SAAS_STRIPE_RAK = previousRak;
+    }
+    if (previousAccountId === undefined) {
+      delete process.env.ATLAS_ACCOUNT_ID;
+    } else {
+      process.env.ATLAS_ACCOUNT_ID = previousAccountId;
+    }
+    if (previousAtlasBaseUrl === undefined) {
+      delete process.env.ATLAS_API_BASE_URL;
+    } else {
+      process.env.ATLAS_API_BASE_URL = previousAtlasBaseUrl;
+    }
+    if (previousAtlasToken === undefined) {
+      delete process.env.ATLAS_B2B_JWT;
+    } else {
+      process.env.ATLAS_B2B_JWT = previousAtlasToken;
+    }
+  }
 });
 
 await test("handler rejects live full secret fallback before calling Stripe", async () => {
