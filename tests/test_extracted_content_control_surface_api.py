@@ -3029,8 +3029,11 @@ async def test_deflection_checkout_authorization_fails_when_terms_misconfigured(
     assert exc.value.detail == detail
 
 
-def test_deflection_report_paid_route_uses_trusted_dependency() -> None:
+def test_deflection_report_routes_use_public_and_trusted_dependencies() -> None:
     async def _tenant_user() -> None:
+        return None
+
+    async def _public_deflection_gate() -> None:
         return None
 
     async def _trusted_paid_release() -> None:
@@ -3039,10 +3042,12 @@ def test_deflection_report_paid_route_uses_trusted_dependency() -> None:
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
         dependencies=[Depends(_tenant_user)],
+        deflection_report_public_dependencies=[Depends(_public_deflection_gate)],
         deflection_report_paid_dependencies=[Depends(_trusted_paid_release)],
     )
 
     paid_route = _route(router, "/ops/deflection-reports/{request_id}/paid", "POST")
+    submit_route = _route(router, "/ops/deflection-reports/submit", "POST")
     artifact_route = _route(
         router,
         "/ops/deflection-reports/{request_id}/artifact",
@@ -3061,6 +3066,13 @@ def test_deflection_report_paid_route_uses_trusted_dependency() -> None:
 
     assert "_tenant_user" in _dependency_names(paid_route)
     assert "_trusted_paid_release" in _dependency_names(paid_route)
+    assert "_public_deflection_gate" not in _dependency_names(paid_route)
+    assert "_public_deflection_gate" in _dependency_names(submit_route)
+    assert "_public_deflection_gate" in _dependency_names(artifact_route)
+    assert "_public_deflection_gate" in _dependency_names(
+        checkout_authorization_route
+    )
+    assert "_public_deflection_gate" in _dependency_names(snapshot_route)
     assert "_trusted_paid_release" not in _dependency_names(artifact_route)
     assert "_trusted_paid_release" not in _dependency_names(
         checkout_authorization_route

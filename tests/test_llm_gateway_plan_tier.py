@@ -94,6 +94,15 @@ def test_plan_rate_limits_covers_llm_tiers():
     assert PLAN_RATE_LIMITS["llm_pro"] == "100000/hour"
 
 
+def test_plan_rate_limits_covers_b2b_tiers():
+    from atlas_brain.auth.rate_limit import PLAN_RATE_LIMITS
+
+    assert PLAN_RATE_LIMITS["b2b_trial"] == "100/hour"
+    assert PLAN_RATE_LIMITS["b2b_starter"] == "100/hour"
+    assert PLAN_RATE_LIMITS["b2b_growth"] == "1000/hour"
+    assert PLAN_RATE_LIMITS["b2b_pro"] == "10000/hour"
+
+
 def test_plan_rate_limits_lookup_via_dynamic_limit():
     """``_dynamic_limit`` is the slowapi callable that maps the
     composite rate-limit key back to a rate string. It must resolve
@@ -102,6 +111,7 @@ def test_plan_rate_limits_lookup_via_dynamic_limit():
 
     assert _dynamic_limit("llm_starter|account-uuid") == "1000/hour"
     assert _dynamic_limit("llm_pro|account-uuid") == "100000/hour"
+    assert _dynamic_limit("b2b_growth|account-uuid") == "1000/hour"
 
 
 def test_plan_rate_limits_unknown_plan_falls_back():

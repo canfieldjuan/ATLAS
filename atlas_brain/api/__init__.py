@@ -59,7 +59,7 @@ from .b2b_win_loss import router as b2b_win_loss_router
 from .b2b_evidence import router as b2b_evidence_router
 from .b2b_vendor_claims import router as b2b_vendor_claims_router
 from .b2b_challenger_claims import router as b2b_challenger_claims_router
-from fastapi import Depends
+from fastapi import Depends, Request
 from ..auth.dependencies import require_b2b_plan_or_api_key
 
 logger = logging.getLogger("atlas.api")
@@ -204,10 +204,12 @@ try:
         create_content_ops_claim_registry_router,
     )
     from ..auth.dependencies import AuthUser
+    from ..auth.rate_limit import _dynamic_limit, limiter
     from ..config import settings
     from ..storage.database import get_db_pool
 
     async def _capture_content_ops_auth_user(
+        request: Request,
         user: AuthUser = Depends(require_b2b_plan_or_api_key("b2b_growth")),
     ) -> AuthUser:
         """Bridge the per-request AuthUser to the
@@ -223,6 +225,8 @@ try:
         """
 
         set_current_auth_user(user)
+        request.state.rate_limit_key = str(getattr(user, "account_id", "") or "")
+        request.state.rate_limit_plan = str(getattr(user, "plan", "") or "trial")
         return user
 
     async def _require_content_ops_usage_operator(
@@ -231,6 +235,16 @@ try:
         if bool(getattr(user, "is_platform_admin", False)):
             return user
         raise HTTPException(status_code=403, detail="Platform admin access required")
+
+    @limiter.shared_limit(
+        _dynamic_limit,
+        scope="content_ops_deflection_public",
+    )
+    async def _rate_limit_public_deflection_report(
+        request: Request,
+        _user: AuthUser = Depends(_capture_content_ops_auth_user),
+    ) -> None:
+        return None
 
     def _content_ops_cache_policy_default(_scope: object) -> str | None:
         policy = str(
@@ -291,6 +305,9 @@ try:
                 profile_id=profile_id,
             )
         ),
+        deflection_report_public_dependencies=[
+            Depends(_rate_limit_public_deflection_report)
+        ],
         usage_dependencies=[Depends(_require_content_ops_usage_operator)],
         deflection_report_paid_dependencies=[
             Depends(_require_content_ops_usage_operator)
