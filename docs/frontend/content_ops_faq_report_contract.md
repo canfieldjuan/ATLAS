@@ -78,12 +78,61 @@ The report Markdown always contains these customer-facing sections:
 
 `Your Help-Desk SEO Targeting List` is a readability index, not the complete
 evidence surface. Large reports render a deterministic top-N phrase list and an
-omitted-count note; every ranked question and complete source evidence remains
-in `Question Details and Evidence`.
+omitted-count note. Complete source evidence is available in the paid artifact's
+`evidence_export`; inline web/PDF renderers may stay bounded as long as they
+link to or attach that export.
 
 `Question Details and Evidence` is the canonical per-question detail pass. It
 contains the answer status, publishable copy or no-proven-answer guidance,
-vocabulary mappings, and complete source evidence for each ranked question.
+vocabulary mappings, and representative source evidence for each ranked
+question.
+
+The paid artifact also includes a complete evidence export:
+
+```ts
+type DeflectionEvidenceExport = {
+  schema_version: "deflection_evidence.v1";
+  summary: {
+    question_count: number;
+    evidence_row_count: number;
+    source_id_count: number;
+    drafted_answer_count: number;
+    no_proven_answer_count: number;
+  };
+  report_summary: DeflectionReportSummary;
+  questions: Array<{
+    question_id: string;
+    rank: number;
+    question: string;
+    customer_wording: string;
+    topic: string;
+    ticket_count: number;
+    weighted_frequency: number;
+    opportunity_score: number;
+    answer_evidence_status: "resolution_evidence" | "draft_needs_review" | string;
+    resolution_evidence_scope: string;
+    answer_linkage: "publishable_answer" | "needs_review";
+    answer: string;
+    steps: string[];
+    source_ids: string[];
+    evidence_quote_count: number;
+    term_mappings: Array<Record<string, unknown>>;
+    outcome_diagnostics: Record<string, unknown>;
+  }>;
+  evidence_rows: Array<{
+    row_id: string;
+    question_id: string;
+    rank: number;
+    question: string;
+    source_id: string;
+    source_field: "evidence_quote" | "source_id" | string;
+    evidence_quote: string;
+    answer_evidence_status: string;
+    resolution_evidence_scope: string;
+    answer_linkage: "publishable_answer" | "needs_review";
+  }>;
+};
+```
 
 ## Deflection Snapshot
 
@@ -306,6 +355,9 @@ type TicketFAQSearchResponse = {
   supplied documentation terms/rules and customer wording.
 - Treat `source_ids` and `evidence_quotes` as proof links/footnotes, not primary
   marketing copy.
+- Treat `evidence_export` as the uncapped audit/detail surface. Hosted web and
+  PDF renderers can cap inline evidence only when they preserve access to this
+  export.
 
 See [`content_ops_faq_report_example.json`](./content_ops_faq_report_example.json)
 for a current compact FAQ example and
