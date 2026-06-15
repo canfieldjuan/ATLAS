@@ -19,13 +19,14 @@
     "committed": false,
     "records_written": 40383,
     "sha256": "43130a9a43c2bd821a16c2025694a14a45fc2a914f79cfe5278c88736b749193",
-    "source_jsonl": "/home/juan-canfield/Desktop/Atlas/tmp/faq_scale_stress_20260523/cfpb_50000_source_rows.jsonl"
+    "source_jsonl": "tmp/faq_scale_stress_20260523/cfpb_50000_source_rows.jsonl"
   },
   "hosted_submit": {
     "artifact_status": 403,
     "elapsed_seconds": 64.46874859603122,
     "ok": false,
-    "request_id": "content-ops-45c06a6950ec4677a214368d6e4dc44f",
+    "request_id": "content-ops-[redacted:a83f5c797c38]",
+    "request_id_sha256_prefix": "a83f5c797c38",
     "snapshot_status": 200,
     "submit_status": 200,
     "volume_gates": {
@@ -63,7 +64,7 @@
     "ok": false,
     "page_status": 404,
     "snapshot_status": 200,
-    "url": "https://juancanfield.com/services/faq-deflection/results/content-ops-45c06a6950ec4677a214368d6e4dc44f"
+    "url": "<redacted-result-url:a83f5c797c38>"
   },
   "preflight": {
     "csv_file_size": 52428276,
@@ -73,6 +74,14 @@
   "redaction": {
     "raw_csv_committed": false,
     "raw_report_committed": false,
+    "raw_request_id_committed": false,
+    "request_id_redacted": true,
+    "request_id_revocation_sweep_20260615": {
+      "post_revocation_artifact_status": 403,
+      "pre_revocation_artifact_status": 200,
+      "request_id_sha256_prefix": "a83f5c797c38",
+      "revocation_webhook_status": 200
+    },
     "secrets_committed": false
   }
 }
