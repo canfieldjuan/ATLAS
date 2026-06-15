@@ -16,6 +16,7 @@ _RESOLUTION_EVIDENCE_SCOPE_SCOPED = "scoped"
 _DRAFT_NEEDS_REVIEW_STATUS = "draft_needs_review"
 DEFAULT_DEFLECTION_SNAPSHOT_TOP_N = 5
 DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT = 3
+DEFAULT_DEFLECTION_SEO_TARGET_LIMIT = 50
 _UNCAPPED_REPORT_MAX_ITEMS = 0
 _ASSISTED_CONTACT_COST = 13.50
 _ASSISTED_CONTACT_COST_LABEL = "$13.50"
@@ -385,8 +386,12 @@ def _support_tax_section(
 
 def _help_desk_seo_targeting_section(
     items: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
 ) -> list[str]:
     phrases = _customer_phrase_list(items)
+    display_limit = max(1, int(limit))
+    displayed_phrases = phrases[:display_limit]
     lines = [
         "## Your Help-Desk SEO Targeting List",
         "",
@@ -402,8 +407,18 @@ def _help_desk_seo_targeting_section(
         return [*lines, "No customer phrase targets were generated for this run.", ""]
     lines.extend(
         f"{index}. {_md(phrase)}"
-        for index, phrase in enumerate(phrases, start=1)
+        for index, phrase in enumerate(displayed_phrases, start=1)
     )
+    omitted_count = len(phrases) - len(displayed_phrases)
+    if omitted_count > 0:
+        lines.extend([
+            "",
+            (
+                f"SEO phrase index capped at {_count(display_limit)} entries for "
+                f"readability; {_count(omitted_count)} additional source-backed "
+                "phrases remain represented in the question detail blocks below."
+            ),
+        ])
     lines.append("")
     return lines
 
@@ -514,6 +529,7 @@ def _question_detail_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
         lines.extend([
             f"### {index}. {_md(item.get('question'))}",
             "",
+            *_customer_wording_detail(item),
             f"**Answer status:** {_md(_status_label(item))}",
             "",
             (
@@ -530,6 +546,17 @@ def _question_detail_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
         lines.extend(_vocabulary_gap_detail(item))
         lines.extend(_complete_evidence_detail(item))
     return lines
+
+
+def _customer_wording_detail(item: Mapping[str, Any]) -> list[str]:
+    question = _text(item.get("question"))
+    customer_wording = _text(item.get("customer_wording"))
+    if not customer_wording or customer_wording == question:
+        return []
+    return [
+        f"**Customer wording:** {_md(customer_wording)}",
+        "",
+    ]
 
 
 def _publishable_answer_detail(item: Mapping[str, Any]) -> list[str]:
@@ -1057,6 +1084,7 @@ def _md(value: Any) -> str:
 
 __all__ = [
     "DEFAULT_DEFLECTION_SNAPSHOT_TOP_N",
+    "DEFAULT_DEFLECTION_SEO_TARGET_LIMIT",
     "DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT",
     "DeflectionSnapshot",
     "DeflectionReportArtifact",

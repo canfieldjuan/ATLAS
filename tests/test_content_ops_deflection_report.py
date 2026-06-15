@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from extracted_content_pipeline.faq_deflection_report import (
+    DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
     build_deflection_snapshot,
     build_deflection_report_artifact,
     deflection_snapshot_content_opportunities,
@@ -248,6 +249,100 @@ def test_deflection_report_reframes_paid_artifact_with_cost_and_seo_sections() -
     assert "will rank" not in markdown
     assert "search volume" not in markdown
     assert "guaranteed traffic" not in markdown
+
+
+def test_deflection_report_caps_seo_index_without_capping_details_or_evidence() -> None:
+    source_ids = tuple(f"ticket-overflow-{index}" for index in range(1, 61))
+    evidence_quotes = tuple(
+        f"`ticket-overflow-{index}` - Overflow evidence {index}"
+        for index in range(1, 8)
+    )
+    items = tuple(
+        {
+            "question": f"Canonical question {index}",
+            "customer_wording": f"Customer phrase {index}",
+            "ticket_count": 1,
+            "answer_evidence_status": "resolution_evidence",
+            "answer": "Use the documented workflow.",
+            "source_ids": source_ids if index == 1 else (f"ticket-{index}",),
+            "evidence_quotes": (
+                evidence_quotes if index == 1 else (f"`ticket-{index}` - Evidence",)
+            ),
+        }
+        for index in range(1, DEFAULT_DEFLECTION_SEO_TARGET_LIMIT + 3)
+    )
+    markdown = build_deflection_report_artifact(
+        TicketFAQMarkdownResult(
+            markdown="# FAQ",
+            source_count=len(items),
+            ticket_source_count=len(items),
+            output_checks={"condensed": True},
+            items=items,
+        )
+    ).markdown
+
+    seo_section = markdown.split("## Your Help-Desk SEO Targeting List", 1)[1].split(
+        "## Ranked Question Opportunities",
+        1,
+    )[0]
+    detail_section = markdown.split("## Question Details and Evidence", 1)[1]
+    seo_lines = [
+        line for line in seo_section.splitlines()
+        if line.split(".", 1)[0].isdigit()
+    ]
+
+    assert len(seo_lines) == DEFAULT_DEFLECTION_SEO_TARGET_LIMIT
+    assert (
+        f"{DEFAULT_DEFLECTION_SEO_TARGET_LIMIT}. "
+        f"Customer phrase {DEFAULT_DEFLECTION_SEO_TARGET_LIMIT}"
+    ) in seo_section
+    assert f"Customer phrase {DEFAULT_DEFLECTION_SEO_TARGET_LIMIT + 1}" not in seo_section
+    assert "2 additional source-backed phrases remain represented" in seo_section
+    assert (
+        f"### {DEFAULT_DEFLECTION_SEO_TARGET_LIMIT + 1}. "
+        f"Canonical question {DEFAULT_DEFLECTION_SEO_TARGET_LIMIT + 1}"
+    ) in detail_section
+    assert (
+        f"**Customer wording:** "
+        f"Customer phrase {DEFAULT_DEFLECTION_SEO_TARGET_LIMIT + 1}"
+    ) in detail_section
+    assert "ticket-overflow-60" in detail_section
+    assert "`ticket-overflow-7` - Overflow evidence 7" in detail_section
+
+
+def test_deflection_report_does_not_show_seo_cap_note_at_exact_limit() -> None:
+    items = tuple(
+        {
+            "question": f"Exact phrase {index}",
+            "customer_wording": f"Exact phrase {index}",
+            "ticket_count": 1,
+            "answer_evidence_status": "draft_needs_review",
+            "source_ids": (f"ticket-{index}",),
+            "evidence_quotes": (f"`ticket-{index}` - Evidence",),
+        }
+        for index in range(1, DEFAULT_DEFLECTION_SEO_TARGET_LIMIT + 1)
+    )
+    markdown = build_deflection_report_artifact(
+        TicketFAQMarkdownResult(
+            markdown="# FAQ",
+            source_count=len(items),
+            ticket_source_count=len(items),
+            output_checks={"condensed": True},
+            items=items,
+        )
+    ).markdown
+
+    seo_section = markdown.split("## Your Help-Desk SEO Targeting List", 1)[1].split(
+        "## Ranked Question Opportunities",
+        1,
+    )[0]
+
+    assert (
+        f"{DEFAULT_DEFLECTION_SEO_TARGET_LIMIT}. "
+        f"Exact phrase {DEFAULT_DEFLECTION_SEO_TARGET_LIMIT}"
+    ) in seo_section
+    assert "SEO phrase index capped" not in seo_section
+    assert "**Customer wording:** Exact phrase 1" not in markdown
 
 
 def test_deflection_report_uses_unknown_window_cost_fallback_without_inference() -> None:
