@@ -40,6 +40,11 @@ REQUIRED_PAGE_MARKERS = (
     "content_ops_deflection_report",
     "request_id",
 )
+PAID_PAGE_MARKERS = (
+    "FULL BACKLOG REPORT",
+    "Your complete Support Tax report is ready",
+    "Paid report contents",
+)
 
 try:
     from dotenv import load_dotenv
@@ -95,6 +100,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--snapshot-path-template", default=SNAPSHOT_PATH_TEMPLATE)
     parser.add_argument("--artifact-path-template", default=ARTIFACT_PATH_TEMPLATE)
+    parser.add_argument(
+        "--artifact-state",
+        choices=("locked", "unlocked"),
+        default="locked",
+        help="Expected paid-artifact state for the result page under test.",
+    )
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -284,10 +295,46 @@ def _page_errors(html: str, *, request_id: str, account_id: str) -> list[str]:
     return errors
 
 
+def _paid_page_errors(html: str, *, request_id: str, account_id: str) -> list[str]:
+    errors: list[str] = []
+    if not html:
+        return ["portfolio paid result page returned empty HTML"]
+    for marker in PAID_PAGE_MARKERS:
+        if marker not in html:
+            errors.append(f"portfolio paid result page missing marker: {marker}")
+    if "SNAPSHOT TEMPORARILY UNAVAILABLE" in html:
+        errors.append("portfolio paid result page rendered unavailable state")
+    if "YOUR DEFLECTION SNAPSHOT" in html:
+        errors.append("portfolio paid result page rendered locked snapshot state")
+    if _unlock_cta_attrs(html) is not None:
+        errors.append("portfolio paid result page must not render unlock CTA")
+    if request_id not in html:
+        errors.append("portfolio paid result page missing request_id value")
+    if "account_id" in html:
+        errors.append("portfolio paid result page must not expose account_id marker")
+    if account_id and account_id in html:
+        errors.append("portfolio paid result page must not expose account_id value")
+    return errors
+
+
 def _unlock_cta_attrs(html: str) -> dict[str, str] | None:
     parser = UnlockCtaParser()
     parser.feed(html)
     return parser.attrs
+
+
+def _page_marker_summary(html: str, *, request_id: str, account_id: str) -> dict[str, bool]:
+    unlock_attrs = _unlock_cta_attrs(html)
+    return {
+        "locked_markers_present": all(marker in html for marker in REQUIRED_PAGE_MARKERS),
+        "paid_markers_present": all(marker in html for marker in PAID_PAGE_MARKERS),
+        "unavailable_state_present": "SNAPSHOT TEMPORARILY UNAVAILABLE" in html,
+        "locked_snapshot_present": "YOUR DEFLECTION SNAPSHOT" in html,
+        "unlock_cta_present": unlock_attrs is not None,
+        "request_id_present": bool(request_id and request_id in html),
+        "account_id_marker_present": "account_id" in html,
+        "account_id_value_present": bool(account_id and account_id in html),
+    }
 
 
 def _result_payload(
@@ -308,9 +355,21 @@ def _result_payload(
             "base_url": _clean(args.base_url),
             "request_id": _clean(args.request_id),
             "account_id": _clean(args.account_id),
+            "artifact_state": _clean(args.artifact_state),
             "token_present": bool(_clean(args.token)),
         },
-        "page": {"status": page.status if page else None},
+        "page": {
+            "status": page.status if page else None,
+            "markers": (
+                _page_marker_summary(
+                    page.text,
+                    request_id=_clean(args.request_id),
+                    account_id=_clean(args.account_id),
+                )
+                if page
+                else None
+            ),
+        },
         "snapshot": {"status": snapshot.status if snapshot else None},
         "artifact": {"status": artifact.status if artifact else None},
     }
@@ -350,12 +409,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     errors: list[str] = []
     if page.status != 200:
         errors.append(f"portfolio result page returned status {page.status}")
-    errors.extend(_page_errors(page.text, request_id=request_id, account_id=_clean(args.account_id)))
+    if args.artifact_state == "unlocked":
+        errors.extend(
+            _paid_page_errors(
+                page.text,
+                request_id=request_id,
+                account_id=_clean(args.account_id),
+            )
+        )
+    else:
+        errors.extend(_page_errors(page.text, request_id=request_id, account_id=_clean(args.account_id)))
     if snapshot.status != 200:
         errors.append(f"snapshot endpoint returned status {snapshot.status}")
     else:
         errors.extend(_snapshot_errors(snapshot.payload))
-    if artifact.status != 403:
+    if args.artifact_state == "unlocked":
+        if artifact.status != 200:
+            errors.append(f"artifact endpoint must return 200 after payment; got {artifact.status}")
+        elif not isinstance(artifact.payload, Mapping):
+            errors.append("paid artifact response must be an object")
+        else:
+            if not isinstance(artifact.payload.get("markdown"), str) or not artifact.payload.get("markdown"):
+                errors.append("paid artifact markdown must be a non-empty string")
+            if not isinstance(artifact.payload.get("faq_result"), Mapping):
+                errors.append("paid artifact faq_result must be an object")
+    elif artifact.status != 403:
         errors.append(f"artifact endpoint must return 403 before payment; got {artifact.status}")
 
     payload = _result_payload(

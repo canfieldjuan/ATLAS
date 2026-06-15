@@ -82,6 +82,22 @@ def _page_html() -> str:
     """
 
 
+def _paid_page_html() -> str:
+    return """
+    <main>
+      <div>FULL BACKLOG REPORT</div>
+      <h1>Your complete Support Tax report is ready.</h1>
+      <section>Paid report contents for content-ops-123</section>
+    </main>
+    """
+
+
+PAID_ARTIFACT = {
+    "markdown": "# Paid report",
+    "faq_result": {"items": []},
+}
+
+
 def test_load_dotenv_files_honors_disable_flag(monkeypatch) -> None:
     calls: list[Path] = []
     monkeypatch.setenv("ATLAS_DISABLE_DOTENV", "1")
@@ -225,6 +241,47 @@ def test_page_errors_bind_checkout_request_to_unlock_cta() -> None:
     ]
 
 
+def test_paid_page_errors_require_paid_markers_and_reject_locked_state() -> None:
+    errors = smoke._paid_page_errors(
+        """
+        <main>
+          SNAPSHOT TEMPORARILY UNAVAILABLE
+          <a data-atlas-deflection-unlock>Unlock</a>
+        </main>
+        """,
+        request_id="content-ops-123",
+        account_id="acct-123",
+    )
+
+    assert errors == [
+        "portfolio paid result page missing marker: FULL BACKLOG REPORT",
+        "portfolio paid result page missing marker: Your complete Support Tax report is ready",
+        "portfolio paid result page missing marker: Paid report contents",
+        "portfolio paid result page rendered unavailable state",
+        "portfolio paid result page must not render unlock CTA",
+        "portfolio paid result page missing request_id value",
+    ]
+
+
+def test_paid_page_errors_allow_inert_unlock_selector_text() -> None:
+    errors = smoke._paid_page_errors(
+        """
+        <main>
+          <div>FULL BACKLOG REPORT</div>
+          <h1>Your complete Support Tax report is ready.</h1>
+          <section>Paid report contents for content-ops-123</section>
+          <script>
+            document.querySelector("[data-atlas-deflection-unlock]");
+          </script>
+        </main>
+        """,
+        request_id="content-ops-123",
+        account_id="acct-123",
+    )
+
+    assert errors == []
+
+
 def test_page_errors_reject_browser_exposed_account_id() -> None:
     html = """
     <main data-atlas-deflection-result>
@@ -293,6 +350,9 @@ def test_main_validates_page_snapshot_and_locked_artifact(monkeypatch, tmp_path,
     assert printed == payload
     assert payload["ok"] is True
     assert payload["page"]["status"] == 200
+    assert payload["page"]["markers"]["locked_markers_present"] is True
+    assert payload["page"]["markers"]["paid_markers_present"] is False
+    assert payload["page"]["markers"]["unlock_cta_present"] is True
     assert payload["snapshot"]["status"] == 200
     assert payload["artifact"]["status"] == 403
     assert calls == [
@@ -314,6 +374,58 @@ def test_main_validates_page_snapshot_and_locked_artifact(monkeypatch, tmp_path,
             "headers": {"Accept": "application/json", "Authorization": "Bearer secret-token"},
             "timeout": 30.0,
         },
+    ]
+
+
+def test_main_validates_paid_page_and_unlocked_artifact(monkeypatch, tmp_path, capsys) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        smoke,
+        "_open_http_request",
+        _fake_open([
+            (200, _paid_page_html()),
+            (200, SNAPSHOT),
+            (200, PAID_ARTIFACT),
+        ], calls),
+    )
+    result_path = tmp_path / "result.json"
+
+    code = smoke.main([*_base_args(tmp_path), "--artifact-state", "unlocked", "--json"])
+
+    assert code == 0
+    printed = json.loads(capsys.readouterr().out)
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert printed == payload
+    assert payload["ok"] is True
+    assert payload["inputs"]["artifact_state"] == "unlocked"
+    assert payload["page"]["status"] == 200
+    assert payload["page"]["markers"]["paid_markers_present"] is True
+    assert payload["page"]["markers"]["unavailable_state_present"] is False
+    assert payload["page"]["markers"]["unlock_cta_present"] is False
+    assert payload["snapshot"]["status"] == 200
+    assert payload["artifact"]["status"] == 200
+
+
+def test_main_rejects_malformed_paid_artifact_in_unlocked_mode(monkeypatch, tmp_path) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        smoke,
+        "_open_http_request",
+        _fake_open([
+            (200, _paid_page_html()),
+            (200, SNAPSHOT),
+            (200, {"markdown": ""}),
+        ], calls),
+    )
+
+    code = smoke.main([*_base_args(tmp_path), "--artifact-state", "unlocked"])
+    payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["errors"] == [
+        "paid artifact markdown must be a non-empty string",
+        "paid artifact faq_result must be an object",
     ]
 
 

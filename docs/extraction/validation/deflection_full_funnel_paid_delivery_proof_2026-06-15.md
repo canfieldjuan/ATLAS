@@ -22,6 +22,12 @@ return 200 for the same paid request, but the portfolio page renders
 `SNAPSHOT TEMPORARILY UNAVAILABLE` instead of the result markers. That remains
 the next live blocker for #1440.
 
+Follow-up on 2026-06-15: atlas-portfolio #309 fixed the paid-artifact fetch
+timeout, and `deflection_portfolio_paid_result_live_proof_2026-06-15.md` proves
+production now renders the unlocked paid report page for a fresh paid
+full-volume request. The portfolio-page blocker recorded here is closed by that
+follow-up proof.
+
 Snapshot email/PDF delivery is also not independently observed in this proof.
 During this slice, no snapshot-email sender surface was found in the Atlas repo;
 the proven email send is the paid full-report delivery.
