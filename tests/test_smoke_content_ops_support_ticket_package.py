@@ -145,6 +145,74 @@ def test_support_ticket_package_smoke_summarizes_undated_csv_without_window_filt
     ]
 
 
+def test_support_ticket_package_uses_zendesk_public_comments_not_internal_notes(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "zendesk_public_comments.csv"
+    _write_csv(path, [
+        {
+            "Ticket ID": "zd-1",
+            "Subject": "Refund status",
+            "Description": "",
+            "Ticket Comments": "How do I see when the duplicate charge was refunded?",
+            "Ticket History": "I still cannot find the refund receipt.",
+            "Internal Notes": "Known billing bug; do not publish this detail.",
+        },
+        {
+            "Ticket ID": "zd-2",
+            "Subject": "",
+            "Description": "",
+            "Private Notes": "Customer is escalated internally.",
+        },
+    ])
+
+    summary = build_support_ticket_package_smoke_summary(path)
+
+    assert summary["source_row_count"] == 2
+    assert summary["included_ticket_row_count"] == 1
+    assert summary["skipped_ticket_row_count"] == 1
+    assert summary["customer_wording_examples"] == [
+        {
+            "source_id": "zd-1",
+            "source_title": "Refund status",
+            "text": (
+                "Refund status How do I see when the duplicate charge was "
+                "refunded? I still cannot find the refund receipt."
+            ),
+        }
+    ]
+    customer_wording = str(summary["customer_wording_examples"])
+    assert "Known billing bug" not in customer_wording
+    assert "Customer is escalated internally" not in customer_wording
+    assert summary["warnings"] == [
+        {
+            "code": "ticket_row_missing_text",
+            "row_index": 2,
+            "message": "Skipped ticket row because it did not include customer wording.",
+        }
+    ]
+
+
+def test_support_ticket_package_skips_private_comment_objects_in_history() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-1",
+        "subject": "Refund status",
+        "ticket_history": [
+            {"body": "How do I see when the duplicate charge was refunded?", "public": True},
+            {"body": "INTERNAL refund quietly; do not publish", "public": False},
+            {"body": "Where can I download the refund receipt?"},
+        ],
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert len(source_material) == 1
+    text = source_material[0]["text"]
+    assert "How do I see when the duplicate charge was refunded?" in text
+    assert "Where can I download the refund receipt?" in text
+    assert "INTERNAL refund quietly" not in text
+    assert package.warnings == ()
+
+
 def test_support_ticket_package_smoke_keeps_date_window_for_dated_rows(
     tmp_path: Path,
 ) -> None:

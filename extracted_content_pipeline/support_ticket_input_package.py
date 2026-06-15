@@ -121,6 +121,20 @@ _TEXT_KEYS = (
     "notes",
     "summary",
 )
+_PUBLIC_COMMENT_KEYS = (
+    "comments",
+    "messages",
+    "thread",
+    "conversation",
+    "comment",
+    "comment_body",
+    "public_comment",
+    "public_comments",
+    "ticket_comments",
+    "ticket_history",
+    "history",
+    "conversation_history",
+)
 _RESOLUTION_TEXT_KEYS = (
     "resolution",
     "resolution_text",
@@ -558,20 +572,31 @@ def _ticket_text(row: Mapping[str, Any], *, source_title: str) -> str:
 
 
 def _comments_text(row: Mapping[str, Any]) -> str:
-    comments = _first_value(row, ("comments", "messages", "thread"))
-    if isinstance(comments, Mapping):
-        comments = (comments,)
-    if not isinstance(comments, Sequence) or isinstance(comments, (str, bytes, bytearray)):
-        return ""
     parts: list[str] = []
-    for item in comments:
-        if isinstance(item, Mapping):
-            text = _first_text(item, ("body", "message", "text", "content", "description"))
-        else:
-            text = _clean(item)
-        if text:
-            parts.append(support_ticket_plain_text(text))
+    for key in _PUBLIC_COMMENT_KEYS:
+        comments = _first_value(row, (key,))
+        if isinstance(comments, Mapping):
+            comments = (comments,)
+        elif isinstance(comments, str):
+            comments = (comments,)
+        elif not isinstance(comments, Sequence) or isinstance(
+            comments,
+            (bytes, bytearray),
+        ):
+            continue
+        for item in comments:
+            text = _comment_text(item)
+            if text:
+                parts.append(support_ticket_plain_text(text))
     return support_ticket_plain_text("\n".join(parts))
+
+
+def _comment_text(item: Any) -> str:
+    if isinstance(item, Mapping):
+        if item.get("public") is False:
+            return ""
+        return _first_text(item, ("body", "message", "text", "content", "description"))
+    return _clean(item)
 
 
 def _ticket_questions(rows: Sequence[Mapping[str, Any]], *, limit: int = 6) -> list[str]:

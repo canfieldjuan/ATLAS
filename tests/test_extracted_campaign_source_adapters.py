@@ -410,6 +410,92 @@ def test_load_source_rows_from_utf16_bom_csv_decodes_support_ticket_export(
     }]
 
 
+@pytest.mark.parametrize(
+    ("header", "body"),
+    (
+        ("Ticket Comments", "How do I see the duplicate charge refund status?"),
+        ("Comment Body", "Can I export all invoices before month-end?"),
+        ("Public Comments", "Where do I update the billing contact?"),
+        ("Ticket History", "How do I reset MFA for a locked-out admin?"),
+        ("History", "Can I cancel before the annual renewal?"),
+        ("Conversation", "Where can I download last quarter's receipt?"),
+    ),
+)
+def test_source_rows_admit_zendesk_public_comment_history_scalar_aliases(
+    tmp_path: Path,
+    header: str,
+    body: str,
+) -> None:
+    path = tmp_path / "zendesk_public_comment_aliases.csv"
+    path.write_text(
+        "\n".join([
+            f"Ticket ID,Subject,Description,{header},Internal Notes",
+            f"zd-1,Support question,,{body},Do not publish this workaround",
+        ]),
+        encoding="utf-8",
+    )
+
+    rows = load_source_rows_from_file(path, file_format="csv")
+    loaded = source_rows_to_campaign_opportunities(rows)
+
+    assert len(loaded.opportunities) == 1
+    opportunity = loaded.opportunities[0]
+    assert "missing_source_text" not in [warning.code for warning in loaded.warnings]
+    assert opportunity["source_type"] == "support_ticket"
+    assert opportunity["target_id"] == "zd-1"
+    assert body in opportunity["evidence"][0]["text"]
+    assert "Do not publish" not in opportunity["evidence"][0]["text"]
+    assert "Internal Notes" not in opportunity
+
+
+@pytest.mark.parametrize("history_key", ("comments", "ticket_history"))
+def test_source_rows_skip_private_comment_objects_in_public_history_aliases(
+    history_key: str,
+) -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "subject": "Refund status",
+        history_key: [
+            {"body": "How do I see the duplicate charge refund?", "public": True},
+            {"body": "INTERNAL refund quietly; do not publish", "public": False},
+            {"body": "Where can I download the refund receipt?"},
+        ],
+    }])
+
+    assert len(loaded.opportunities) == 1
+    opportunity = loaded.opportunities[0]
+    text = opportunity["evidence"][0]["text"]
+    assert "How do I see the duplicate charge refund?" in text
+    assert "Where can I download the refund receipt?" in text
+    assert "INTERNAL refund quietly" not in text
+    preserved_payload = json.dumps(dict(opportunity), default=str)
+    assert "INTERNAL refund quietly" not in preserved_payload
+    assert len(opportunity[history_key]) == 2
+    assert all(item.get("public") is not False for item in opportunity[history_key])
+    assert "missing_source_text" not in [warning.code for warning in loaded.warnings]
+
+
+@pytest.mark.parametrize("header", ("Internal Notes", "Private Notes"))
+def test_source_rows_do_not_admit_private_note_aliases_as_customer_text(
+    tmp_path: Path,
+    header: str,
+) -> None:
+    path = tmp_path / "zendesk_private_notes_only.csv"
+    path.write_text(
+        "\n".join([
+            f"Ticket ID,Subject,Description,{header}",
+            "zd-1,Support question,,Do not publish this private note",
+        ]),
+        encoding="utf-8",
+    )
+
+    rows = load_source_rows_from_file(path, file_format="csv")
+    loaded = source_rows_to_campaign_opportunities(rows)
+
+    assert loaded.opportunities == ()
+    assert "missing_source_text" in [warning.code for warning in loaded.warnings]
+
+
 @pytest.mark.parametrize("encoding", ("utf-16-le", "utf-16-be"))
 def test_load_source_rows_infers_bomless_utf16_after_utf8_failure(
     tmp_path: Path,
