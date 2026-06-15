@@ -1,6 +1,6 @@
 # Plan archive index
 
-1061 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1064 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -673,6 +673,7 @@
 - [PR-Deflection-CSV-Partial-Coverage-Warning](archive/PR-Deflection-CSV-Partial-Coverage-Warning.md) - lane: content-ops/deflection-parser-admission | phase: Production hardening
 - [PR-Deflection-Checkout-Authorization](archive/PR-Deflection-Checkout-Authorization.md) - lane: deflection/go-live | phase: Production hardening
 - [PR-Deflection-Checkout-Concurrency-Guard](archive/PR-Deflection-Checkout-Concurrency-Guard.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
+- [PR-Deflection-Complete-Evidence-Export](archive/PR-Deflection-Complete-Evidence-Export.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Csv-Encoding-Admission](archive/PR-Deflection-Csv-Encoding-Admission.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Csv-Legacy-Fallback-Warning](archive/PR-Deflection-Csv-Legacy-Fallback-Warning.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Customer-Wording-PII-Headings](archive/PR-Deflection-Customer-Wording-PII-Headings.md) - lane: deflection/clustering | phase: Production hardening
@@ -706,6 +707,7 @@
 - [PR-Deflection-Paid-Funnel-Incidents](archive/PR-Deflection-Paid-Funnel-Incidents.md) - lane: go-live-deflection-cleanup | phase: Production hardening
 - [PR-Deflection-Paid-Report-PDF-Attachment](archive/PR-Deflection-Paid-Report-PDF-Attachment.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Paid-Report-Reframe](archive/PR-Deflection-Paid-Report-Reframe.md) - lane: content-ops/faq-deflection-paid-report | phase: Product polish
+- [PR-Deflection-Paid-Result-Page-Consolidated-View](archive/PR-Deflection-Paid-Result-Page-Consolidated-View.md) - lane: content-ops/deflection-launch-readiness | phase: Product polish
 - [PR-Deflection-Paid-Unlock-Diagnostics](archive/PR-Deflection-Paid-Unlock-Diagnostics.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
 - [PR-Deflection-Portfolio-Paid-Result-Live-Proof](archive/PR-Deflection-Portfolio-Paid-Result-Live-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Provider-Export-Fixtures](archive/PR-Deflection-Provider-Export-Fixtures.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation

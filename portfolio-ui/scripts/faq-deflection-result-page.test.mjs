@@ -29,6 +29,10 @@ const resultPageSource = await readFile(
   resolve(root, "api/content-ops/deflection/result-page.js"),
   "utf8",
 );
+const evidenceExportSource = await readFile(
+  resolve(root, "api/content-ops/deflection/evidence-export.js"),
+  "utf8",
+);
 
 async function test(name, fn) {
   try {
@@ -121,6 +125,9 @@ await test("paid result page source renders dashboard sections instead of raw ma
     "data-atlas-deflection-paid-summary",
     "data-atlas-deflection-paid-readiness",
     "paid-report-nav",
+    "data-atlas-deflection-evidence-export-download",
+    "Complete evidence export",
+    "deflection_evidence.v1",
     "Top ranked questions",
     "Publishable answers",
     "No-proven-answer gaps",
@@ -128,6 +135,9 @@ await test("paid result page source renders dashboard sections instead of raw ma
   ]) {
     assert.match(resultPageSource, new RegExp(marker));
   }
+  assert.match(evidenceExportSource, /evidence_export/);
+  assert.match(evidenceExportSource, /artifact_status !== "unlocked"/);
+  assert.match(evidenceExportSource, /Content-Disposition/);
   assert.doesNotMatch(resultPageSource, /report-markdown/);
   assert.doesNotMatch(resultPageSource, /<pre class=/);
 });
@@ -192,7 +202,7 @@ await test("paid dashboard uses canonical repeat-ticket count for support tax", 
 });
 
 await test("result pages never embed ATLAS service credentials or paid-route calls", () => {
-  for (const source of [pageSource, resultPageSource]) {
+  for (const source of [pageSource, resultPageSource, evidenceExportSource]) {
     assert.doesNotMatch(source, /ATLAS_B2B_JWT|ATLAS_API_BASE_URL|ATLAS_TOKEN/);
     assert.doesNotMatch(source, /\/paid\b/);
   }
