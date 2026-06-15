@@ -1,0 +1,103 @@
+{
+  "artifact_version": 1,
+  "csv_input": {
+    "bytes": 52426845,
+    "committed": false,
+    "records_written": 42646,
+    "sha256": "e812f4eb6c41f2d81cbb852f9e9898aec08703e02aacdd17d77b21ef9aa69bde",
+    "source_jsonl": "tmp/faq_scale_stress_20260523/cfpb_50000_source_rows.jsonl"
+  },
+  "delivery": {
+    "completed_at": "2026-06-15T04:03:56.904607+00:00",
+    "duration_ms": 16134,
+    "execution_id": "5af4e50a-7044-4445-bc38-72ed3e9231d5",
+    "result_text": "{'_skip_synthesis': 'Deflection report delivery complete', 'scanned': 1, 'sent': 1, 'failed': 0, 'dry_run': 0, 'dry_run_enabled': False}",
+    "started_at": "2026-06-15T04:03:40.765332+00:00",
+    "status": "completed",
+    "task_id": "a5370306-b465-403e-be04-dd521df91a9f",
+    "trigger_status": "accepted_running"
+  },
+  "hosted_submit": {
+    "elapsed_seconds": 60.79574222397059,
+    "ok": true,
+    "snapshot_status": 200,
+    "submit_status": 200,
+    "unpaid_artifact_status": 403,
+    "volume_gates": {
+      "actual": {
+        "generated_questions": 1757,
+        "repeat_ticket_count": 29106,
+        "source_row_count": 42646,
+        "submitted_row_count": 42646,
+        "top_question_count": 5,
+        "uploaded_bytes": 52426845
+      },
+      "configured": {
+        "generated_questions": 30,
+        "repeat_ticket_count": 25000,
+        "source_row_count": 30000,
+        "submitted_row_count": 30000,
+        "top_question_count": 5,
+        "uploaded_bytes": 50000000
+      },
+      "errors": [],
+      "ok": true,
+      "profile": "full-volume-cfpb"
+    }
+  },
+  "issue": 1440,
+  "paid_unlock": {
+    "after_artifact_status": 200,
+    "before_artifact_status": 403,
+    "ok": true,
+    "replay_payload_status": "already_processed",
+    "replay_webhook_status": 200,
+    "webhook_status": 200
+  },
+  "portfolio_result_page": {
+    "artifact_status": 200,
+    "missing_markers": [
+      "portfolio result page missing marker: data-atlas-deflection-result",
+      "portfolio result page missing marker: data-atlas-deflection-request-id",
+      "portfolio result page missing marker: data-atlas-deflection-unlock",
+      "portfolio result page missing marker: content_ops_deflection_report",
+      "portfolio result page missing marker: request_id",
+      "portfolio result page missing unlock CTA element"
+    ],
+    "ok": false,
+    "page_status": 200,
+    "rendered_unavailable_state": true,
+    "result_url": "<redacted-paid-result-url>",
+    "snapshot_status": 200,
+    "text_snippet": "Support Ticket Deflection Report: Cut Repeat Support Tickets SNAPSHOT TEMPORARILY UNAVAILABLE We couldn&#x27;t load your snapshot right now. Your upload may still be processing, or the report service may be temporarily unavailable. Try again in a moment. Try again Back to Support Ticket Deflection"
+  },
+  "redaction": {
+    "bearer_tokens_committed": false,
+    "live_request_artifact_locked_after_invalidation": true,
+    "live_request_artifact_status_after_invalidation": 403,
+    "live_request_id_sha256": "1ebb65093faf3823d2b1413d2b34db28f786908885406acc48846f224ac1011d",
+    "live_request_invalidated_server_side": true,
+    "live_request_invalidated_status": "artifact_relocked_403",
+    "live_request_invalidation_checked_at": "2026-06-15T13:55:05Z",
+    "live_request_revocation_webhook_status": 200,
+    "local_absolute_paths_committed": false,
+    "operator_email_committed": false,
+    "portfolio_html_committed": false,
+    "raw_csv_committed": false,
+    "raw_report_committed": false,
+    "request_id_committed": false,
+    "result_url_committed": false,
+    "secrets_committed": false
+  },
+  "remaining_blockers": [
+    "Portfolio production result page still renders SNAPSHOT TEMPORARILY UNAVAILABLE for the fresh paid request even though ATLAS snapshot/artifact endpoints return 200.",
+    "Snapshot email/PDF delivery is still not independently observed in code or artifacts; no snapshot-email sender surface was found in this repo during this slice."
+  ],
+  "request_id": "<redacted-paid-request-id>",
+  "result": "partial_full_funnel_pass_paid_delivery_proven_portfolio_page_unavailable",
+  "secret_alignment": {
+    "portfolio_env_webhook_secret_result": "webhook_200_replay_already_processed",
+    "root_env_webhook_secret_result": "invalid_signature",
+    "secret_values_committed": false
+  }
+}
