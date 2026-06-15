@@ -125,6 +125,7 @@ def test_inspect_source_csv_reports_unmapped_populated_text_column(tmp_path: Pat
         "reason": "no_usable_source_rows",
         "location": "source_row_csv",
     }
+    assert "coverage_warnings" not in admission
 
 
 def test_inspect_source_csv_classifies_zendesk_public_and_private_columns(
@@ -154,6 +155,43 @@ def test_inspect_source_csv_classifies_zendesk_public_and_private_columns(
     assert admission["ignored_private_fields"] == ["Internal Notes"]
     assert admission["populated_unmapped_fields"] == []
     assert admission["admission_decision"] == {"status": "ACCEPT"}
+    assert "coverage_warnings" not in admission
+
+
+def test_inspect_source_csv_warns_when_accepted_upload_has_skipped_rows(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "partial.csv"
+    path.write_text(
+        "Ticket ID,Message,Conversation Text\n"
+        "T-1,Customer cannot export the weekly report.,\n"
+        "T-2,,Customer cannot invite a teammate.\n"
+    )
+
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+        sample_limit=1,
+        default_fields={
+            "company_name": "Acme Logistics",
+            "vendor_name": "Atlas",
+            "contact_email": "ops@example.com",
+        },
+    ).as_dict()
+
+    admission = payload["source_row_admission"]
+    assert payload["ok"] is True
+    assert payload["warning_counts"] == {"missing_source_text": 1}
+    assert admission["admission_decision"] == {"status": "ACCEPT"}
+    assert admission["coverage_warnings"] == [{
+        "code": "partial_source_row_coverage",
+        "location": "source_row_csv",
+        "raw_source_row_count": 2,
+        "usable_source_row_count": 1,
+        "skipped_source_row_count": 1,
+        "usable_source_ratio": 0.5,
+    }]
 
 
 def test_inspect_source_csv_sample_limit_does_not_make_known_aliases_unmapped(
@@ -244,6 +282,7 @@ def test_inspect_source_csv_with_header_only_has_no_hard_policy_decision(
     assert admission["usable_source_row_count"] == 0
     assert admission["usable_source_ratio"] is None
     assert "admission_decision" not in admission
+    assert "coverage_warnings" not in admission
 
 
 def test_inspect_reports_missing_generation_fields(tmp_path: Path) -> None:
