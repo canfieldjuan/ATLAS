@@ -118,9 +118,15 @@ def _sanitized_comments(raw_comments: Any, *, raw_requester_id: str) -> list[dic
     for raw in raw_comments:
         if not isinstance(raw, Mapping):
             continue
+        role = _comment_role(raw, raw_requester_id=raw_requester_id)
+        if role == _SYSTEM_ROLE:
+            # Automation/system comments are neither the customer's question nor
+            # an agent resolution. Drop them so a non-boilerplate automation
+            # comment cannot reach the importer and become resolution_text.
+            continue
         out.append({
             "public": bool(raw.get("public", True)),
-            "author_id": _comment_role(raw, raw_requester_id=raw_requester_id),
+            "author_id": role,
             "body": _comment_body(raw),
         })
     return out

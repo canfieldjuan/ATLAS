@@ -60,10 +60,13 @@ RAW_EXPORT = {
                     "body": "Internal note: known proration bug, refund quietly.",
                 },
                 {
+                    # Non-boilerplate automation comment: the importer's auto-ack
+                    # text filter would NOT catch this, so the sanitizer must drop
+                    # it by role or it would become resolution_text.
                     "public": True,
                     "author_id": 0,
                     "via": {"channel": "rule"},
-                    "body": "A member of the support team will get back to you.",
+                    "body": "Ticket reassigned to the tier-2 queue by an automation rule.",
                 },
             ],
         },
@@ -109,7 +112,20 @@ def test_roles_are_pseudonymized_not_identity() -> None:
     t0 = _corpus()["tickets"][0]
     assert t0["requester_id"] == "requester"
     roles = [c["author_id"] for c in t0["comments"]]
-    assert roles == ["requester", "agent", "agent", "system"]
+    # the system/automation comment is dropped, so only requester/agent remain
+    assert roles == ["requester", "agent", "agent"]
+
+
+def test_system_automation_comments_are_excluded() -> None:
+    # Regression for the Codex finding: a public automation comment that is NOT
+    # auto-ack boilerplate must not survive sanitization (otherwise the importer
+    # would emit it as agent resolution_text).
+    t0 = _corpus()["tickets"][0]
+    assert "system" not in [c["author_id"] for c in t0["comments"]]
+    assert all("automation rule" not in c["body"].lower() for c in t0["comments"])
+    result = rows_from_zendesk_full_thread(_corpus())
+    r1 = {row["ticket_id"]: row for row in result.rows}["zd-proof-001"]
+    assert "automation rule" not in r1.get("resolution_text", "").lower()
 
 
 def test_whitelist_projection_drops_identity_fields() -> None:
@@ -151,7 +167,8 @@ def test_satisfaction_rating_reduced_to_score() -> None:
 
 def test_private_note_flag_and_public_flags() -> None:
     tickets = _corpus()["tickets"]
-    assert [c["public"] for c in tickets[0]["comments"]] == [True, True, False, True]
+    # requester(pub), agent(pub), agent-private; the system comment is dropped
+    assert [c["public"] for c in tickets[0]["comments"]] == [True, True, False]
     assert tickets[0]["expected"]["has_private_note"] is True
     assert tickets[1]["expected"]["has_private_note"] is False
     assert tickets[0]["expected"]["cluster_theme"] is None
@@ -171,9 +188,9 @@ def test_importer_round_trip_splits_customer_and_agent() -> None:
     # the split is real: customer text is not in the resolution and vice versa
     assert "refunded the extra" not in r1["description"].lower()
     assert "charged twice" not in r1["resolution_text"].lower()
-    # private note excluded; auto-ack excluded
+    # private note excluded; automation/system comment excluded
     assert "proration bug" not in (r1["description"] + r1["resolution_text"]).lower()
-    assert "member of the support team" not in r1["resolution_text"].lower()
+    assert "automation rule" not in r1["resolution_text"].lower()
 
     r2 = by_id["zd-proof-002"]
     assert "refund" in r2["description"].lower()               # requester-only ticket

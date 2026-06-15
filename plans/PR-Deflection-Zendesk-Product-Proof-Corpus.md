@@ -8,7 +8,7 @@ tickets. It proves the funnel survives scale; it cannot prove the deflection
 product produces *good* output, because real support queues cluster repeated
 questions and CFPB does not. Product quality needs real ticket shape.
 
-The operator has ~29 synthetic Zendesk tickets in the `finetunelab` trial,
+The operator has ~50 synthetic Zendesk tickets in the `finetunelab` trial,
 created via the Zendesk API. This slice captures those into a sanitized,
 committed **product-shaped eval corpus** with expected-outcome labels, so the
 deflection output can be judged qualitatively (does it cluster the variants,
@@ -24,8 +24,8 @@ Slice phase: Functional validation
    wraps the existing live export client and projects raw `tickets + comments`
    into a sanitized fixture (whitelist fields; scrub emails/phones/identifier
    numbers/URL tokens; replace raw ticket/user IDs with local stable tokens and
-   role pseudonyms so identity is dropped but the importer's role-split is
-   preserved).
+   `requester`/`agent` role pseudonyms so identity is dropped but the importer's
+   role-split is preserved; exclude automation/`system` comments).
 2. Expected-outcome metadata per ticket: `cluster_theme`,
    `should_publish_answer`, `has_private_note` (derived), `reopened`,
    `unresolved`. Derived facts are filled; judgment fields are labeled by a
@@ -46,10 +46,11 @@ Slice phase: Functional validation
   - [ ] The committed fixture contains no credentials, tokens, emails, phone
         numbers, identifier-length numbers, raw Zendesk ticket/user IDs, or
         ticket URLs. Ticket IDs are local stable tokens (`zd-proof-001`).
-  - [ ] Roles are preserved as pseudonyms (`requester`/`agent`/`system`) so the
-        importer's `author_id == requester_id` split still separates customer
-        wording (`description`) from agent resolution (`resolution_text`); a
-        round-trip test through `rows_from_zendesk_full_thread` proves it.
+  - [ ] Roles are preserved as `requester`/`agent` pseudonyms so the importer's
+        `author_id == requester_id` split still separates customer wording
+        (`description`) from agent resolution (`resolution_text`); automation
+        (`system`) comments are excluded so they cannot become resolution_text.
+        A round-trip test through `rows_from_zendesk_full_thread` proves both.
   - [ ] Ticket projection keeps only `id`, `requester_id` (pseudonym),
         `subject`, `description`, `status`, `satisfaction_rating` (score only),
         `comments[{public, author_id (role), body}]`, and `expected`.
@@ -96,12 +97,16 @@ agent resolution by comparing `comment.author_id` to `ticket.requester_id`, so
 dropping those IDs outright collapses both into `resolution_text`. Instead the
 sanitizer derives a role from the raw IDs at capture time and emits stable
 pseudonyms in the same field names: `requester_id` becomes `"requester"`, and
-each `author_id` becomes `"requester"` (matches the requester), `"system"` (an
-automation `via.channel`), or `"agent"`. The importer's comparison then works
-unchanged with no raw IDs committed -- a round-trip test through
-`rows_from_zendesk_full_thread` confirms customer wording lands in `description`
-and agent public replies in `resolution_text`. Ticket IDs become local
-`zd-proof-NNN` tokens; the ticket `url` (which embeds the raw id) is dropped.
+each `author_id` becomes `"requester"` (matches the requester) or `"agent"`.
+Automation/`system` comments (an automation `via.channel`) are **excluded** --
+they are neither the question nor the resolution, and a non-boilerplate one
+would otherwise pass the importer's text-based auto-ack filter and become
+`resolution_text`. The importer's comparison then works unchanged with no raw
+IDs committed -- a round-trip test through `rows_from_zendesk_full_thread`
+confirms customer wording lands in `description`, agent public replies in
+`resolution_text`, and the automation comment in neither. Ticket IDs become
+local `zd-proof-NNN` tokens; the ticket `url` (which embeds the raw id) is
+dropped.
 
 Retained text (subject, description, comment bodies) is scrubbed for emails,
 phone-shaped runs, 6+ digit identifier numbers, and URL token parameters; short
@@ -117,8 +122,8 @@ is given, and `--dry-run` forces preview even with `--out`.
 - **Build strictly on top of merged #1565.** #1565 owns the portfolio-ui submit
   live smoke (`faq-deflection-submit-live-smoke.mjs`); this slice touches only
   the export/capture path and does not modify that surface.
-- **Capture the real 29 first; do not generate a parallel synthetic corpus.**
-  Missing-case fill (toward ~30-40 tickets) is deferred and only if the 29 leave
+- **Capture the real tickets first; do not generate a parallel synthetic corpus.**
+  Missing-case fill is deferred and only if the captured 50 leave
   gaps in the needed cases.
 - **Not the deterministic ground-truth lane.** This is a real-shape qualitative
   eval corpus; `scripts/build_synthetic_support_tickets.py` stays the separate
