@@ -103,6 +103,11 @@ _REDACTED_DATE_RE = re.compile(r"\bX{2}/X{2}/(?:X{2,4}|\d{2,4})\b", re.IGNORECAS
 _REDACTED_MONEY_RE = re.compile(r"\{\$|\$\s*X{2,}", re.IGNORECASE)
 _TRAILING_TITLE_RE = re.compile(r"\b(?:mr|mrs|ms|dr)\.?$", re.IGNORECASE)
 _QUOTE_ARTIFACT_RE = re.compile(r"(?:''|``)")
+_LEADING_BRACKETED_METADATA_RE = re.compile(r"^(?:\[[^\]\n]{1,80}\]\s*)+")
+_METADATA_QUESTION_START_RE = re.compile(
+    r"\b(?:how|what|where|when|why|can|could|do|does)\s+",
+    re.IGNORECASE,
+)
 _MORTGAGE_INTENT_TERMS = (
     "mortgage",
     "home loan",
@@ -2515,6 +2520,9 @@ def _question_text_matching(
             prefix = prefix.strip()
             sentence_parts = [part.strip() for part in re.split(r"[.!:;]+", prefix) if part.strip()]
             candidate = sentence_parts[-1] if sentence_parts else prefix
+            normalized = _question_start_text(candidate, predicate=predicate)
+            if normalized:
+                return normalized
             normalized = _normalize_question_text(candidate)
             if predicate(normalized):
                 return normalized
@@ -2542,7 +2550,7 @@ def _question_candidate_texts(value: Any) -> tuple[str, ...]:
         return ()
     matches = list(_SPEAKER_LABEL_RE.finditer(text))
     if not matches:
-        return (_compact(_URL_RE.sub("", text)),)
+        return _question_candidate_variants(text)
 
     candidates = []
     leading = _question_segment(text[:matches[0].start()])
@@ -2559,7 +2567,37 @@ def _question_candidate_texts(value: Any) -> tuple[str, ...]:
 
 
 def _question_segment(value: str) -> str:
-    return _compact(_URL_RE.sub("", value))
+    variants = _question_candidate_variants(value)
+    return variants[0] if variants else ""
+
+
+def _question_candidate_variants(value: str) -> tuple[str, ...]:
+    text = _compact(_URL_RE.sub("", value))
+    if not text:
+        return ()
+    stripped = _strip_leading_question_metadata(text)
+    variants = []
+    if stripped != text:
+        tail = _question_after_metadata_prefix(stripped)
+        if tail:
+            variants.append(tail)
+        variants.append(stripped)
+        variants.append(text)
+    else:
+        variants.append(text)
+    return tuple(dict.fromkeys(candidate for candidate in variants if candidate))
+
+
+def _strip_leading_question_metadata(value: str) -> str:
+    return _compact(_LEADING_BRACKETED_METADATA_RE.sub("", value))
+
+
+def _question_after_metadata_prefix(value: str) -> str:
+    for match in _METADATA_QUESTION_START_RE.finditer(value):
+        if match.start() <= 0:
+            continue
+        return _compact(value[match.start():])
+    return ""
 
 
 def _question_start_text(

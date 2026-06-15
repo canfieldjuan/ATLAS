@@ -13,6 +13,7 @@ from typing import Any
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+_LEADING_BRACKETED_METADATA_RE = re.compile(r"^(?:\[[^\]\n]{1,80}\]\s*)+")
 _HTML_TAG_NAMES_RE = (
     r"(?:a|abbr|article|aside|b|blockquote|body|br|button|cite|code|dd|"
     r"del|div|dl|dt|em|figcaption|figure|footer|h[1-6]|header|hr|html|i|"
@@ -347,8 +348,7 @@ def support_ticket_tokens(value: Any) -> frozenset[str]:
             continue
         if token in _STOPWORDS:
             continue
-        if token.endswith("s") and len(token) > 3 and not token.endswith("ss"):
-            token = token[:-1]
+        token = _strip_plural_suffix(token)
         token = _TOKEN_FOLDS.get(token, token)
         if not token or token in _STOPWORDS or len(token) < 2:
             continue
@@ -615,12 +615,24 @@ def _row_tokens(row: Mapping[str, Any]) -> frozenset[str]:
     for key in _TEXT_KEYS:
         value = support_ticket_plain_text(row.get(key))
         if value:
-            parts.append(value)
+            parts.append(_strip_leading_ticket_metadata(value))
     source_id = support_ticket_plain_text(row.get("source_id"))
     source_title = support_ticket_plain_text(row.get("source_title"))
     if source_title and source_title != source_id:
-        parts.append(source_title)
+        parts.append(_strip_leading_ticket_metadata(source_title))
     return support_ticket_tokens(" ".join(part for part in parts if part))
+
+
+def _strip_plural_suffix(token: str) -> str:
+    if token.endswith(("ss", "us", "is", "as")):
+        return token
+    if token.endswith("s") and len(token) > 3:
+        return token[:-1]
+    return token
+
+
+def _strip_leading_ticket_metadata(value: str) -> str:
+    return _compact(_LEADING_BRACKETED_METADATA_RE.sub("", value))
 
 
 def _first_text(row: Mapping[str, Any], keys: Sequence[str]) -> str:
