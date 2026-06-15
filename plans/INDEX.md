@@ -1,6 +1,6 @@
 # Plan archive index
 
-1049 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1050 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -622,6 +622,7 @@
 - [PR-Content-Ops-Survey-Source-Adapter](archive/PR-Content-Ops-Survey-Source-Adapter.md)
 - [PR-Content-Ops-Tenant-Binding-Bridge](archive/PR-Content-Ops-Tenant-Binding-Bridge.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Tenant-Usage-Summary](archive/PR-Content-Ops-Tenant-Usage-Summary.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Text-Truncate-Helper](archive/PR-Content-Ops-Text-Truncate-Helper.md) - lane: content-ops/review-contract | phase: Production hardening
 - [PR-Content-Ops-Ticket-FAQ-Markdown](archive/PR-Content-Ops-Ticket-FAQ-Markdown.md)
 - [PR-Content-Ops-Ticket-Thread-Adapter](archive/PR-Content-Ops-Ticket-Thread-Adapter.md)
 - [PR-Content-Ops-Triage-Experiment](archive/PR-Content-Ops-Triage-Experiment.md) - lane: content-ops/review-contract | phase: Vertical slice
