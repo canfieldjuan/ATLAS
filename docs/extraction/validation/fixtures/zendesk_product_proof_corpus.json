@@ -1,0 +1,1488 @@
+{
+  "source": "zendesk_trial_api",
+  "subdomain": "finetunelab",
+  "run_tag": "atlas_product_proof_20260614",
+  "ticket_count": 50,
+  "tickets": [
+    {
+      "id": "zd-proof-001",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 22] Shipping or replacement question",
+      "description": "Where is my replacement device? The tracking link has not updated in five days.",
+      "status": "pending",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Where is my replacement device? The tracking link has not updated in five days."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Open the order details page, confirm the destination address, and use the replacement shipment workflow. If tracking is stale for more than 72 hours, support can issue a replacement or return label."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Shipping or replacement question",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-002",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 24] Shipping or replacement question",
+      "description": "Can you change the shipping address before the package leaves the warehouse?",
+      "status": "pending",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Can you change the shipping address before the package leaves the warehouse?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Open the order details page, confirm the destination address, and use the replacement shipment workflow. If tracking is stale for more than 72 hours, support can issue a replacement or return label."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Shipping or replacement question",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-003",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 25] Shipping or replacement question",
+      "description": "The shipment was split and the second box is missing the adapter.",
+      "status": "pending",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The shipment was split and the second box is missing the adapter."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Open the order details page, confirm the destination address, and use the replacement shipment workflow. If tracking is stale for more than 72 hours, support can issue a replacement or return label."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Shipping or replacement question",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-004",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 23] Shipping or replacement question",
+      "description": "The order shows delivered but nothing arrived at our office.",
+      "status": "pending",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The order shows delivered but nothing arrived at our office."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Open the order details page, confirm the destination address, and use the replacement shipment workflow. If tracking is stale for more than 72 hours, support can issue a replacement or return label."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Shipping or replacement question",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-005",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 26] Shipping or replacement question",
+      "description": "I need a return label because the hardware arrived damaged.",
+      "status": "pending",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "I need a return label because the hardware arrived damaged."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Open the order details page, confirm the destination address, and use the replacement shipment workflow. If tracking is stale for more than 72 hours, support can issue a replacement or return label."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Shipping or replacement question",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-006",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 33] Private note must not become answer",
+      "description": "The account export button is missing for my workspace. What permission do I need?",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The account export button is missing for my workspace. What permission do I need?"
+        },
+        {
+          "public": false,
+          "author_id": "agent",
+          "body": "Internal note: explain the real workaround to the account owner only. This must not become customer-facing FAQ wording."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Private note must not become answer",
+        "should_publish_answer": false,
+        "has_private_note": true,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-007",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 35] Private note must not become answer",
+      "description": "The billing dashboard shows an old company name after our legal name changed.",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The billing dashboard shows an old company name after our legal name changed."
+        },
+        {
+          "public": false,
+          "author_id": "agent",
+          "body": "Internal note: explain the real workaround to the account owner only. This must not become customer-facing FAQ wording."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Private note must not become answer",
+        "should_publish_answer": false,
+        "has_private_note": true,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-008",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 31] Unanswered product question",
+      "description": "Can the dashboard show time saved by deflected tickets?",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Can the dashboard show time saved by deflected tickets?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Unanswered product question",
+        "should_publish_answer": false,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": true
+      }
+    },
+    {
+      "id": "zd-proof-009",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 28] Unanswered product question",
+      "description": "Can I restrict exports so contractors cannot download customer emails?",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Can I restrict exports so contractors cannot download customer emails?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Unanswered product question",
+        "should_publish_answer": false,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": true
+      }
+    },
+    {
+      "id": "zd-proof-010",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 27] Unanswered product question",
+      "description": "Do you support invoices in euros for EU subsidiaries?",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Do you support invoices in euros for EU subsidiaries?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Unanswered product question",
+        "should_publish_answer": false,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": true
+      }
+    },
+    {
+      "id": "zd-proof-011",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 29] Unanswered product question",
+      "description": "Is there a way to bulk merge duplicate customer profiles?",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Is there a way to bulk merge duplicate customer profiles?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Unanswered product question",
+        "should_publish_answer": false,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": true
+      }
+    },
+    {
+      "id": "zd-proof-012",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 30] Unanswered product question",
+      "description": "How do I get a SOC 2 report for procurement?",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "How do I get a SOC 2 report for procurement?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Unanswered product question",
+        "should_publish_answer": false,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": true
+      }
+    },
+    {
+      "id": "zd-proof-013",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 32] Unanswered product question",
+      "description": "Is German language support available for the help center?",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Is German language support available for the help center?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Unanswered product question",
+        "should_publish_answer": false,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": true
+      }
+    },
+    {
+      "id": "zd-proof-014",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 34] Private note must not become answer",
+      "description": "Customers keep asking why their saved reply disappeared after migration.",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Customers keep asking why their saved reply disappeared after migration."
+        },
+        {
+          "public": false,
+          "author_id": "agent",
+          "body": "Internal note: explain the real workaround to the account owner only. This must not become customer-facing FAQ wording."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Private note must not become answer",
+        "should_publish_answer": false,
+        "has_private_note": true,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-015",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 40] Answered but reopened risk signal",
+      "description": "I followed the refund steps but the credit still has not posted after two weeks.",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "I followed the refund steps but the credit still has not posted after two weeks."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We sent the standard resolution steps and marked this as solved. Please reply if the issue continues."
+        },
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "This is still broken after trying the steps. Please reopen this ticket; the answer did not resolve it."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Answered but reopened risk signal",
+        "should_publish_answer": false,
+        "has_private_note": false,
+        "reopened": true,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-016",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 41] Answered but reopened risk signal",
+      "description": "The MFA reset instructions did not work; the user is still locked out.",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The MFA reset instructions did not work; the user is still locked out."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We sent the standard resolution steps and marked this as solved. Please reply if the issue continues."
+        },
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "This is still broken after trying the steps. Please reopen this ticket; the answer did not resolve it."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Answered but reopened risk signal",
+        "should_publish_answer": false,
+        "has_private_note": false,
+        "reopened": true,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-017",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 42] Answered but reopened risk signal",
+      "description": "Your webhook retry advice did not stop duplicate customer records.",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Your webhook retry advice did not stop duplicate customer records."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We sent the standard resolution steps and marked this as solved. Please reply if the issue continues."
+        },
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "This is still broken after trying the steps. Please reopen this ticket; the answer did not resolve it."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Answered but reopened risk signal",
+        "should_publish_answer": false,
+        "has_private_note": false,
+        "reopened": true,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-018",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 43] Answered but reopened risk signal",
+      "description": "The replacement shipment answer did not help because the tracking page is still blank.",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The replacement shipment answer did not help because the tracking page is still blank."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We sent the standard resolution steps and marked this as solved. Please reply if the issue continues."
+        },
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "This is still broken after trying the steps. Please reopen this ticket; the answer did not resolve it."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Answered but reopened risk signal",
+        "should_publish_answer": false,
+        "has_private_note": false,
+        "reopened": true,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-019",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 46] Permission and export access",
+      "description": "A contractor can see customer emails in exports even though they only need ticket titles. Can this be restricted?",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "A contractor can see customer emails in exports even though they only need ticket titles. Can this be restricted?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Permission and export access",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-020",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 01] Billing question: duplicate charge",
+      "description": "I was billed twice for this month. How do I get the duplicate charge refunded?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "I was billed twice for this month. How do I get the duplicate charge refunded?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We confirmed the duplicate billing event and refunded the extra charge. Refunds normally appear on the original payment method in 5-10 business days."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Billing question: duplicate charge",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-021",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 02] Billing question: duplicate charge",
+      "description": "Why did two subscription charges hit my card after I only upgraded once?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We confirmed the duplicate billing event and refunded the extra charge. Refunds normally appear on the original payment method in 5-10 business days."
+        },
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Why did two subscription charges hit my card after I only upgraded once?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Billing question: duplicate charge",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-022",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 03] Billing question: duplicate charge",
+      "description": "Can someone reverse the second invoice? It looks like the renewal ran twice.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Can someone reverse the second invoice? It looks like the renewal ran twice."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We confirmed the duplicate billing event and refunded the extra charge. Refunds normally appear on the original payment method in 5-10 business days."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Billing question: duplicate charge",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-023",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 04] Billing question: duplicate charge",
+      "description": "My receipt shows a duplicate payment and I need the extra one sent back.",
+      "status": "solved",
+      "satisfaction_rating": "bad",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "My receipt shows a duplicate payment and I need the extra one sent back."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We confirmed the duplicate billing event and refunded the extra charge. Refunds normally appear on the original payment method in 5-10 business days."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Billing question: duplicate charge",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-024",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 05] Billing question: duplicate charge",
+      "description": "There are two charges for the same plan on my bank statement. What is the refund process?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "There are two charges for the same plan on my bank statement. What is the refund process?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We confirmed the duplicate billing event and refunded the extra charge. Refunds normally appear on the original payment method in 5-10 business days."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Billing question: duplicate charge",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-025",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 06] Billing question: duplicate charge",
+      "description": "I paid once but the billing page says two payments. Please help before finance closes the books.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "I paid once but the billing page says two payments. Please help before finance closes the books."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We confirmed the duplicate billing event and refunded the extra charge. Refunds normally appear on the original payment method in 5-10 business days."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Billing question: duplicate charge",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-026",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 07] Billing question: duplicate charge",
+      "description": "The invoice total is wrong after my coupon. Can this be corrected?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The invoice total is wrong after my coupon. Can this be corrected?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We confirmed the duplicate billing event and refunded the extra charge. Refunds normally appear on the original payment method in 5-10 business days."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Billing question: duplicate charge",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-027",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 08] Billing question: duplicate charge",
+      "description": "We downgraded seats but still got charged for the old count. What happens now?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "We downgraded seats but still got charged for the old count. What happens now?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "We confirmed the duplicate billing event and refunded the extra charge. Refunds normally appear on the original payment method in 5-10 business days."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Billing question: duplicate charge",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-028",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 09] Login and MFA access issue",
+      "description": "I cannot log in after enabling MFA. The code keeps looping back to sign in.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "I cannot log in after enabling MFA. The code keeps looping back to sign in."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Reset MFA from Admin Settings &gt; Security &gt; Two-factor authentication, then send the user a new invite. If SSO is enforced, confirm the user is assigned to the app in the identity provider."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Login and MFA access issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-029",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 10] Login and MFA access issue",
+      "description": "How do I reset two factor authentication for a teammate who lost their phone?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "How do I reset two factor authentication for a teammate who lost their phone?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Reset MFA from Admin Settings &gt; Security &gt; Two-factor authentication, then send the user a new invite. If SSO is enforced, confirm the user is assigned to the app in the identity provider."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Login and MFA access issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-030",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 11] Login and MFA access issue",
+      "description": "The magic link says expired even when I click it right away.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The magic link says expired even when I click it right away."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Reset MFA from Admin Settings &gt; Security &gt; Two-factor authentication, then send the user a new invite. If SSO is enforced, confirm the user is assigned to the app in the identity provider."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Login and MFA access issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-031",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 12] Login and MFA access issue",
+      "description": "SSO works for admins but regular users get a blank callback page.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "SSO works for admins but regular users get a blank callback page."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Reset MFA from Admin Settings &gt; Security &gt; Two-factor authentication, then send the user a new invite. If SSO is enforced, confirm the user is assigned to the app in the identity provider."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Login and MFA access issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-032",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 13] Login and MFA access issue",
+      "description": "My invite says already accepted, but I never created a password.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "My invite says already accepted, but I never created a password."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Reset MFA from Admin Settings &gt; Security &gt; Two-factor authentication, then send the user a new invite. If SSO is enforced, confirm the user is assigned to the app in the identity provider."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Login and MFA access issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-033",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 14] Login and MFA access issue",
+      "description": "The login screen is stuck after I enter the verification code.",
+      "status": "solved",
+      "satisfaction_rating": "bad",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Reset MFA from Admin Settings &gt; Security &gt; Two-factor authentication, then send the user a new invite. If SSO is enforced, confirm the user is assigned to the app in the identity provider."
+        },
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The login screen is stuck after I enter the verification code."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Login and MFA access issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-034",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 15] Login and MFA access issue",
+      "description": "Can you help me recover access? The authenticator app was deleted.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Can you help me recover access? The authenticator app was deleted."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Reset MFA from Admin Settings &gt; Security &gt; Two-factor authentication, then send the user a new invite. If SSO is enforced, confirm the user is assigned to the app in the identity provider."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Login and MFA access issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-035",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 16] API or webhook integration issue",
+      "description": "Webhook delivery is failing with 401 even though the signing secret is copied from settings.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Webhook delivery is failing with 401 even though the signing secret is copied from settings."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Use exponential backoff for 429 responses and verify the webhook signature against the raw request body. Rotate exposed keys from Settings &gt; Developers &gt; API keys, then update integrations before revoking the old key."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "API or webhook integration issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-036",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 17] API or webhook integration issue",
+      "description": "Our API import returns HTTP 429 during the nightly sync. How should we retry safely?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Our API import returns HTTP 429 during the nightly sync. How should we retry safely?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Use exponential backoff for 429 responses and verify the webhook signature against the raw request body. Rotate exposed keys from Settings &gt; Developers &gt; API keys, then update integrations before revoking the old key."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "API or webhook integration issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-037",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 18] API or webhook integration issue",
+      "description": "The integration sends duplicate customer records when the webhook retries after timeout.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The integration sends duplicate customer records when the webhook retries after timeout."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Use exponential backoff for 429 responses and verify the webhook signature against the raw request body. Rotate exposed keys from Settings &gt; Developers &gt; API keys, then update integrations before revoking the old key."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "API or webhook integration issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-038",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 19] API or webhook integration issue",
+      "description": "Can we rotate the API key without downtime? The current key may be exposed.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Can we rotate the API key without downtime? The current key may be exposed."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Use exponential backoff for 429 responses and verify the webhook signature against the raw request body. Rotate exposed keys from Settings &gt; Developers &gt; API keys, then update integrations before revoking the old key."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "API or webhook integration issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-039",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 20] API or webhook integration issue",
+      "description": "The endpoint returns malformed JSON when a ticket has a file attached. Here is the log: {\"error\":\"bad parse\"}",
+      "status": "solved",
+      "satisfaction_rating": "bad",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Use exponential backoff for 429 responses and verify the webhook signature against the raw request body. Rotate exposed keys from Settings &gt; Developers &gt; API keys, then update integrations before revoking the old key."
+        },
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The endpoint returns malformed JSON when a ticket has a file attached. Here is the log: {\"error\":\"bad parse\"}"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "API or webhook integration issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-040",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 21] API or webhook integration issue",
+      "description": "Webhook setup keeps failing for **Shopify**. The callback URL saves, then disappears.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Webhook setup keeps failing for Shopify. The callback URL saves, then disappears."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Use exponential backoff for 429 responses and verify the webhook signature against the raw request body. Rotate exposed keys from Settings &gt; Developers &gt; API keys, then update integrations before revoking the old key."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "API or webhook integration issue",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-041",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 36] Localized support question",
+      "description": "No puedo cancelar la suscripci\u00f3n desde el panel. \u00bfD\u00f3nde est\u00e1 el bot\u00f3n correcto?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "No puedo cancelar la suscripci\u00f3n desde el panel. \u00bfD\u00f3nde est\u00e1 el bot\u00f3n correcto?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Update the account setting from the admin profile, then retry the verification or billing workflow. If the localized page is missing the control, switch to English temporarily and contact support."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Localized support question",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-042",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 37] Localized support question",
+      "description": "Je ne re\u00e7ois pas le courriel de v\u00e9rification pour inviter mon \u00e9quipe.",
+      "status": "solved",
+      "satisfaction_rating": "bad",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Je ne re\u00e7ois pas le courriel de v\u00e9rification pour inviter mon \u00e9quipe."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Update the account setting from the admin profile, then retry the verification or billing workflow. If the localized page is missing the control, switch to English temporarily and contact support."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Localized support question",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-043",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 38] Localized support question",
+      "description": "Warum ist meine Rechnung h\u00f6her, obwohl ich Benutzer entfernt habe?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Warum ist meine Rechnung h\u00f6her, obwohl ich Benutzer entfernt habe?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Update the account setting from the admin profile, then retry the verification or billing workflow. If the localized page is missing the control, switch to English temporarily and contact support."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Localized support question",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-044",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 39] Localized support question",
+      "description": "Como fa\u00e7o para recuperar uma conta bloqueada por MFA?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Como fa\u00e7o para recuperar uma conta bloqueada por MFA?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Update the account setting from the admin profile, then retry the verification or billing workflow. If the localized page is missing the control, switch to English temporarily and contact support."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Localized support question",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-045",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 44] Onboarding setup confusion",
+      "description": "The setup checklist says connect billing before inviting the team, but our owner is out. Can admins skip that step?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The setup checklist says connect billing before inviting the team, but our owner is out. Can admins skip that step?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Admins can invite teammates before billing is connected. Open Workspace Settings &gt; Members, invite the team, then return to Billing before the trial ends."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Onboarding setup confusion",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-046",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 45] Onboarding setup confusion",
+      "description": "I imported a CSV and every row says unmapped. The file has a BOM and semicolon separators from Excel.",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "I imported a CSV and every row says unmapped. The file has a BOM and semicolon separators from Excel."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Save the export as UTF-8 CSV or upload the original file; the importer detects BOMs and semicolon delimiters, then shows mapped columns before processing."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Onboarding setup confusion",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-047",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 48] HTML-heavy ticket body",
+      "description": "The help-center article has a broken reset password link.\n\n    Error: token_expired\n    trace_id=abc123",
+      "status": "solved",
+      "satisfaction_rating": "bad",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "The help-center article has a broken reset password link.  Error: token_expired\ntrace_id=abc123"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "Update the reset-password article link to the current route, then ask the user to request a fresh magic link. Expired tokens cannot be reused."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "HTML-heavy ticket body",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-048",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 49] Security review request",
+      "description": "Procurement needs a SOC 2 report and a data processing addendum before we can renew. Where do we download those?",
+      "status": "solved",
+      "satisfaction_rating": "good",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Procurement needs a SOC 2 report and a data processing addendum before we can renew. Where do we download those?"
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "SOC 2 and DPA files are available from Trust Center after an admin requests access. If the Trust Center link is disabled, contact your account owner."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Security review request",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-049",
+      "requester_id": "requester",
+      "subject": "SAMPLE generated by AI: Question About Website Project Invoice",
+      "description": "Hi, I received the invoice for my website project, but I\u2019m not sure what the charge for the post-launch support covers. Could you please confirm whether that includes updates and minor fixes after the site goes live? I\u2019d also appreciate a copy of the payment schedule if one is available.",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "Hi, I received the invoice for my website project, but I\u2019m not sure what the charge for the post-launch support covers. Could you please confirm whether that includes updates and minor fixes after the site goes live? I\u2019d also appreciate a copy of the payment schedule if one is available."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "no one has gotten back to me yet\n&nbsp;"
+        }
+      ],
+      "expected": {
+        "cluster_theme": "SAMPLE generated by AI: Question About Website Project Invoice",
+        "should_publish_answer": true,
+        "has_private_note": false,
+        "reopened": false,
+        "unresolved": false
+      }
+    },
+    {
+      "id": "zd-proof-050",
+      "requester_id": "requester",
+      "subject": "[Atlas seed 47] Notification noise after import",
+      "description": "After the migration, customers received duplicate email notifications for old solved tickets. How do we stop that?",
+      "status": "open",
+      "satisfaction_rating": "unoffered",
+      "comments": [
+        {
+          "public": true,
+          "author_id": "requester",
+          "body": "After the migration, customers received duplicate email notifications for old solved tickets. How do we stop that?"
+        },
+        {
+          "public": false,
+          "author_id": "agent",
+          "body": "Internal note: likely trigger misconfiguration from the migration. Do not publish this as customer guidance until support confirms the safe trigger rule."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "A member of the support team will get back to you within the next 48 hours."
+        },
+        {
+          "public": true,
+          "author_id": "agent",
+          "body": "there all pretty basic"
+        }
+      ],
+      "expected": {
+        "cluster_theme": "Notification noise after import",
+        "should_publish_answer": false,
+        "has_private_note": true,
+        "reopened": false,
+        "unresolved": true
+      }
+    }
+  ]
+}

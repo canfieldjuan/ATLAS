@@ -47,6 +47,7 @@ pytest \
   tests/test_content_ops_faq_deflection_live_upload_fixture.py \
   tests/test_content_ops_faq_report_contract_docs.py \
   tests/test_content_ops_deflection_source_proof_docs.py \
+  tests/test_capture_zendesk_product_proof_corpus.py \
   tests/test_content_ops_deflection_report.py \
   tests/test_content_ops_deflection_resolution_live_proof.py \
   tests/test_extracted_content_deflection_submit.py \
