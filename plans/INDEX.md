@@ -1,6 +1,6 @@
 # Plan archive index
 
-1050 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1051 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -735,6 +735,7 @@
 - [PR-Deflection-Zendesk-Credential-Flow](archive/PR-Deflection-Zendesk-Credential-Flow.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Zendesk-Full-Thread-Importer](archive/PR-Deflection-Zendesk-Full-Thread-Importer.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Zendesk-Full-Thread-Proof](archive/PR-Deflection-Zendesk-Full-Thread-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
+- [PR-Deflection-Zendesk-Header-Admission](archive/PR-Deflection-Zendesk-Header-Admission.md) - lane: content-ops/deflection-parser-admission | phase: Production hardening
 - [PR-Deflection-Zendesk-Live-Upload-Smoke](archive/PR-Deflection-Zendesk-Live-Upload-Smoke.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Zendesk-Product-Proof-Corpus](archive/PR-Deflection-Zendesk-Product-Proof-Corpus.md) - lane: content-ops/deflection-product-proof | phase: Functional validation
 - [PR-Deflection-Zendesk-Product-Proof-Eval](archive/PR-Deflection-Zendesk-Product-Proof-Eval.md) - lane: content-ops/deflection-product-proof | phase: Functional validation
