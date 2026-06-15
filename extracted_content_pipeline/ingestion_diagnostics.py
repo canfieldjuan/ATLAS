@@ -16,7 +16,10 @@ from .campaign_customer_data import (
 )
 from .campaign_source_adapters import (
     SourceDataFormat,
+    SourceRowAdmissionDiagnostics,
+    build_source_row_admission_diagnostics,
     load_source_campaign_opportunities_from_file,
+    load_source_rows_with_warnings_from_file,
     source_rows_to_campaign_opportunities,
 )
 
@@ -39,13 +42,14 @@ class IngestionDiagnosticsReport:
     missing_field_counts: Mapping[str, int]
     source_type_counts: Mapping[str, int]
     sample_limit: int
+    source_row_admission: SourceRowAdmissionDiagnostics | None = None
 
     @property
     def ok(self) -> bool:
         return bool(self.opportunities) and not self.missing_field_counts.get("target_id", 0)
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "ok": self.ok,
             "mode": self.mode,
             "source": self.source,
@@ -57,6 +61,9 @@ class IngestionDiagnosticsReport:
             "samples": [dict(row) for row in self.opportunities[: self.sample_limit]],
             "warnings": list(self.warnings),
         }
+        if self.source_row_admission:
+            payload["source_row_admission"] = self.source_row_admission.as_dict()
+        return payload
 
 
 def inspect_ingestion_file(
@@ -78,14 +85,37 @@ def inspect_ingestion_file(
         raise ValueError("max_source_text_chars must be positive")
 
     source = Path(path)
+    source_row_admission: SourceRowAdmissionDiagnostics | None = None
     if source_rows:
-        loaded = load_source_campaign_opportunities_from_file(
-            source,
-            file_format=source_format,
-            target_mode=target_mode,
-            max_text_chars=max_source_text_chars,
-            default_fields=default_fields,
-        )
+        if _source_rows_file_is_csv(source, source_format):
+            rows, load_warnings = load_source_rows_with_warnings_from_file(
+                source,
+                file_format=source_format,
+            )
+            converted = source_rows_to_campaign_opportunities(
+                rows,
+                target_mode=target_mode,
+                max_text_chars=max_source_text_chars,
+                default_fields=default_fields,
+            )
+            source_row_admission = build_source_row_admission_diagnostics(
+                rows,
+                input_format="csv",
+                usable_source_row_count=len(converted.opportunities),
+            )
+            loaded = CampaignOpportunityLoadResult(
+                opportunities=converted.opportunities,
+                warnings=load_warnings + converted.warnings,
+                source=str(source),
+            )
+        else:
+            loaded = load_source_campaign_opportunities_from_file(
+                source,
+                file_format=source_format,
+                target_mode=target_mode,
+                max_text_chars=max_source_text_chars,
+                default_fields=default_fields,
+            )
         mode: IngestionMode = "source_rows"
     else:
         loaded = load_campaign_opportunities_from_file(
@@ -100,6 +130,7 @@ def inspect_ingestion_file(
         mode=mode,
         source=str(source),
         sample_limit=sample_limit,
+        source_row_admission=source_row_admission,
     )
 
 
@@ -149,6 +180,7 @@ def build_ingestion_diagnostics(
     mode: IngestionMode,
     source: str | None = None,
     sample_limit: int = 3,
+    source_row_admission: SourceRowAdmissionDiagnostics | None = None,
 ) -> IngestionDiagnosticsReport:
     """Build a diagnostics report from normalized opportunity rows."""
 
@@ -166,6 +198,7 @@ def build_ingestion_diagnostics(
         missing_field_counts=_missing_field_counts(opportunities),
         source_type_counts=_source_type_counts(opportunities),
         sample_limit=sample_limit,
+        source_row_admission=source_row_admission,
     )
 
 
@@ -207,6 +240,14 @@ def _row_source_type(row: Mapping[str, Any]) -> str:
                 if source_type:
                     return source_type
     return ""
+
+
+def _source_rows_file_is_csv(path: Path, source_format: SourceDataFormat) -> bool:
+    if source_format == "csv":
+        return True
+    if source_format != "auto":
+        return False
+    return path.suffix.lower() == ".csv"
 
 
 def _has_value(value: Any) -> bool:
