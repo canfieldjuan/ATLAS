@@ -74,10 +74,11 @@ The report Markdown always contains these customer-facing sections:
 - `Support Tax Confirmation`
 - `Your Help-Desk SEO Targeting List`
 - `Ranked Question Opportunities`
-- `Publishable Help-Center Copy From Proven Resolutions`
-- `No Proven Answer Yet`
-- `Vocabulary Gaps`
-- `Evidence Appendix`
+- `Question Details and Evidence`
+
+`Question Details and Evidence` is the canonical per-question detail pass. It
+contains the answer status, publishable copy or no-proven-answer guidance,
+vocabulary mappings, and complete source evidence for each ranked question.
 
 ## Deflection Snapshot
 

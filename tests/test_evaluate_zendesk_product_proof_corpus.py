@@ -55,6 +55,37 @@ def _item(source_ids, question="How do I reset MFA?"):
     }
 
 
+def test_report_excerpt_skips_complete_evidence_bodies_but_keeps_next_question() -> None:
+    markdown = """# Support Ticket Deflection Report
+
+## Question Details and Evidence
+
+### 1. How do I get a duplicate charge refunded?
+
+**Publishable answer draft:**
+
+Refund the duplicate charge.
+
+**Complete evidence:**
+
+**Source IDs (full list):** zd-proof-020
+
+- `zd-proof-020` - [Atlas seed 01] raw seeded ticket text
+
+### 2. How do I reset MFA?
+
+**Publishable answer draft:**
+
+Reset MFA from Admin Settings.
+"""
+
+    excerpt = MOD._report_excerpt(markdown, max_lines=40)
+
+    assert "[Atlas seed" not in excerpt
+    assert "### 2. How do I reset MFA?" in excerpt
+    assert "Reset MFA from Admin Settings." in excerpt
+
+
 def test_evaluate_items_accepts_clean_publishable_sources() -> None:
     result = MOD.evaluate_items(
         labels=_labels(),

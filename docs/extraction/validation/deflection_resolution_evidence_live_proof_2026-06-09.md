@@ -55,13 +55,13 @@ python scripts/build_content_ops_deflection_report.py \
 | Resolution evidence present | true |
 | Resolution evidence count | 2 |
 
-The generated report includes both required customer-facing lanes:
+The generated report includes both required customer-facing lanes inside
+`## Question Details and Evidence`:
 
-- `## Publishable Help-Center Copy From Proven Resolutions` contains two
-  resolved-answer drafts:
+- Two resolved-answer drafts:
   - attribution/report export, backed by 4 resolved tickets;
   - invoice download, backed by 3 resolved tickets.
-- `## No Proven Answer Yet` contains two unresolved themes:
+- Two no-proven-answer themes:
   - SSO certificate upload, asked by 3 tickets but no resolution text;
   - CRM sync pause after a field-mapping change, asked by 2 tickets but no
     resolution text.

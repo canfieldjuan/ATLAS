@@ -188,8 +188,9 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     assert all(payload["faq_result"]["output_checks"].values())
     assert "## Support Tax Confirmation" in payload["markdown"]
     assert "## Your Help-Desk SEO Targeting List" in payload["markdown"]
-    assert "## Publishable Help-Center Copy From Proven Resolutions" in payload["markdown"]
-    assert "## No Proven Answer Yet" in payload["markdown"]
+    assert "## Question Details and Evidence" in payload["markdown"]
+    assert "## Publishable Help-Center Copy From Proven Resolutions" not in payload["markdown"]
+    assert "## No Proven Answer Yet" not in payload["markdown"]
     assert "**Sources:**" not in payload["markdown"]
     assert "ATLAS" not in payload["markdown"]
     assert "Atlas" not in payload["markdown"]
