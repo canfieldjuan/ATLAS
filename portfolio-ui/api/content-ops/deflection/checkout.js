@@ -1,6 +1,7 @@
 const CHECKOUT_SOURCE = "content_ops_deflection_report";
 const DEFAULT_AMOUNT_CENTS = 150000;
 const DEFAULT_CURRENCY = "usd";
+const DEFAULT_ATLAS_TIMEOUT_MS = 5000;
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{5,160}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -24,6 +25,31 @@ function parseAmount(value) {
 function normalizeCurrency(value) {
   const normalized = clean(value).toLowerCase();
   return /^[a-z]{3}$/.test(normalized) ? normalized : DEFAULT_CURRENCY;
+}
+
+function atlasConfigFromEnv(env = process.env) {
+  const timeoutMs = Number.parseInt(clean(env.ATLAS_PROXY_TIMEOUT_MS), 10);
+  return {
+    baseUrl: clean(env.ATLAS_API_BASE_URL),
+    token: clean(env.ATLAS_B2B_JWT || env.ATLAS_TOKEN),
+    timeoutMs:
+      Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_ATLAS_TIMEOUT_MS,
+  };
+}
+
+function checkoutAuthorizationConfigErrors(config) {
+  const errors = [];
+  if (!config.baseUrl) errors.push("ATLAS_API_BASE_URL is not configured");
+  if (!config.token) errors.push("ATLAS_B2B_JWT is not configured");
+  return errors;
+}
+
+function atlasUrl(baseUrl, path) {
+  return `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function checkoutAuthorizationPath(requestId) {
+  return `/api/v1/content-ops/deflection-reports/${encodeURIComponent(requestId)}/checkout-authorization`;
 }
 
 function stripeAuthHeaders(stripeSecretKey) {
@@ -112,7 +138,52 @@ function checkoutUrls(req, requestId, accountId) {
   return { successUrl, cancelUrl, errors: [] };
 }
 
-function buildStripeCheckoutBody({ requestId, accountId, successUrl, cancelUrl }) {
+function normalizeCheckoutTerms(terms = {}) {
+  const source = terms && typeof terms === "object" ? terms : {};
+  const priceId = clean(source.price_id);
+  const amount = Number.parseInt(String(source.amount_cents ?? ""), 10);
+  const currency = clean(source.currency).toLowerCase();
+  return {
+    priceId,
+    amount: Number.isFinite(amount) && amount > 0 ? amount : null,
+    currency: /^[a-z]{3}$/.test(currency) ? currency : "",
+  };
+}
+
+function stripeCheckoutIdempotencyKey({ requestId, accountId }) {
+  return `deflection-checkout:${accountId}:${requestId}`;
+}
+
+function stripeCheckoutPriceId(checkout = null, env = process.env) {
+  const terms = normalizeCheckoutTerms(checkout);
+  return terms.priceId || clean(env.STRIPE_DEFLECTION_REPORT_PRICE_ID);
+}
+
+function stripeCheckoutInlineTerms(checkout = null, env = process.env) {
+  const terms = normalizeCheckoutTerms(checkout);
+  return {
+    amount: terms.amount || parseAmount(env.DEFLECTION_REPORT_AMOUNT_CENTS),
+    currency: terms.currency || normalizeCurrency(env.DEFLECTION_REPORT_CURRENCY),
+  };
+}
+
+function validateInlineCheckoutTerms({ amount, currency }) {
+  if (currency !== DEFAULT_CURRENCY || amount < DEFAULT_AMOUNT_CENTS) {
+    return {
+      ok: false,
+      message: "configured inline Checkout amount must be usd and at least 150000 cents",
+    };
+  }
+  return { ok: true };
+}
+
+function buildStripeCheckoutBody({
+  requestId,
+  accountId,
+  successUrl,
+  cancelUrl,
+  checkout = null,
+}) {
   const params = new URLSearchParams();
   params.set("mode", "payment");
   params.set("success_url", successUrl);
@@ -126,14 +197,13 @@ function buildStripeCheckoutBody({ requestId, accountId, successUrl, cancelUrl }
   params.set("client_reference_id", requestId);
   params.set("line_items[0][quantity]", "1");
 
-  const priceId = clean(process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID);
+  const priceId = stripeCheckoutPriceId(checkout);
   if (priceId) {
     params.set("line_items[0][price]", priceId);
     return params;
   }
 
-  const amount = parseAmount(process.env.DEFLECTION_REPORT_AMOUNT_CENTS);
-  const currency = normalizeCurrency(process.env.DEFLECTION_REPORT_CURRENCY);
+  const { amount, currency } = stripeCheckoutInlineTerms(checkout);
   params.set("line_items[0][price_data][currency]", currency);
   params.set("line_items[0][price_data][unit_amount]", String(amount));
   params.set("line_items[0][price_data][product_data][name]", "FAQ Deflection Report");
@@ -144,8 +214,11 @@ function buildStripeCheckoutBody({ requestId, accountId, successUrl, cancelUrl }
   return params;
 }
 
-async function validateConfiguredPrice(stripeSecretKey) {
-  const priceId = clean(process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID);
+async function validateConfiguredPrice(
+  stripeSecretKey,
+  priceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID,
+) {
+  priceId = clean(priceId);
   if (!priceId) return { ok: true };
 
   const response = await fetch(
@@ -174,12 +247,76 @@ async function validateConfiguredPrice(stripeSecretKey) {
   return { ok: true };
 }
 
-async function createCheckoutSession(params, stripeSecretKey) {
+async function authorizeCheckout({ requestId, env = process.env, fetchImpl = fetch }) {
+  const config = atlasConfigFromEnv(env);
+  const configErrors = checkoutAuthorizationConfigErrors(config);
+  if (configErrors.length > 0) {
+    return {
+      ok: false,
+      status: 503,
+      error: "checkout_authorization_not_configured",
+      details: configErrors,
+    };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const response = await fetchImpl(
+      atlasUrl(config.baseUrl, checkoutAuthorizationPath(requestId)),
+      {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Authorization": `Bearer ${config.token}`,
+        },
+        signal: controller.signal,
+      },
+    );
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        error: "checkout_not_authorized",
+        details:
+          payload && typeof payload.detail === "string"
+            ? payload.detail
+            : "Deflection report is not ready for checkout.",
+      };
+    }
+    if (
+      !payload ||
+      payload.status !== "authorized" ||
+      !payload.checkout ||
+      typeof payload.checkout !== "object"
+    ) {
+      return {
+        ok: false,
+        status: 502,
+        error: "checkout_authorization_contract_violation",
+      };
+    }
+    return { ok: true, checkout: payload.checkout };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 502,
+      error: "checkout_authorization_failed",
+      details: error && typeof error === "object" ? error.name || "fetch_error" : "fetch_error",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function createCheckoutSession(params, stripeSecretKey, idempotencyKey) {
   const response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
     method: "POST",
     headers: {
       ...stripeAuthHeaders(stripeSecretKey),
       "Content-Type": "application/x-www-form-urlencoded",
+      "Idempotency-Key": idempotencyKey,
     },
     body: params,
   });
@@ -196,10 +333,15 @@ async function createCheckoutSession(params, stripeSecretKey) {
 
 export {
   CHECKOUT_SOURCE,
+  authorizeCheckout,
   buildStripeCheckoutBody,
   checkoutUrls,
   resultPath,
   stripeCheckoutKeyConfig,
+  stripeCheckoutIdempotencyKey,
+  stripeCheckoutInlineTerms,
+  stripeCheckoutPriceId,
+  validateInlineCheckoutTerms,
   validateConfiguredPrice,
   validatePayload,
 };
@@ -236,10 +378,32 @@ export default async function handler(req, res) {
     json(res, 503, { error: "checkout_url_not_configured", details: urls.errors });
     return;
   }
+
+  const authorization = await authorizeCheckout({ requestId });
+  if (!authorization.ok) {
+    json(res, authorization.status, {
+      error: authorization.error,
+      details: authorization.details,
+    });
+    return;
+  }
+
   if (stripeKey.source !== "restricted") {
-    const priceValidation = await validateConfiguredPrice(stripeKey.key);
+    const priceValidation = await validateConfiguredPrice(
+      stripeKey.key,
+      stripeCheckoutPriceId(authorization.checkout),
+    );
     if (!priceValidation.ok) {
       json(res, 503, { error: "checkout_price_not_configured", details: priceValidation.message });
+      return;
+    }
+  }
+  if (!stripeCheckoutPriceId(authorization.checkout)) {
+    const inlineValidation = validateInlineCheckoutTerms(
+      stripeCheckoutInlineTerms(authorization.checkout),
+    );
+    if (!inlineValidation.ok) {
+      json(res, 503, { error: "checkout_price_not_configured", details: inlineValidation.message });
       return;
     }
   }
@@ -249,8 +413,13 @@ export default async function handler(req, res) {
     accountId,
     successUrl: urls.successUrl,
     cancelUrl: urls.cancelUrl,
+    checkout: authorization.checkout,
   });
-  const session = await createCheckoutSession(body, stripeKey.key);
+  const session = await createCheckoutSession(
+    body,
+    stripeKey.key,
+    stripeCheckoutIdempotencyKey({ requestId, accountId }),
+  );
   if (!session.ok) {
     json(res, 502, { error: "stripe_checkout_failed", details: session.message });
     return;
