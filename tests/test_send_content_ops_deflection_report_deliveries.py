@@ -86,7 +86,16 @@ def test_validate_requires_resend_key_for_live_send(monkeypatch: pytest.MonkeyPa
         send_cli._validate_args(args)
 
 
-def test_validate_fails_closed_before_pool_for_missing_destination() -> None:
+def test_validate_fails_closed_before_pool_for_missing_destination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "ATLAS_DEFLECTION_DELIVERY_RESULT_BASE_URL",
+        "ATLAS_DEFLECTION_DELIVERY_RESULT_URL_TEMPLATE",
+        "ATLAS_DEFLECTION_PORTFOLIO_BASE_URL",
+        "ATLAS_DEFLECTION_PORTFOLIO_RESULT_URL_TEMPLATE",
+    ):
+        monkeypatch.delenv(name, raising=False)
     args = send_cli._parse_args(
         [
             "--database-url",

@@ -70,10 +70,11 @@ answer" (3), alongside repeat-question clusters (duplicate charge x8, login/MFA
 x7, API/webhook x6, shipping x5). Labels are reviewer-drafted from the theme +
 structure and are **pending operator correction**.
 
-Still deferred: the funnel run itself -- feeding this corpus through deflection
-and scoring publishable-answer precision against `should_publish_answer`,
-private-note exclusion, and reopened/unresolved handling. Until then this corpus
-is captured-and-labeled but not yet a qualitative product pass.
+Follow-up validation now lives in
+`deflection_zendesk_product_proof_eval_2026-06-14.md`: the committed corpus is
+fed through deflection and scored against `should_publish_answer`, private-note
+exclusion, and reopened/unresolved handling. The corpus labels remain
+reviewer-drafted and pending operator correction.
 
 ## Pairing
 

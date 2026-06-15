@@ -1,0 +1,194 @@
+{
+  "artifact_summary": {
+    "csat_present_count": 22,
+    "drafted_answer_count": 6,
+    "generated": 9,
+    "negative_csat_ticket_count": 4,
+    "no_proven_answer_count": 3,
+    "non_repeat_question_count": 19,
+    "non_repeat_ticket_count": 19,
+    "outcome_diagnostic_ticket_count": 31,
+    "outcome_diagnostics_present": true,
+    "outcome_risk_ticket_count": 4,
+    "output_checks": {
+      "condensed": true,
+      "has_action_items": true,
+      "resolution_evidence_scoped": true,
+      "uses_user_vocabulary": true
+    },
+    "reopened_ticket_count": 0,
+    "source_count": 50,
+    "support_ticket_resolution_evidence_count": 6,
+    "support_ticket_resolution_evidence_present": true,
+    "ticket_source_count": 50,
+    "ticket_status_summary": {
+      "open": 9,
+      "resolved": 22
+    },
+    "top_opportunity_score": 24,
+    "top_question": "How do I get the duplicate charge refunded?"
+  },
+  "blocking_violation_codes": [],
+  "corpus": {
+    "has_private_note_true": 4,
+    "reopened_true": 4,
+    "should_publish_answer_true": 36,
+    "ticket_count": 50,
+    "unresolved_true": 7
+  },
+  "covered_publishable_source_count": 25,
+  "degraded_draft_question_labels": [
+    "What should I do about reset?",
+    "What should I do about reset?",
+    "What should I do about duplicate?"
+  ],
+  "degraded_question_labels": [],
+  "expected_publishable_source_count": 36,
+  "failed_output_checks": [],
+  "faq_warning_codes": [
+    "non_repeat_tickets_excluded",
+    "duplicate_source_policy_questions"
+  ],
+  "faq_warning_count": 2,
+  "faq_warnings": [
+    {
+      "code": "non_repeat_tickets_excluded",
+      "message": "Excluded 19 tickets whose question appeared only once; they are counted separately and not billed as repeat work.",
+      "question_count": 19,
+      "ticket_count": 19
+    },
+    {
+      "code": "duplicate_source_policy_questions",
+      "message": "Some source-policy FAQ headings remain duplicated because no safe controlled-vocabulary disambiguator was available.",
+      "question": "What should I do about reset?",
+      "source_ids": [
+        "zd-proof-015",
+        "zd-proof-016",
+        "zd-proof-017",
+        "zd-proof-018",
+        "zd-proof-047"
+      ]
+    }
+  ],
+  "generated_item_count": 9,
+  "import_warning_count": 0,
+  "output_checks": {
+    "condensed": true,
+    "has_action_items": true,
+    "resolution_evidence_scoped": true,
+    "uses_user_vocabulary": true
+  },
+  "package_warning_count": 0,
+  "private_note_leaks": [],
+  "publishable_answer_item_count": 6,
+  "publishable_false_positive_source_ids": [],
+  "publishable_source_coverage": 0.6944,
+  "reopened_publishable_source_ids": [],
+  "status": "ok",
+  "top_questions": [
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "How do I get the duplicate charge refunded?",
+      "rank": 1,
+      "source_ids": [
+        "zd-proof-020",
+        "zd-proof-021",
+        "zd-proof-022",
+        "zd-proof-023",
+        "zd-proof-024",
+        "zd-proof-025",
+        "zd-proof-026",
+        "zd-proof-027"
+      ],
+      "ticket_count": 8
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "How do I reset two factor authentication for a teammate who lost their phone?",
+      "rank": 2,
+      "source_ids": [
+        "zd-proof-028",
+        "zd-proof-029",
+        "zd-proof-030",
+        "zd-proof-031",
+        "zd-proof-032",
+        "zd-proof-033",
+        "zd-proof-034"
+      ],
+      "ticket_count": 7
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "Where is my replacement device?",
+      "rank": 3,
+      "source_ids": [
+        "zd-proof-001",
+        "zd-proof-002",
+        "zd-proof-003",
+        "zd-proof-004",
+        "zd-proof-005"
+      ],
+      "ticket_count": 5
+    },
+    {
+      "answer_evidence_status": "draft_needs_review",
+      "question": "What should I do about reset?",
+      "rank": 4,
+      "source_ids": [
+        "zd-proof-015",
+        "zd-proof-016",
+        "zd-proof-017",
+        "zd-proof-018"
+      ],
+      "ticket_count": 4
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "\u00bfD\u00f3nde est\u00e1 el bot\u00f3n correcto?",
+      "rank": 5,
+      "source_ids": [
+        "zd-proof-041",
+        "zd-proof-042",
+        "zd-proof-043"
+      ],
+      "ticket_count": 3
+    },
+    {
+      "answer_evidence_status": "draft_needs_review",
+      "question": "What should I do about reset?",
+      "rank": 6,
+      "source_ids": [
+        "zd-proof-047"
+      ],
+      "ticket_count": 1
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "Can admins skip that step?",
+      "rank": 7,
+      "source_ids": [
+        "zd-proof-045"
+      ],
+      "ticket_count": 1
+    },
+    {
+      "answer_evidence_status": "draft_needs_review",
+      "question": "What should I do about duplicate?",
+      "rank": 8,
+      "source_ids": [
+        "zd-proof-046"
+      ],
+      "ticket_count": 1
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "Como fa\u00e7o para recuperar uma conta bloqueada por MFA?",
+      "rank": 9,
+      "source_ids": [
+        "zd-proof-044"
+      ],
+      "ticket_count": 1
+    }
+  ],
+  "unresolved_publishable_source_ids": []
+}

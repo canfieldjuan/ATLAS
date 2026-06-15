@@ -30,6 +30,17 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-06-14
+
+### Support-ticket tokenizer still over-strips some es-ending words
+- File/location: `extracted_content_pipeline/support_ticket_clustering.py`
+- Description: The tokenizer fix in `PR-Deflection-Question-Label-Quality` stopped `Atlas` and `status` from becoming `atla` and `statu`, but the remaining final-`s` rule can still turn terms such as `series` and `kubernetes` into `serie` and `kubernete`.
+- Why it matters: Rare product or technical terms could still degrade cluster previews or source-policy labels if they become the dominant fallback token.
+- Effort: S
+- Category: polish
+- Owner/session: Codex content-ops/deflection-product-proof
+- Found during: PR-Deflection-Question-Label-Quality review
+
 ## 2026-06-13
 
 ### portfolio-ui npm audit vulnerabilities

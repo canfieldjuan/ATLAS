@@ -719,13 +719,14 @@ def test_build_ticket_faq_markdown_fails_closed_when_resolution_has_no_question_
 
     item = result.items[0]
     assert item["question_source"] == "source_policy"
-    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["answer_evidence_status"] == "draft_needs_review"
     assert item["resolution_evidence_scope"] == "missing_question_scope"
+    assert item["steps"][0].startswith("Review the cited ticket evidence")
     assert result.output_checks == {
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
-        "resolution_evidence_scoped": False,
+        "resolution_evidence_scoped": True,
     }
 
 
@@ -816,11 +817,11 @@ def test_build_ticket_faq_markdown_fails_closed_for_unscoped_resolution_beyond_d
 
     item = result.items[0]
     assert item["question_source"] == "source_policy"
-    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["answer_evidence_status"] == "draft_needs_review"
     assert item["resolution_evidence_scope"] == "missing_question_scope"
     assert item["resolution_source_count"] == 1
-    assert item["steps"][0] == "Enable Report Downloads for the analyst role."
-    assert result.output_checks["resolution_evidence_scoped"] is False
+    assert item["steps"][0].startswith("Review the cited ticket evidence")
+    assert result.output_checks["resolution_evidence_scoped"] is True
 
 
 def test_build_ticket_faq_markdown_counts_resolution_sources_not_unique_texts() -> None:
@@ -1826,7 +1827,9 @@ def test_build_ticket_faq_markdown_cleans_committed_zendesk_product_corpus_label
 
     assert "How do I reset two factor authentication for a teammate who lost their phone?" in questions
     assert "Where is my replacement device?" in questions
+    assert "Como fa\u00e7o para recuperar uma conta bloqueada por MFA?" in questions
     assert not any("[Atlas seed" in question for question in questions)
+    assert not any(question.startswith("Localized support question ") for question in questions)
     assert "What should I do about atla?" not in questions
     assert cluster_labels.isdisjoint({"atla", "atlas"})
 
