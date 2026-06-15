@@ -119,6 +119,67 @@ def test_partial_coverage_case_records_warning_without_rejecting() -> None:
     }]
 
 
+def test_observed_partial_csv_is_recorded_without_blocking(tmp_path: Path) -> None:
+    corpus = {
+        "source": "unit",
+        "run_tag": "unit",
+        "tickets": [{
+            "id": "zd-proof-001",
+            "subject": "Export failed",
+            "description": "Customer cannot export reports.",
+            "comments": [{
+                "public": True,
+                "body": "Customer cannot export reports.",
+            }],
+        }],
+    }
+    corpus_path = tmp_path / "corpus.json"
+    observed_path = tmp_path / "partial.csv"
+    out_dir = tmp_path / "artifact"
+    doc = tmp_path / "proof.md"
+    corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
+    observed_path.write_text(
+        "Ticket ID,Subject,Public Comments\n"
+        "T-1,Export failed,Customer cannot export reports.\n"
+        "T-2,Invite failed,\n",
+        encoding="utf-8",
+    )
+
+    code = MOD.main([
+        "--corpus",
+        str(corpus_path),
+        "--observed-csv",
+        f"observed_partial={observed_path}",
+        "--out-dir",
+        str(out_dir),
+        "--doc",
+        str(doc),
+    ])
+
+    summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+    observed = {
+        case["name"]: case for case in summary["cases"]
+    }["observed_partial"]
+    assert code == 0
+    assert summary["status"] == "ok"
+    assert summary["blocking_violation_codes"] == []
+    assert summary["observed_case_count"] == 1
+    assert summary["blocking_case_count"] == 0
+    assert observed["case_status"] == "observed"
+    assert observed["admission_status"] == "ACCEPT"
+    assert observed["raw_source_row_count"] == 2
+    assert observed["usable_source_row_count"] == 1
+    assert observed["coverage_warnings"] == [{
+        "code": "partial_source_row_coverage",
+        "location": "source_row_csv",
+        "raw_source_row_count": 2,
+        "usable_source_row_count": 1,
+        "skipped_source_row_count": 1,
+        "usable_source_ratio": 0.5,
+    }]
+    assert "Observed evidence cases: `1`" in doc.read_text(encoding="utf-8")
+
+
 def test_expected_full_coverage_partial_csv_fails_closed(tmp_path: Path) -> None:
     corpus = {
         "source": "unit",
@@ -167,6 +228,24 @@ def test_expected_full_coverage_partial_csv_fails_closed(tmp_path: Path) -> None
     assert written["status"] == "failed"
 
 
+def test_observed_csv_argument_requires_name_and_existing_path(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.csv"
+
+    try:
+        MOD.main(["--observed-csv", str(missing)])
+    except SystemExit as exc:
+        assert str(exc) == "--observed-csv values must use NAME=PATH"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("missing NAME=PATH did not fail")
+
+    try:
+        MOD.main(["--observed-csv", f"observed={missing}"])
+    except SystemExit as exc:
+        assert str(exc) == f"--observed-csv path does not exist: {missing}"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("missing observed path did not fail")
+
+
 def test_main_writes_summary_and_doc(tmp_path: Path) -> None:
     out_dir = tmp_path / "artifact"
     doc = tmp_path / "proof.md"
@@ -176,6 +255,7 @@ def test_main_writes_summary_and_doc(tmp_path: Path) -> None:
     assert code == 0
     summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["status"] == "ok"
+    assert summary["observed_case_count"] == 0
     assert summary["observed_min_usable_source_ratio"] == 1.0
     proof = doc.read_text(encoding="utf-8")
     assert "does not choose a low non-zero reject threshold" in proof
