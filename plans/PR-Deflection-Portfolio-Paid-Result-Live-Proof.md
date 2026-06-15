@@ -137,7 +137,9 @@ Parked hardening: none.
 - Redaction sanity check over committed proof doc/summary: passed; no live
   request id, result URL, account id, event id, or session id in committed
   artifacts.
-- Pending: `bash scripts/local_pr_review.sh --current-pr-body-file <body>`.
+- Review follow-up: unlocked-mode CTA detection now uses the HTML parser, not a
+  raw substring; focused pytest passed with an inert selector near-miss.
+- `bash scripts/local_pr_review.sh --current-pr-body-file <body>` - passed.
 
 ## Estimated diff size
 
@@ -147,8 +149,8 @@ Parked hardening: none.
 | `docs/extraction/validation/deflection_portfolio_paid_result_live_proof_2026-06-15.md` | 160 |
 | `docs/extraction/validation/fixtures/deflection_portfolio_paid_result_live_proof_20260615/summary.json` | 89 |
 | `plans/INDEX.md` | 1 |
-| `plans/PR-Deflection-Portfolio-Paid-Result-Live-Proof.md` | 154 |
+| `plans/PR-Deflection-Portfolio-Paid-Result-Live-Proof.md` | 156 |
 | `plans/archive/PR-Deflection-Full-Funnel-Paid-Delivery-Proof.md` | 0 |
 | `scripts/smoke_content_ops_deflection_portfolio_result_page.py` | 84 |
-| `tests/test_smoke_content_ops_deflection_portfolio_result_page.py` | 93 |
-| **Total** | **587** |
+| `tests/test_smoke_content_ops_deflection_portfolio_result_page.py` | 112 |
+| **Total** | **608** |

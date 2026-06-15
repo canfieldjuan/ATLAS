@@ -306,7 +306,7 @@ def _paid_page_errors(html: str, *, request_id: str, account_id: str) -> list[st
         errors.append("portfolio paid result page rendered unavailable state")
     if "YOUR DEFLECTION SNAPSHOT" in html:
         errors.append("portfolio paid result page rendered locked snapshot state")
-    if "data-atlas-deflection-unlock" in html:
+    if _unlock_cta_attrs(html) is not None:
         errors.append("portfolio paid result page must not render unlock CTA")
     if request_id not in html:
         errors.append("portfolio paid result page missing request_id value")

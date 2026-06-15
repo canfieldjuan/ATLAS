@@ -263,6 +263,25 @@ def test_paid_page_errors_require_paid_markers_and_reject_locked_state() -> None
     ]
 
 
+def test_paid_page_errors_allow_inert_unlock_selector_text() -> None:
+    errors = smoke._paid_page_errors(
+        """
+        <main>
+          <div>FULL BACKLOG REPORT</div>
+          <h1>Your complete Support Tax report is ready.</h1>
+          <section>Paid report contents for content-ops-123</section>
+          <script>
+            document.querySelector("[data-atlas-deflection-unlock]");
+          </script>
+        </main>
+        """,
+        request_id="content-ops-123",
+        account_id="acct-123",
+    )
+
+    assert errors == []
+
+
 def test_page_errors_reject_browser_exposed_account_id() -> None:
     html = """
     <main data-atlas-deflection-result>
