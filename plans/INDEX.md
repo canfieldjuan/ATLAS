@@ -1,6 +1,6 @@
 # Plan archive index
 
-1054 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1055 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -667,6 +667,7 @@
 - [PR-Deflection-CFPB-Mxbai-Live-Artifact](archive/PR-Deflection-CFPB-Mxbai-Live-Artifact.md) - lane: deflection/clustering | phase: Functional validation
 - [PR-Deflection-CSV-Admission-Diagnostics](archive/PR-Deflection-CSV-Admission-Diagnostics.md) - lane: content-ops/deflection-parser-admission | phase: Production hardening
 - [PR-Deflection-CSV-Admission-Policy](archive/PR-Deflection-CSV-Admission-Policy.md) - lane: content-ops/deflection-parser-admission | phase: Production hardening
+- [PR-Deflection-CSV-Admission-Threshold-Evidence](archive/PR-Deflection-CSV-Admission-Threshold-Evidence.md) - lane: content-ops/deflection-parser-admission | phase: Functional validation
 - [PR-Deflection-CSV-Ingestion-Hardening](archive/PR-Deflection-CSV-Ingestion-Hardening.md) - lane: deflection/go-live | phase: Production hardening
 - [PR-Deflection-CSV-Partial-Coverage-Warning](archive/PR-Deflection-CSV-Partial-Coverage-Warning.md) - lane: content-ops/deflection-parser-admission | phase: Production hardening
 - [PR-Deflection-Checkout-Authorization](archive/PR-Deflection-Checkout-Authorization.md) - lane: deflection/go-live | phase: Production hardening
