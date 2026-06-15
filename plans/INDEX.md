@@ -1,6 +1,6 @@
 # Plan archive index
 
-1047 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1048 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -702,6 +702,7 @@
 - [PR-Deflection-Provider-Export-Fixtures](archive/PR-Deflection-Provider-Export-Fixtures.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Question-Evidence-Scoping](archive/PR-Deflection-Question-Evidence-Scoping.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Question-Label-Merge](archive/PR-Deflection-Question-Label-Merge.md) - lane: deflection/clustering | phase: Production hardening
+- [PR-Deflection-Question-Label-Quality](archive/PR-Deflection-Question-Label-Quality.md) - lane: content-ops/deflection-product-proof | phase: Vertical slice
 - [PR-Deflection-Raw-CSV-Cluster-Preview](archive/PR-Deflection-Raw-CSV-Cluster-Preview.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Real-Data-Proof](archive/PR-Deflection-Real-Data-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Refund-Dispute-Revocation](archive/PR-Deflection-Refund-Dispute-Revocation.md) - lane: go-live-deflection-cleanup | phase: Production hardening
