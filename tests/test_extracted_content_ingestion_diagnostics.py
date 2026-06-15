@@ -120,6 +120,11 @@ def test_inspect_source_csv_reports_unmapped_populated_text_column(tmp_path: Pat
     assert admission["usable_source_ratio"] == 0.0
     assert admission["mapped_fields"] == {"source_id": ["Ticket ID"]}
     assert admission["populated_unmapped_fields"] == ["Conversation Text"]
+    assert admission["admission_decision"] == {
+        "status": "REJECT",
+        "reason": "no_usable_source_rows",
+        "location": "source_row_csv",
+    }
 
 
 def test_inspect_source_csv_classifies_zendesk_public_and_private_columns(
@@ -148,6 +153,7 @@ def test_inspect_source_csv_classifies_zendesk_public_and_private_columns(
     }
     assert admission["ignored_private_fields"] == ["Internal Notes"]
     assert admission["populated_unmapped_fields"] == []
+    assert admission["admission_decision"] == {"status": "ACCEPT"}
 
 
 def test_inspect_source_csv_sample_limit_does_not_make_known_aliases_unmapped(
@@ -218,6 +224,26 @@ def test_inspect_source_jsonl_does_not_emit_csv_admission_diagnostics(
 
     assert payload["ok"] is True
     assert "source_row_admission" not in payload
+
+
+def test_inspect_source_csv_with_header_only_has_no_hard_policy_decision(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "empty.csv"
+    path.write_text("Ticket ID,Message\n")
+
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+    ).as_dict()
+
+    admission = payload["source_row_admission"]
+    assert payload["ok"] is False
+    assert admission["raw_source_row_count"] == 0
+    assert admission["usable_source_row_count"] == 0
+    assert admission["usable_source_ratio"] is None
+    assert "admission_decision" not in admission
 
 
 def test_inspect_reports_missing_generation_fields(tmp_path: Path) -> None:
@@ -319,6 +345,11 @@ def test_inspection_cli_emits_csv_source_row_admission(tmp_path: Path) -> None:
     assert payload["source_row_admission"]["populated_unmapped_fields"] == [
         "Conversation Text"
     ]
+    assert payload["source_row_admission"]["admission_decision"] == {
+        "status": "REJECT",
+        "reason": "no_usable_source_rows",
+        "location": "source_row_csv",
+    }
 
 
 def test_inspection_cli_rejects_negative_sample_limit(tmp_path: Path) -> None:

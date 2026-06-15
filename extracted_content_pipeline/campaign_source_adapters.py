@@ -339,8 +339,20 @@ class SourceRowAdmissionDiagnostics:
             return None
         return round(self.usable_source_row_count / self.raw_source_row_count, 6)
 
+    @property
+    def admission_decision(self) -> dict[str, str] | None:
+        if self.input_format != "csv" or self.raw_source_row_count < 1:
+            return None
+        if self.usable_source_row_count < 1:
+            return {
+                "status": "REJECT",
+                "reason": "no_usable_source_rows",
+                "location": "source_row_csv",
+            }
+        return {"status": "ACCEPT"}
+
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "input_format": self.input_format,
             "raw_source_row_count": self.raw_source_row_count,
             "usable_source_row_count": self.usable_source_row_count,
@@ -354,6 +366,10 @@ class SourceRowAdmissionDiagnostics:
             "populated_unmapped_fields": list(self.populated_unmapped_fields),
             "field_sample_limit": self.field_sample_limit,
         }
+        decision = self.admission_decision
+        if decision:
+            payload["admission_decision"] = decision
+        return payload
 
 
 class _SourceFieldLookup(Mapping[str, Any]):
