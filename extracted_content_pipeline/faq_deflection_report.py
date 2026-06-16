@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from types import MappingProxyType
 from typing import Any
 
 from .campaign_ports import TenantScope
@@ -57,6 +58,18 @@ class DeflectionSnapshot:
 
 
 @dataclass(frozen=True)
+class DeflectionReportSectionDefinition:
+    """Registry metadata for one paid deflection report section."""
+
+    id: str
+    title: str
+    priority: int
+    surfaces: tuple[str, ...]
+    default_limit: int | None
+    required_data: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class DeflectionReportSection:
     """Structured report section plus interim Markdown rendering lines."""
 
@@ -65,6 +78,7 @@ class DeflectionReportSection:
     priority: int
     surfaces: tuple[str, ...]
     default_limit: int | None
+    required_data: tuple[str, ...]
     data: dict[str, Any]
     markdown_lines: tuple[str, ...]
 
@@ -75,6 +89,7 @@ class DeflectionReportSection:
             "priority": self.priority,
             "surfaces": list(self.surfaces),
             "default_limit": self.default_limit,
+            "required_data": list(self.required_data),
             "data": _json_ready(self.data),
         }
 
@@ -117,6 +132,100 @@ class DeflectionReportArtifact:
 
     def snapshot(self, *, top_n: int = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N) -> DeflectionSnapshot:
         return build_deflection_snapshot(self, top_n=top_n)
+
+
+_DEFLECTION_REPORT_SECTION_DEFINITIONS = (
+    DeflectionReportSectionDefinition(
+        id="support_tax",
+        title="Support Tax Confirmation",
+        priority=10,
+        surfaces=("web", "pdf", "email_summary", "markdown"),
+        default_limit=None,
+        required_data=(
+            "repeat_ticket_count",
+            "non_repeat_ticket_count",
+            "generated_question_count",
+            "assisted_contact_cost",
+            "estimated_support_cost",
+            "source_date_window",
+            "drafted_answer_count",
+            "no_proven_answer_count",
+            "ticket_source_count",
+        ),
+    ),
+    DeflectionReportSectionDefinition(
+        id="source_file",
+        title="Source file",
+        priority=15,
+        surfaces=("web", "pdf", "markdown"),
+        default_limit=None,
+        required_data=("source_label",),
+    ),
+    DeflectionReportSectionDefinition(
+        id="seo_targets",
+        title="Your Help-Desk SEO Targeting List",
+        priority=20,
+        surfaces=("web", "pdf", "markdown"),
+        default_limit=DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
+        required_data=(
+            "phrases",
+            "total_phrase_count",
+            "displayed_phrase_count",
+            "omitted_phrase_count",
+            "limit",
+        ),
+    ),
+    DeflectionReportSectionDefinition(
+        id="ranked_questions",
+        title="Ranked Question Opportunities",
+        priority=30,
+        surfaces=("web", "pdf", "markdown"),
+        default_limit=None,
+        required_data=("rows",),
+    ),
+    DeflectionReportSectionDefinition(
+        id="outcome_diagnostics",
+        title="Resolution Outcome Diagnostics",
+        priority=40,
+        surfaces=("web", "pdf", "markdown"),
+        default_limit=None,
+        required_data=(
+            "outcome_diagnostic_ticket_count",
+            "outcome_risk_ticket_count",
+            "reopened_ticket_count",
+            "negative_csat_ticket_count",
+            "rows",
+        ),
+    ),
+    DeflectionReportSectionDefinition(
+        id="question_details",
+        title="Question Details and Evidence",
+        priority=50,
+        surfaces=("web", "pdf", "markdown"),
+        default_limit=None,
+        required_data=("rows",),
+    ),
+    DeflectionReportSectionDefinition(
+        id="complete_evidence",
+        title="Complete Evidence",
+        priority=90,
+        surfaces=("export",),
+        default_limit=None,
+        required_data=(
+            "question_count",
+            "evidence_row_count",
+            "source_id_count",
+            "surfaces",
+        ),
+    ),
+)
+
+DEFLECTION_REPORT_SECTION_REGISTRY: Mapping[str, DeflectionReportSectionDefinition] = (
+    MappingProxyType({
+        definition.id: definition
+        for definition in _DEFLECTION_REPORT_SECTION_DEFINITIONS
+    })
+)
 
 
 class FAQDeflectionReportService:
@@ -401,10 +510,6 @@ def build_deflection_report_model(
     sections: list[DeflectionReportSection] = [
         _report_section(
             section_id="support_tax",
-            title="Support Tax Confirmation",
-            priority=10,
-            surfaces=("web", "pdf", "email_summary", "markdown"),
-            default_limit=None,
             data=_support_tax_data(resolved_summary, items),
             markdown_lines=_support_tax_section(resolved_summary, items),
         )
@@ -413,10 +518,6 @@ def build_deflection_report_model(
         sections.append(
             _report_section(
                 section_id="source_file",
-                title="Source file",
-                priority=15,
-                surfaces=("web", "pdf", "markdown"),
-                default_limit=None,
                 data={"source_label": _text(source_label)},
                 markdown_lines=["**Source file:**", "", _md(source_label), ""],
             )
@@ -424,19 +525,11 @@ def build_deflection_report_model(
     sections.extend([
         _report_section(
             section_id="seo_targets",
-            title="Your Help-Desk SEO Targeting List",
-            priority=20,
-            surfaces=("web", "pdf", "markdown"),
-            default_limit=DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
             data=_seo_targets_data(items, limit=DEFAULT_DEFLECTION_SEO_TARGET_LIMIT),
             markdown_lines=_help_desk_seo_targeting_section(items),
         ),
         _report_section(
             section_id="ranked_questions",
-            title="Ranked Question Opportunities",
-            priority=30,
-            surfaces=("web", "pdf", "markdown"),
-            default_limit=None,
             data={"rows": _ranked_question_rows(items)},
             markdown_lines=_ranked_opportunity_section(items),
         ),
@@ -446,10 +539,6 @@ def build_deflection_report_model(
         sections.append(
             _report_section(
                 section_id="outcome_diagnostics",
-                title="Resolution Outcome Diagnostics",
-                priority=40,
-                surfaces=("web", "pdf", "markdown"),
-                default_limit=None,
                 data=_outcome_diagnostics_data(items, resolved_summary),
                 markdown_lines=diagnostics_lines,
             )
@@ -457,19 +546,11 @@ def build_deflection_report_model(
     sections.extend([
         _report_section(
             section_id="question_details",
-            title="Question Details and Evidence",
-            priority=50,
-            surfaces=("web", "pdf", "markdown"),
-            default_limit=None,
             data={"rows": _question_detail_rows(items)},
             markdown_lines=_question_detail_section(items),
         ),
         _report_section(
             section_id="complete_evidence",
-            title="Complete Evidence",
-            priority=90,
-            surfaces=("export",),
-            default_limit=None,
             data=_complete_evidence_section_data(items),
             markdown_lines=[],
         ),
@@ -496,19 +577,32 @@ def render_deflection_report_model(model: DeflectionStructuredReport) -> str:
 def _report_section(
     *,
     section_id: str,
-    title: str,
-    priority: int,
-    surfaces: Sequence[str],
-    default_limit: int | None,
     data: Mapping[str, Any],
     markdown_lines: Sequence[str],
 ) -> DeflectionReportSection:
+    try:
+        definition = DEFLECTION_REPORT_SECTION_REGISTRY[section_id]
+    except KeyError as exc:
+        raise ValueError(f"unknown deflection report section: {section_id}") from exc
+
+    missing_data = [
+        key
+        for key in definition.required_data
+        if key not in data
+    ]
+    if missing_data:
+        missing = ", ".join(missing_data)
+        raise ValueError(
+            f"section {section_id!r} missing required data keys: {missing}"
+        )
+
     return DeflectionReportSection(
-        id=section_id,
-        title=title,
-        priority=priority,
-        surfaces=tuple(_text(surface) for surface in surfaces if _text(surface)),
-        default_limit=default_limit,
+        id=definition.id,
+        title=definition.title,
+        priority=definition.priority,
+        surfaces=definition.surfaces,
+        default_limit=definition.default_limit,
+        required_data=definition.required_data,
         data=dict(data),
         markdown_lines=tuple(markdown_lines),
     )
@@ -1558,9 +1652,11 @@ __all__ = [
     "DEFAULT_DEFLECTION_SEO_TARGET_LIMIT",
     "DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT",
     "DEFLECTION_REPORT_SCHEMA_VERSION",
+    "DEFLECTION_REPORT_SECTION_REGISTRY",
     "DeflectionSnapshot",
     "DeflectionReportArtifact",
     "DeflectionReportSection",
+    "DeflectionReportSectionDefinition",
     "DeflectionStructuredReport",
     "FAQDeflectionReportService",
     "build_deflection_report_model",

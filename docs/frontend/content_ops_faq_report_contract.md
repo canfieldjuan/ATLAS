@@ -99,6 +99,7 @@ type DeflectionReportSection = {
   priority: number;
   surfaces: Array<"web" | "pdf" | "email_summary" | "markdown" | "export" | string>;
   default_limit: number | null;
+  required_data: string[];
   data: Record<string, unknown>;
 };
 ```
@@ -107,6 +108,8 @@ Renderer rules:
 
 - Sort sections by `priority`; do not rely on array position alone.
 - Skip unknown section IDs or unsupported `surfaces` values rather than failing.
+- Use `required_data` as the section's top-level data contract. A listed key is
+  expected to be present in `data`; nested shapes stay section-specific.
 - Treat `complete_evidence` as export-only. It summarizes export size and should
   not be inlined into web/PDF surfaces.
 - Breaking shape changes bump `schema_version`; additive sections should keep
