@@ -733,6 +733,7 @@
 - [PR-Deflection-Resolution-Evidence-Preview-Signal](archive/PR-Deflection-Resolution-Evidence-Preview-Signal.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-SaaS-Demo-Dotenv-Preflight](archive/PR-Deflection-SaaS-Demo-Dotenv-Preflight.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Safe-Label-Disambiguation](archive/PR-Deflection-Safe-Label-Disambiguation.md) - lane: deflection/clustering | phase: Production hardening
+- [PR-Deflection-Section-Registry](archive/PR-Deflection-Section-Registry.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Session-Amount-Gate](archive/PR-Deflection-Session-Amount-Gate.md) - lane: ai-content-ops/faq-deflection-monetization | phase: Production hardening
 - [PR-Deflection-Snapshot-Counts](archive/PR-Deflection-Snapshot-Counts.md) - lane: content-ops/faq-deflection | phase: Functional validation
 - [PR-Deflection-Snapshot-Date-Window](archive/PR-Deflection-Snapshot-Date-Window.md) - lane: ai-content-ops/faq-support-ticket-deflection | phase: Production hardening

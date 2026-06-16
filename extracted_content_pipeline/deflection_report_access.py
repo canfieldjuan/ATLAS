@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from .faq_deflection_report import DEFLECTION_REPORT_SCHEMA_VERSION
 from .storage._jsonb_helpers import (
     decode_jsonb_field,
     json_dump_jsonb,
@@ -25,6 +26,11 @@ class DeflectionReportAccessRecord:
     paid: bool
     payment_reference: str | None = None
     delivery_email: str | None = None
+
+    def report_model(self) -> dict[str, Any] | None:
+        """Return the supported persisted structured report model, if present."""
+
+        return stored_deflection_report_model(self.artifact)
 
 
 @dataclass(frozen=True)
@@ -406,6 +412,65 @@ def _record_from_row(row: Mapping[str, Any]) -> DeflectionReportAccessRecord:
     )
 
 
+def stored_deflection_report_model(
+    artifact: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Project a safe persisted `deflection.v1` report model from an artifact."""
+
+    if not isinstance(artifact, Mapping):
+        return None
+    raw_model = artifact.get("report_model")
+    if not isinstance(raw_model, Mapping):
+        return None
+    if _clean(raw_model.get("schema_version")) != DEFLECTION_REPORT_SCHEMA_VERSION:
+        return None
+
+    raw_sections = raw_model.get("sections")
+    if not _is_sequence(raw_sections):
+        return None
+    sections = [
+        section
+        for raw_section in raw_sections
+        if (section := _stored_report_model_section(raw_section)) is not None
+    ]
+    if not sections:
+        return None
+
+    summary = raw_model.get("summary")
+    sections.sort(key=lambda section: section["priority"])
+    return {
+        "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
+        "title": _clean(raw_model.get("title")) or "Support Ticket Deflection Report",
+        "summary": dict(summary) if isinstance(summary, Mapping) else {},
+        "sections": sections,
+    }
+
+
+def _stored_report_model_section(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    section_id = _clean(value.get("id"))
+    if not section_id:
+        return None
+    priority = _required_int(value.get("priority"))
+    if priority is None:
+        return None
+    raw_data = value.get("data")
+    data = dict(raw_data) if isinstance(raw_data, Mapping) else {}
+    required_data = _text_list(value.get("required_data"))
+    if any(key not in data for key in required_data):
+        return None
+    return {
+        "id": section_id,
+        "title": _clean(value.get("title")) or section_id.replace("_", " ").title(),
+        "priority": priority,
+        "surfaces": _text_list(value.get("surfaces")),
+        "default_limit": _optional_int(value.get("default_limit")),
+        "required_data": required_data,
+        "data": data,
+    }
+
+
 def _list_record_from_row(row: Mapping[str, Any]) -> DeflectionReportListRecord:
     snapshot = decode_jsonb_field(row.get("snapshot"), default={})
     return DeflectionReportListRecord(
@@ -427,6 +492,37 @@ def _bounded_limit(value: Any) -> int:
     return max(1, min(parsed, 100))
 
 
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return _parse_int(value)
+
+
+def _required_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return _parse_int(value)
+
+
+def _parse_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_sequence(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+
+
+def _text_list(value: Any) -> list[str]:
+    if not _is_sequence(value):
+        return []
+    return [text for item in value if (text := _clean(item))]
+
+
 def _required_text(value: Any, field: str) -> str:
     text = _clean(value)
     if not text:
@@ -444,4 +540,5 @@ __all__ = [
     "DeflectionReportArtifactStore",
     "InMemoryDeflectionReportArtifactStore",
     "PostgresDeflectionReportArtifactStore",
+    "stored_deflection_report_model",
 ]
