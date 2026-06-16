@@ -289,6 +289,8 @@ def test_content_ops_faq_report_contract_links_example() -> None:
     assert "required_data: string[]" in doc
     assert "Skip unknown section IDs" in doc
     assert "Treat `complete_evidence` as export-only" in doc
+    assert "persist `report_model`" in doc
+    assert "tolerate a missing or unsupported `report_model`" in doc
     assert "account_id: string;" in doc
     assert EXAMPLE_PATH.exists()
     assert DEFLECTION_EXAMPLE_PATH.exists()

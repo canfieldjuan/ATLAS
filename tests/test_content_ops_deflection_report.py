@@ -22,6 +22,7 @@ from extracted_content_pipeline.faq_deflection_report import (
 from extracted_content_pipeline.deflection_report_access import (
     InMemoryDeflectionReportArtifactStore,
     PostgresDeflectionReportArtifactStore,
+    stored_deflection_report_model,
 )
 from extracted_content_pipeline.support_ticket_input_package import (
     build_support_ticket_input_package,
@@ -1711,11 +1712,10 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
             }
         ],
     }
-    artifact = {
-        "markdown": "# Full report\n\nOpen Analytics.",
-        "summary": {"generated": 1},
-        "faq_result": {"items": [{"source_ids": ["ticket-1"]}]},
-    }
+    artifact = build_deflection_report_artifact(
+        _structured_report_fixture_result()
+    ).as_dict()
+    postgres_artifact = json.loads(json.dumps(artifact))
 
     await store.save_report(
         account_id="acct-1",
@@ -1736,7 +1736,8 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
     )
     assert locked is not None
     assert locked.paid is False
-    assert locked.artifact == artifact
+    assert locked.artifact == postgres_artifact
+    assert locked.report_model() == artifact["report_model"]
     assert locked.delivery_email == "buyer@example.com"
     assert await store.mark_paid(
         account_id="acct-1",
@@ -1750,6 +1751,7 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
     assert unlocked is not None
     assert unlocked.paid is True
     assert unlocked.payment_reference == "checkout-session:test"
+    assert unlocked.report_model() == artifact["report_model"]
     assert unlocked.delivery_email == "buyer@example.com"
     await store.save_report(
         account_id="acct-1",
@@ -1790,6 +1792,97 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
         account_id="acct-1",
         request_id="missing",
     ) is False
+
+
+@pytest.mark.asyncio
+async def test_in_memory_deflection_report_store_round_trips_report_model() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    artifact = build_deflection_report_artifact(
+        _structured_report_fixture_result()
+    ).as_dict()
+
+    await store.save_report(
+        account_id="acct-model",
+        request_id="request-model",
+        snapshot=build_deflection_snapshot(artifact).as_dict(),
+        artifact=artifact,
+    )
+
+    record = await store.get_artifact_record(
+        account_id="acct-model",
+        request_id="request-model",
+    )
+
+    assert record is not None
+    assert record.artifact is not None
+    assert record.artifact["report_model"] == artifact["report_model"]
+    assert record.report_model() == artifact["report_model"]
+
+
+def test_stored_deflection_report_model_tolerates_legacy_and_schema_drift() -> None:
+    assert stored_deflection_report_model(None) is None
+    assert stored_deflection_report_model({}) is None
+    assert stored_deflection_report_model({"report_model": "not-json"}) is None
+    assert (
+        stored_deflection_report_model({
+            "report_model": {
+                "schema_version": "deflection.v2",
+                "sections": [],
+            }
+        })
+        is None
+    )
+
+    payload = stored_deflection_report_model({
+        "report_model": {
+            "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
+            "title": "Stored report",
+            "summary": {"generated": 2},
+            "sections": [
+                "not-a-section",
+                {"title": "Missing id", "priority": 5, "data": {"ignored": True}},
+                {
+                    "id": "future_section",
+                    "title": "Future section",
+                    "priority": "70",
+                    "surfaces": ["web", "pdf"],
+                    "required_data": ["future_rows"],
+                    "data": {"future_rows": [{"id": "future-1"}]},
+                },
+                {
+                    "id": "legacy_section",
+                    "priority": 20,
+                    "data": {"legacy_count": 3},
+                },
+            ],
+        }
+    })
+
+    assert payload == {
+        "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
+        "title": "Stored report",
+        "summary": {"generated": 2},
+        "sections": [
+            {
+                "id": "legacy_section",
+                "title": "Legacy Section",
+                "priority": 20,
+                "surfaces": [],
+                "default_limit": None,
+                "required_data": [],
+                "data": {"legacy_count": 3},
+            },
+            {
+                "id": "future_section",
+                "title": "Future section",
+                "priority": 70,
+                "surfaces": ["web", "pdf"],
+                "default_limit": None,
+                "required_data": ["future_rows"],
+                "data": {"future_rows": [{"id": "future-1"}]},
+            },
+        ],
+    }
 
 
 @pytest.mark.asyncio
