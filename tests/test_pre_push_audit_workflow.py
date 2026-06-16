@@ -27,3 +27,9 @@ def test_pre_push_audit_workflow_enrolls_push_pr_wrapper_tests() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
     assert "tests/test_push_pr_wrapper.py" in text
+
+
+def test_pre_push_audit_workflow_enrolls_full_report_redaction_checker_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tests/test_check_deflection_full_report_proof_bundle.py" in text
