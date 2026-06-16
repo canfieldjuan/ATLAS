@@ -218,6 +218,11 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
         await artifact_route.endpoint(request_id=request_id)
     assert locked.value.status_code == 403
 
+    model_route = _route(router, "/ops/deflection-reports/{request_id}/report-model", "GET")
+    with pytest.raises(billing.HTTPException) as locked_model:
+        await model_route.endpoint(request_id=request_id)
+    assert locked_model.value.status_code == 403
+
     event = SimpleNamespace(
         id="evt_deflection_paid_flow",
         type="checkout.session.completed",
@@ -266,3 +271,48 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
     assert "## Publishable Help-Center Copy From Proven Resolutions" not in unlocked["markdown"]
     assert "## No Proven Answer Yet" not in unlocked["markdown"]
     assert unlocked["faq_result"]["items"][0]["source_ids"]
+
+    report_model = await model_route.endpoint(request_id=request_id)
+    assert report_model == unlocked["report_model"]
+    assert report_model["schema_version"] == "deflection.v1"
+    assert "markdown" not in report_model
+    assert "faq_result" not in report_model
+
+
+@pytest.mark.asyncio
+async def test_deflection_report_model_route_fails_closed_without_supported_model() -> None:
+    account_id = "00000000-0000-0000-0000-000000000116"
+    request_id = "legacy-model-row"
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id=account_id,
+        request_id=request_id,
+        snapshot={"summary": {"generated": 1}},
+        artifact={
+            "markdown": "# Legacy report",
+            "report_model": {
+                "schema_version": "deflection.v2",
+                "sections": [],
+            },
+        },
+    )
+    await store.mark_paid(account_id=account_id, request_id=request_id)
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            deflection_snapshot_top_n=2,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService(),
+        ),
+        deflection_report_store_provider=lambda: store,
+        scope_provider=lambda: {"account_id": account_id},
+    )
+
+    model_route = _route(router, "/ops/deflection-reports/{request_id}/report-model", "GET")
+
+    with pytest.raises(billing.HTTPException) as missing_model:
+        await model_route.endpoint(request_id=request_id)
+    assert missing_model.value.status_code == 404
+    assert missing_model.value.detail == "Deflection report model is not available."

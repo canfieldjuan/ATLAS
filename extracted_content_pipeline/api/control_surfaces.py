@@ -837,6 +837,31 @@ def create_content_ops_control_surface_router(
             raise HTTPException(status_code=403, detail="Deflection report is locked.")
         return dict(record.artifact or {})
 
+    @router.get(
+        "/deflection-reports/{request_id}/report-model",
+        dependencies=public_deflection_dependencies,
+    )
+    async def deflection_report_model(
+        request_id: str = PathParam(..., min_length=1, max_length=200),
+    ) -> dict[str, Any]:
+        store = await _resolve_deflection_report_store(deflection_report_store_provider)
+        scope = await _resolve_scope(scope_provider)
+        record = await store.get_artifact_record(
+            account_id=_required_scope_account_id(scope),
+            request_id=request_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="Deflection report not found.")
+        if not record.paid:
+            raise HTTPException(status_code=403, detail="Deflection report is locked.")
+        model = record.report_model()
+        if model is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Deflection report model is not available.",
+            )
+        return model
+
     @router.post(
         "/deflection-reports/{request_id}/checkout-authorization",
         dependencies=public_deflection_dependencies,
