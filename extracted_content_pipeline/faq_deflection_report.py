@@ -18,6 +18,7 @@ DEFAULT_DEFLECTION_SNAPSHOT_TOP_N = 5
 DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT = 3
 DEFAULT_DEFLECTION_SEO_TARGET_LIMIT = 50
 DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION = "deflection_evidence.v1"
+DEFLECTION_REPORT_SCHEMA_VERSION = "deflection.v1"
 _UNCAPPED_REPORT_MAX_ITEMS = 0
 _ASSISTED_CONTACT_COST = 13.50
 _ASSISTED_CONTACT_COST_LABEL = "$13.50"
@@ -56,18 +57,61 @@ class DeflectionSnapshot:
 
 
 @dataclass(frozen=True)
+class DeflectionReportSection:
+    """Structured report section plus interim Markdown rendering lines."""
+
+    id: str
+    title: str
+    priority: int
+    surfaces: tuple[str, ...]
+    default_limit: int | None
+    data: dict[str, Any]
+    markdown_lines: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "priority": self.priority,
+            "surfaces": list(self.surfaces),
+            "default_limit": self.default_limit,
+            "data": _json_ready(self.data),
+        }
+
+
+@dataclass(frozen=True)
+class DeflectionStructuredReport:
+    """Surface-neutral paid report model for future web/PDF/export renderers."""
+
+    schema_version: str
+    title: str
+    summary: dict[str, Any]
+    sections: tuple[DeflectionReportSection, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "title": self.title,
+            "summary": dict(self.summary),
+            "sections": [section.as_dict() for section in self.sections],
+        }
+
+
+@dataclass(frozen=True)
 class DeflectionReportArtifact:
     """Rendered deflection report plus compact proof metadata."""
 
     markdown: str
     summary: dict[str, Any]
     faq_result: TicketFAQMarkdownResult
+    report_model: DeflectionStructuredReport
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "markdown": self.markdown,
             "summary": dict(self.summary),
             "faq_result": self.faq_result.as_dict(),
+            "report_model": self.report_model.as_dict(),
             "evidence_export": build_deflection_evidence_export(self),
         }
 
@@ -135,16 +179,18 @@ def build_deflection_report_artifact(
     """Render a customer-facing report from a generated FAQ result."""
 
     summary = deflection_report_summary(faq_result)
-    markdown = render_deflection_report(
+    report_model = build_deflection_report_model(
         faq_result,
         title=title,
         source_label=source_label,
         summary=summary,
     )
+    markdown = render_deflection_report_model(report_model)
     return DeflectionReportArtifact(
         markdown=markdown,
         summary=summary,
         faq_result=faq_result,
+        report_model=report_model,
     )
 
 
@@ -331,20 +377,284 @@ def render_deflection_report(
 ) -> str:
     """Render the customer-facing Markdown report."""
 
+    return render_deflection_report_model(
+        build_deflection_report_model(
+            faq_result,
+            title=title,
+            source_label=source_label,
+            summary=summary,
+        )
+    )
+
+
+def build_deflection_report_model(
+    faq_result: TicketFAQMarkdownResult,
+    *,
+    title: str = "Support Ticket Deflection Report",
+    source_label: str | None = None,
+    summary: Mapping[str, Any] | None = None,
+) -> DeflectionStructuredReport:
+    """Build the surface-neutral paid deflection report model."""
+
     resolved_summary = dict(summary or deflection_report_summary(faq_result))
     items = tuple(_item(item) for item in faq_result.items)
-    lines: list[str] = [
-        f"# {_md(title)}",
-        "",
+    sections: list[DeflectionReportSection] = [
+        _report_section(
+            section_id="support_tax",
+            title="Support Tax Confirmation",
+            priority=10,
+            surfaces=("web", "pdf", "email_summary", "markdown"),
+            default_limit=None,
+            data=_support_tax_data(resolved_summary, items),
+            markdown_lines=_support_tax_section(resolved_summary, items),
+        )
     ]
-    lines.extend(_support_tax_section(resolved_summary, items))
     if source_label:
-        lines.extend(["**Source file:**", "", _md(source_label), ""])
-    lines.extend(_help_desk_seo_targeting_section(items))
-    lines.extend(_ranked_opportunity_section(items))
-    lines.extend(_outcome_diagnostics_section(items, resolved_summary))
-    lines.extend(_question_detail_section(items))
+        sections.append(
+            _report_section(
+                section_id="source_file",
+                title="Source file",
+                priority=15,
+                surfaces=("web", "pdf", "markdown"),
+                default_limit=None,
+                data={"source_label": _text(source_label)},
+                markdown_lines=["**Source file:**", "", _md(source_label), ""],
+            )
+        )
+    sections.extend([
+        _report_section(
+            section_id="seo_targets",
+            title="Your Help-Desk SEO Targeting List",
+            priority=20,
+            surfaces=("web", "pdf", "markdown"),
+            default_limit=DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
+            data=_seo_targets_data(items, limit=DEFAULT_DEFLECTION_SEO_TARGET_LIMIT),
+            markdown_lines=_help_desk_seo_targeting_section(items),
+        ),
+        _report_section(
+            section_id="ranked_questions",
+            title="Ranked Question Opportunities",
+            priority=30,
+            surfaces=("web", "pdf", "markdown"),
+            default_limit=None,
+            data={"rows": _ranked_question_rows(items)},
+            markdown_lines=_ranked_opportunity_section(items),
+        ),
+    ])
+    diagnostics_lines = _outcome_diagnostics_section(items, resolved_summary)
+    if diagnostics_lines:
+        sections.append(
+            _report_section(
+                section_id="outcome_diagnostics",
+                title="Resolution Outcome Diagnostics",
+                priority=40,
+                surfaces=("web", "pdf", "markdown"),
+                default_limit=None,
+                data=_outcome_diagnostics_data(items, resolved_summary),
+                markdown_lines=diagnostics_lines,
+            )
+        )
+    sections.extend([
+        _report_section(
+            section_id="question_details",
+            title="Question Details and Evidence",
+            priority=50,
+            surfaces=("web", "pdf", "markdown"),
+            default_limit=None,
+            data={"rows": _question_detail_rows(items)},
+            markdown_lines=_question_detail_section(items),
+        ),
+        _report_section(
+            section_id="complete_evidence",
+            title="Complete Evidence",
+            priority=90,
+            surfaces=("export",),
+            default_limit=None,
+            data=_complete_evidence_section_data(items),
+            markdown_lines=[],
+        ),
+    ])
+    return DeflectionStructuredReport(
+        schema_version=DEFLECTION_REPORT_SCHEMA_VERSION,
+        title=_text(title) or "Support Ticket Deflection Report",
+        summary=resolved_summary,
+        sections=tuple(sorted(sections, key=lambda section: section.priority)),
+    )
+
+
+def render_deflection_report_model(model: DeflectionStructuredReport) -> str:
+    """Render the current Markdown surface from structured report sections."""
+
+    lines: list[str] = [f"# {_md(model.title)}", ""]
+    for section in sorted(model.sections, key=lambda item: item.priority):
+        if "markdown" not in section.surfaces:
+            continue
+        lines.extend(section.markdown_lines)
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _report_section(
+    *,
+    section_id: str,
+    title: str,
+    priority: int,
+    surfaces: Sequence[str],
+    default_limit: int | None,
+    data: Mapping[str, Any],
+    markdown_lines: Sequence[str],
+) -> DeflectionReportSection:
+    return DeflectionReportSection(
+        id=section_id,
+        title=title,
+        priority=priority,
+        surfaces=tuple(_text(surface) for surface in surfaces if _text(surface)),
+        default_limit=default_limit,
+        data=dict(data),
+        markdown_lines=tuple(markdown_lines),
+    )
+
+
+def _support_tax_data(
+    summary: Mapping[str, Any],
+    items: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    repeat_ticket_count = _repeat_ticket_count(items)
+    non_repeat_ticket_count = _non_repeat_ticket_count(summary, items)
+    source_window = _complete_source_date_window(summary, items)
+    data: dict[str, Any] = {
+        "repeat_ticket_count": repeat_ticket_count,
+        "non_repeat_ticket_count": non_repeat_ticket_count,
+        "generated_question_count": _int(summary.get("generated")),
+        "assisted_contact_cost": _ASSISTED_CONTACT_COST,
+        "estimated_support_cost": _support_cost(repeat_ticket_count),
+        "source_date_window": source_window or None,
+        "drafted_answer_count": _int(summary.get("drafted_answer_count")),
+        "no_proven_answer_count": _int(summary.get("no_proven_answer_count")),
+        "ticket_source_count": _int(summary.get("ticket_source_count")),
+    }
+    if source_window:
+        days = _int(source_window.get("source_window_days"))
+        data["annualized_support_cost"] = _support_cost(
+            repeat_ticket_count * 365 / days
+        )
+    else:
+        data["annualized_run_rate_support_cost"] = _support_cost(
+            repeat_ticket_count * 12
+        )
+    return data
+
+
+def _seo_targets_data(
+    items: Sequence[Mapping[str, Any]],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    phrases = _customer_phrase_list(items)
+    display_limit = max(1, int(limit))
+    displayed_phrases = phrases[:display_limit]
+    return {
+        "phrases": list(displayed_phrases),
+        "total_phrase_count": len(phrases),
+        "displayed_phrase_count": len(displayed_phrases),
+        "omitted_phrase_count": max(len(phrases) - len(displayed_phrases), 0),
+        "limit": display_limit,
+    }
+
+
+def _ranked_question_rows(
+    items: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "rank": index,
+            "question": _text(item.get("question")),
+            "ticket_count": _ticket_count(item),
+            "estimated_support_cost": _support_cost(_ticket_count(item)),
+            "opportunity_score": _int(item.get("opportunity_score")),
+            "answer_status": _status_label(item),
+            "source_proof": _source_count_label(item),
+        }
+        for index, item in enumerate(items, start=1)
+    ]
+
+
+def _outcome_diagnostics_data(
+    items: Sequence[Mapping[str, Any]],
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        diagnostics = _item_outcome_diagnostics(item)
+        if not diagnostics:
+            continue
+        rows.append({
+            "question": _text(item.get("question")),
+            "status_mix": _status_mix_label(diagnostics),
+            "reopened_ticket_count": _int(diagnostics.get("reopened_ticket_count")),
+            "negative_csat_ticket_count": _int(
+                diagnostics.get("negative_csat_ticket_count")
+            ),
+            "guidance": _outcome_guidance(diagnostics),
+        })
+    return {
+        "outcome_diagnostic_ticket_count": _int(
+            summary.get("outcome_diagnostic_ticket_count")
+        ),
+        "outcome_risk_ticket_count": _int(summary.get("outcome_risk_ticket_count")),
+        "reopened_ticket_count": _int(summary.get("reopened_ticket_count")),
+        "negative_csat_ticket_count": _int(summary.get("negative_csat_ticket_count")),
+        "rows": rows,
+    }
+
+
+def _question_detail_rows(
+    items: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for index, item in enumerate(items, start=1):
+        rows.append({
+            "rank": index,
+            "question": _text(item.get("question")),
+            "customer_wording": _text(item.get("customer_wording")),
+            "topic": _text(item.get("topic")),
+            "ticket_count": _ticket_count(item),
+            "estimated_support_cost": _support_cost(_ticket_count(item)),
+            "answer_status": _status_label(item),
+            "answer_evidence_status": _text(item.get("answer_evidence_status")),
+            "resolution_evidence_scope": _text(item.get("resolution_evidence_scope")),
+            "answer_linkage": _evidence_answer_linkage(item),
+            "answer": _text(item.get("answer")),
+            "steps": _texts(item.get("steps")),
+            "term_mappings": [
+                dict(mapping)
+                for mapping in item.get("term_mappings") or ()
+                if isinstance(mapping, Mapping)
+            ],
+            "source_ids": _texts(item.get("source_ids")),
+            "evidence_quotes": _texts(item.get("evidence_quotes")),
+            "outcome_diagnostics": dict(_item_outcome_diagnostics(item)),
+        })
+    return rows
+
+
+def _complete_evidence_section_data(
+    items: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    evidence_row_count = sum(
+        len(_evidence_export_rows(rank, item))
+        for rank, item in enumerate(items, start=1)
+    )
+    source_ids = {
+        source_id
+        for item in items
+        for source_id in _texts(item.get("source_ids"))
+    }
+    return {
+        "question_count": len(items),
+        "evidence_row_count": evidence_row_count,
+        "source_id_count": len(source_ids),
+        "surfaces": ["export"],
+    }
 
 
 def _support_tax_section(
@@ -1226,6 +1536,14 @@ def _positive_limit(value: Any) -> int:
     return max(1, min(parsed, 25))
 
 
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_json_ready(item) for item in value]
+    return value
+
+
 def _cell(value: Any) -> str:
     text = _md(value).replace("\n", " ")
     return text.replace("|", "\\|")
@@ -1239,12 +1557,17 @@ __all__ = [
     "DEFAULT_DEFLECTION_SNAPSHOT_TOP_N",
     "DEFAULT_DEFLECTION_SEO_TARGET_LIMIT",
     "DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT",
+    "DEFLECTION_REPORT_SCHEMA_VERSION",
     "DeflectionSnapshot",
     "DeflectionReportArtifact",
+    "DeflectionReportSection",
+    "DeflectionStructuredReport",
     "FAQDeflectionReportService",
+    "build_deflection_report_model",
     "build_deflection_snapshot",
     "build_deflection_report_artifact",
     "deflection_report_summary",
     "deflection_snapshot_content_opportunities",
     "render_deflection_report",
+    "render_deflection_report_model",
 ]
