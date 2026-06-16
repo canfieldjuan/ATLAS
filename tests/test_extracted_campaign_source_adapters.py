@@ -246,6 +246,77 @@ def test_load_source_rows_from_semicolon_csv_detects_support_ticket_export(
     }]
 
 
+def test_load_source_rows_streams_csv_without_whole_file_byte_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "support_tickets.csv"
+    path.write_text(
+        "\n".join([
+            "ticket_id,subject,message",
+            "ticket-1,Export help,How do I export attribution reports?",
+            "ticket-2,Billing help,Where can I download invoices?",
+        ]),
+        encoding="utf-8",
+    )
+
+    def fail_read_bytes(self: Path) -> bytes:
+        raise AssertionError(f"unexpected whole-file byte read for {self}")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+    rows = load_source_rows_from_file(path, file_format="csv")
+
+    assert rows == [
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Export help",
+            "message": "How do I export attribution reports?",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Billing help",
+            "message": "Where can I download invoices?",
+        },
+    ]
+
+
+def test_load_source_rows_finds_header_after_large_provider_preamble(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_large_preamble.csv"
+    path.write_text(
+        "\n".join([
+            "Zendesk export metadata " + ("x" * 70_000),
+            "ticket_id;subject;message",
+            "ticket-1;Export help;How do I export attribution reports?",
+            "ticket-2;Billing help;Where can I download invoices?",
+        ]),
+        encoding="utf-8",
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert rows == [
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Export help",
+            "message": "How do I export attribution reports?",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Billing help",
+            "message": "Where can I download invoices?",
+        },
+    ]
+    assert [warning.code for warning in warnings] == ["csv_leading_rows_skipped"]
+    assert warnings[0].row_index == 1
+    assert "CSV header on row 2" in warnings[0].message
+
+
 def test_load_source_rows_keeps_comma_delimiter_when_body_has_tabs_semicolons(
     tmp_path: Path,
 ) -> None:
@@ -675,6 +746,25 @@ def test_load_source_rows_warns_on_implausible_legacy_fallback_artifacts(
     assert [warning.code for warning in warnings] == ["csv_encoding_ambiguous"]
     assert warnings[0].field == "encoding"
     assert "failed strict UTF-8" in warnings[0].message
+
+
+def test_load_source_rows_keeps_legacy_fallback_warning_position_correlated(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_legacy_warning_alignment.csv"
+    path.write_bytes(b"ticket_id,subject,message\nA,B,\xc4\x9dqqqq\xc1\n")
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert rows == [{
+        "ticket_id": "A",
+        "subject": "B",
+        "message": "\xc4\x9dqqqq\xc1",
+    }]
+    assert warnings == ()
 
 
 @pytest.mark.parametrize(

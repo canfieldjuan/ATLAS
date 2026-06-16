@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 from collections.abc import Callable, Mapping, Sequence
 import csv
 from dataclasses import dataclass
@@ -28,7 +29,11 @@ _CSV_UTF16_NUL_SIDE_RATIO = 0.30
 _CSV_REPLACEMENT_WARNING_RATIO = 0.01
 _CSV_UTF8_RECOVERY_REPLACEMENT_RATIO = 0.05
 _CSV_UTF8_MOJIBAKE_MARKERS = ("\u00c3", "\u00c2", "\u00e2\u20ac", "\u00e2\u201a")
+_CSV_UTF8_MOJIBAKE_MARKER_TAIL_CHARS = max(
+    len(marker) for marker in _CSV_UTF8_MOJIBAKE_MARKERS
+) - 1
 _CSV_IMPLAUSIBLE_LEGACY_FALLBACK_CHARS = ("\u00ff", "\u00fe")
+_CSV_READ_CHUNK_BYTES = 64 * 1024
 _CSV_BOM_ENCODINGS = (
     (b"\xff\xfe\x00\x00", "utf-32"),
     (b"\x00\x00\xfe\xff", "utf-32"),
@@ -110,6 +115,7 @@ class _CsvDelimiterCandidate:
     delimiter: str
     quotechar: str
     header_index: int | None
+    header_has_hint: bool
     header_width: int
     data_rows: int
     consistent_rows: int
@@ -137,6 +143,78 @@ class _CsvDelimiterCandidate:
             and (self.data_rows > 0 or self.header_index == 0)
             and self.first_collapsed_row is None
             and self.consistency >= _CSV_DELIMITER_MIN_CONSISTENCY
+        )
+
+
+@dataclass(frozen=True)
+class _CsvEncodingPlan:
+    encoding: str
+    errors: str = "strict"
+    warnings: tuple[CampaignOpportunityWarning, ...] = ()
+
+
+@dataclass(frozen=True)
+class _CsvTextStats:
+    char_count: int
+    nul_count: int
+    replacement_count: int
+    mojibake_score: int
+    implausible_legacy_count: int
+
+    @property
+    def nul_ratio(self) -> float:
+        if not self.char_count:
+            return 0.0
+        return self.nul_count / self.char_count
+
+    @property
+    def replacement_ratio(self) -> float:
+        if not self.char_count:
+            return 0.0
+        return self.replacement_count / self.char_count
+
+
+@dataclass
+class _CsvColumnConsistencyState:
+    header_index: int
+    header_has_hint: bool
+    header_width: int
+    delimiter: str
+    data_rows: int = 0
+    consistent_rows: int = 0
+    exact_width_rows: int = 0
+    first_offending_row: int | None = None
+    first_collapsed_row: int | None = None
+
+    def add(self, row_number: int, row: Sequence[Any]) -> None:
+        if not any(str(value or "").strip() for value in row):
+            return
+        self.data_rows += 1
+        collapsed = (
+            self.header_width >= 2
+            and _csv_short_row_uses_competing_delimiter(row, delimiter=self.delimiter)
+        )
+        if collapsed and self.first_collapsed_row is None:
+            self.first_collapsed_row = row_number
+        if len(row) == self.header_width:
+            self.exact_width_rows += 1
+        if _csv_row_matches_delimiter(row, self.header_width, delimiter=self.delimiter):
+            self.consistent_rows += 1
+        elif self.first_offending_row is None:
+            self.first_offending_row = row_number
+
+    def as_candidate(self, *, quotechar: str) -> _CsvDelimiterCandidate:
+        return _CsvDelimiterCandidate(
+            delimiter=self.delimiter,
+            quotechar=quotechar,
+            header_index=self.header_index,
+            header_has_hint=self.header_has_hint,
+            header_width=self.header_width,
+            data_rows=self.data_rows,
+            consistent_rows=self.consistent_rows,
+            exact_width_rows=self.exact_width_rows,
+            first_offending_row=self.first_offending_row,
+            first_collapsed_row=self.first_collapsed_row,
         )
 
 
@@ -326,77 +404,187 @@ def _load_csv_dict_rows(
     value_coercer: Callable[[Any], Any] | None = None,
 ) -> tuple[list[dict[str, Any]], tuple[CampaignOpportunityWarning, ...]]:
     rows: list[dict[str, Any]] = []
-    text, decode_warnings = _read_csv_text(path)
-    if not text.strip():
-        raise ValueError("CSV customer data must include a header row.")
-    candidate = _select_csv_delimiter(text)
-    reader = csv.reader(
-        StringIO(text),
-        dialect=_csv_delimiter_dialect(
-            candidate.delimiter,
-            quotechar=candidate.quotechar,
-        ),
-    )
-    raw_rows = list(reader)
-    header_index = _csv_header_index(raw_rows)
+    encoding_plan = _csv_encoding_plan(path)
+    candidate = _select_csv_delimiter_for_path(path, encoding_plan)
+    header_index = candidate.header_index
     if header_index is None:
         raise ValueError("CSV customer data must include a header row.")
-    _validate_csv_column_consistency(
-        raw_rows,
-        header_index,
-        delimiter=candidate.delimiter,
-        quotechar=candidate.quotechar,
-    )
-    load_warnings = decode_warnings + _leading_rows_skipped_warnings(
-        raw_rows,
-        header_index,
-    )
-    header_width = len(raw_rows[header_index])
-    header_fields = tuple(
-        (index, str(field or "").strip())
-        for index, field in enumerate(raw_rows[header_index])
-        if field is not None and str(field).strip()
-    )
-    if not header_fields:
-        raise ValueError("CSV customer data must include a header row.")
-    for row_index, values in enumerate(raw_rows[header_index + 1:], start=header_index + 2):
-        if not any(str(value or "").strip() for value in values):
-            continue
-        if len(values) > header_width:
-            raise ValueError(
-                f"CSV row {row_index} has more cells than the header; "
-                "check the delimiter and header row."
-            )
-        cleaned: dict[str, Any] = {}
-        for value_index, key in header_fields:
-            value = values[value_index] if value_index < len(values) else ""
-            cleaned_key = str(key).strip()
-            if not cleaned_key:
+
+    skipped_leading_count = 0
+    first_leading_row: tuple[int, Sequence[Any]] | None = None
+    header_fields: tuple[tuple[int, str], ...] = ()
+    header_width = 0
+    consistency: _CsvColumnConsistencyState | None = None
+    header_row_number = header_index + 1
+    with _open_csv_text(path, encoding_plan) as handle:
+        reader = csv.reader(
+            handle,
+            dialect=_csv_delimiter_dialect(
+                candidate.delimiter,
+                quotechar=candidate.quotechar,
+            ),
+        )
+        for row_index, values in enumerate(reader, start=1):
+            if row_index < header_row_number:
+                if any(str(cell or "").strip() for cell in values):
+                    skipped_leading_count += 1
+                    if first_leading_row is None:
+                        first_leading_row = (row_index, values)
                 continue
-            cleaned_value = value_coercer(value) if value_coercer else value
-            if cleaned_value not in (None, ""):
-                cleaned[cleaned_key] = cleaned_value
-        rows.append(cleaned)
+            if row_index == header_row_number:
+                header_width = len(values)
+                header_fields = tuple(
+                    (index, str(field or "").strip())
+                    for index, field in enumerate(values)
+                    if field is not None and str(field).strip()
+                )
+                if not header_fields:
+                    raise ValueError("CSV customer data must include a header row.")
+                consistency = _CsvColumnConsistencyState(
+                    header_index=header_index,
+                    header_has_hint=candidate.header_has_hint,
+                    header_width=header_width,
+                    delimiter=candidate.delimiter,
+                )
+                continue
+            if not any(str(value or "").strip() for value in values):
+                continue
+            if len(values) > header_width:
+                raise ValueError(
+                    f"CSV row {row_index} has more cells than the header; "
+                    "check the delimiter and header row."
+                )
+            if consistency is not None:
+                consistency.add(row_index, values)
+            cleaned: dict[str, Any] = {}
+            for value_index, key in header_fields:
+                value = values[value_index] if value_index < len(values) else ""
+                cleaned_key = str(key).strip()
+                if not cleaned_key:
+                    continue
+                cleaned_value = value_coercer(value) if value_coercer else value
+                if cleaned_value not in (None, ""):
+                    cleaned[cleaned_key] = cleaned_value
+            rows.append(cleaned)
+    if not header_fields or consistency is None:
+        raise ValueError("CSV customer data must include a header row.")
+    consistency_candidate = consistency.as_candidate(quotechar=candidate.quotechar)
+    if not consistency_candidate.valid:
+        _raise_csv_delimiter_error(consistency_candidate)
+    load_warnings = encoding_plan.warnings + _leading_rows_skipped_warnings(
+        skipped_leading_count,
+        first_leading_row,
+        header_index,
+    )
     return rows, load_warnings
 
 
+def _open_csv_text(path: Path, plan: _CsvEncodingPlan):
+    return path.open(
+        "r",
+        encoding=plan.encoding,
+        errors=plan.errors,
+        newline="",
+    )
+
+
+def _csv_delimiter_sample(path: Path, plan: _CsvEncodingPlan) -> str:
+    with _open_csv_text(path, plan) as handle:
+        return handle.read(_CSV_SNIFFER_SAMPLE_CHARS)
+
+
+def _select_csv_delimiter_for_path(
+    path: Path,
+    plan: _CsvEncodingPlan,
+) -> _CsvDelimiterCandidate:
+    sample_text = _csv_delimiter_sample(path, plan)
+    if sample_text.strip():
+        try:
+            sample_candidate = _select_csv_delimiter(sample_text)
+        except ValueError:
+            sample_candidate = None
+        if sample_candidate is not None and sample_candidate.header_has_hint:
+            return sample_candidate
+    return _select_csv_delimiter_from_stream(path, plan)
+
+
+def _csv_encoding_plan(path: Path) -> _CsvEncodingPlan:
+    prefix, byte_count = _csv_byte_prefix_and_count(path)
+    if byte_count == 0:
+        return _CsvEncodingPlan(encoding="utf-8-sig")
+    for bom, encoding in _CSV_BOM_ENCODINGS:
+        if prefix.startswith(bom):
+            return _csv_checked_encoding_plan(path, encoding=encoding)
+    try:
+        utf8_stats = _scan_csv_text_stats(path, encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return _csv_utf8_error_encoding_plan(path, prefix=prefix)
+    if utf8_stats.nul_ratio >= _CSV_NUL_REDECODE_RATIO:
+        inferred = _utf16_encoding_from_nul_bytes(prefix)
+        if inferred:
+            return _csv_inferred_utf16_encoding_plan(path, encoding=inferred)
+        raise ValueError(
+            "CSV customer data decoded to NUL-heavy text; check the file encoding."
+        )
+    return _CsvEncodingPlan(
+        encoding="utf-8-sig",
+        warnings=_csv_decode_warnings_from_stats(
+            utf8_stats,
+            encoding="utf-8-sig",
+        ),
+    )
+
+
+def _csv_checked_encoding_plan(path: Path, *, encoding: str) -> _CsvEncodingPlan:
+    stats = _scan_csv_text_stats(path, encoding=encoding)
+    if stats.nul_ratio >= _CSV_NUL_REDECODE_RATIO:
+        raise ValueError(
+            f"CSV customer data decoded as {encoding} but remained NUL-heavy; "
+            "check the file encoding."
+        )
+    return _CsvEncodingPlan(
+        encoding=encoding,
+        warnings=_csv_decode_warnings_from_stats(stats, encoding=encoding),
+    )
+
+
+def _csv_inferred_utf16_encoding_plan(path: Path, *, encoding: str) -> _CsvEncodingPlan:
+    stats = _scan_csv_text_stats(path, encoding=encoding)
+    if stats.nul_ratio >= _CSV_NUL_REDECODE_RATIO:
+        raise ValueError(
+            f"CSV customer data decoded as {encoding} but remained NUL-heavy; "
+            "check the file encoding."
+        )
+    return _CsvEncodingPlan(
+        encoding=encoding,
+        warnings=_csv_decode_warnings_from_stats(stats, encoding=encoding)
+        + (
+            CampaignOpportunityWarning(
+                code="csv_encoding_inferred",
+                field="encoding",
+                message=(
+                    "CSV contained UTF-16-style NUL bytes without a BOM; "
+                    f"decoded as {encoding}."
+                ),
+            ),
+        ),
+    )
+
+
 def _leading_rows_skipped_warnings(
-    raw_rows: Sequence[Sequence[Any]],
+    skipped_count: int,
+    first_row: tuple[int, Sequence[Any]] | None,
     header_index: int,
 ) -> tuple[CampaignOpportunityWarning, ...]:
-    skipped: list[tuple[int, Sequence[Any]]] = []
-    for index, row in enumerate(raw_rows[:header_index]):
-        if any(str(cell or "").strip() for cell in row):
-            skipped.append((index + 1, row))
-    if not skipped:
+    if not skipped_count or first_row is None:
         return ()
-    first_row_number, first_row = skipped[0]
-    preview = _csv_row_preview(first_row)
+    first_row_number, first_row_values = first_row
+    preview = _csv_row_preview(first_row_values)
     return (
         CampaignOpportunityWarning(
             code="csv_leading_rows_skipped",
             message=(
-                f"Skipped {len(skipped)} leading row(s) before the CSV header "
+                f"Skipped {skipped_count} leading row(s) before the CSV header "
                 f"on row {header_index + 1}; "
                 f"first skipped row {first_row_number}: {preview}"
             ),
@@ -415,122 +603,171 @@ def _csv_row_preview(row: Sequence[Any], *, max_chars: int = 80) -> str:
 
 
 def _csv_header_index(rows: Sequence[Sequence[Any]]) -> int | None:
+    index, _has_hint = _csv_header_index_and_hint(rows)
+    return index
+
+
+def _csv_header_index_and_hint(
+    rows: Sequence[Sequence[Any]],
+) -> tuple[int | None, bool]:
     fallback: int | None = None
     for index, row in enumerate(rows):
         cells = [str(cell or "").strip() for cell in row]
         nonempty = [cell for cell in cells if cell]
         if not nonempty:
             continue
-        normalized = {_normalize_csv_header_cell(cell) for cell in nonempty}
-        if normalized.intersection(_CSV_HEADER_HINTS):
-            return index
+        if _csv_row_has_header_hint(row):
+            return index, True
         if len(nonempty) < 2:
             continue
         if fallback is None:
             fallback = index
-    return fallback
+    return fallback, False
+
+
+def _csv_row_has_header_hint(row: Sequence[Any]) -> bool:
+    normalized = {
+        _normalize_csv_header_cell(str(cell or "").strip())
+        for cell in row
+        if str(cell or "").strip()
+    }
+    return bool(normalized.intersection(_CSV_HEADER_HINTS))
 
 
 def _normalize_csv_header_cell(value: str) -> str:
     return value.strip().lower().replace("-", "_").replace(" ", "_")
 
 
-def _read_csv_text(
-    path: Path,
-) -> tuple[str, tuple[CampaignOpportunityWarning, ...]]:
-    data = path.read_bytes()
-    if not data:
-        return "", ()
-    for bom, encoding in _CSV_BOM_ENCODINGS:
-        if data.startswith(bom):
-            return _decode_csv_bytes(data, encoding=encoding)
-    try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return _decode_utf8_error_csv_bytes(data)
-    inferred = _utf16_encoding_from_nul_pattern(data, text)
+def _csv_byte_prefix_and_count(path: Path) -> tuple[bytes, int]:
+    prefix = bytearray()
+    byte_count = 0
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(_CSV_READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            byte_count += len(chunk)
+            if len(prefix) < _CSV_SNIFFER_SAMPLE_CHARS:
+                remaining = _CSV_SNIFFER_SAMPLE_CHARS - len(prefix)
+                prefix.extend(chunk[:remaining])
+    return bytes(prefix), byte_count
+
+
+def _csv_utf8_error_encoding_plan(path: Path, *, prefix: bytes) -> _CsvEncodingPlan:
+    inferred = _utf16_encoding_from_nul_bytes(prefix)
     if inferred:
-        return _decode_inferred_utf16_csv_bytes(data, encoding=inferred)
-    if _nul_ratio(text) >= _CSV_NUL_REDECODE_RATIO:
-        raise ValueError(
-            "CSV customer data decoded to NUL-heavy text; check the file encoding."
+        return _csv_inferred_utf16_encoding_plan(path, encoding=inferred)
+    legacy_encoding, legacy_stats = _legacy_csv_encoding_stats(path)
+    recovered_stats = _scan_csv_text_stats(
+        path,
+        encoding="utf-8-sig",
+        errors="replace",
+    )
+    if (
+        recovered_stats.replacement_ratio <= _CSV_UTF8_RECOVERY_REPLACEMENT_RATIO
+        and legacy_stats.mojibake_score > recovered_stats.replacement_count
+    ):
+        return _CsvEncodingPlan(
+            encoding="utf-8-sig",
+            errors="replace",
+            warnings=_csv_decode_warnings_from_stats(
+                recovered_stats,
+                encoding="utf-8-sig",
+                warn_on_any_replacement=True,
+            ),
         )
-    return text, _csv_decode_warnings(text, encoding="utf-8-sig")
+    return _CsvEncodingPlan(
+        encoding=legacy_encoding,
+        warnings=_csv_decode_warnings_from_stats(
+            legacy_stats,
+            encoding=legacy_encoding,
+        )
+        + _legacy_fallback_corruption_warnings(
+            path,
+            legacy_encoding=legacy_encoding,
+            legacy_stats=legacy_stats,
+        ),
+    )
 
 
-def _decode_legacy_csv_bytes(
-    data: bytes,
-) -> tuple[str, tuple[CampaignOpportunityWarning, ...]]:
+def _legacy_csv_encoding_stats(path: Path) -> tuple[str, _CsvTextStats]:
     for encoding in ("cp1252", "latin-1"):
         try:
-            return _decode_csv_bytes(data, encoding=encoding)
+            stats = _scan_csv_text_stats(path, encoding=encoding)
         except UnicodeDecodeError:
             continue
+        if stats.nul_ratio >= _CSV_NUL_REDECODE_RATIO:
+            raise ValueError(
+                f"CSV customer data decoded as {encoding} but remained NUL-heavy; "
+                "check the file encoding."
+            )
+        return encoding, stats
     raise ValueError(
         "CSV customer data could not be decoded as UTF-8, UTF-16, UTF-32, "
         "CP1252, or Latin-1."
     )
 
 
-def _decode_utf8_error_csv_bytes(
-    data: bytes,
-) -> tuple[str, tuple[CampaignOpportunityWarning, ...]]:
-    inferred = _utf16_encoding_from_nul_bytes(data)
-    if inferred:
-        return _decode_inferred_utf16_csv_bytes(data, encoding=inferred)
-    legacy_text, legacy_warnings = _decode_legacy_csv_bytes(data)
-    recovered_text = data.decode("utf-8-sig", errors="replace")
-    if (
-        _replacement_ratio(recovered_text) <= _CSV_UTF8_RECOVERY_REPLACEMENT_RATIO
-        and _utf8_mojibake_score(legacy_text) > recovered_text.count("\ufffd")
-    ):
-        return recovered_text, _csv_decode_warnings(
-            recovered_text,
-            encoding="utf-8-sig",
-            warn_on_any_replacement=True,
+def _scan_csv_text_stats(
+    path: Path,
+    *,
+    encoding: str,
+    errors: str = "strict",
+) -> _CsvTextStats:
+    decoder = codecs.getincrementaldecoder(encoding)(errors=errors)
+    char_count = 0
+    nul_count = 0
+    replacement_count = 0
+    mojibake_score = 0
+    implausible_legacy_count = 0
+    marker_tail = ""
+
+    def add_text(text: str) -> None:
+        nonlocal char_count
+        nonlocal nul_count
+        nonlocal replacement_count
+        nonlocal mojibake_score
+        nonlocal implausible_legacy_count
+        nonlocal marker_tail
+        if not text:
+            return
+        char_count += len(text)
+        nul_count += text.count("\x00")
+        replacement_count += text.count("\ufffd")
+        marker_score, marker_tail = _csv_mojibake_marker_score(text, marker_tail)
+        mojibake_score += marker_score
+        implausible_legacy_count += sum(
+            1 for char in text if _is_implausible_legacy_fallback_char(char)
         )
-    return legacy_text, legacy_warnings + _legacy_fallback_corruption_warnings(
-        legacy_text,
-        recovered_text,
+
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(_CSV_READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            add_text(decoder.decode(chunk, final=False))
+    add_text(decoder.decode(b"", final=True))
+    return _CsvTextStats(
+        char_count=char_count,
+        nul_count=nul_count,
+        replacement_count=replacement_count,
+        mojibake_score=mojibake_score,
+        implausible_legacy_count=implausible_legacy_count,
     )
 
 
-def _decode_inferred_utf16_csv_bytes(
-    data: bytes,
-    *,
-    encoding: str,
-) -> tuple[str, tuple[CampaignOpportunityWarning, ...]]:
-    decoded, warnings = _decode_csv_bytes(data, encoding=encoding)
-    return decoded, warnings + (
-        CampaignOpportunityWarning(
-            code="csv_encoding_inferred",
-            field="encoding",
-            message=(
-                "CSV contained UTF-16-style NUL bytes without a BOM; "
-                f"decoded as {encoding}."
-            ),
-        ),
-    )
-
-
-def _decode_csv_bytes(
-    data: bytes,
-    *,
-    encoding: str,
-) -> tuple[str, tuple[CampaignOpportunityWarning, ...]]:
-    text = data.decode(encoding)
-    if _nul_ratio(text) >= _CSV_NUL_REDECODE_RATIO:
-        raise ValueError(
-            f"CSV customer data decoded as {encoding} but remained NUL-heavy; "
-            "check the file encoding."
-        )
-    return text, _csv_decode_warnings(text, encoding=encoding)
-
-
-def _utf16_encoding_from_nul_pattern(data: bytes, text: str) -> str | None:
-    if _nul_ratio(text) < _CSV_NUL_REDECODE_RATIO:
-        return None
-    return _utf16_encoding_from_nul_bytes(data)
+def _csv_mojibake_marker_score(text: str, tail: str) -> tuple[int, str]:
+    combined = tail + text
+    boundary = len(tail)
+    score = 0
+    for marker in _CSV_UTF8_MOJIBAKE_MARKERS:
+        start = combined.find(marker)
+        while start != -1:
+            if start + len(marker) > boundary:
+                score += 1
+            start = combined.find(marker, start + 1)
+    next_tail = combined[-_CSV_UTF8_MOJIBAKE_MARKER_TAIL_CHARS:]
+    return score, next_tail
 
 
 def _utf16_encoding_from_nul_bytes(data: bytes) -> str | None:
@@ -554,33 +791,19 @@ def _utf16_encoding_from_nul_bytes(data: bytes) -> str | None:
     return None
 
 
-def _nul_ratio(text: str) -> float:
-    if not text:
-        return 0.0
-    return text.count("\x00") / len(text)
-
-
-def _replacement_ratio(text: str) -> float:
-    if not text:
-        return 0.0
-    return text.count("\ufffd") / len(text)
-
-
-def _utf8_mojibake_score(text: str) -> int:
-    return sum(text.count(marker) for marker in _CSV_UTF8_MOJIBAKE_MARKERS)
-
-
 def _legacy_fallback_corruption_warnings(
-    legacy_text: str,
-    recovered_text: str,
+    path: Path,
+    *,
+    legacy_encoding: str,
+    legacy_stats: _CsvTextStats,
 ) -> tuple[CampaignOpportunityWarning, ...]:
+    if legacy_stats.mojibake_score:
+        return ()
     artifact_count = _legacy_fallback_implausible_artifact_count(
-        legacy_text,
-        recovered_text,
+        path,
+        legacy_encoding=legacy_encoding,
     )
     if not artifact_count:
-        return ()
-    if _utf8_mojibake_score(legacy_text):
         return ()
     return (
         CampaignOpportunityWarning(
@@ -597,17 +820,44 @@ def _legacy_fallback_corruption_warnings(
 
 
 def _legacy_fallback_implausible_artifact_count(
-    legacy_text: str,
-    recovered_text: str,
+    path: Path,
+    *,
+    legacy_encoding: str,
 ) -> int:
+    legacy_decoder = codecs.getincrementaldecoder(legacy_encoding)(errors="strict")
+    recovered_decoder = codecs.getincrementaldecoder("utf-8-sig")(errors="replace")
+    legacy_buffer = ""
+    recovered_buffer = ""
     count = 0
-    for index, char in enumerate(recovered_text):
-        if char != "\ufffd":
-            continue
-        legacy_char = legacy_text[index] if index < len(legacy_text) else ""
-        if not _is_implausible_legacy_fallback_char(legacy_char):
-            continue
-        count += 1
+
+    def consume() -> None:
+        nonlocal legacy_buffer
+        nonlocal recovered_buffer
+        nonlocal count
+        limit = min(len(legacy_buffer), len(recovered_buffer))
+        for legacy_char, recovered_char in zip(
+            legacy_buffer[:limit],
+            recovered_buffer[:limit],
+        ):
+            if (
+                recovered_char == "\ufffd"
+                and _is_implausible_legacy_fallback_char(legacy_char)
+            ):
+                count += 1
+        legacy_buffer = legacy_buffer[limit:]
+        recovered_buffer = recovered_buffer[limit:]
+
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(_CSV_READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            legacy_buffer += legacy_decoder.decode(chunk, final=False)
+            recovered_buffer += recovered_decoder.decode(chunk, final=False)
+            consume()
+    legacy_buffer += legacy_decoder.decode(b"", final=True)
+    recovered_buffer += recovered_decoder.decode(b"", final=True)
+    consume()
     return count
 
 
@@ -620,16 +870,15 @@ def _is_implausible_legacy_fallback_char(char: str) -> bool:
     return 0x80 <= codepoint <= 0x9F
 
 
-def _csv_decode_warnings(
-    text: str,
+def _csv_decode_warnings_from_stats(
+    stats: _CsvTextStats,
     *,
     encoding: str,
     warn_on_any_replacement: bool = False,
 ) -> tuple[CampaignOpportunityWarning, ...]:
-    replacement_count = text.count("\ufffd")
-    if not replacement_count:
+    if not stats.replacement_count:
         return ()
-    ratio = _replacement_ratio(text)
+    ratio = stats.replacement_ratio
     if ratio < _CSV_REPLACEMENT_WARNING_RATIO and not warn_on_any_replacement:
         return ()
     return (
@@ -637,7 +886,7 @@ def _csv_decode_warnings(
             code="csv_replacement_characters",
             field="encoding",
             message=(
-                f"CSV decoded as {encoding} but contains {replacement_count} "
+                f"CSV decoded as {encoding} but contains {stats.replacement_count} "
                 f"Unicode replacement character(s) ({ratio:.1%}); export "
                 "the source again with UTF-8 or UTF-16 encoding."
             ),
@@ -648,6 +897,28 @@ def _csv_decode_warnings(
 def _select_csv_delimiter(text: str) -> _CsvDelimiterCandidate:
     candidates = tuple(
         _score_csv_delimiter(text, delimiter=delimiter, quotechar=quotechar)
+        for delimiter in _CSV_DETECT_DELIMITERS
+        for quotechar in _CSV_DETECT_QUOTECHARS
+    )
+    valid = [candidate for candidate in candidates if candidate.valid]
+    if valid:
+        return max(valid, key=_csv_delimiter_candidate_key)
+    if all(candidate.header_index is None for candidate in candidates):
+        raise ValueError("CSV customer data must include a header row.")
+    _raise_csv_delimiter_error(max(candidates, key=_csv_delimiter_candidate_key))
+
+
+def _select_csv_delimiter_from_stream(
+    path: Path,
+    plan: _CsvEncodingPlan,
+) -> _CsvDelimiterCandidate:
+    candidates = tuple(
+        _score_csv_delimiter_stream(
+            path,
+            plan,
+            delimiter=delimiter,
+            quotechar=quotechar,
+        )
         for delimiter in _CSV_DETECT_DELIMITERS
         for quotechar in _CSV_DETECT_QUOTECHARS
     )
@@ -668,19 +939,77 @@ def _score_csv_delimiter(
         dialect=_csv_delimiter_dialect(delimiter, quotechar=quotechar),
     )
     rows = list(reader)
-    header_index = _csv_header_index(rows)
+    header_index, header_has_hint = _csv_header_index_and_hint(rows)
     return _csv_delimiter_candidate(
         rows,
         header_index,
+        header_has_hint=header_has_hint,
         delimiter=delimiter,
         quotechar=quotechar,
     )
+
+
+def _score_csv_delimiter_stream(
+    path: Path,
+    plan: _CsvEncodingPlan,
+    *,
+    delimiter: str,
+    quotechar: str,
+) -> _CsvDelimiterCandidate:
+    fallback_state: _CsvColumnConsistencyState | None = None
+    hint_state: _CsvColumnConsistencyState | None = None
+    with _open_csv_text(path, plan) as handle:
+        reader = csv.reader(
+            handle,
+            dialect=_csv_delimiter_dialect(delimiter, quotechar=quotechar),
+        )
+        for row_index, row in enumerate(reader):
+            if hint_state is not None:
+                hint_state.add(row_index + 1, row)
+                continue
+            if not any(str(cell or "").strip() for cell in row):
+                continue
+            if _csv_row_has_header_hint(row):
+                hint_state = _CsvColumnConsistencyState(
+                    header_index=row_index,
+                    header_has_hint=True,
+                    header_width=len(row),
+                    delimiter=delimiter,
+                )
+                continue
+            if fallback_state is None:
+                nonempty = [cell for cell in row if str(cell or "").strip()]
+                if len(nonempty) >= 2:
+                    fallback_state = _CsvColumnConsistencyState(
+                        header_index=row_index,
+                        header_has_hint=False,
+                        header_width=len(row),
+                        delimiter=delimiter,
+                    )
+                continue
+            fallback_state.add(row_index + 1, row)
+    state = hint_state or fallback_state
+    if state is None:
+        return _CsvDelimiterCandidate(
+            delimiter=delimiter,
+            quotechar=quotechar,
+            header_index=None,
+            header_has_hint=False,
+            header_width=0,
+            data_rows=0,
+            consistent_rows=0,
+            exact_width_rows=0,
+            first_offending_row=None,
+            first_collapsed_row=None,
+        )
+    return state.as_candidate(quotechar=quotechar)
 
 
 def _csv_delimiter_candidate(
     rows: Sequence[Sequence[Any]],
     header_index: int | None,
     *,
+    header_has_hint: bool,
     delimiter: str,
     quotechar: str,
 ) -> _CsvDelimiterCandidate:
@@ -711,6 +1040,7 @@ def _csv_delimiter_candidate(
         delimiter=delimiter,
         quotechar=quotechar,
         header_index=header_index,
+        header_has_hint=header_has_hint,
         header_width=header_width,
         data_rows=data_rows,
         consistent_rows=consistent_rows,
@@ -722,9 +1052,10 @@ def _csv_delimiter_candidate(
 
 def _csv_delimiter_candidate_key(
     candidate: _CsvDelimiterCandidate,
-) -> tuple[bool, bool, bool, float, float, int, int, int, int]:
+) -> tuple[bool, bool, bool, bool, float, float, int, int, int, int, int]:
     return (
         candidate.header_index is not None,
+        candidate.header_has_hint,
         candidate.data_rows > 0,
         candidate.first_collapsed_row is None,
         candidate.consistency,
@@ -799,6 +1130,7 @@ def _validate_csv_column_consistency(
     candidate = _csv_delimiter_candidate(
         rows,
         header_index,
+        header_has_hint=_csv_row_has_header_hint(rows[header_index]),
         delimiter=delimiter,
         quotechar=quotechar,
     )
