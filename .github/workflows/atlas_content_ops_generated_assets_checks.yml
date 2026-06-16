@@ -11,6 +11,7 @@ on:
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/api/content_ops_brand_voice_profiles.py"
       - "atlas_brain/api/content_ops_zendesk_export.py"
+      - "scripts/setup_content_ops_zendesk_credentials.py"
       - "atlas_brain/storage/migrations/333_content_ops_brand_voice_profiles.sql"
       - "extracted_content_pipeline/api/control_surfaces.py"
       - "extracted_content_pipeline/api/generated_assets.py"
@@ -19,6 +20,7 @@ on:
       - "tests/test_content_ops_brand_voice_profiles_api.py"
       - "tests/test_content_ops_zendesk_credentials.py"
       - "tests/test_content_ops_zendesk_export_api.py"
+      - "tests/test_setup_content_ops_zendesk_credentials.py"
   push:
     branches:
       - main
@@ -31,6 +33,7 @@ on:
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/api/content_ops_brand_voice_profiles.py"
       - "atlas_brain/api/content_ops_zendesk_export.py"
+      - "scripts/setup_content_ops_zendesk_credentials.py"
       - "atlas_brain/storage/migrations/333_content_ops_brand_voice_profiles.sql"
       - "extracted_content_pipeline/api/control_surfaces.py"
       - "extracted_content_pipeline/api/generated_assets.py"
@@ -39,6 +42,7 @@ on:
       - "tests/test_content_ops_brand_voice_profiles_api.py"
       - "tests/test_content_ops_zendesk_credentials.py"
       - "tests/test_content_ops_zendesk_export_api.py"
+      - "tests/test_setup_content_ops_zendesk_credentials.py"
 
 jobs:
   atlas-content-ops-generated-assets-checks:
@@ -67,4 +71,5 @@ jobs:
             tests/test_content_ops_brand_voice_profiles_api.py \
             tests/test_content_ops_zendesk_credentials.py \
             tests/test_content_ops_zendesk_export_api.py \
+            tests/test_setup_content_ops_zendesk_credentials.py \
             -q

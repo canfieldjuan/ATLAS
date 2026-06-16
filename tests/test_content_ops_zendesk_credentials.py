@@ -175,6 +175,31 @@ async def test_upsert_zendesk_credentials_encrypts_token_and_returns_display_rec
 
 
 @pytest.mark.asyncio
+async def test_upsert_zendesk_credentials_suppresses_complete_short_token_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = uuid.uuid4()
+    pool = _Pool(fetchrow_result=_row(account_id=account_id, api_token_prefix=""))
+    monkeypatch.setattr(
+        service,
+        "encrypt_secret",
+        lambda raw: (f"encrypted:{raw}".encode("utf-8"), "kid-1"),
+    )
+
+    record = await service.upsert_zendesk_credentials(
+        pool,
+        account_id=account_id,
+        email="agent@example.com",
+        api_token="short",
+        subdomain="acme",
+    )
+
+    insert_call = pool.fetchrow_calls[0]
+    assert insert_call["args"][4] == ""
+    assert record.api_token_prefix == ""
+
+
+@pytest.mark.asyncio
 async def test_upsert_zendesk_credentials_accepts_raw_asyncpg_pool_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
