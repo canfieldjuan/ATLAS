@@ -38,6 +38,10 @@ _CLEANUP_SCRIPT = _load_script_module(
     "cleanup_content_ops_faq_macro_sandbox_for_lifecycle",
     ROOT / "scripts" / "cleanup_content_ops_faq_macro_sandbox.py",
 )
+_CHECKER_SCRIPT = _load_script_module(
+    "check_content_ops_faq_macro_lifecycle_artifact_for_lifecycle",
+    ROOT / "scripts" / "check_content_ops_faq_macro_lifecycle_artifact.py",
+)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -98,6 +102,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Required to delete real Zendesk macros during cleanup.",
     )
     parser.add_argument("--output", type=Path, help="Optional JSON output path.")
+    parser.add_argument(
+        "--summary-output",
+        type=Path,
+        help="Optional sanitized Markdown proof summary output path.",
+    )
     parser.add_argument(
         "--json",
         action="store_true",
@@ -267,12 +276,42 @@ def _write_payload(payload: dict[str, Any], args: argparse.Namespace) -> None:
         print(output, end="")
 
 
+def _write_proof_summary(
+    code: int,
+    payload: dict[str, Any],
+    args: argparse.Namespace,
+) -> tuple[int, dict[str, Any]]:
+    if not args.summary_output:
+        return code, payload
+
+    result = _CHECKER_SCRIPT.validate_lifecycle_artifact(payload)
+    args.summary_output.write_text(
+        _CHECKER_SCRIPT.render_summary(result),
+        encoding="utf-8",
+    )
+    if code == 0 and not result.get("ok"):
+        errors = list(payload.get("errors") or ())
+        errors.append("proof_summary_validation_failed")
+        return (
+            1,
+            {
+                **payload,
+                "ok": False,
+                "stage": "proof_summary",
+                "errors": errors,
+                "proof_summary_errors": list(result.get("errors") or ()),
+            },
+        )
+    return code, payload
+
+
 async def _main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     _validate_args(args)
     preflight = _preflight(args)
     if preflight is not None:
         code, payload = preflight
+        code, payload = _write_proof_summary(code, payload, args)
         _write_payload(payload, args)
         return code
 
@@ -285,6 +324,7 @@ async def _main(argv: list[str] | None = None) -> int:
             maybe_awaitable = close()
             if hasattr(maybe_awaitable, "__await__"):
                 await maybe_awaitable
+    code, payload = _write_proof_summary(code, payload, args)
     _write_payload(payload, args)
     return code
 

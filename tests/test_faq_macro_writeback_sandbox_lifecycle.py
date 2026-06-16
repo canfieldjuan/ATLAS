@@ -287,6 +287,157 @@ async def test_lifecycle_main_closes_pool_after_success(
     assert pool.closed is True
 
 
+@pytest.mark.asyncio
+async def test_lifecycle_main_writes_raw_artifact_and_sanitized_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "lifecycle.json"
+    summary = tmp_path / "summary.md"
+
+    class Pool:
+        async def close(self) -> None:
+            return None
+
+    async def create_pool(database_url: str) -> Pool:
+        return Pool()
+
+    async def run(
+        args: argparse.Namespace,
+        stage_pool: Pool,
+    ) -> tuple[int, dict[str, Any]]:
+        return 0, _complete_lifecycle_payload()
+
+    monkeypatch.setattr(lifecycle, "_create_pool", create_pool)
+    monkeypatch.setattr(lifecycle, "run_sandbox_lifecycle_smoke", run)
+
+    code = await lifecycle._main(_argv(_args(), output=output, summary=summary))
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    summary_text = summary.read_text(encoding="utf-8")
+    assert code == 0
+    assert payload["ok"] is True
+    assert "Status: PASS" in summary_text
+    assert "faq-seed-123" in summary_text
+    assert "macro-123: ok" in summary_text
+    assert "How do I refund a duplicate charge" not in summary_text
+    assert "next_command" not in summary_text
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_preflight_skip_writes_failure_summary_before_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "preflight.json"
+    summary = tmp_path / "summary.md"
+
+    async def fail_create_pool(database_url: str) -> object:
+        raise AssertionError(f"pool should not open for {database_url}")
+
+    monkeypatch.setattr(lifecycle, "_create_pool", fail_create_pool)
+
+    code = await lifecycle._main(
+        _argv(
+            _args(confirm_live_zendesk_delete=False),
+            output=output,
+            summary=summary,
+        )
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    summary_text = summary.read_text(encoding="utf-8")
+    assert code == lifecycle.SKIPPED_EXIT
+    assert payload["not_run_reason"] == "missing_confirm_live_zendesk_delete"
+    assert "Status: FAIL" in summary_text
+    assert "missing_write_payload" in summary_text
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_failure_writes_summary_without_masking_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "lifecycle.json"
+    summary = tmp_path / "summary.md"
+
+    class Pool:
+        async def close(self) -> None:
+            return None
+
+    async def create_pool(database_url: str) -> Pool:
+        return Pool()
+
+    async def run(
+        args: argparse.Namespace,
+        stage_pool: Pool,
+    ) -> tuple[int, dict[str, Any]]:
+        payload = _complete_lifecycle_payload()
+        payload.update({
+            "ok": False,
+            "stage": "cleanup",
+            "errors": ["zendesk_macro_delete_failed"],
+        })
+        payload["cleanup"].update({
+            "ok": False,
+            "stage": "external_delete",
+            "errors": ["zendesk_macro_delete_failed"],
+        })
+        return 1, payload
+
+    monkeypatch.setattr(lifecycle, "_create_pool", create_pool)
+    monkeypatch.setattr(lifecycle, "run_sandbox_lifecycle_smoke", run)
+
+    code = await lifecycle._main(_argv(_args(), output=output, summary=summary))
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    summary_text = summary.read_text(encoding="utf-8")
+    assert code == 1
+    assert payload["stage"] == "cleanup"
+    assert payload["errors"] == ["zendesk_macro_delete_failed"]
+    assert "proof_summary_validation_failed" not in payload["errors"]
+    assert "Status: FAIL" in summary_text
+    assert "zendesk_macro_delete_failed" in summary_text
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_summary_validation_failure_blocks_green_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "lifecycle.json"
+    summary = tmp_path / "summary.md"
+
+    class Pool:
+        async def close(self) -> None:
+            return None
+
+    async def create_pool(database_url: str) -> Pool:
+        return Pool()
+
+    async def run(
+        args: argparse.Namespace,
+        stage_pool: Pool,
+    ) -> tuple[int, dict[str, Any]]:
+        payload = _complete_lifecycle_payload()
+        payload["cleanup"]["external_deletes"] = []
+        return 0, payload
+
+    monkeypatch.setattr(lifecycle, "_create_pool", create_pool)
+    monkeypatch.setattr(lifecycle, "run_sandbox_lifecycle_smoke", run)
+
+    code = await lifecycle._main(_argv(_args(), output=output, summary=summary))
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    summary_text = summary.read_text(encoding="utf-8")
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["stage"] == "proof_summary"
+    assert "proof_summary_validation_failed" in payload["errors"]
+    assert payload["proof_summary_errors"] == ["missing_external_delete_proof"]
+    assert "Status: FAIL" in summary_text
+
+
 def test_lifecycle_wrapper_does_not_define_zendesk_transport_or_provider() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 
@@ -319,7 +470,58 @@ def _args(**overrides: Any) -> argparse.Namespace:
     return argparse.Namespace(**values)
 
 
-def _argv(args: argparse.Namespace, *, output: Path | None = None) -> list[str]:
+def _complete_lifecycle_payload() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "skipped": False,
+        "cleanup_skipped": False,
+        "stage": "complete",
+        "account_id": "acct-1",
+        "faq_id": "faq-seed-123",
+        "zendesk_base_url": "https://sandbox.zendesk.com",
+        "write": {
+            "ok": True,
+            "skipped": False,
+            "stage": "complete",
+            "account_id": "acct-1",
+            "faq_id": "faq-seed-123",
+            "zendesk_base_url": "https://sandbox.zendesk.com",
+            "publishable_count": 1,
+            "seed": {
+                "macro_titles": ["How do I refund a duplicate charge?"],
+                "next_command": "DATABASE_URL=secret python smoke.py",
+            },
+            "live_smoke": {
+                "ok": True,
+                "skipped": False,
+                "faq_id": "faq-seed-123",
+                "zendesk_base_url": "https://sandbox.zendesk.com",
+                "publishable_count": 1,
+            },
+        },
+        "cleanup": {
+            "ok": True,
+            "skipped": False,
+            "stage": "complete",
+            "account_id": "acct-1",
+            "faq_id": "faq-seed-123",
+            "zendesk_base_url": "https://sandbox.zendesk.com",
+            "deleted_faq_count": 1,
+            "external_deletes": [
+                {"external_id": "macro-123", "ok": True, "error": ""}
+            ],
+            "errors": [],
+        },
+        "errors": [],
+    }
+
+
+def _argv(
+    args: argparse.Namespace,
+    *,
+    output: Path | None = None,
+    summary: Path | None = None,
+) -> list[str]:
     argv = [
         "--database-url",
         args.database_url,
@@ -342,4 +544,6 @@ def _argv(args: argparse.Namespace, *, output: Path | None = None) -> list[str]:
         argv.append("--confirm-live-zendesk-delete")
     if output is not None:
         argv.extend(["--output", str(output)])
+    if summary is not None:
+        argv.extend(["--summary-output", str(summary)])
     return argv
