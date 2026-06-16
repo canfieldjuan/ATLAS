@@ -10,6 +10,7 @@ from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownResu
 from atlas_brain.deflection_pdf_renderer import (
     PDF_QUESTION_DETAIL_LIMIT,
     PDF_RANKED_TABLE_LIMIT,
+    _artifact_report_model_pdf_markdown,
     _curate_markdown_for_pdf,
     _toc_entries,
     render_deflection_full_report_pdf,
@@ -56,6 +57,39 @@ def _large_markdown() -> str:
     ])
 
 
+def _report_model_artifact() -> dict[str, object]:
+    return build_deflection_report_artifact(
+        TicketFAQMarkdownResult(
+            markdown="# FAQ",
+            source_count=3,
+            ticket_source_count=3,
+            output_checks={"condensed": True},
+            items=(
+                {
+                    "question": "How do I export attribution reports?",
+                    "customer_wording": "export attribution reports",
+                    "ticket_count": 2,
+                    "opportunity_score": 7,
+                    "answer": "Open Analytics, choose Attribution, then Download report.",
+                    "answer_evidence_status": "resolution_evidence",
+                    "resolution_evidence_scope": "scoped",
+                    "steps": ("Open Analytics and choose Attribution.",),
+                    "source_ids": ("ticket-export-1", "ticket-export-2"),
+                    "evidence_quotes": ("`ticket-export-1` - Export attribution",),
+                },
+                {
+                    "question": "How do I enable SSO?",
+                    "customer_wording": "enable SSO",
+                    "ticket_count": 1,
+                    "answer_evidence_status": "draft_needs_review",
+                    "source_ids": ("ticket-sso-1",),
+                    "evidence_quotes": ("`ticket-sso-1` - SSO setup",),
+                },
+            ),
+        )
+    ).as_dict()
+
+
 def test_render_deflection_full_report_pdf_from_artifact_markdown() -> None:
     pdf_bytes = render_deflection_full_report_pdf(
         {
@@ -77,6 +111,146 @@ def test_render_deflection_full_report_pdf_from_artifact_markdown() -> None:
 
     assert pdf_bytes[:5] == b"%PDF-"
     assert len(pdf_bytes) > 1000
+
+
+def test_render_deflection_full_report_pdf_from_report_model_without_markdown() -> None:
+    artifact = _report_model_artifact()
+    artifact.pop("markdown")
+
+    pdf_bytes = render_deflection_full_report_pdf(artifact)
+
+    assert pdf_bytes[:5] == b"%PDF-"
+    assert len(pdf_bytes) > 1000
+
+
+def test_pdf_prefers_report_model_over_stale_artifact_markdown() -> None:
+    artifact = _report_model_artifact()
+    artifact["markdown"] = (
+        "# Stale Markdown\n\n"
+        "## Stale Markdown Only Section\n\n"
+        "STALE_MARKDOWN_ONLY_SENTINEL\n"
+    )
+
+    model_markdown = _artifact_report_model_pdf_markdown(artifact)
+
+    assert "How do I export attribution reports?" in model_markdown
+    assert "Open Analytics, choose Attribution" in model_markdown
+    assert "STALE_MARKDOWN_ONLY_SENTINEL" not in model_markdown
+    assert "Stale Markdown Only Section" not in model_markdown
+    assert "ticket-export-1" not in model_markdown
+    assert "complete evidence export" in model_markdown
+
+
+def test_report_model_pdf_markdown_caps_rows_and_skips_non_pdf_sections() -> None:
+    ranked_rows = [
+        {
+            "rank": index,
+            "question": f"Ranked question {index}",
+            "ticket_count": index,
+            "estimated_support_cost": index * 13.5,
+            "opportunity_score": index * 2,
+            "answer_status": "drafted from resolution evidence",
+            "source_proof": f"{index} source tickets",
+        }
+        for index in range(1, PDF_RANKED_TABLE_LIMIT + 3)
+    ]
+    detail_rows = [
+        {
+            "rank": index,
+            "question": f"Detail question {index}",
+            "customer_wording": f"customer words {index}",
+            "ticket_count": index,
+            "estimated_support_cost": index * 13.5,
+            "answer_status": "drafted from resolution evidence",
+            "answer_linkage": "publishable_answer",
+            "answer": f"Publishable answer {index}",
+            "steps": (f"Step {index}",),
+            "source_ids": (f"ticket-detail-{index}",),
+            "evidence_quotes": (f"RAW_EVIDENCE_SHOULD_NOT_RENDER_{index}",),
+        }
+        for index in range(1, PDF_QUESTION_DETAIL_LIMIT + 3)
+    ]
+    artifact = {
+        "report_model": {
+            "schema_version": "deflection.v1",
+            "title": "Model PDF",
+            "summary": {"generated": 2},
+            "sections": [
+                {
+                    "id": "ranked_questions",
+                    "title": "Ranked Question Opportunities",
+                    "priority": 30,
+                    "surfaces": ["web", "pdf", "markdown"],
+                    "default_limit": None,
+                    "required_data": ["rows"],
+                    "data": {"rows": ranked_rows},
+                },
+                {
+                    "id": "complete_evidence",
+                    "title": "Complete Evidence",
+                    "priority": 20,
+                    "surfaces": ["export"],
+                    "default_limit": None,
+                    "required_data": [
+                        "question_count",
+                        "evidence_row_count",
+                        "source_id_count",
+                        "surfaces",
+                    ],
+                    "data": {
+                        "question_count": 99,
+                        "evidence_row_count": 999,
+                        "source_id_count": 999,
+                        "surfaces": ["export"],
+                    },
+                },
+                {
+                    "id": "unknown_pdf_section",
+                    "title": "Unknown PDF Section",
+                    "priority": 25,
+                    "surfaces": ["pdf"],
+                    "default_limit": None,
+                    "required_data": [],
+                    "data": {"body": "UNKNOWN_SECTION_SHOULD_NOT_RENDER"},
+                },
+                {
+                    "id": "source_file",
+                    "title": "Source file",
+                    "priority": 5,
+                    "surfaces": ["pdf"],
+                    "default_limit": None,
+                    "required_data": ["source_label"],
+                    "data": {"source_label": "zendesk-export.json"},
+                },
+                {
+                    "id": "question_details",
+                    "title": "Question Details and Evidence",
+                    "priority": 50,
+                    "surfaces": ["web", "pdf", "markdown"],
+                    "default_limit": None,
+                    "required_data": ["rows"],
+                    "data": {"rows": detail_rows},
+                },
+            ],
+        }
+    }
+
+    model_markdown = _artifact_report_model_pdf_markdown(artifact)
+
+    assert model_markdown.index("## Source file") < model_markdown.index(
+        "## Ranked Question Opportunities"
+    )
+    assert f"Ranked question {PDF_RANKED_TABLE_LIMIT}" in model_markdown
+    assert f"Ranked question {PDF_RANKED_TABLE_LIMIT + 1}" not in model_markdown
+    assert "Ranked question table capped" in model_markdown
+    assert f"Detail question {PDF_QUESTION_DETAIL_LIMIT}" in model_markdown
+    assert f"Detail question {PDF_QUESTION_DETAIL_LIMIT + 1}" not in model_markdown
+    assert "Question detail blocks capped" in model_markdown
+    assert "UNKNOWN_SECTION_SHOULD_NOT_RENDER" not in model_markdown
+    assert "Complete Evidence" not in model_markdown
+    assert "RAW_EVIDENCE_SHOULD_NOT_RENDER_1" not in model_markdown
+    assert "ticket-detail-1" not in model_markdown
+    assert "complete evidence export" in model_markdown
 
 
 def test_curated_pdf_markdown_caps_ranked_table_and_question_details() -> None:
@@ -197,5 +371,5 @@ def test_plain_toc_uses_curated_headings_only() -> None:
 
 
 def test_render_deflection_full_report_pdf_requires_markdown() -> None:
-    with pytest.raises(ValueError, match="artifact markdown is required"):
+    with pytest.raises(ValueError, match="report_model or markdown is required"):
         render_deflection_full_report_pdf({"summary": {"generated": 0}})
