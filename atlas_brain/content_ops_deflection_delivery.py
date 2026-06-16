@@ -14,6 +14,9 @@ from extracted_content_pipeline.campaign_ports import (
     SendRequest,
     SendResult,
 )
+from extracted_content_pipeline.deflection_report_access import (
+    stored_deflection_report_model,
+)
 from extracted_content_pipeline.storage._jsonb_helpers import decode_jsonb_field
 
 
@@ -46,6 +49,16 @@ class DeflectionReportDeliverySummary:
     sent: int
     failed: int
     dry_run: int
+
+
+@dataclass(frozen=True)
+class _DeliveryEmailSummary:
+    repeat_ticket_count: int
+    generated_question_count: int
+    estimated_support_cost: float
+    drafted_answer_count: int
+    no_proven_answer_count: int
+    ticket_source_count: int
 
 
 async def send_pending_deflection_report_deliveries(
@@ -92,10 +105,12 @@ async def send_pending_deflection_report_deliveries(
             dry_run += 1
             continue
         try:
+            artifact = _decoded_artifact(data.get("artifact"))
             attachments = _pdf_attachments(
-                artifact=data.get("artifact"),
+                artifact=artifact,
                 request_id=request_id,
             )
+            email_summary = _delivery_email_summary(artifact)
             if not await _confirm_delivery_still_sendable(pool, account_id, request_id):
                 await _emit_delivery_incident(
                     "paid_report_delivery_no_longer_sendable",
@@ -118,6 +133,7 @@ async def send_pending_deflection_report_deliveries(
                     email=email,
                     report_url=report_url,
                     attachments=attachments,
+                    email_summary=email_summary,
                     config=config,
                 )
             )
@@ -207,6 +223,7 @@ def _send_request(
     email: str,
     report_url: str,
     attachments: tuple[dict[str, str], ...] = (),
+    email_summary: _DeliveryEmailSummary | None = None,
     config: DeflectionReportDeliveryConfig,
 ) -> SendRequest:
     has_attachment = bool(attachments)
@@ -217,8 +234,16 @@ def _send_request(
         from_email=_required_text(config.from_email, "from_email"),
         reply_to=_clean(config.reply_to) or None,
         subject=_required_text(config.subject, "subject"),
-        html_body=_render_html(report_url, has_attachment=has_attachment),
-        text_body=_render_text(report_url, has_attachment=has_attachment),
+        html_body=_render_html(
+            report_url,
+            has_attachment=has_attachment,
+            email_summary=email_summary,
+        ),
+        text_body=_render_text(
+            report_url,
+            has_attachment=has_attachment,
+            email_summary=email_summary,
+        ),
         attachments=attachments,
         tags=(
             {"name": "source", "value": "content_ops_deflection_report"},
@@ -232,7 +257,18 @@ def _send_request(
     )
 
 
-def _render_html(report_url: str, *, has_attachment: bool = False) -> str:
+def _render_html(
+    report_url: str,
+    *,
+    has_attachment: bool = False,
+    email_summary: _DeliveryEmailSummary | None = None,
+) -> str:
+    if email_summary is not None:
+        return _render_model_summary_html(
+            report_url,
+            has_attachment=has_attachment,
+            summary=email_summary,
+        )
     safe_url = _escape(report_url)
     attachment_copy = (
         "<p>The full report PDF is attached for sharing and offline review.</p>"
@@ -248,7 +284,18 @@ def _render_html(report_url: str, *, has_attachment: bool = False) -> str:
     )
 
 
-def _render_text(report_url: str, *, has_attachment: bool = False) -> str:
+def _render_text(
+    report_url: str,
+    *,
+    has_attachment: bool = False,
+    email_summary: _DeliveryEmailSummary | None = None,
+) -> str:
+    if email_summary is not None:
+        return _render_model_summary_text(
+            report_url,
+            has_attachment=has_attachment,
+            summary=email_summary,
+        )
     attachment_copy = (
         "The full report PDF is attached for sharing and offline review.\n\n"
         if has_attachment
@@ -263,13 +310,165 @@ def _render_text(report_url: str, *, has_attachment: bool = False) -> str:
     )
 
 
+def _render_model_summary_html(
+    report_url: str,
+    *,
+    has_attachment: bool,
+    summary: _DeliveryEmailSummary,
+) -> str:
+    safe_url = _escape(report_url)
+    attachment_copy = (
+        "<p>The curated report PDF is attached for sharing and offline review.</p>"
+        if has_attachment
+        else ""
+    )
+    return (
+        "<h1>Your FAQ deflection report is ready</h1>"
+        "<p>Your paid report is available at the secure results page below.</p>"
+        "<h2>Key numbers</h2>"
+        "<ul>"
+        f"<li>{_html_count(summary.repeat_ticket_count)} repeat tickets across "
+        f"{_html_count(summary.generated_question_count)} ranked questions.</li>"
+        f"<li>{_html_money(summary.estimated_support_cost)} estimated assisted-contact "
+        "handling in this upload.</li>"
+        f"<li>{_html_count(summary.drafted_answer_count)} publishable answers drafted "
+        "from proven resolutions.</li>"
+        f"<li>{_html_count(summary.no_proven_answer_count)} questions still need "
+        "approved resolution evidence.</li>"
+        f"<li>{_html_count(summary.ticket_source_count)} ticket sources represented.</li>"
+        "</ul>"
+        f"{attachment_copy}"
+        "<p>The secure results page has the consolidated report, PDF, and complete "
+        "evidence export.</p>"
+        f'<p><a href="{safe_url}">Open your report</a></p>'
+    )
+
+
+def _render_model_summary_text(
+    report_url: str,
+    *,
+    has_attachment: bool,
+    summary: _DeliveryEmailSummary,
+) -> str:
+    attachment_copy = (
+        "The curated report PDF is attached for sharing and offline review.\n\n"
+        if has_attachment
+        else ""
+    )
+    return (
+        "Your FAQ deflection report is ready\n\n"
+        "Key numbers:\n"
+        f"- {_email_count(summary.repeat_ticket_count)} repeat tickets across "
+        f"{_email_count(summary.generated_question_count)} ranked questions.\n"
+        f"- {_email_money(summary.estimated_support_cost)} estimated assisted-contact "
+        "handling in this upload.\n"
+        f"- {_email_count(summary.drafted_answer_count)} publishable answers drafted "
+        "from proven resolutions.\n"
+        f"- {_email_count(summary.no_proven_answer_count)} questions still need approved "
+        "resolution evidence.\n"
+        f"- {_email_count(summary.ticket_source_count)} ticket sources represented.\n\n"
+        f"{attachment_copy}"
+        "The secure results page has the consolidated report, PDF, and complete "
+        "evidence export:\n\n"
+        f"{report_url}\n"
+    )
+
+
+def _delivery_email_summary(artifact: Any) -> _DeliveryEmailSummary | None:
+    model = stored_deflection_report_model(
+        artifact if isinstance(artifact, Mapping) else None
+    )
+    if model is None:
+        return None
+    for section in _model_sections(model, "email_summary"):
+        if _clean(section.get("id")) != "support_tax":
+            continue
+        summary = _support_tax_email_summary(section)
+        if summary is not None:
+            return summary
+    return None
+
+
+def _model_sections(model: Mapping[str, Any], surface: str) -> tuple[dict[str, Any], ...]:
+    sections = model.get("sections")
+    if not isinstance(sections, list):
+        return ()
+    filtered = [
+        dict(section)
+        for section in sections
+        if isinstance(section, Mapping)
+        and surface in {str(item).strip() for item in section.get("surfaces") or ()}
+    ]
+    filtered.sort(key=lambda section: _strict_int(section.get("priority")) or 0)
+    return tuple(filtered)
+
+
+def _support_tax_email_summary(
+    section: Mapping[str, Any],
+) -> _DeliveryEmailSummary | None:
+    data = section.get("data")
+    if not isinstance(data, Mapping):
+        return None
+    repeat_ticket_count = _strict_int(data.get("repeat_ticket_count"))
+    generated_question_count = _strict_int(data.get("generated_question_count"))
+    estimated_support_cost = _strict_number(data.get("estimated_support_cost"))
+    drafted_answer_count = _strict_int(data.get("drafted_answer_count"))
+    no_proven_answer_count = _strict_int(data.get("no_proven_answer_count"))
+    ticket_source_count = _strict_int(data.get("ticket_source_count"))
+    if (
+        repeat_ticket_count is None
+        or generated_question_count is None
+        or estimated_support_cost is None
+        or drafted_answer_count is None
+        or no_proven_answer_count is None
+        or ticket_source_count is None
+    ):
+        return None
+    return _DeliveryEmailSummary(
+        repeat_ticket_count=repeat_ticket_count,
+        generated_question_count=generated_question_count,
+        estimated_support_cost=estimated_support_cost,
+        drafted_answer_count=drafted_answer_count,
+        no_proven_answer_count=no_proven_answer_count,
+        ticket_source_count=ticket_source_count,
+    )
+
+
+def _strict_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _strict_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _decoded_artifact(artifact: Any) -> Any:
+    return decode_jsonb_field(artifact, default={})
+
+
 def _pdf_attachments(
     *,
     artifact: Any,
     request_id: str,
 ) -> tuple[dict[str, str], ...]:
-    decoded_artifact = decode_jsonb_field(artifact, default={})
-    if not isinstance(decoded_artifact, Mapping):
+    if not isinstance(artifact, Mapping):
         logger.warning(
             "Skipping deflection report PDF attachment for %s: missing artifact",
             request_id,
@@ -278,7 +477,7 @@ def _pdf_attachments(
     try:
         from .deflection_pdf_renderer import render_deflection_full_report_pdf
 
-        pdf_bytes = render_deflection_full_report_pdf(decoded_artifact)
+        pdf_bytes = render_deflection_full_report_pdf(artifact)
     except Exception:
         logger.exception(
             "Deflection report PDF render failed for %s; sending link-only email",
@@ -420,6 +619,22 @@ def _required_text(value: Any, label: str) -> str:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _email_count(value: int) -> str:
+    return f"{int(value):,}"
+
+
+def _html_count(value: int) -> str:
+    return _escape(_email_count(value))
+
+
+def _email_money(value: float) -> str:
+    return f"${float(value):,.0f}"
+
+
+def _html_money(value: float) -> str:
+    return _escape(_email_money(value))
 
 
 def _escape(value: str) -> str:
