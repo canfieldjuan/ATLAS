@@ -1,6 +1,6 @@
 # Plan archive index
 
-1079 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1080 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -680,6 +680,7 @@
 - [PR-Deflection-Customer-Wording-PII-Headings](archive/PR-Deflection-Customer-Wording-PII-Headings.md) - lane: deflection/clustering | phase: Production hardening
 - [PR-Deflection-Delimiter-Vote-Reject](archive/PR-Deflection-Delimiter-Vote-Reject.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Delivery-Email-Metadata](archive/PR-Deflection-Delivery-Email-Metadata.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
+- [PR-Deflection-Delivery-Email-Model-Wrapper](archive/PR-Deflection-Delivery-Email-Model-Wrapper.md) - lane: content-ops/deflection-report-shape | phase: Vertical slice
 - [PR-Deflection-Delivery-Privacy-Regressions](archive/PR-Deflection-Delivery-Privacy-Regressions.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Delivery-Reconciliation](archive/PR-Deflection-Delivery-Reconciliation.md) - lane: deflection/go-live | phase: Production hardening
 - [PR-Deflection-Delivery-Row-Claim](archive/PR-Deflection-Delivery-Row-Claim.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening

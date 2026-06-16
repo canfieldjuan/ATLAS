@@ -50,6 +50,8 @@ _UNICODE_MAP = str.maketrans({
     "\ufeff": "",
 })
 
+_PDFNavigationEntry = tuple[int, str, int]
+
 
 class DeflectionReportPDF(FPDF):
     def header(self) -> None:
@@ -75,8 +77,19 @@ class DeflectionReportPDF(FPDF):
         self.set_text_color(*_CLR_MUTED)
         self.cell(0, 5, f"Page {self.page_no()}", align="C")
 
-    def section_title(self, text: str, *, level: int) -> None:
+    def section_title(
+        self,
+        text: str,
+        *,
+        level: int,
+        link_target: int | None = None,
+        outline_level: int | None = None,
+    ) -> None:
         self.ln(2)
+        if link_target is not None:
+            self.set_link(link_target, y=self.get_y(), page=self.page_no())
+        if outline_level is not None:
+            self.start_section(_safe(_clean_inline(text)), level=outline_level, strict=False)
         self.set_text_color(*_CLR_ACCENT if level <= 2 else _CLR_DARK)
         self.set_font("Helvetica", "B", 13 if level <= 2 else 11)
         self.multi_cell(0, 7, _safe(text), new_x="LMARGIN", new_y="NEXT")
@@ -94,6 +107,19 @@ class DeflectionReportPDF(FPDF):
         self.set_text_color(*_CLR_DARK)
         self.set_font("Helvetica", "", 9)
         self.multi_cell(0, 5, _safe(text), new_x="LMARGIN", new_y="NEXT")
+        self.ln(1)
+
+    def toc_entry(self, text: str, *, link_target: int | None) -> None:
+        self.set_text_color(*_CLR_ACCENT if link_target is not None else _CLR_DARK)
+        self.set_font("Helvetica", "", 9)
+        self.multi_cell(
+            0,
+            5,
+            _safe(text),
+            link=link_target,
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
         self.ln(1)
 
     def table_row(self, cells: list[str]) -> None:
@@ -131,12 +157,20 @@ def render_deflection_full_report_pdf(
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.alias_nb_pages()
     pdf.add_page()
-    _render_pdf_intro(pdf, title=title, toc_entries=_toc_entries(curated_markdown))
+    toc_entries = _toc_entries(curated_markdown)
+    navigation_entries = _pdf_navigation_entries(pdf, toc_entries)
+    _render_pdf_intro(
+        pdf,
+        title=title,
+        toc_entries=toc_entries,
+        navigation_entries=navigation_entries,
+    )
     _render_markdown(
         pdf,
         _drop_first_title_heading(curated_markdown),
         title=title,
         render_missing_title=False,
+        navigation_entries=navigation_entries,
     )
 
     buf = io.BytesIO()
@@ -512,14 +546,20 @@ def _render_pdf_intro(
     *,
     title: str,
     toc_entries: list[tuple[int, str]],
+    navigation_entries: Sequence[_PDFNavigationEntry] = (),
 ) -> None:
     pdf.section_title(title, level=1)
     if not toc_entries:
         return
     pdf.section_title("Table of contents", level=2)
-    for level, text in toc_entries:
+    for index, (level, text) in enumerate(toc_entries):
         prefix = "  - " if level >= 3 else "- "
-        pdf.body_text(f"{prefix}{text}")
+        link_target = (
+            navigation_entries[index][2]
+            if index < len(navigation_entries)
+            else None
+        )
+        pdf.toc_entry(f"{prefix}{text}", link_target=link_target)
     pdf.ln(2)
 
 
@@ -529,10 +569,12 @@ def _render_markdown(
     *,
     title: str,
     render_missing_title: bool = True,
+    navigation_entries: Sequence[_PDFNavigationEntry] = (),
 ) -> None:
     lines = markdown.splitlines()
     if render_missing_title and not any(line.startswith("# ") for line in lines):
         pdf.section_title(title, level=1)
+    navigation_index = 0
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
@@ -540,7 +582,24 @@ def _render_markdown(
             continue
         heading_level = _heading_level(line)
         if heading_level:
-            pdf.section_title(line[heading_level + 1 :].strip(), level=heading_level)
+            heading_text = line[heading_level + 1 :].strip()
+            link_target = None
+            outline_level = None
+            if navigation_index < len(navigation_entries):
+                entry_level, entry_text, entry_link = navigation_entries[navigation_index]
+                if (
+                    entry_level == heading_level
+                    and entry_text == _clean_inline(heading_text)
+                ):
+                    link_target = entry_link
+                    outline_level = max(0, heading_level - 2)
+                    navigation_index += 1
+            pdf.section_title(
+                heading_text,
+                level=heading_level,
+                link_target=link_target,
+                outline_level=outline_level,
+            )
             continue
         if _is_table_rule(line):
             continue
@@ -627,6 +686,13 @@ def _toc_entries(markdown: str) -> list[tuple[int, str]]:
         if level in {2, 3}:
             entries.append((level, _clean_inline(line[level + 1 :])))
     return entries
+
+
+def _pdf_navigation_entries(
+    pdf: DeflectionReportPDF,
+    toc_entries: Sequence[tuple[int, str]],
+) -> list[_PDFNavigationEntry]:
+    return [(level, text, pdf.add_link()) for level, text in toc_entries]
 
 
 def _drop_first_title_heading(markdown: str) -> str:

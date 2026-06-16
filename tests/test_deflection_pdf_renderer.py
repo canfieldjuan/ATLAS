@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import atlas_brain.deflection_pdf_renderer as pdf_renderer
 from extracted_content_pipeline.faq_deflection_report import (
     build_deflection_report_artifact,
 )
@@ -368,6 +369,105 @@ def test_plain_toc_uses_curated_headings_only() -> None:
         3,
         f"{PDF_QUESTION_DETAIL_LIMIT + 1}. Question {PDF_QUESTION_DETAIL_LIMIT + 1}",
     ) not in entries
+
+
+def test_pdf_toc_entries_link_to_curated_heading_outlines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[pdf_renderer.DeflectionReportPDF] = []
+
+    class SpyPDF(pdf_renderer.DeflectionReportPDF):
+        def __init__(self) -> None:
+            super().__init__()
+            self.created_links: list[int] = []
+            self.toc_links: list[int] = []
+            self.link_destinations: list[tuple[int | None, int, float]] = []
+            self.outlines: list[tuple[str, int, bool]] = []
+            created.append(self)
+
+        def add_link(self, *args: object, **kwargs: object) -> int:
+            link = super().add_link(*args, **kwargs)
+            self.created_links.append(link)
+            return link
+
+        def set_link(
+            self,
+            link: int | None = None,
+            y: float = 0,
+            x: float = 0,
+            page: int = -1,
+            zoom: float | str = "null",
+            name: str | None = None,
+        ) -> object:
+            self.link_destinations.append((link, page, y))
+            return super().set_link(link, y=y, x=x, page=page, zoom=zoom, name=name)
+
+        def start_section(self, name: str, level: int = 0, strict: bool = True) -> None:
+            self.outlines.append((name, level, strict))
+            return super().start_section(name, level=level, strict=strict)
+
+        def toc_entry(self, text: str, *, link_target: int | None) -> None:
+            if link_target is not None:
+                self.toc_links.append(link_target)
+            return super().toc_entry(text, link_target=link_target)
+
+    monkeypatch.setattr(pdf_renderer, "DeflectionReportPDF", SpyPDF)
+
+    pdf_bytes = render_deflection_full_report_pdf({"markdown": _large_markdown()})
+    pdf = created[0]
+    expected_entries = _toc_entries(_curate_markdown_for_pdf(_large_markdown()))
+
+    assert pdf_bytes[:5] == b"%PDF-"
+    assert len(pdf.created_links) == len(expected_entries)
+    assert pdf.toc_links == pdf.created_links
+    assert [link for link, _page, _y in pdf.link_destinations] == pdf.created_links
+    assert [(name, level) for name, level, _strict in pdf.outlines] == [
+        (text, max(0, level - 2))
+        for level, text in expected_entries
+    ]
+    assert ("Support Tax Confirmation", 0, False) in pdf.outlines
+    assert ("Ranked Question Opportunities", 0, False) in pdf.outlines
+    assert (
+        f"{PDF_QUESTION_DETAIL_LIMIT}. Question {PDF_QUESTION_DETAIL_LIMIT}",
+        1,
+        False,
+    ) in pdf.outlines
+    assert (
+        f"{PDF_QUESTION_DETAIL_LIMIT + 1}. Question {PDF_QUESTION_DETAIL_LIMIT + 1}",
+        1,
+        False,
+    ) not in pdf.outlines
+
+
+def test_pdf_navigation_skips_empty_toc(monkeypatch: pytest.MonkeyPatch) -> None:
+    created: list[pdf_renderer.DeflectionReportPDF] = []
+
+    class SpyPDF(pdf_renderer.DeflectionReportPDF):
+        def __init__(self) -> None:
+            super().__init__()
+            self.created_links: list[int] = []
+            self.outlines: list[tuple[str, int, bool]] = []
+            created.append(self)
+
+        def add_link(self, *args: object, **kwargs: object) -> int:
+            link = super().add_link(*args, **kwargs)
+            self.created_links.append(link)
+            return link
+
+        def start_section(self, name: str, level: int = 0, strict: bool = True) -> None:
+            self.outlines.append((name, level, strict))
+            return super().start_section(name, level=level, strict=strict)
+
+    monkeypatch.setattr(pdf_renderer, "DeflectionReportPDF", SpyPDF)
+
+    pdf_bytes = render_deflection_full_report_pdf(
+        {"markdown": "# Support Ticket Deflection Report\n\nExecutive summary only."}
+    )
+    pdf = created[0]
+
+    assert pdf_bytes[:5] == b"%PDF-"
+    assert pdf.created_links == []
+    assert pdf.outlines == []
 
 
 def test_render_deflection_full_report_pdf_requires_markdown() -> None:
