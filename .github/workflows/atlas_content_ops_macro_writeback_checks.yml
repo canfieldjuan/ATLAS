@@ -13,11 +13,13 @@ on:
       - "atlas_brain/config.py"
       - "scripts/cleanup_content_ops_faq_macro_sandbox.py"
       - "scripts/smoke_content_ops_faq_macro_sandbox_e2e.py"
+      - "scripts/smoke_content_ops_faq_macro_sandbox_lifecycle.py"
       - "scripts/seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
       - "tests/test_cleanup_content_ops_faq_macro_sandbox.py"
       - "tests/test_extracted_ticket_faq_macro_writeback_zendesk.py"
       - "tests/test_faq_macro_writeback_sandbox_e2e_smoke.py"
+      - "tests/test_faq_macro_writeback_sandbox_lifecycle.py"
       - "tests/test_seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_scheduler.py"
       - "tests/test_synthesis.py"
@@ -35,11 +37,13 @@ on:
       - "atlas_brain/config.py"
       - "scripts/cleanup_content_ops_faq_macro_sandbox.py"
       - "scripts/smoke_content_ops_faq_macro_sandbox_e2e.py"
+      - "scripts/smoke_content_ops_faq_macro_sandbox_lifecycle.py"
       - "scripts/seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
       - "tests/test_cleanup_content_ops_faq_macro_sandbox.py"
       - "tests/test_extracted_ticket_faq_macro_writeback_zendesk.py"
       - "tests/test_faq_macro_writeback_sandbox_e2e_smoke.py"
+      - "tests/test_faq_macro_writeback_sandbox_lifecycle.py"
       - "tests/test_seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_scheduler.py"
       - "tests/test_synthesis.py"
@@ -70,6 +74,7 @@ jobs:
             tests/test_cleanup_content_ops_faq_macro_sandbox.py \
             tests/test_extracted_ticket_faq_macro_writeback_zendesk.py \
             tests/test_faq_macro_writeback_sandbox_e2e_smoke.py \
+            tests/test_faq_macro_writeback_sandbox_lifecycle.py \
             tests/test_seed_faq_macro_writeback_live_smoke_draft.py \
             tests/test_scheduler.py::TestDefaults::test_content_ops_faq_macro_writeback_default_seed_respects_opt_in \
             tests/test_scheduler.py::TestDefaults::test_content_ops_faq_macro_writeback_default_notifies_skipped_summary \
