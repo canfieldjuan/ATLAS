@@ -325,6 +325,88 @@ async def test_lifecycle_main_writes_raw_artifact_and_sanitized_summary(
 
 
 @pytest.mark.asyncio
+async def test_lifecycle_proof_dir_writes_raw_artifact_and_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    proof_dir = tmp_path / "proof"
+
+    class Pool:
+        async def close(self) -> None:
+            return None
+
+    async def create_pool(database_url: str) -> Pool:
+        return Pool()
+
+    async def run(
+        args: argparse.Namespace,
+        stage_pool: Pool,
+    ) -> tuple[int, dict[str, Any]]:
+        assert args.output == proof_dir / "lifecycle.json"
+        assert args.summary_output == proof_dir / "summary.md"
+        return 0, _complete_lifecycle_payload()
+
+    monkeypatch.setattr(lifecycle, "_create_pool", create_pool)
+    monkeypatch.setattr(lifecycle, "run_sandbox_lifecycle_smoke", run)
+
+    code = await lifecycle._main(_argv(_args(), proof_dir=proof_dir))
+
+    payload = json.loads((proof_dir / "lifecycle.json").read_text(encoding="utf-8"))
+    summary_text = (proof_dir / "summary.md").read_text(encoding="utf-8")
+    assert code == 0
+    assert payload["ok"] is True
+    assert "Status: PASS" in summary_text
+    assert "macro-123: ok" in summary_text
+    assert "next_command" not in summary_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conflicting_arg", ["output", "summary"])
+async def test_lifecycle_proof_dir_rejects_explicit_output_modes_before_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    conflicting_arg: str,
+) -> None:
+    async def fail_create_pool(database_url: str) -> object:
+        raise AssertionError(f"pool should not open for {database_url}")
+
+    monkeypatch.setattr(lifecycle, "_create_pool", fail_create_pool)
+    kwargs: dict[str, Path] = {"proof_dir": tmp_path / "proof"}
+    if conflicting_arg == "output":
+        kwargs["output"] = tmp_path / "manual.json"
+    else:
+        kwargs["summary"] = tmp_path / "manual.md"
+
+    with pytest.raises(SystemExit) as excinfo:
+        await lifecycle._main(_argv(_args(), **kwargs))
+
+    message = str(excinfo.value)
+    assert "--proof-dir cannot be combined with" in message
+    assert not (tmp_path / "proof").exists()
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_proof_dir_rejects_stale_directory_before_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    proof_dir = tmp_path / "proof"
+    proof_dir.mkdir()
+    (proof_dir / "summary.md").write_text("stale proof\n", encoding="utf-8")
+
+    async def fail_create_pool(database_url: str) -> object:
+        raise AssertionError(f"pool should not open for {database_url}")
+
+    monkeypatch.setattr(lifecycle, "_create_pool", fail_create_pool)
+
+    with pytest.raises(SystemExit) as excinfo:
+        await lifecycle._main(_argv(_args(), proof_dir=proof_dir))
+
+    assert str(excinfo.value) == "--proof-dir must be empty"
+    assert (proof_dir / "summary.md").read_text(encoding="utf-8") == "stale proof\n"
+
+
+@pytest.mark.asyncio
 async def test_lifecycle_preflight_skip_writes_failure_summary_before_pool(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -521,6 +603,7 @@ def _argv(
     *,
     output: Path | None = None,
     summary: Path | None = None,
+    proof_dir: Path | None = None,
 ) -> list[str]:
     argv = [
         "--database-url",
@@ -546,4 +629,6 @@ def _argv(
         argv.extend(["--output", str(output)])
     if summary is not None:
         argv.extend(["--summary-output", str(summary)])
+    if proof_dir is not None:
+        argv.extend(["--proof-dir", str(proof_dir)])
     return argv
