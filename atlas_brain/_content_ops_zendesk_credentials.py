@@ -63,7 +63,7 @@ async def upsert_zendesk_credentials(
     )
     cleaned_token = str(api_token or "").strip()
     ciphertext, kid = encrypt_secret(cleaned_token)
-    token_prefix = cleaned_token[:TOKEN_PREFIX_LEN]
+    token_prefix = _safe_token_prefix(cleaned_token)
 
     async with _credential_write_transaction(pool) as conn:
         await conn.execute(
@@ -264,6 +264,13 @@ def _validated_credentials(
     if not credentials.is_complete():
         raise ValueError("Complete Zendesk email, API token, and endpoint are required")
     return credentials
+
+
+def _safe_token_prefix(token: str) -> str:
+    cleaned = str(token or "").strip()
+    if len(cleaned) <= TOKEN_PREFIX_LEN:
+        return ""
+    return cleaned[:TOKEN_PREFIX_LEN]
 
 
 def encrypt_secret(raw: str) -> tuple[bytes, str]:
