@@ -91,6 +91,76 @@ def _row(**overrides: Any) -> dict[str, Any]:
     return row
 
 
+def _delivery_report_model_artifact(
+    *,
+    schema_version: str = "deflection.v1",
+    support_tax_overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    support_tax_data = {
+        "repeat_ticket_count": 1234,
+        "non_repeat_ticket_count": 17,
+        "generated_question_count": 8,
+        "assisted_contact_cost": 13.50,
+        "estimated_support_cost": 16659.0,
+        "source_date_window": None,
+        "drafted_answer_count": 3,
+        "no_proven_answer_count": 5,
+        "ticket_source_count": 42,
+    }
+    support_tax_data.update(support_tax_overrides or {})
+    return {
+        "markdown": (
+            "# Support Ticket Deflection Report\n\n"
+            "RAW MARKDOWN BODY SHOULD NOT ENTER THE EMAIL\n"
+        ),
+        "report_model": {
+            "schema_version": schema_version,
+            "title": "Support Ticket Deflection Report",
+            "summary": {},
+            "sections": [
+                {
+                    "id": "support_tax",
+                    "title": "Support Tax Confirmation",
+                    "priority": 10,
+                    "surfaces": ["web", "pdf", "email_summary", "markdown"],
+                    "default_limit": None,
+                    "required_data": [
+                        "repeat_ticket_count",
+                        "non_repeat_ticket_count",
+                        "generated_question_count",
+                        "assisted_contact_cost",
+                        "estimated_support_cost",
+                        "source_date_window",
+                        "drafted_answer_count",
+                        "no_proven_answer_count",
+                        "ticket_source_count",
+                    ],
+                    "data": support_tax_data,
+                },
+                {
+                    "id": "question_details",
+                    "title": "Question Details and Evidence",
+                    "priority": 50,
+                    "surfaces": ["web", "pdf", "markdown"],
+                    "default_limit": None,
+                    "required_data": ["rows"],
+                    "data": {
+                        "rows": [
+                            {
+                                "source_ids": ["ticket-secret-123"],
+                                "evidence_quotes": [
+                                    "private evidence quote should stay out",
+                                ],
+                                "answer_evidence_status": "resolution_evidence",
+                            }
+                        ]
+                    },
+                },
+            ],
+        },
+    }
+
+
 def _config(**overrides: Any) -> DeflectionReportDeliveryConfig:
     values = {
         "from_email": "Atlas Content Ops <reports@example.com>",
@@ -154,6 +224,7 @@ async def test_delivery_worker_sends_pending_paid_report_link(
         "content-ops-abc123-support-deflection-report.pdf"
     )
     assert base64.b64decode(request.attachments[0]["content"]) == b"%PDF-fake-bytes"
+    assert "Key numbers" not in request.html_body
     assert "full report PDF is attached" in request.html_body
     assert "full report PDF is attached" in (request.text_body or "")
 
@@ -162,6 +233,100 @@ async def test_delivery_worker_sends_pending_paid_report_link(
     assert "delivery_status = 'sending'" in update_query
     assert update_args == ("acct-123", "content-ops-abc123", "resend:email-123")
     assert "buyer@example.com" not in str(update_args)
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_renders_model_backed_email_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([_row(artifact=json.dumps(_delivery_report_model_artifact()))])
+    sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-model-bytes")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 1
+    request = sender.requests[0]
+    assert "Key numbers" in request.html_body
+    assert "1,234 repeat tickets across 8 ranked questions" in request.html_body
+    assert "$16,659 estimated assisted-contact handling" in request.html_body
+    assert "3 publishable answers drafted" in request.html_body
+    assert "5 questions still need approved resolution evidence" in request.html_body
+    assert "42 ticket sources represented" in request.html_body
+    assert "curated report PDF is attached" in request.html_body
+    assert "full report PDF is attached" not in request.html_body
+    assert "The secure results page has the consolidated report" in request.html_body
+    assert "RAW MARKDOWN BODY" not in request.html_body
+    assert "private evidence quote" not in request.html_body
+    assert "ticket-secret-123" not in request.html_body
+    assert "resolution_evidence" not in request.html_body
+    assert request.text_body is not None
+    assert "1,234 repeat tickets across 8 ranked questions" in request.text_body
+    assert "$16,659 estimated assisted-contact handling" in request.text_body
+    assert "curated report PDF is attached" in request.text_body
+    assert "RAW MARKDOWN BODY" not in request.text_body
+    assert "private evidence quote" not in request.text_body
+    assert "ticket-secret-123" not in request.text_body
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_falls_back_for_future_report_model_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([
+        _row(
+            artifact=json.dumps(
+                _delivery_report_model_artifact(schema_version="deflection.v2")
+            )
+        )
+    ])
+    sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-model-bytes")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 1
+    request = sender.requests[0]
+    assert "Key numbers" not in request.html_body
+    assert "full report PDF is attached" in request.html_body
+    assert "secure results page remains the system of record" in request.html_body
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_falls_back_for_malformed_email_summary_numbers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([
+        _row(
+            artifact=json.dumps(
+                _delivery_report_model_artifact(
+                    support_tax_overrides={"repeat_ticket_count": "not-a-number"}
+                )
+            )
+        )
+    ])
+    sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-model-bytes")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 1
+    request = sender.requests[0]
+    assert "Key numbers" not in request.html_body
+    assert "0 repeat tickets" not in request.html_body
+    assert "full report PDF is attached" in request.html_body
 
 
 @pytest.mark.asyncio
