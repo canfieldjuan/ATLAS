@@ -108,6 +108,9 @@ Parked hardening: none.
 - Focused persistence/contract pytest:
   python -m pytest tests/test_content_ops_deflection_report.py::test_postgres_deflection_report_store_round_trips_paid_gate tests/test_content_ops_deflection_report.py::test_in_memory_deflection_report_store_round_trips_report_model tests/test_content_ops_deflection_report.py::test_stored_deflection_report_model_tolerates_legacy_and_schema_drift tests/test_content_ops_faq_report_contract_docs.py::test_content_ops_faq_report_contract_links_example -q
   -- 4 passed.
+- Review-fix focused pytest:
+  python -m pytest tests/test_content_ops_deflection_report.py::test_deflection_snapshot_excludes_complete_evidence_export tests/test_content_ops_deflection_report.py::test_stored_deflection_report_model_tolerates_legacy_and_schema_drift -q
+  -- 2 passed.
 - Touched test files:
   python -m pytest tests/test_content_ops_deflection_report.py tests/test_content_ops_faq_report_contract_docs.py -q
   -- 59 passed.
@@ -121,19 +124,20 @@ Parked hardening: none.
   passed; bash scripts/check_ascii_python.sh -- passed.
 - Full extracted CI check: bash scripts/run_extracted_pipeline_checks.sh --
   4327 passed, 10 skipped.
-- Pending before push:
-  - python scripts/sync_pr_plan.py plans/PR-Deflection-Report-Model-Persistence.md --check
-  - push-wrapper local review
+- Plan sync check:
+  python scripts/sync_pr_plan.py plans/PR-Deflection-Report-Model-Persistence.md --check
+  -- passed.
+- Local PR review bundle: bash scripts/local_pr_review.sh -- passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `docs/frontend/content_ops_faq_report_contract.md` | 6 |
-| `extracted_content_pipeline/deflection_report_access.py` | 84 |
-| `plans/INDEX.md` | 3 |
-| `plans/PR-Deflection-Report-Model-Persistence.md` | 139 |
+| `extracted_content_pipeline/deflection_report_access.py` | 99 |
+| `plans/INDEX.md` | 1 |
+| `plans/PR-Deflection-Report-Model-Persistence.md` | 143 |
 | `plans/archive/PR-Deflection-Section-Registry.md` | 0 |
-| `tests/test_content_ops_deflection_report.py` | 105 |
+| `tests/test_content_ops_deflection_report.py` | 129 |
 | `tests/test_content_ops_faq_report_contract_docs.py` | 2 |
-| **Total** | **339** |
+| **Total** | **380** |

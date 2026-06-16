@@ -648,6 +648,9 @@ def test_deflection_snapshot_excludes_complete_evidence_export() -> None:
     assert "evidence_export" in artifact.as_dict()
     assert "evidence_export" not in snapshot
     assert "evidence_export" not in encoded
+    assert "report_model" in artifact.as_dict()
+    assert "report_model" not in snapshot
+    assert "report_model" not in encoded
     assert "evidence_quotes" not in encoded
     assert "source_ids" not in encoded
     assert "ticket-export-1" not in encoded
@@ -1841,6 +1844,27 @@ def test_stored_deflection_report_model_tolerates_legacy_and_schema_drift() -> N
             "sections": [
                 "not-a-section",
                 {"title": "Missing id", "priority": 5, "data": {"ignored": True}},
+                {
+                    "id": "missing_priority",
+                    "data": {"ignored": True},
+                },
+                {
+                    "id": "invalid_priority",
+                    "priority": "not-a-number",
+                    "data": {"ignored": True},
+                },
+                {
+                    "id": "missing_required_data",
+                    "priority": 40,
+                    "required_data": ["rows"],
+                    "data": {},
+                },
+                {
+                    "id": "non_mapping_required_data_source",
+                    "priority": 50,
+                    "required_data": ["rows"],
+                    "data": "not-json",
+                },
                 {
                     "id": "future_section",
                     "title": "Future section",

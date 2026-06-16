@@ -452,15 +452,22 @@ def _stored_report_model_section(value: Any) -> dict[str, Any] | None:
     section_id = _clean(value.get("id"))
     if not section_id:
         return None
-    data = value.get("data")
+    priority = _required_int(value.get("priority"))
+    if priority is None:
+        return None
+    raw_data = value.get("data")
+    data = dict(raw_data) if isinstance(raw_data, Mapping) else {}
+    required_data = _text_list(value.get("required_data"))
+    if any(key not in data for key in required_data):
+        return None
     return {
         "id": section_id,
         "title": _clean(value.get("title")) or section_id.replace("_", " ").title(),
-        "priority": _int(value.get("priority")),
+        "priority": priority,
         "surfaces": _text_list(value.get("surfaces")),
         "default_limit": _optional_int(value.get("default_limit")),
-        "required_data": _text_list(value.get("required_data")),
-        "data": dict(data) if isinstance(data, Mapping) else {},
+        "required_data": required_data,
+        "data": data,
     }
 
 
@@ -488,14 +495,22 @@ def _bounded_limit(value: Any) -> int:
 def _optional_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
-    return _int(value)
+    return _parse_int(value)
 
 
-def _int(value: Any) -> int:
+def _required_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return _parse_int(value)
+
+
+def _parse_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):
-        return 0
+        return None
 
 
 def _is_sequence(value: Any) -> bool:
