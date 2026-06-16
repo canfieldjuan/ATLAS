@@ -1,6 +1,6 @@
 # Plan archive index
 
-1078 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1079 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -844,6 +844,7 @@
 - [PR-FAQ-Macro-Writeback-Credential-API](archive/PR-FAQ-Macro-Writeback-Credential-API.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
 - [PR-FAQ-Macro-Writeback-Credential-Fallback-Fail-Closed](archive/PR-FAQ-Macro-Writeback-Credential-Fallback-Fail-Closed.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
 - [PR-FAQ-Macro-Writeback-Credential-Pool-Contract](archive/PR-FAQ-Macro-Writeback-Credential-Pool-Contract.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
+- [PR-FAQ-Macro-Writeback-Credential-Setup-CLI](archive/PR-FAQ-Macro-Writeback-Credential-Setup-CLI.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
 - [PR-FAQ-Macro-Writeback-Credential-UI](archive/PR-FAQ-Macro-Writeback-Credential-UI.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
 - [PR-FAQ-Macro-Writeback-Functional-Validation](archive/PR-FAQ-Macro-Writeback-Functional-Validation.md) - lane: content-ops/faq-macro-writeback | phase: Functional validation
 - [PR-FAQ-Macro-Writeback-Idempotency](archive/PR-FAQ-Macro-Writeback-Idempotency.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
