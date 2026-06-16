@@ -90,22 +90,22 @@ Parked hardening: none.
 
 ## Verification
 
-- `pytest tests/test_content_ops_deflection_report.py -q` - 58 passed.
+- `pytest tests/test_content_ops_deflection_report.py -q` - 62 passed.
 - `pytest tests/test_docs_no_raw_deflection_request_ids.py tests/test_check_deflection_full_report_proof_bundle.py -q` - 36 passed.
 - `scripts/validate_extracted_content_pipeline.sh` - passed.
 - `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline` - passed.
 - `python scripts/audit_extracted_standalone.py --fail-on-debt` - passed.
 - `scripts/check_ascii_python.sh` - passed.
-- `scripts/run_extracted_pipeline_checks.sh` - 4413 passed, 10 skipped.
+- `scripts/run_extracted_pipeline_checks.sh` - 4417 passed, 10 skipped.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/faq_deflection_report.py` | 311 |
+| `extracted_content_pipeline/faq_deflection_report.py` | 414 |
 | `plans/INDEX.md` | 3 |
 | `plans/PR-Deflection-Full-Report-QA-Scorecard.md` | 111 |
 | `plans/archive/PR-Deflection-Full-Report-QA-Redaction-Policy.md` | 0 |
 | `tests/test_check_deflection_full_report_proof_bundle.py` | 17 |
-| `tests/test_content_ops_deflection_report.py` | 151 |
-| **Total** | **593** |
+| `tests/test_content_ops_deflection_report.py` | 243 |
+| **Total** | **788** |

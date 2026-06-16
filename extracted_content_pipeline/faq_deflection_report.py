@@ -255,6 +255,32 @@ _SCORECARD_SAFE_STRINGS = frozenset({
     "bool",
     "NoneType",
 })
+_SCORECARD_COUNT_KEYS = frozenset({
+    "repeat_ticket_count",
+    "generated_question_count",
+    "ranked_question_count",
+    "drafted_answer_count",
+    "no_proven_answer_count",
+    "ticket_source_count",
+    "estimated_support_cost",
+    "evidence_question_count",
+    "evidence_row_count",
+    "source_id_count",
+    "seo_total_phrase_count",
+    "seo_displayed_phrase_count",
+    "seo_omitted_phrase_count",
+    "outcome_diagnostic_row_count",
+    "question_detail_count",
+})
+_SCORECARD_SURFACE_KEYS = frozenset({
+    "email",
+    "email_summary",
+    "evidence_export",
+    "export",
+    "pdf",
+    "result_page",
+    "web",
+})
 
 
 class FAQDeflectionReportService:
@@ -526,18 +552,16 @@ def _add_evidence_export_assertions(
     summary = export.get("summary") if isinstance(export.get("summary"), Mapping) else {}
     questions = export.get("questions")
     rows = export.get("evidence_rows")
-    question_count = (
-        len(questions)
-        if isinstance(questions, Sequence)
-        and not isinstance(questions, (str, bytes, bytearray))
-        else 0
+    questions_valid = isinstance(questions, Sequence) and not isinstance(
+        questions,
+        (str, bytes, bytearray),
     )
-    row_count = (
-        len(rows)
-        if isinstance(rows, Sequence)
-        and not isinstance(rows, (str, bytes, bytearray))
-        else 0
+    rows_valid = isinstance(rows, Sequence) and not isinstance(
+        rows,
+        (str, bytes, bytearray),
     )
+    question_count = len(questions) if questions_valid else 0
+    row_count = len(rows) if rows_valid else 0
 
     add(
         "evidence_export.present",
@@ -559,21 +583,34 @@ def _add_evidence_export_assertions(
         ("drafted_answer_count", "drafted_answer_count"),
         ("no_proven_answer_count", "no_proven_answer_count"),
     ):
+        key_present = key in summary
         add(
             f"evidence_export.summary.{key}",
-            _int(summary.get(key)) == _int(counts.get(expected_key)),
+            key_present and _int(summary.get(key)) == _int(counts.get(expected_key)),
             expected=_int(counts.get(expected_key)),
-            actual=_int(summary.get(key)),
+            actual=_int(summary.get(key)) if key_present else None,
         )
     add(
+        "evidence_export.questions.present",
+        questions_valid,
+        expected=True,
+        actual=questions_valid,
+    )
+    add(
         "evidence_export.questions.length",
-        question_count == _int(counts.get("evidence_question_count")),
+        questions_valid and question_count == _int(counts.get("evidence_question_count")),
         expected=_int(counts.get("evidence_question_count")),
         actual=question_count,
     )
     add(
+        "evidence_export.evidence_rows.present",
+        rows_valid,
+        expected=True,
+        actual=rows_valid,
+    )
+    add(
         "evidence_export.evidence_rows.length",
-        row_count == _int(counts.get("evidence_row_count")),
+        rows_valid and row_count == _int(counts.get("evidence_row_count")),
         expected=_int(counts.get("evidence_row_count")),
         actual=row_count,
     )
@@ -595,10 +632,18 @@ def _add_surface_observation_assertions(
     surface_observations: Mapping[str, Mapping[str, Any]],
     surface_caps: Mapping[str, Mapping[str, int]],
 ) -> None:
-    for surface, observation in sorted(surface_observations.items()):
+    for surface_index, (surface, observation) in enumerate(
+        sorted(surface_observations.items()),
+        start=1,
+    ):
+        surface_id = _scorecard_id_segment(
+            surface,
+            allowed=_SCORECARD_SURFACE_KEYS,
+            fallback=f"surface_{surface_index}",
+        )
         if not isinstance(observation, Mapping):
             add(
-                f"surface.{surface}.observation_shape",
+                f"surface.{surface_id}.observation_shape",
                 False,
                 expected="mapping",
                 actual=type(observation).__name__,
@@ -609,32 +654,90 @@ def _add_surface_observation_assertions(
             if isinstance(observation.get("counts"), Mapping)
             else {}
         )
-        for key, actual in sorted(observed_counts.items()):
-            expected = counts.get(str(key))
-            add(
-                f"surface.{surface}.count.{key}",
-                expected is not None and actual == expected,
-                expected=expected,
-                actual=actual,
-            )
-
         displayed_rows = (
             observation.get("displayed_rows")
             if isinstance(observation.get("displayed_rows"), Mapping)
             else {}
         )
+        add(
+            f"surface.{surface_id}.observation_has_data",
+            bool(observed_counts) or bool(displayed_rows),
+            expected="counts or displayed_rows",
+            actual={
+                "counts": bool(observed_counts),
+                "displayed_rows": bool(displayed_rows),
+            },
+        )
+        for key_index, (key, actual) in enumerate(
+            sorted(observed_counts.items()),
+            start=1,
+        ):
+            key_text = str(key)
+            key_id = _scorecard_id_segment(
+                key_text,
+                allowed=_SCORECARD_COUNT_KEYS,
+                fallback=f"count_{key_index}",
+            )
+            expected = counts.get(key_text)
+            add(
+                f"surface.{surface_id}.count.{key_id}",
+                expected is not None and _scorecard_observed_number_equals(
+                    actual,
+                    expected,
+                ),
+                expected=expected,
+                actual=actual,
+            )
+
         caps = surface_caps.get(surface, {})
         caps = caps if isinstance(caps, Mapping) else {}
-        for section_id, actual in sorted(displayed_rows.items()):
-            total = _scorecard_section_total(str(section_id), counts)
-            cap = _int(caps.get(str(section_id))) or total
-            expected = min(total, cap)
-            add(
-                f"surface.{surface}.displayed_rows.{section_id}",
-                _int(actual) == expected,
-                expected=expected,
-                actual=_int(actual),
+        for section_index, (section_id, actual) in enumerate(
+            sorted(displayed_rows.items()),
+            start=1,
+        ):
+            section_text = str(section_id)
+            section_safe_id = _scorecard_id_segment(
+                section_text,
+                allowed=frozenset(DEFLECTION_REPORT_SECTION_REGISTRY),
+                fallback=f"section_{section_index}",
             )
+            total = _scorecard_section_total(section_text, counts)
+            cap = (
+                max(0, _int(caps[section_text]))
+                if section_text in caps
+                else total
+            )
+            expected = min(total, cap)
+            observed = _scorecard_observed_int(actual)
+            add(
+                f"surface.{surface_id}.displayed_rows.{section_safe_id}",
+                observed is not None and observed == expected,
+                expected=expected,
+                actual=observed if observed is not None else actual,
+            )
+
+
+def _scorecard_id_segment(value: Any, *, allowed: frozenset[str], fallback: str) -> str:
+    text = _text(value)
+    if text in allowed:
+        return text
+    return fallback
+
+
+def _scorecard_observed_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def _scorecard_observed_number_equals(actual: Any, expected: Any) -> bool:
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return False
+    if not isinstance(actual, (int, float)):
+        return False
+    return actual == expected
 
 
 def _scorecard_safe_value(value: Any) -> Any:

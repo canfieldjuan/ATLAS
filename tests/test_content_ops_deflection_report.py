@@ -749,7 +749,7 @@ def test_deflection_full_report_qa_scorecard_checks_surface_caps_behaviorally() 
     assert "surface.result_page.displayed_rows.ranked_questions" in failed
 
 
-def test_deflection_full_report_qa_scorecard_redacts_bad_observed_strings() -> None:
+def test_deflection_full_report_qa_scorecard_honors_zero_row_surface_caps() -> None:
     artifact = build_deflection_report_artifact(_structured_report_fixture_result())
     export = build_deflection_evidence_export(artifact)
 
@@ -757,8 +757,97 @@ def test_deflection_full_report_qa_scorecard_redacts_bad_observed_strings() -> N
         artifact.report_model,
         evidence_export=export,
         surface_observations={
-            "result_page": {
-                "counts": {"repeat_ticket_count": "ticket-export-1"},
+            "email_summary": {"displayed_rows": {"question_details": 0}},
+        },
+        surface_caps={"email_summary": {"question_details": 0}},
+    )
+
+    assert scorecard["ok"] is True
+
+
+def test_deflection_full_report_qa_scorecard_fails_empty_surface_observation() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={"result_page": {}},
+    )
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "surface.result_page.observation_has_data" in failed
+
+
+def test_deflection_full_report_qa_scorecard_rejects_boolean_count_observation() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={
+            "result_page": {"counts": {"drafted_answer_count": True}},
+        },
+    )
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "surface.result_page.count.drafted_answer_count" in failed
+
+
+def test_deflection_full_report_qa_scorecard_fails_missing_zero_export_fields() -> None:
+    artifact = build_deflection_report_artifact(
+        TicketFAQMarkdownResult(
+            markdown="# FAQ",
+            source_count=0,
+            ticket_source_count=0,
+            output_checks={"condensed": True},
+            items=(),
+        )
+    )
+    malformed_export = {
+        "schema_version": DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+        "summary": {},
+    }
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=malformed_export,
+    )
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "evidence_export.summary.question_count" in failed
+    assert "evidence_export.questions.present" in failed
+    assert "evidence_export.evidence_rows.present" in failed
+
+
+def test_deflection_full_report_qa_scorecard_redacts_bad_observed_strings() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+    raw_request_id = "content-ops-" + "45c06a6950ec4677a214368d6e4dc44f"
+    raw_result_url = f"https://www.juancanfield.com/results/{raw_request_id}"
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={
+            raw_result_url: {
+                "counts": {"ticket-export-1": "ticket-export-1"},
             }
         },
     )
@@ -766,6 +855,9 @@ def test_deflection_full_report_qa_scorecard_redacts_bad_observed_strings() -> N
     assert scorecard["ok"] is False
     encoded = json.dumps(scorecard, sort_keys=True)
     assert "ticket-export-1" not in encoded
+    assert raw_request_id not in encoded
+    assert "juancanfield.com" not in encoded
+    assert "surface.surface_1.count.count_1" in encoded
     assert "<redacted-string>" in encoded
 
 
