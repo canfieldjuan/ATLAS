@@ -108,6 +108,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional sanitized Markdown proof summary output path.",
     )
     parser.add_argument(
+        "--proof-dir",
+        type=Path,
+        help=(
+            "Optional proof directory. Writes lifecycle.json and summary.md "
+            "there; cannot be combined with --output or --summary-output."
+        ),
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Accepted for operator consistency; output is always JSON.",
@@ -124,6 +132,23 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--question is required")
     if not _clean(args.resolution_text):
         raise SystemExit("--resolution-text is required")
+
+
+def _normalize_output_args(args: argparse.Namespace) -> None:
+    proof_dir = getattr(args, "proof_dir", None)
+    if proof_dir is None:
+        return
+    if args.output is not None:
+        raise SystemExit("--proof-dir cannot be combined with --output")
+    if args.summary_output is not None:
+        raise SystemExit("--proof-dir cannot be combined with --summary-output")
+    if proof_dir.exists() and not proof_dir.is_dir():
+        raise SystemExit("--proof-dir must be a directory")
+    if proof_dir.exists() and any(proof_dir.iterdir()):
+        raise SystemExit("--proof-dir must be empty")
+    proof_dir.mkdir(parents=True, exist_ok=True)
+    args.output = proof_dir / "lifecycle.json"
+    args.summary_output = proof_dir / "summary.md"
 
 
 async def _create_pool(database_url: str) -> Any:
@@ -307,6 +332,7 @@ def _write_proof_summary(
 
 async def _main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    _normalize_output_args(args)
     _validate_args(args)
     preflight = _preflight(args)
     if preflight is not None:
