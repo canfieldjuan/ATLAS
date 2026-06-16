@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from extracted_content_pipeline import campaign_source_adapters as adapters
+from extracted_content_pipeline.campaign_customer_data import CsvCustomerDataParseError
 from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
     load_source_rows_from_file,
@@ -371,6 +372,86 @@ def test_load_source_rows_rejects_inconsistent_mixed_delimiters(
         load_source_rows_from_file(path, file_format="csv")
 
 
+def test_load_source_rows_structures_missing_header_parse_error(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "missing_header.csv"
+    path.write_text(
+        "\n".join([
+            "I need help exporting reports",
+            "Where can I download invoices?",
+        ]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CsvCustomerDataParseError) as exc:
+        load_source_rows_from_file(path, file_format="csv")
+
+    assert exc.value.code == "csv_missing_header"
+    assert "header row" in exc.value.message
+    assert "ticket_id" in exc.value.how_to_fix
+
+
+def test_load_source_rows_structures_encoding_parse_error(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "nul_heavy.csv"
+    path.write_bytes(b"\x00" * 128)
+
+    with pytest.raises(CsvCustomerDataParseError) as exc:
+        load_source_rows_from_file(path, file_format="csv")
+
+    assert exc.value.code == "csv_encoding_error"
+    assert "NUL-heavy" in exc.value.message
+    assert "UTF-8 or UTF-16" in exc.value.how_to_fix
+
+
+@pytest.mark.parametrize(
+    ("payload", "encoding_name"),
+    [
+        (b"\xff\xfeticket_id\x00\xff", "utf-16"),
+        (b"\x00\x00\xfe\xffnot-a-valid-utf32", "utf-32"),
+    ],
+)
+def test_load_source_rows_structures_malformed_bom_encoding_errors(
+    tmp_path: Path,
+    payload: bytes,
+    encoding_name: str,
+) -> None:
+    path = tmp_path / "malformed_bom.csv"
+    path.write_bytes(payload)
+
+    with pytest.raises(CsvCustomerDataParseError) as exc:
+        load_source_rows_from_file(path, file_format="csv")
+
+    assert exc.value.code == "csv_encoding_error"
+    assert encoding_name in exc.value.message
+    assert "UTF-8 or UTF-16" in exc.value.how_to_fix
+
+
+def test_load_source_rows_structures_inconsistent_columns_without_raw_row(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_extra_cell.csv"
+    path.write_text(
+        "\n".join([
+            "ticket_id,subject,message",
+            "ticket-1,Export help,How do I export reports?",
+            "ticket-2,Billing help,Invoice portal is wrong,lead@example.com",
+        ]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CsvCustomerDataParseError) as exc:
+        load_source_rows_from_file(path, file_format="csv")
+
+    detail = exc.value.as_dict()
+    assert detail["code"] == "csv_inconsistent_columns"
+    assert detail["row_index"] == 3
+    assert "more cells than the header" in detail["message"]
+    assert "lead@example.com" not in json.dumps(detail)
+
+
 def test_load_source_rows_rejects_collapsed_mixed_delimiter_at_threshold(
     tmp_path: Path,
 ) -> None:
@@ -380,11 +461,17 @@ def test_load_source_rows_rejects_collapsed_mixed_delimiter_at_threshold(
         f"ticket-{index},Export help,How do I export report {index}?"
         for index in range(1, 10)
     )
-    lines.append("ticket-bad;Billing help;Invoice portal is wrong")
+    lines.append("ticket-bad;Billing help;Invoice portal is wrong for lead@example.com")
     path.write_text("\n".join(lines), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="first collapsed mixed-delimiter row 11"):
+    with pytest.raises(CsvCustomerDataParseError) as exc:
         load_source_rows_from_file(path, file_format="csv")
+
+    detail = exc.value.as_dict()
+    assert detail["code"] == "csv_inconsistent_columns"
+    assert detail["row_index"] == 11
+    assert "first collapsed mixed-delimiter row 11" in detail["message"]
+    assert "lead@example.com" not in json.dumps(detail)
 
 
 def test_load_source_rows_allows_single_column_message_with_delimiters(
