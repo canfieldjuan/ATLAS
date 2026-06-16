@@ -1,6 +1,6 @@
 # Plan archive index
 
-1071 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1073 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -844,6 +844,7 @@
 - [PR-FAQ-Macro-Writeback-Credential-UI](archive/PR-FAQ-Macro-Writeback-Credential-UI.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
 - [PR-FAQ-Macro-Writeback-Functional-Validation](archive/PR-FAQ-Macro-Writeback-Functional-Validation.md) - lane: content-ops/faq-macro-writeback | phase: Functional validation
 - [PR-FAQ-Macro-Writeback-Idempotency](archive/PR-FAQ-Macro-Writeback-Idempotency.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Macro-Writeback-Lifecycle-Artifact](archive/PR-FAQ-Macro-Writeback-Lifecycle-Artifact.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
 - [PR-FAQ-Macro-Writeback-Live-Smoke](archive/PR-FAQ-Macro-Writeback-Live-Smoke.md) - lane: content-ops/faq-macro-writeback | phase: Functional validation
 - [PR-FAQ-Macro-Writeback-Pending-Reconcile](archive/PR-FAQ-Macro-Writeback-Pending-Reconcile.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
 - [PR-FAQ-Macro-Writeback-Preview](archive/PR-FAQ-Macro-Writeback-Preview.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
