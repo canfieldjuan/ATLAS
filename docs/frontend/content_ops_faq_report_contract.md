@@ -121,6 +121,12 @@ tolerate a missing or unsupported `report_model`: older records may predate the
 structured model, and future schema versions must be handled by explicit
 renderer support rather than guessed.
 
+Paid consumers that only need the structured section contract should prefer
+`GET /content-ops/deflection-reports/{request_id}/report-model`. It applies the
+same tenant scope and paid lock as the full artifact route, returns only the
+validated `deflection.v1` model, and returns 404 when a historical or drifted
+paid artifact has no supported model.
+
 The report Markdown always contains these customer-facing sections:
 
 - `Support Tax Confirmation`

@@ -724,6 +724,7 @@
 - [PR-Deflection-Repeat-Metric-Alignment](archive/PR-Deflection-Repeat-Metric-Alignment.md) - lane: deflection/clustering | phase: Vertical slice
 - [PR-Deflection-Repeat-Volume-Preview](archive/PR-Deflection-Repeat-Volume-Preview.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Report-Brand-Neutral](archive/PR-Deflection-Report-Brand-Neutral.md) - lane: go-live-deflection-cleanup | phase: Product polish
+- [PR-Deflection-Report-Model-Persistence](archive/PR-Deflection-Report-Model-Persistence.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Report-SEO-Target-Cap](archive/PR-Deflection-Report-SEO-Target-Cap.md) - lane: content-ops/deflection-launch-readiness | phase: Product polish
 - [PR-Deflection-Representative-Taxonomy-Source](archive/PR-Deflection-Representative-Taxonomy-Source.md) - lane: deflection/clustering | phase: Production hardening
 - [PR-Deflection-Request-ID-Redaction](archive/PR-Deflection-Request-ID-Redaction.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
