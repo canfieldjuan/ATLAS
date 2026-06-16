@@ -62,6 +62,7 @@ pytest \
   tests/test_alerts.py \
   tests/test_content_ops_deflection_incidents.py \
   tests/test_send_content_ops_deflection_report_deliveries.py \
+  tests/test_cleanup_content_ops_faq_macro_sandbox.py \
   tests/test_extracted_ticket_faq_markdown.py \
   tests/test_extracted_ticket_faq_macro_writeback.py \
   tests/test_extracted_ticket_faq_macro_writeback_postgres.py \

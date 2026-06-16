@@ -135,6 +135,8 @@ class ZendeskHTTPMacroTransport:
             )
         if response.status_code >= 400:
             raise ZendeskMacroTransportError(status_code=response.status_code)
+        if not response.content:
+            return {}
         payload = response.json()
         return payload if isinstance(payload, Mapping) else {}
 
