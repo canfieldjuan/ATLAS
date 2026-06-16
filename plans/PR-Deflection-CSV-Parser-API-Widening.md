@@ -14,10 +14,16 @@ tuple callers stay compatible, while deflection submit can request a capped CSV
 load result that carries source row count, included row count, and truncation
 metadata.
 
-The synced diff is slightly over the 400 LOC soft cap because the slice has to
-land the parser result type, the deflection submit wiring, and both adapter-level
-and route-level regression tests together. Splitting the tests from the API
-widening would leave the new contract under-proven.
+The synced diff is over the 400 LOC soft cap because the slice has to land the
+parser result type, the deflection submit wiring, the review-finding fix, and
+both adapter-level and route-level regression tests together. Splitting the
+tests from the API widening would leave the new contract under-proven.
+
+Review update: Codex thread #1342 found that the first version reused the
+post-language row count as the source/truncation basis, hiding parser-cap
+truncation when a non-English row appeared inside the capped prefix. This update
+fixes the root by separating total parser source count, loaded included count,
+post-language eligible count, submitted count, and explicit truncation count.
 
 ## Scope (this PR)
 
@@ -70,7 +76,9 @@ from the difference between source and included row counts.
 Expose the result through `campaign_source_adapters` with a CSV-specific helper
 instead of widening JSON/JSONL loaders in the same PR. Deflection submit uses
 the helper for CSV upload and blob paths. JSON/Zendesk full-thread paths keep
-their current tuple shape.
+their current tuple shape. Submit diagnostics compute truncation from the parser
+cap and post-filter submission separately, so language filtering cannot erase a
+real parser cap or create a fake truncation warning by itself.
 
 ## Intentional
 
@@ -94,7 +102,7 @@ Parked hardening: none.
 ## Verification
 
 - `.venv/bin/python -m compileall -q extracted_content_pipeline/campaign_customer_data.py extracted_content_pipeline/campaign_source_adapters.py extracted_content_pipeline/api/control_surfaces.py` — passed.
-- `.venv/bin/python -m pytest tests/test_extracted_campaign_source_adapters.py tests/test_extracted_content_deflection_submit.py` — 194 passed.
+- `.venv/bin/python -m pytest tests/test_extracted_campaign_source_adapters.py tests/test_extracted_content_deflection_submit.py` — 195 passed after review fix.
 - `bash` with `scripts/run_extracted_pipeline_checks.sh` — 4413 passed, 10 skipped.
 - `bash` with `scripts/local_pr_review.sh` and the PR body file — passed.
 
@@ -102,10 +110,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/api/control_surfaces.py` | 117 |
+| `extracted_content_pipeline/api/control_surfaces.py` | 147 |
 | `extracted_content_pipeline/campaign_customer_data.py` | 41 |
 | `extracted_content_pipeline/campaign_source_adapters.py` | 51 |
-| `plans/PR-Deflection-CSV-Parser-API-Widening.md` | 111 |
+| `plans/PR-Deflection-CSV-Parser-API-Widening.md` | 119 |
 | `tests/test_extracted_campaign_source_adapters.py` | 47 |
-| `tests/test_extracted_content_deflection_submit.py` | 71 |
-| **Total** | **438** |
+| `tests/test_extracted_content_deflection_submit.py` | 133 |
+| **Total** | **538** |

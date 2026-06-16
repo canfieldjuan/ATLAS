@@ -978,8 +978,9 @@ async def test_deflection_submit_filters_non_english_huggingface_shaped_rows() -
 
     metadata = payload["input_provider"]["metadata"]
     assert metadata["loaded_source_row_count"] == 2
-    assert metadata["source_row_count"] == 1
+    assert metadata["source_row_count"] == 2
     assert metadata["submitted_row_count"] == 1
+    assert metadata["truncated_row_count"] == 0
     assert metadata["included_row_count"] == 1
     assert metadata["language_filtered_row_count"] == 1
     assert metadata["support_ticket_resolution_evidence_count"] == 1
@@ -993,6 +994,65 @@ async def test_deflection_submit_filters_non_english_huggingface_shaped_rows() -
     assert snapshot["summary"]["support_ticket_resolution_evidence_count"] == 1
     assert snapshot["summary"]["drafted_answer_count"] == 1
     assert "Synchronisationsproblem" not in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_preserves_parser_truncation_after_language_filter() -> None:
+    csv_data = _csv_dict_bytes([
+        {
+            "ticket_id": "ticket-export-1",
+            "subject": "Export reports",
+            "body": "How do I export attribution reports?",
+            "answer": "Open Analytics and click Download report.",
+            "language": "en",
+            "queue": "Exports",
+        },
+        {
+            "ticket_id": "ticket-sync-de",
+            "subject": "Synchronisationsproblem",
+            "body": "Ich erfahre Schwierigkeiten bei der Synchronisation.",
+            "answer": "Bitte senden Sie aktuelle Fehlerprotokolle.",
+            "language": "de",
+            "queue": "Technical Support",
+        },
+        {
+            "ticket_id": "ticket-sso-1",
+            "subject": "SSO setup",
+            "body": "How do I enable SSO for my team?",
+            "answer": "Open Settings, then configure SAML SSO.",
+            "language": "en",
+            "queue": "Authentication",
+        },
+    ])
+    store = InMemoryDeflectionReportArtifactStore()
+    router = _router(store)
+
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+        "limit": "2",
+    })
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["loaded_source_row_count"] == 3
+    assert metadata["source_row_count"] == 3
+    assert metadata["submitted_row_count"] == 1
+    assert metadata["truncated_row_count"] == 1
+    assert metadata["max_source_material_rows"] == 2
+    assert metadata["language_filtered_row_count"] == 1
+    warnings = payload["input_provider"]["warnings"]
+    assert [warning["code"] for warning in warnings] == [
+        "deflection_submit_non_english_rows_filtered",
+        "deflection_submit_rows_truncated",
+    ]
+    assert warnings[1]["row_count"] == 3
+    assert warnings[1]["max_rows"] == 2
+    assert warnings[1]["truncated_row_count"] == 1
+    assert "ticket-sso-1" not in str(payload)
 
 
 @pytest.mark.asyncio

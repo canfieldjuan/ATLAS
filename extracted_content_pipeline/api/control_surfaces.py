@@ -1323,7 +1323,9 @@ def create_content_ops_control_surface_router(
                     ),
                 },
             )
-        loaded_row_count = parser_source_row_count or len(rows)
+        source_row_count = parser_source_row_count or len(rows)
+        loaded_row_count = source_row_count
+        loaded_included_row_count = len(rows)
         rows, language_filtered_row_count = _deflection_submit_english_rows(rows)
         if not rows:
             raise HTTPException(
@@ -1335,13 +1337,15 @@ def create_content_ops_control_surface_router(
                     "language_filtered_row_count": language_filtered_row_count,
                 },
             )
-        raw_row_count = (
-            len(rows)
-            if language_filtered_row_count
-            else parser_source_row_count or len(rows)
-        )
-        max_rows = _deflection_submit_max_rows(data.get("limit"), raw_row_count)
+        max_rows = _deflection_submit_max_rows(data.get("limit"), source_row_count)
         submitted_rows = _deflection_submit_rows_with_defaults(data, rows)[:max_rows]
+        truncated_row_count = _deflection_submit_truncated_row_count(
+            source_row_count=source_row_count,
+            loaded_included_row_count=loaded_included_row_count,
+            eligible_row_count=len(rows),
+            submitted_row_count=len(submitted_rows),
+            parser_source_row_count=parser_source_row_count,
+        )
         title = _deflection_submit_title(data)
         package = build_support_ticket_input_package(
             submitted_rows,
@@ -1364,7 +1368,7 @@ def create_content_ops_control_surface_router(
                     "message": (
                         f"{source_label} did not include usable support-ticket wording."
                     ),
-                    "source_row_count": raw_row_count,
+                    "source_row_count": source_row_count,
                     "max_source_material_rows": max_rows,
                 },
             )
@@ -1388,8 +1392,9 @@ def create_content_ops_control_surface_router(
             byte_count=byte_count,
             max_rows=max_rows,
             loaded_row_count=loaded_row_count,
-            source_row_count=raw_row_count,
+            source_row_count=source_row_count,
             submitted_row_count=len(submitted_rows),
+            truncated_row_count=truncated_row_count,
             language_filtered_row_count=language_filtered_row_count,
             csv_load_warnings=csv_load_warnings,
             package=package.as_dict(),
@@ -1564,6 +1569,23 @@ def _deflection_submit_max_rows(limit: Any, raw_row_count: int) -> int:
     if limit is None:
         return raw_row_count
     return min(int(limit), raw_row_count)
+
+
+def _deflection_submit_truncated_row_count(
+    *,
+    source_row_count: int,
+    loaded_included_row_count: int,
+    eligible_row_count: int,
+    submitted_row_count: int,
+    parser_source_row_count: int | None,
+) -> int:
+    parser_truncated = (
+        max(0, source_row_count - loaded_included_row_count)
+        if parser_source_row_count is not None
+        else 0
+    )
+    post_filter_truncated = max(0, eligible_row_count - submitted_row_count)
+    return parser_truncated + post_filter_truncated
 
 
 def _deflection_submit_parse_max_rows(limit: Any) -> int | None:
@@ -2379,6 +2401,7 @@ def _with_deflection_submit_diagnostics(
     loaded_row_count: int,
     source_row_count: int,
     submitted_row_count: int,
+    truncated_row_count: int,
     language_filtered_row_count: int,
     package: Mapping[str, Any],
     support_platform: str,
@@ -2428,7 +2451,6 @@ def _with_deflection_submit_diagnostics(
                 )
                 if key in package_metadata
             })
-    truncated_row_count = max(0, source_row_count - submitted_row_count)
     metadata.update({
         "source": "portfolio_deflection_submit",
         "source_row_count": source_row_count,
