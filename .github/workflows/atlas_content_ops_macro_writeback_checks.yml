@@ -11,8 +11,10 @@ on:
       - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
       - "atlas_brain/config.py"
+      - "scripts/smoke_content_ops_faq_macro_sandbox_e2e.py"
       - "scripts/seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
+      - "tests/test_faq_macro_writeback_sandbox_e2e_smoke.py"
       - "tests/test_seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_scheduler.py"
       - "tests/test_synthesis.py"
@@ -28,8 +30,10 @@ on:
       - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
       - "atlas_brain/config.py"
+      - "scripts/smoke_content_ops_faq_macro_sandbox_e2e.py"
       - "scripts/seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
+      - "tests/test_faq_macro_writeback_sandbox_e2e_smoke.py"
       - "tests/test_seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_scheduler.py"
       - "tests/test_synthesis.py"
@@ -57,6 +61,7 @@ jobs:
         run: |
           python -m pytest \
             tests/test_autonomous_faq_macro_writeback_scheduled_publish.py \
+            tests/test_faq_macro_writeback_sandbox_e2e_smoke.py \
             tests/test_seed_faq_macro_writeback_live_smoke_draft.py \
             tests/test_scheduler.py::TestDefaults::test_content_ops_faq_macro_writeback_default_seed_respects_opt_in \
             tests/test_scheduler.py::TestDefaults::test_content_ops_faq_macro_writeback_default_notifies_skipped_summary \
