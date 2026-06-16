@@ -461,6 +461,29 @@ async def test_deflection_submit_upload_skips_provider_metadata_header() -> None
 
 
 @pytest.mark.asyncio
+async def test_deflection_submit_upload_load_result_caps_rows_and_counts_source() -> None:
+    data = _csv_bytes([
+        "ticket_id,subject,message",
+        "ticket-1,Export help,How do I export attribution reports?",
+        "ticket-2,Billing help,Where can I download invoices?",
+        "ticket-3,Password help,How do I reset my password?",
+    ])
+
+    loaded = await api_module._load_deflection_submit_upload_rows(
+        _Upload(data),
+        max_bytes=2048,
+        max_rows=2,
+    )
+
+    assert loaded.source_row_count == 3
+    assert [row["ticket_id"] for row in loaded.rows] == ["ticket-1", "ticket-2"]
+    rows, byte_count, load_warnings = loaded
+    assert rows == loaded.rows
+    assert byte_count == len(data)
+    assert load_warnings == ()
+
+
+@pytest.mark.asyncio
 async def test_deflection_submit_upload_structures_missing_header_csv_error() -> None:
     data = _csv_bytes([
         "Need export help",
@@ -870,6 +893,54 @@ async def test_deflection_submit_defaults_to_all_rows_that_fit_upload_guard() ->
         "status": "locked",
         "reason": "payment_required",
     }
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_request_limit_becomes_csv_parse_cap() -> None:
+    csv_data = _csv_bytes([
+        "ticket_id,subject,message,resolution_text,pain_category",
+        (
+            "ticket-export-1,Export attribution,"
+            "How do I export attribution reports?,"
+            "Open Analytics and click Download report.,exports"
+        ),
+        (
+            "ticket-export-2,Report download,"
+            "Where is the report download for attribution exports?,"
+            "Open Analytics and click Download report.,exports"
+        ),
+        "ticket-sso-1,SSO setup,How do I enable SSO for my team?,,auth",
+    ])
+
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data),
+        "support_platform": "help-scout",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+        "limit": "2",
+    })
+
+    (
+        data,
+        rows,
+        byte_count,
+        byte_count_key,
+        load_warnings,
+        parser_source_row_count,
+    ) = await api_module._load_deflection_submit_rows_from_request(
+        request,
+        max_bytes=2048,
+    )
+
+    assert data["limit"] == 2
+    assert byte_count == len(csv_data)
+    assert byte_count_key == "uploaded_bytes"
+    assert load_warnings == ()
+    assert parser_source_row_count == 3
+    assert [row["ticket_id"] for row in rows] == [
+        "ticket-export-1",
+        "ticket-export-2",
+    ]
 
 
 @pytest.mark.asyncio

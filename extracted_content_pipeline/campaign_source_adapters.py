@@ -12,7 +12,8 @@ from typing import Any, Literal
 from .campaign_customer_data import (
     CampaignOpportunityLoadResult,
     CampaignOpportunityWarning,
-    _load_csv_dict_rows,
+    CsvDictRowsLoadResult,
+    _load_csv_dict_rows_result,
     normalize_campaign_opportunity_rows,
 )
 from .campaign_opportunities import normalize_campaign_opportunity
@@ -395,6 +396,23 @@ class SourceRowAdmissionDiagnostics:
         return payload
 
 
+@dataclass(frozen=True)
+class SourceRowsLoadResult:
+    """Source rows plus parser-level count metadata."""
+
+    rows: list[Any]
+    warnings: tuple[CampaignOpportunityWarning, ...]
+    source_row_count: int
+
+    @property
+    def included_row_count(self) -> int:
+        return len(self.rows)
+
+    @property
+    def truncated_row_count(self) -> int:
+        return max(0, self.source_row_count - self.included_row_count)
+
+
 class _SourceFieldLookup(Mapping[str, Any]):
     """Mapping wrapper that caches string-key alias lookups for one source row."""
 
@@ -496,6 +514,16 @@ def load_source_rows_with_warnings_from_file(
     """Load source rows plus non-fatal load warnings (e.g. skipped prologue rows)."""
 
     return _load_source_rows(Path(path), file_format=file_format)
+
+
+def load_csv_source_rows_result_from_file(
+    path: str | Path,
+    *,
+    max_rows: int | None = None,
+) -> SourceRowsLoadResult:
+    """Load CSV source rows with source/included/truncated row counts."""
+
+    return _load_source_csv_rows_result(Path(path), max_rows=max_rows)
 
 
 def source_rows_to_campaign_opportunities(
@@ -897,7 +925,24 @@ def _is_safe_parent_value(value: Any) -> bool:
 def _load_source_csv_rows(
     path: Path,
 ) -> tuple[list[dict[str, Any]], tuple[CampaignOpportunityWarning, ...]]:
-    return _load_csv_dict_rows(path)
+    result = _load_source_csv_rows_result(path)
+    return result.rows, result.warnings
+
+
+def _load_source_csv_rows_result(
+    path: Path,
+    *,
+    max_rows: int | None = None,
+) -> SourceRowsLoadResult:
+    result: CsvDictRowsLoadResult = _load_csv_dict_rows_result(
+        path,
+        max_rows=max_rows,
+    )
+    return SourceRowsLoadResult(
+        rows=list(result.rows),
+        warnings=result.warnings,
+        source_row_count=result.source_row_count,
+    )
 
 
 def _resolve_format(
@@ -1147,8 +1192,10 @@ def _compact_field_key(key: str) -> str:
 
 __all__ = [
     "SourceDataFormat",
+    "SourceRowsLoadResult",
     "SourceRowAdmissionDiagnostics",
     "build_source_row_admission_diagnostics",
+    "load_csv_source_rows_result_from_file",
     "load_source_campaign_opportunities_from_file",
     "load_source_rows_from_file",
     "load_source_rows_with_warnings_from_file",

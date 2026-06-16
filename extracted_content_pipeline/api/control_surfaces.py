@@ -45,8 +45,8 @@ from ..campaign_ports import TenantScope
 from ..campaign_customer_data import CsvCustomerDataParseError
 from ..brand_voice import BrandVoiceProfile, brand_voice_profile_from_mapping
 from ..campaign_postgres_import import import_campaign_opportunities
+from ..campaign_source_adapters import load_csv_source_rows_result_from_file
 from ..campaign_source_adapters import source_material_to_source_rows
-from ..campaign_source_adapters import load_source_rows_with_warnings_from_file
 from ..content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
@@ -159,6 +159,21 @@ _DEFLECTION_SUBMIT_PLATFORMS = frozenset({
     "other",
 })
 _DEFLECTION_SUBMIT_IMPORTER_MODES = frozenset({"csv", "full_thread"})
+
+
+@dataclass(frozen=True)
+class _DeflectionSubmitRowsLoad:
+    rows: list[Any]
+    byte_count: int
+    warnings: tuple[dict[str, Any], ...]
+    source_row_count: int | None = None
+
+    def __iter__(self):
+        yield self.rows
+        yield self.byte_count
+        yield self.warnings
+
+
 _UPLOAD_FILE_FORMATS = ("auto", "json", "jsonl", "csv")
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _MAX_FALSIFICATION_RULES = 20
@@ -1285,6 +1300,7 @@ def create_content_ops_control_surface_router(
             byte_count,
             byte_count_key,
             csv_load_warnings,
+            parser_source_row_count,
         ) = await _load_deflection_submit_rows_from_request(
             request,
             max_bytes=_MAX_DEFLECTION_SUBMIT_BLOB_BYTES,
@@ -1307,7 +1323,7 @@ def create_content_ops_control_surface_router(
                     ),
                 },
             )
-        loaded_row_count = len(rows)
+        loaded_row_count = parser_source_row_count or len(rows)
         rows, language_filtered_row_count = _deflection_submit_english_rows(rows)
         if not rows:
             raise HTTPException(
@@ -1319,7 +1335,11 @@ def create_content_ops_control_surface_router(
                     "language_filtered_row_count": language_filtered_row_count,
                 },
             )
-        raw_row_count = len(rows)
+        raw_row_count = (
+            len(rows)
+            if language_filtered_row_count
+            else parser_source_row_count or len(rows)
+        )
         max_rows = _deflection_submit_max_rows(data.get("limit"), raw_row_count)
         submitted_rows = _deflection_submit_rows_with_defaults(data, rows)[:max_rows]
         title = _deflection_submit_title(data)
@@ -1385,7 +1405,14 @@ async def _load_deflection_submit_rows_from_request(
     request: Any,
     *,
     max_bytes: int,
-) -> tuple[dict[str, Any], list[Any], int, str, tuple[dict[str, Any], ...]]:
+) -> tuple[
+    dict[str, Any],
+    list[Any],
+    int,
+    str,
+    tuple[dict[str, Any], ...],
+    int | None,
+]:
     if _is_deflection_submit_http_request(request):
         content_type = _request_content_type(request)
         if "multipart/form-data" in content_type:
@@ -1412,7 +1439,7 @@ async def _load_deflection_submit_rows_from_request(
                     json_file,
                     max_bytes=max_bytes,
                 )
-                return data, rows, byte_count, "uploaded_bytes", load_warnings
+                return data, rows, byte_count, "uploaded_bytes", load_warnings, None
             json_file = form.get("json_file") if hasattr(form, "get") else None
             if json_file is not None:
                 raise HTTPException(
@@ -1422,11 +1449,19 @@ async def _load_deflection_submit_rows_from_request(
             csv_file = form.get("csv_file") if hasattr(form, "get") else None
             if csv_file is None:
                 raise HTTPException(status_code=422, detail="csv_file is required")
-            rows, byte_count, load_warnings = await _load_deflection_submit_upload_rows(
+            loaded = await _load_deflection_submit_upload_rows(
                 csv_file,
                 max_bytes=max_bytes,
+                max_rows=_deflection_submit_parse_max_rows(data.get("limit")),
             )
-            return data, rows, byte_count, "uploaded_bytes", load_warnings
+            return (
+                data,
+                loaded.rows,
+                loaded.byte_count,
+                "uploaded_bytes",
+                loaded.warnings,
+                loaded.source_row_count,
+            )
 
         try:
             payload = await request.json()
@@ -1436,20 +1471,36 @@ async def _load_deflection_submit_rows_from_request(
                 detail="JSON deflection submit body could not be parsed.",
             ) from exc
         data = _deflection_submit_payload_to_mapping(payload)
-        rows, byte_count, load_warnings = await _load_deflection_submit_blob_rows(
+        loaded = await _load_deflection_submit_blob_rows(
             data["blob_url"],
             max_bytes=max_bytes,
             importer_mode=data.get("importer_mode") or "csv",
+            max_rows=_deflection_submit_parse_max_rows(data.get("limit")),
         )
-        return data, rows, byte_count, "blob_bytes", load_warnings
+        return (
+            data,
+            loaded.rows,
+            loaded.byte_count,
+            "blob_bytes",
+            loaded.warnings,
+            loaded.source_row_count,
+        )
 
     data = _deflection_submit_payload_to_mapping(request)
-    rows, byte_count, load_warnings = await _load_deflection_submit_blob_rows(
+    loaded = await _load_deflection_submit_blob_rows(
         data["blob_url"],
         max_bytes=max_bytes,
         importer_mode=data.get("importer_mode") or "csv",
+        max_rows=_deflection_submit_parse_max_rows(data.get("limit")),
     )
-    return data, rows, byte_count, "blob_bytes", load_warnings
+    return (
+        data,
+        loaded.rows,
+        loaded.byte_count,
+        "blob_bytes",
+        loaded.warnings,
+        loaded.source_row_count,
+    )
 
 
 def _is_deflection_submit_http_request(value: Any) -> bool:
@@ -1513,6 +1564,12 @@ def _deflection_submit_max_rows(limit: Any, raw_row_count: int) -> int:
     if limit is None:
         return raw_row_count
     return min(int(limit), raw_row_count)
+
+
+def _deflection_submit_parse_max_rows(limit: Any) -> int | None:
+    if limit is None:
+        return None
+    return int(limit)
 
 
 async def _inspect_uploaded_ingestion_file(
@@ -1580,12 +1637,14 @@ async def _load_deflection_submit_blob_rows(
     *,
     max_bytes: int,
     importer_mode: str = "csv",
-) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    max_rows: int | None = None,
+) -> _DeflectionSubmitRowsLoad:
     return await asyncio.to_thread(
         _load_deflection_submit_blob_rows_sync,
         blob_url,
         max_bytes,
         importer_mode,
+        max_rows,
     )
 
 
@@ -1593,7 +1652,8 @@ async def _load_deflection_submit_upload_rows(
     csv_file: Any,
     *,
     max_bytes: int,
-) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    max_rows: int | None = None,
+) -> _DeflectionSubmitRowsLoad:
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -1616,6 +1676,7 @@ async def _load_deflection_submit_upload_rows(
             temp_path,
             byte_count=byte_count,
             parse_error_detail="Uploaded CSV could not be parsed.",
+            max_rows=max_rows,
         )
     finally:
         if temp_path is not None:
@@ -1710,13 +1771,19 @@ def _load_deflection_submit_blob_rows_sync(
     blob_url: str,
     max_bytes: int,
     importer_mode: str = "csv",
-) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    max_rows: int | None = None,
+) -> _DeflectionSubmitRowsLoad:
     if importer_mode == "full_thread":
-        return _load_deflection_submit_json_blob_rows_sync(
+        rows, byte_count, warnings = _load_deflection_submit_json_blob_rows_sync(
             blob_url,
             max_bytes=max_bytes,
         )
-    return _load_deflection_submit_csv_blob_rows_sync(blob_url, max_bytes=max_bytes)
+        return _DeflectionSubmitRowsLoad(rows, byte_count, warnings)
+    return _load_deflection_submit_csv_blob_rows_sync(
+        blob_url,
+        max_bytes=max_bytes,
+        max_rows=max_rows,
+    )
 
 
 def _load_deflection_submit_json_blob_rows_sync(
@@ -1762,7 +1829,8 @@ def _load_deflection_submit_csv_blob_rows_sync(
     blob_url: str,
     *,
     max_bytes: int,
-) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    max_rows: int | None = None,
+) -> _DeflectionSubmitRowsLoad:
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -1785,6 +1853,7 @@ def _load_deflection_submit_csv_blob_rows_sync(
             temp_path,
             byte_count=byte_count,
             parse_error_detail="Blob CSV could not be parsed.",
+            max_rows=max_rows,
         )
     finally:
         if temp_path is not None:
@@ -1882,11 +1951,12 @@ def _parse_deflection_submit_csv_file(
     *,
     byte_count: int,
     parse_error_detail: str,
-) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    max_rows: int | None = None,
+) -> _DeflectionSubmitRowsLoad:
     try:
-        rows, load_warnings = load_source_rows_with_warnings_from_file(
+        result = load_csv_source_rows_result_from_file(
             temp_path,
-            file_format="csv",
+            max_rows=max_rows,
         )
     except CsvCustomerDataParseError as exc:
         raise HTTPException(
@@ -1898,7 +1968,12 @@ def _parse_deflection_submit_csv_file(
             status_code=400,
             detail=parse_error_detail,
         ) from exc
-    return rows, byte_count, tuple(warning.as_dict() for warning in load_warnings)
+    return _DeflectionSubmitRowsLoad(
+        rows=result.rows,
+        byte_count=byte_count,
+        warnings=tuple(warning.as_dict() for warning in result.warnings),
+        source_row_count=result.source_row_count,
+    )
 
 
 def _deflection_submit_csv_parse_error_detail(
