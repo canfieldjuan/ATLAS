@@ -10,12 +10,14 @@ from extracted_content_pipeline.faq_deflection_report import (
     DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
     DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
     DEFLECTION_REPORT_SCHEMA_VERSION,
+    DEFLECTION_REPORT_SECTION_REGISTRY,
     build_deflection_evidence_export,
     build_deflection_report_model,
     build_deflection_snapshot,
     build_deflection_report_artifact,
     deflection_snapshot_content_opportunities,
     render_deflection_report_model,
+    _report_section,
 )
 from extracted_content_pipeline.deflection_report_access import (
     InMemoryDeflectionReportArtifactStore,
@@ -285,6 +287,17 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
 
     support_tax = section_by_id["support_tax"]
     assert support_tax["surfaces"] == ["web", "pdf", "email_summary", "markdown"]
+    assert support_tax["required_data"] == [
+        "repeat_ticket_count",
+        "non_repeat_ticket_count",
+        "generated_question_count",
+        "assisted_contact_cost",
+        "estimated_support_cost",
+        "source_date_window",
+        "drafted_answer_count",
+        "no_proven_answer_count",
+        "ticket_source_count",
+    ]
     assert support_tax["data"]["repeat_ticket_count"] == 8
     assert support_tax["data"]["annualized_support_cost"] == 2628.0
     assert support_tax["data"]["source_date_window"] == {
@@ -296,6 +309,13 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
 
     seo_targets = section_by_id["seo_targets"]
     assert seo_targets["default_limit"] == DEFAULT_DEFLECTION_SEO_TARGET_LIMIT
+    assert seo_targets["required_data"] == [
+        "phrases",
+        "total_phrase_count",
+        "displayed_phrase_count",
+        "omitted_phrase_count",
+        "limit",
+    ]
     assert seo_targets["data"]["phrases"] == [
         "export attribution reports",
         "report download",
@@ -343,12 +363,71 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
 
     complete_evidence = section_by_id["complete_evidence"]
     assert complete_evidence["surfaces"] == ["export"]
+    assert complete_evidence["required_data"] == [
+        "question_count",
+        "evidence_row_count",
+        "source_id_count",
+        "surfaces",
+    ]
     assert complete_evidence["data"] == {
         "question_count": 2,
         "evidence_row_count": 8,
         "source_id_count": 8,
         "surfaces": ["export"],
     }
+
+
+def test_deflection_report_section_registry_drives_section_metadata() -> None:
+    artifact = build_deflection_report_artifact(
+        _structured_report_fixture_result(),
+        source_label="zendesk-trial-export.json",
+    )
+    section_by_id = {
+        section.id: section
+        for section in artifact.report_model.sections
+    }
+
+    assert set(section_by_id) == set(DEFLECTION_REPORT_SECTION_REGISTRY)
+    assert len({
+        definition.priority
+        for definition in DEFLECTION_REPORT_SECTION_REGISTRY.values()
+    }) == len(DEFLECTION_REPORT_SECTION_REGISTRY)
+
+    for section_id, definition in DEFLECTION_REPORT_SECTION_REGISTRY.items():
+        section = section_by_id[section_id]
+        assert section.title == definition.title
+        assert section.priority == definition.priority
+        assert section.surfaces == definition.surfaces
+        assert section.default_limit == definition.default_limit
+        assert section.required_data == definition.required_data
+        assert set(section.required_data) <= set(section.data)
+
+
+def test_deflection_report_section_registry_fails_closed_on_missing_data() -> None:
+    with pytest.raises(
+        ValueError,
+        match=(
+            "section 'seo_targets' missing required data keys: "
+            "total_phrase_count, displayed_phrase_count, omitted_phrase_count, limit"
+        ),
+    ):
+        _report_section(
+            section_id="seo_targets",
+            data={"phrases": ["export attribution reports"]},
+            markdown_lines=["## Your Help-Desk SEO Targeting List"],
+        )
+
+
+def test_deflection_report_section_registry_rejects_unknown_section_id() -> None:
+    with pytest.raises(
+        ValueError,
+        match="unknown deflection report section: surprise_appendix",
+    ):
+        _report_section(
+            section_id="surprise_appendix",
+            data={},
+            markdown_lines=["## Surprise Appendix"],
+        )
 
 
 def test_deflection_report_model_support_tax_data_matches_markdown() -> None:

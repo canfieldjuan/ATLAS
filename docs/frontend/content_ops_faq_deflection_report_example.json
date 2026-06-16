@@ -350,6 +350,17 @@
         "default_limit": null,
         "id": "support_tax",
         "priority": 10,
+        "required_data": [
+          "repeat_ticket_count",
+          "non_repeat_ticket_count",
+          "generated_question_count",
+          "assisted_contact_cost",
+          "estimated_support_cost",
+          "source_date_window",
+          "drafted_answer_count",
+          "no_proven_answer_count",
+          "ticket_source_count"
+        ],
         "surfaces": [
           "web",
           "pdf",
@@ -375,6 +386,13 @@
         "default_limit": 50,
         "id": "seo_targets",
         "priority": 20,
+        "required_data": [
+          "phrases",
+          "total_phrase_count",
+          "displayed_phrase_count",
+          "omitted_phrase_count",
+          "limit"
+        ],
         "surfaces": [
           "web",
           "pdf",
@@ -408,6 +426,9 @@
         "default_limit": null,
         "id": "ranked_questions",
         "priority": 30,
+        "required_data": [
+          "rows"
+        ],
         "surfaces": [
           "web",
           "pdf",
@@ -511,6 +532,9 @@
         "default_limit": null,
         "id": "question_details",
         "priority": 50,
+        "required_data": [
+          "rows"
+        ],
         "surfaces": [
           "web",
           "pdf",
@@ -530,6 +554,12 @@
         "default_limit": null,
         "id": "complete_evidence",
         "priority": 90,
+        "required_data": [
+          "question_count",
+          "evidence_row_count",
+          "source_id_count",
+          "surfaces"
+        ],
         "surfaces": [
           "export"
         ],

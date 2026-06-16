@@ -286,6 +286,7 @@ def test_content_ops_faq_report_contract_links_example() -> None:
     assert "report_model: DeflectionStructuredReport;" in doc
     assert 'schema_version: "deflection.v1";' in doc
     assert 'id:' in doc and '"complete_evidence"' in doc
+    assert "required_data: string[]" in doc
     assert "Skip unknown section IDs" in doc
     assert "Treat `complete_evidence` as export-only" in doc
     assert "account_id: string;" in doc

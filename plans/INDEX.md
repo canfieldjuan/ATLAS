@@ -741,6 +741,7 @@
 - [PR-Deflection-Statement-Customer-Wording-Smoke](archive/PR-Deflection-Statement-Customer-Wording-Smoke.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Status-Pending-Customer-Open](archive/PR-Deflection-Status-Pending-Customer-Open.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Stream-Upload-Tempfile](archive/PR-Deflection-Stream-Upload-Tempfile.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
+- [PR-Deflection-Structured-Report-Model](archive/PR-Deflection-Structured-Report-Model.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Synonym-Clustering-Recall](archive/PR-Deflection-Synonym-Clustering-Recall.md) - lane: deflection/clustering-raw-data | phase: Production hardening
 - [PR-Deflection-Teaser-Locked-Dedupe](archive/PR-Deflection-Teaser-Locked-Dedupe.md) - lane: content-ops/faq-deflection-teaser | phase: Product polish
 - [PR-Deflection-Teaser-Top-Answer](archive/PR-Deflection-Teaser-Top-Answer.md) - lane: content-ops/faq-deflection-teaser | phase: Product polish
