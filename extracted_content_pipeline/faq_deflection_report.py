@@ -20,6 +20,7 @@ DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT = 3
 DEFAULT_DEFLECTION_SEO_TARGET_LIMIT = 50
 DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION = "deflection_evidence.v1"
 DEFLECTION_REPORT_SCHEMA_VERSION = "deflection.v1"
+DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION = "deflection_full_report_qa_scorecard.v1"
 _UNCAPPED_REPORT_MAX_ITEMS = 0
 _ASSISTED_CONTACT_COST = 13.50
 _ASSISTED_CONTACT_COST_LABEL = "$13.50"
@@ -226,6 +227,34 @@ DEFLECTION_REPORT_SECTION_REGISTRY: Mapping[str, DeflectionReportSectionDefiniti
         for definition in _DEFLECTION_REPORT_SECTION_DEFINITIONS
     })
 )
+DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS: Mapping[str, Mapping[str, int]] = (
+    MappingProxyType({
+        "result_page": MappingProxyType({
+            "ranked_questions": 25,
+            "question_details": 10,
+            "seo_targets": 20,
+            "outcome_diagnostics": 25,
+        }),
+        "pdf": MappingProxyType({
+            "ranked_questions": 25,
+            "question_details": 10,
+        }),
+    })
+)
+_SCORECARD_SAFE_STRINGS = frozenset({
+    DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+    DEFLECTION_REPORT_SCHEMA_VERSION,
+    DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION,
+    "mapping",
+    "dict",
+    "list",
+    "tuple",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "NoneType",
+})
 
 
 class FAQDeflectionReportService:
@@ -337,6 +366,285 @@ def build_deflection_evidence_export(
         "questions": [dict(question) for question in questions],
         "evidence_rows": [dict(row) for row in evidence_rows],
     }
+
+
+def build_deflection_full_report_qa_scorecard(
+    report_model: DeflectionStructuredReport | Mapping[str, Any],
+    *,
+    evidence_export: Mapping[str, Any] | None = None,
+    surface_observations: Mapping[str, Mapping[str, Any]] | None = None,
+    surface_caps: Mapping[str, Mapping[str, int]] | None = None,
+) -> dict[str, Any]:
+    """Return a sanitized model-anchored QA scorecard for full-report surfaces."""
+
+    model = (
+        report_model.as_dict()
+        if isinstance(report_model, DeflectionStructuredReport)
+        else report_model
+    )
+    if not isinstance(model, Mapping):
+        model = {}
+    sections = _scorecard_sections(model)
+    counts = _scorecard_counts(sections)
+    assertions: list[dict[str, Any]] = []
+
+    def add(assertion_id: str, ok: bool, *, expected: Any, actual: Any) -> None:
+        assertions.append({
+            "id": assertion_id,
+            "ok": bool(ok),
+            "expected": _scorecard_safe_value(expected),
+            "actual": _scorecard_safe_value(actual),
+        })
+
+    add(
+        "model.schema_version",
+        _text(model.get("schema_version")) == DEFLECTION_REPORT_SCHEMA_VERSION,
+        expected=DEFLECTION_REPORT_SCHEMA_VERSION,
+        actual=_text(model.get("schema_version")),
+    )
+    for section_id in (
+        "support_tax",
+        "seo_targets",
+        "ranked_questions",
+        "question_details",
+        "complete_evidence",
+    ):
+        add(
+            f"model.section.{section_id}.present",
+            section_id in sections,
+            expected=True,
+            actual=section_id in sections,
+        )
+    for section_id, section in sections.items():
+        definition = DEFLECTION_REPORT_SECTION_REGISTRY.get(section_id)
+        if definition is None:
+            continue
+        data = section.get("data") if isinstance(section.get("data"), Mapping) else {}
+        for key in definition.required_data:
+            add(
+                f"model.section.{section_id}.data.{key}.present",
+                key in data,
+                expected=True,
+                actual=key in data,
+            )
+
+    _add_evidence_export_assertions(add, counts, evidence_export)
+    _add_surface_observation_assertions(
+        add,
+        counts,
+        surface_observations or {},
+        surface_caps or DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS,
+    )
+    return {
+        "schema_version": DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION,
+        "ok": all(assertion["ok"] for assertion in assertions),
+        "counts": _json_ready(counts),
+        "assertions": assertions,
+    }
+
+
+def _scorecard_sections(model: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    raw_sections = model.get("sections")
+    if not isinstance(raw_sections, Sequence) or isinstance(
+        raw_sections,
+        (str, bytes, bytearray),
+    ):
+        return {}
+    sections: dict[str, Mapping[str, Any]] = {}
+    for raw in raw_sections:
+        if not isinstance(raw, Mapping):
+            continue
+        section_id = _text(raw.get("id"))
+        if section_id:
+            sections[section_id] = raw
+    return sections
+
+
+def _scorecard_section_data(
+    sections: Mapping[str, Mapping[str, Any]],
+    section_id: str,
+) -> Mapping[str, Any]:
+    section = sections.get(section_id)
+    if not isinstance(section, Mapping):
+        return {}
+    data = section.get("data")
+    return data if isinstance(data, Mapping) else {}
+
+
+def _scorecard_rows_count(data: Mapping[str, Any]) -> int:
+    rows = data.get("rows")
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+        return 0
+    return len([row for row in rows if isinstance(row, Mapping)])
+
+
+def _scorecard_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _scorecard_counts(sections: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    support_tax = _scorecard_section_data(sections, "support_tax")
+    seo_targets = _scorecard_section_data(sections, "seo_targets")
+    ranked_questions = _scorecard_section_data(sections, "ranked_questions")
+    diagnostics = _scorecard_section_data(sections, "outcome_diagnostics")
+    question_details = _scorecard_section_data(sections, "question_details")
+    complete_evidence = _scorecard_section_data(sections, "complete_evidence")
+    return {
+        "repeat_ticket_count": _int(support_tax.get("repeat_ticket_count")),
+        "generated_question_count": _int(
+            support_tax.get("generated_question_count")
+        ),
+        "ranked_question_count": _scorecard_rows_count(ranked_questions),
+        "drafted_answer_count": _int(support_tax.get("drafted_answer_count")),
+        "no_proven_answer_count": _int(support_tax.get("no_proven_answer_count")),
+        "ticket_source_count": _int(support_tax.get("ticket_source_count")),
+        "estimated_support_cost": _scorecard_float(
+            support_tax.get("estimated_support_cost")
+        ),
+        "evidence_question_count": _int(complete_evidence.get("question_count")),
+        "evidence_row_count": _int(complete_evidence.get("evidence_row_count")),
+        "source_id_count": _int(complete_evidence.get("source_id_count")),
+        "seo_total_phrase_count": _int(seo_targets.get("total_phrase_count")),
+        "seo_displayed_phrase_count": _int(
+            seo_targets.get("displayed_phrase_count")
+        ),
+        "seo_omitted_phrase_count": _int(seo_targets.get("omitted_phrase_count")),
+        "outcome_diagnostic_row_count": _scorecard_rows_count(diagnostics),
+        "question_detail_count": _scorecard_rows_count(question_details),
+    }
+
+
+def _add_evidence_export_assertions(
+    add: Any,
+    counts: Mapping[str, Any],
+    evidence_export: Mapping[str, Any] | None,
+) -> None:
+    export = evidence_export if isinstance(evidence_export, Mapping) else {}
+    summary = export.get("summary") if isinstance(export.get("summary"), Mapping) else {}
+    questions = export.get("questions")
+    rows = export.get("evidence_rows")
+    question_count = (
+        len(questions)
+        if isinstance(questions, Sequence)
+        and not isinstance(questions, (str, bytes, bytearray))
+        else 0
+    )
+    row_count = (
+        len(rows)
+        if isinstance(rows, Sequence)
+        and not isinstance(rows, (str, bytes, bytearray))
+        else 0
+    )
+
+    add(
+        "evidence_export.present",
+        bool(export),
+        expected=True,
+        actual=bool(export),
+    )
+    add(
+        "evidence_export.schema_version",
+        _text(export.get("schema_version"))
+        == DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+        expected=DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+        actual=_text(export.get("schema_version")),
+    )
+    for key, expected_key in (
+        ("question_count", "evidence_question_count"),
+        ("evidence_row_count", "evidence_row_count"),
+        ("source_id_count", "source_id_count"),
+        ("drafted_answer_count", "drafted_answer_count"),
+        ("no_proven_answer_count", "no_proven_answer_count"),
+    ):
+        add(
+            f"evidence_export.summary.{key}",
+            _int(summary.get(key)) == _int(counts.get(expected_key)),
+            expected=_int(counts.get(expected_key)),
+            actual=_int(summary.get(key)),
+        )
+    add(
+        "evidence_export.questions.length",
+        question_count == _int(counts.get("evidence_question_count")),
+        expected=_int(counts.get("evidence_question_count")),
+        actual=question_count,
+    )
+    add(
+        "evidence_export.evidence_rows.length",
+        row_count == _int(counts.get("evidence_row_count")),
+        expected=_int(counts.get("evidence_row_count")),
+        actual=row_count,
+    )
+
+
+def _scorecard_section_total(section_id: str, counts: Mapping[str, Any]) -> int:
+    return {
+        "seo_targets": _int(counts.get("seo_total_phrase_count")),
+        "ranked_questions": _int(counts.get("ranked_question_count")),
+        "outcome_diagnostics": _int(counts.get("outcome_diagnostic_row_count")),
+        "question_details": _int(counts.get("question_detail_count")),
+        "complete_evidence": _int(counts.get("evidence_row_count")),
+    }.get(section_id, 0)
+
+
+def _add_surface_observation_assertions(
+    add: Any,
+    counts: Mapping[str, Any],
+    surface_observations: Mapping[str, Mapping[str, Any]],
+    surface_caps: Mapping[str, Mapping[str, int]],
+) -> None:
+    for surface, observation in sorted(surface_observations.items()):
+        if not isinstance(observation, Mapping):
+            add(
+                f"surface.{surface}.observation_shape",
+                False,
+                expected="mapping",
+                actual=type(observation).__name__,
+            )
+            continue
+        observed_counts = (
+            observation.get("counts")
+            if isinstance(observation.get("counts"), Mapping)
+            else {}
+        )
+        for key, actual in sorted(observed_counts.items()):
+            expected = counts.get(str(key))
+            add(
+                f"surface.{surface}.count.{key}",
+                expected is not None and actual == expected,
+                expected=expected,
+                actual=actual,
+            )
+
+        displayed_rows = (
+            observation.get("displayed_rows")
+            if isinstance(observation.get("displayed_rows"), Mapping)
+            else {}
+        )
+        caps = surface_caps.get(surface, {})
+        caps = caps if isinstance(caps, Mapping) else {}
+        for section_id, actual in sorted(displayed_rows.items()):
+            total = _scorecard_section_total(str(section_id), counts)
+            cap = _int(caps.get(str(section_id))) or total
+            expected = min(total, cap)
+            add(
+                f"surface.{surface}.displayed_rows.{section_id}",
+                _int(actual) == expected,
+                expected=expected,
+                actual=_int(actual),
+            )
+
+
+def _scorecard_safe_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return value if value in _SCORECARD_SAFE_STRINGS else "<redacted-string>"
+    if isinstance(value, Mapping):
+        return {str(key): _scorecard_safe_value(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return [_scorecard_safe_value(item) for item in value]
+    return _json_ready(value)
 
 
 def build_deflection_snapshot(
@@ -1649,8 +1957,10 @@ def _md(value: Any) -> str:
 
 __all__ = [
     "DEFAULT_DEFLECTION_SNAPSHOT_TOP_N",
+    "DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS",
     "DEFAULT_DEFLECTION_SEO_TARGET_LIMIT",
     "DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT",
+    "DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION",
     "DEFLECTION_REPORT_SCHEMA_VERSION",
     "DEFLECTION_REPORT_SECTION_REGISTRY",
     "DeflectionSnapshot",
@@ -1662,6 +1972,7 @@ __all__ = [
     "build_deflection_report_model",
     "build_deflection_snapshot",
     "build_deflection_report_artifact",
+    "build_deflection_full_report_qa_scorecard",
     "deflection_report_summary",
     "deflection_snapshot_content_opportunities",
     "render_deflection_report",
