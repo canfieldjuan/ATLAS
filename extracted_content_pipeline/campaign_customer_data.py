@@ -87,6 +87,17 @@ _CSV_HEADER_HINTS = frozenset({
     "vendor",
     "vendor_name",
 })
+_CSV_MISSING_HEADER_FIX = (
+    "Add a header row with column names such as ticket_id, subject, and message, "
+    "then export the CSV again."
+)
+_CSV_ENCODING_FIX = (
+    "Export the file again as UTF-8 or UTF-16 CSV, then upload the new export."
+)
+_CSV_INCONSISTENT_COLUMNS_FIX = (
+    "Use one delimiter consistently, keep every row within the header width, "
+    "and quote cells that contain commas, tabs, semicolons, pipes, or newlines."
+)
 
 
 @dataclass(frozen=True)
@@ -107,6 +118,29 @@ class CampaignOpportunityWarning:
             data["row_index"] = self.row_index
         if self.field:
             data["field"] = self.field
+        return data
+
+
+@dataclass(frozen=True)
+class CsvCustomerDataParseError(ValueError):
+    """Safe structured CSV parser error for user-facing upload feedback."""
+
+    code: str
+    message: str
+    how_to_fix: str
+    row_index: int | None = None
+
+    def __str__(self) -> str:
+        return self.message
+
+    def as_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "code": self.code,
+            "message": self.message,
+            "how_to_fix": self.how_to_fix,
+        }
+        if self.row_index is not None:
+            data["row_index"] = self.row_index
         return data
 
 
@@ -408,7 +442,7 @@ def _load_csv_dict_rows(
     candidate = _select_csv_delimiter_for_path(path, encoding_plan)
     header_index = candidate.header_index
     if header_index is None:
-        raise ValueError("CSV customer data must include a header row.")
+        raise _csv_missing_header_error()
 
     skipped_leading_count = 0
     first_leading_row: tuple[int, Sequence[Any]] | None = None
@@ -439,7 +473,7 @@ def _load_csv_dict_rows(
                     if field is not None and str(field).strip()
                 )
                 if not header_fields:
-                    raise ValueError("CSV customer data must include a header row.")
+                    raise _csv_missing_header_error()
                 consistency = _CsvColumnConsistencyState(
                     header_index=header_index,
                     header_has_hint=candidate.header_has_hint,
@@ -450,9 +484,9 @@ def _load_csv_dict_rows(
             if not any(str(value or "").strip() for value in values):
                 continue
             if len(values) > header_width:
-                raise ValueError(
-                    f"CSV row {row_index} has more cells than the header; "
-                    "check the delimiter and header row."
+                raise _csv_inconsistent_columns_error(
+                    f"CSV row {row_index} has more cells than the header.",
+                    row_index=row_index,
                 )
             if consistency is not None:
                 consistency.add(row_index, values)
@@ -467,7 +501,7 @@ def _load_csv_dict_rows(
                     cleaned[cleaned_key] = cleaned_value
             rows.append(cleaned)
     if not header_fields or consistency is None:
-        raise ValueError("CSV customer data must include a header row.")
+        raise _csv_missing_header_error()
     consistency_candidate = consistency.as_candidate(quotechar=candidate.quotechar)
     if not consistency_candidate.valid:
         _raise_csv_delimiter_error(consistency_candidate)
@@ -477,6 +511,35 @@ def _load_csv_dict_rows(
         header_index,
     )
     return rows, load_warnings
+
+
+def _csv_missing_header_error() -> CsvCustomerDataParseError:
+    return CsvCustomerDataParseError(
+        code="csv_missing_header",
+        message="CSV customer data must include a header row.",
+        how_to_fix=_CSV_MISSING_HEADER_FIX,
+    )
+
+
+def _csv_encoding_error(message: str) -> CsvCustomerDataParseError:
+    return CsvCustomerDataParseError(
+        code="csv_encoding_error",
+        message=message,
+        how_to_fix=_CSV_ENCODING_FIX,
+    )
+
+
+def _csv_inconsistent_columns_error(
+    message: str,
+    *,
+    row_index: int | None = None,
+) -> CsvCustomerDataParseError:
+    return CsvCustomerDataParseError(
+        code="csv_inconsistent_columns",
+        message=message,
+        how_to_fix=_CSV_INCONSISTENT_COLUMNS_FIX,
+        row_index=row_index,
+    )
 
 
 def _open_csv_text(path: Path, plan: _CsvEncodingPlan):
@@ -523,7 +586,7 @@ def _csv_encoding_plan(path: Path) -> _CsvEncodingPlan:
         inferred = _utf16_encoding_from_nul_bytes(prefix)
         if inferred:
             return _csv_inferred_utf16_encoding_plan(path, encoding=inferred)
-        raise ValueError(
+        raise _csv_encoding_error(
             "CSV customer data decoded to NUL-heavy text; check the file encoding."
         )
     return _CsvEncodingPlan(
@@ -536,9 +599,15 @@ def _csv_encoding_plan(path: Path) -> _CsvEncodingPlan:
 
 
 def _csv_checked_encoding_plan(path: Path, *, encoding: str) -> _CsvEncodingPlan:
-    stats = _scan_csv_text_stats(path, encoding=encoding)
+    try:
+        stats = _scan_csv_text_stats(path, encoding=encoding)
+    except UnicodeDecodeError as exc:
+        raise _csv_encoding_error(
+            f"CSV customer data could not be decoded as {encoding}; "
+            "check the file encoding."
+        ) from exc
     if stats.nul_ratio >= _CSV_NUL_REDECODE_RATIO:
-        raise ValueError(
+        raise _csv_encoding_error(
             f"CSV customer data decoded as {encoding} but remained NUL-heavy; "
             "check the file encoding."
         )
@@ -549,9 +618,15 @@ def _csv_checked_encoding_plan(path: Path, *, encoding: str) -> _CsvEncodingPlan
 
 
 def _csv_inferred_utf16_encoding_plan(path: Path, *, encoding: str) -> _CsvEncodingPlan:
-    stats = _scan_csv_text_stats(path, encoding=encoding)
+    try:
+        stats = _scan_csv_text_stats(path, encoding=encoding)
+    except UnicodeDecodeError as exc:
+        raise _csv_encoding_error(
+            f"CSV customer data could not be decoded as {encoding}; "
+            "check the file encoding."
+        ) from exc
     if stats.nul_ratio >= _CSV_NUL_REDECODE_RATIO:
-        raise ValueError(
+        raise _csv_encoding_error(
             f"CSV customer data decoded as {encoding} but remained NUL-heavy; "
             "check the file encoding."
         )
@@ -697,12 +772,12 @@ def _legacy_csv_encoding_stats(path: Path) -> tuple[str, _CsvTextStats]:
         except UnicodeDecodeError:
             continue
         if stats.nul_ratio >= _CSV_NUL_REDECODE_RATIO:
-            raise ValueError(
+            raise _csv_encoding_error(
                 f"CSV customer data decoded as {encoding} but remained NUL-heavy; "
                 "check the file encoding."
             )
         return encoding, stats
-    raise ValueError(
+    raise _csv_encoding_error(
         "CSV customer data could not be decoded as UTF-8, UTF-16, UTF-32, "
         "CP1252, or Latin-1."
     )
@@ -904,7 +979,7 @@ def _select_csv_delimiter(text: str) -> _CsvDelimiterCandidate:
     if valid:
         return max(valid, key=_csv_delimiter_candidate_key)
     if all(candidate.header_index is None for candidate in candidates):
-        raise ValueError("CSV customer data must include a header row.")
+        raise _csv_missing_header_error()
     _raise_csv_delimiter_error(max(candidates, key=_csv_delimiter_candidate_key))
 
 
@@ -925,6 +1000,8 @@ def _select_csv_delimiter_from_stream(
     valid = [candidate for candidate in candidates if candidate.valid]
     if valid:
         return max(valid, key=_csv_delimiter_candidate_key)
+    if all(candidate.header_index is None for candidate in candidates):
+        raise _csv_missing_header_error()
     _raise_csv_delimiter_error(max(candidates, key=_csv_delimiter_candidate_key))
 
 
@@ -1153,12 +1230,12 @@ def _raise_csv_delimiter_error(candidate: _CsvDelimiterCandidate) -> None:
         if candidate.first_offending_row is not None
         else ""
     )
-    raise ValueError(
+    raise _csv_inconsistent_columns_error(
         "CSV customer data has inconsistent column counts under the best "
         f"delimiter candidate ({delimiter_name}); "
         f"{candidate.consistent_rows}/{candidate.data_rows} data row(s) "
-        f"matched the {candidate.header_width}-column header{row_hint}. "
-        "Check the delimiter and header row."
+        f"matched the {candidate.header_width}-column header{row_hint}.",
+        row_index=candidate.first_collapsed_row or candidate.first_offending_row,
     )
 
 
@@ -1241,6 +1318,7 @@ def _matches_filters(
 __all__ = [
     "CampaignOpportunityLoadResult",
     "CampaignOpportunityWarning",
+    "CsvCustomerDataParseError",
     "FileIntelligenceRepository",
     "load_campaign_opportunities_from_file",
     "normalize_campaign_opportunity_rows",

@@ -460,6 +460,93 @@ async def test_deflection_submit_upload_skips_provider_metadata_header() -> None
     }]
 
 
+@pytest.mark.asyncio
+async def test_deflection_submit_upload_structures_missing_header_csv_error() -> None:
+    data = _csv_bytes([
+        "Need export help",
+        "Invoice portal is wrong",
+    ])
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await api_module._load_deflection_submit_upload_rows(
+            _Upload(data),
+            max_bytes=1024,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == {
+        "code": "csv_missing_header",
+        "message": "CSV customer data must include a header row.",
+        "how_to_fix": (
+            "Add a header row with column names such as ticket_id, subject, "
+            "and message, then export the CSV again."
+        ),
+        "reason": "deflection_submit_csv_parse_error",
+    }
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_upload_structures_encoding_csv_error() -> None:
+    data = b"\x00" * 128
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await api_module._load_deflection_submit_upload_rows(
+            _Upload(data),
+            max_bytes=1024,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["reason"] == "deflection_submit_csv_parse_error"
+    assert exc.value.detail["code"] == "csv_encoding_error"
+    assert "NUL-heavy" in exc.value.detail["message"]
+    assert "UTF-8 or UTF-16" in exc.value.detail["how_to_fix"]
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_upload_structures_malformed_bom_csv_error() -> None:
+    data = b"\xff\xfeticket_id\x00\xff"
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await api_module._load_deflection_submit_upload_rows(
+            _Upload(data),
+            max_bytes=1024,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["reason"] == "deflection_submit_csv_parse_error"
+    assert exc.value.detail["code"] == "csv_encoding_error"
+    assert "utf-16" in exc.value.detail["message"]
+    assert "UTF-8 or UTF-16" in exc.value.detail["how_to_fix"]
+
+
+def test_deflection_submit_blob_structures_inconsistent_columns_csv_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_public_dns(monkeypatch)
+    _install_blob(
+        monkeypatch,
+        _csv_bytes([
+            "ticket_id,subject,message",
+            "ticket-1,Export help,How do I export reports?",
+            "ticket-2,Billing help,Invoice portal is wrong,lead@example.com",
+        ]),
+    )
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        api_module._load_deflection_submit_blob_rows_sync(
+            "https://portfolio.example/blob/tickets.csv",
+            max_bytes=2048,
+        )
+
+    detail_json = json.dumps(exc.value.detail)
+    assert exc.value.status_code == 400
+    assert exc.value.detail["reason"] == "deflection_submit_csv_parse_error"
+    assert exc.value.detail["code"] == "csv_inconsistent_columns"
+    assert exc.value.detail["row_index"] == 3
+    assert "more cells than the header" in exc.value.detail["message"]
+    assert "lead@example.com" not in detail_json
+
+
 def _router(
     store: InMemoryDeflectionReportArtifactStore,
 ):

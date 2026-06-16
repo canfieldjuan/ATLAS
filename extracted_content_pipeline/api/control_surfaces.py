@@ -42,6 +42,7 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 from ..campaign_ports import TenantScope
+from ..campaign_customer_data import CsvCustomerDataParseError
 from ..brand_voice import BrandVoiceProfile, brand_voice_profile_from_mapping
 from ..campaign_postgres_import import import_campaign_opportunities
 from ..campaign_source_adapters import source_material_to_source_rows
@@ -1887,12 +1888,25 @@ def _parse_deflection_submit_csv_file(
             temp_path,
             file_format="csv",
         )
+    except CsvCustomerDataParseError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_deflection_submit_csv_parse_error_detail(exc),
+        ) from exc
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(
             status_code=400,
             detail=parse_error_detail,
         ) from exc
     return rows, byte_count, tuple(warning.as_dict() for warning in load_warnings)
+
+
+def _deflection_submit_csv_parse_error_detail(
+    error: CsvCustomerDataParseError,
+) -> dict[str, Any]:
+    detail = error.as_dict()
+    detail["reason"] = "deflection_submit_csv_parse_error"
+    return detail
 
 
 def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:
