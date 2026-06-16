@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import logging
 import uuid as _uuid
 from dataclasses import dataclass
 from datetime import datetime
+from typing import AsyncIterator
 from typing import Optional
 
 from extracted_content_pipeline.faq_macro_writeback_zendesk import (
@@ -37,6 +39,10 @@ class ZendeskCredentialLookupError(RuntimeError):
     """Stored Zendesk credentials could not be read or decrypted."""
 
 
+class ZendeskCredentialWriteError(RuntimeError):
+    """Stored Zendesk credentials could not be written."""
+
+
 async def upsert_zendesk_credentials(
     pool,
     *,
@@ -59,7 +65,7 @@ async def upsert_zendesk_credentials(
     ciphertext, kid = encrypt_secret(cleaned_token)
     token_prefix = cleaned_token[:TOKEN_PREFIX_LEN]
 
-    async with pool.transaction() as conn:
+    async with _credential_write_transaction(pool) as conn:
         await conn.execute(
             "SELECT id FROM saas_accounts WHERE id = $1 FOR UPDATE",
             account_id,
@@ -94,6 +100,58 @@ async def upsert_zendesk_credentials(
         )
 
     return _display_record(row)
+
+
+@asynccontextmanager
+async def _credential_write_transaction(pool) -> AsyncIterator[object]:
+    """Yield a transaction connection from the supported credential DB shapes."""
+
+    transaction = getattr(pool, "transaction", None)
+    if callable(transaction):
+        async with transaction() as conn:
+            yield conn
+        return
+
+    acquire = getattr(pool, "acquire", None)
+    if not callable(acquire):
+        raise ZendeskCredentialWriteError("zendesk_credentials_write_pool_unsupported")
+
+    acquired = acquire()
+    if hasattr(acquired, "__await__"):
+        conn = await acquired
+        conn_transaction = getattr(conn, "transaction", None)
+        if not callable(conn_transaction):
+            await _release_if_supported(pool, conn)
+            raise ZendeskCredentialWriteError(
+                "zendesk_credentials_write_pool_unsupported"
+            )
+        try:
+            async with conn_transaction():
+                yield conn
+        finally:
+            await _release_if_supported(pool, conn)
+        return
+
+    if not (hasattr(acquired, "__aenter__") and hasattr(acquired, "__aexit__")):
+        raise ZendeskCredentialWriteError("zendesk_credentials_write_pool_unsupported")
+
+    async with acquired as conn:
+        conn_transaction = getattr(conn, "transaction", None)
+        if not callable(conn_transaction):
+            raise ZendeskCredentialWriteError(
+                "zendesk_credentials_write_pool_unsupported"
+            )
+        async with conn_transaction():
+            yield conn
+
+
+async def _release_if_supported(pool, conn: object) -> None:
+    release = getattr(pool, "release", None)
+    if not callable(release):
+        return
+    result = release(conn)
+    if hasattr(result, "__await__"):
+        await result
 
 
 async def list_zendesk_credentials(
@@ -260,6 +318,7 @@ __all__ = [
     "ContentOpsZendeskCredentialRecord",
     "TOKEN_PREFIX_LEN",
     "ZendeskCredentialLookupError",
+    "ZendeskCredentialWriteError",
     "list_zendesk_credentials",
     "lookup_zendesk_credentials",
     "revoke_zendesk_credentials",

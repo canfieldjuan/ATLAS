@@ -52,6 +52,61 @@ class _Transaction:
         return False
 
 
+class _RawAsyncpgPool:
+    def __init__(self, conn: "_RawAsyncpgConnection") -> None:
+        self.conn = conn
+        self.acquire_calls = 0
+
+    def acquire(self):
+        self.acquire_calls += 1
+        return _AcquireContext(self.conn)
+
+
+class _AcquireContext:
+    def __init__(self, conn: "_RawAsyncpgConnection") -> None:
+        self.conn = conn
+
+    async def __aenter__(self):
+        self.conn.acquired = True
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.conn.released = True
+        return False
+
+
+class _RawAsyncpgConnection:
+    def __init__(self, *, fetchrow_result=None) -> None:
+        self.fetchrow_result = fetchrow_result
+        self.execute_calls: list[dict] = []
+        self.fetchrow_calls: list[dict] = []
+        self.transaction_calls = 0
+        self.acquired = False
+        self.released = False
+
+    def transaction(self):
+        self.transaction_calls += 1
+        return _ConnectionTransaction(self)
+
+    async def execute(self, query, *args):
+        self.execute_calls.append({"query": query, "args": args})
+
+    async def fetchrow(self, query, *args):
+        self.fetchrow_calls.append({"query": query, "args": args})
+        return self.fetchrow_result
+
+
+class _ConnectionTransaction:
+    def __init__(self, conn: _RawAsyncpgConnection) -> None:
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 def _row(**overrides):
     row = {
         "id": uuid.uuid4(),
@@ -117,6 +172,69 @@ async def test_upsert_zendesk_credentials_encrypts_token_and_returns_display_rec
     assert not hasattr(record, "api_token")
     assert not hasattr(record, "encrypted_api_token")
     assert not hasattr(record, "encryption_kid")
+
+
+@pytest.mark.asyncio
+async def test_upsert_zendesk_credentials_accepts_raw_asyncpg_pool_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = uuid.uuid4()
+    conn = _RawAsyncpgConnection(fetchrow_result=_row(account_id=account_id))
+    pool = _RawAsyncpgPool(conn)
+    monkeypatch.setattr(
+        service,
+        "encrypt_secret",
+        lambda raw: (f"encrypted:{raw}".encode("utf-8"), "kid-1"),
+    )
+
+    record = await service.upsert_zendesk_credentials(
+        pool,
+        account_id=account_id,
+        email="agent@example.com",
+        api_token="secret-token",
+        subdomain="acme",
+        label="Primary",
+    )
+
+    assert pool.acquire_calls == 1
+    assert conn.acquired is True
+    assert conn.released is True
+    assert conn.transaction_calls == 1
+    assert conn.execute_calls[0]["query"].strip().startswith("SELECT id FROM saas_accounts")
+    insert_call = conn.fetchrow_calls[0]
+    assert "INSERT INTO content_ops_zendesk_credentials" in insert_call["query"]
+    assert insert_call["args"][0] == account_id
+    assert insert_call["args"][2] == b"encrypted:secret-token"
+    assert record.account_id == account_id
+
+
+@pytest.mark.asyncio
+async def test_upsert_zendesk_credentials_rejects_unsupported_pool_before_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _UnsupportedPool:
+        def __init__(self) -> None:
+            self.execute_calls = 0
+
+        async def execute(self, query, *args):
+            self.execute_calls += 1
+
+    pool = _UnsupportedPool()
+    monkeypatch.setattr(service, "encrypt_secret", lambda raw: (b"encrypted", "kid-1"))
+
+    with pytest.raises(
+        service.ZendeskCredentialWriteError,
+        match="zendesk_credentials_write_pool_unsupported",
+    ):
+        await service.upsert_zendesk_credentials(
+            pool,
+            account_id=uuid.uuid4(),
+            email="agent@example.com",
+            api_token="secret-token",
+            subdomain="acme",
+        )
+
+    assert pool.execute_calls == 0
 
 
 @pytest.mark.asyncio
