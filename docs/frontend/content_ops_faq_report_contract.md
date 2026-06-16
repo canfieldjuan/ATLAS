@@ -49,6 +49,8 @@ type FAQDeflectionReportArtifact = {
   markdown: string;
   summary: FAQDeflectionReportSummary;
   faq_result: TicketFAQMarkdownResult;
+  report_model: DeflectionStructuredReport;
+  evidence_export: DeflectionEvidenceExport;
 };
 
 type FAQDeflectionReportSummary = {
@@ -68,6 +70,47 @@ type FAQDeflectionReportSummary = {
   top_opportunity_score: number;
 };
 ```
+
+The paid artifact also includes `report_model`, the first structured
+`deflection.v1` section model. This is the forward-compatible contract for web,
+PDF, email, Markdown, and export renderers. Current consumers may continue to
+render `markdown`, but new surface-specific renderers should prefer
+`report_model.sections` rather than parsing Markdown.
+
+```ts
+type DeflectionStructuredReport = {
+  schema_version: "deflection.v1";
+  title: string;
+  summary: FAQDeflectionReportSummary;
+  sections: DeflectionReportSection[];
+};
+
+type DeflectionReportSection = {
+  id:
+    | "support_tax"
+    | "source_file"
+    | "seo_targets"
+    | "ranked_questions"
+    | "outcome_diagnostics"
+    | "question_details"
+    | "complete_evidence"
+    | string;
+  title: string;
+  priority: number;
+  surfaces: Array<"web" | "pdf" | "email_summary" | "markdown" | "export" | string>;
+  default_limit: number | null;
+  data: Record<string, unknown>;
+};
+```
+
+Renderer rules:
+
+- Sort sections by `priority`; do not rely on array position alone.
+- Skip unknown section IDs or unsupported `surfaces` values rather than failing.
+- Treat `complete_evidence` as export-only. It summarizes export size and should
+  not be inlined into web/PDF surfaces.
+- Breaking shape changes bump `schema_version`; additive sections should keep
+  `schema_version: "deflection.v1"` and remain skippable by older renderers.
 
 The report Markdown always contains these customer-facing sections:
 
@@ -99,7 +142,7 @@ type DeflectionEvidenceExport = {
     drafted_answer_count: number;
     no_proven_answer_count: number;
   };
-  report_summary: DeflectionReportSummary;
+  report_summary: FAQDeflectionReportSummary;
   questions: Array<{
     question_id: string;
     rank: number;

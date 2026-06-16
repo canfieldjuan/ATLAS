@@ -9,10 +9,13 @@ import pytest
 from extracted_content_pipeline.faq_deflection_report import (
     DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
     DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+    DEFLECTION_REPORT_SCHEMA_VERSION,
     build_deflection_evidence_export,
+    build_deflection_report_model,
     build_deflection_snapshot,
     build_deflection_report_artifact,
     deflection_snapshot_content_opportunities,
+    render_deflection_report_model,
 )
 from extracted_content_pipeline.deflection_report_access import (
     InMemoryDeflectionReportArtifactStore,
@@ -59,6 +62,312 @@ def _report_access_snapshot(question: str, *, generated: int = 1) -> dict[str, o
             }
         ],
     }
+
+
+def _money(value: object) -> str:
+    return f"${int(float(value) + 0.5):,}"
+
+
+def _structured_report_fixture_result() -> TicketFAQMarkdownResult:
+    return TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=8,
+        ticket_source_count=8,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I export attribution reports?",
+                "customer_wording": "export attribution reports",
+                "topic": "exports",
+                "weighted_frequency": 8,
+                "ticket_count": 5,
+                "opportunity_score": 21,
+                "answer": "To resolve this, open Analytics, choose Attribution, then Download report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "steps": ["Open Analytics and select Download report."],
+                "source_ids": (
+                    "ticket-export-1",
+                    "ticket-export-2",
+                    "ticket-export-3",
+                    "ticket-export-4",
+                    "ticket-export-5",
+                ),
+                "source_date_span": {
+                    "start": "2026-05-01",
+                    "end": "2026-05-05",
+                    "missing_source_count": 0,
+                },
+                "evidence_quotes": ("`ticket-export-1` - Export attribution",),
+                "term_mappings": (
+                    {
+                        "customer_term": "report download",
+                        "documentation_term": "Download report",
+                        "suggestion": "Use report download in the FAQ title.",
+                        "source_id_count": 5,
+                    },
+                ),
+            },
+            {
+                "question": "Can I turn on SSO for all users?",
+                "customer_wording": "turn on SSO for all users",
+                "topic": "sso",
+                "weighted_frequency": 4,
+                "ticket_count": 3,
+                "opportunity_score": 13,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (
+                    "ticket-sso-1",
+                    "ticket-sso-2",
+                    "ticket-sso-3",
+                ),
+                "source_date_span": {
+                    "start": "2026-05-10",
+                    "end": "2026-05-15",
+                    "missing_source_count": 0,
+                },
+                "evidence_quotes": ("`ticket-sso-1` - SSO setup",),
+                "outcome_diagnostics": {
+                    "ticket_status_summary": {"resolved": 2, "reopened": 1},
+                    "diagnostic_ticket_count": 3,
+                    "outcome_risk_ticket_count": 1,
+                    "reopened_ticket_count": 1,
+                    "negative_csat_ticket_count": 0,
+                },
+            },
+        ),
+    )
+
+
+_STRUCTURED_REPORT_GOLDEN_MARKDOWN = """# Support Ticket Deflection Report
+
+## Support Tax Confirmation
+
+This report found 8 question-level repeat tickets across 2 ranked questions. At the Gartner $13.50 assisted-contact benchmark, that repeated-question work sizes to about $108 of assisted-contact handling.
+
+The source window is 2026-05-01 to 2026-05-15 (15 days). At the same measured daily pace, that is about $2,628 over 12 months.
+
+Estimate only. This is not a savings guarantee; adjust the $13.50 benchmark to your own loaded support cost.
+
+The full unlocked report below gives you every ranked question, the estimated support cost by question, publishable help-center copy where your uploaded resolutions prove the answer, the no-proven-answer roadmap, and a complete evidence export for audit/detail review.
+
+- Publishable answers drafted from proven resolutions: 1
+- Questions still needing an approved resolution: 1
+- Ticket sources represented: 8
+
+## Your Help-Desk SEO Targeting List
+
+Use these source-backed phrases as help-center headings, internal-search synonyms, and FAQ wording. These were mined from the tickets you uploaded; this report does not claim keyword volume, search rank, or traffic.
+
+1. export attribution reports
+2. report download
+3. turn on SSO for all users
+
+## Ranked Question Opportunities
+
+| Rank | Customer question | Tickets | Estimated support cost | Opportunity | Answer status | Source proof |
+|---:|---|---:|---:|---:|---|---|
+| 1 | How do I export attribution reports? | 5 | $68 | 21 | drafted from resolution evidence | 5 source tickets |
+| 2 | Can I turn on SSO for all users? | 3 | $41 | 13 | no proven answer yet | 3 source tickets |
+
+## Resolution Outcome Diagnostics
+
+These status and CSAT signals flag answers that may need review. They do not prove a publishable answer; only uploaded resolution evidence can do that.
+
+- Tickets with outcome diagnostics: 3
+- Tickets with reopened or negative-CSAT risk: 1
+- Reopened tickets: 1
+- Negative CSAT tickets: 0
+
+| Customer question | Status mix | Reopened | Negative CSAT | Guidance |
+|---|---|---:|---:|---|
+| Can I turn on SSO for all users? | reopened: 1, resolved: 2 | 1 | 0 | Review the answer before publishing because at least one ticket reopened. |
+
+## Question Details and Evidence
+
+Each ranked question appears once below with its answer status, publishable copy or review guidance, vocabulary gaps, and complete source evidence.
+
+Questions without uploaded resolution evidence stay in review: outcome/status signals can prioritize them, but only resolution evidence can make an answer publishable.
+
+### 1. How do I export attribution reports?
+
+**Customer wording:** export attribution reports
+
+**Answer status:** drafted from resolution evidence
+
+**Ticket/support-cost context:** 5 tickets, estimated at $68 of assisted-contact handling.
+
+**Publishable answer draft:**
+
+To resolve this, open Analytics, choose Attribution, then Download report.
+
+**Draft answer steps:**
+
+1. Open Analytics and select Download report.
+
+**Evidence backing:** Backed by 5 resolved tickets (ticket-export-1, ticket-export-2, ticket-export-3, +2 more). Complete source IDs are in this question detail block.
+
+**Vocabulary gaps:**
+
+- report download -> Download report: Use report download in the FAQ title. (5 sources)
+
+**Complete evidence:**
+
+**Source IDs (full list):** ticket-export-1, ticket-export-2, ticket-export-3, ticket-export-4, ticket-export-5
+
+- `ticket-export-1` - Export attribution
+
+### 2. Can I turn on SSO for all users?
+
+**Customer wording:** turn on SSO for all users
+
+**Answer status:** no proven answer yet
+
+**Ticket/support-cost context:** 3 tickets, estimated at $41 of assisted-contact handling.
+
+**No proven answer yet:**
+
+No uploaded resolution evidence was present for this question.
+
+**Ticket backing:** Seen in 3 repeated tickets (ticket-sso-1, ticket-sso-2, ticket-sso-3). Complete source IDs are in this question detail block.
+
+**Complete evidence:**
+
+**Source IDs (full list):** ticket-sso-1, ticket-sso-2, ticket-sso-3
+
+- `ticket-sso-1` - SSO setup
+"""
+
+
+def test_deflection_report_model_keeps_current_markdown_golden_snapshot() -> None:
+    result = _structured_report_fixture_result()
+
+    artifact = build_deflection_report_artifact(result)
+    rebuilt_model = build_deflection_report_model(result)
+
+    assert artifact.markdown == _STRUCTURED_REPORT_GOLDEN_MARKDOWN
+    assert render_deflection_report_model(artifact.report_model) == (
+        _STRUCTURED_REPORT_GOLDEN_MARKDOWN
+    )
+    assert render_deflection_report_model(rebuilt_model) == (
+        _STRUCTURED_REPORT_GOLDEN_MARKDOWN
+    )
+
+
+def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+
+    payload = artifact.as_dict()["report_model"]
+    section_by_id = {
+        section["id"]: section
+        for section in payload["sections"]
+    }
+
+    assert payload["schema_version"] == DEFLECTION_REPORT_SCHEMA_VERSION
+    assert payload["title"] == "Support Ticket Deflection Report"
+    assert payload["summary"]["generated"] == 2
+    assert [section["id"] for section in payload["sections"]] == [
+        "support_tax",
+        "seo_targets",
+        "ranked_questions",
+        "outcome_diagnostics",
+        "question_details",
+        "complete_evidence",
+    ]
+    assert [section["priority"] for section in payload["sections"]] == [
+        10,
+        20,
+        30,
+        40,
+        50,
+        90,
+    ]
+
+    support_tax = section_by_id["support_tax"]
+    assert support_tax["surfaces"] == ["web", "pdf", "email_summary", "markdown"]
+    assert support_tax["data"]["repeat_ticket_count"] == 8
+    assert support_tax["data"]["annualized_support_cost"] == 2628.0
+    assert support_tax["data"]["source_date_window"] == {
+        "source_date_start": "2026-05-01",
+        "source_date_end": "2026-05-15",
+        "source_window_days": 15,
+    }
+    assert "markdown_lines" not in support_tax
+
+    seo_targets = section_by_id["seo_targets"]
+    assert seo_targets["default_limit"] == DEFAULT_DEFLECTION_SEO_TARGET_LIMIT
+    assert seo_targets["data"]["phrases"] == [
+        "export attribution reports",
+        "report download",
+        "turn on SSO for all users",
+    ]
+    assert seo_targets["data"]["omitted_phrase_count"] == 0
+
+    ranked = section_by_id["ranked_questions"]["data"]["rows"]
+    assert ranked[0] == {
+        "rank": 1,
+        "question": "How do I export attribution reports?",
+        "ticket_count": 5,
+        "estimated_support_cost": 67.5,
+        "opportunity_score": 21,
+        "answer_status": "drafted from resolution evidence",
+        "source_proof": "5 source tickets",
+    }
+
+    diagnostics = section_by_id["outcome_diagnostics"]["data"]
+    assert diagnostics["outcome_risk_ticket_count"] == 1
+    assert diagnostics["rows"] == [
+        {
+            "question": "Can I turn on SSO for all users?",
+            "status_mix": "reopened: 1, resolved: 2",
+            "reopened_ticket_count": 1,
+            "negative_csat_ticket_count": 0,
+            "guidance": (
+                "Review the answer before publishing because at least one "
+                "ticket reopened."
+            ),
+        }
+    ]
+
+    details = section_by_id["question_details"]["data"]["rows"]
+    assert details[0]["answer_linkage"] == "publishable_answer"
+    assert details[0]["source_ids"] == [
+        "ticket-export-1",
+        "ticket-export-2",
+        "ticket-export-3",
+        "ticket-export-4",
+        "ticket-export-5",
+    ]
+    assert details[1]["answer_linkage"] == "needs_review"
+    assert details[1]["evidence_quotes"] == ["`ticket-sso-1` - SSO setup"]
+
+    complete_evidence = section_by_id["complete_evidence"]
+    assert complete_evidence["surfaces"] == ["export"]
+    assert complete_evidence["data"] == {
+        "question_count": 2,
+        "evidence_row_count": 8,
+        "source_id_count": 8,
+        "surfaces": ["export"],
+    }
+
+
+def test_deflection_report_model_support_tax_data_matches_markdown() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    section_by_id = {
+        section.id: section
+        for section in artifact.report_model.sections
+    }
+    support_tax = section_by_id["support_tax"]
+    support_tax_markdown = "\n".join(support_tax.markdown_lines)
+
+    assert str(support_tax.data["repeat_ticket_count"]) in support_tax_markdown
+    assert str(support_tax.data["generated_question_count"]) in support_tax_markdown
+    assert _money(support_tax.data["estimated_support_cost"]) in support_tax_markdown
+    assert _money(support_tax.data["annualized_support_cost"]) in support_tax_markdown
+    assert (
+        f"{support_tax.data['source_date_window']['source_date_start']} to "
+        f"{support_tax.data['source_date_window']['source_date_end']}"
+    ) in support_tax_markdown
 
 
 def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
@@ -485,7 +794,14 @@ def test_deflection_report_uses_unknown_window_cost_fallback_without_inference()
         ),
     )
 
-    markdown = build_deflection_report_artifact(result).markdown
+    artifact = build_deflection_report_artifact(result)
+    markdown = artifact.markdown
+    support_tax = next(
+        section
+        for section in artifact.report_model.sections
+        if section.id == "support_tax"
+    )
+    support_tax_markdown = "\n".join(support_tax.markdown_lines)
 
     assert "2 question-level repeat tickets across 1 ranked questions" in markdown
     assert "repeat-ticket hits" not in markdown
@@ -496,6 +812,13 @@ def test_deflection_report_uses_unknown_window_cost_fallback_without_inference()
     assert "If this uploaded batch is monthly pace" in markdown
     assert "the 12-month run-rate would be about $324" in markdown
     assert "same measured daily pace" not in markdown
+    assert "monthly_pace_support_cost" not in support_tax.data
+    assert support_tax.data["annualized_run_rate_support_cost"] == 324.0
+    assert _money(support_tax.data["estimated_support_cost"]) in support_tax_markdown
+    assert (
+        _money(support_tax.data["annualized_run_rate_support_cost"])
+        in support_tax_markdown
+    )
 
 
 def test_deflection_report_does_not_put_review_needed_steps_in_drafted_section() -> None:

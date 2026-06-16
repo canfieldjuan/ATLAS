@@ -175,6 +175,7 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     assert set(payload) == set(producer_payload)
     assert set(payload["summary"]) == set(producer_payload["summary"])
     assert set(payload["faq_result"]) == set(producer_payload["faq_result"])
+    assert payload["report_model"] == producer_payload["report_model"]
     assert payload["markdown"] == producer_payload["markdown"]
     assert payload["summary"]["drafted_answer_count"] == 1
     assert payload["summary"]["no_proven_answer_count"] == 1
@@ -282,6 +283,11 @@ def test_content_ops_faq_report_contract_links_example() -> None:
     assert "content_ops_faq_deflection_snapshot_example.json" in doc
     assert "content_ops_faq_deflection_checkout_contract.md" in doc
     assert "type DeflectionSnapshot" in doc
+    assert "report_model: DeflectionStructuredReport;" in doc
+    assert 'schema_version: "deflection.v1";' in doc
+    assert 'id:' in doc and '"complete_evidence"' in doc
+    assert "Skip unknown section IDs" in doc
+    assert "Treat `complete_evidence` as export-only" in doc
     assert "account_id: string;" in doc
     assert EXAMPLE_PATH.exists()
     assert DEFLECTION_EXAMPLE_PATH.exists()
