@@ -14,6 +14,7 @@ from extracted_content_pipeline.faq_macro_writeback import (
 from extracted_content_pipeline.faq_macro_writeback_zendesk import (
     StaticZendeskMacroCredentialsProvider,
     ZENDESK_PLATFORM,
+    ZendeskHTTPMacroTransport,
     ZendeskMacroCredentials,
     ZendeskMacroPublishProvider,
     ZendeskMacroTransportError,
@@ -117,6 +118,97 @@ def _macro(
         faq_item_id=item_id,
         source_ids=("ticket-1",),
     )
+
+
+@pytest.mark.asyncio
+async def test_zendesk_http_transport_accepts_successful_empty_delete_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        status_code = 204
+        content = b""
+
+        def json(self) -> Mapping[str, Any]:
+            raise AssertionError("empty response body should not be parsed")
+
+    class _Client:
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            headers: Mapping[str, str],
+            json: Mapping[str, Any],
+        ) -> _Response:
+            assert method == "DELETE"
+            assert url == "https://example.zendesk.com/api/v2/macros/123"
+            assert dict(headers) == {"Authorization": "Basic token"}
+            assert dict(json) == {}
+            return _Response()
+
+    monkeypatch.setattr(
+        "extracted_content_pipeline.faq_macro_writeback_zendesk.httpx.AsyncClient",
+        lambda timeout: _Client(),
+    )
+
+    payload = await ZendeskHTTPMacroTransport().request(
+        "DELETE",
+        "https://example.zendesk.com/api/v2/macros/123",
+        headers={"Authorization": "Basic token"},
+        json={},
+    )
+
+    assert payload == {}
+
+
+@pytest.mark.asyncio
+async def test_zendesk_http_transport_rejects_empty_error_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        status_code = 500
+        content = b""
+
+        def json(self) -> Mapping[str, Any]:
+            raise AssertionError("error response body should not be parsed")
+
+    class _Client:
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            headers: Mapping[str, str],
+            json: Mapping[str, Any],
+        ) -> _Response:
+            assert method == "DELETE"
+            assert url == "https://example.zendesk.com/api/v2/macros/123"
+            return _Response()
+
+    monkeypatch.setattr(
+        "extracted_content_pipeline.faq_macro_writeback_zendesk.httpx.AsyncClient",
+        lambda timeout: _Client(),
+    )
+
+    with pytest.raises(ZendeskMacroTransportError):
+        await ZendeskHTTPMacroTransport().request(
+            "DELETE",
+            "https://example.zendesk.com/api/v2/macros/123",
+            headers={"Authorization": "Basic token"},
+            json={},
+        )
 
 
 @pytest.mark.asyncio
