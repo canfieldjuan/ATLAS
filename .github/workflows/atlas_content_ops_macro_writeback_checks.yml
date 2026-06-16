@@ -11,11 +11,13 @@ on:
       - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
       - "atlas_brain/config.py"
+      - "scripts/check_content_ops_faq_macro_lifecycle_artifact.py"
       - "scripts/cleanup_content_ops_faq_macro_sandbox.py"
       - "scripts/smoke_content_ops_faq_macro_sandbox_e2e.py"
       - "scripts/smoke_content_ops_faq_macro_sandbox_lifecycle.py"
       - "scripts/seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
+      - "tests/test_check_content_ops_faq_macro_lifecycle_artifact.py"
       - "tests/test_cleanup_content_ops_faq_macro_sandbox.py"
       - "tests/test_extracted_ticket_faq_macro_writeback_zendesk.py"
       - "tests/test_faq_macro_writeback_sandbox_e2e_smoke.py"
@@ -35,11 +37,13 @@ on:
       - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
       - "atlas_brain/config.py"
+      - "scripts/check_content_ops_faq_macro_lifecycle_artifact.py"
       - "scripts/cleanup_content_ops_faq_macro_sandbox.py"
       - "scripts/smoke_content_ops_faq_macro_sandbox_e2e.py"
       - "scripts/smoke_content_ops_faq_macro_sandbox_lifecycle.py"
       - "scripts/seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
+      - "tests/test_check_content_ops_faq_macro_lifecycle_artifact.py"
       - "tests/test_cleanup_content_ops_faq_macro_sandbox.py"
       - "tests/test_extracted_ticket_faq_macro_writeback_zendesk.py"
       - "tests/test_faq_macro_writeback_sandbox_e2e_smoke.py"
@@ -71,6 +75,7 @@ jobs:
         run: |
           python -m pytest \
             tests/test_autonomous_faq_macro_writeback_scheduled_publish.py \
+            tests/test_check_content_ops_faq_macro_lifecycle_artifact.py \
             tests/test_cleanup_content_ops_faq_macro_sandbox.py \
             tests/test_extracted_ticket_faq_macro_writeback_zendesk.py \
             tests/test_faq_macro_writeback_sandbox_e2e_smoke.py \
