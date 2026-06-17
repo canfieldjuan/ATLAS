@@ -9,9 +9,11 @@ import pytest
 from extracted_content_pipeline.faq_deflection_report import (
     DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
     DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+    DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION,
     DEFLECTION_REPORT_SCHEMA_VERSION,
     DEFLECTION_REPORT_SECTION_REGISTRY,
     build_deflection_evidence_export,
+    build_deflection_full_report_qa_scorecard,
     build_deflection_report_model,
     build_deflection_snapshot,
     build_deflection_report_artifact,
@@ -616,6 +618,247 @@ def test_deflection_report_artifact_includes_complete_evidence_export() -> None:
     assert export["evidence_rows"][1]["source_field"] == "source_id"
     assert export["evidence_rows"][1]["evidence_quote"] == ""
     assert export["evidence_rows"][2]["answer_linkage"] == "needs_review"
+
+
+def test_deflection_full_report_qa_scorecard_anchors_counts_without_leaking_evidence() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={
+            "result_page": {
+                "counts": {
+                    "repeat_ticket_count": 8,
+                    "generated_question_count": 2,
+                    "drafted_answer_count": 1,
+                    "no_proven_answer_count": 1,
+                    "ticket_source_count": 8,
+                    "evidence_row_count": 8,
+                },
+                "displayed_rows": {
+                    "ranked_questions": 2,
+                    "question_details": 2,
+                    "seo_targets": 3,
+                    "outcome_diagnostics": 1,
+                },
+            }
+        },
+    )
+
+    assert scorecard["schema_version"] == (
+        DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION
+    )
+    assert scorecard["ok"] is True
+    assert scorecard["counts"]["repeat_ticket_count"] == 8
+    assert scorecard["counts"]["evidence_row_count"] == 8
+    assert scorecard["counts"]["question_detail_count"] == 2
+    encoded = json.dumps(scorecard, sort_keys=True)
+    assert "ticket-export-1" not in encoded
+    assert "Export attribution" not in encoded
+    assert "ticket-sso-1" not in encoded
+    assert "SSO setup" not in encoded
+
+
+def test_deflection_full_report_qa_scorecard_fails_on_export_model_mismatch() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+    bad_export = json.loads(json.dumps(export))
+    bad_export["summary"]["evidence_row_count"] = 7
+    bad_export["evidence_rows"] = bad_export["evidence_rows"][:-1]
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=bad_export,
+    )
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "evidence_export.summary.evidence_row_count" in failed
+    assert "evidence_export.evidence_rows.length" in failed
+
+
+def test_deflection_full_report_qa_scorecard_checks_surface_caps_behaviorally() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    model = json.loads(json.dumps(artifact.report_model.as_dict()))
+    sections = {section["id"]: section for section in model["sections"]}
+    support_tax = sections["support_tax"]["data"]
+    ranked_rows = sections["ranked_questions"]["data"]["rows"]
+    detail_rows = sections["question_details"]["data"]["rows"]
+    diagnostic_rows = sections["outcome_diagnostics"]["data"]["rows"]
+    seo_targets = sections["seo_targets"]["data"]
+    complete_evidence = sections["complete_evidence"]["data"]
+
+    support_tax["generated_question_count"] = 30
+    ranked_rows[:] = [dict(ranked_rows[0], rank=index) for index in range(1, 31)]
+    detail_rows[:] = [dict(detail_rows[0], rank=index) for index in range(1, 13)]
+    diagnostic_rows[:] = [dict(diagnostic_rows[0]) for _ in range(30)]
+    seo_targets["phrases"] = [f"phrase {index}" for index in range(1, 31)]
+    seo_targets["total_phrase_count"] = 30
+    seo_targets["displayed_phrase_count"] = 30
+    complete_evidence["question_count"] = 30
+    complete_evidence["evidence_row_count"] = 60
+    complete_evidence["source_id_count"] = 60
+    evidence_export = {
+        "schema_version": DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+        "summary": {
+            "question_count": 30,
+            "evidence_row_count": 60,
+            "source_id_count": 60,
+            "drafted_answer_count": 1,
+            "no_proven_answer_count": 1,
+        },
+        "questions": [{} for _ in range(30)],
+        "evidence_rows": [{} for _ in range(60)],
+    }
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        model,
+        evidence_export=evidence_export,
+        surface_observations={
+            "result_page": {
+                "displayed_rows": {
+                    "ranked_questions": 25,
+                    "question_details": 10,
+                    "seo_targets": 20,
+                    "outcome_diagnostics": 25,
+                },
+            }
+        },
+    )
+    bad_scorecard = build_deflection_full_report_qa_scorecard(
+        model,
+        evidence_export=evidence_export,
+        surface_observations={
+            "result_page": {"displayed_rows": {"ranked_questions": 26}},
+        },
+    )
+
+    assert scorecard["ok"] is True
+    assert bad_scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in bad_scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "surface.result_page.displayed_rows.ranked_questions" in failed
+
+
+def test_deflection_full_report_qa_scorecard_honors_zero_row_surface_caps() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={
+            "email_summary": {"displayed_rows": {"question_details": 0}},
+        },
+        surface_caps={"email_summary": {"question_details": 0}},
+    )
+
+    assert scorecard["ok"] is True
+
+
+def test_deflection_full_report_qa_scorecard_fails_empty_surface_observation() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={"result_page": {}},
+    )
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "surface.result_page.observation_has_data" in failed
+
+
+def test_deflection_full_report_qa_scorecard_rejects_boolean_count_observation() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={
+            "result_page": {"counts": {"drafted_answer_count": True}},
+        },
+    )
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "surface.result_page.count.drafted_answer_count" in failed
+
+
+def test_deflection_full_report_qa_scorecard_fails_missing_zero_export_fields() -> None:
+    artifact = build_deflection_report_artifact(
+        TicketFAQMarkdownResult(
+            markdown="# FAQ",
+            source_count=0,
+            ticket_source_count=0,
+            output_checks={"condensed": True},
+            items=(),
+        )
+    )
+    malformed_export = {
+        "schema_version": DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+        "summary": {},
+    }
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=malformed_export,
+    )
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "evidence_export.summary.question_count" in failed
+    assert "evidence_export.questions.present" in failed
+    assert "evidence_export.evidence_rows.present" in failed
+
+
+def test_deflection_full_report_qa_scorecard_redacts_bad_observed_strings() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+    raw_request_id = "content-ops-" + "45c06a6950ec4677a214368d6e4dc44f"
+    raw_result_url = f"https://www.juancanfield.com/results/{raw_request_id}"
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={
+            raw_result_url: {
+                "counts": {"ticket-export-1": "ticket-export-1"},
+            }
+        },
+    )
+
+    assert scorecard["ok"] is False
+    encoded = json.dumps(scorecard, sort_keys=True)
+    assert "ticket-export-1" not in encoded
+    assert raw_request_id not in encoded
+    assert "juancanfield.com" not in encoded
+    assert "surface.surface_1.count.count_1" in encoded
+    assert "<redacted-string>" in encoded
 
 
 def test_deflection_snapshot_excludes_complete_evidence_export() -> None:

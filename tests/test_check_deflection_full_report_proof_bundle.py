@@ -20,9 +20,16 @@ sys.modules[SPEC.name] = checker
 SPEC.loader.exec_module(checker)
 
 
+RAW_REQUEST_ID_FIXTURE = "content-ops-" + "45c06a6950ec4677a214368d6e4dc44f"
+RAW_RESULT_URL_FIXTURE = (
+    "https://www.juancanfield.com/systems/support-ticket-deflection/results/"
+    + RAW_REQUEST_ID_FIXTURE
+)
+
+
 FORBIDDEN_FIXTURES = {
-    "request_id": '"request_id": "content-ops-45c06a6950ec4677a214368d6e4dc44f"',
-    "result_url": "https://www.juancanfield.com/systems/support-ticket-deflection/results/content-ops-45c06a6950ec4677a214368d6e4dc44f",
+    "request_id": f'"request_id": "{RAW_REQUEST_ID_FIXTURE}"',
+    "result_url": RAW_RESULT_URL_FIXTURE,
     "customer_email": "Delivered-To: buyer@realcustomer.com",
     "absolute_local_path": "artifact written to /home/juan-canfield/Desktop/live/report.pdf",
     "stripe_checkout_session_id": "checkout session cs_live_a1b2c3d4e5f6g7h8",
@@ -74,7 +81,7 @@ def test_cli_writes_assertions_without_echoing_raw_sensitive_values(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    raw_request_id = "content-ops-45c06a6950ec4677a214368d6e4dc44f"
+    raw_request_id = RAW_REQUEST_ID_FIXTURE
     bundle = _write_bundle(tmp_path, f'"request_id": "{raw_request_id}"')
     output = tmp_path / "assertions.json"
 
@@ -115,7 +122,7 @@ def test_raw_evidence_and_private_note_do_not_echo_customer_text(
 
 
 def test_request_id_in_bundle_path_is_detected_and_redacted(tmp_path: Path) -> None:
-    raw_request_id = "content-ops-45c06a6950ec4677a214368d6e4dc44f"
+    raw_request_id = RAW_REQUEST_ID_FIXTURE
     bundle = tmp_path / raw_request_id
     bundle.mkdir()
     (bundle / "artifact.txt").write_text('{"scorecard": "only"}', encoding="utf-8")
@@ -130,7 +137,7 @@ def test_request_id_in_bundle_path_is_detected_and_redacted(tmp_path: Path) -> N
 
 
 def test_finding_paths_are_redacted(tmp_path: Path) -> None:
-    raw_request_id = "content-ops-45c06a6950ec4677a214368d6e4dc44f"
+    raw_request_id = RAW_REQUEST_ID_FIXTURE
     bundle = tmp_path / "bundle"
     bundle.mkdir()
     artifact = bundle / f"{raw_request_id}.txt"
