@@ -67,11 +67,13 @@ and OIDC review so this slice stays focused on the new guardrails.
 
 Workflow supply-chain posture is checked by
 `scripts/audit_workflow_security_posture.py`. It fails unapproved
-`pull_request_target` and `id-token: write` usage, while reporting existing
-mutable action refs as warnings until the fleet-wide pin drain is complete.
-`claude.yml` keeps `id-token: write` for the Claude Code action, but the job is
-owner-gated, uses read-only GitHub token permissions, and pins its third-party
-actions by commit SHA.
+`pull_request_target` jobs and unapproved `id-token: write` / `write-all`
+usage, while reporting existing mutable action, reusable workflow, and
+container/service image refs as warnings until the fleet-wide pin drain is
+complete. Allowances are per expected job shape rather than whole-file
+exceptions. `claude.yml` keeps `id-token: write` for the Claude Code action,
+but the job is owner-gated, uses read-only GitHub token permissions, and pins
+its third-party actions by commit SHA.
 
 The adoption pass also removed current-tree secret-shaped fallback literals from
 the GraphRAG Supabase API routes and the archived IndexNow script. Those paths
@@ -124,8 +126,8 @@ decide whether to rewrite history or keep the redacted baseline as the permanent
   `d63a9b77b9727766e14e523626c22dd6c1c80da8`.
 - Rotate the archived IndexNow key that was removed from the branch tip but
   remains in git history.
-- Pin remaining mutable action refs across non-security product/check
-  workflows.
+- Pin remaining mutable action, reusable workflow, and container/service image
+  refs across non-security product/check workflows.
 - Burn down advisory Semgrep, Trivy, Checkov, pip-audit, and OSV findings, then
   ratchet the relevant scans from advisory to blocking.
 - Pin or retire the floating `NVIDIA/NeMo@main` requirement in

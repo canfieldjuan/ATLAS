@@ -41,10 +41,10 @@ register under `docs/technical-debt/`.
 - Owner/session: Codex security/workflow
 - Found during: PR-Security-Guardrail-CI review
 
-### Pin remaining mutable workflow action refs
-- File/location: `.github/workflows/*.yml`
-- Description: The workflow posture audit now reports existing mutable GitHub Action refs as warnings, and `claude.yml` has been owner-gated and SHA-pinned. Existing product/check workflows still use mutable action tags and should be drained through a dedicated pinning or Dependabot-triage slice.
-- Why it matters: Mutable action tags can become CI compromise paths if a third-party action is compromised or a tag is repointed.
+### Pin remaining mutable workflow supply-chain refs
+- File/location: `.github/workflows/*.yml`, `.github/workflows/*.yaml`
+- Description: The workflow posture audit now reports existing mutable GitHub Action refs, reusable workflow refs, and container/service image refs as warnings, and `claude.yml` has been owner-gated and SHA-pinned. Existing product/check workflows still use mutable refs and should be drained through a dedicated pinning or Dependabot-triage slice.
+- Why it matters: Mutable action tags, reusable workflow refs, and container tags can become CI compromise paths if a third-party action/image is compromised or a tag is repointed.
 - Effort: M
 - Category: security
 - Owner/session: Codex security/workflow
