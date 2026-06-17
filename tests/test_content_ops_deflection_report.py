@@ -917,6 +917,43 @@ def test_deflection_full_report_qa_deterministic_harness_requires_each_surface()
     assert "harness.surface.pdf.present" in failed
 
 
+def test_deflection_full_report_qa_deterministic_harness_requires_surface_metrics() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+
+    scorecard = build_deflection_full_report_qa_deterministic_harness(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={
+            "email": {"counts": {"repeat_ticket_count": 8}},
+            "result_page": {
+                "counts": {"repeat_ticket_count": 8},
+                "displayed_rows": {"ranked_questions": 2},
+            },
+            "pdf": {"counts": {"repeat_ticket_count": 8}},
+            "evidence_export": {"counts": {"evidence_row_count": 8}},
+        },
+    )
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "harness.surface.email.count.generated_question_count.present" in failed
+    assert "harness.surface.result_page.count.evidence_row_count.present" in failed
+    assert (
+        "harness.surface.result_page.displayed_rows.question_details.present"
+        in failed
+    )
+    assert "harness.surface.pdf.displayed_rows.ranked_questions.present" in failed
+    assert (
+        "harness.surface.evidence_export.count.evidence_question_count.present"
+        in failed
+    )
+
+
 def test_deflection_full_report_qa_deterministic_harness_fails_surface_mismatches() -> None:
     artifact = build_deflection_report_artifact(_structured_report_fixture_result())
     export = build_deflection_evidence_export(artifact)

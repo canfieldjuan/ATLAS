@@ -561,6 +561,15 @@ def build_deflection_full_report_qa_deterministic_harness(
             "expected": True,
             "actual": surface_text in observed_surface_keys,
         })
+        observation = observations.get(surface_text)
+        if isinstance(observation, Mapping):
+            _add_full_report_qa_required_metric_assertions(
+                assertions,
+                surface=surface_text,
+                surface_id=surface_id,
+                observation=observation,
+                surface_caps=caps,
+            )
 
     result = dict(scorecard)
     result["ok"] = all(assertion["ok"] for assertion in assertions)
@@ -584,6 +593,59 @@ def build_deflection_full_report_qa_deterministic_harness(
         ],
     }
     return result
+
+
+def _add_full_report_qa_required_metric_assertions(
+    assertions: list[dict[str, Any]],
+    *,
+    surface: str,
+    surface_id: str,
+    observation: Mapping[str, Any],
+    surface_caps: Mapping[str, Mapping[str, int]],
+) -> None:
+    observed_counts = (
+        observation.get("counts")
+        if isinstance(observation.get("counts"), Mapping)
+        else {}
+    )
+    for key_index, key in enumerate(
+        _FULL_REPORT_QA_SURFACE_COUNT_KEYS.get(surface, ()),
+        start=1,
+    ):
+        key_id = _scorecard_id_segment(
+            key,
+            allowed=_SCORECARD_COUNT_KEYS,
+            fallback=f"count_{key_index}",
+        )
+        assertions.append({
+            "id": f"harness.surface.{surface_id}.count.{key_id}.present",
+            "ok": key in observed_counts,
+            "expected": True,
+            "actual": key in observed_counts,
+        })
+
+    displayed_rows = (
+        observation.get("displayed_rows")
+        if isinstance(observation.get("displayed_rows"), Mapping)
+        else {}
+    )
+    caps = surface_caps.get(surface, {})
+    caps = caps if isinstance(caps, Mapping) else {}
+    for section_index, section_id in enumerate(sorted(caps), start=1):
+        section_safe_id = _scorecard_id_segment(
+            section_id,
+            allowed=frozenset(DEFLECTION_REPORT_SECTION_REGISTRY),
+            fallback=f"section_{section_index}",
+        )
+        assertions.append({
+            "id": (
+                f"harness.surface.{surface_id}.displayed_rows."
+                f"{section_safe_id}.present"
+            ),
+            "ok": section_id in displayed_rows,
+            "expected": True,
+            "actual": section_id in displayed_rows,
+        })
 
 
 def _full_report_qa_surface_observations(

@@ -15,6 +15,14 @@ customer bundle drifts away from the persisted `deflection.v1` model. This PR
 fixes that at the harness boundary by making the deterministic proof build all
 surface observations from one report model and export.
 
+Review fix root cause: the first harness pass required each surface name to be
+present, but the real-observation override path did not require each surface to
+report its full metric/displayed-row contract. This change fixes that root by
+making required-surface completeness part of the harness assertions, not a
+deferred hosted-runner concern. The diff now exceeds the soft cap because the
+initial harness, review-fix completeness assertions, negative probes, and plan
+archive need to ship together for the harness contract to be meaningful.
+
 ## Scope (this PR)
 
 Ownership lane: content-ops/deflection-full-report-qa
@@ -26,8 +34,8 @@ Slice phase: Functional validation
 2. Feed those observations into `build_deflection_full_report_qa_scorecard(...)`
    so all customer-facing surfaces are checked through the same contract.
 3. Add failure-mode tests proving the harness goes red when a surface reports a
-   model-count mismatch, exceeds a capped display count, or omits a required
-   surface.
+   model-count mismatch, exceeds a capped display count, omits a required
+   surface, or omits required metrics for a present surface.
 4. Archive the merged #1618 scorecard plan as this branch's teardown
    housekeeping.
 
@@ -54,6 +62,8 @@ Acceptance criteria:
   and still rely on the scorecard's export-vs-model checks.
 - Missing-surface, count-mismatch, and cap-overrun fixtures fail with specific
   assertion IDs.
+- Present-but-incomplete real surface observations fail with specific missing
+  metric/displayed-row assertion IDs.
 - The scorecard output remains safe to commit: no evidence quotes, source IDs,
   request IDs, result URLs, customer emails, local paths, or Stripe IDs.
 
@@ -80,8 +90,11 @@ build_deflection_full_report_qa_deterministic_harness(
 The helper derives the canonical counts once, emits observation dictionaries for
 the required surfaces, and delegates the actual assertions to the #1618
 scorecard. The result includes the normal scorecard plus a small `surfaces`
-summary listing which surfaces were observed. Tests pass intentionally bad
-observations to prove the scorecard fails on the important directions.
+summary listing which surfaces were observed. The harness also asserts the
+required count keys for each required surface and the required displayed-row
+keys for capped surfaces, so a hosted/live runner cannot pass by sending a
+one-field observation. Tests pass intentionally bad observations to prove the
+scorecard fails on the important directions.
 
 ## Intentional
 
@@ -106,20 +119,20 @@ Parked hardening: none.
 
 ## Verification
 
-- `pytest tests/test_content_ops_deflection_report.py -q` - 66 passed.
+- `pytest tests/test_content_ops_deflection_report.py -q` - 67 passed.
 - `bash scripts/validate_extracted_content_pipeline.sh` - passed.
 - `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline` - passed.
 - `python scripts/audit_extracted_standalone.py --fail-on-debt` - passed.
 - `bash scripts/check_ascii_python.sh` - passed.
-- `bash scripts/run_extracted_pipeline_checks.sh` - 4421 passed, 10 skipped.
+- `bash scripts/run_extracted_pipeline_checks.sh` - 4423 passed, 10 skipped.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/faq_deflection_report.py` | 140 |
-| `plans/INDEX.md` | 3 |
-| `plans/PR-Deflection-Full-Report-QA-Deterministic-Harness.md` | 125 |
+| `extracted_content_pipeline/faq_deflection_report.py` | 202 |
+| `plans/INDEX.md` | 1 |
+| `plans/PR-Deflection-Full-Report-QA-Deterministic-Harness.md` | 138 |
 | `plans/archive/PR-Deflection-Full-Report-QA-Scorecard.md` | 0 |
-| `tests/test_content_ops_deflection_report.py` | 111 |
-| **Total** | **379** |
+| `tests/test_content_ops_deflection_report.py` | 148 |
+| **Total** | **489** |
