@@ -1,5 +1,8 @@
 name: Atlas Content Ops Macro Writeback Checks
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:

@@ -9,7 +9,7 @@ ARG TORCH_CPU_SPEC=torch
 ARG TORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     && rm -rf /var/lib/apt/lists/*
@@ -27,6 +27,9 @@ COPY graphiti-wrapper/ ./graphiti-wrapper/
 
 # Set working directory for the server
 WORKDIR /app/graphiti-wrapper
+RUN useradd --create-home --shell /usr/sbin/nologin atlas && \
+    chown -R atlas:atlas /app
+USER atlas
 
 # Default port
 ENV PORT=8000

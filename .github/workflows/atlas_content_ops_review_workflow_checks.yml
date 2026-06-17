@@ -1,5 +1,8 @@
 name: Atlas Content Ops Review Workflow Checks
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:

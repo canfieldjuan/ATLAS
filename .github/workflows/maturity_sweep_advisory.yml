@@ -1,5 +1,8 @@
 name: Maturity Sweep (advisory)
 
+permissions:
+  contents: read
+
 # Advisory brittleness triage -- NOT a gate. Ranks files in the content-ops
 # lane by structural-fragility signals (untested modules, happy-path-only
 # tests, swallowed exceptions, unguarded input) and prints a worst-first

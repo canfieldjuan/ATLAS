@@ -1,0 +1,88 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "America/Chicago"
+    labels:
+      - dependencies
+      - security
+
+  - package-ecosystem: "npm"
+    directories:
+      - "/atlas-admin-ui"
+      - "/atlas-churn-ui"
+      - "/atlas-intel-ui"
+      - "/atlas-mobile"
+      - "/atlas-ui"
+      - "/portfolio-ui"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:30"
+      timezone: "America/Chicago"
+    labels:
+      - dependencies
+      - security
+    groups:
+      npm-security-and-patches:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
+
+  - package-ecosystem: "pip"
+    directories:
+      - "/"
+      - "/atlas_edge"
+      - "/atlas_video-processing"
+      - "/atlas_video-processing/ingest/drone_client"
+      - "/atlas_video-processing/processing/video_stream_processor"
+      - "/graphiti-wrapper"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Chicago"
+    labels:
+      - dependencies
+      - security
+    groups:
+      python-security-and-patches:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
+
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+      - "/atlas_video-processing"
+      - "/atlas_video-processing/ingest/drone_client"
+      - "/atlas_video-processing/processing/video_stream_processor"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:30"
+      timezone: "America/Chicago"
+    labels:
+      - dependencies
+      - security
+
+  - package-ecosystem: "docker-compose"
+    directories:
+      - "/"
+      - "/atlas_video-processing"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "America/Chicago"
+    labels:
+      - dependencies
+      - security

@@ -1,5 +1,8 @@
 name: Atlas Main Voice Startup Checks
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:

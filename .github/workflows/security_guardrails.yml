@@ -1,0 +1,286 @@
+name: Security Guardrails
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  gitleaks-baseline-guard:
+    name: Gitleaks baseline growth guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout pull request
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Reject baseline changes after adoption
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+
+          if ! git cat-file -e "origin/${BASE_REF}:docs/security/gitleaks-baseline.json" 2>/dev/null; then
+            echo "No baseline exists on ${BASE_REF}; allowing initial adoption baseline."
+            exit 0
+          fi
+
+          if git diff --quiet "origin/${BASE_REF}" -- docs/security/gitleaks-baseline.json; then
+            echo "Gitleaks baseline unchanged."
+            exit 0
+          fi
+
+          cat <<'MSG'
+          Gitleaks baseline changes are blocked by default.
+          Rotate/revoke the exposed provider secret, then use a dedicated security
+          rotation PR to justify any baseline change.
+          MSG
+          git diff --stat "origin/${BASE_REF}" -- docs/security/gitleaks-baseline.json
+          exit 1
+
+  secrets-pr:
+    name: Gitleaks PR secret scan
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve trusted baseline
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          baseline=".gitleaks-baseline-ci.json"
+          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+
+          if git cat-file -e "origin/${BASE_REF}:docs/security/gitleaks-baseline.json" 2>/dev/null; then
+            git show "origin/${BASE_REF}:docs/security/gitleaks-baseline.json" > "$baseline"
+            echo "Using Gitleaks baseline from origin/${BASE_REF}."
+          elif [ -f docs/security/gitleaks-baseline.json ]; then
+            cp docs/security/gitleaks-baseline.json "$baseline"
+            echo "Using adoption baseline from this PR because ${BASE_REF} has no baseline yet."
+          else
+            echo "No Gitleaks baseline found; scanning without a baseline."
+          fi
+
+      - name: Scan complete git history
+        run: |
+          set -euo pipefail
+          baseline_args=()
+          if [ -s .gitleaks-baseline-ci.json ]; then
+            baseline_args=(--baseline-path /repo/.gitleaks-baseline-ci.json)
+          fi
+
+          docker run --rm \
+            -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git \
+            --redact \
+            --verbose \
+            --log-opts="HEAD" \
+            "${baseline_args[@]}" \
+            /repo
+
+  secrets-full-history:
+    name: Gitleaks full-history secret scan
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve baseline
+        run: |
+          set -euo pipefail
+          if [ -f docs/security/gitleaks-baseline.json ]; then
+            cp docs/security/gitleaks-baseline.json .gitleaks-baseline-ci.json
+            echo "Using checked-in Gitleaks baseline from this trusted ref."
+          else
+            echo "No Gitleaks baseline found; scanning without a baseline."
+          fi
+
+      - name: Scan complete git history
+        run: |
+          set -euo pipefail
+          baseline_args=()
+          if [ -s .gitleaks-baseline-ci.json ]; then
+            baseline_args=(--baseline-path /repo/.gitleaks-baseline-ci.json)
+          fi
+
+          docker run --rm \
+            -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git \
+            --redact \
+            --verbose \
+            --log-opts="HEAD" \
+            "${baseline_args[@]}" \
+            --report-format sarif \
+            --report-path /repo/gitleaks.sarif \
+            /repo
+
+      - name: Upload Gitleaks SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@411bbbe57033eedfc1a82d68c01345aa96c737d7 # v4
+        with:
+          sarif_file: gitleaks.sarif
+
+  pip-audit:
+    name: pip-audit (${{ matrix.requirements }})
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        requirements:
+          - requirements.txt
+          - atlas_edge/requirements.txt
+          - atlas_video-processing/requirements.txt
+          - atlas_video-processing/ingest/drone_client/requirements.txt
+          - atlas_video-processing/processing/video_stream_processor/requirements.txt
+          - graphiti-wrapper/requirements.txt
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: python -m pip install --quiet pip-audit
+
+      - name: Audit Python requirements
+        continue-on-error: true
+        run: timeout 15m python -m pip_audit -r "${{ matrix.requirements }}" --progress-spinner off
+
+  osv-full:
+    name: OSV dependency scan
+    if: github.event_name != 'pull_request'
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      scan-args: |-
+        --recursive
+        ./
+
+  semgrep:
+    name: Semgrep SAST
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Semgrep
+        run: python -m pip install --quiet semgrep
+
+      - name: Run Semgrep rulesets
+        run: |
+          semgrep scan \
+            --config p/default \
+            --config p/owasp-top-ten \
+            --config p/python \
+            --metrics=off \
+            --sarif \
+            --output semgrep.sarif \
+            .
+
+      - name: Upload Semgrep SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@411bbbe57033eedfc1a82d68c01345aa96c737d7 # v4
+        with:
+          sarif_file: semgrep.sarif
+
+  trivy-config:
+    name: Trivy config scan
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Scan Docker/IaC configuration
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          format: sarif
+          output: trivy-config.sarif
+          skip-dirs: ".venv,.venv-*,node_modules,worktrees,data,third_party"
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@411bbbe57033eedfc1a82d68c01345aa96c737d7 # v4
+        with:
+          sarif_file: trivy-config.sarif
+
+  checkov:
+    name: Checkov IaC scan
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@fa9edf8f0a491c59a924ea6accd5bdcf07752cff # v12
+        with:
+          directory: .
+          framework: dockerfile,github_actions,terraform,yaml
+          quiet: true
+          skip_path: ".venv,.venv-*,node_modules,worktrees,data,third_party"
+          soft_fail: true

@@ -1,5 +1,8 @@
 name: Portfolio UI Checks
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:
