@@ -13,6 +13,17 @@ from extracted_content_pipeline.ingestion_diagnostics import inspect_ingestion_f
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "scripts/inspect_extracted_content_ingestion.py"
+ZERO_USABLE_DECISION = {
+    "status": "REJECT",
+    "reason": "no_usable_source_rows",
+    "location": "source_row_csv",
+    "message": "No usable support-ticket text was found in this file.",
+    "how_to_fix": (
+        "Re-export your tickets with the customer message or description "
+        "column included, then upload again. Rows marked private or internal "
+        "are skipped on purpose and do not count toward usable text."
+    ),
+}
 
 
 def test_inspect_opportunity_json_reports_ready_rows(tmp_path: Path) -> None:
@@ -177,11 +188,12 @@ def test_inspect_source_csv_reports_unmapped_populated_text_column(tmp_path: Pat
     assert admission["usable_source_ratio"] == 0.0
     assert admission["mapped_fields"] == {"source_id": ["Ticket ID"]}
     assert admission["populated_unmapped_fields"] == ["Conversation Text"]
-    assert admission["admission_decision"] == {
-        "status": "REJECT",
-        "reason": "no_usable_source_rows",
-        "location": "source_row_csv",
-    }
+    assert admission["admission_decision"] == ZERO_USABLE_DECISION
+    assert "Customer cannot export" not in admission["admission_decision"]["message"]
+    assert (
+        "Customer cannot export"
+        not in admission["admission_decision"]["how_to_fix"]
+    )
     assert "coverage_warnings" not in admission
 
 
@@ -283,11 +295,7 @@ def test_inspect_source_csv_rejects_machine_json_message_payload(
         "source_id": ["Ticket ID"],
         "source_text": ["Message"],
     }
-    assert admission["admission_decision"] == {
-        "status": "REJECT",
-        "reason": "no_usable_source_rows",
-        "location": "source_row_csv",
-    }
+    assert admission["admission_decision"] == ZERO_USABLE_DECISION
 
 
 def test_inspect_source_csv_warns_when_partial_upload_has_machine_json_row(
@@ -325,6 +333,70 @@ def test_inspect_source_csv_warns_when_partial_upload_has_machine_json_row(
         "skipped_source_row_count": 1,
         "usable_source_ratio": 0.5,
     }]
+
+
+def test_partial_coverage_csv_still_produces_report(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "see-something.csv"
+    path.write_text(
+        "Ticket ID,Message,Internal Notes,Unused Column\n"
+        "T-1,Customer cannot export the weekly report.,,\n"
+        "T-2,,secret_ticket_text_private_note,\n"
+        "T-3,,,metadata only\n",
+        encoding="utf-8",
+    )
+
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+        sample_limit=2,
+        default_fields={
+            "company_name": "Acme Logistics",
+            "vendor_name": "Atlas",
+            "contact_email": "ops@example.com",
+        },
+    ).as_dict()
+
+    admission = payload["source_row_admission"]
+    assert payload["ok"] is True
+    assert payload["opportunity_count"] >= 1
+    assert admission["admission_decision"] == {"status": "ACCEPT"}
+    assert admission["coverage_warnings"] == [{
+        "code": "partial_source_row_coverage",
+        "location": "source_row_csv",
+        "raw_source_row_count": 3,
+        "usable_source_row_count": 1,
+        "skipped_source_row_count": 2,
+        "usable_source_ratio": 0.333333,
+    }]
+
+
+def test_zero_usable_csv_rejects_with_guidance(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "zero-usable.csv"
+    path.write_text(
+        "Ticket ID,Internal Notes,Unused Column\n"
+        "T-1,secret_ticket_text_private_note,metadata only\n",
+        encoding="utf-8",
+    )
+
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+        sample_limit=1,
+    ).as_dict()
+
+    decision = payload["source_row_admission"]["admission_decision"]
+    assert payload["ok"] is False
+    assert decision == ZERO_USABLE_DECISION
+    assert decision["message"]
+    assert decision["how_to_fix"]
+    assert "secret_ticket_text_private_note" not in decision["message"]
+    assert "secret_ticket_text_private_note" not in decision["how_to_fix"]
 
 
 def test_inspect_source_csv_accepts_long_ticket_body_field(
@@ -441,11 +513,7 @@ def test_inspect_source_csv_rejects_observed_body_alias_when_row_is_private(
         "source_id": ["Ticket ID"],
         "source_text": ["actionbody"],
     }
-    assert admission["admission_decision"] == {
-        "status": "REJECT",
-        "reason": "no_usable_source_rows",
-        "location": "source_row_csv",
-    }
+    assert admission["admission_decision"] == ZERO_USABLE_DECISION
 
 
 def test_inspect_source_csv_sample_limit_does_not_make_known_aliases_unmapped(
@@ -814,11 +882,9 @@ def test_inspection_cli_emits_csv_source_row_admission(tmp_path: Path) -> None:
     assert payload["source_row_admission"]["populated_unmapped_fields"] == [
         "Conversation Text"
     ]
-    assert payload["source_row_admission"]["admission_decision"] == {
-        "status": "REJECT",
-        "reason": "no_usable_source_rows",
-        "location": "source_row_csv",
-    }
+    assert payload["source_row_admission"]["admission_decision"] == (
+        ZERO_USABLE_DECISION
+    )
 
 
 def test_inspection_cli_emits_structured_parse_error(tmp_path: Path) -> None:
