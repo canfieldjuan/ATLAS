@@ -60,6 +60,7 @@ pytest \
   tests/test_smoke_content_ops_deflection_stripe_paid_unlock.py \
   tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py \
   tests/test_smoke_content_ops_deflection_pdf_export_validators.py \
+  tests/test_run_deflection_full_report_qa_live_runner.py \
   tests/test_atlas_content_ops_deflection_delivery.py \
   tests/test_alerts.py \
   tests/test_content_ops_deflection_incidents.py \
