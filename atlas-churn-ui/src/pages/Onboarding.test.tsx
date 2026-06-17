@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, RouterProvider, Routes, createMemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Onboarding from './Onboarding'
 
 const auth = vi.hoisted(() => ({
@@ -46,6 +46,10 @@ describe('Onboarding', () => {
     api.addTrackedVendor.mockResolvedValue({})
     api.removeTrackedVendor.mockResolvedValue({})
     api.listTrackedVendors.mockResolvedValue({ vendors: [] })
+  })
+
+  afterEach(() => {
+    cleanup()
   })
 
   it('hydrates the search query from the URL and loads matching results', async () => {

@@ -13,12 +13,25 @@ found that Expo's compatibility checker rejects `typescript@6.0.3` and expects
 `~5.9.2`, so mobile remains deferred for an Expo-aligned migration instead of
 being forced through a broken package contract.
 
+Review found two follow-up defects before merge. Root cause: the TypeScript
+manifest ranges allowed future `6.x` minors beyond the installed
+`typescript-eslint` peer range, and one churn UI test queried an async-rendered
+witness shortcut synchronously under CI timing. This update fixes both roots by
+pinning the affected web packages to the supported TypeScript 6.0 patch line
+and awaiting the witness-card link in the failing test.
+
+The local full churn rerun also surfaced a test teardown leak from
+`Onboarding.test.tsx`: React still had scheduled work when Vitest tore down the
+jsdom `window`. The root is test cleanup that only ran before each test, not
+after the final test in the file. This update adds explicit after-test cleanup
+so the router tree is unmounted before the environment disappears.
+
 ## Scope (this PR)
 
 Ownership lane: security/dependencies
 Slice phase: Production hardening
 
-1. Update TypeScript to `^6.0.3` in `atlas-admin-ui`, `atlas-churn-ui`,
+1. Update TypeScript to `~6.0.3` in `atlas-admin-ui`, `atlas-churn-ui`,
    `atlas-intel-ui`, and `atlas-ui`.
 2. Keep package code changes limited to compiler-compatibility fixes that are
    required for the TypeScript 6 builds/tests to pass.
@@ -26,6 +39,10 @@ Slice phase: Production hardening
    build/test command.
 4. Prove `atlas-mobile` stays out of scope because its Expo compatibility check
    rejects TypeScript 6.0.3 under the current Expo SDK.
+5. Address review/CI findings needed for merge: pin the TypeScript range to
+   the supported 6.0 line and await the async-rendered churn witness shortcut.
+6. Stabilize the churn full-suite rerun by adding explicit after-test cleanup
+   to `Onboarding.test.tsx`.
 
 ### Review Contract
 
@@ -34,10 +51,14 @@ Acceptance criteria:
   superseded by one Atlas-shaped PR.
 - Mobile TypeScript PR #1651 is explicitly deferred with the Expo compatibility
   reason named in this plan and PR body.
-- TypeScript is bumped consistently to `^6.0.3` in the affected manifests and
+- TypeScript is bumped consistently to `~6.0.3` in the affected manifests and
   lockfiles.
 - Any code edits are direct compiler-compatibility fixes, not lint cleanup or
   product refactors.
+- The churn UI test fix is limited to the CI-red async assertion identified in
+  review.
+- The Onboarding test cleanup fix is limited to unmounting the test router
+  after each test; product code is unchanged.
 - The affected package checks pass locally before push and in GitHub Actions
   after the PR opens.
 
@@ -64,6 +85,8 @@ Reviewer rules triggered: R1, R2, R9, R12, R14.
 - `atlas-admin-ui/package.json`
 - `atlas-churn-ui/package-lock.json`
 - `atlas-churn-ui/package.json`
+- `atlas-churn-ui/src/pages/EvidenceExplorer.test.tsx`
+- `atlas-churn-ui/src/pages/Onboarding.test.tsx`
 - `atlas-intel-ui/package-lock.json`
 - `atlas-intel-ui/package.json`
 - `atlas-ui/package-lock.json`
@@ -73,11 +96,19 @@ Reviewer rules triggered: R1, R2, R9, R12, R14.
 ## Mechanism
 
 Use npm in each affected web package to update only the `typescript` dev
-dependency to `^6.0.3`, then run each package's existing compile/build/test
+dependency to `~6.0.3`, then run each package's existing compile/build/test
 gate. If TypeScript 6 exposes compile errors, fix the narrow typed source
 that is actually failing and rerun the package gate that caught it. Keep
 `atlas-mobile` pinned to its Expo-compatible TypeScript version because
 `npx expo install --check` rejects TypeScript 6.0.3.
+
+The churn UI CI fix does not change product behavior. It changes the failing
+test assertion from a synchronous role query to `findByRole`, matching the
+component's async witness-card render path.
+
+The Onboarding cleanup fix also stays in test code: it imports Vitest's
+`afterEach` and runs Testing Library cleanup after every test to prevent React
+work from surviving past jsdom teardown.
 
 ## Intentional
 
@@ -117,9 +148,11 @@ Parked hardening: none.
 | `atlas-admin-ui/package.json` | 2 |
 | `atlas-churn-ui/package-lock.json` | 8 |
 | `atlas-churn-ui/package.json` | 2 |
+| `atlas-churn-ui/src/pages/EvidenceExplorer.test.tsx` | 2 |
+| `atlas-churn-ui/src/pages/Onboarding.test.tsx` | 6 |
 | `atlas-intel-ui/package-lock.json` | 8 |
 | `atlas-intel-ui/package.json` | 2 |
 | `atlas-ui/package-lock.json` | 8 |
 | `atlas-ui/package.json` | 2 |
-| `plans/PR-TypeScript-Major-Batch.md` | 125 |
-| **Total** | **165** |
+| `plans/PR-TypeScript-Major-Batch.md` | 158 |
+| **Total** | **206** |
