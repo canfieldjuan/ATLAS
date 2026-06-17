@@ -169,10 +169,18 @@ def _pdf_text() -> str:
     """
 
 
-def _write_pdf_inputs(tmp_path: Path, *, text: str | None = None) -> tuple[Path, Path]:
+def _write_pdf_inputs(
+    tmp_path: Path,
+    *,
+    text: str | None = None,
+    pdf_bytes_payload: bytes | None = None,
+) -> tuple[Path, Path]:
     pdf_bytes = tmp_path / "report.pdf"
     pdf_text = tmp_path / "report_pdf_text.txt"
-    pdf_bytes.write_bytes(b"%PDF-1.7\n% synthetic live-runner bytes\n%%EOF\n")
+    pdf_bytes.write_bytes(
+        pdf_bytes_payload
+        or b"%PDF-1.7\n% synthetic live-runner bytes\n%%EOF\n"
+    )
     pdf_text.write_text(_pdf_text() if text is None else text, encoding="utf-8")
     return pdf_bytes, pdf_text
 
@@ -241,6 +249,10 @@ def test_live_runner_fetches_live_json_and_writes_redacted_scorecard(
     assert payload["fetches"]["report_model"] == {"status": 200}
     assert payload["fetches"]["artifact"] == {"status": 200}
     assert payload["scorecard"]["ok"] is True
+    assert payload["pdf_text"] == {
+        "source": "operator_asserted",
+        "verified_from_pdf_bytes": False,
+    }
     assert payload["scorecard"]["artifacts"]["pdf"]["text_chars"] > 0
     assert [call["url"] for call in calls] == [
         f"https://atlas.example.com/api/v1/content-ops/deflection-reports/{REQUEST_ID}/report-model",
@@ -326,6 +338,46 @@ def test_empty_pdf_text_fails_before_network(monkeypatch, tmp_path) -> None:
     assert _payload(tmp_path)["errors"] == ["pdf text extraction must be non-empty"]
 
 
+def test_pdf_byte_leak_fails_before_network(monkeypatch, tmp_path) -> None:
+    pdf_bytes, pdf_text = _write_pdf_inputs(
+        tmp_path,
+        pdf_bytes_payload=(
+            b"%PDF-1.7\ncontent-ops-deadbeefLEAK buyer@example.com\n%%EOF\n"
+        ),
+    )
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("PDF byte leaks must fail before network")
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", _unexpected)
+
+    code = runner.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        TOKEN,
+        "--request-id",
+        REQUEST_ID,
+        "--pdf-bytes",
+        str(pdf_bytes),
+        "--pdf-text",
+        str(pdf_text),
+        "--output-result",
+        str(tmp_path / "result.json"),
+    ])
+
+    assert code == 1
+    payload = _payload(tmp_path)
+    assert payload["ok"] is False
+    assert payload["errors"] == [
+        "pdf bytes contain sensitive pattern: request_id",
+        "pdf bytes contain sensitive pattern: customer_email",
+    ]
+    encoded = json.dumps(payload, sort_keys=True)
+    assert "content-ops-deadbeefLEAK" not in encoded
+    assert "buyer@example.com" not in encoded
+
+
 def test_artifact_missing_evidence_export_fails_closed(monkeypatch, tmp_path) -> None:
     def _urlopen(request, *, timeout):
         if request.full_url.endswith("/report-model"):
@@ -402,3 +454,47 @@ def test_http_error_status_is_sanitized(monkeypatch, tmp_path) -> None:
     encoded = json.dumps(payload, sort_keys=True)
     assert TOKEN not in encoded
     assert REQUEST_ID not in encoded
+
+
+def test_output_sanitizer_rewrites_sensitive_scorecard_and_returns_one(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    def _urlopen(request, *, timeout):
+        if request.full_url.endswith("/report-model"):
+            return FakeResponse(200, _report_model())
+        return FakeResponse(200, _artifact())
+
+    def _leaky_scorecard(**_kwargs):
+        return {
+            "ok": True,
+            "leaked": (
+                "Bearer leaked-token content-ops-outputleak "
+                "cs_live_outputleak ticket-outputleak"
+            ),
+        }
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(runner, "build_pdf_export_scorecard", _leaky_scorecard)
+
+    code = runner.main(_base_args(tmp_path))
+
+    assert code == 1
+    payload = _payload(tmp_path)
+    assert payload["ok"] is False
+    assert payload["inputs"] == {
+        "base_url_present": True,
+        "token_present": True,
+        "request_id_present": True,
+        "pdf_bytes_present": True,
+        "pdf_text_present": True,
+        "preflight_only": False,
+    }
+    assert "runner output contains sensitive pattern: bearer_token" in payload["errors"]
+    assert "runner output contains sensitive pattern: stripe_checkout_session_id" in payload["errors"]
+    assert "runner output contains sensitive pattern: source_id" in payload["errors"]
+    encoded = json.dumps(payload, sort_keys=True)
+    assert "Bearer leaked-token" not in encoded
+    assert "content-ops-outputleak" not in encoded
+    assert "cs_live_outputleak" not in encoded
+    assert "ticket-outputleak" not in encoded

@@ -26,6 +26,17 @@ are not separable: the script is a live transport wrapper around a leak-sensitiv
 validator, and the test matrix has to prove each new fail-closed branch before
 the operator uses it on live paid artifacts.
 
+Review fix root cause: the first runner pass treated `--pdf-bytes` and
+`--pdf-text` as independent trusted operator inputs. The downstream validator
+checked PDF bytes only for a `%PDF-` header and size, while every leak/count
+assertion ran against the separate text file. A clean text file could therefore
+green-light bytes containing a live result ID or customer email. The same pass
+also left the final output sanitizer untested even though it is the last guard
+before a committed proof. This update fixes the reachable root in this slice:
+raw PDF bytes are decoded and leak-scanned before network calls, the result
+marks PDF text as operator-asserted rather than byte-derived, and tests now
+exercise both the byte-leak failure path and the sanitizer redaction/exit path.
+
 ## Scope (this PR)
 
 Ownership lane: content-ops/deflection-full-report-qa
@@ -37,15 +48,16 @@ Slice phase: Functional validation
 3. Extract `evidence_export` from the paid artifact JSON and verify any
    artifact-embedded `report_model` matches the report-model route.
 4. Read operator-supplied PDF bytes and already-extracted PDF text, failing
-   closed when text extraction is empty.
+   closed when text extraction is empty or the raw PDF bytes contain a
+   sensitive leak pattern.
 5. Reuse `build_pdf_export_scorecard` from #1622 so model/export/PDF checks stay
    centralized.
 6. Write only a sanitized runner result: statuses, primitive artifact counts,
    scorecard assertions, and redacted errors. No raw request ID, token, URLs,
    local paths, PDF text, source IDs, or evidence rows are written.
 7. Add tests for successful transport/scoring, preflight redaction, malformed
-   live payloads, report-model drift, empty PDF text extraction, and HTTP/JSON
-   failure handling.
+   live payloads, report-model drift, empty PDF text extraction, PDF-byte leak
+   detection, sanitizer redaction, and HTTP/JSON failure handling.
 8. Enroll the new test in `scripts/run_extracted_pipeline_checks.sh`.
 
 ### Files touched
@@ -70,15 +82,18 @@ Acceptance criteria:
 - If the artifact includes `report_model`, it must match the report-model route
   exactly, preventing a scorecard built from one model and export from another.
 - PDF bytes and extracted PDF text are read from operator-supplied files because
-  ATLAS does not expose a PDF download route; empty PDF text fails before the
-  scorecard can treat extraction as successful.
+  ATLAS does not expose a PDF download route; empty PDF text and raw PDF-byte
+  leaks fail before the scorecard can treat extraction as successful.
+- The runner output marks PDF text as operator-asserted and not verified from
+  PDF bytes until a real extraction dependency lands.
 - The runner delegates artifact assertions to the #1622 PDF/export validator and
   does not duplicate count/leak logic.
 - The output JSON is safe to commit: it omits raw request IDs, bearer tokens,
   endpoint URLs, local file paths, source IDs, evidence rows, PDF text, customer
   emails, Stripe IDs, and private-note text.
 - Tests mock the HTTP transport boundary, not the runner's checker logic, and
-  include negative fixtures for each failure branch added in this slice.
+  include negative fixtures for each failure branch added in this slice,
+  including byte-level PDF leaks and final sanitizer rewrites.
 - The new test is enrolled in the extracted checks suite.
 
 Affected surfaces: full-report QA operator scripts, paid deflection artifact
@@ -104,10 +119,13 @@ compares it to the route model and fails on drift.
 The runner reads local PDF bytes and extracted PDF text supplied by the
 operator. This matches current production delivery: the PDF is an email
 attachment rendered by the delivery worker, not a backend download endpoint.
-Once inputs are assembled, it calls `build_pdf_export_scorecard` and wraps the
-scorecard with fetch status and input-presence metadata. Before writing or
-printing, the runner walks the output and rejects any concrete forbidden values
-or sensitive token patterns.
+Before any network request, the runner rejects empty extracted text and scans
+the decoded PDF bytes for the same sensitive leak classes used by the PDF/export
+validator. Once inputs are assembled, it calls `build_pdf_export_scorecard` and
+wraps the scorecard with fetch status, input-presence metadata, and an explicit
+`operator_asserted` PDF text marker. Before writing or printing, the runner
+walks the output and rejects any concrete forbidden values or sensitive token
+patterns.
 
 ## Intentional
 
@@ -115,7 +133,9 @@ or sensitive token patterns.
   `atlas-portfolio/web`, and this PR stays in the ATLAS artifact lane.
 - No PDF parser or browser automation. This slice proves live artifact assembly
   around the existing validator; PDF text extraction tooling remains an
-  operator input until a dedicated extraction dependency is chosen.
+  operator input until a dedicated extraction dependency is chosen. The runner
+  now scans raw PDF bytes for leak patterns, but it does not claim counts are
+  byte-derived.
 - No API changes. The runner consumes the existing paid report routes and the
   PDF attachment produced by delivery.
 - No committed live proof artifact. The script can write a sanitized summary
@@ -130,24 +150,29 @@ or sensitive token patterns.
   Zendesk-shaped request and commit only the sanitized scorecard if it passes.
 - PDF text extraction automation: choose and gate the extraction mechanism
   before replacing the explicit `--pdf-text` input.
+- Redirect hardening for the live runner: build a no-redirect opener or
+  revalidate the final URL after redirects. Deferred because this review-fix
+  patch is scoped to artifact proof integrity and sanitizer coverage, while the
+  current runner still requires an operator-supplied hosted HTTPS base URL and
+  keeps URL/token values out of output.
 
 Parked hardening: none.
 
 ## Verification
 
-- Focused live-runner pytest for `tests/test_run_deflection_full_report_qa_live_runner.py` - 7 passed.
+- Focused live-runner pytest for `tests/test_run_deflection_full_report_qa_live_runner.py` - 9 passed.
 - Python compile check for the live-runner script and its test - passed.
 - Extracted pipeline CI enrollment audit - OK, 185 matching tests enrolled.
 - Whitespace diff check - passed.
-- Full extracted pipeline bundle via `scripts/run_extracted_pipeline_checks.sh` - package audits passed; reasoning-core suite 295 passed; extracted-content suite 4567 passed, 10 skipped.
+- Full extracted pipeline bundle via `scripts/run_extracted_pipeline_checks.sh` - package audits passed; reasoning-core suite 295 passed; extracted-content suite 4569 passed, 10 skipped.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/extracted_pipeline_checks.yml` | 4 |
-| `plans/PR-Deflection-Full-Report-QA-Live-Runner.md` | 153 |
-| `scripts/run_deflection_full_report_qa_live_runner.py` | 408 |
+| `plans/PR-Deflection-Full-Report-QA-Live-Runner.md` | 178 |
+| `scripts/run_deflection_full_report_qa_live_runner.py` | 436 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_run_deflection_full_report_qa_live_runner.py` | 404 |
-| **Total** | **970** |
+| `tests/test_run_deflection_full_report_qa_live_runner.py` | 500 |
+| **Total** | **1119** |

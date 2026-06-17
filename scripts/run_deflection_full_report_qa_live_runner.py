@@ -25,6 +25,7 @@ for path in (ROOT, SCRIPT_DIR):
 
 from check_deflection_full_report_pdf_export_artifacts import (  # noqa: E402
     DEFAULT_REQUIRED_SURFACES,
+    LEAK_PATTERNS as PDF_LEAK_PATTERNS,
     build_pdf_export_scorecard,
 )
 
@@ -55,6 +56,11 @@ SENSITIVE_PATTERNS = (
     ("request_id", re.compile(r"\bcontent-ops-[A-Za-z0-9_-]{6,}\b")),
     ("absolute_local_path", re.compile(r"(?<!\w)(?:/home/|/tmp/)")),
     ("customer_email", re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")),
+    (
+        "source_id",
+        re.compile(r"\bticket[-_](?!source(?:_|$))[A-Za-z0-9][A-Za-z0-9_.:-]*\b"),
+    ),
+    ("private_note", re.compile(r"\b(?:private|internal)\s+note\b", re.IGNORECASE)),
 )
 
 
@@ -216,7 +222,22 @@ def _forbidden_values(args: argparse.Namespace) -> tuple[str, ...]:
         str(args.pdf_bytes or ""),
         str(args.pdf_text or ""),
     )
-    return tuple(value for value in values if len(value) >= 6)
+    return tuple(value for value in values if value)
+
+
+def _pdf_byte_leak_errors(pdf_bytes: bytes) -> list[str]:
+    text = pdf_bytes.decode("utf-8", errors="replace")
+    errors: list[str] = []
+    for label, pattern in PDF_LEAK_PATTERNS:
+        if pattern.search(text):
+            errors.append(f"pdf bytes contain sensitive pattern: {label}")
+    for label, pattern in SENSITIVE_PATTERNS:
+        if pattern.search(text) and label not in {
+            error.rsplit(": ", 1)[-1]
+            for error in errors
+        }:
+            errors.append(f"pdf bytes contain sensitive pattern: {label}")
+    return errors
 
 
 def _sanitizer_errors(payload: Mapping[str, Any], forbidden_values: Sequence[str]) -> list[str]:
@@ -247,6 +268,7 @@ def _write_result(
     *,
     pretty: bool,
     forbidden_values: Sequence[str],
+    safe_inputs: Mapping[str, Any],
 ) -> tuple[dict[str, Any], bool]:
     output = dict(payload)
     sanitizer_errors = _sanitizer_errors(output, forbidden_values)
@@ -255,7 +277,7 @@ def _write_result(
         output = {
             "schema_version": SCHEMA_VERSION,
             "ok": False,
-            "inputs": output.get("inputs", {}),
+            "inputs": dict(safe_inputs),
             "errors": sanitizer_errors,
         }
         if _sanitizer_errors(output, ()):
@@ -282,6 +304,7 @@ def _emit_result(
         payload,
         pretty=bool(args.pretty),
         forbidden_values=_forbidden_values(args),
+        safe_inputs=_input_summary(args),
     )
     if args.json:
         print(json.dumps(output, sort_keys=True))
@@ -353,6 +376,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     read_errors = [*byte_errors, *text_errors]
     if pdf_text.strip() == "":
         read_errors.append("pdf text extraction must be non-empty")
+    read_errors.extend(_pdf_byte_leak_errors(pdf_bytes))
     if read_errors:
         return _safe_failure_payload(args, read_errors)
 
@@ -386,6 +410,10 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "ok": scorecard.get("ok") is True,
         "inputs": _input_summary(args),
         "fetches": fetches,
+        "pdf_text": {
+            "source": "operator_asserted",
+            "verified_from_pdf_bytes": False,
+        },
         "scorecard": scorecard,
         "errors": [] if scorecard.get("ok") is True else ["scorecard failed"],
     }
