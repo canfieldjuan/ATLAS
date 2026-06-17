@@ -46,7 +46,7 @@ def test_zendesk_product_proof_corpus_records_full_csv_admission() -> None:
         assert case["coverage_warnings"] == []
     assert summary["breakage_matrix"]["case_count"] == 6
     assert summary["breakage_matrix"]["blocking_case_count"] == 0
-    assert summary["breakage_matrix"]["known_gap_count"] == 1
+    assert summary["breakage_matrix"]["known_gap_count"] == 0
 
 
 def test_breakage_matrix_scores_fail_closed_warning_and_known_gap() -> None:
@@ -111,11 +111,13 @@ def test_breakage_matrix_scores_fail_closed_warning_and_known_gap() -> None:
     assert cases["header_only_csv_has_no_policy_decision"]["observed_outcome"] == (
         "NO_POLICY_DECISION"
     )
-    known_gap = cases["json_blob_message_known_fail_open"]
-    assert known_gap["case_status"] == "known_gap"
-    assert known_gap["known_gap"] is True
-    assert known_gap["observed_outcome"] == "ACCEPT_CLEAN"
-    assert known_gap["admission_status"] == "ACCEPT"
+    json_payload = cases["json_blob_message_rejects_zero_usable"]
+    assert json_payload["case_status"] == "ok"
+    assert json_payload["known_gap"] is False
+    assert json_payload["observed_outcome"] == "REJECT"
+    assert json_payload["admission_status"] == "REJECT"
+    assert json_payload["admission_decision_reason"] == "no_usable_source_rows"
+    assert json_payload["admission_decision_location"] == "source_row_csv"
 
 
 def test_breakage_matrix_expected_guard_mismatch_blocks() -> None:
@@ -373,5 +375,5 @@ def test_main_writes_summary_and_doc(tmp_path: Path) -> None:
     proof = doc.read_text(encoding="utf-8")
     assert "does not choose a low non-zero reject threshold" in proof
     assert "## Parser Breakage Matrix" in proof
-    assert "json_blob_message_known_fail_open" in proof
-    assert "Known fail-open gaps: `1`" in proof
+    assert "json_blob_message_rejects_zero_usable" in proof
+    assert "Known fail-open gaps: `0`" in proof

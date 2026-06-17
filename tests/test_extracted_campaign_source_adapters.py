@@ -701,6 +701,135 @@ def test_source_rows_do_not_admit_private_note_aliases_as_customer_text(
     assert "missing_source_text" in [warning.code for warning in loaded.warnings]
 
 
+def test_source_rows_do_not_admit_machine_json_payload_as_customer_text() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": '{"event":"ticket_created","id":123}',
+    }])
+
+    assert loaded.opportunities == ()
+    warnings = [warning.as_dict() for warning in loaded.warnings]
+    assert warnings == [{
+        "code": "machine_source_payload_text",
+        "row_index": 1,
+        "field": "text",
+        "message": (
+            "Skipped source row because the mapped text field contains a "
+            "machine JSON payload, not customer wording."
+        ),
+    }]
+
+
+def test_source_rows_keep_human_text_that_mentions_json_payload() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": 'The API returned {"event":"ticket_created"} after export.',
+    }])
+
+    assert len(loaded.opportunities) == 1
+    assert "machine_source_payload_text" not in [
+        warning.code for warning in loaded.warnings
+    ]
+    assert '{"event":"ticket_created"}' in loaded.opportunities[0]["evidence"][0]["text"]
+
+
+def test_source_rows_keep_json_object_with_customer_message_value() -> None:
+    message = '{"message":"I cannot export the weekly report from billing."}'
+
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": message,
+    }])
+
+    assert len(loaded.opportunities) == 1
+    assert "machine_source_payload_text" not in [
+        warning.code for warning in loaded.warnings
+    ]
+    assert (
+        loaded.opportunities[0]["evidence"][0]["text"]
+        == "I cannot export the weekly report from billing."
+    )
+
+
+def test_source_rows_keep_short_json_customer_message_value() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": '{"message":"Cannot login"}',
+    }])
+
+    assert len(loaded.opportunities) == 1
+    assert "machine_source_payload_text" not in [
+        warning.code for warning in loaded.warnings
+    ]
+    assert loaded.opportunities[0]["evidence"][0]["text"] == "Cannot login"
+
+
+def test_source_rows_reject_verbose_machine_json_metadata() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": '{"event":"ticket created from zendesk webhook"}',
+    }])
+
+    assert loaded.opportunities == ()
+    assert [warning.code for warning in loaded.warnings] == [
+        "machine_source_payload_text",
+    ]
+
+
+def test_source_rows_continue_past_machine_json_alias_to_human_text() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": '{"event":"ticket_created"}',
+        "description": "Customer cannot export the weekly report.",
+    }])
+
+    assert len(loaded.opportunities) == 1
+    assert "machine_source_payload_text" not in [
+        warning.code for warning in loaded.warnings
+    ]
+    assert (
+        loaded.opportunities[0]["evidence"][0]["text"]
+        == "Customer cannot export the weekly report."
+    )
+
+
+def test_source_rows_inspect_structured_machine_json_before_stringifying() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": {"event": "ticket_created", "id": 123},
+    }])
+
+    assert loaded.opportunities == ()
+    assert [warning.code for warning in loaded.warnings] == [
+        "machine_source_payload_text",
+    ]
+
+
+def test_source_rows_reject_structured_machine_json_under_message_key() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": {"message": {"event": "ticket_created", "id": 123}},
+    }])
+
+    assert loaded.opportunities == ()
+    assert [warning.code for warning in loaded.warnings] == [
+        "machine_source_payload_text",
+    ]
+
+
+def test_source_rows_keep_structured_customer_json_message_value() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": {"message": "Refund please"},
+    }])
+
+    assert len(loaded.opportunities) == 1
+    assert "machine_source_payload_text" not in [
+        warning.code for warning in loaded.warnings
+    ]
+    assert loaded.opportunities[0]["evidence"][0]["text"] == "Refund please"
+
+
 @pytest.mark.parametrize("encoding", ("utf-16-le", "utf-16-be"))
 def test_load_source_rows_infers_bomless_utf16_after_utf8_failure(
     tmp_path: Path,
