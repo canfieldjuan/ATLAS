@@ -1,0 +1,42 @@
+{
+  "atlas_brain/comms/action_planner.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/comms/call_intelligence.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 16
+  },
+  "atlas_brain/comms/invoice_detector.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/comms/real_services.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/comms/sms_intelligence.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 3
+    },
+    "score": 21
+  },
+  "atlas_brain/comms/tool_bridge.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  }
+}

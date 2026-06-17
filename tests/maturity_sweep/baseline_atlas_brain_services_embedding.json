@@ -1,0 +1,8 @@
+{
+  "atlas_brain/services/embedding/sentence_transformer.py": {
+    "counts": {
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 8
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "atlas_brain/vision/models.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 15
+  },
+  "atlas_brain/vision/subscriber.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 9
+  }
+}
