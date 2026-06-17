@@ -1,6 +1,6 @@
 # Plan archive index
 
-1117 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1118 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -145,6 +145,7 @@
 - [PR-Campaign-Channel-Legacy-Cleanup](archive/PR-Campaign-Channel-Legacy-Cleanup.md)
 - [PR-Campaign-Config-V2](archive/PR-Campaign-Config-V2.md)
 - [PR-Checker-Detection-Branch-Discipline](archive/PR-Checker-Detection-Branch-Discipline.md) - lane: workflow/process | phase: Workflow/process
+- [PR-Churn-UI-Async-Race-Sweep](archive/PR-Churn-UI-Async-Race-Sweep.md) - lane: security/dependencies | phase: Production hardening
 - [PR-Clear-Placeholder-Url-Gate-Inflight](archive/PR-Clear-Placeholder-Url-Gate-Inflight.md)
 - [PR-Clear-Real-Asset-Url-CTA-Inflight](archive/PR-Clear-Real-Asset-Url-CTA-Inflight.md)
 - [PR-Clear-Selling-Context-Inflight](archive/PR-Clear-Selling-Context-Inflight.md)
