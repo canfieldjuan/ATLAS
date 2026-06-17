@@ -332,18 +332,29 @@ def _raw_evidence_quote_leak_present(
 
 
 def _section_text(text: str, marker: str, end_markers: Sequence[str]) -> str:
-    haystack = text.casefold()
-    start = haystack.find(marker.casefold())
+    start = _section_heading_index(text, marker, 0)
     if start < 0:
         return ""
     section_start = start + len(marker)
     ends = [
         index
         for end_marker in end_markers
-        if (index := haystack.find(end_marker.casefold(), section_start)) >= 0
+        if (index := _section_heading_index(text, end_marker, section_start)) >= 0
     ]
     section_end = min(ends) if ends else len(text)
     return text[section_start:section_end]
+
+
+def _section_heading_index(text: str, marker: str, start: int) -> int:
+    marker_text = marker.casefold()
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        raw_stripped = line.strip()
+        stripped = raw_stripped.casefold()
+        if offset >= start and raw_stripped[:1].isupper() and stripped == marker_text:
+            return offset + line.casefold().find(marker_text)
+        offset += len(line)
+    return -1
 
 
 def _visible_question_rows(section_text: str, rows: Sequence[Mapping[str, Any]]) -> int:

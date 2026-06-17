@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import re
+import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,14 @@ ARTIFACT_PATH_TEMPLATE = (
     "/api/v1/content-ops/deflection-reports/{request_id}/artifact"
 )
 LOCAL_HOSTS = frozenset({"localhost", "0.0.0.0", "::1"})
+PDF_STREAM_RE = re.compile(
+    rb"<<(?P<dict>.*?)>>\s*stream\r?\n(?P<body>.*?)\r?\nendstream",
+    re.DOTALL,
+)
+PDF_FILTER_RE = re.compile(rb"/([A-Za-z0-9]+Decode)\b")
+PDF_TJ_RE = re.compile(rb"\((?:\\.|[^\\()])*\)\s*Tj", re.DOTALL)
+PDF_TJ_ARRAY_RE = re.compile(rb"\[(.*?)\]\s*TJ", re.DOTALL)
+PDF_LITERAL_RE = re.compile(rb"\((?:\\.|[^\\()])*\)", re.DOTALL)
 SENSITIVE_PATTERNS = (
     ("bearer_token", re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)),
     ("secret_key", re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9_=-]+")),
@@ -77,7 +86,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--token", default="")
     parser.add_argument("--request-id", default="")
     parser.add_argument("--pdf-bytes", type=Path)
-    parser.add_argument("--pdf-text", type=Path)
+    parser.add_argument(
+        "--pdf-text",
+        type=Path,
+        help="Optional extracted PDF text override. Omit to extract from --pdf-bytes.",
+    )
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--report-model-path-template", default=REPORT_MODEL_PATH_TEMPLATE)
     parser.add_argument("--artifact-path-template", default=ARTIFACT_PATH_TEMPLATE)
@@ -146,7 +159,8 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         if "{request_id}" not in value:
             errors.append(f"{label} must include {{request_id}}")
     errors.extend(_validate_file(args.pdf_bytes, label="--pdf-bytes"))
-    errors.extend(_validate_file(args.pdf_text, label="--pdf-text"))
+    if args.pdf_text is not None:
+        errors.extend(_validate_file(args.pdf_text, label="--pdf-text"))
     return errors
 
 
@@ -194,6 +208,146 @@ def _read_text(path: Path, *, label: str) -> tuple[str, list[str]]:
         return "", [f"{label} could not be read"]
 
 
+def _pdf_streams(pdf_bytes: bytes) -> list[tuple[bytes, bytes]]:
+    return [
+        (match.group("dict"), match.group("body"))
+        for match in PDF_STREAM_RE.finditer(pdf_bytes)
+    ]
+
+
+def _decode_pdf_stream(stream_dict: bytes, stream: bytes) -> tuple[bytes, str | None]:
+    if b"/Filter" not in stream_dict:
+        return stream, None
+    filters = PDF_FILTER_RE.findall(stream_dict)
+    if filters != [b"FlateDecode"]:
+        names = ", ".join(
+            f.decode("ascii", errors="replace") for f in filters
+        ) or "unknown"
+        return b"", f"pdf stream uses unsupported filter: {names}"
+    try:
+        return zlib.decompress(stream), None
+    except zlib.error:
+        return b"", "pdf stream FlateDecode decompression failed"
+
+
+def _decoded_pdf_streams(pdf_bytes: bytes) -> tuple[list[bytes], list[str]]:
+    decoded: list[bytes] = []
+    errors: list[str] = []
+    for stream_dict, stream in _pdf_streams(pdf_bytes):
+        content, error = _decode_pdf_stream(stream_dict, stream)
+        if error:
+            errors.append(error)
+        else:
+            decoded.append(content)
+    return decoded, errors
+
+
+def _decode_pdf_literal(value: bytes) -> str:
+    if value.startswith(b"(") and value.endswith(b")"):
+        value = value[1:-1]
+    out = bytearray()
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char != 0x5C:
+            out.append(char)
+            index += 1
+            continue
+        index += 1
+        if index >= len(value):
+            break
+        escaped = value[index]
+        index += 1
+        if escaped in b"nrtbf":
+            out.append({
+                ord("n"): 0x0A,
+                ord("r"): 0x0D,
+                ord("t"): 0x09,
+                ord("b"): 0x08,
+                ord("f"): 0x0C,
+            }[escaped])
+        elif escaped in b"()\\":
+            out.append(escaped)
+        elif escaped in b"\r\n":
+            if escaped == 0x0D and index < len(value) and value[index] == 0x0A:
+                index += 1
+        elif 0x30 <= escaped <= 0x37:
+            digits = bytes([escaped])
+            while (
+                len(digits) < 3
+                and index < len(value)
+                and 0x30 <= value[index] <= 0x37
+            ):
+                digits += bytes([value[index]])
+                index += 1
+            out.append(int(digits, 8) & 0xFF)
+        else:
+            out.append(escaped)
+    return out.decode("latin-1", errors="replace")
+
+
+def _pdf_text_operands(content: bytes) -> list[str]:
+    text: list[str] = []
+    for match in PDF_TJ_RE.finditer(content):
+        literal = match.group(0).rsplit(b")", 1)[0] + b")"
+        decoded = _decode_pdf_literal(literal).strip()
+        if decoded:
+            text.append(decoded)
+    for match in PDF_TJ_ARRAY_RE.finditer(content):
+        for literal in PDF_LITERAL_RE.findall(match.group(1)):
+            decoded = _decode_pdf_literal(literal).strip()
+            if decoded:
+                text.append(decoded)
+    return text
+
+
+def _drop_extracted_table_of_contents(lines: Sequence[str]) -> list[str]:
+    output: list[str] = []
+    in_toc = False
+    for line in lines:
+        cleaned = line.strip()
+        if cleaned.casefold() == "table of contents":
+            in_toc = True
+            continue
+        if in_toc and cleaned.startswith("-"):
+            continue
+        in_toc = False
+        output.append(line)
+    return output
+
+
+def _extract_pdf_text(pdf_bytes: bytes) -> tuple[str, list[str]]:
+    if not pdf_bytes.startswith(b"%PDF-"):
+        return "", ["pdf text extraction requires PDF bytes"]
+    streams = _pdf_streams(pdf_bytes)
+    if not streams:
+        return "", ["pdf text extraction found no PDF streams"]
+    decoded_streams, decode_errors = _decoded_pdf_streams(pdf_bytes)
+    if decode_errors:
+        return "", decode_errors
+    text: list[str] = []
+    for stream in decoded_streams:
+        text.extend(_pdf_text_operands(stream))
+    extracted = "\n".join(part for part in _drop_extracted_table_of_contents(text) if part)
+    if not extracted.strip():
+        return "", ["pdf text extraction produced no text"]
+    return extracted, []
+
+
+def _pdf_text_input(args: argparse.Namespace, pdf_bytes: bytes) -> tuple[str, list[str], dict[str, Any]]:
+    if args.pdf_text is not None:
+        pdf_text, errors = _read_text(args.pdf_text, label="--pdf-text")
+        return pdf_text, errors, {
+            "source": "operator_asserted",
+            "verified_from_pdf_bytes": False,
+        }
+    pdf_text, errors = _extract_pdf_text(pdf_bytes)
+    return pdf_text, errors, {
+        "source": "extracted_from_pdf_bytes",
+        "verified_from_pdf_bytes": True,
+    }
+
+
 def _status_summary(result: HttpResult | None) -> dict[str, Any]:
     if result is None:
         return {"status": None}
@@ -226,18 +380,37 @@ def _forbidden_values(args: argparse.Namespace) -> tuple[str, ...]:
 
 
 def _pdf_byte_leak_errors(pdf_bytes: bytes) -> list[str]:
-    text = pdf_bytes.decode("utf-8", errors="replace")
     errors: list[str] = []
+    seen: set[str] = set()
+    decoded_streams, decode_errors = _decoded_pdf_streams(pdf_bytes)
+    errors.extend(decode_errors)
+    texts = [
+        pdf_bytes.decode("utf-8", errors="replace"),
+        *[
+            stream.decode("utf-8", errors="replace")
+            for stream in decoded_streams
+        ],
+    ]
     for label, pattern in PDF_LEAK_PATTERNS:
-        if pattern.search(text):
+        if any(pattern.search(text) for text in texts):
             errors.append(f"pdf bytes contain sensitive pattern: {label}")
+            seen.add(label)
     for label, pattern in SENSITIVE_PATTERNS:
-        if pattern.search(text) and label not in {
-            error.rsplit(": ", 1)[-1]
-            for error in errors
-        }:
+        if label not in seen and any(pattern.search(text) for text in texts):
             errors.append(f"pdf bytes contain sensitive pattern: {label}")
+            seen.add(label)
     return errors
+
+
+def _dedupe_errors(errors: Sequence[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for error in errors:
+        if error in seen:
+            continue
+        deduped.append(error)
+        seen.add(error)
+    return deduped
 
 
 def _sanitizer_errors(payload: Mapping[str, Any], forbidden_values: Sequence[str]) -> list[str]:
@@ -375,11 +548,12 @@ def _live_payload_errors(
 
 def _run(args: argparse.Namespace) -> dict[str, Any]:
     pdf_bytes, byte_errors = _read_bytes(args.pdf_bytes, label="--pdf-bytes")
-    pdf_text, text_errors = _read_text(args.pdf_text, label="--pdf-text")
+    pdf_text, text_errors, pdf_text_meta = _pdf_text_input(args, pdf_bytes)
     read_errors = [*byte_errors, *text_errors]
     if pdf_text.strip() == "":
         read_errors.append("pdf text extraction must be non-empty")
     read_errors.extend(_pdf_byte_leak_errors(pdf_bytes))
+    read_errors = _dedupe_errors(read_errors)
     if read_errors:
         return _safe_failure_payload(args, read_errors)
 
@@ -413,10 +587,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "ok": scorecard.get("ok") is True,
         "inputs": _input_summary(args),
         "fetches": fetches,
-        "pdf_text": {
-            "source": "operator_asserted",
-            "verified_from_pdf_bytes": False,
-        },
+        "pdf_text": pdf_text_meta,
         "scorecard": scorecard,
         "errors": [] if scorecard.get("ok") is True else ["scorecard failed"],
     }

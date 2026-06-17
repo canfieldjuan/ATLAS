@@ -216,8 +216,120 @@ def _artifact(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
+def _pdf_renderable_artifact(**overrides: Any) -> dict[str, Any]:
+    payload = _artifact(**overrides)
+    for section in payload["report_model"]["sections"]:
+        section["surfaces"] = ["pdf"]
+    return payload
+
+
+def _pdf_report_model() -> dict[str, Any]:
+    return _pdf_renderable_artifact()["report_model"]
+
+
+def _render_pdf_bytes(artifact: dict[str, Any]) -> bytes:
+    pytest.importorskip("fpdf")
+    from atlas_brain.deflection_pdf_renderer import (  # noqa: PLC0415
+        render_deflection_full_report_pdf,
+    )
+
+    return render_deflection_full_report_pdf(artifact)
+
+
 def _payload(tmp_path: Path) -> dict[str, Any]:
     return json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+
+
+def test_live_runner_extracts_pdf_text_from_renderer_bytes_by_default(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    pdf_bytes = tmp_path / "report.pdf"
+    pdf_bytes.write_bytes(_render_pdf_bytes(_pdf_renderable_artifact()))
+    calls: list[str] = []
+
+    def _urlopen(request, *, timeout):
+        calls.append(request.full_url)
+        if request.full_url.endswith(f"/{REQUEST_ID}/report-model"):
+            return FakeResponse(200, _pdf_report_model())
+        if request.full_url.endswith(f"/{REQUEST_ID}/artifact"):
+            return FakeResponse(200, _pdf_renderable_artifact())
+        raise AssertionError(request.full_url)
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", _urlopen)
+
+    code = runner.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        TOKEN,
+        "--request-id",
+        REQUEST_ID,
+        "--pdf-bytes",
+        str(pdf_bytes),
+        "--output-result",
+        str(tmp_path / "result.json"),
+        "--json",
+    ])
+
+    assert code == 0
+    printed = json.loads(capsys.readouterr().out)
+    payload = _payload(tmp_path)
+    assert printed == payload
+    assert payload["ok"] is True
+    assert payload["pdf_text"] == {
+        "source": "extracted_from_pdf_bytes",
+        "verified_from_pdf_bytes": True,
+    }
+    assert payload["inputs"]["pdf_text_present"] is False
+    assert payload["scorecard"]["artifacts"]["pdf"]["text_chars"] > 0
+    assert calls == [
+        f"https://atlas.example.com/api/v1/content-ops/deflection-reports/{REQUEST_ID}/report-model",
+        f"https://atlas.example.com/api/v1/content-ops/deflection-reports/{REQUEST_ID}/artifact",
+    ]
+
+
+def test_live_runner_fails_real_renderer_pdf_leaks_before_network(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    artifact = _pdf_renderable_artifact()
+    rows = artifact["report_model"]["sections"][2]["data"]["rows"]
+    rows[0]["question"] = (
+        "How do I export content-ops-deadbeefLEAK reports for buyer@example.com?"
+    )
+    pdf_bytes = tmp_path / "report.pdf"
+    pdf_bytes.write_bytes(_render_pdf_bytes(artifact))
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("rendered PDF leaks must fail before network")
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", _unexpected)
+
+    code = runner.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        TOKEN,
+        "--request-id",
+        REQUEST_ID,
+        "--pdf-bytes",
+        str(pdf_bytes),
+        "--output-result",
+        str(tmp_path / "result.json"),
+    ])
+
+    assert code == 1
+    payload = _payload(tmp_path)
+    assert payload["ok"] is False
+    assert payload["errors"] == [
+        "pdf bytes contain sensitive pattern: request_id",
+        "pdf bytes contain sensitive pattern: customer_email",
+    ]
+    encoded = json.dumps(payload, sort_keys=True)
+    assert "content-ops-deadbeefLEAK" not in encoded
+    assert "buyer@example.com" not in encoded
 
 
 def test_live_runner_fetches_live_json_and_writes_redacted_scorecard(
@@ -266,6 +378,41 @@ def test_live_runner_fetches_live_json_and_writes_redacted_scorecard(
     assert REQUEST_ID not in encoded
     assert str(tmp_path) not in encoded
     assert "https://atlas.example.com" not in encoded
+
+
+def test_pdf_text_extraction_failure_fails_before_network(monkeypatch, tmp_path) -> None:
+    pdf_bytes, _pdf_text = _write_pdf_inputs(
+        tmp_path,
+        pdf_bytes_payload=b"not a pdf",
+    )
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("PDF text extraction failure must fail before network")
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", _unexpected)
+
+    code = runner.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        TOKEN,
+        "--request-id",
+        REQUEST_ID,
+        "--pdf-bytes",
+        str(pdf_bytes),
+        "--output-result",
+        str(tmp_path / "result.json"),
+    ])
+
+    assert code == 1
+    payload = _payload(tmp_path)
+    assert payload["ok"] is False
+    assert payload["inputs"]["pdf_text_present"] is False
+    assert payload["errors"] == [
+        "pdf text extraction requires PDF bytes",
+        "pdf text extraction must be non-empty",
+    ]
+    assert str(tmp_path) not in json.dumps(payload, sort_keys=True)
 
 
 def test_preflight_only_reports_validation_errors_without_network(
@@ -378,6 +525,47 @@ def test_pdf_byte_leak_fails_before_network(monkeypatch, tmp_path) -> None:
     encoded = json.dumps(payload, sort_keys=True)
     assert "content-ops-deadbeefLEAK" not in encoded
     assert "buyer@example.com" not in encoded
+
+
+def test_unsupported_pdf_stream_filter_fails_before_network(monkeypatch, tmp_path) -> None:
+    pdf_bytes, _pdf_text = _write_pdf_inputs(
+        tmp_path,
+        pdf_bytes_payload=(
+            b"%PDF-1.7\n"
+            b"1 0 obj\n<< /Length 35 >>\nstream\n"
+            b"(Support Ticket Deflection Report) Tj\n"
+            b"endstream\nendobj\n"
+            b"2 0 obj\n<< /Filter /ASCIIHexDecode /Length 20 >>\nstream\n"
+            b"636f6e74656e742d6f70732d6465616462656566>\n"
+            b"endstream\nendobj\n%%EOF\n"
+        ),
+    )
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("unsupported PDF streams must fail before network")
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", _unexpected)
+
+    code = runner.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        TOKEN,
+        "--request-id",
+        REQUEST_ID,
+        "--pdf-bytes",
+        str(pdf_bytes),
+        "--output-result",
+        str(tmp_path / "result.json"),
+    ])
+
+    assert code == 1
+    payload = _payload(tmp_path)
+    assert payload["ok"] is False
+    assert payload["errors"] == [
+        "pdf stream uses unsupported filter: ASCIIHexDecode",
+        "pdf text extraction must be non-empty",
+    ]
 
 
 def test_artifact_missing_evidence_export_fails_closed(monkeypatch, tmp_path) -> None:
