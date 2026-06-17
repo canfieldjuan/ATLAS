@@ -20,6 +20,17 @@ the checked-out PR head. A lightweight PR guard also rejects changes to that
 baseline, so a future PR cannot add a secret and hide it by growing the
 baseline.
 
+Legitimate baseline rotations are allowed only through a narrow controlled
+path: rotate or revoke the exposed provider credential first, add the
+`security-rotation` PR label, and keep the diff limited to
+`docs/security/gitleaks-baseline.json`, `docs/SECURITY_GUARDRAILS.md`,
+`HARDENING.md`, and the slice plan under `plans/PR-*.md`. The label alone is
+not enough; product-code or workflow changes in the same PR still fail the
+baseline guard. The baseline guard runs from trusted base-branch workflow code
+on `pull_request_target`, fetches the PR head only as git data, parses labels
+from GitHub's JSON event payload, and rejects candidate baselines that drop
+trusted-base fingerprints.
+
 Current blocking posture: new unbaselined secrets block PRs; Semgrep, Trivy,
 Checkov, pip-audit, and OSV are advisory/report-only until their adoption
 backlogs are triaged and ratcheted.
@@ -103,8 +114,6 @@ decide whether to rewrite history or keep the redacted baseline as the permanent
 
 - Rotate/revoke the provider credentials exposed in historical commit
   `d63a9b77b9727766e14e523626c22dd6c1c80da8`.
-- Add a controlled Gitleaks baseline rotation escape hatch for legitimate
-  post-rotation baseline changes.
 - Rotate the archived IndexNow key that was removed from the branch tip but
   remains in git history.
 - Audit and pin remaining non-security workflow actions, and review
