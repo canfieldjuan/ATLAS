@@ -140,7 +140,7 @@ Parked hardening: none.
   - OK: 185 matching tests are enrolled.
 - Extracted pipeline check bundle.
   - extracted reasoning core: 295 passed.
-  - extracted content pipeline: 4627 passed, 10 skipped, 1 existing torch warning.
+  - extracted content pipeline: 4629 passed, 10 skipped, 1 existing torch warning.
 - Local PR review wrapper.
   - passed after this plan stopped presenting verification commands as fake
     path claims to the consistency audit.
@@ -158,4 +158,4 @@ Parked hardening: none.
 | `tests/test_check_deflection_process_contract.py` | 240 |
 | `tests/test_content_ops_deflection_report.py` | 107 |
 | `tests/test_extracted_content_control_surface_api.py` | 39 |
-| **Total** | **863** |
+| **Total** | **864** |
