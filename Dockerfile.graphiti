@@ -1,7 +1,7 @@
 # Atlas Memory — Graphiti GraphRAG Server (local deployment)
 # Knowledge graph API with Neo4j backend, 100% local inference
 
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
