@@ -38,7 +38,7 @@
     "verify:landing-page-geo": "node scripts/verify-landing-page-geo-prerender.mjs"
   },
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": "^20.19.0 || ^22.13.0 || >=24"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -51,7 +51,7 @@
     "recharts": "^2.15.3"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.1",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^25.9.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

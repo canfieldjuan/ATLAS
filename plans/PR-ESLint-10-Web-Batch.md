@@ -25,6 +25,12 @@ instead of package-qualified paths. The root cause was ambiguous plan wording,
 not a missing repository file; this update fixes the wording class by avoiding
 bare root-looking file names in prose.
 
+Codex review follow-up: automated review also caught two package-boundary
+mismatches. The root cause was treating the Dependabot `eslint` bump as the
+whole ESLint 10 toolchain change; this update aligns `@eslint/js` with the
+available 10.x config package and raises the Node 22 engine floor to match
+`eslint@10.5.0`.
+
 ## Scope (this PR)
 
 Ownership lane: security/dependencies
@@ -47,6 +53,9 @@ Slice phase: Production hardening
         included.
   - [ ] Existing flat ESLint config remains compatible, or any required config
         edit is minimal and explained here.
+  - [ ] Touched package engine ranges match the installed ESLint 10 engine
+        floor, and the directly imported `@eslint/js` config package moves to
+        its available 10.x line.
   - [ ] `atlas-admin-ui` and `atlas-intel-ui` lint/build gates pass locally
         before push.
 - Affected surfaces: frontend lint toolchains and lockfiles for the two
@@ -71,9 +80,11 @@ remain in sync (`atlas-admin-ui/package.json`,
 `atlas-admin-ui/package-lock.json`, `atlas-intel-ui/package.json`, and
 `atlas-intel-ui/package-lock.json`). The existing apps already use flat config
 via `eslint/config`, `@eslint/js`, `typescript-eslint`,
-`eslint-plugin-react-hooks`, and `eslint-plugin-react-refresh`; this slice does
-not rewrite lint policy because the existing configs pass under ESLint 10 for
-the touched packages.
+`eslint-plugin-react-hooks`, and `eslint-plugin-react-refresh`, so this slice
+moves the directly imported `@eslint/js` package to `^10.0.1` alongside
+`eslint@^10.5.0`. The package `engines.node` ranges also move from
+`>=22.12.0` to `^22.13.0 || >=24` because `eslint@10.5.0` declares
+`^20.19.0 || ^22.13.0 || >=24`.
 
 ## Intentional
 
@@ -113,9 +124,9 @@ churn/ui lint failures that block their ESLint 10 PRs.
 | File | LOC |
 |---|---:|
 | `HARDENING.md` | 9 |
-| `atlas-admin-ui/package-lock.json` | 440 |
-| `atlas-admin-ui/package.json` | 2 |
-| `atlas-intel-ui/package-lock.json` | 446 |
-| `atlas-intel-ui/package.json` | 2 |
-| `plans/PR-ESLint-10-Web-Batch.md` | 121 |
-| **Total** | **1020** |
+| `atlas-admin-ui/package-lock.json` | 460 |
+| `atlas-admin-ui/package.json` | 6 |
+| `atlas-intel-ui/package-lock.json` | 466 |
+| `atlas-intel-ui/package.json` | 6 |
+| `plans/PR-ESLint-10-Web-Batch.md` | 132 |
+| **Total** | **1079** |
