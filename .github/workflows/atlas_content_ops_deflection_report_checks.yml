@@ -8,26 +8,36 @@ on:
     paths:
       - ".github/workflows/atlas_content_ops_deflection_report_checks.yml"
       - "requirements.txt"
+      - "atlas_brain/deflection_pdf_renderer.py"
       - "extracted_content_pipeline/**"
       - "extracted_content_pipeline/faq_deflection_report.py"
       - "extracted_content_pipeline/ticket_faq_markdown.py"
       - "scripts/build_content_ops_deflection_report.py"
+      - "scripts/check_deflection_full_report_pdf_export_artifacts.py"
+      - "scripts/run_deflection_full_report_qa_live_runner.py"
       - "tests/test_content_ops_deflection_report.py"
       - "tests/test_extracted_content_ops_live_execute_harness.py"
       - "tests/test_extracted_ticket_faq_markdown.py"
+      - "tests/test_run_deflection_full_report_qa_live_runner.py"
+      - "tests/test_smoke_content_ops_deflection_pdf_export_validators.py"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_deflection_report_checks.yml"
       - "requirements.txt"
+      - "atlas_brain/deflection_pdf_renderer.py"
       - "extracted_content_pipeline/**"
       - "extracted_content_pipeline/faq_deflection_report.py"
       - "extracted_content_pipeline/ticket_faq_markdown.py"
       - "scripts/build_content_ops_deflection_report.py"
+      - "scripts/check_deflection_full_report_pdf_export_artifacts.py"
+      - "scripts/run_deflection_full_report_qa_live_runner.py"
       - "tests/test_content_ops_deflection_report.py"
       - "tests/test_extracted_content_ops_live_execute_harness.py"
       - "tests/test_extracted_ticket_faq_markdown.py"
+      - "tests/test_run_deflection_full_report_qa_live_runner.py"
+      - "tests/test_smoke_content_ops_deflection_pdf_export_validators.py"
 
 jobs:
   atlas-content-ops-deflection-report-checks:
@@ -56,4 +66,6 @@ jobs:
             tests/test_extracted_ticket_faq_markdown.py::test_build_ticket_faq_markdown_condenses_overflow_sources_instead_of_truncating \
             tests/test_extracted_content_ops_live_execute_harness.py::test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot_top_n \
             tests/test_content_ops_deflection_report.py::test_deflection_report_cli_ignores_legacy_max_items_cap \
+            tests/test_run_deflection_full_report_qa_live_runner.py \
+            tests/test_smoke_content_ops_deflection_pdf_export_validators.py \
             -q
