@@ -13,6 +13,7 @@ from extracted_content_pipeline.faq_deflection_report import (
     DEFLECTION_REPORT_SCHEMA_VERSION,
     DEFLECTION_REPORT_SECTION_REGISTRY,
     build_deflection_evidence_export,
+    build_deflection_full_report_qa_deterministic_harness,
     build_deflection_full_report_qa_scorecard,
     build_deflection_report_model,
     build_deflection_snapshot,
@@ -859,6 +860,116 @@ def test_deflection_full_report_qa_scorecard_redacts_bad_observed_strings() -> N
     assert "juancanfield.com" not in encoded
     assert "surface.surface_1.count.count_1" in encoded
     assert "<redacted-string>" in encoded
+
+
+def test_deflection_full_report_qa_deterministic_harness_composes_all_surfaces() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+
+    scorecard = build_deflection_full_report_qa_deterministic_harness(
+        artifact.report_model,
+        evidence_export=export,
+    )
+
+    assert scorecard["schema_version"] == (
+        DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION
+    )
+    assert scorecard["ok"] is True
+    assert scorecard["surfaces"] == {
+        "required": ["email", "result_page", "pdf", "evidence_export"],
+        "observed": ["email", "evidence_export", "pdf", "result_page"],
+    }
+    assertion_ids = {assertion["id"] for assertion in scorecard["assertions"]}
+    assert "harness.surface.email.present" in assertion_ids
+    assert "harness.surface.result_page.present" in assertion_ids
+    assert "harness.surface.pdf.present" in assertion_ids
+    assert "harness.surface.evidence_export.present" in assertion_ids
+    assert "surface.email.count.repeat_ticket_count" in assertion_ids
+    assert "surface.result_page.displayed_rows.seo_targets" in assertion_ids
+    assert "surface.pdf.displayed_rows.ranked_questions" in assertion_ids
+    assert "surface.evidence_export.count.evidence_row_count" in assertion_ids
+
+    encoded = json.dumps(scorecard, sort_keys=True)
+    assert "ticket-export-1" not in encoded
+    assert "Export attribution" not in encoded
+
+
+def test_deflection_full_report_qa_deterministic_harness_requires_each_surface() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+
+    scorecard = build_deflection_full_report_qa_deterministic_harness(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={
+            "email": {"counts": {"repeat_ticket_count": 8}},
+            "result_page": {"counts": {"repeat_ticket_count": 8}},
+            "evidence_export": {"counts": {"evidence_row_count": 8}},
+        },
+    )
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "harness.surface.pdf.present" in failed
+
+
+def test_deflection_full_report_qa_deterministic_harness_fails_surface_mismatches() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+
+    scorecard = build_deflection_full_report_qa_deterministic_harness(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={
+            "email": {"counts": {"repeat_ticket_count": 9}},
+            "result_page": {
+                "counts": {"repeat_ticket_count": 8},
+                "displayed_rows": {"ranked_questions": 3},
+            },
+            "pdf": {
+                "counts": {"repeat_ticket_count": 8},
+                "displayed_rows": {"ranked_questions": 2},
+            },
+            "evidence_export": {"counts": {"evidence_row_count": 8}},
+        },
+    )
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "surface.email.count.repeat_ticket_count" in failed
+    assert "surface.result_page.displayed_rows.ranked_questions" in failed
+
+
+def test_deflection_full_report_qa_deterministic_harness_redacts_unknown_surface_names() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+    raw_request_id = "content-ops-" + "45c06a6950ec4677a214368d6e4dc44f"
+    raw_result_url = f"https://www.juancanfield.com/results/{raw_request_id}"
+
+    scorecard = build_deflection_full_report_qa_deterministic_harness(
+        artifact.report_model,
+        evidence_export=export,
+        surface_observations={
+            "email": {"counts": {"repeat_ticket_count": 8}},
+            "result_page": {"counts": {"repeat_ticket_count": 8}},
+            "pdf": {"counts": {"repeat_ticket_count": 8}},
+            "evidence_export": {"counts": {"evidence_row_count": 8}},
+            raw_result_url: {"counts": {"repeat_ticket_count": 8}},
+        },
+    )
+
+    encoded = json.dumps(scorecard, sort_keys=True)
+    assert raw_request_id not in encoded
+    assert "juancanfield.com" not in encoded
+    assert "surface_" in encoded
 
 
 def test_deflection_snapshot_excludes_complete_evidence_export() -> None:

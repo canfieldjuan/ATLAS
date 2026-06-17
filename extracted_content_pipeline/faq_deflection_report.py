@@ -21,6 +21,12 @@ DEFAULT_DEFLECTION_SEO_TARGET_LIMIT = 50
 DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION = "deflection_evidence.v1"
 DEFLECTION_REPORT_SCHEMA_VERSION = "deflection.v1"
 DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION = "deflection_full_report_qa_scorecard.v1"
+DEFLECTION_FULL_REPORT_QA_REQUIRED_SURFACES = (
+    "email",
+    "result_page",
+    "pdf",
+    "evidence_export",
+)
 _UNCAPPED_REPORT_MAX_ITEMS = 0
 _ASSISTED_CONTACT_COST = 13.50
 _ASSISTED_CONTACT_COST_LABEL = "$13.50"
@@ -239,6 +245,45 @@ DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS: Mapping[str, Mapping[str, int]] = (
             "ranked_questions": 25,
             "question_details": 10,
         }),
+    })
+)
+_FULL_REPORT_QA_SURFACE_COUNT_KEYS: Mapping[str, tuple[str, ...]] = (
+    MappingProxyType({
+        "email": (
+            "repeat_ticket_count",
+            "generated_question_count",
+            "drafted_answer_count",
+            "no_proven_answer_count",
+            "ticket_source_count",
+            "estimated_support_cost",
+        ),
+        "result_page": (
+            "repeat_ticket_count",
+            "generated_question_count",
+            "ranked_question_count",
+            "drafted_answer_count",
+            "no_proven_answer_count",
+            "ticket_source_count",
+            "estimated_support_cost",
+            "evidence_row_count",
+            "source_id_count",
+        ),
+        "pdf": (
+            "repeat_ticket_count",
+            "generated_question_count",
+            "ranked_question_count",
+            "drafted_answer_count",
+            "no_proven_answer_count",
+            "ticket_source_count",
+            "estimated_support_cost",
+        ),
+        "evidence_export": (
+            "evidence_question_count",
+            "evidence_row_count",
+            "source_id_count",
+            "drafted_answer_count",
+            "no_proven_answer_count",
+        ),
     })
 )
 _SCORECARD_SAFE_STRINGS = frozenset({
@@ -467,6 +512,100 @@ def build_deflection_full_report_qa_scorecard(
         "counts": _json_ready(counts),
         "assertions": assertions,
     }
+
+
+def build_deflection_full_report_qa_deterministic_harness(
+    report_model: DeflectionStructuredReport | Mapping[str, Any],
+    *,
+    evidence_export: Mapping[str, Any] | None = None,
+    surface_observations: Mapping[str, Mapping[str, Any]] | None = None,
+    surface_caps: Mapping[str, Mapping[str, int]] | None = None,
+    required_surfaces: Sequence[str] = DEFLECTION_FULL_REPORT_QA_REQUIRED_SURFACES,
+) -> dict[str, Any]:
+    """Return a deterministic all-surface QA scorecard for CI harnesses."""
+
+    model = (
+        report_model.as_dict()
+        if isinstance(report_model, DeflectionStructuredReport)
+        else report_model
+    )
+    if not isinstance(model, Mapping):
+        model = {}
+    caps = surface_caps or DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS
+    counts = _scorecard_counts(_scorecard_sections(model))
+    observations = (
+        surface_observations
+        if surface_observations is not None
+        else _full_report_qa_surface_observations(counts, caps)
+    )
+    observations = observations if isinstance(observations, Mapping) else {}
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        model,
+        evidence_export=evidence_export,
+        surface_observations=observations,
+        surface_caps=caps,
+    )
+    assertions = [dict(assertion) for assertion in scorecard["assertions"]]
+    observed_surface_keys = {str(surface) for surface in observations}
+    for index, surface in enumerate(required_surfaces, start=1):
+        surface_text = str(surface)
+        surface_id = _scorecard_id_segment(
+            surface_text,
+            allowed=_SCORECARD_SURFACE_KEYS,
+            fallback=f"required_surface_{index}",
+        )
+        assertions.append({
+            "id": f"harness.surface.{surface_id}.present",
+            "ok": surface_text in observed_surface_keys,
+            "expected": True,
+            "actual": surface_text in observed_surface_keys,
+        })
+
+    result = dict(scorecard)
+    result["ok"] = all(assertion["ok"] for assertion in assertions)
+    result["assertions"] = assertions
+    result["surfaces"] = {
+        "required": [
+            _scorecard_id_segment(
+                surface,
+                allowed=_SCORECARD_SURFACE_KEYS,
+                fallback=f"required_surface_{index}",
+            )
+            for index, surface in enumerate(required_surfaces, start=1)
+        ],
+        "observed": [
+            _scorecard_id_segment(
+                surface,
+                allowed=_SCORECARD_SURFACE_KEYS,
+                fallback=f"surface_{index}",
+            )
+            for index, surface in enumerate(sorted(observed_surface_keys), start=1)
+        ],
+    }
+    return result
+
+
+def _full_report_qa_surface_observations(
+    counts: Mapping[str, Any],
+    surface_caps: Mapping[str, Mapping[str, int]],
+) -> dict[str, dict[str, Any]]:
+    observations: dict[str, dict[str, Any]] = {}
+    for surface, keys in _FULL_REPORT_QA_SURFACE_COUNT_KEYS.items():
+        observation: dict[str, Any] = {
+            "counts": {key: counts.get(key) for key in keys},
+        }
+        caps = surface_caps.get(surface)
+        if isinstance(caps, Mapping) and caps:
+            observation["displayed_rows"] = {
+                section_id: min(
+                    _scorecard_section_total(section_id, counts),
+                    max(0, _int(cap)),
+                )
+                for section_id, cap in sorted(caps.items())
+            }
+        observations[surface] = observation
+    return observations
 
 
 def _scorecard_sections(model: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -2075,6 +2214,7 @@ __all__ = [
     "build_deflection_report_model",
     "build_deflection_snapshot",
     "build_deflection_report_artifact",
+    "build_deflection_full_report_qa_deterministic_harness",
     "build_deflection_full_report_qa_scorecard",
     "deflection_report_summary",
     "deflection_snapshot_content_opportunities",
