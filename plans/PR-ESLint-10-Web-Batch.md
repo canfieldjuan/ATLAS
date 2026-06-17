@@ -19,6 +19,12 @@ indivisible: both touched packages need their lockfiles refreshed with the
 manifest bump, and hand-trimming generated lockfile churn would be less safe
 than letting npm own the package graph.
 
+Review follow-up: CI caught a plan/code consistency false path claim because
+the original plan described generic `package.json` / `package-lock.json` files
+instead of package-qualified paths. The root cause was ambiguous plan wording,
+not a missing repository file; this update fixes the wording class by avoiding
+bare root-looking file names in prose.
+
 ## Scope (this PR)
 
 Ownership lane: security/dependencies
@@ -47,7 +53,7 @@ Slice phase: Production hardening
   CI-linted web packages.
 - Risk areas: dependency/toolchain backcompat, CI runtime compatibility, and
   lockfile drift with open Dependabot PRs.
-- Reviewer rules triggered: R1, R2, R9, R12, R14.
+- Reviewer rules triggered: R1, R2, R9, R12, R13, R14.
 
 ### Files touched
 
@@ -60,8 +66,10 @@ Slice phase: Production hardening
 
 ## Mechanism
 
-Each touched package is updated with npm so `package.json` and
-`package-lock.json` remain in sync. The existing apps already use flat config
+Each touched package is updated with npm so the package manifest and lockfile
+remain in sync (`atlas-admin-ui/package.json`,
+`atlas-admin-ui/package-lock.json`, `atlas-intel-ui/package.json`, and
+`atlas-intel-ui/package-lock.json`). The existing apps already use flat config
 via `eslint/config`, `@eslint/js`, `typescript-eslint`,
 `eslint-plugin-react-hooks`, and `eslint-plugin-react-refresh`; this slice does
 not rewrite lint policy because the existing configs pass under ESLint 10 for
@@ -109,5 +117,5 @@ churn/ui lint failures that block their ESLint 10 PRs.
 | `atlas-admin-ui/package.json` | 2 |
 | `atlas-intel-ui/package-lock.json` | 446 |
 | `atlas-intel-ui/package.json` | 2 |
-| `plans/PR-ESLint-10-Web-Batch.md` | 113 |
-| **Total** | **1012** |
+| `plans/PR-ESLint-10-Web-Batch.md` | 121 |
+| **Total** | **1020** |
