@@ -145,6 +145,23 @@ class CsvCustomerDataParseError(ValueError):
 
 
 @dataclass(frozen=True)
+class CsvDictRowsLoadResult:
+    """CSV rows plus parser-level count metadata."""
+
+    rows: list[dict[str, Any]]
+    warnings: tuple[CampaignOpportunityWarning, ...]
+    source_row_count: int
+
+    @property
+    def included_row_count(self) -> int:
+        return len(self.rows)
+
+    @property
+    def truncated_row_count(self) -> int:
+        return max(0, self.source_row_count - self.included_row_count)
+
+
+@dataclass(frozen=True)
 class _CsvDelimiterCandidate:
     delimiter: str
     quotechar: str
@@ -437,7 +454,20 @@ def _load_csv_dict_rows(
     *,
     value_coercer: Callable[[Any], Any] | None = None,
 ) -> tuple[list[dict[str, Any]], tuple[CampaignOpportunityWarning, ...]]:
+    result = _load_csv_dict_rows_result(path, value_coercer=value_coercer)
+    return result.rows, result.warnings
+
+
+def _load_csv_dict_rows_result(
+    path: Path,
+    *,
+    value_coercer: Callable[[Any], Any] | None = None,
+    max_rows: int | None = None,
+) -> CsvDictRowsLoadResult:
+    if max_rows is not None and max_rows < 1:
+        raise ValueError("max_rows must be at least 1")
     rows: list[dict[str, Any]] = []
+    source_row_count = 0
     encoding_plan = _csv_encoding_plan(path)
     candidate = _select_csv_delimiter_for_path(path, encoding_plan)
     header_index = candidate.header_index
@@ -483,6 +513,7 @@ def _load_csv_dict_rows(
                 continue
             if not any(str(value or "").strip() for value in values):
                 continue
+            source_row_count += 1
             if len(values) > header_width:
                 raise _csv_inconsistent_columns_error(
                     f"CSV row {row_index} has more cells than the header.",
@@ -499,7 +530,8 @@ def _load_csv_dict_rows(
                 cleaned_value = value_coercer(value) if value_coercer else value
                 if cleaned_value not in (None, ""):
                     cleaned[cleaned_key] = cleaned_value
-            rows.append(cleaned)
+            if max_rows is None or len(rows) < max_rows:
+                rows.append(cleaned)
     if not header_fields or consistency is None:
         raise _csv_missing_header_error()
     consistency_candidate = consistency.as_candidate(quotechar=candidate.quotechar)
@@ -510,7 +542,11 @@ def _load_csv_dict_rows(
         first_leading_row,
         header_index,
     )
-    return rows, load_warnings
+    return CsvDictRowsLoadResult(
+        rows=rows,
+        warnings=load_warnings,
+        source_row_count=source_row_count,
+    )
 
 
 def _csv_missing_header_error() -> CsvCustomerDataParseError:
@@ -1318,6 +1354,7 @@ def _matches_filters(
 __all__ = [
     "CampaignOpportunityLoadResult",
     "CampaignOpportunityWarning",
+    "CsvDictRowsLoadResult",
     "CsvCustomerDataParseError",
     "FileIntelligenceRepository",
     "load_campaign_opportunities_from_file",

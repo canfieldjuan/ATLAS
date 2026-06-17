@@ -10,6 +10,7 @@ import pytest
 from extracted_content_pipeline import campaign_source_adapters as adapters
 from extracted_content_pipeline.campaign_customer_data import CsvCustomerDataParseError
 from extracted_content_pipeline.campaign_source_adapters import (
+    load_csv_source_rows_result_from_file,
     load_source_campaign_opportunities_from_file,
     load_source_rows_from_file,
     load_source_rows_with_warnings_from_file,
@@ -316,6 +317,52 @@ def test_load_source_rows_finds_header_after_large_provider_preamble(
     assert [warning.code for warning in warnings] == ["csv_leading_rows_skipped"]
     assert warnings[0].row_index == 1
     assert "CSV header on row 2" in warnings[0].message
+
+
+def test_load_csv_source_rows_result_reports_counts_and_preserves_warnings(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_capped.csv"
+    path.write_text(
+        "\n".join([
+            "Zendesk export metadata",
+            "ticket_id,subject,message",
+            "ticket-1,Export help,How do I export reports?",
+            "ticket-2,Billing help,Where can I download invoices?",
+            "ticket-3,Password help,How do I reset my password?",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = load_csv_source_rows_result_from_file(path, max_rows=2)
+
+    assert result.source_row_count == 3
+    assert result.included_row_count == 2
+    assert result.truncated_row_count == 1
+    assert [row["ticket_id"] for row in result.rows] == ["ticket-1", "ticket-2"]
+    assert [warning.code for warning in result.warnings] == ["csv_leading_rows_skipped"]
+
+
+def test_load_source_rows_with_warnings_keeps_tuple_contract_after_result_api(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets.csv"
+    path.write_text(
+        "\n".join([
+            "ticket_id,subject,message",
+            "ticket-1,Export help,How do I export reports?",
+        ]),
+        encoding="utf-8",
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(path, file_format="csv")
+
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": "How do I export reports?",
+    }]
+    assert warnings == ()
 
 
 def test_load_source_rows_keeps_comma_delimiter_when_body_has_tabs_semicolons(
