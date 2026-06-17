@@ -16,5 +16,5 @@ def test_claude_oidc_job_is_owner_gated() -> None:
 def test_claude_actions_are_sha_pinned() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4" in text
+    assert "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3" in text
     assert "anthropics/claude-code-action@9dd8b95a392eb34b6f5fb56cf5a64cb735912d4b # v1" in text
