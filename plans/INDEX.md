@@ -1096,5 +1096,6 @@
 - [PR-Support-Ticket-Source-Context-Live-Validation](archive/PR-Support-Ticket-Source-Context-Live-Validation.md) - lane: content-ops/support-ticket-input-provider | phase: functional validation
 - [PR-Track-Preflight-Dotenv-Fix](archive/PR-Track-Preflight-Dotenv-Fix.md) - lane: content-ops/deflection-tracking | phase: workflow/process
 - [PR-UI-Test-Enrollment-Audit](archive/PR-UI-Test-Enrollment-Audit.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
+- [PR-Workflow-Action-Pin-OIDC-Audit](archive/PR-Workflow-Action-Pin-OIDC-Audit.md) - lane: security/workflow | phase: Production hardening
 - [PR-Workflow-Single-Push-Review](archive/PR-Workflow-Single-Push-Review.md) - lane: dev-workflow/pr-review-efficiency | phase: Workflow/process
 - [PR-Workflow-Teardown-On-Merge](archive/PR-Workflow-Teardown-On-Merge.md) - lane: workflow/process | phase: Workflow/process

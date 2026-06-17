@@ -63,7 +63,7 @@ register under `docs/technical-debt/`.
 
 ### Pin remaining mutable workflow supply-chain refs
 - File/location: `.github/workflows/*.yml`, `.github/workflows/*.yaml`
-- Description: The workflow posture audit now reports existing mutable GitHub Action refs, reusable workflow refs, and container/service image refs as warnings, and `claude.yml` has been owner-gated and SHA-pinned. Existing product/check workflows still use mutable refs and should be drained through a dedicated pinning or Dependabot-triage slice.
+- Description: The workflow posture audit now reports existing mutable GitHub Action refs, reusable workflow refs, and container/service image refs as warnings. `claude.yml` has been owner-gated and SHA-pinned, and `actions/setup-python@v5` has been drained to a SHA pin. Existing product/check workflows still use other mutable refs and should be drained through dedicated pinning or Dependabot-triage slices.
 - Why it matters: Mutable action tags, reusable workflow refs, and container tags can become CI compromise paths if a third-party action/image is compromised or a tag is repointed.
 - Effort: M
 - Category: security
