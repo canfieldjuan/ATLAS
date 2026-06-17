@@ -231,6 +231,27 @@ export interface ContentOpsIngestionParseError {
   byte?: number
 }
 
+export interface ContentOpsSourceRowAdmissionDecision {
+  status: string
+  reason?: string
+  location?: string
+  message?: string
+  howToFix?: string
+}
+
+export interface ContentOpsSourceRowAdmission {
+  inputFormat: string
+  rawSourceRowCount: number
+  usableSourceRowCount: number
+  usableSourceRatio: number | null
+  mappedFields: Record<string, string[]>
+  ignoredPrivateFields: string[]
+  populatedUnmappedFields: string[]
+  fieldSampleLimit: number
+  admissionDecision?: ContentOpsSourceRowAdmissionDecision
+  coverageWarnings: Array<Record<string, unknown>>
+}
+
 export interface ContentOpsIngestionDiagnostics {
   ok: boolean
   mode: 'opportunities' | 'source_rows'
@@ -243,6 +264,7 @@ export interface ContentOpsIngestionDiagnostics {
   samples: Array<Record<string, unknown>>
   sourceMaterial: Array<Record<string, unknown>>
   warnings: ContentOpsIngestionWarning[]
+  sourceRowAdmission?: ContentOpsSourceRowAdmission
   parseError?: ContentOpsIngestionParseError
 }
 
