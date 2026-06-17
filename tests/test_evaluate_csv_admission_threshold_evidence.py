@@ -44,6 +44,75 @@ def test_zendesk_product_proof_corpus_records_full_csv_admission() -> None:
         assert case["raw_source_row_count"] == 50
         assert case["usable_source_ratio"] == 1.0
         assert case["coverage_warnings"] == []
+    assert summary["breakage_matrix"]["case_count"] == 6
+    assert summary["breakage_matrix"]["blocking_case_count"] == 0
+    assert summary["breakage_matrix"]["known_gap_count"] == 1
+
+
+def test_breakage_matrix_scores_fail_closed_warning_and_known_gap() -> None:
+    cases = {case["name"]: case for case in MOD.evaluate_breakage_matrix()}
+
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "observed_outcome"
+    ] == "REJECT"
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "admission_status"
+    ] == "REJECT"
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "populated_unmapped_fields"
+    ] == ["Conversation Text"]
+
+    assert cases["private_note_only_rejects_zero_usable"]["observed_outcome"] == (
+        "REJECT"
+    )
+    assert cases["private_note_only_rejects_zero_usable"][
+        "ignored_private_fields"
+    ] == ["Internal Notes"]
+
+    assert cases["status_timestamp_only_rejects_zero_usable"][
+        "observed_outcome"
+    ] == "REJECT"
+    assert cases["status_timestamp_only_rejects_zero_usable"][
+        "populated_unmapped_fields"
+    ] == ["Status", "First Response", "Last Response"]
+
+    partial = cases["partial_blank_rows_warns_without_rejecting"]
+    assert partial["observed_outcome"] == "ACCEPT_WITH_WARNING"
+    assert partial["coverage_warnings"] == [{
+        "code": "partial_source_row_coverage",
+        "location": "source_row_csv",
+        "raw_source_row_count": 2,
+        "usable_source_row_count": 1,
+        "skipped_source_row_count": 1,
+        "usable_source_ratio": 0.5,
+    }]
+
+    assert cases["header_only_csv_has_no_policy_decision"]["observed_outcome"] == (
+        "NO_POLICY_DECISION"
+    )
+    known_gap = cases["json_blob_message_known_fail_open"]
+    assert known_gap["case_status"] == "known_gap"
+    assert known_gap["known_gap"] is True
+    assert known_gap["observed_outcome"] == "ACCEPT_CLEAN"
+    assert known_gap["admission_status"] == "ACCEPT"
+
+
+def test_breakage_matrix_expected_guard_mismatch_blocks() -> None:
+    case = MOD.CsvBreakageCase(
+        name="broken_expectation",
+        description="A mismatch should fail the evidence runner.",
+        fieldnames=("Ticket ID", "Message"),
+        rows=({"Ticket ID": "T-1", "Message": "Customer cannot export reports."},),
+        expected_outcome="REJECT",
+    )
+
+    result = MOD.evaluate_breakage_case(case)
+
+    assert result["observed_outcome"] == "ACCEPT_CLEAN"
+    assert result["case_status"] == "failed"
+    assert MOD._breakage_blocking_codes([result]) == [
+        "broken_expectation:unexpected_breakage_outcome"
+    ]
 
 
 def test_public_comments_projection_ignores_private_note_column() -> None:
@@ -259,3 +328,6 @@ def test_main_writes_summary_and_doc(tmp_path: Path) -> None:
     assert summary["observed_min_usable_source_ratio"] == 1.0
     proof = doc.read_text(encoding="utf-8")
     assert "does not choose a low non-zero reject threshold" in proof
+    assert "## Parser Breakage Matrix" in proof
+    assert "json_blob_message_known_fail_open" in proof
+    assert "Known fail-open gaps: `1`" in proof

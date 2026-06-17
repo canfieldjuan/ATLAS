@@ -1,6 +1,186 @@
 {
   "blocking_case_count": 0,
   "blocking_violation_codes": [],
+  "breakage_matrix": {
+    "blocking_case_count": 0,
+    "case_count": 6,
+    "cases": [
+      {
+        "admission_status": "REJECT",
+        "case_status": "ok",
+        "coverage_warnings": [],
+        "description": "Populated body-like column is not mapped and must reject.",
+        "expected_full_coverage": false,
+        "expected_outcome": "REJECT",
+        "ignored_private_fields": [],
+        "known_gap": false,
+        "mapped_fields": {
+          "source_id": [
+            "Ticket ID"
+          ]
+        },
+        "name": "unknown_body_like_column_rejects_zero_usable",
+        "observed_outcome": "REJECT",
+        "ok": false,
+        "populated_unmapped_fields": [
+          "Conversation Text"
+        ],
+        "raw_source_row_count": 1,
+        "usable_source_ratio": 0.0,
+        "usable_source_row_count": 0,
+        "warning_counts": {
+          "missing_source_text": 1
+        }
+      },
+      {
+        "admission_status": "REJECT",
+        "case_status": "ok",
+        "coverage_warnings": [],
+        "description": "Private/internal-only rows must not count as usable text.",
+        "expected_full_coverage": false,
+        "expected_outcome": "REJECT",
+        "ignored_private_fields": [
+          "Internal Notes"
+        ],
+        "known_gap": false,
+        "mapped_fields": {
+          "source_id": [
+            "Ticket ID"
+          ]
+        },
+        "name": "private_note_only_rejects_zero_usable",
+        "observed_outcome": "REJECT",
+        "ok": false,
+        "populated_unmapped_fields": [],
+        "raw_source_row_count": 1,
+        "usable_source_ratio": 0.0,
+        "usable_source_row_count": 0,
+        "warning_counts": {
+          "missing_source_text": 1
+        }
+      },
+      {
+        "admission_status": "REJECT",
+        "case_status": "ok",
+        "coverage_warnings": [],
+        "description": "Status/SLA timestamp columns alone are not customer wording.",
+        "expected_full_coverage": false,
+        "expected_outcome": "REJECT",
+        "ignored_private_fields": [],
+        "known_gap": false,
+        "mapped_fields": {
+          "source_id": [
+            "Ticket ID"
+          ]
+        },
+        "name": "status_timestamp_only_rejects_zero_usable",
+        "observed_outcome": "REJECT",
+        "ok": false,
+        "populated_unmapped_fields": [
+          "Status",
+          "First Response",
+          "Last Response"
+        ],
+        "raw_source_row_count": 1,
+        "usable_source_ratio": 0.0,
+        "usable_source_row_count": 0,
+        "warning_counts": {
+          "missing_source_text": 1
+        }
+      },
+      {
+        "admission_status": "ACCEPT",
+        "case_status": "ok",
+        "coverage_warnings": [
+          {
+            "code": "partial_source_row_coverage",
+            "location": "source_row_csv",
+            "raw_source_row_count": 2,
+            "skipped_source_row_count": 1,
+            "usable_source_ratio": 0.5,
+            "usable_source_row_count": 1
+          }
+        ],
+        "description": "Some usable rows plus blanks should accept with coverage warning.",
+        "expected_full_coverage": false,
+        "expected_outcome": "ACCEPT_WITH_WARNING",
+        "ignored_private_fields": [],
+        "known_gap": false,
+        "mapped_fields": {
+          "source_id": [
+            "Ticket ID"
+          ],
+          "source_text": [
+            "Message"
+          ]
+        },
+        "name": "partial_blank_rows_warns_without_rejecting",
+        "observed_outcome": "ACCEPT_WITH_WARNING",
+        "ok": true,
+        "populated_unmapped_fields": [],
+        "raw_source_row_count": 2,
+        "usable_source_ratio": 0.5,
+        "usable_source_row_count": 1,
+        "warning_counts": {
+          "missing_company_name": 1,
+          "missing_contact_email": 1,
+          "missing_source_text": 1,
+          "missing_vendor_name": 1
+        }
+      },
+      {
+        "admission_status": null,
+        "case_status": "ok",
+        "coverage_warnings": [],
+        "description": "Header-only CSV has no hard source-row admission decision.",
+        "expected_full_coverage": false,
+        "expected_outcome": "NO_POLICY_DECISION",
+        "ignored_private_fields": [],
+        "known_gap": false,
+        "mapped_fields": {},
+        "name": "header_only_csv_has_no_policy_decision",
+        "observed_outcome": "NO_POLICY_DECISION",
+        "ok": false,
+        "populated_unmapped_fields": [],
+        "raw_source_row_count": 0,
+        "usable_source_ratio": null,
+        "usable_source_row_count": 0,
+        "warning_counts": {}
+      },
+      {
+        "admission_status": "ACCEPT",
+        "case_status": "known_gap",
+        "coverage_warnings": [],
+        "description": "Machine JSON in a mapped text field is currently accepted.",
+        "expected_full_coverage": false,
+        "expected_outcome": "ACCEPT_CLEAN",
+        "ignored_private_fields": [],
+        "known_gap": true,
+        "mapped_fields": {
+          "source_id": [
+            "Ticket ID"
+          ],
+          "source_text": [
+            "Message"
+          ]
+        },
+        "name": "json_blob_message_known_fail_open",
+        "observed_outcome": "ACCEPT_CLEAN",
+        "ok": true,
+        "populated_unmapped_fields": [],
+        "raw_source_row_count": 1,
+        "usable_source_ratio": 1.0,
+        "usable_source_row_count": 1,
+        "warning_counts": {
+          "missing_company_name": 1,
+          "missing_contact_email": 1,
+          "missing_vendor_name": 1
+        }
+      }
+    ],
+    "conclusion": "Synthetic breakage cases prove parser mechanics only. Fail-closed and warning expectations are blocking; known fail-open cases are recorded as explicit gaps and do not set low-coverage reject policy.",
+    "known_gap_count": 1
+  },
   "case_count": 2,
   "cases": [
     {
