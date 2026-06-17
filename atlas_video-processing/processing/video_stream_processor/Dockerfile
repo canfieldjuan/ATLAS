@@ -1,4 +1,5 @@
 # Use an official Python runtime as a parent image
+#checkov:skip=CKV_DOCKER_2:Video stream processor is a worker process and does not expose an HTTP health endpoint.
 FROM python:3.9-slim-bullseye
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -17,6 +18,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of your application's source code
 COPY . .
+
+RUN useradd --create-home --shell /usr/sbin/nologin atlas && \
+    chown -R atlas:atlas /app
+USER atlas
 
 # Command to run the application
 CMD ["python", "video_stream_processor.py"]

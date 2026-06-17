@@ -1,5 +1,8 @@
 name: Semantic Diff Advisor (advisory)
 
+permissions:
+  contents: read
+
 # Advisory matching/contract-edge pattern detector -- NOT a gate. When a PR
 # widens a recognition set, changes a matcher, touches a normalizer beside
 # term sets, or adds a defaulting idiom in projection context, this prints

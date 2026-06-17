@@ -1,5 +1,8 @@
 name: Atlas Content Ops Generated Assets Checks
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:

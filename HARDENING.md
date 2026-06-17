@@ -30,6 +30,62 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-06-16
+
+### Add controlled Gitleaks baseline rotation escape hatch
+- File/location: `.github/workflows/security_guardrails.yml`, `gitleaks-baseline-guard`
+- Description: The baseline guard blocks all PR changes to `docs/security/gitleaks-baseline.json`, but its failure message references a dedicated security rotation PR. Add an explicit controlled path, such as requiring a `security-rotation` label plus narrow path ownership, so legitimate post-rotation baseline changes are possible without weakening normal PR protection.
+- Why it matters: The guard correctly prevents baseline poisoning, but without a controlled escape hatch a legitimate provider rotation or history rewrite can get stuck behind the same protection.
+- Effort: S
+- Category: security
+- Owner/session: Codex security/workflow
+- Found during: PR-Security-Guardrail-CI review
+
+### Rotate archived IndexNow key
+- File/location: Historical `atlas-intel-next` / `_ARCHIVED_atlas-intel-next/scripts/indexnow.ts`
+- Description: The archived IndexNow script previously contained a real IndexNow key. The branch tip now requires `INDEXNOW_KEY`, but the old key remains in git history and should be rotated or replaced at the IndexNow key-hosting location.
+- Why it matters: IndexNow keys are low-sensitivity and semi-public by design, but rotating the historical value closes the loop on a real key surfaced by secret scanning.
+- Effort: S
+- Category: security
+- Owner/session: Codex security/workflow
+- Found during: PR-Security-Guardrail-CI review
+
+### Audit remaining workflow action pins and Claude OIDC trigger
+- File/location: `.github/workflows/*.yml`, especially `.github/workflows/claude.yml`
+- Description: This security guardrail PR pins the newly introduced security workflows to immutable action SHAs and confirms there are no `pull_request_target` triggers. Existing product workflows still use mutable action tags, and `claude.yml` grants `id-token: write` to the Claude action when `@claude` is invoked in issue or PR review surfaces.
+- Why it matters: Mutable action tags and broad OIDC grants can become CI compromise paths if a third-party action is compromised or a workflow trigger trusts attacker-controlled input.
+- Effort: M
+- Category: security
+- Owner/session: Codex security/workflow
+- Found during: PR-Security-Guardrail-CI review
+
+### Burn down advisory security scanner backlog
+- File/location: `.github/workflows/security_guardrails.yml`, GitHub code scanning results for Semgrep, Trivy, Checkov, pip-audit, and OSV.
+- Description: The first adoption run surfaced existing Semgrep findings, Trivy HIGH/CRITICAL config findings, and dependency CVEs. This PR keeps the sweep informative so `main` does not launch permanently red, but the findings still need triage and ratcheting to blocking gates.
+- Why it matters: Advisory scans are only useful if the backlog is burned down and the gates are tightened once known debt is fixed or explicitly waived.
+- Effort: L
+- Category: security
+- Owner/session: Codex security/workflow
+- Found during: PR-Security-Guardrail-CI review
+
+### Pin or retire floating ASR dependency audit input
+- File/location: `requirements.asr.txt`
+- Description: `requirements.asr.txt` installs `nemo_toolkit[asr]` from `NVIDIA/NeMo@main`, so pip-audit would resolve a moving upstream dependency graph on every scheduled run. The advisory pip-audit matrix excludes this file entirely, which means the ASR dependency stack has zero CVE coverage until the requirement is pinned to a tag/commit or retired.
+- Why it matters: Security scans need deterministic inputs; a floating VCS requirement can fail or change results without any Atlas code change, but excluding it is still a conscious CVE-coverage gap that must be closed.
+- Effort: M
+- Category: security
+- Owner/session: Codex security/workflow
+- Found during: PR-Security-Guardrail-CI review
+
+### Rotate credentials exposed in historical `.env`
+- File/location: Historical commit `d63a9b77b9727766e14e523626c22dd6c1c80da8`, file `.env`
+- Description: Full-history Gitleaks adoption scan found redacted provider credentials in an old committed `.env`, including Stripe, Anthropic, OpenRouter, Reddit, Firecrawl, Stack Overflow, Product Hunt, CAPTCHA, Apollo, SignalWire, Google Calendar, Resend, and Google API-style keys.
+- Why it matters: Any real key committed to git history must be treated as exposed even if the file is now ignored or deleted. CI can block new leaks with a baseline, but provider-side rotation/revocation is still required.
+- Effort: M
+- Category: security
+- Owner/session: Codex security/workflow
+- Found during: PR-Security-Guardrail-CI
+
 ## 2026-06-14
 
 ### Support-ticket tokenizer still over-strips some es-ending words

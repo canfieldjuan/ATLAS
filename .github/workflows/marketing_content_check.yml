@@ -1,6 +1,9 @@
 # .github/workflows/marketing_content_check.yml
 name: Marketing Content Voice Check
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:

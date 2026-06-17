@@ -1,5 +1,8 @@
 name: Atlas Content Ops Auth Checks
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:

@@ -1,5 +1,8 @@
 name: Atlas Deflection Migration Apply Checks
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:

@@ -1,0 +1,43 @@
+name: Security DAST ZAP
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 10 * * 2"
+
+permissions:
+  contents: read
+
+jobs:
+  zap-baseline:
+    name: OWASP ZAP baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve target URL
+        id: target
+        env:
+          DEFAULT_TARGET_URL: ${{ vars.ATLAS_DAST_TARGET_URL }}
+        run: |
+          target="$DEFAULT_TARGET_URL"
+          if [ -z "$target" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Set repository variable ATLAS_DAST_TARGET_URL to run DAST."
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "url=$target" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.target.outputs.configured == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Run ZAP baseline
+        if: steps.target.outputs.configured == 'true'
+        uses: zaproxy/action-baseline@6c5a007541891231cd9e0ddec25d4f25c59c9874 # v0.15.0
+        with:
+          target: ${{ steps.target.outputs.url }}
+          fail_action: true
+          allow_issue_writing: false
+          artifact_name: zap-baseline-report
+          cmd_options: "-a"

@@ -8,10 +8,14 @@
  */
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://churnsignals.co";
-const INDEXNOW_KEY = "6a1d58a9cdf74c7b9c948ac27f86ec7a";
+const INDEXNOW_KEY = process.env.INDEXNOW_KEY;
 const INDEXNOW_ENDPOINT = "https://api.indexnow.org/IndexNow";
 
 async function main() {
+  if (!INDEXNOW_KEY) {
+    throw new Error("INDEXNOW_KEY is required to submit IndexNow URLs");
+  }
+
   // Dynamically import the sitemap to get all URLs
   const { POSTS } = await import("../content/blog/index.js");
 
