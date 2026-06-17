@@ -1,0 +1,142 @@
+{
+  "atlas_brain/storage/config.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/storage/database.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/storage/models.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 11
+  },
+  "atlas_brain/storage/repositories/appointment.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 11
+  },
+  "atlas_brain/storage/repositories/call_transcript.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/storage/repositories/competitive_set.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/storage/repositories/conversation.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 17
+  },
+  "atlas_brain/storage/repositories/device.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/storage/repositories/email.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 11
+  },
+  "atlas_brain/storage/repositories/feedback.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/storage/repositories/identity.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/storage/repositories/invoice.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/storage/repositories/reminder.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 11
+  },
+  "atlas_brain/storage/repositories/scheduled_task.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 20
+  },
+  "atlas_brain/storage/repositories/session.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 3
+    },
+    "score": 17
+  },
+  "atlas_brain/storage/repositories/sms_message.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/storage/repositories/unified_alerts.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 2,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 19
+  },
+  "atlas_brain/storage/repositories/vector.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/storage/repositories/vision.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 8
+  }
+}
