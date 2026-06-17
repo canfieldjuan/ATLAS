@@ -1,13 +1,11 @@
-name: Maturity Sweep (advisory)
+name: Maturity Sweep
 
 permissions:
   contents: read
 
-# Advisory brittleness triage -- NOT a gate. Ranks files in the content-ops
-# lane by structural-fragility signals (untested modules, happy-path-only
-# tests, swallowed exceptions, unguarded input) and prints a worst-first
-# agenda for an adversarial pass. It never fails the build: it surfaces
-# suspects, judgment stays with the reviewer.
+# Brittleness triage + ratchet gate. The advisory report ranks files in the
+# content-ops lane by structural-fragility signals, while the blocking baseline
+# gate prevents new brittleness without failing on existing debt.
 #
 # It catches STRUCTURAL brittleness only. Semantic / contract / logic bugs
 # (over-broad matchers, fail-open fields, asymmetric token handling) are NOT
@@ -20,6 +18,7 @@ on:
       - ".github/workflows/maturity_sweep_advisory.yml"
       - "scripts/maturity_sweep.py"
       - "tests/test_maturity_sweep.py"
+      - "tests/maturity_sweep/baseline_extracted_content_pipeline.json"
       - "extracted_content_pipeline/**"
       - "tests/test_extracted_*.py"
       - "tests/test_content_ops_*.py"
@@ -29,6 +28,7 @@ on:
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
       - "scripts/maturity_sweep.py"
+      - "tests/maturity_sweep/baseline_extracted_content_pipeline.json"
       - "extracted_content_pipeline/**"
 
 jobs:
@@ -63,3 +63,16 @@ jobs:
           echo "A green sweep is not a production-hardening stamp."
           echo
           python scripts/maturity_sweep.py extracted_content_pipeline --tests-root tests --top 25
+
+      - name: Maturity sweep ratchet gate (blocking)
+        run: |
+          python scripts/maturity_sweep.py extracted_content_pipeline \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_extracted_content_pipeline.json \
+            --min-score 8 \
+            --sensitive-glob '**/billing/**' \
+            --sensitive-glob '**/paid*' \
+            --sensitive-glob '**/auth/**' \
+            --sensitive-glob '**/webhook*' \
+            --sensitive-glob '**/payment*' \
+            --sensitive-glob '**/*deletion*'
