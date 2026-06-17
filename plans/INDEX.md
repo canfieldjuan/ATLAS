@@ -1,6 +1,6 @@
 # Plan archive index
 
-1124 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1125 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -1016,6 +1016,7 @@
 - [PR-MCP-Connector-Session-Handoff](archive/PR-MCP-Connector-Session-Handoff.md)
 - [PR-Marketer-Reviews-As-Input](archive/PR-Marketer-Reviews-As-Input.md) - lane: content-ops/marketer-reviews-as-input | phase: Workflow/process
 - [PR-Maturity-Sweep-Advisory-CI](archive/PR-Maturity-Sweep-Advisory-CI.md) - lane: review-workflow | phase: workflow/process
+- [PR-Maturity-Sweep-Atlas-Brain-B2a](archive/PR-Maturity-Sweep-Atlas-Brain-B2a.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Gate-Scope](archive/PR-Maturity-Sweep-Gate-Scope.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Robust-Gate](archive/PR-Maturity-Sweep-Robust-Gate.md) - lane: ci/maturity-sweep | phase: Production hardening (CI enforcement)
 - [PR-Mobile-NPM-Security-Patches](archive/PR-Mobile-NPM-Security-Patches.md) - lane: security/dependencies | phase: Production hardening
