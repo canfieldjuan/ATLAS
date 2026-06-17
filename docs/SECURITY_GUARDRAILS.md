@@ -50,7 +50,8 @@ backlogs are triaged and ratcheted.
   repository and uploads SARIF in advisory mode.
 - IaC/container config: Trivy config mode and Checkov scan Dockerfiles,
   Docker Compose, GitHub Actions, and Terraform if Terraform is added later.
-  These are advisory until the initial HIGH/CRITICAL backlog is triaged.
+  Trivy and Checkov upload SARIF in advisory mode until the initial
+  HIGH/CRITICAL backlog is triaged.
 
 These checks are repository-level guardrails. They are not tied to one Atlas
 product unless the scanner finding points at product-specific files.
