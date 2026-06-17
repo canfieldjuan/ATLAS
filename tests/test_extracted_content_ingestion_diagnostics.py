@@ -326,6 +326,43 @@ def test_inspect_source_csv_warns_when_partial_upload_has_machine_json_row(
     }]
 
 
+def test_inspect_source_csv_accepts_long_ticket_body_field(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "long-ticket-body.csv"
+    long_body = "Customer cannot export the weekly report. " + ("x" * 200_000)
+    path.write_text(
+        "Ticket ID,Message\n"
+        f"T-1,{long_body}\n",
+        encoding="utf-8",
+    )
+
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+        sample_limit=1,
+        default_fields={
+            "company_name": "Acme Logistics",
+            "vendor_name": "Atlas",
+            "contact_email": "ops@example.com",
+        },
+    ).as_dict()
+
+    admission = payload["source_row_admission"]
+    assert payload["ok"] is True
+    assert payload["warning_counts"] == {}
+    assert admission["raw_source_row_count"] == 1
+    assert admission["usable_source_row_count"] == 1
+    assert admission["usable_source_ratio"] == 1.0
+    assert admission["mapped_fields"] == {
+        "source_id": ["Ticket ID"],
+        "source_text": ["Message"],
+    }
+    assert admission["admission_decision"] == {"status": "ACCEPT"}
+    assert "coverage_warnings" not in admission
+
+
 @pytest.mark.parametrize(
     ("header", "text"),
     (
