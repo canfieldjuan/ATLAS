@@ -342,6 +342,19 @@ export function fromWireIngestionDiagnostics(
       rowIndex: warning.row_index,
       field: warning.field,
     })),
+    parseError: wire.parse_error
+      ? {
+          code: wire.parse_error.code,
+          message: wire.parse_error.message,
+          howToFix: wire.parse_error.how_to_fix,
+          location: wire.parse_error.location,
+          rowIndex: wire.parse_error.row_index,
+          line: wire.parse_error.line,
+          column: wire.parse_error.column,
+          encoding: wire.parse_error.encoding,
+          byte: wire.parse_error.byte,
+        }
+      : undefined,
   }
 }
 

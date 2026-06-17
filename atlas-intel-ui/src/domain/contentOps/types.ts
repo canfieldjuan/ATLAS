@@ -219,6 +219,18 @@ export interface ContentOpsIngestionWarning {
   field?: string
 }
 
+export interface ContentOpsIngestionParseError {
+  code: string
+  message: string
+  howToFix?: string
+  location?: string
+  rowIndex?: number
+  line?: number
+  column?: number
+  encoding?: string | null
+  byte?: number
+}
+
 export interface ContentOpsIngestionDiagnostics {
   ok: boolean
   mode: 'opportunities' | 'source_rows'
@@ -231,6 +243,7 @@ export interface ContentOpsIngestionDiagnostics {
   samples: Array<Record<string, unknown>>
   sourceMaterial: Array<Record<string, unknown>>
   warnings: ContentOpsIngestionWarning[]
+  parseError?: ContentOpsIngestionParseError
 }
 
 export interface ContentOpsIngestionImportResult {

@@ -2774,6 +2774,9 @@ function IngestionInspectResult({ state }: { state: IngestionInspectState }) {
           Warnings: {diagnostics.warningCount}
         </span>
       </div>
+      {diagnostics.parseError && (
+        <IngestionParseErrorNotice parseError={diagnostics.parseError} />
+      )}
       {diagnostics.warnings.length > 0 && (
         <Section label="Warnings">
           <ul className="ml-4 list-disc text-xs text-amber-100">
@@ -2793,6 +2796,25 @@ function IngestionInspectResult({ state }: { state: IngestionInspectState }) {
         </Section>
       )}
     </div>
+  )
+}
+
+function IngestionParseErrorNotice({
+  parseError,
+}: {
+  parseError: NonNullable<ContentOpsIngestionDiagnostics['parseError']>
+}) {
+  return (
+    <Section label="Parser issue">
+      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+        <div className="font-medium">
+          {parseError.code}: {parseError.message}
+        </div>
+        {parseError.howToFix && (
+          <div className="mt-1 text-amber-50/80">{parseError.howToFix}</div>
+        )}
+      </div>
+    </Section>
   )
 }
 
@@ -2985,6 +3007,9 @@ function IngestionImportResult({
           <span>Opportunities: {state.diagnostics.opportunityCount}</span>
           <span>Warnings: {state.diagnostics.warningCount}</span>
         </div>
+        {state.diagnostics.parseError && (
+          <IngestionParseErrorNotice parseError={state.diagnostics.parseError} />
+        )}
         {state.diagnostics.warnings.length > 0 && (
           <Section label="Blocking diagnostics">
             <ul className="ml-4 list-disc text-xs text-amber-100">

@@ -58,6 +58,44 @@ test('domain mapper preserves full ingestion source material separately from sam
   )
 })
 
+test('domain mapper preserves ingestion parse errors', () => {
+  const diagnostics = fromWireIngestionDiagnostics({
+    ok: false,
+    mode: 'source_rows',
+    source: 'tickets.csv',
+    opportunity_count: 0,
+    warning_count: 0,
+    warning_counts: {},
+    missing_field_counts: {},
+    source_type_counts: {},
+    samples: [],
+    warnings: [],
+    parse_error: {
+      code: 'csv_parse_error',
+      message: 'CSV customer data could not be parsed.',
+      how_to_fix: 'Export a valid CSV.',
+      location: 'source_row_csv',
+      row_index: 3,
+      line: 3,
+      column: 12,
+      encoding: 'utf-8',
+      byte: 42,
+    },
+  })
+
+  assert.deepEqual(diagnostics.parseError, {
+    code: 'csv_parse_error',
+    message: 'CSV customer data could not be parsed.',
+    howToFix: 'Export a valid CSV.',
+    location: 'source_row_csv',
+    rowIndex: 3,
+    line: 3,
+    column: 12,
+    encoding: 'utf-8',
+    byte: 42,
+  })
+})
+
 test('domain import request can opt into full source material', () => {
   assert.deepEqual(
     toWireIngestionImportRequest({
@@ -116,4 +154,12 @@ test('new run import handoff applies persisted target ids to the run inputs', ()
   )
   assert.equal(newRunSource.includes('next.source_material = sourceMaterial.map'), false)
   assert.equal(newRunSource.includes('onApplySourceMaterial(sourceMaterial)'), false)
+})
+
+test('new run page renders parser issues from ingestion diagnostics', () => {
+  assert.ok(newRunSource.includes('diagnostics.parseError'))
+  assert.ok(newRunSource.includes('state.diagnostics.parseError'))
+  assert.ok(newRunSource.includes('function IngestionParseErrorNotice'))
+  assert.ok(newRunSource.includes('Parser issue'))
+  assert.ok(newRunSource.includes('parseError.howToFix'))
 })
