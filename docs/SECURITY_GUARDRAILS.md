@@ -41,10 +41,9 @@ backlogs are triaged and ratcheted.
   findings from the first trusted-main adoption scan while still failing on new
   leaks.
 - Python SCA: pip-audit runs in advisory mode against deterministic tracked
-  requirements files: `requirements.txt`, `atlas_edge/requirements.txt`, both
-  `atlas_video-processing/**/requirements.txt` service files, and
-  `graphiti-wrapper/requirements.txt`. `requirements.asr.txt` is parked until
-  its floating `NVIDIA/NeMo@main` dependency is pinned.
+  requirements files: `requirements.txt`, `requirements.asr.txt`,
+  `atlas_edge/requirements.txt`, both `atlas_video-processing/**/requirements.txt`
+  service files, and `graphiti-wrapper/requirements.txt`.
 - Ecosystem SCA: OSV Scanner runs recursively across the repository and reports
   dependency vulnerabilities to GitHub code scanning.
 - SAST: Semgrep runs `p/default`, `p/owasp-top-ten`, and `p/python` across the
@@ -130,8 +129,6 @@ decide whether to rewrite history or keep the redacted baseline as the permanent
   refs across non-security product/check workflows.
 - Burn down advisory Semgrep, Trivy, Checkov, pip-audit, and OSV findings, then
   ratchet the relevant scans from advisory to blocking.
-- Pin or retire the floating `NVIDIA/NeMo@main` requirement in
-  `requirements.asr.txt` before adding that file back to pip-audit.
 - Add per-image Trivy image scans to image publish workflows when those
   production image build/push paths are named.
 - Tune ZAP baseline rules after the first configured staging run produces a

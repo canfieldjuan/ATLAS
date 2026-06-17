@@ -165,6 +165,7 @@ jobs:
           - atlas_video-processing/ingest/drone_client/requirements.txt
           - atlas_video-processing/processing/video_stream_processor/requirements.txt
           - graphiti-wrapper/requirements.txt
+          - requirements.asr.txt
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6

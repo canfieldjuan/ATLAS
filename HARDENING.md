@@ -79,15 +79,6 @@ register under `docs/technical-debt/`.
 - Owner/session: Codex security/workflow
 - Found during: PR-Security-Guardrail-CI review
 
-### Pin or retire floating ASR dependency audit input
-- File/location: `requirements.asr.txt`
-- Description: `requirements.asr.txt` installs `nemo_toolkit[asr]` from `NVIDIA/NeMo@main`, so pip-audit would resolve a moving upstream dependency graph on every scheduled run. The advisory pip-audit matrix excludes this file entirely, which means the ASR dependency stack has zero CVE coverage until the requirement is pinned to a tag/commit or retired.
-- Why it matters: Security scans need deterministic inputs; a floating VCS requirement can fail or change results without any Atlas code change, but excluding it is still a conscious CVE-coverage gap that must be closed.
-- Effort: M
-- Category: security
-- Owner/session: Codex security/workflow
-- Found during: PR-Security-Guardrail-CI review
-
 ### Rotate credentials exposed in historical `.env`
 - File/location: Historical commit `d63a9b77b9727766e14e523626c22dd6c1c80da8`, file `.env`
 - Description: Full-history Gitleaks adoption scan found redacted provider credentials in an old committed `.env`, including Stripe, Anthropic, OpenRouter, Reddit, Firecrawl, Stack Overflow, Product Hunt, CAPTCHA, Apollo, SignalWire, Google Calendar, Resend, and Google API-style keys.
