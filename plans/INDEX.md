@@ -1,6 +1,6 @@
 # Plan archive index
 
-1104 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1105 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -998,6 +998,7 @@
 - [PR-Landing-Repair-Attempt-Contract](archive/PR-Landing-Repair-Attempt-Contract.md)
 - [PR-Live-Provider-Circular-Import](archive/PR-Live-Provider-Circular-Import.md)
 - [PR-Live-Smoke-Saved-Draft-Export](archive/PR-Live-Smoke-Saved-Draft-Export.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Lucide-React-Major-Batch](archive/PR-Lucide-React-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-MCP-ChatGPT-OAuth-Rollout-Runbook](archive/PR-MCP-ChatGPT-OAuth-Rollout-Runbook.md)
 - [PR-MCP-Connector-Session-Handoff](archive/PR-MCP-Connector-Session-Handoff.md)
 - [PR-Marketer-Reviews-As-Input](archive/PR-Marketer-Reviews-As-Input.md) - lane: content-ops/marketer-reviews-as-input | phase: Workflow/process
