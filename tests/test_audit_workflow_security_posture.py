@@ -228,6 +228,42 @@ jobs:
     assert any(f.level == "WARN" and "local/action@<missing ref>" in f.detail for f in findings)
 
 
+def test_setup_python_tag_warns_and_pinned_ref_is_clean(tmp_path: Path) -> None:
+    auditor = load_auditor()
+    mutable = _write_workflow(
+        tmp_path,
+        "setup-python-mutable.yml",
+        """
+name: Mutable setup-python
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+""",
+    )
+    pinned = _write_workflow(
+        tmp_path,
+        "setup-python-pinned.yml",
+        """
+name: Pinned setup-python
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+""",
+    )
+
+    mutable_findings = auditor.audit_workflow(mutable)
+    pinned_findings = auditor.audit_workflow(pinned)
+
+    assert any(f.level == "WARN" and "actions/setup-python@v5" in f.detail for f in mutable_findings)
+    assert pinned_findings == []
+
+
 def test_yaml_workflow_files_are_audited(tmp_path: Path) -> None:
     auditor = load_auditor()
     _write_workflow(
