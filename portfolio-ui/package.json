@@ -9,6 +9,7 @@
     "test:deflection-upload-shell": "node scripts/faq-deflection-upload-shell.test.mjs",
     "test:deflection-atlas-proxy": "node scripts/faq-deflection-atlas-proxy.test.mjs",
     "test:deflection-result": "node scripts/faq-deflection-result-page.test.mjs",
+    "test:deflection-full-report-qa-hosted-smoke": "node scripts/faq-deflection-full-report-qa-hosted-smoke.test.mjs",
     "smoke:deflection-submit-live": "node scripts/faq-deflection-submit-live-smoke.mjs",
     "preview": "vite preview"
   },
