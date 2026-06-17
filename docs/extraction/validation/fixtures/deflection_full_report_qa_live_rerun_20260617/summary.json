@@ -1,0 +1,83 @@
+{
+  "artifact_date": "2026-06-17",
+  "issue": 1612,
+  "schema_version": "deflection_full_report_qa_live_rerun.v1",
+  "ok": false,
+  "result": "failed_upstream_live_artifact_contract_after_source_contract_pin",
+  "source_contract_pin": {
+    "pr": 1674,
+    "merged": true,
+    "merge_commit": "90380e8858635f1eaf765fd1a9d747d4af53f120"
+  },
+  "controlled_request": {
+    "source_shape": "zendesk_full_thread_csv_fixture",
+    "submit_status": 200,
+    "submit_created_request_id": true,
+    "submit_smoke_ok": false,
+    "submit_smoke_classification": "smoke_checker_drift",
+    "submit_smoke_errors": [
+      "faq_deflection_report.result.snapshot leaked forbidden fields: $.teaser.full_answer.answer, $.teaser.full_answer.steps"
+    ]
+  },
+  "auth": {
+    "submit_token_source": "atlas_b2b_service_token",
+    "jwt_token_paths_failed_401": true
+  },
+  "paid_unlock": {
+    "ok": true,
+    "webhook_secret_source": "portfolio_web_env",
+    "before_artifact_status": 403,
+    "webhook_status": 200,
+    "replay_webhook_status": 200,
+    "replay_webhook_payload_status": "already_processed",
+    "after_artifact_status": 200
+  },
+  "pdf": {
+    "source": "locally_rendered_from_live_paid_artifact_with_delivery_renderer",
+    "bytes": 7136,
+    "committed": false,
+    "live_runner_pdf_bytes_present": true,
+    "live_runner_pdf_text_override_present": false,
+    "scorecard_status": "skipped_due_to_payload_errors"
+  },
+  "live_runner": {
+    "schema_version": "deflection_full_report_qa_live_runner.v1",
+    "ok": false,
+    "errors": [
+      "report-model endpoint must return 200, got 404",
+      "artifact.evidence_export must be an object"
+    ],
+    "fetches": {
+      "artifact": {
+        "status": 200
+      },
+      "report_model": {
+        "status": 404,
+        "errors": [
+          "http_error"
+        ]
+      }
+    }
+  },
+  "redaction": {
+    "bearer_tokens_committed": false,
+    "customer_email_committed": false,
+    "local_absolute_paths_committed": false,
+    "private_notes_committed": false,
+    "raw_artifact_committed": false,
+    "raw_evidence_committed": false,
+    "raw_pdf_committed": false,
+    "raw_report_model_committed": false,
+    "request_id_committed": false,
+    "result_url_committed": false,
+    "source_ids_committed": false,
+    "stripe_checkout_session_id_committed": false,
+    "stripe_payment_intent_id_committed": false
+  },
+  "upstream_blockers": [
+    "Hosted report-model endpoint returned 404 for the fresh paid request.",
+    "Hosted paid artifact still used the legacy top-level shape and did not include an object evidence_export.",
+    "Hosted paid artifact still did not include an object report_model even after the source contract pin merged."
+  ],
+  "deferred_next_slice": "Trace the hosted submit artifact producer or deployment path; fix why deployed paid artifacts persist the legacy shape despite the source contract pin, then rerun the issue 1612 live proof."
+}
