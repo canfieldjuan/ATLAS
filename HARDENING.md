@@ -41,14 +41,14 @@ register under `docs/technical-debt/`.
 - Owner/session: Codex security/workflow
 - Found during: PR-Security-Guardrail-CI review
 
-### Audit remaining workflow action pins and Claude OIDC trigger
-- File/location: `.github/workflows/*.yml`, especially `.github/workflows/claude.yml`
-- Description: This security guardrail PR pins the newly introduced security workflows to immutable action SHAs and confirms there are no `pull_request_target` triggers. Existing product workflows still use mutable action tags, and `claude.yml` grants `id-token: write` to the Claude action when `@claude` is invoked in issue or PR review surfaces.
-- Why it matters: Mutable action tags and broad OIDC grants can become CI compromise paths if a third-party action is compromised or a workflow trigger trusts attacker-controlled input.
+### Pin remaining mutable workflow supply-chain refs
+- File/location: `.github/workflows/*.yml`, `.github/workflows/*.yaml`
+- Description: The workflow posture audit now reports existing mutable GitHub Action refs, reusable workflow refs, and container/service image refs as warnings, and `claude.yml` has been owner-gated and SHA-pinned. Existing product/check workflows still use mutable refs and should be drained through a dedicated pinning or Dependabot-triage slice.
+- Why it matters: Mutable action tags, reusable workflow refs, and container tags can become CI compromise paths if a third-party action/image is compromised or a tag is repointed.
 - Effort: M
 - Category: security
 - Owner/session: Codex security/workflow
-- Found during: PR-Security-Guardrail-CI review
+- Found during: PR-Security-Guardrail-CI review; narrowed during PR-Workflow-Action-Pin-OIDC-Audit
 
 ### Burn down advisory security scanner backlog
 - File/location: `.github/workflows/security_guardrails.yml`, GitHub code scanning results for Semgrep, Trivy, Checkov, pip-audit, and OSV.
