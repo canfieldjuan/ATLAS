@@ -47,9 +47,9 @@ fail-open gap. They do not justify a low-coverage threshold.
 | status_timestamp_only_rejects_zero_usable | ok | REJECT | REJECT | 1 | 0 | REJECT | no_usable_source_rows | source_row_csv | 0 |
 | partial_blank_rows_warns_without_rejecting | ok | ACCEPT_WITH_WARNING | ACCEPT_WITH_WARNING | 2 | 1 | ACCEPT |  |  | 1 |
 | header_only_csv_has_no_policy_decision | ok | NO_POLICY_DECISION | NO_POLICY_DECISION | 0 | 0 | None |  |  | 0 |
-| json_blob_message_known_fail_open | known_gap | ACCEPT_CLEAN | ACCEPT_CLEAN | 1 | 1 | ACCEPT |  |  | 0 |
+| json_blob_message_rejects_zero_usable | ok | REJECT | REJECT | 1 | 0 | REJECT | no_usable_source_rows | source_row_csv | 0 |
 
-Known fail-open gaps: `1`
+Known fail-open gaps: `0`
 
 Synthetic breakage cases prove parser mechanics only. Fail-closed and warning expectations are blocking; known fail-open cases are recorded as explicit gaps and do not set low-coverage reject policy.
 

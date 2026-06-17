@@ -183,6 +183,22 @@ _THREAD_TEXT_KEYS = (
     "notes",
 )
 _THREAD_SPEAKER_KEYS = ("speaker", "author", "role", "name")
+_JSON_CUSTOMER_MESSAGE_KEYS = (
+    "message",
+    "customer_message",
+    "requester_message",
+    "requester_comment",
+    "customer_comment",
+    "comment",
+    "body",
+    "text",
+    "content",
+    "complaint",
+    "complaint_narrative",
+    "consumer_complaint_narrative",
+    "narrative",
+    "issue_description",
+)
 _PRIVATE_TEXT_KEYS = (
     "internal_note",
     "internal_notes",
@@ -777,18 +793,29 @@ def source_row_to_campaign_opportunity(
 
     lookup = _SourceFieldLookup(row)
     warnings: list[CampaignOpportunityWarning] = []
-    text = _source_text(lookup)
+    text, machine_payload_seen = _source_text(lookup)
     if not text:
-        warnings.append(CampaignOpportunityWarning(
-            code="missing_source_text",
-            row_index=row_index,
-            field="text",
-            message=(
-                "Source row did not contain text, review_text, transcript, "
-                "content, body, quote, complaint, message, description, "
-                "summary, notes, or thread messages."
-            ),
-        ))
+        if machine_payload_seen:
+            warnings.append(CampaignOpportunityWarning(
+                code="machine_source_payload_text",
+                row_index=row_index,
+                field="text",
+                message=(
+                    "Skipped source row because the mapped text field contains a "
+                    "machine JSON payload, not customer wording."
+                ),
+            ))
+        else:
+            warnings.append(CampaignOpportunityWarning(
+                code="missing_source_text",
+                row_index=row_index,
+                field="text",
+                message=(
+                    "Source row did not contain text, review_text, transcript, "
+                    "content, body, quote, complaint, message, description, "
+                    "summary, notes, or thread messages."
+                ),
+            ))
         return {}, tuple(warnings)
     source_id = _first_text(lookup, _SOURCE_ID_KEYS)
     source_type = _first_text(lookup, _SOURCE_TYPE_KEYS) or _infer_source_type(lookup)
@@ -990,52 +1017,204 @@ def _first_text(row: Mapping[str, Any], keys: Sequence[str]) -> str:
     return ""
 
 
-def _source_text(row: Mapping[str, Any]) -> str:
-    scalar_text = _first_text(row, _TEXT_KEYS)
-    if scalar_text:
-        return scalar_text
-    return _thread_text(row)
+def _source_text(row: Mapping[str, Any]) -> tuple[str, bool]:
+    machine_payload_seen = False
+    for key in _TEXT_KEYS:
+        value = _field_value(row, key)
+        text, is_machine_payload = _source_text_value(value)
+        if text:
+            return text, machine_payload_seen
+        if is_machine_payload:
+            machine_payload_seen = True
+    thread_text, thread_machine_payload_seen = _thread_text(row)
+    return thread_text, machine_payload_seen or thread_machine_payload_seen
 
 
-def _thread_text(row: Mapping[str, Any]) -> str:
-    for key in _THREAD_KEYS:
-        value = row.get(key)
-        lines = _thread_lines(value)
-        if lines:
-            return "\n".join(lines)
+def _source_text_value(value: Any) -> tuple[str, bool]:
+    if value in (None, "", [], {}):
+        return "", False
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return "", False
+        extracted = _customer_message_from_json_payload(text)
+        if extracted:
+            return extracted, False
+        return ("", True) if _is_machine_payload_text(text) else (text, False)
+    if isinstance(value, Mapping) or (
+        isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray))
+    ):
+        extracted = _customer_message_from_json_value(value)
+        return (extracted, False) if extracted else ("", True)
+    text = str(value or "").strip()
+    return text, False
+
+
+def _is_machine_payload_text(text: str) -> bool:
+    raw = text.strip()
+    if not _looks_like_json_container(raw):
+        return False
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return _is_machine_payload_value(parsed)
+
+
+def _customer_message_from_json_payload(text: str) -> str:
+    raw = text.strip()
+    if not _looks_like_json_container(raw):
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    return _customer_message_from_json_value(parsed)
+
+
+def _looks_like_json_container(text: str) -> bool:
+    if not (
+        (text.startswith("{") and text.endswith("}"))
+        or (text.startswith("[") and text.endswith("]"))
+    ):
+        return False
+    return True
+
+
+def _is_machine_payload_value(value: Any) -> bool:
+    if not isinstance(value, (Mapping, Sequence)) or isinstance(
+        value,
+        (str, bytes, bytearray),
+    ):
+        return False
+    if _customer_message_from_json_value(value):
+        return False
+    strings = tuple(_json_string_values(value))
+    if not strings:
+        return True
+    return True
+
+
+def _customer_message_from_json_value(value: Any) -> str:
+    for text in _json_customer_message_values(value):
+        stripped = text.strip()
+        if stripped:
+            return stripped
     return ""
 
 
-def _thread_lines(value: Any) -> list[str]:
+def _json_customer_message_values(value: Any, *, limit: int = 20) -> tuple[str, ...]:
+    out: list[str] = []
+
+    def visit(item: Any) -> None:
+        if len(out) >= limit:
+            return
+        if isinstance(item, Mapping):
+            for key, nested in item.items():
+                if _field_matches_aliases(str(key), _JSON_CUSTOMER_MESSAGE_KEYS):
+                    if isinstance(nested, str):
+                        text = nested.strip()
+                        if text:
+                            out.append(text)
+                        if len(out) >= limit:
+                            return
+                    elif isinstance(nested, (Mapping, Sequence)) and not isinstance(
+                        nested,
+                        (bytes, bytearray),
+                    ):
+                        visit(nested)
+                        if len(out) >= limit:
+                            return
+                if isinstance(nested, (Mapping, Sequence)) and not isinstance(
+                    nested,
+                    (str, bytes, bytearray),
+                ):
+                    visit(nested)
+                    if len(out) >= limit:
+                        return
+            return
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            for nested in item:
+                visit(nested)
+                if len(out) >= limit:
+                    return
+
+    visit(value)
+    return tuple(out)
+
+
+def _json_string_values(value: Any, *, limit: int = 50) -> tuple[str, ...]:
+    out: list[str] = []
+
+    def visit(item: Any) -> None:
+        if len(out) >= limit:
+            return
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                out.append(text)
+            return
+        if isinstance(item, Mapping):
+            for nested in item.values():
+                visit(nested)
+                if len(out) >= limit:
+                    return
+            return
+        if isinstance(item, Sequence) and not isinstance(item, (bytes, bytearray)):
+            for nested in item:
+                visit(nested)
+                if len(out) >= limit:
+                    return
+
+    visit(value)
+    return tuple(out)
+
+
+def _thread_text(row: Mapping[str, Any]) -> tuple[str, bool]:
+    machine_payload_seen = False
+    for key in _THREAD_KEYS:
+        value = row.get(key)
+        lines, line_machine_payload_seen = _thread_lines(value)
+        if lines:
+            return "\n".join(lines), machine_payload_seen
+        if line_machine_payload_seen:
+            machine_payload_seen = True
+    return "", machine_payload_seen
+
+
+def _thread_lines(value: Any) -> tuple[list[str], bool]:
     if value in (None, "", [], {}):
-        return []
+        return [], False
     if isinstance(value, str):
         text = value.strip()
-        return [text] if text else []
+        return ([text], False) if text else ([], False)
     if isinstance(value, Mapping):
         return _thread_lines([value])
     if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
-        return []
+        return [], False
     lines: list[str] = []
+    machine_payload_seen = False
     for item in value:
-        line = _thread_line(item)
+        line, is_machine_payload = _thread_line(item)
         if line:
             lines.append(line)
-    return lines
+        if is_machine_payload:
+            machine_payload_seen = True
+    return lines, machine_payload_seen
 
 
-def _thread_line(item: Any) -> str:
+def _thread_line(item: Any) -> tuple[str, bool]:
     if isinstance(item, str):
-        return item.strip()
+        return item.strip(), False
     if not isinstance(item, Mapping):
-        return ""
+        return "", False
     if item.get("public") is False:
-        return ""
-    text = _first_text(item, _THREAD_TEXT_KEYS)
+        return "", False
+    text, machine_payload_seen = _source_text(item)
     if not text:
-        return ""
+        return "", machine_payload_seen
     speaker = _first_text(item, _THREAD_SPEAKER_KEYS)
-    return f"{speaker}: {text}" if speaker else text
+    return (f"{speaker}: {text}" if speaker else text), machine_payload_seen
 
 
 def _first_text_list(row: Mapping[str, Any], keys: Sequence[str]) -> list[str]:

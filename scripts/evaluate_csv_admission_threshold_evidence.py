@@ -404,12 +404,13 @@ def _breakage_cases() -> tuple[CsvBreakageCase, ...]:
             expected_outcome="NO_POLICY_DECISION",
         ),
         CsvBreakageCase(
-            name="json_blob_message_known_fail_open",
-            description="Machine JSON in a mapped text field is currently accepted.",
+            name="json_blob_message_rejects_zero_usable",
+            description="Machine JSON in a mapped text field must not count as usable text.",
             fieldnames=("Ticket ID", "Message"),
             rows=({"Ticket ID": "T-1", "Message": '{"event":"ticket_created","id":123}'},),
-            expected_outcome="ACCEPT_CLEAN",
-            known_gap=True,
+            expected_outcome="REJECT",
+            expected_decision_reason="no_usable_source_rows",
+            expected_decision_location="source_row_csv",
         ),
     )
 

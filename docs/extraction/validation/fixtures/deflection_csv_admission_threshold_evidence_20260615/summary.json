@@ -193,21 +193,23 @@
       },
       {
         "admission_decision": {
-          "status": "ACCEPT"
+          "location": "source_row_csv",
+          "reason": "no_usable_source_rows",
+          "status": "REJECT"
         },
-        "admission_decision_location": null,
-        "admission_decision_reason": null,
-        "admission_status": "ACCEPT",
-        "case_status": "known_gap",
+        "admission_decision_location": "source_row_csv",
+        "admission_decision_reason": "no_usable_source_rows",
+        "admission_status": "REJECT",
+        "case_status": "ok",
         "coverage_warnings": [],
         "decision_matched": true,
-        "description": "Machine JSON in a mapped text field is currently accepted.",
-        "expected_decision_location": null,
-        "expected_decision_reason": null,
+        "description": "Machine JSON in a mapped text field must not count as usable text.",
+        "expected_decision_location": "source_row_csv",
+        "expected_decision_reason": "no_usable_source_rows",
         "expected_full_coverage": false,
-        "expected_outcome": "ACCEPT_CLEAN",
+        "expected_outcome": "REJECT",
         "ignored_private_fields": [],
-        "known_gap": true,
+        "known_gap": false,
         "mapped_fields": {
           "source_id": [
             "Ticket ID"
@@ -216,22 +218,20 @@
             "Message"
           ]
         },
-        "name": "json_blob_message_known_fail_open",
-        "observed_outcome": "ACCEPT_CLEAN",
-        "ok": true,
+        "name": "json_blob_message_rejects_zero_usable",
+        "observed_outcome": "REJECT",
+        "ok": false,
         "populated_unmapped_fields": [],
         "raw_source_row_count": 1,
-        "usable_source_ratio": 1.0,
-        "usable_source_row_count": 1,
+        "usable_source_ratio": 0.0,
+        "usable_source_row_count": 0,
         "warning_counts": {
-          "missing_company_name": 1,
-          "missing_contact_email": 1,
-          "missing_vendor_name": 1
+          "machine_source_payload_text": 1
         }
       }
     ],
     "conclusion": "Synthetic breakage cases prove parser mechanics only. Fail-closed and warning expectations are blocking; known fail-open cases are recorded as explicit gaps and do not set low-coverage reject policy.",
-    "known_gap_count": 1
+    "known_gap_count": 0
   },
   "case_count": 2,
   "cases": [
