@@ -14,6 +14,8 @@ from extracted_content_pipeline.control_surfaces import (
 )
 from extracted_content_pipeline.generation_plan import build_generation_plan
 from extracted_content_pipeline.support_ticket_clustering import (
+    _PHRASE_FOLDS,
+    _TOKEN_FOLDS,
     support_ticket_plain_text,
     support_ticket_tokens,
 )
@@ -34,6 +36,16 @@ from extracted_content_pipeline.support_ticket_zendesk_thread import (
 
 ROOT = Path(__file__).resolve().parents[1]
 ZENDESK_THREAD_SAMPLE = ROOT / "tests/fixtures/zendesk_full_thread_seed_sample.json"
+
+
+def test_support_ticket_fold_targets_survive_tokenization() -> None:
+    token_fold_targets = {
+        target for target in _TOKEN_FOLDS.values() if target and len(target) >= 2
+    }
+    phrase_fold_targets = {replacement for _pattern, replacement in _PHRASE_FOLDS}
+
+    for target in sorted(token_fold_targets | phrase_fold_targets):
+        assert target in support_ticket_tokens(f"customer mentioned {target} issue"), target
 
 
 def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:

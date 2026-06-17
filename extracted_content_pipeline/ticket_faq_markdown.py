@@ -314,6 +314,12 @@ _RESOLUTION_ACTION_TERMS = {
     "update",
     "verify",
 }
+_RESOLUTION_ACTION_IRREGULAR_PAST_TERMS = {
+    "chose": "choose",
+    "ran": "run",
+    "reran": "rerun",
+    "sent": "send",
+}
 _RESOLUTION_TOPIC_STOPWORDS = {
     "about",
     "after",
@@ -1826,6 +1832,9 @@ def _resolution_overlap_tokens(tokens: set[str]) -> set[str]:
 
 
 def _resolution_signal_token(token: str) -> str:
+    irregular = _RESOLUTION_ACTION_IRREGULAR_PAST_TERMS.get(token)
+    if irregular:
+        return irregular
     if len(token) > 4 and token.endswith("ies"):
         return f"{token[:-3]}y"
     if len(token) > 5 and token.endswith("ing"):
