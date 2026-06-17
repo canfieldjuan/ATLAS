@@ -1,5 +1,5 @@
 # Use an NVIDIA CUDA runtime as a parent image
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
 
 # Set environment variables to make the installation non-interactive
 ENV DEBIAN_FRONTEND=noninteractive
