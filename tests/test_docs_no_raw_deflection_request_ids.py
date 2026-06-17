@@ -89,6 +89,18 @@ def test_raw_request_id_detector_allows_redacted_and_non_capability_tokens(
     assert _raw_request_id_hits([candidate]) == []
 
 
+def test_raw_request_id_detector_allows_fixture_shaped_checker_tokens(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "proof_checker_test.py"
+    candidate.write_text(
+        "content-ops-fixture-45c06a6950ec4677a214368d6e4dc44f",
+        encoding="utf-8",
+    )
+
+    assert _raw_request_id_hits([candidate]) == []
+
+
 def test_proof_redaction_detector_catches_local_paths_and_real_emails(
     tmp_path: Path,
 ) -> None:
