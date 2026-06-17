@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Reports from './Reports'
@@ -215,7 +215,9 @@ describe('Reports', () => {
       })
     })
 
-    await router.navigate('/reports')
+    await act(async () => {
+      await router.navigate('/reports')
+    })
 
     await waitFor(() => {
       expect(screen.getByTestId('location-probe')).toHaveTextContent('/reports')
@@ -1516,11 +1518,15 @@ describe('Reports', () => {
 
     expect(await screen.findByRole('button', { name: 'Subscribe to Library' })).toBeInTheDocument()
 
-    await router.navigate('/reports?tab=subscriptions')
+    await act(async () => {
+      await router.navigate('/reports?tab=subscriptions')
+    })
 
     expect(await screen.findByText('No subscriptions yet. Subscribe from a report or the library view.')).toBeInTheDocument()
 
-    await router.navigate('/reports')
+    await act(async () => {
+      await router.navigate('/reports')
+    })
 
     expect(await screen.findByRole('button', { name: 'Subscribe to Library' })).toBeInTheDocument()
 

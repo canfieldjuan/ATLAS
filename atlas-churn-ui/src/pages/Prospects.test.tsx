@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, RouterProvider, Routes, createMemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ProspectsPage from './Prospects'
@@ -152,7 +152,9 @@ describe('ProspectsPage', () => {
 
     expect(await screen.findByDisplayValue('Acme')).toBeInTheDocument()
 
-    await router.navigate('/prospects')
+    await act(async () => {
+      await router.navigate('/prospects')
+    })
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Search company...')).toHaveValue('')
@@ -179,7 +181,9 @@ describe('ProspectsPage', () => {
 
     expect(await screen.findByDisplayValue('Acme')).toBeInTheDocument()
 
-    await router.navigate('/prospects?tab=manual_queue')
+    await act(async () => {
+      await router.navigate('/prospects?tab=manual_queue')
+    })
 
     await waitFor(() => {
       expect(screen.getByText('0 queue entries')).toBeInTheDocument()
