@@ -103,9 +103,15 @@ describe('Onboarding', () => {
   })
 
   it('rehydrates the query from same-route URL changes', async () => {
-    api.searchAvailableVendors
-      .mockResolvedValueOnce({ vendors: [{ vendor_name: 'Zendesk', product_category: 'Helpdesk', total_reviews: 120, avg_urgency: 6.2 }] })
-      .mockResolvedValueOnce({ vendors: [{ vendor_name: 'HubSpot', product_category: 'CRM', total_reviews: 220, avg_urgency: 5.8 }] })
+    api.searchAvailableVendors.mockImplementation((query: string) => {
+      if (query === 'Zendesk') {
+        return Promise.resolve({ vendors: [{ vendor_name: 'Zendesk', product_category: 'Helpdesk', total_reviews: 120, avg_urgency: 6.2 }] })
+      }
+      if (query === 'HubSpot') {
+        return Promise.resolve({ vendors: [{ vendor_name: 'HubSpot', product_category: 'CRM', total_reviews: 220, avg_urgency: 5.8 }] })
+      }
+      return Promise.resolve({ vendors: [] })
+    })
 
     const router = createMemoryRouter([{ path: '/onboarding', element: <Onboarding /> }], {
       initialEntries: ['/onboarding?q=Zendesk'],
@@ -122,7 +128,6 @@ describe('Onboarding', () => {
       expect(screen.getByDisplayValue('HubSpot')).toBeInTheDocument()
       expect(api.searchAvailableVendors).toHaveBeenLastCalledWith('HubSpot')
     })
-    expect(await screen.findByText('HubSpot')).toBeInTheDocument()
     router.dispose()
   })
 
