@@ -18,43 +18,48 @@ export default function useApiData<T>(
   const [refreshing, setRefreshing] = useState(false)
   const requestIdRef = useRef(0)
   const mountedRef = useRef(true)
+  const fetcherRef = useRef(fetcher)
+  const depsKey = JSON.stringify(deps)
 
-  const load = useCallback(
-    async (isRefresh: boolean) => {
-      const id = ++requestIdRef.current
-      if (isRefresh) {
-        setRefreshing(true)
-      } else {
-        setLoading(true)
+  useEffect(() => {
+    fetcherRef.current = fetcher
+  }, [fetcher])
+
+  const load = useCallback(async (isRefresh: boolean) => {
+    const id = ++requestIdRef.current
+    if (isRefresh) {
+      setRefreshing(true)
+    } else {
+      setLoading(true)
+    }
+    setError(null)
+    try {
+      const result = await fetcherRef.current()
+      if (mountedRef.current && id === requestIdRef.current) {
+        setData(result)
       }
-      setError(null)
-      try {
-        const result = await fetcher()
-        if (mountedRef.current && id === requestIdRef.current) {
-          setData(result)
-        }
-      } catch (err) {
-        if (mountedRef.current && id === requestIdRef.current) {
-          setError(err instanceof Error ? err : new Error(String(err)))
-        }
-      } finally {
-        if (mountedRef.current && id === requestIdRef.current) {
-          setLoading(false)
-          setRefreshing(false)
-        }
+    } catch (err) {
+      if (mountedRef.current && id === requestIdRef.current) {
+        setError(err instanceof Error ? err : new Error(String(err)))
       }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    deps,
-  )
+    } finally {
+      if (mountedRef.current && id === requestIdRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     mountedRef.current = true
-    load(false)
+    const timeout = window.setTimeout(() => {
+      load(false)
+    }, 0)
     return () => {
       mountedRef.current = false
+      window.clearTimeout(timeout)
     }
-  }, [load])
+  }, [depsKey, load])
 
   const refresh = useCallback(() => {
     load(true)

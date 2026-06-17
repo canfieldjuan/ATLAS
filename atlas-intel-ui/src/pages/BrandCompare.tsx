@@ -80,8 +80,8 @@ function BrandCompareInner() {
   useEffect(() => {
     clearTimeout(debounceRef.current)
     if (!brandInput.trim()) {
-      setSuggestions([])
-      return
+      debounceRef.current = window.setTimeout(() => setSuggestions([]), 0)
+      return () => clearTimeout(debounceRef.current)
     }
     debounceRef.current = setTimeout(async () => {
       try {

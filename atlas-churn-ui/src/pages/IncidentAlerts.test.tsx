@@ -218,7 +218,7 @@ describe('IncidentAlerts', () => {
       vendor_name: 'Acme Rival',
       company_name: 'Acme Bank',
     }))
-    expect(screen.getByText('Acme Bank at Acme Rival')).toBeInTheDocument()
+    expect(screen.getByText((_, element) => element?.textContent === 'Acme Bank at Acme Rival')).toBeInTheDocument()
   })
 
   it('shows vendor-scope workflow shortcuts in the header when a vendor filter is active', async () => {
