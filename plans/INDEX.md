@@ -1,6 +1,6 @@
 # Plan archive index
 
-1084 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1085 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -717,6 +717,7 @@
 - [PR-Deflection-Paid-Result-Page-Consolidated-View](archive/PR-Deflection-Paid-Result-Page-Consolidated-View.md) - lane: content-ops/deflection-launch-readiness | phase: Product polish
 - [PR-Deflection-Paid-Unlock-Diagnostics](archive/PR-Deflection-Paid-Unlock-Diagnostics.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
 - [PR-Deflection-Portfolio-Paid-Result-Live-Proof](archive/PR-Deflection-Portfolio-Paid-Result-Live-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
+- [PR-Deflection-Proof-Fixture-Request-ID-Redaction](archive/PR-Deflection-Proof-Fixture-Request-ID-Redaction.md) - lane: content-ops/deflection-report | phase: Production hardening
 - [PR-Deflection-Provider-Export-Fixtures](archive/PR-Deflection-Provider-Export-Fixtures.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Public-Endpoint-Rate-Limit](archive/PR-Deflection-Public-Endpoint-Rate-Limit.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Question-Evidence-Scoping](archive/PR-Deflection-Question-Evidence-Scoping.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
