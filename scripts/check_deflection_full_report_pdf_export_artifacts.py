@@ -38,37 +38,39 @@ REQUIRED_PDF_MARKERS = (
     "Question Details and Evidence",
     "complete evidence export",
 )
-PDF_COUNT_LABELS = {
+PDF_COUNT_PATTERNS = {
     "repeat_ticket_count": (
-        r"question-level repeat tickets",
-        r"repeat tickets",
+        r"\b{value}\s+question-level\s+repeat tickets\b",
+        r"\b{value}\s+repeat tickets\b",
     ),
     "generated_question_count": (
-        r"ranked questions",
+        r"\bacross\s+{value}\s+ranked questions\b",
     ),
     "ranked_question_count": (
-        r"ranked questions",
-        r"ranked question opportunities",
+        r"\b{value}\s+ranked questions\b",
+        r"\b{value}\s+ranked question opportunities\b",
     ),
     "drafted_answer_count": (
-        r"publishable answers drafted",
-        r"publishable answers?",
+        r"\bpublishable answers drafted(?: from proven resolutions)?\s*:\s*{value}\b",
+        r"\b{value}\s+publishable answers drafted\b",
+        r"\b{value}\s+questions?\s+have publishable answers\b",
     ),
     "no_proven_answer_count": (
-        r"questions still needing",
-        r"no proven answers?",
-        r"approved resolution",
+        r"\bquestions still needing an approved resolution\s*:\s*{value}\b",
+        r"\b{value}\s+questions?\s+(?:still\s+)?have no proven answer\b",
+        r"\bno proven answers?\s*:\s*{value}\b",
     ),
     "ticket_source_count": (
-        r"ticket sources represented",
-        r"source tickets",
-        r"source rows",
+        r"\bticket sources represented\s*:\s*{value}\b",
+        r"\bgrounded in\s+{value}\s+source tickets\b",
+        r"\b{value}\s+source tickets\b",
+        r"\b{value}\s+source rows\b",
     ),
     "estimated_support_cost": (
-        r"repeated-question work",
-        r"support cost",
-        r"assisted-contact handling",
-        r"sizes to about",
+        r"\bsizes to about\s+{value}\b",
+        r"(?<!\w){value}\s+of assisted-contact handling\b",
+        r"(?<!\w){value}\s+estimated assisted-contact handling\b",
+        r"\bsupport cost\s*:\s*{value}\b",
     ),
 }
 LEAK_PATTERNS = (
@@ -83,7 +85,10 @@ LEAK_PATTERNS = (
         "result_url",
         re.compile(
             r"https?://[^\s\"'<>]+/"
-            r"(?:systems/support-ticket-deflection|services/faq-deflection)/results/"
+            r"(?:"
+            r"(?:systems/support-ticket-deflection|services/faq-deflection)/results"
+            r"|content-ops/deflection-reports"
+            r")/"
             r"[^\s\"'<>]+",
             re.IGNORECASE,
         ),
@@ -92,11 +97,11 @@ LEAK_PATTERNS = (
     ("absolute_local_path", re.compile(r"(?<!\w)(?:/home/|/tmp/)")),
     ("stripe_checkout_session_id", re.compile(r"\bcs_(?:test|live)_[A-Za-z0-9_]+\b")),
     ("stripe_payment_intent_id", re.compile(r"\bpi_[A-Za-z0-9_]+\b")),
-    (
-        "raw_evidence_quote",
-        re.compile(r"\b(?:evidence_quote|raw quoted evidence)\b", re.IGNORECASE),
-    ),
     ("private_note", re.compile(r"\bprivate note\b|\binternal note\b", re.IGNORECASE)),
+)
+RAW_EVIDENCE_QUOTE_MARKER_PATTERN = re.compile(
+    r"\b(?:evidence_quote|raw quoted evidence)\b",
+    re.IGNORECASE,
 )
 SOURCE_ID_TOKEN_PATTERN = re.compile(r"\bticket[-_][A-Za-z0-9][A-Za-z0-9_.:-]*\b")
 
@@ -237,28 +242,22 @@ def _count_line_candidates(text: str) -> list[str]:
     return candidates
 
 
-def _line_has_labeled_value(line: str, *, labels: Sequence[str], forms: Sequence[str]) -> bool:
-    for label in labels:
-        label_pattern = re.compile(label, re.IGNORECASE)
-        if not label_pattern.search(line):
-            continue
+def _line_has_labeled_value(line: str, *, patterns: Sequence[str], forms: Sequence[str]) -> bool:
+    for pattern in patterns:
         for form in forms:
-            value_pattern = re.compile(
-                rf"(?<![\w$]){re.escape(form)}(?!\w)",
-                re.IGNORECASE,
-            )
-            if value_pattern.search(line):
+            value_pattern = pattern.format(value=re.escape(form))
+            if re.search(value_pattern, line, re.IGNORECASE):
                 return True
     return False
 
 
 def _text_has_labeled_value(text: str, key: str, value: Any, *, money: bool = False) -> bool:
-    labels = PDF_COUNT_LABELS.get(key, ())
-    if not labels:
+    patterns = PDF_COUNT_PATTERNS.get(key, ())
+    if not patterns:
         return False
     forms = _number_forms(value, money=money)
     return any(
-        _line_has_labeled_value(candidate, labels=labels, forms=forms)
+        _line_has_labeled_value(candidate, patterns=patterns, forms=forms)
         for candidate in _count_line_candidates(text)
     )
 
@@ -292,7 +291,7 @@ def _source_ids_from_model(report_model: Mapping[str, Any]) -> set[str]:
 
 
 def _source_id_candidate(value: str) -> bool:
-    return len(value) >= 3 and not value.isdigit()
+    return len(value) >= 3
 
 
 def _text_contains_source_id(text: str, source_id: str) -> bool:
@@ -306,6 +305,30 @@ def _source_id_leak_present(text: str, source_ids: set[str]) -> bool:
     if SOURCE_ID_TOKEN_PATTERN.search(text):
         return True
     return any(_text_contains_source_id(text, source_id) for source_id in source_ids)
+
+
+def _evidence_quotes_from_export(evidence_export: Mapping[str, Any]) -> set[str]:
+    quotes: set[str] = set()
+    for row in _sequence(evidence_export.get("evidence_rows")):
+        if not isinstance(row, Mapping):
+            continue
+        quote = _normal_text(str(row.get("evidence_quote") or ""))
+        if len(quote) >= 24:
+            quotes.add(quote)
+    return quotes
+
+
+def _raw_evidence_quote_leak_present(
+    text: str,
+    evidence_export: Mapping[str, Any],
+) -> bool:
+    if RAW_EVIDENCE_QUOTE_MARKER_PATTERN.search(text):
+        return True
+    haystack = _normal_text(text).casefold()
+    return any(
+        quote.casefold() in haystack
+        for quote in _evidence_quotes_from_export(evidence_export)
+    )
 
 
 def _section_text(text: str, marker: str, end_markers: Sequence[str]) -> str:
@@ -365,6 +388,7 @@ def _pdf_artifact_assertions(
     pdf_bytes: bytes,
     pdf_text: str,
     counts: Mapping[str, Any],
+    evidence_export: Mapping[str, Any],
     source_ids: set[str],
 ) -> list[dict[str, Any]]:
     assertions = [
@@ -411,6 +435,13 @@ def _pdf_artifact_assertions(
             expected="absent",
             actual="matched" if matched else "absent",
         ))
+    quote_matched = _raw_evidence_quote_leak_present(pdf_text, evidence_export)
+    assertions.append(_assertion(
+        "artifact.pdf.leak.raw_evidence_quote",
+        not quote_matched,
+        expected="absent",
+        actual="matched" if quote_matched else "absent",
+    ))
     source_id_matched = _source_id_leak_present(pdf_text, source_ids)
     assertions.append(_assertion(
         "artifact.pdf.leak.source_id_list",
@@ -436,7 +467,10 @@ def _pdf_observation(
         assertion_id = str(assertion.get("id") or "")
         if assertion_id in hard_failures and assertion.get("ok") is not True:
             return {"counts": {}}
-        if assertion_id.startswith("artifact.pdf.text.marker.") and assertion.get("ok") is not True:
+        if (
+            assertion_id.startswith("artifact.pdf.text.marker.")
+            and assertion.get("ok") is not True
+        ):
             return {"counts": {}}
         if assertion_id.startswith("artifact.pdf.leak.") and assertion.get("ok") is not True:
             return {"counts": {}}
@@ -464,37 +498,40 @@ def _safe_sequence_len(value: Any) -> int:
 
 def build_pdf_export_scorecard(
     *,
-    report_model: dict[str, Any],
-    evidence_export: dict[str, Any],
+    report_model: Any,
+    evidence_export: Any,
     pdf_bytes: bytes,
     pdf_text: str,
     required_surfaces: tuple[str, ...] = DEFAULT_REQUIRED_SURFACES,
 ) -> dict[str, Any]:
     """Return a sanitized scorecard for PDF/export artifacts."""
 
-    counts = _model_counts(report_model)
+    report_payload = report_model if isinstance(report_model, Mapping) else {}
+    export_payload = evidence_export if isinstance(evidence_export, Mapping) else {}
+    counts = _model_counts(report_payload)
     source_ids = (
-        _source_ids_from_export(evidence_export)
-        | _source_ids_from_model(report_model)
+        _source_ids_from_export(export_payload)
+        | _source_ids_from_model(report_payload)
     )
     artifact_assertions = _pdf_artifact_assertions(
         pdf_bytes=pdf_bytes,
         pdf_text=pdf_text,
         counts=counts,
+        evidence_export=export_payload,
         source_ids=source_ids,
     )
     observations = {
         "pdf": _pdf_observation(
-            report_model=report_model,
+            report_model=report_payload,
             pdf_text=pdf_text,
             counts=counts,
             artifact_assertions=artifact_assertions,
         ),
-        "evidence_export": _evidence_export_observation(evidence_export),
+        "evidence_export": _evidence_export_observation(export_payload),
     }
     scorecard = build_deflection_full_report_qa_deterministic_harness(
-        report_model,
-        evidence_export=evidence_export,
+        report_payload,
+        evidence_export=export_payload,
         surface_observations=observations,
         required_surfaces=required_surfaces,
     )
@@ -510,8 +547,8 @@ def build_pdf_export_scorecard(
             "text_chars": len(pdf_text),
         },
         "evidence_export": {
-            "questions": _safe_sequence_len(evidence_export.get("questions")),
-            "evidence_rows": _safe_sequence_len(evidence_export.get("evidence_rows")),
+            "questions": _safe_sequence_len(export_payload.get("questions")),
+            "evidence_rows": _safe_sequence_len(export_payload.get("evidence_rows")),
         },
     }
     return result

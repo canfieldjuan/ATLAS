@@ -32,6 +32,16 @@ forms are accepted, source ID leaks are checked against the actual model/export
 IDs, malformed arrays stay inside scorecard assertions, and default PDF caps
 remain active through displayed-row observations.
 
+Second review fix root cause: the label-anchor repair still bound values only
+to the same line, not to the rendered phrase, so the shared sentence "8
+question-level repeat tickets across 2 ranked questions" could satisfy the
+wrong metric with a neighboring value. The source-ID repair also still filtered
+out digit-only known IDs even though Zendesk/Freshdesk ticket IDs are commonly
+bare numbers. This update fixes those roots at the detector predicates:
+count patterns include the metric phrase and escaped expected value in one
+regex template, and the known source-ID set checks exact IDs verbatim whether
+they are numeric or prefixed.
+
 The diff may exceed the soft cap because this is another cross-surface bridge:
 the checker, negative fixtures, CI enrollment, and plan/archive housekeeping
 ship together so the live runner has a tested validator to call.
@@ -57,9 +67,11 @@ Slice phase: Functional validation
 6. Keep default PDF row-cap assertions active by deriving displayed row counts
    from visible ranked-question and question-detail text.
 7. Add negative tests for bad PDF bytes, missing PDF model count, live
-   URL/request-id leaks, Zendesk/Freshdesk-style source ID leaks, label-anchor
-   false positives, missing row-cap observations, malformed export arrays, and
-   mismatched export totals.
+   URL/request-id leaks, `content-ops/deflection-reports` URL leaks,
+   Zendesk/Freshdesk-style numeric source ID leaks, actual evidence quote
+   leaks, label-anchor false positives, swapped-value false positives, missing
+   row-cap observations, malformed export arrays, non-mapping caller payloads,
+   and mismatched export totals.
 8. Enroll the test in `scripts/run_extracted_pipeline_checks.sh`.
 9. Archive the merged #1621 hosted-smoke plan as teardown housekeeping, while
    explicitly not treating it as buyer hosted-result proof.
@@ -86,14 +98,19 @@ Acceptance criteria:
 - PDF observations are present only when the PDF bytes/text satisfy the
   artifact checks; missing required PDF counts fail the required-metric guard.
 - PDF count observations are label-anchored and accept the renderer's rounded
-  dollar and comma-formatted count displays.
+  dollar and comma-formatted count displays; a neighboring count on the same
+  renderer sentence must not satisfy the wrong metric.
 - PDF displayed-row observations keep the default ranked-question and
   question-detail caps active.
 - Leak checks include both result URL paths, concrete `content-ops-...` request
-  IDs, and actual source IDs from the report model/evidence export without
-  echoing those values in the scorecard.
+  IDs, `content-ops/deflection-reports` URLs, actual evidence quotes, and
+  actual source IDs from the report model/evidence export without echoing those
+  values in the scorecard. Numeric Zendesk/Freshdesk-style IDs are checked
+  verbatim when they come from the known model/export set.
 - Malformed evidence-export arrays produce structured failure assertions rather
   than crashing before output is written.
+- Non-mapping programmatic caller payloads fail through the scorecard instead
+  of raising an unstructured attribute error.
 - Evidence-export shape/count mismatches fail through the existing
   `deflection_full_report_qa_scorecard.v1` assertions.
 - Bad PDF bytes, missing visible count, and leak strings are all proven to fail
@@ -149,6 +166,10 @@ slice owns the model-anchored artifact contract that runner must satisfy.
 - PR-Deflection-Full-Report-QA-Live-Runner: download real hosted PDF/export
   artifacts, extract PDF text, feed this validator, and commit only sanitized
   summaries.
+- Empty-PDF text extraction quality remains part of the live-runner slice: this
+  validator already fails empty text through marker/count assertions, while the
+  runner owns proving the extraction method did not silently return an empty
+  document.
 - Buyer hosted-result smoke: move the surface-specific observation hook/smoke to
   `atlas-portfolio/web` and fold it into that repo's existing hosted-results
   smoke rather than duplicating it in ATLAS `portfolio-ui`.
@@ -159,17 +180,17 @@ Parked hardening: none.
 ## Verification
 
 - `pytest tests/test_smoke_content_ops_deflection_pdf_export_validators.py -q`
-  (10 passed).
-- `scripts/run_extracted_pipeline_checks.sh` via bash (4441 passed, 10 skipped).
+  (15 passed).
+- `scripts/run_extracted_pipeline_checks.sh` via bash (4446 passed, 10 skipped).
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Deflection-Full-Report-QA-PDF-Export-Validators.md` | 175 |
+| `plans/PR-Deflection-Full-Report-QA-PDF-Export-Validators.md` | 196 |
 | `plans/archive/PR-Deflection-Full-Report-QA-Hosted-Smoke.md` | 0 |
-| `scripts/check_deflection_full_report_pdf_export_artifacts.py` | 552 |
+| `scripts/check_deflection_full_report_pdf_export_artifacts.py` | 589 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` | 388 |
-| **Total** | **1119** |
+| `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` | 495 |
+| **Total** | **1284** |

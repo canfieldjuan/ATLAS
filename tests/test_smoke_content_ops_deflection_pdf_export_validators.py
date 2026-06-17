@@ -217,6 +217,27 @@ def test_pdf_export_validator_detects_live_urls_and_request_ids() -> None:
     assert "content-ops-1234567890abcdef" not in encoded
 
 
+def test_pdf_export_validator_detects_content_ops_report_urls() -> None:
+    leaked_id = "content-ops-fedcba0987654321"
+    leaked_text = (
+        f"{_pdf_text()}\n"
+        f"https://juancanfield.com/content-ops/deflection-reports/{leaked_id}"
+    )
+
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=_report_model(),
+        evidence_export=_evidence_export(),
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=leaked_text,
+    )
+
+    assert scorecard["ok"] is False
+    failed = _failed_ids(scorecard)
+    assert "artifact.pdf.leak.result_url" in failed
+    encoded = json.dumps(scorecard, sort_keys=True)
+    assert leaked_id not in encoded
+
+
 def test_pdf_export_validator_detects_dynamic_source_id_leaks_without_echoing_them() -> None:
     scorecard = checker.build_pdf_export_scorecard(
         report_model=_report_model(),
@@ -233,6 +254,55 @@ def test_pdf_export_validator_detects_dynamic_source_id_leaks_without_echoing_th
     assert "zd-100" not in encoded
     assert "fd-200" not in encoded
     assert "raw quoted evidence" not in encoded
+
+
+def test_pdf_export_validator_detects_numeric_source_id_leaks_without_echoing_them() -> None:
+    model = _report_model()
+    question_details = model["sections"][3]["data"]["rows"]  # type: ignore[index]
+    question_details[0]["source_ids"] = ["360098765432"]
+    question_details[1]["source_ids"] = ["150042"]
+    export = _evidence_export()
+    export["questions"] = [  # type: ignore[index]
+        {"source_ids": ["360098765432"]},
+        {"source_ids": ["150042"]},
+    ]
+    export["evidence_rows"] = [  # type: ignore[index]
+        {"source_id": "360098765432"},
+        {"source_id": "150042"},
+    ]
+
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=model,
+        evidence_export=export,
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=f"{_pdf_text()}\nSource IDs: 360098765432 and 150042",
+    )
+
+    assert scorecard["ok"] is False
+    failed = _failed_ids(scorecard)
+    assert "artifact.pdf.leak.source_id_list" in failed
+    encoded = json.dumps(scorecard, sort_keys=True)
+    assert "360098765432" not in encoded
+    assert "150042" not in encoded
+
+
+def test_pdf_export_validator_detects_actual_evidence_quote_leak_without_echoing_it() -> None:
+    leaked_quote = "Customer says the export failed after upgrading the workspace"
+    export = _evidence_export()
+    export["evidence_rows"][0]["evidence_quote"] = leaked_quote  # type: ignore[index]
+
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=_report_model(),
+        evidence_export=export,
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=f"{_pdf_text()}\n{leaked_quote}",
+    )
+
+    assert scorecard["ok"] is False
+    failed = _failed_ids(scorecard)
+    assert "artifact.pdf.leak.raw_evidence_quote" in failed
+    encoded = json.dumps(scorecard, sort_keys=True)
+    assert leaked_quote not in encoded
 
 
 def test_pdf_export_validator_anchors_count_checks_to_labels() -> None:
@@ -263,6 +333,31 @@ def test_pdf_export_validator_anchors_count_checks_to_labels() -> None:
     failed = _failed_ids(scorecard)
     assert "artifact.pdf.text.count.drafted_answer_count" in failed
     assert "artifact.pdf.text.count.no_proven_answer_count" in failed
+
+
+def test_pdf_export_validator_rejects_swapped_values_on_shared_count_line() -> None:
+    model = _report_model()
+    support_tax = model["sections"][0]["data"]  # type: ignore[index]
+    support_tax["repeat_ticket_count"] = 2  # type: ignore[index]
+    support_tax["generated_question_count"] = 8  # type: ignore[index]
+    ranked_questions = model["sections"][2]["data"]["rows"]  # type: ignore[index]
+    ranked_questions.extend(
+        {"rank": rank, "question": f"Held-out question {rank}?"}
+        for rank in range(3, 9)
+    )
+
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=model,
+        evidence_export=_evidence_export(),
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=_pdf_text(),
+    )
+
+    assert scorecard["ok"] is False
+    failed = _failed_ids(scorecard)
+    assert "artifact.pdf.text.count.repeat_ticket_count" in failed
+    assert "artifact.pdf.text.count.generated_question_count" in failed
+    assert "artifact.pdf.text.count.ranked_question_count" in failed
 
 
 def test_pdf_export_validator_accepts_renderer_count_and_money_display_forms() -> None:
@@ -386,3 +481,15 @@ def test_pdf_export_validator_cli_fails_malformed_export_arrays_without_crashing
     failed = _failed_ids(payload)
     assert "evidence_export.questions.present" in failed
     assert "evidence_export.evidence_rows.present" in failed
+
+
+def test_pdf_export_validator_handles_non_mapping_payloads_without_crashing() -> None:
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=["not", "a", "mapping"],
+        evidence_export=["not", "a", "mapping"],
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=_pdf_text(),
+    )
+
+    assert scorecard["ok"] is False
+    assert isinstance(scorecard["assertions"], list)
