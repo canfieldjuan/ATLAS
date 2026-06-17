@@ -47,6 +47,9 @@ on:
       - "atlas_brain/skills/**"
       - "atlas_brain/vision/**"
       - "atlas_brain/voice/**"
+      - "atlas_brain/reasoning/**"
+      - "atlas_brain/security/**"
+      - "atlas_brain/storage/**"
   push:
     branches:
       - main
@@ -83,6 +86,9 @@ on:
       - "atlas_brain/skills/**"
       - "atlas_brain/vision/**"
       - "atlas_brain/voice/**"
+      - "atlas_brain/reasoning/**"
+      - "atlas_brain/security/**"
+      - "atlas_brain/storage/**"
 
 jobs:
   maturity-sweep:
@@ -256,6 +262,36 @@ jobs:
             python scripts/maturity_sweep.py "atlas_brain/${lane}" \
               --tests-root tests \
               --baseline "tests/maturity_sweep/baseline_atlas_brain_${slug}.json" \
+              --min-score 8 \
+              "${common_sensitive_args[@]}"
+            echo "::endgroup::"
+          done
+
+      - name: Maturity sweep atlas_brain B2c core-risk ratchet gates (blocking)
+        run: |
+          set -euo pipefail
+          common_sensitive_args=(
+            --sensitive-glob '**/billing/**'
+            --sensitive-glob '**/billing*'
+            --sensitive-glob '**/paid*'
+            --sensitive-glob '**/auth/**'
+            --sensitive-glob '**/auth*'
+            --sensitive-glob '**/webhook*'
+            --sensitive-glob '**/webhooks/**'
+            --sensitive-glob '**/*webhook*/**'
+            --sensitive-glob '**/payment*'
+            --sensitive-glob '**/invoicing/**'
+            --sensitive-glob '**/*invoice*'
+            --sensitive-glob '**/*deletion*'
+            --sensitive-glob '**/delete*/**'
+            --sensitive-glob 'atlas_brain/security/**'
+            --sensitive-glob 'atlas_brain/storage/**'
+          )
+          for lane in reasoning security storage; do
+            echo "::group::atlas_brain/${lane}"
+            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+              --tests-root tests \
+              --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
               --min-score 8 \
               "${common_sensitive_args[@]}"
             echo "::endgroup::"

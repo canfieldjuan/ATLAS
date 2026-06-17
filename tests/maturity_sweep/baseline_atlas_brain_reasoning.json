@@ -1,0 +1,189 @@
+{
+  "atlas_brain/reasoning/agent.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/reasoning/call_transcript.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/reasoning/config.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/reasoning/consumer.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/reasoning/context_aggregator.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 18
+  },
+  "atlas_brain/reasoning/cross_vendor_selection.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 13
+  },
+  "atlas_brain/reasoning/ecosystem.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "atlas_brain/reasoning/entity_locks.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/reasoning/event_bus.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 3
+    },
+    "score": 21
+  },
+  "atlas_brain/reasoning/events.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/reasoning/evidence_engine.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/reasoning/knowledge_graph.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 12
+  },
+  "atlas_brain/reasoning/llm_utils.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 11
+  },
+  "atlas_brain/reasoning/lock_integration.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 3
+    },
+    "score": 21
+  },
+  "atlas_brain/reasoning/market_pulse.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/reasoning/narrative.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "atlas_brain/reasoning/patterns.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/reasoning/phrase_metadata.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/reasoning/semantic_cache.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/reasoning/single_pass_prompts/battle_card_reasoning.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1
+    },
+    "score": 1
+  },
+  "atlas_brain/reasoning/single_pass_prompts/category_council_synthesis.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 3
+    },
+    "score": 3
+  },
+  "atlas_brain/reasoning/single_pass_prompts/cross_vendor_battle.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2
+    },
+    "score": 2
+  },
+  "atlas_brain/reasoning/single_pass_prompts/cross_vendor_battle_synthesis.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 3
+    },
+    "score": 3
+  },
+  "atlas_brain/reasoning/single_pass_prompts/resource_asymmetry_synthesis.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1
+    },
+    "score": 1
+  },
+  "atlas_brain/reasoning/single_pass_prompts/vendor_classify.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1
+    },
+    "score": 1
+  },
+  "atlas_brain/reasoning/state.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/reasoning/trigger_events.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/reasoning/vendor_pressure.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  }
+}
