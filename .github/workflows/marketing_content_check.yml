@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Need the base SHA so the diff below can resolve; the default
           # shallow (fetch-depth 1) checkout makes `git diff base head` error
