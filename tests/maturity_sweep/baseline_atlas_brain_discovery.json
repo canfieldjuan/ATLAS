@@ -1,0 +1,23 @@
+{
+  "atlas_brain/discovery/scanners/mdns.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "atlas_brain/discovery/scanners/ssdp.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 14
+  },
+  "atlas_brain/discovery/service.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 17
+  }
+}

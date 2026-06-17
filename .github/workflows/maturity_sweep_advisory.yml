@@ -24,12 +24,40 @@ on:
       - "tests/maturity_sweep/baseline_atlas_brain_autonomous.json"
       - "tests/maturity_sweep/baseline_atlas_brain_mcp.json"
       - "tests/maturity_sweep/baseline_atlas_brain_services_b2b.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_alerts.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_brand.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_discovery.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_escalation.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_events.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_jobs.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_memory.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_modes.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_orchestration.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_pipelines.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_presence.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_schemas.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_templates.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_utils.json"
       - "extracted_content_pipeline/**"
       - "atlas_brain/api/**"
       - "atlas_brain/auth/**"
       - "atlas_brain/autonomous/**"
       - "atlas_brain/mcp/**"
       - "atlas_brain/services/b2b/**"
+      - "atlas_brain/alerts/**"
+      - "atlas_brain/brand/**"
+      - "atlas_brain/discovery/**"
+      - "atlas_brain/escalation/**"
+      - "atlas_brain/events/**"
+      - "atlas_brain/jobs/**"
+      - "atlas_brain/memory/**"
+      - "atlas_brain/modes/**"
+      - "atlas_brain/orchestration/**"
+      - "atlas_brain/pipelines/**"
+      - "atlas_brain/presence/**"
+      - "atlas_brain/schemas/**"
+      - "atlas_brain/templates/**"
+      - "atlas_brain/utils/**"
       - "tests/test_extracted_*.py"
       - "tests/test_content_ops_*.py"
       - "tests/test_atlas_*.py"
@@ -39,6 +67,34 @@ on:
       - "tests/test_*billing*.py"
       - "tests/test_*webhook*.py"
       - "tests/test_invoicing*.py"
+      - "tests/*alert*.py"
+      - "tests/*brand*.py"
+      - "tests/*discovery*.py"
+      - "tests/*escalation*.py"
+      - "tests/*event*.py"
+      - "tests/*job*.py"
+      - "tests/*memory*.py"
+      - "tests/*mode*.py"
+      - "tests/*orchestration*.py"
+      - "tests/*pipeline*.py"
+      - "tests/*presence*.py"
+      - "tests/*schema*.py"
+      - "tests/*template*.py"
+      - "tests/*util*.py"
+      - "tests/**/*alert*.py"
+      - "tests/**/*brand*.py"
+      - "tests/**/*discovery*.py"
+      - "tests/**/*escalation*.py"
+      - "tests/**/*event*.py"
+      - "tests/**/*job*.py"
+      - "tests/**/*memory*.py"
+      - "tests/**/*mode*.py"
+      - "tests/**/*orchestration*.py"
+      - "tests/**/*pipeline*.py"
+      - "tests/**/*presence*.py"
+      - "tests/**/*schema*.py"
+      - "tests/**/*template*.py"
+      - "tests/**/*util*.py"
   push:
     branches:
       - main
@@ -51,12 +107,68 @@ on:
       - "tests/maturity_sweep/baseline_atlas_brain_autonomous.json"
       - "tests/maturity_sweep/baseline_atlas_brain_mcp.json"
       - "tests/maturity_sweep/baseline_atlas_brain_services_b2b.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_alerts.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_brand.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_discovery.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_escalation.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_events.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_jobs.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_memory.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_modes.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_orchestration.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_pipelines.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_presence.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_schemas.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_templates.json"
+      - "tests/maturity_sweep/baseline_atlas_brain_utils.json"
       - "extracted_content_pipeline/**"
       - "atlas_brain/api/**"
       - "atlas_brain/auth/**"
       - "atlas_brain/autonomous/**"
       - "atlas_brain/mcp/**"
       - "atlas_brain/services/b2b/**"
+      - "atlas_brain/alerts/**"
+      - "atlas_brain/brand/**"
+      - "atlas_brain/discovery/**"
+      - "atlas_brain/escalation/**"
+      - "atlas_brain/events/**"
+      - "atlas_brain/jobs/**"
+      - "atlas_brain/memory/**"
+      - "atlas_brain/modes/**"
+      - "atlas_brain/orchestration/**"
+      - "atlas_brain/pipelines/**"
+      - "atlas_brain/presence/**"
+      - "atlas_brain/schemas/**"
+      - "atlas_brain/templates/**"
+      - "atlas_brain/utils/**"
+      - "tests/*alert*.py"
+      - "tests/*brand*.py"
+      - "tests/*discovery*.py"
+      - "tests/*escalation*.py"
+      - "tests/*event*.py"
+      - "tests/*job*.py"
+      - "tests/*memory*.py"
+      - "tests/*mode*.py"
+      - "tests/*orchestration*.py"
+      - "tests/*pipeline*.py"
+      - "tests/*presence*.py"
+      - "tests/*schema*.py"
+      - "tests/*template*.py"
+      - "tests/*util*.py"
+      - "tests/**/*alert*.py"
+      - "tests/**/*brand*.py"
+      - "tests/**/*discovery*.py"
+      - "tests/**/*escalation*.py"
+      - "tests/**/*event*.py"
+      - "tests/**/*job*.py"
+      - "tests/**/*memory*.py"
+      - "tests/**/*mode*.py"
+      - "tests/**/*orchestration*.py"
+      - "tests/**/*pipeline*.py"
+      - "tests/**/*presence*.py"
+      - "tests/**/*schema*.py"
+      - "tests/**/*template*.py"
+      - "tests/**/*util*.py"
 
 jobs:
   maturity-sweep:
@@ -168,3 +280,29 @@ jobs:
             --sensitive-glob '**/webhook*' \
             --sensitive-glob '**/payment*' \
             --sensitive-glob '**/*deletion*'
+
+      - name: Maturity sweep atlas_brain B2a support ratchet gates (blocking)
+        run: |
+          set -euo pipefail
+          common_sensitive_args=(
+            --sensitive-glob '**/billing/**'
+            --sensitive-glob '**/billing*'
+            --sensitive-glob '**/paid*'
+            --sensitive-glob '**/auth/**'
+            --sensitive-glob '**/auth*'
+            --sensitive-glob '**/webhook*'
+            --sensitive-glob '**/webhooks/**'
+            --sensitive-glob '**/payment*'
+            --sensitive-glob '**/invoicing/**'
+            --sensitive-glob '**/*invoice*'
+            --sensitive-glob '**/*deletion*'
+          )
+          for lane in alerts brand discovery escalation events jobs memory modes orchestration pipelines presence schemas templates utils; do
+            echo "::group::atlas_brain/${lane}"
+            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+              --tests-root tests \
+              --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
+              --min-score 8 \
+              "${common_sensitive_args[@]}"
+            echo "::endgroup::"
+          done
