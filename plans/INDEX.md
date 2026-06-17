@@ -1,6 +1,6 @@
 # Plan archive index
 
-1128 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1129 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -766,6 +766,7 @@
 - [PR-Deflection-Safe-Label-Disambiguation](archive/PR-Deflection-Safe-Label-Disambiguation.md) - lane: deflection/clustering | phase: Production hardening
 - [PR-Deflection-Section-Registry](archive/PR-Deflection-Section-Registry.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-See-Something-Invariant](archive/PR-Deflection-See-Something-Invariant.md) - lane: content-ops/deflection-parser | phase: Production hardening
+- [PR-Deflection-Semantic-Question-Detection](archive/PR-Deflection-Semantic-Question-Detection.md) - lane: content-ops/deflection-parser | phase: Product polish
 - [PR-Deflection-Session-Amount-Gate](archive/PR-Deflection-Session-Amount-Gate.md) - lane: ai-content-ops/faq-deflection-monetization | phase: Production hardening
 - [PR-Deflection-Snapshot-Counts](archive/PR-Deflection-Snapshot-Counts.md) - lane: content-ops/faq-deflection | phase: Functional validation
 - [PR-Deflection-Snapshot-Date-Window](archive/PR-Deflection-Snapshot-Date-Window.md) - lane: ai-content-ops/faq-support-ticket-deflection | phase: Production hardening
