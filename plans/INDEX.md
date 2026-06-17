@@ -1,6 +1,6 @@
 # Plan archive index
 
-1094 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1096 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -998,6 +998,7 @@
 - [PR-MCP-Connector-Session-Handoff](archive/PR-MCP-Connector-Session-Handoff.md)
 - [PR-Marketer-Reviews-As-Input](archive/PR-Marketer-Reviews-As-Input.md) - lane: content-ops/marketer-reviews-as-input | phase: Workflow/process
 - [PR-Maturity-Sweep-Advisory-CI](archive/PR-Maturity-Sweep-Advisory-CI.md) - lane: review-workflow | phase: workflow/process
+- [PR-Npm-Security-Patch-Batch](archive/PR-Npm-Security-Patch-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-OptionA-1](archive/PR-OptionA-1.md)
 - [PR-OptionA-2](archive/PR-OptionA-2.md)
 - [PR-OptionA-3](archive/PR-OptionA-3.md)
