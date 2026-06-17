@@ -40,14 +40,14 @@ These synthetic cases break parser mechanics through the same CSV diagnostics
 path. They prove whether current guards fail closed, warn, or expose a known
 fail-open gap. They do not justify a low-coverage threshold.
 
-| Case | Case status | Expected outcome | Observed outcome | Raw rows | Usable rows | Admission | Coverage warnings |
-|---|---|---|---|---:|---:|---|---:|
-| unknown_body_like_column_rejects_zero_usable | ok | REJECT | REJECT | 1 | 0 | REJECT | 0 |
-| private_note_only_rejects_zero_usable | ok | REJECT | REJECT | 1 | 0 | REJECT | 0 |
-| status_timestamp_only_rejects_zero_usable | ok | REJECT | REJECT | 1 | 0 | REJECT | 0 |
-| partial_blank_rows_warns_without_rejecting | ok | ACCEPT_WITH_WARNING | ACCEPT_WITH_WARNING | 2 | 1 | ACCEPT | 1 |
-| header_only_csv_has_no_policy_decision | ok | NO_POLICY_DECISION | NO_POLICY_DECISION | 0 | 0 | None | 0 |
-| json_blob_message_known_fail_open | known_gap | ACCEPT_CLEAN | ACCEPT_CLEAN | 1 | 1 | ACCEPT | 0 |
+| Case | Case status | Expected outcome | Observed outcome | Raw rows | Usable rows | Admission | Decision reason | Decision location | Coverage warnings |
+|---|---|---|---|---:|---:|---|---|---|---:|
+| unknown_body_like_column_rejects_zero_usable | ok | REJECT | REJECT | 1 | 0 | REJECT | no_usable_source_rows | source_row_csv | 0 |
+| private_note_only_rejects_zero_usable | ok | REJECT | REJECT | 1 | 0 | REJECT | no_usable_source_rows | source_row_csv | 0 |
+| status_timestamp_only_rejects_zero_usable | ok | REJECT | REJECT | 1 | 0 | REJECT | no_usable_source_rows | source_row_csv | 0 |
+| partial_blank_rows_warns_without_rejecting | ok | ACCEPT_WITH_WARNING | ACCEPT_WITH_WARNING | 2 | 1 | ACCEPT |  |  | 1 |
+| header_only_csv_has_no_policy_decision | ok | NO_POLICY_DECISION | NO_POLICY_DECISION | 0 | 0 | None |  |  | 0 |
+| json_blob_message_known_fail_open | known_gap | ACCEPT_CLEAN | ACCEPT_CLEAN | 1 | 1 | ACCEPT |  |  | 0 |
 
 Known fail-open gaps: `1`
 

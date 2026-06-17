@@ -59,6 +59,15 @@ def test_breakage_matrix_scores_fail_closed_warning_and_known_gap() -> None:
         "admission_status"
     ] == "REJECT"
     assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "admission_decision_reason"
+    ] == "no_usable_source_rows"
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "admission_decision_location"
+    ] == "source_row_csv"
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "decision_matched"
+    ] is True
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
         "populated_unmapped_fields"
     ] == ["Conversation Text"]
 
@@ -68,6 +77,12 @@ def test_breakage_matrix_scores_fail_closed_warning_and_known_gap() -> None:
     assert cases["private_note_only_rejects_zero_usable"][
         "ignored_private_fields"
     ] == ["Internal Notes"]
+    assert cases["private_note_only_rejects_zero_usable"][
+        "admission_decision_reason"
+    ] == "no_usable_source_rows"
+    assert cases["private_note_only_rejects_zero_usable"][
+        "admission_decision_location"
+    ] == "source_row_csv"
 
     assert cases["status_timestamp_only_rejects_zero_usable"][
         "observed_outcome"
@@ -75,6 +90,12 @@ def test_breakage_matrix_scores_fail_closed_warning_and_known_gap() -> None:
     assert cases["status_timestamp_only_rejects_zero_usable"][
         "populated_unmapped_fields"
     ] == ["Status", "First Response", "Last Response"]
+    assert cases["status_timestamp_only_rejects_zero_usable"][
+        "admission_decision_reason"
+    ] == "no_usable_source_rows"
+    assert cases["status_timestamp_only_rejects_zero_usable"][
+        "admission_decision_location"
+    ] == "source_row_csv"
 
     partial = cases["partial_blank_rows_warns_without_rejecting"]
     assert partial["observed_outcome"] == "ACCEPT_WITH_WARNING"
@@ -112,6 +133,29 @@ def test_breakage_matrix_expected_guard_mismatch_blocks() -> None:
     assert result["case_status"] == "failed"
     assert MOD._breakage_blocking_codes([result]) == [
         "broken_expectation:unexpected_breakage_outcome"
+    ]
+
+
+def test_breakage_matrix_reject_reason_mismatch_blocks() -> None:
+    case = MOD.CsvBreakageCase(
+        name="wrong_reject_reason",
+        description="Reject cases must assert the exact reason and location.",
+        fieldnames=("Ticket ID", "Conversation Text"),
+        rows=({"Ticket ID": "T-1", "Conversation Text": "Cannot export reports."},),
+        expected_outcome="REJECT",
+        expected_decision_reason="wrong_reason",
+        expected_decision_location="source_row_csv",
+    )
+
+    result = MOD.evaluate_breakage_case(case)
+
+    assert result["observed_outcome"] == "REJECT"
+    assert result["admission_decision_reason"] == "no_usable_source_rows"
+    assert result["admission_decision_location"] == "source_row_csv"
+    assert result["decision_matched"] is False
+    assert result["case_status"] == "failed"
+    assert MOD._breakage_blocking_codes([result]) == [
+        "wrong_reject_reason:unexpected_breakage_outcome"
     ]
 
 

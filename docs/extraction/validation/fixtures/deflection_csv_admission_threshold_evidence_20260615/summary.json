@@ -6,10 +6,20 @@
     "case_count": 6,
     "cases": [
       {
+        "admission_decision": {
+          "location": "source_row_csv",
+          "reason": "no_usable_source_rows",
+          "status": "REJECT"
+        },
+        "admission_decision_location": "source_row_csv",
+        "admission_decision_reason": "no_usable_source_rows",
         "admission_status": "REJECT",
         "case_status": "ok",
         "coverage_warnings": [],
+        "decision_matched": true,
         "description": "Populated body-like column is not mapped and must reject.",
+        "expected_decision_location": "source_row_csv",
+        "expected_decision_reason": "no_usable_source_rows",
         "expected_full_coverage": false,
         "expected_outcome": "REJECT",
         "ignored_private_fields": [],
@@ -33,10 +43,20 @@
         }
       },
       {
+        "admission_decision": {
+          "location": "source_row_csv",
+          "reason": "no_usable_source_rows",
+          "status": "REJECT"
+        },
+        "admission_decision_location": "source_row_csv",
+        "admission_decision_reason": "no_usable_source_rows",
         "admission_status": "REJECT",
         "case_status": "ok",
         "coverage_warnings": [],
+        "decision_matched": true,
         "description": "Private/internal-only rows must not count as usable text.",
+        "expected_decision_location": "source_row_csv",
+        "expected_decision_reason": "no_usable_source_rows",
         "expected_full_coverage": false,
         "expected_outcome": "REJECT",
         "ignored_private_fields": [
@@ -60,10 +80,20 @@
         }
       },
       {
+        "admission_decision": {
+          "location": "source_row_csv",
+          "reason": "no_usable_source_rows",
+          "status": "REJECT"
+        },
+        "admission_decision_location": "source_row_csv",
+        "admission_decision_reason": "no_usable_source_rows",
         "admission_status": "REJECT",
         "case_status": "ok",
         "coverage_warnings": [],
+        "decision_matched": true,
         "description": "Status/SLA timestamp columns alone are not customer wording.",
+        "expected_decision_location": "source_row_csv",
+        "expected_decision_reason": "no_usable_source_rows",
         "expected_full_coverage": false,
         "expected_outcome": "REJECT",
         "ignored_private_fields": [],
@@ -89,6 +119,11 @@
         }
       },
       {
+        "admission_decision": {
+          "status": "ACCEPT"
+        },
+        "admission_decision_location": null,
+        "admission_decision_reason": null,
         "admission_status": "ACCEPT",
         "case_status": "ok",
         "coverage_warnings": [
@@ -101,7 +136,10 @@
             "usable_source_row_count": 1
           }
         ],
+        "decision_matched": true,
         "description": "Some usable rows plus blanks should accept with coverage warning.",
+        "expected_decision_location": null,
+        "expected_decision_reason": null,
         "expected_full_coverage": false,
         "expected_outcome": "ACCEPT_WITH_WARNING",
         "ignored_private_fields": [],
@@ -129,10 +167,16 @@
         }
       },
       {
+        "admission_decision": {},
+        "admission_decision_location": null,
+        "admission_decision_reason": null,
         "admission_status": null,
         "case_status": "ok",
         "coverage_warnings": [],
+        "decision_matched": true,
         "description": "Header-only CSV has no hard source-row admission decision.",
+        "expected_decision_location": null,
+        "expected_decision_reason": null,
         "expected_full_coverage": false,
         "expected_outcome": "NO_POLICY_DECISION",
         "ignored_private_fields": [],
@@ -148,10 +192,18 @@
         "warning_counts": {}
       },
       {
+        "admission_decision": {
+          "status": "ACCEPT"
+        },
+        "admission_decision_location": null,
+        "admission_decision_reason": null,
         "admission_status": "ACCEPT",
         "case_status": "known_gap",
         "coverage_warnings": [],
+        "decision_matched": true,
         "description": "Machine JSON in a mapped text field is currently accepted.",
+        "expected_decision_location": null,
+        "expected_decision_reason": null,
         "expected_full_coverage": false,
         "expected_outcome": "ACCEPT_CLEAN",
         "ignored_private_fields": [],
@@ -184,6 +236,11 @@
   "case_count": 2,
   "cases": [
     {
+      "admission_decision": {
+        "status": "ACCEPT"
+      },
+      "admission_decision_location": null,
+      "admission_decision_reason": null,
       "admission_status": "ACCEPT",
       "case_status": "ok",
       "coverage_warnings": [],
@@ -216,6 +273,11 @@
       }
     },
     {
+      "admission_decision": {
+        "status": "ACCEPT"
+      },
+      "admission_decision_location": null,
+      "admission_decision_reason": null,
       "admission_status": "ACCEPT",
       "case_status": "ok",
       "coverage_warnings": [],

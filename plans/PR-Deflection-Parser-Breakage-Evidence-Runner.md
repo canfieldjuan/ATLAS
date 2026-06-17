@@ -57,6 +57,7 @@ Reviewer rules triggered: R1, R2, R10, R12, R13, R14.
 
 ### Files touched
 
+- `HARDENING.md`
 - `docs/extraction/validation/deflection_csv_admission_threshold_evidence_2026-06-15.md`
 - `docs/extraction/validation/fixtures/deflection_csv_admission_threshold_evidence_20260615/summary.json`
 - `plans/INDEX.md`
@@ -90,9 +91,14 @@ Reviewer rules triggered: R1, R2, R10, R12, R13, R14.
 - #1467 low non-zero reject threshold: still blocked on real partial provider
   CSV evidence.
 - A future policy/fix slice can promote the JSON-blob-message known gap into a
-  fail-closed guard once the desired parser behavior is agreed.
+  fail-closed guard once the desired parser behavior is agreed; tracked in
+  `HARDENING.md` as "CSV source-row admission accepts machine JSON in mapped
+  message fields."
 
-Parked hardening: none.
+Parked hardening:
+- `HARDENING.md`: "CSV source-row admission accepts machine JSON in mapped
+  message fields" because this PR records the breakage evidence but does not
+  choose parser policy for machine payload rejection.
 
 ## Verification
 
@@ -100,19 +106,20 @@ Parked hardening: none.
   - Passed; generated a 6-case breakage matrix with 0 blocking cases and 1
     known fail-open gap.
 - `pytest tests/test_evaluate_csv_admission_threshold_evidence.py -q`
-  - 9 passed in 0.13s.
+  - 10 passed in 0.15s.
 - `./scripts/run_extracted_pipeline_checks.sh`
-  - 4562 passed, 10 skipped, 1 warning in 82.00s.
+  - 4563 passed, 10 skipped, 1 warning in 74.93s.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
+| `HARDENING.md` | 11 |
 | `docs/extraction/validation/deflection_csv_admission_threshold_evidence_2026-06-15.md` | 19 |
-| `docs/extraction/validation/fixtures/deflection_csv_admission_threshold_evidence_20260615/summary.json` | 180 |
-| `plans/INDEX.md` | 3 |
-| `plans/PR-Deflection-Parser-Breakage-Evidence-Runner.md` | 118 |
+| `docs/extraction/validation/fixtures/deflection_csv_admission_threshold_evidence_20260615/summary.json` | 242 |
+| `plans/INDEX.md` | 1 |
+| `plans/PR-Deflection-Parser-Breakage-Evidence-Runner.md` | 125 |
 | `plans/archive/PR-Deflection-Parser-Invariant-Test-Pack.md` | 0 |
-| `scripts/evaluate_csv_admission_threshold_evidence.py` | 166 |
-| `tests/test_evaluate_csv_admission_threshold_evidence.py` | 72 |
-| **Total** | **558** |
+| `scripts/evaluate_csv_admission_threshold_evidence.py` | 195 |
+| `tests/test_evaluate_csv_admission_threshold_evidence.py` | 116 |
+| **Total** | **709** |

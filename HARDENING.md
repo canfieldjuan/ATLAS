@@ -30,6 +30,17 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-06-17
+
+### CSV source-row admission accepts machine JSON in mapped message fields
+- File/location: `scripts/evaluate_csv_admission_threshold_evidence.py` breakage matrix and `extracted_content_pipeline/ingestion_diagnostics.py` CSV source-row admission.
+- Description: A row whose mapped `Message` value is a machine JSON blob such as `{"event":"ticket_created","id":123}` is currently accepted as usable customer text.
+- Why it matters: Machine payloads in a mapped body field can inflate usable-row coverage and make parser admission look cleaner than the report input really is.
+- Effort: M
+- Category: correctness
+- Owner/session: Codex content-ops/deflection-parser-testing
+- Found during: PR-Deflection-Parser-Breakage-Evidence-Runner
+
 ## 2026-06-16
 
 ### Add controlled Gitleaks baseline rotation escape hatch
