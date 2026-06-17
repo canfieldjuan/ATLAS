@@ -33,6 +33,47 @@ const evidenceExportSource = await readFile(
   resolve(root, "api/content-ops/deflection/evidence-export.js"),
   "utf8",
 );
+const REQUIRED_SNAPSHOT_SUMMARY_GUARDS = [
+  {
+    field: "generated",
+    read: /const generated = finiteNumber\(value\.summary\.generated\);/,
+    guard: /generated === null/,
+    failOpen: /finiteNumber\(value\.summary\.generated\)\s*\?\?\s*0/,
+  },
+  {
+    field: "repeat_ticket_count",
+    read: /const repeatTicketCount = finiteNumber\(value\.summary\.repeat_ticket_count\);/,
+    guard: /repeatTicketCount === null/,
+    failOpen: /finiteNumber\(value\.summary\.repeat_ticket_count\)\s*\?\?\s*0/,
+  },
+  {
+    field: "drafted_answer_count",
+    read: /const draftedAnswerCount = finiteNumber\(value\.summary\.drafted_answer_count\);/,
+    guard: /draftedAnswerCount === null/,
+    failOpen: /finiteNumber\(value\.summary\.drafted_answer_count\)\s*\?\?\s*0/,
+  },
+  {
+    field: "no_proven_answer_count",
+    read: /const noProvenAnswerCount = finiteNumber\(value\.summary\.no_proven_answer_count\);/,
+    guard: /noProvenAnswerCount === null/,
+    failOpen: /finiteNumber\(value\.summary\.no_proven_answer_count\)\s*\?\?\s*0/,
+  },
+  {
+    field: "support_ticket_resolution_evidence_present",
+    read:
+      /const resolutionEvidencePresent = value\.summary\.support_ticket_resolution_evidence_present;/,
+    guard: /typeof resolutionEvidencePresent !== "boolean"/,
+    failOpen: /value\.summary\.support_ticket_resolution_evidence_present\s*\?\?\s*false/,
+  },
+  {
+    field: "support_ticket_resolution_evidence_count",
+    read:
+      /const resolutionEvidenceCount = finiteNumber\( value\.summary\.support_ticket_resolution_evidence_count, \);/,
+    guard: /resolutionEvidenceCount === null/,
+    failOpen:
+      /finiteNumber\(\s*value\.summary\.support_ticket_resolution_evidence_count,?\s*\)\s*\?\?\s*0/,
+  },
+];
 
 async function test(name, fn) {
   try {
@@ -215,17 +256,13 @@ await test("snapshot guard names paid report fields that must not render pre-pay
   assert.match(pageSource, /collectForbiddenKeys/);
 });
 
-await test("React fallback rejects snapshots that omit repeat-ticket counts", () => {
+await test("React fallback rejects snapshots that omit required summary fields", () => {
   const compactPageSource = pageSource.replace(/\s+/g, " ");
-  assert.match(
-    compactPageSource,
-    /const repeatTicketCount = finiteNumber\(value\.summary\.repeat_ticket_count\);/,
-  );
-  assert.match(compactPageSource, /repeatTicketCount === null \|\| draftedAnswerCount === null/);
-  assert.doesNotMatch(
-    pageSource,
-    /finiteNumber\(value\.summary\.repeat_ticket_count\)\s*\?\?\s*0/,
-  );
+  for (const { field, read, guard, failOpen } of REQUIRED_SNAPSHOT_SUMMARY_GUARDS) {
+    assert.match(compactPageSource, read, field);
+    assert.match(compactPageSource, guard, field);
+    assert.doesNotMatch(compactPageSource, failOpen, field);
+  }
 });
 
 await test("real snapshot page groups bounded customer wording examples", () => {

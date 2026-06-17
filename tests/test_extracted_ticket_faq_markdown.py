@@ -25,8 +25,10 @@ from extracted_content_pipeline.support_ticket_zendesk_thread import (
 from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownConfig,
     TicketFAQMarkdownService,
+    _RESOLUTION_ACTION_TERMS,
     _output_checks,
     _resolution_advisory_signals,
+    _resolution_signal_token,
     _resolution_signal_tokens,
     _resolution_text_is_publishable,
     _safe_vocabulary_representative_label,
@@ -49,6 +51,16 @@ FAQ_DOCUMENTATION_TERMS = (
 ZENDESK_PRODUCT_PROOF_CORPUS = (
     ROOT / "docs/extraction/validation/fixtures/zendesk_product_proof_corpus.json"
 )
+_VOWELS = frozenset("aeiou")
+_IRREGULAR_PAST_RESOLUTION_ACTION_TERMS = frozenset(
+    {"choose", "rerun", "reset", "run", "send", "set"}
+)
+_IRREGULAR_PAST_RESOLUTION_ACTION_INFLECTIONS = {
+    "chose": "choose",
+    "ran": "run",
+    "reran": "rerun",
+    "sent": "send",
+}
 
 
 class _StubEmbeddingPort:
@@ -104,6 +116,64 @@ class _RenderedFAQHTML(HTMLParser):
             self._stack.pop()
         elif tag in self._stack:
             self._stack.remove(tag)
+
+
+def _standard_resolution_action_inflections(term: str) -> tuple[str, ...]:
+    forms = {f"{term}s"}
+    if term.endswith("y") and len(term) > 1 and term[-2] not in _VOWELS:
+        forms.add(f"{term[:-1]}ies")
+        forms.add(f"{term}ing")
+        if term not in _IRREGULAR_PAST_RESOLUTION_ACTION_TERMS:
+            forms.add(f"{term[:-1]}ied")
+        return tuple(sorted(forms))
+
+    if term.endswith("e"):
+        forms.add(f"{term[:-1]}ing")
+        if term not in _IRREGULAR_PAST_RESOLUTION_ACTION_TERMS:
+            forms.add(f"{term}d")
+        return tuple(sorted(forms))
+
+    is_cvc = (
+        len(term) == 3
+        and term[-1] not in _VOWELS
+        and term[-2] in _VOWELS
+        and term[-3] not in _VOWELS
+        and term[-1] not in {"w", "x", "y"}
+    )
+    if is_cvc:
+        forms.add(f"{term}{term[-1]}ing")
+        if term not in _IRREGULAR_PAST_RESOLUTION_ACTION_TERMS:
+            forms.add(f"{term}{term[-1]}ed")
+        return tuple(sorted(forms))
+
+    forms.add(f"{term}ing")
+    if term not in _IRREGULAR_PAST_RESOLUTION_ACTION_TERMS:
+        forms.add(f"{term}ed")
+    return tuple(sorted(forms))
+
+
+@pytest.mark.parametrize(
+    ("term", "inflection"),
+    [
+        (term, inflection)
+        for term in sorted(_RESOLUTION_ACTION_TERMS)
+        for inflection in _standard_resolution_action_inflections(term)
+    ],
+)
+def test_resolution_action_terms_recognize_standard_inflections(
+    term: str, inflection: str
+) -> None:
+    assert _resolution_signal_token(inflection) == term
+
+
+@pytest.mark.parametrize(
+    ("inflection", "term"),
+    sorted(_IRREGULAR_PAST_RESOLUTION_ACTION_INFLECTIONS.items()),
+)
+def test_resolution_action_terms_recognize_irregular_past_forms(
+    inflection: str, term: str
+) -> None:
+    assert _resolution_signal_token(inflection) == term
 
 
 class _FAQRepository:

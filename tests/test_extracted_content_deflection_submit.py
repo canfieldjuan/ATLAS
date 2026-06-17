@@ -768,11 +768,18 @@ async def test_deflection_submit_accepts_zendesk_full_thread_blob(
     assert summary["drafted_answer_count"] == 1
     assert summary["support_ticket_resolution_evidence_present"] is True
     assert summary["support_ticket_resolution_evidence_count"] == 1
-    assert summary["no_proven_answer_count"] == 0
+    assert summary["no_proven_answer_count"] == 1
     assert artifact_payload["faq_result"]["items"][0]["answer_evidence_status"] == (
+        "draft_needs_review"
+    )
+    assert artifact_payload["faq_result"]["items"][0]["resolution_evidence_scope"] == (
+        "missing_question_scope"
+    )
+    assert list(artifact_payload["faq_result"]["items"][0]["source_ids"]) == ["41"]
+    assert artifact_payload["faq_result"]["items"][1]["answer_evidence_status"] == (
         "resolution_evidence"
     )
-    assert list(artifact_payload["faq_result"]["items"][0]["source_ids"]) == ["2"]
+    assert list(artifact_payload["faq_result"]["items"][1]["source_ids"]) == ["2"]
     assert "duplicate billing event and refunded the extra charge" in (
         artifact_payload["markdown"]
     )
@@ -781,7 +788,7 @@ async def test_deflection_submit_accepts_zendesk_full_thread_blob(
         artifact_payload
     )
     assert "We sent the standard resolution steps" not in artifact_payload["markdown"]
-    assert "This is still broken after trying the steps" not in artifact_payload[
+    assert "This is still broken after trying the steps" in artifact_payload[
         "markdown"
     ]
     assert "lead@acme.example" not in json.dumps(artifact_payload)
