@@ -17,27 +17,7 @@ on:
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
       - "scripts/maturity_sweep.py"
-      - "tests/test_maturity_sweep.py"
-      - "tests/maturity_sweep/baseline_extracted_content_pipeline.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_api.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_auth.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_autonomous.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_mcp.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_services_b2b.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_alerts.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_brand.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_discovery.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_escalation.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_events.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_jobs.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_memory.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_modes.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_orchestration.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_pipelines.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_presence.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_schemas.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_templates.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_utils.json"
+      - "tests/**"
       - "extracted_content_pipeline/**"
       - "atlas_brain/api/**"
       - "atlas_brain/auth/**"
@@ -58,69 +38,22 @@ on:
       - "atlas_brain/schemas/**"
       - "atlas_brain/templates/**"
       - "atlas_brain/utils/**"
-      - "tests/test_extracted_*.py"
-      - "tests/test_content_ops_*.py"
-      - "tests/test_atlas_*.py"
-      - "tests/test_b2b_*.py"
-      - "tests/test_mcp_*.py"
-      - "tests/test_auth*.py"
-      - "tests/test_*billing*.py"
-      - "tests/test_*webhook*.py"
-      - "tests/test_invoicing*.py"
-      - "tests/*alert*.py"
-      - "tests/*brand*.py"
-      - "tests/*discovery*.py"
-      - "tests/*escalation*.py"
-      - "tests/*event*.py"
-      - "tests/*job*.py"
-      - "tests/*memory*.py"
-      - "tests/*mode*.py"
-      - "tests/*orchestration*.py"
-      - "tests/*pipeline*.py"
-      - "tests/*presence*.py"
-      - "tests/*schema*.py"
-      - "tests/*template*.py"
-      - "tests/*util*.py"
-      - "tests/**/*alert*.py"
-      - "tests/**/*brand*.py"
-      - "tests/**/*discovery*.py"
-      - "tests/**/*escalation*.py"
-      - "tests/**/*event*.py"
-      - "tests/**/*job*.py"
-      - "tests/**/*memory*.py"
-      - "tests/**/*mode*.py"
-      - "tests/**/*orchestration*.py"
-      - "tests/**/*pipeline*.py"
-      - "tests/**/*presence*.py"
-      - "tests/**/*schema*.py"
-      - "tests/**/*template*.py"
-      - "tests/**/*util*.py"
+      - "atlas_brain/comms/**"
+      - "atlas_brain/services/email_webhooks/**"
+      - "atlas_brain/services/embedding/**"
+      - "atlas_brain/services/llm/**"
+      - "atlas_brain/services/personaplex/**"
+      - "atlas_brain/services/speaker_id/**"
+      - "atlas_brain/skills/**"
+      - "atlas_brain/vision/**"
+      - "atlas_brain/voice/**"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
       - "scripts/maturity_sweep.py"
-      - "tests/maturity_sweep/baseline_extracted_content_pipeline.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_api.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_auth.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_autonomous.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_mcp.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_services_b2b.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_alerts.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_brand.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_discovery.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_escalation.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_events.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_jobs.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_memory.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_modes.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_orchestration.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_pipelines.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_presence.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_schemas.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_templates.json"
-      - "tests/maturity_sweep/baseline_atlas_brain_utils.json"
+      - "tests/**"
       - "extracted_content_pipeline/**"
       - "atlas_brain/api/**"
       - "atlas_brain/auth/**"
@@ -141,34 +74,15 @@ on:
       - "atlas_brain/schemas/**"
       - "atlas_brain/templates/**"
       - "atlas_brain/utils/**"
-      - "tests/*alert*.py"
-      - "tests/*brand*.py"
-      - "tests/*discovery*.py"
-      - "tests/*escalation*.py"
-      - "tests/*event*.py"
-      - "tests/*job*.py"
-      - "tests/*memory*.py"
-      - "tests/*mode*.py"
-      - "tests/*orchestration*.py"
-      - "tests/*pipeline*.py"
-      - "tests/*presence*.py"
-      - "tests/*schema*.py"
-      - "tests/*template*.py"
-      - "tests/*util*.py"
-      - "tests/**/*alert*.py"
-      - "tests/**/*brand*.py"
-      - "tests/**/*discovery*.py"
-      - "tests/**/*escalation*.py"
-      - "tests/**/*event*.py"
-      - "tests/**/*job*.py"
-      - "tests/**/*memory*.py"
-      - "tests/**/*mode*.py"
-      - "tests/**/*orchestration*.py"
-      - "tests/**/*pipeline*.py"
-      - "tests/**/*presence*.py"
-      - "tests/**/*schema*.py"
-      - "tests/**/*template*.py"
-      - "tests/**/*util*.py"
+      - "atlas_brain/comms/**"
+      - "atlas_brain/services/email_webhooks/**"
+      - "atlas_brain/services/embedding/**"
+      - "atlas_brain/services/llm/**"
+      - "atlas_brain/services/personaplex/**"
+      - "atlas_brain/services/speaker_id/**"
+      - "atlas_brain/skills/**"
+      - "atlas_brain/vision/**"
+      - "atlas_brain/voice/**"
 
 jobs:
   maturity-sweep:
@@ -292,6 +206,7 @@ jobs:
             --sensitive-glob '**/auth*'
             --sensitive-glob '**/webhook*'
             --sensitive-glob '**/webhooks/**'
+            --sensitive-glob '**/*webhook*/**'
             --sensitive-glob '**/payment*'
             --sensitive-glob '**/invoicing/**'
             --sensitive-glob '**/*invoice*'
@@ -302,6 +217,45 @@ jobs:
             python scripts/maturity_sweep.py "atlas_brain/${lane}" \
               --tests-root tests \
               --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
+              --min-score 8 \
+              "${common_sensitive_args[@]}"
+            echo "::endgroup::"
+          done
+
+      - name: Maturity sweep atlas_brain B2b service/comms ratchet gates (blocking)
+        run: |
+          set -euo pipefail
+          common_sensitive_args=(
+            --sensitive-glob '**/billing/**'
+            --sensitive-glob '**/billing*'
+            --sensitive-glob '**/paid*'
+            --sensitive-glob '**/auth/**'
+            --sensitive-glob '**/auth*'
+            --sensitive-glob '**/webhook*'
+            --sensitive-glob '**/webhooks/**'
+            --sensitive-glob '**/*webhook*/**'
+            --sensitive-glob '**/payment*'
+            --sensitive-glob '**/invoicing/**'
+            --sensitive-glob '**/*invoice*'
+            --sensitive-glob '**/*deletion*'
+          )
+          lanes=(
+            comms
+            services/email_webhooks
+            services/embedding
+            services/llm
+            services/personaplex
+            services/speaker_id
+            skills
+            vision
+            voice
+          )
+          for lane in "${lanes[@]}"; do
+            slug="${lane//\//_}"
+            echo "::group::atlas_brain/${lane}"
+            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+              --tests-root tests \
+              --baseline "tests/maturity_sweep/baseline_atlas_brain_${slug}.json" \
               --min-score 8 \
               "${common_sensitive_args[@]}"
             echo "::endgroup::"
