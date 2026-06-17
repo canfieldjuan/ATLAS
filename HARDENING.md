@@ -32,15 +32,6 @@ register under `docs/technical-debt/`.
 
 ## 2026-06-17
 
-### Enroll npm security package checks in CI
-- File/location: `.github/workflows/`, `atlas-admin-ui`, `atlas-churn-ui`, `atlas-ui`, `atlas-mobile`.
-- Description: This batch proves admin, churn, atlas-ui, and mobile dependency updates locally, but only the existing Intel and portfolio workflows exercise npm package checks in CI.
-- Why it matters: Security dependency batches should not depend on local-only build/audit evidence for packages that can drift again; CI enrollment would make future Dependabot triage cheaper and harder to accidentally under-test.
-- Effort: M
-- Category: security
-- Owner/session: Codex security/dependencies
-- Found during: PR-Npm-Security-Patch-Batch review
-
 ### Mobile Expo 56 audit cleanup
 - File/location: `atlas-mobile/package-lock.json`, Expo/React Native dependency graph.
 - Description: `npm audit --audit-level=high` passes after this slice, but plain `npm audit` still reports 21 moderate findings in the Expo, React Native, and audio config-plugin chain; npm says clearing them requires `npm audit fix --force`, which would install `expo@56.0.12`, `react-native@0.86.0`, or downgrade `@siteed/audio-studio`.

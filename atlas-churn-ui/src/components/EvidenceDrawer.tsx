@@ -398,6 +398,7 @@ export default function EvidenceDrawer({
 
   useEffect(() => {
     if (!open || !witnessId || !vendorName) return
+    let cancelled = false
     setLoading(true)
     setError('')
     setAnnotationState(null)
@@ -415,12 +416,21 @@ export default function EvidenceDrawer({
       fetchAnnotations({ vendor_name: vendorName }).catch(() => ({ annotations: [] })),
     ])
       .then(([witnessRes, annotRes]) => {
+        if (cancelled) return
         setWitness(witnessRes.witness)
         const match = annotRes.annotations.find((a: EvidenceAnnotation) => a.witness_id === witnessId)
         setAnnotationState(match || null)
       })
-      .catch(err => setError(err instanceof Error ? err.message : 'Failed to load witness'))
-      .finally(() => setLoading(false))
+      .catch(err => {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : 'Failed to load witness')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [open, witnessId, vendorName, effectiveAsOfDate, windowDays])
 
   useEffect(() => {
