@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -146,7 +146,9 @@ describe('VendorTargets', () => {
 
     expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
 
-    await router.navigate('/vendor-targets')
+    await act(async () => {
+      await router.navigate('/vendor-targets')
+    })
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Search company...')).toHaveValue('')

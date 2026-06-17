@@ -128,8 +128,8 @@ describe('Onboarding', () => {
 
     await router.navigate('/onboarding?q=HubSpot')
 
+    expect(await screen.findByDisplayValue('HubSpot')).toBeInTheDocument()
     await waitFor(() => {
-      expect(screen.getByDisplayValue('HubSpot')).toBeInTheDocument()
       expect(api.searchAvailableVendors).toHaveBeenLastCalledWith('HubSpot')
     })
     router.dispose()
@@ -158,17 +158,19 @@ describe('Onboarding', () => {
 
     await router.navigate('/onboarding?q=HubSpot')
 
+    expect(await screen.findByDisplayValue('HubSpot')).toBeInTheDocument()
     await waitFor(() => {
-      expect(screen.getByDisplayValue('HubSpot')).toBeInTheDocument()
       expect(api.searchAvailableVendors).toHaveBeenLastCalledWith('HubSpot')
     })
 
     zendesk.resolve({ vendors: [{ vendor_name: 'Zendesk', product_category: 'Helpdesk', total_reviews: 120, avg_urgency: 6.2 }] })
+    await zendesk.promise
     await waitFor(() => {
       expect(screen.queryByText('Zendesk')).not.toBeInTheDocument()
     })
 
     hubspot.resolve({ vendors: [{ vendor_name: 'HubSpot', product_category: 'CRM', total_reviews: 220, avg_urgency: 5.8 }] })
+    await hubspot.promise
     expect(await screen.findByText('HubSpot')).toBeInTheDocument()
     router.dispose()
   })

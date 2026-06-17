@@ -1,7 +1,7 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Opportunities from './Opportunities'
 
 const planGate = vi.hoisted(() => ({
@@ -94,6 +94,10 @@ function opportunityRow(overrides = {}) {
 }
 
 describe('Opportunities', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
@@ -147,7 +151,9 @@ describe('Opportunities', () => {
     const input = await screen.findByPlaceholderText('Filter vendor...')
     expect(input).toHaveValue('Zendesk')
 
-    await router.navigate('/opportunities?vendor=HubSpot')
+    await act(async () => {
+      await router.navigate('/opportunities?vendor=HubSpot')
+    })
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Filter vendor...')).toHaveValue('HubSpot')
@@ -168,7 +174,9 @@ describe('Opportunities', () => {
 
     expect(await screen.findByPlaceholderText('Filter vendor...')).toHaveValue('Zendesk')
 
-    await router.navigate('/opportunities')
+    await act(async () => {
+      await router.navigate('/opportunities')
+    })
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Filter vendor...')).toHaveValue('')
