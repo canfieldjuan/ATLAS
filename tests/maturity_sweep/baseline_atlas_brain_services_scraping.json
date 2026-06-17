@@ -1,0 +1,269 @@
+{
+  "atlas_brain/services/scraping/browser.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 3
+    },
+    "score": 22
+  },
+  "atlas_brain/services/scraping/captcha.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 9
+  },
+  "atlas_brain/services/scraping/capterra_audit.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 23
+  },
+  "atlas_brain/services/scraping/eligibility.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/services/scraping/g2_audit.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/services/scraping/gartner_audit.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/services/scraping/getapp_audit.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 21
+  },
+  "atlas_brain/services/scraping/parsers/__init__.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/services/scraping/parsers/capterra.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 5,
+      "UNGUARDED_INDEX": 11
+    },
+    "score": 35
+  },
+  "atlas_brain/services/scraping/parsers/g2.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 4,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 31
+  },
+  "atlas_brain/services/scraping/parsers/gartner.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 6,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 41
+  },
+  "atlas_brain/services/scraping/parsers/getapp.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 8,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 46
+  },
+  "atlas_brain/services/scraping/parsers/peerspot.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 5
+    },
+    "score": 25
+  },
+  "atlas_brain/services/scraping/parsers/producthunt.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 17
+  },
+  "atlas_brain/services/scraping/parsers/quora.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "HEURISTIC_COMMENT": 2,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 4,
+      "UNGUARDED_INDEX": 8
+    },
+    "score": 35
+  },
+  "atlas_brain/services/scraping/parsers/reddit.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 18
+    },
+    "score": 28
+  },
+  "atlas_brain/services/scraping/parsers/rss.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 14
+  },
+  "atlas_brain/services/scraping/parsers/slashdot.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 24
+  },
+  "atlas_brain/services/scraping/parsers/software_advice.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 7
+    },
+    "score": 35
+  },
+  "atlas_brain/services/scraping/parsers/sourceforge.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 4,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 22
+  },
+  "atlas_brain/services/scraping/parsers/stackoverflow.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 17
+  },
+  "atlas_brain/services/scraping/parsers/trustpilot.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 7
+    },
+    "score": 42
+  },
+  "atlas_brain/services/scraping/parsers/trustradius.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 11,
+      "UNGUARDED_INDEX": 6
+    },
+    "score": 61
+  },
+  "atlas_brain/services/scraping/parsers/twitter.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 20
+  },
+  "atlas_brain/services/scraping/parsers/youtube.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 13
+  },
+  "atlas_brain/services/scraping/proxy.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/services/scraping/serp_discovery.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 17
+  },
+  "atlas_brain/services/scraping/source_yield.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/services/scraping/sources.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/services/scraping/target_planning.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "atlas_brain/services/scraping/target_provisioning.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "atlas_brain/services/scraping/trustpilot_audit.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/services/scraping/universal/engine.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 3
+    },
+    "score": 22
+  },
+  "atlas_brain/services/scraping/universal/html_cleaner.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/services/scraping/universal/schemas.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/services/scraping/web_unlocker_http.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  }
+}
