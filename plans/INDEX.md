@@ -722,6 +722,7 @@
 - [PR-Deflection-Paid-Report-Reframe](archive/PR-Deflection-Paid-Report-Reframe.md) - lane: content-ops/faq-deflection-paid-report | phase: Product polish
 - [PR-Deflection-Paid-Result-Page-Consolidated-View](archive/PR-Deflection-Paid-Result-Page-Consolidated-View.md) - lane: content-ops/deflection-launch-readiness | phase: Product polish
 - [PR-Deflection-Paid-Unlock-Diagnostics](archive/PR-Deflection-Paid-Unlock-Diagnostics.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
+- [PR-Deflection-Parser-Breakage-Evidence-Runner](archive/PR-Deflection-Parser-Breakage-Evidence-Runner.md) - lane: content-ops/deflection-parser-testing | phase: Robust testing
 - [PR-Deflection-Parser-Invariant-Test-Pack](archive/PR-Deflection-Parser-Invariant-Test-Pack.md) - lane: content-ops/deflection-parser-testing | phase: Robust testing
 - [PR-Deflection-Portfolio-Paid-Result-Live-Proof](archive/PR-Deflection-Portfolio-Paid-Result-Live-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Proof-Fixture-Request-ID-Redaction](archive/PR-Deflection-Proof-Fixture-Request-ID-Redaction.md) - lane: content-ops/deflection-report | phase: Production hardening
