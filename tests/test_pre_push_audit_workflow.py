@@ -51,6 +51,7 @@ def test_pre_push_audit_workflow_enrolls_workflow_security_posture_audit() -> No
     text = WORKFLOW.read_text(encoding="utf-8")
 
     assert "tests/test_audit_workflow_security_posture.py" in text
+    assert "pytest pytest-asyncio pyyaml" in text
     assert "python scripts/audit_workflow_security_posture.py .github/workflows" in text
 
 

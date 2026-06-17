@@ -60,7 +60,7 @@ jobs:
       # in CI rather than only in local dev.
       - name: PR-review tooling unit tests
         run: |
-          python -m pip install --quiet pytest pytest-asyncio
+          python -m pip install --quiet pytest pytest-asyncio pyyaml
           python -m pytest tests/test_local_pr_review.py tests/test_audit_ai_reconciliation.py tests/test_audit_review_rules_triggered.py tests/test_summarize_review_misses.py tests/test_check_ai_reconciliation_live.py tests/test_pre_push_audit_workflow.py tests/test_check_review_body_r14.py tests/test_push_pr_wrapper.py tests/test_audit_pr_body.py tests/test_check_deflection_full_report_proof_bundle.py tests/test_check_gitleaks_baseline_rotation.py tests/test_security_guardrails_workflow.py tests/test_audit_workflow_security_posture.py tests/test_claude_workflow_security.py -q
 
       - name: Workflow security posture audit

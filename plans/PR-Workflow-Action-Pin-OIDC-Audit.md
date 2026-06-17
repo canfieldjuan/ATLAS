@@ -74,7 +74,9 @@ behind their existing tags, with comments retaining the human tag version.
 The current `.github/workflows/security_guardrails.yml` `pull_request_target`
 and `.github/workflows/claude.yml` OIDC use are explicitly allowlisted with
 rationale. The audit is wired into `.github/workflows/pre_push_audit.yml`, and
-fixture tests prove the failure branches fire.
+fixture tests prove the failure branches fire. The pre-push audit workflow
+installs `pyyaml` alongside its pytest tooling so the YAML-backed audit runs in
+CI's clean environment rather than only in a developer venv.
 
 ## Intentional
 
@@ -97,7 +99,9 @@ trigger` to leave only the remaining mutable-action pin drain.
 ## Verification
 
 - `python -m pytest tests/test_audit_workflow_security_posture.py tests/test_pre_push_audit_workflow.py tests/test_claude_workflow_security.py -q` - 16 passed.
+- Clean venv matching the CI install set (`pytest pytest-asyncio pyyaml`) ran the same focused pytest command - 16 passed.
 - `python scripts/audit_workflow_security_posture.py .github/workflows` - passed with mutable-action warnings and the expected allowed Claude OIDC warning.
+- Clean venv matching the CI install set ran `python scripts/audit_workflow_security_posture.py .github/workflows` - passed with the expected warnings.
 - YAML parse smoke for `.github/workflows/claude.yml` and `.github/workflows/pre_push_audit.yml` - passed.
 - `python scripts/sync_pr_plan.py plans/PR-Workflow-Action-Pin-OIDC-Audit.md --check` - passed.
 - Pending before push: `bash scripts/push_pr.sh tmp/pr_body_workflow_action_pin_oidc_audit.md -u origin HEAD`, which runs the mechanical local review bundle once with the PR body context.
@@ -107,14 +111,14 @@ trigger` to leave only the remaining mutable-action pin drain.
 | File | LOC |
 |---|---:|
 | `.github/workflows/claude.yml` | 16 |
-| `.github/workflows/pre_push_audit.yml` | 5 |
+| `.github/workflows/pre_push_audit.yml` | 7 |
 | `HARDENING.md` | 10 |
 | `docs/SECURITY_GUARDRAILS.md` | 12 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Workflow-Action-Pin-OIDC-Audit.md` | 120 |
+| `plans/PR-Workflow-Action-Pin-OIDC-Audit.md` | 124 |
 | `plans/archive/PR-Gitleaks-Baseline-Rotation-Escape-Hatch.md` | 0 |
 | `scripts/audit_workflow_security_posture.py` | 136 |
 | `tests/test_audit_workflow_security_posture.py` | 162 |
 | `tests/test_claude_workflow_security.py` | 20 |
-| `tests/test_pre_push_audit_workflow.py` | 13 |
-| **Total** | **497** |
+| `tests/test_pre_push_audit_workflow.py` | 14 |
+| **Total** | **504** |
