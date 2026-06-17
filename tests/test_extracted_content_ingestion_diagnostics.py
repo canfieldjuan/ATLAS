@@ -73,6 +73,60 @@ def test_inspect_source_rows_counts_source_types_and_warnings(tmp_path: Path) ->
     assert payload["samples"][0]["evidence"][0]["source_type"] == "support_ticket"
 
 
+def test_inspect_source_jsonl_reports_malformed_line_without_aborting(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        "\n".join([
+            json.dumps({
+                "ticket_id": "ticket-1",
+                "company": "Acme Logistics",
+                "vendor": "HubSpot",
+                "message": "Renewal quote jumped before export work finished.",
+            }),
+            '{"ticket_id": "bad", "message": ',
+            json.dumps({
+                "ticket_id": "ticket-2",
+                "company": "Beta",
+                "vendor": "Zendesk",
+                "message": "Ticket exports timeout after filtering.",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    report = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="jsonl",
+        sample_limit=2,
+    )
+    payload = report.as_dict()
+
+    assert payload["ok"] is True
+    assert payload["opportunity_count"] == 2
+    assert payload["warning_counts"] == {
+        "malformed_jsonl_line": 1,
+        "missing_contact_email": 2,
+    }
+    assert payload["warnings"][0] == {
+        "code": "malformed_jsonl_line",
+        "message": (
+            "Skipped JSONL source row because it is not valid JSON "
+            "(Expecting value at column 32)."
+        ),
+        "row_index": 2,
+        "field": "jsonl",
+    }
+    assert "bad" not in payload["warnings"][0]["message"]
+    assert [
+        warning["row_index"]
+        for warning in payload["warnings"]
+        if warning["code"] == "missing_contact_email"
+    ] == [1, 3]
+
+
 def test_inspect_source_rows_applies_default_fields(tmp_path: Path) -> None:
     path = tmp_path / "sources.jsonl"
     path.write_text(json.dumps({

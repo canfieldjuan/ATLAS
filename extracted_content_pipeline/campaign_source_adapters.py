@@ -338,6 +338,14 @@ _MAX_BUNDLE_DEPTH = 8
 _MISSING = object()
 
 
+class _IndexedSourceRow(dict[str, Any]):
+    """Source row dict that remembers its physical JSONL line number."""
+
+    def __init__(self, row: Mapping[str, Any], *, source_row_index: int) -> None:
+        super().__init__(row)
+        self.source_row_index = source_row_index
+
+
 @dataclass(frozen=True)
 class SourceRowAdmissionDiagnostics:
     """Source-row admission evidence for operator-facing diagnostics."""
@@ -515,10 +523,17 @@ def load_source_rows_from_file(
 ) -> list[Any]:
     """Load source rows from a CSV, JSON, or JSONL file without opportunity mapping."""
 
-    rows, _warnings = load_source_rows_with_warnings_from_file(
+    rows, warnings = load_source_rows_with_warnings_from_file(
         path,
         file_format=file_format,
     )
+    malformed_jsonl_warnings = [
+        warning for warning in warnings if warning.code == "malformed_jsonl_line"
+    ]
+    if malformed_jsonl_warnings:
+        warning = malformed_jsonl_warnings[0]
+        line = f"line {warning.row_index}" if warning.row_index is not None else "a line"
+        raise ValueError(f"Malformed JSONL source row at {line}: {warning.message}")
     return rows
 
 
@@ -562,15 +577,19 @@ def source_rows_to_campaign_opportunities(
                 message="Skipped source row because it is not an object.",
             ))
             continue
+        row_index = _source_row_input_index(row, index)
         merged_row = _merge_default_fields(defaults, row) if defaults else row
         opportunity, row_warnings = source_row_to_campaign_opportunity(
             merged_row,
-            row_index=index,
+            row_index=row_index,
             max_text_chars=max_text_chars,
         )
         warnings.extend(row_warnings)
         if opportunity:
-            opportunities.append(opportunity)
+            opportunities.append(_IndexedSourceRow(
+                opportunity,
+                source_row_index=row_index,
+            ))
     normalized = normalize_campaign_opportunity_rows(
         opportunities,
         target_mode=target_mode,
@@ -739,6 +758,13 @@ def _populated_source_fields(rows: Sequence[Any]) -> tuple[str, ...]:
     return tuple(fields)
 
 
+def _source_row_input_index(row: Mapping[str, Any], fallback: int) -> int:
+    raw_index = getattr(row, "source_row_index", None)
+    if isinstance(raw_index, int) and raw_index > 0:
+        return raw_index
+    return fallback
+
+
 def _matching_fields(fields: Sequence[str], aliases: Sequence[str]) -> tuple[str, ...]:
     return tuple(field for field in fields if _field_matches_aliases(field, aliases))
 
@@ -872,11 +898,29 @@ def _load_source_rows(
         return _load_source_csv_rows(path)
     if resolved_format == "jsonl":
         rows: list[Any] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
+        warnings: list[CampaignOpportunityWarning] = []
+        for line_index, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(),
+            start=1,
+        ):
             text = line.strip()
             if text:
-                rows.append(json.loads(text))
-        return rows, ()
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, Mapping):
+                        parsed = _IndexedSourceRow(parsed, source_row_index=line_index)
+                    rows.append(parsed)
+                except json.JSONDecodeError as exc:
+                    warnings.append(CampaignOpportunityWarning(
+                        code="malformed_jsonl_line",
+                        row_index=line_index,
+                        field="jsonl",
+                        message=(
+                            "Skipped JSONL source row because it is not valid "
+                            f"JSON ({exc.msg} at column {exc.colno})."
+                        ),
+                    ))
+        return rows, tuple(warnings)
     data = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(data, list):
         return list(data), ()

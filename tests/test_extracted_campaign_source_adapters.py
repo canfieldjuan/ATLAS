@@ -1808,6 +1808,115 @@ def test_load_source_campaign_opportunities_from_jsonl(tmp_path: Path) -> None:
     assert loaded.opportunities[1]["evidence"][0]["source_type"] == "complaint"
 
 
+def test_load_source_rows_from_jsonl_skips_malformed_line_with_warning(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        "\n".join([
+            json.dumps({
+                "id": "ticket-1",
+                "company": "Acme",
+                "vendor": "Zendesk",
+                "message": "The export keeps failing.",
+            }),
+            "",
+            '{"id": "broken", "message": ',
+            json.dumps({
+                "id": "ticket-2",
+                "company": "Beta",
+                "vendor": "HubSpot",
+                "message": "The renewal quote is wrong.",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="jsonl",
+    )
+
+    assert [row["id"] for row in rows] == ["ticket-1", "ticket-2"]
+    assert [warning.as_dict() for warning in warnings] == [{
+        "code": "malformed_jsonl_line",
+        "message": (
+            "Skipped JSONL source row because it is not valid JSON "
+            "(Expecting value at column 28)."
+        ),
+        "row_index": 3,
+        "field": "jsonl",
+    }]
+    assert "broken" not in warnings[0].message
+
+    loaded = source_rows_to_campaign_opportunities(rows)
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "ticket-1",
+        "ticket-2",
+    ]
+    assert "__atlas_jsonl_source_line" not in loaded.opportunities[0]
+    assert [
+        warning.row_index
+        for warning in loaded.warnings
+        if warning.code == "missing_contact_email"
+    ] == [1, 4]
+
+
+def test_load_source_rows_from_jsonl_does_not_drop_malformed_line_warning(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        "\n".join([
+            json.dumps({
+                "id": "ticket-1",
+                "company": "Acme",
+                "vendor": "Zendesk",
+                "message": "The export keeps failing.",
+            }),
+            '{"id": "broken", "message": ',
+        ]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Malformed JSONL source row at line 2"):
+        load_source_rows_from_file(path, file_format="jsonl")
+
+
+def test_load_source_rows_from_valid_jsonl_stays_warning_free(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        "\n".join([
+            "",
+            json.dumps({
+                "id": "ticket-1",
+                "company": "Acme",
+                "vendor": "Zendesk",
+                "message": "The export keeps failing.",
+            }),
+            "   ",
+            json.dumps({
+                "id": "ticket-2",
+                "company": "Beta",
+                "vendor": "HubSpot",
+                "message": "The renewal quote is wrong.",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="jsonl",
+    )
+
+    assert [row["id"] for row in rows] == ["ticket-1", "ticket-2"]
+    assert warnings == ()
+
+
 def test_load_source_campaign_opportunities_from_csv(tmp_path: Path) -> None:
     path = tmp_path / "sources.csv"
     path.write_text(
