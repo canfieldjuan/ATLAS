@@ -10,6 +10,11 @@ const PAID_DETAIL_LIMIT = 5;
 const PAID_PHRASE_LIMIT = 10;
 const RESOLUTION_EVIDENCE_STATUS = "resolution_evidence";
 const EVIDENCE_EXPORT_SCHEMA_VERSION = "deflection_evidence.v1";
+const RESULT_PAGE_QA_SURFACE_CAPS = Object.freeze({
+  ranked_questions: PAID_QUESTION_LIMIT,
+  question_details: PAID_DETAIL_LIMIT * 2,
+  seo_targets: PAID_PHRASE_LIMIT,
+});
 
 function clean(value) {
   if (Array.isArray(value)) return clean(value[0]);
@@ -77,6 +82,23 @@ function formatMoney(value) {
 
 function isObjectRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value);
+}
+
+function reportModelSectionData(report, sectionId) {
+  const model = isObjectRecord(report?.artifact?.report_model)
+    ? report.artifact.report_model
+    : null;
+  const sections = Array.isArray(model?.sections) ? model.sections : [];
+  const section = sections.find(
+    (candidate) => isObjectRecord(candidate) && clean(candidate.id) === sectionId,
+  );
+  return isObjectRecord(section?.data) ? section.data : {};
+}
+
+function rowCount(data) {
+  return Array.isArray(data?.rows)
+    ? data.rows.filter(isObjectRecord).length
+    : 0;
 }
 
 function customerWordingExamples(questions) {
@@ -239,6 +261,14 @@ function paidSummary(report, items) {
   };
 }
 
+function paidEvidenceExport(report) {
+  const evidenceExport = report?.artifact?.evidence_export;
+  return isObjectRecord(evidenceExport) &&
+    clean(evidenceExport.schema_version) === EVIDENCE_EXPORT_SCHEMA_VERSION
+    ? evidenceExport
+    : {};
+}
+
 function uniqueTexts(values, limit) {
   const seen = new Set();
   const out = [];
@@ -370,13 +400,87 @@ function renderPaidPhrases(items) {
           </section>`;
 }
 
+function resultPageQaObservation(report) {
+  const items = paidArtifactItems(report);
+  if (!items.length) return null;
+
+  const supportTax = reportModelSectionData(report, "support_tax");
+  const rankedQuestions = reportModelSectionData(report, "ranked_questions");
+  const questionDetails = reportModelSectionData(report, "question_details");
+  const seoTargets = reportModelSectionData(report, "seo_targets");
+  const completeEvidence = reportModelSectionData(report, "complete_evidence");
+  const evidenceExport = paidEvidenceExport(report);
+  const exportSummary = isObjectRecord(evidenceExport.summary)
+    ? evidenceExport.summary
+    : {};
+  const summary = paidSummary(report, items);
+  const publishable = items.filter(hasResolutionEvidence);
+  const needsProof = items.filter((item) => !hasResolutionEvidence(item));
+  const phrases = paidCustomerPhrases(items);
+
+  return {
+    counts: {
+      repeat_ticket_count: firstParsedCount(
+        supportTax.repeat_ticket_count,
+        report.artifact?.summary?.repeat_ticket_count,
+      ),
+      generated_question_count: firstParsedCount(
+        supportTax.generated_question_count,
+        report.artifact?.summary?.generated,
+        items.length,
+      ),
+      ranked_question_count: rowCount(rankedQuestions) || items.length,
+      drafted_answer_count: firstParsedCount(
+        supportTax.drafted_answer_count,
+        summary.publishableCount,
+      ),
+      no_proven_answer_count: firstParsedCount(
+        supportTax.no_proven_answer_count,
+        summary.needsProof,
+      ),
+      ticket_source_count: firstParsedCount(
+        supportTax.ticket_source_count,
+        completeEvidence.source_id_count,
+        exportSummary.source_id_count,
+      ),
+      estimated_support_cost: firstParsedCount(
+        supportTax.estimated_support_cost,
+        summary.supportCost,
+      ),
+      evidence_row_count: firstParsedCount(
+        completeEvidence.evidence_row_count,
+        exportSummary.evidence_row_count,
+      ),
+      source_id_count: firstParsedCount(
+        completeEvidence.source_id_count,
+        exportSummary.source_id_count,
+      ),
+    },
+    displayed_rows: {
+      ranked_questions: Math.min(items.length, RESULT_PAGE_QA_SURFACE_CAPS.ranked_questions),
+      question_details: Math.min(
+        rowCount(questionDetails) || publishable.length + needsProof.length,
+        RESULT_PAGE_QA_SURFACE_CAPS.question_details,
+      ),
+      seo_targets: Math.min(
+        firstParsedCount(seoTargets.total_phrase_count, phrases.length),
+        RESULT_PAGE_QA_SURFACE_CAPS.seo_targets,
+      ),
+    },
+  };
+}
+
 function renderPaidArtifact(report, requestId = "") {
   const items = paidArtifactItems(report);
   if (!items.length) return "";
   const summary = paidSummary(report, items);
   const evidenceExportHref = paidEvidenceExportHref(report, requestId);
+  const qaObservation = resultPageQaObservation(report);
+  const qaObservationAttr = qaObservation
+    ? ` data-atlas-deflection-qa-observation="${escapeHtml(JSON.stringify(qaObservation))}"`
+    : "";
 
-  return `<section class="paid-report" aria-labelledby="paid-report-title" data-atlas-deflection-paid-report>
+  return `<section class="paid-report" aria-labelledby="paid-report-title" data-atlas-deflection-paid-report${qaObservationAttr}>
           <div class="paid-report-header">
             <div>
               <h2 id="paid-report-title">Paid report dashboard</h2>
@@ -621,7 +725,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
 </html>`;
 }
 
-export { renderResultPage };
+export { RESULT_PAGE_QA_SURFACE_CAPS, renderResultPage, resultPageQaObservation };
 
 export default async function handler(req, res) {
   const url = requestUrl(req);
