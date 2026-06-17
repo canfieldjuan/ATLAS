@@ -329,6 +329,18 @@ export interface ContentOpsIngestionWarning {
   field?: string
 }
 
+export interface ContentOpsIngestionParseErrorResponse {
+  code: string
+  message: string
+  how_to_fix?: string
+  location?: string
+  row_index?: number
+  line?: number
+  column?: number
+  encoding?: string | null
+  byte?: number
+}
+
 export interface ContentOpsIngestionDiagnosticsResponse {
   ok: boolean
   mode: 'opportunities' | 'source_rows'
@@ -341,6 +353,7 @@ export interface ContentOpsIngestionDiagnosticsResponse {
   samples: Array<Record<string, unknown>>
   source_material?: Array<Record<string, unknown>>
   warnings: ContentOpsIngestionWarning[]
+  parse_error?: ContentOpsIngestionParseErrorResponse
 }
 
 export interface ContentOpsIngestionImportResultResponse {
