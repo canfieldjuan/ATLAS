@@ -345,22 +345,30 @@ def normalize_campaign_opportunity_rows(
                 )
             )
             continue
+        row_index = _source_row_warning_index(row, index)
         normalized = normalize_campaign_opportunity(row, target_mode=target_mode)
         if not normalized:
             warnings.append(
                 CampaignOpportunityWarning(
                     code="empty_row",
-                    row_index=index,
+                    row_index=row_index,
                     message="Skipped row because it did not contain usable values.",
                 )
             )
             continue
         opportunities.append(normalized)
-        warnings.extend(_validation_warnings(normalized, row_index=index))
+        warnings.extend(_validation_warnings(normalized, row_index=row_index))
     return CampaignOpportunityLoadResult(
         opportunities=tuple(opportunities),
         warnings=tuple(warnings),
     )
+
+
+def _source_row_warning_index(row: Mapping[str, Any], fallback: int) -> int:
+    raw_index = getattr(row, "source_row_index", None)
+    if isinstance(raw_index, int) and raw_index > 0:
+        return raw_index
+    return fallback
 
 
 @dataclass(frozen=True)
