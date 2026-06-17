@@ -21,7 +21,10 @@ from extracted_content_pipeline.content_ops_execution import ContentOpsExecution
 from extracted_content_pipeline.deflection_report_access import (
     InMemoryDeflectionReportArtifactStore,
 )
-from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
+from extracted_content_pipeline.faq_deflection_report import (
+    FAQDeflectionReportService,
+    deflection_report_model_contract_shape,
+)
 
 
 pytestmark = pytest.mark.skipif(
@@ -335,6 +338,40 @@ class _AdmissionGate:
         self.release_calls += 1
         if self.fail_release:
             raise RuntimeError("admission backend release failed")
+
+
+@pytest.mark.asyncio
+async def test_deflection_process_contract_route_advertises_paid_artifact_contract():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(
+        router,
+        "/ops/deflection-reports/process-contract",
+        "GET",
+    )
+    payload = await route.endpoint()
+
+    assert payload == {
+        "schema_version": "deflection_report_process.v1",
+        "service": "content_ops_deflection_reports",
+        "contract": {
+            "report_model_schema_version": "deflection.v1",
+            "report_model_contract": deflection_report_model_contract_shape(),
+            "evidence_export_schema_version": "deflection_evidence.v1",
+            "paid_artifact_requires": {
+                "report_model": "object",
+                "evidence_export": "object",
+            },
+        },
+        "routes": {
+            "process_contract": "/ops/deflection-reports/process-contract",
+            "snapshot": "/ops/deflection-reports/{request_id}/snapshot",
+            "artifact": "/ops/deflection-reports/{request_id}/artifact",
+            "report_model": "/ops/deflection-reports/{request_id}/report-model",
+        },
+    }
 
 
 @pytest.mark.asyncio

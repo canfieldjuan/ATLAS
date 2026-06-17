@@ -18,6 +18,7 @@ from extracted_content_pipeline.faq_deflection_report import (
     build_deflection_report_model,
     build_deflection_snapshot,
     build_deflection_report_artifact,
+    deflection_report_model_contract_shape,
     deflection_snapshot_content_opportunities,
     render_deflection_report_model,
     _report_section,
@@ -378,6 +379,112 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         "evidence_row_count": 8,
         "source_id_count": 8,
         "surfaces": ["export"],
+    }
+
+
+def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
+    assert deflection_report_model_contract_shape() == {
+        "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
+        "model_fields": [
+            "schema_version",
+            "title",
+            "summary",
+            "sections",
+        ],
+        "section_fields": [
+            "id",
+            "title",
+            "priority",
+            "surfaces",
+            "default_limit",
+            "required_data",
+            "data",
+        ],
+        "sections": [
+            {
+                "id": "support_tax",
+                "title": "Support Tax Confirmation",
+                "priority": 10,
+                "surfaces": ["web", "pdf", "email_summary", "markdown"],
+                "default_limit": None,
+                "required_data": [
+                    "repeat_ticket_count",
+                    "non_repeat_ticket_count",
+                    "generated_question_count",
+                    "assisted_contact_cost",
+                    "estimated_support_cost",
+                    "source_date_window",
+                    "drafted_answer_count",
+                    "no_proven_answer_count",
+                    "ticket_source_count",
+                ],
+            },
+            {
+                "id": "source_file",
+                "title": "Source file",
+                "priority": 15,
+                "surfaces": ["web", "pdf", "markdown"],
+                "default_limit": None,
+                "required_data": ["source_label"],
+            },
+            {
+                "id": "seo_targets",
+                "title": "Your Help-Desk SEO Targeting List",
+                "priority": 20,
+                "surfaces": ["web", "pdf", "markdown"],
+                "default_limit": DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
+                "required_data": [
+                    "phrases",
+                    "total_phrase_count",
+                    "displayed_phrase_count",
+                    "omitted_phrase_count",
+                    "limit",
+                ],
+            },
+            {
+                "id": "ranked_questions",
+                "title": "Ranked Question Opportunities",
+                "priority": 30,
+                "surfaces": ["web", "pdf", "markdown"],
+                "default_limit": None,
+                "required_data": ["rows"],
+            },
+            {
+                "id": "outcome_diagnostics",
+                "title": "Resolution Outcome Diagnostics",
+                "priority": 40,
+                "surfaces": ["web", "pdf", "markdown"],
+                "default_limit": None,
+                "required_data": [
+                    "outcome_diagnostic_ticket_count",
+                    "outcome_risk_ticket_count",
+                    "reopened_ticket_count",
+                    "negative_csat_ticket_count",
+                    "rows",
+                ],
+            },
+            {
+                "id": "question_details",
+                "title": "Question Details and Evidence",
+                "priority": 50,
+                "surfaces": ["web", "pdf", "markdown"],
+                "default_limit": None,
+                "required_data": ["rows"],
+            },
+            {
+                "id": "complete_evidence",
+                "title": "Complete Evidence",
+                "priority": 90,
+                "surfaces": ["export"],
+                "default_limit": None,
+                "required_data": [
+                    "question_count",
+                    "evidence_row_count",
+                    "source_id_count",
+                    "surfaces",
+                ],
+            },
+        ],
     }
 
 
