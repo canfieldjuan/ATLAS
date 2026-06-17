@@ -19,6 +19,9 @@ on:
       - "scripts/maturity_sweep.py"
       - "tests/**"
       - "extracted_content_pipeline/**"
+      - "extracted_reasoning_core/**"
+      - "extracted_quality_gate/**"
+      - "extracted_evidence_to_story/**"
       - "atlas_brain/api/**"
       - "atlas_brain/auth/**"
       - "atlas_brain/autonomous/**"
@@ -62,6 +65,9 @@ on:
       - "scripts/maturity_sweep.py"
       - "tests/**"
       - "extracted_content_pipeline/**"
+      - "extracted_reasoning_core/**"
+      - "extracted_quality_gate/**"
+      - "extracted_evidence_to_story/**"
       - "atlas_brain/api/**"
       - "atlas_brain/auth/**"
       - "atlas_brain/autonomous/**"
@@ -143,6 +149,19 @@ jobs:
             --sensitive-glob '**/webhook*' \
             --sensitive-glob '**/payment*' \
             --sensitive-glob '**/*deletion*'
+
+      - name: Maturity sweep Phase C1 extracted core ratchet gates (blocking)
+        run: |
+          set -euo pipefail
+          for lane in extracted_reasoning_core extracted_quality_gate extracted_evidence_to_story; do
+            echo "::group::${lane}"
+            python scripts/maturity_sweep.py "${lane}" \
+              --tests-root tests \
+              --baseline "tests/maturity_sweep/baseline_${lane}.json" \
+              --min-score 8 \
+              --sensitive-glob "${lane}/**"
+            echo "::endgroup::"
+          done
 
       - name: Maturity sweep atlas_brain/api ratchet gate (blocking)
         run: |
