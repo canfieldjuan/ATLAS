@@ -23,6 +23,7 @@ Usage:
 
 import argparse
 import ast
+import fnmatch
 import json
 import os
 import re
@@ -89,6 +90,7 @@ SKIP_DIRS = {
 }
 
 TEST_NAME_RE = re.compile(r"(^test_.+\.py$)|(.+_test\.py$)")
+SENSITIVE_ZERO_TOLERANCE = ("BARE_EXCEPT", "SWALLOWED_EXCEPT")
 
 
 @dataclass
@@ -108,6 +110,13 @@ class FileResult:
     score: int = 0
     findings: list = field(default_factory=list)
     counts: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class GateFailure:
+    path: str
+    reason: str
+    detail: str
 
 
 # ---------------------------------------------------------------------------
@@ -409,10 +418,126 @@ def sweep(root, tests_root=None):
 
 
 # ---------------------------------------------------------------------------
+# baseline ratchet gate
+# ---------------------------------------------------------------------------
+
+def baseline_entry(result):
+    return {
+        "score": int(result.score),
+        "counts": {code: int(count) for code, count in sorted(result.counts.items())},
+    }
+
+
+def baseline_payload(results):
+    return {
+        result.path: baseline_entry(result)
+        for result in sorted(results, key=lambda item: item.path)
+        if result.score > 0
+    }
+
+
+def write_baseline(path, results):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(baseline_payload(results), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_baseline(path):
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise SystemExit("baseline not found: %s" % path)
+    except json.JSONDecodeError as exc:
+        raise SystemExit("baseline is not valid JSON: %s: %s" % (path, exc))
+    if not isinstance(raw, dict):
+        raise SystemExit("baseline must be a JSON object: %s" % path)
+    return raw
+
+
+def _baseline_score(entry):
+    if not isinstance(entry, dict):
+        return 0
+    try:
+        return int(entry.get("score", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _baseline_counts(entry):
+    if not isinstance(entry, dict):
+        return {}
+    counts = entry.get("counts", {})
+    if not isinstance(counts, dict):
+        return {}
+    out = {}
+    for code, count in counts.items():
+        try:
+            out[str(code)] = int(count)
+        except (TypeError, ValueError):
+            out[str(code)] = 0
+    return out
+
+
+def _matches_sensitive(path, patterns):
+    return any(
+        fnmatch.fnmatch(path, pattern) or Path(path).match(pattern)
+        for pattern in patterns
+    )
+
+
+def ratchet_failures(results, baseline, min_score=None, sensitive_globs=()):
+    by_path = {result.path: result for result in results}
+    failures = []
+    for path, result in sorted(by_path.items()):
+        entry = baseline.get(path)
+        baseline_score = _baseline_score(entry)
+        baseline_counts = _baseline_counts(entry)
+        if entry is not None and result.score > baseline_score:
+            failures.append(GateFailure(
+                path=path,
+                reason="score increased",
+                detail="%d -> %d" % (baseline_score, result.score),
+            ))
+        if entry is None and min_score is not None and result.score >= min_score:
+            failures.append(GateFailure(
+                path=path,
+                reason="new file at or above min-score",
+                detail="score %d >= %d" % (result.score, min_score),
+            ))
+        if _matches_sensitive(path, sensitive_globs):
+            for code in SENSITIVE_ZERO_TOLERANCE:
+                old = baseline_counts.get(code, 0)
+                new = int(result.counts.get(code, 0))
+                if new > old:
+                    failures.append(GateFailure(
+                        path=path,
+                        reason="new sensitive-path %s" % code,
+                        detail="%d -> %d" % (old, new),
+                    ))
+    return failures
+
+
+def print_ratchet_failures(failures, baseline_path):
+    if not failures:
+        print("ratchet gate passed: no new brittleness above baseline")
+        return 0
+    print("RATCHET GATE FAILED: %d file(s) introduced new brittleness" % len(failures))
+    for failure in failures:
+        print("- %s: %s (%s)" % (failure.path, failure.reason, failure.detail))
+    print()
+    print("To accept this intentionally, rerun with:")
+    print("  python scripts/maturity_sweep.py <lane> --baseline %s --update-baseline" % baseline_path)
+    return 1
+
+
+# ---------------------------------------------------------------------------
 # reporting
 # ---------------------------------------------------------------------------
 
-def print_report(results, top, min_score):
+def print_report(results, top, min_score, ratchet=None, baseline_path=None):
     flagged = [r for r in results if r.score > 0]
     print("maturity sweep: %d files scanned, %d flagged\n" % (len(results), len(flagged)))
     print("score  file")
@@ -431,6 +556,9 @@ def print_report(results, top, min_score):
             loc = ("L%d" % f.lineno) if f.lineno else "file"
             print("     %-5s %s" % (loc, f.detail))
         print()
+
+    if ratchet is not None:
+        return print_ratchet_failures(ratchet, baseline_path)
 
     if min_score is not None:
         over = [r for r in results if r.score >= min_score]
@@ -451,9 +579,32 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="emit JSON instead of text")
     ap.add_argument("--min-score", type=int, default=None,
                     help="exit nonzero if any file scores at/above this (CI gate)")
+    ap.add_argument("--baseline", default=None,
+                    help="baseline JSON for ratchet mode")
+    ap.add_argument("--update-baseline", action="store_true",
+                    help="write/refresh the baseline from the current sweep and exit 0")
+    ap.add_argument("--sensitive-glob", action="append", default=[],
+                    help="glob for sensitive paths where new swallowed/bare except fails")
     args = ap.parse_args(argv)
 
     results = sweep(args.path, args.tests_root)
+
+    if args.update_baseline:
+        if not args.baseline:
+            raise SystemExit("--update-baseline requires --baseline")
+        write_baseline(args.baseline, results)
+        print("wrote maturity sweep baseline: %s" % args.baseline)
+        return 0
+
+    baseline = load_baseline(args.baseline) if args.baseline else None
+    ratchet = None
+    if baseline is not None:
+        ratchet = ratchet_failures(
+            results,
+            baseline,
+            min_score=args.min_score,
+            sensitive_globs=tuple(args.sensitive_glob),
+        )
 
     if args.json:
         payload = [
@@ -462,11 +613,19 @@ def main(argv=None):
             for r in results if r.score > 0
         ]
         print(json.dumps(payload, indent=2))
+        if ratchet is not None:
+            return 1 if ratchet else 0
         if args.min_score is not None:
             return 1 if any(r.score >= args.min_score for r in results) else 0
         return 0
 
-    return print_report(results, args.top, args.min_score)
+    return print_report(
+        results,
+        args.top,
+        args.min_score,
+        ratchet=ratchet,
+        baseline_path=args.baseline,
+    )
 
 
 if __name__ == "__main__":

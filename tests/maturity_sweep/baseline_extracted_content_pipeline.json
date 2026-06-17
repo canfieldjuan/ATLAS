@@ -1,0 +1,906 @@
+{
+  "extracted_content_pipeline/ad_copy_generation.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/ad_copy_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/api/control_surfaces.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "HEURISTIC_COMMENT": 5,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 6
+    },
+    "score": 29
+  },
+  "extracted_content_pipeline/api/generated_assets.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/api/seller_campaigns.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/autonomous/tasks/_b2b_cross_vendor_synthesis.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 15
+    },
+    "score": 16
+  },
+  "extracted_content_pipeline/autonomous/tasks/_b2b_pool_compression.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 11,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 17,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 19
+  },
+  "extracted_content_pipeline/autonomous/tasks/_b2b_reasoning_contracts.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 11
+  },
+  "extracted_content_pipeline/autonomous/tasks/_b2b_shared.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 4,
+      "SWALLOWED_EXCEPT": 26,
+      "UNGUARDED_INDEX": 130
+    },
+    "score": 140
+  },
+  "extracted_content_pipeline/autonomous/tasks/_b2b_specificity.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/autonomous/tasks/_b2b_synthesis_reader.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 5
+    },
+    "score": 25
+  },
+  "extracted_content_pipeline/autonomous/tasks/_blog_matching.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/autonomous/tasks/_blog_ts.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/autonomous/tasks/_campaign_sequence_context.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/autonomous/tasks/_execution_progress.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "extracted_content_pipeline/autonomous/tasks/_google_news.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 11
+  },
+  "extracted_content_pipeline/autonomous/tasks/article_enrichment.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "extracted_content_pipeline/autonomous/tasks/b2b_blog_post_generation.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 16,
+      "UNGUARDED_INDEX": 42
+    },
+    "score": 90
+  },
+  "extracted_content_pipeline/autonomous/tasks/b2b_campaign_generation.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "HEURISTIC_COMMENT": 3,
+      "SWALLOWED_EXCEPT": 6,
+      "UNGUARDED_INDEX": 27
+    },
+    "score": 43
+  },
+  "extracted_content_pipeline/autonomous/tasks/b2b_vendor_briefing.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 10,
+      "UNGUARDED_INDEX": 13
+    },
+    "score": 59
+  },
+  "extracted_content_pipeline/autonomous/tasks/blog_post_generation.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 15
+    },
+    "score": 9
+  },
+  "extracted_content_pipeline/autonomous/tasks/campaign_audit.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/autonomous/tasks/competitive_intelligence.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 9
+  },
+  "extracted_content_pipeline/autonomous/tasks/complaint_analysis.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/autonomous/tasks/complaint_content_generation.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 11
+  },
+  "extracted_content_pipeline/autonomous/tasks/complaint_enrichment.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 3
+    },
+    "score": 15
+  },
+  "extracted_content_pipeline/autonomous/visibility.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2
+    },
+    "score": 2
+  },
+  "extracted_content_pipeline/blog_blueprint_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/blog_generation.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 12
+  },
+  "extracted_content_pipeline/blog_post_export.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 14
+  },
+  "extracted_content_pipeline/blog_post_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "extracted_content_pipeline/calibration_anchors.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/campaign_analytics.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 13
+  },
+  "extracted_content_pipeline/campaign_customer_data.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2,
+      "UNGUARDED_INPUT": 6
+    },
+    "score": 40
+  },
+  "extracted_content_pipeline/campaign_example.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "WEAK_CONTRACT": 6
+    },
+    "score": 10
+  },
+  "extracted_content_pipeline/campaign_generation.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 20
+  },
+  "extracted_content_pipeline/campaign_install_check.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 9
+  },
+  "extracted_content_pipeline/campaign_llm_client.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 5
+    },
+    "score": 25
+  },
+  "extracted_content_pipeline/campaign_opportunities.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "extracted_content_pipeline/campaign_postgres.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/campaign_postgres_export.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/campaign_postgres_import.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/campaign_postgres_review.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/campaign_postgres_seller_category_intelligence.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "extracted_content_pipeline/campaign_postgres_seller_opportunities.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 14
+  },
+  "extracted_content_pipeline/campaign_postgres_seller_targets.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/campaign_reasoning_data.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 9
+  },
+  "extracted_content_pipeline/campaign_send.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/campaign_sender.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/campaign_sequence_context.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "extracted_content_pipeline/campaign_sequence_progression.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/campaign_source_adapters.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 17
+  },
+  "extracted_content_pipeline/campaign_visibility.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "HEURISTIC_COMMENT": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INPUT": 3
+    },
+    "score": 22
+  },
+  "extracted_content_pipeline/campaign_webhooks.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "extracted_content_pipeline/claim_evidence_benchmark.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/claims_map.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/content_image_provider.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 16
+  },
+  "extracted_content_pipeline/content_ops_cache_policy.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/content_ops_execution.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 4
+    },
+    "score": 20
+  },
+  "extracted_content_pipeline/content_ops_usage_summary.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "extracted_content_pipeline/control_surfaces.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/coverage_rows.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/csv_export.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/deflection_report_access.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "extracted_content_pipeline/embedding_port.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/faq_deflection_report.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 3,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 29
+  },
+  "extracted_content_pipeline/faq_macro_writeback_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/faq_macro_writeback_publish.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/faq_macro_writeback_zendesk.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/faq_output_ingestion.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/generation_plan.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/ingestion_diagnostics.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/landing_page_export.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 14
+  },
+  "extracted_content_pipeline/landing_page_generation.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/landing_page_input_contract.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/landing_page_postgres.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/landing_page_readiness.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 10
+  },
+  "extracted_content_pipeline/landing_page_structured_data.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/pipelines/llm.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/pipelines/notify.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/podcast_example.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/podcast_extraction.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 1,
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 20
+  },
+  "extracted_content_pipeline/podcast_idea_data.py": {
+    "counts": {
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/podcast_postgres.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 11
+  },
+  "extracted_content_pipeline/podcast_postgres_extraction.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/podcast_postgres_repurpose.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/podcast_repurpose_generation.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 14
+  },
+  "extracted_content_pipeline/podcast_transcript_data.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 15
+  },
+  "extracted_content_pipeline/quote_card_export.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/quote_card_generation.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/quote_card_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/reasoning/evidence_engine.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/reasoning_policy.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/reasoning_signals.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/report_export.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/report_generation.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "extracted_content_pipeline/report_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/sales_brief_export.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/sales_brief_generation.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "extracted_content_pipeline/services/b2b/account_opportunity_claims.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/services/b2b/cache_runner.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/services/b2b/corrections.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/services/b2b/enrichment_contract.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "extracted_content_pipeline/services/b2b/vendor_briefing_repository.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "extracted_content_pipeline/services/blog_quality.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/services/campaign_quality.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "extracted_content_pipeline/services/campaign_reasoning_context.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/services/llm_router.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/services/multi_pass_reasoning_provider.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "extracted_content_pipeline/services/podcast_quality.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/services/scraping/sources.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/services/single_pass_reasoning_provider.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "extracted_content_pipeline/services/vendor_registry.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/services/vendor_target_selection.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/social_post_export.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/social_post_generation.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 14
+  },
+  "extracted_content_pipeline/social_post_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/stat_card_export.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/stat_card_generation.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "extracted_content_pipeline/stat_card_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_content_pipeline/storage/_jsonb_helpers.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_content_pipeline/storage/database.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/storage/migration_runner.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_content_pipeline/storage/models.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_content_pipeline/support_ticket_clustering.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 5
+    },
+    "score": 13
+  },
+  "extracted_content_pipeline/support_ticket_context_contract.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "extracted_content_pipeline/support_ticket_dates.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 3
+    },
+    "score": 15
+  },
+  "extracted_content_pipeline/support_ticket_generated_content_eval.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "extracted_content_pipeline/support_ticket_input_package.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "HEURISTIC_COMMENT": 2,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 16
+  },
+  "extracted_content_pipeline/text_truncate.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "extracted_content_pipeline/ticket_faq_input_contract.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "extracted_content_pipeline/ticket_faq_markdown.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 30
+    },
+    "score": 16
+  },
+  "extracted_content_pipeline/ticket_faq_postgres.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  }
+}
