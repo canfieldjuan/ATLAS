@@ -20,9 +20,11 @@ Two bumps qualify as low-risk:
   -cudnn8-runtime-ubuntu22.04 variant). A CUDA minor bump within the 12.x line;
   torch/torchaudio are unpinned in requirements, so the pip wheels carry their
   own CUDA runtime and do not pin a +cu121 build that could mismatch the base.
-- drone_client worker image: python 3.9-slim-buster -> 3.11-slim-buster.
-  Retires end-of-life Python 3.9 on a worker whose only dependency is the
-  pure-Python kafka-python.
+- drone_client worker image: python 3.9-slim-buster -> 3.11-slim-bookworm.
+  Retires BOTH end-of-life Python 3.9 and end-of-life Debian 10 (buster) in one
+  bump (a buster-only bump would ship the security fix onto an unsupported OS).
+  The only dependency is the pure-Python kafka-python, so the bookworm
+  (Debian 12) base carries no native-build risk.
 
 ## Scope
 
@@ -73,14 +75,16 @@ Held for separate, dev-gated decisions (not in this PR):
 
 - docker manifest inspect nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04 -> tag
   EXISTS.
-- docker manifest inspect python:3.11-slim-buster -> tag EXISTS.
+- docker manifest inspect python:3.11-slim-bookworm -> tag EXISTS.
 - drone_client: docker build of atlas_video-processing/ingest/drone_client
   succeeded; docker run of the image with python -c "import sys, kafka" printed
-  Python 3.11.4 and kafka-python 3.0.0.
+  Python 3.11.15 and kafka-python 3.0.0, on Debian GNU/Linux 12 (bookworm).
 - Root CUDA Dockerfile: NOT built locally (multi-GB CUDA base plus the full
   requirements install, including torch, is too heavy to build in this
   environment). Verification ceiling: tag existence, CUDA 12.x minor-compat,
-  and torch being unpinned. CI / dev build is the backstop.
+  and torch being unpinned. NOTE: no CI workflow runs docker build of the brain
+  image (the check workflows run pytest), so the real backstop is the
+  deploy-time docker compose up --build, not CI.
 
 ## Estimated diff size
 
