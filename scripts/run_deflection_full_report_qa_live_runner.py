@@ -363,9 +363,12 @@ def _live_payload_errors(
             errors.append("artifact.evidence_export must be an object")
         else:
             evidence_export = raw_export
-        raw_model = artifact_payload.get("report_model")
-        if isinstance(raw_model, Mapping) and model_payload and raw_model != model_payload:
-            errors.append("artifact.report_model must match the report-model route")
+        if "report_model" in artifact_payload:
+            raw_model = artifact_payload.get("report_model")
+            if not isinstance(raw_model, Mapping):
+                errors.append("artifact.report_model must be an object when present")
+            elif model_payload and raw_model != model_payload:
+                errors.append("artifact.report_model must match the report-model route")
 
     return errors, model_payload, artifact_payload, evidence_export
 

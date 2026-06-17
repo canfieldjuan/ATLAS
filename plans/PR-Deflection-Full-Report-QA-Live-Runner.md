@@ -37,6 +37,13 @@ raw PDF bytes are decoded and leak-scanned before network calls, the result
 marks PDF text as operator-asserted rather than byte-derived, and tests now
 exercise both the byte-leak failure path and the sanitizer redaction/exit path.
 
+Second review fix root cause: the artifact/report-model consistency guard only
+checked mismatches when `artifact.report_model` was already a mapping. If the
+artifact carried `report_model` as a string, null, or list, the runner silently
+skipped the drift check. This update fixes that validation root directly:
+`artifact.report_model` may be absent, but when present it must be a JSON
+object before it can be compared to the report-model route.
+
 ## Scope (this PR)
 
 Ownership lane: content-ops/deflection-full-report-qa
@@ -46,7 +53,8 @@ Slice phase: Functional validation
 2. Fetch the live `/report-model` and `/artifact` JSON endpoints for a supplied
    request, requiring HTTP 200 and object payloads.
 3. Extract `evidence_export` from the paid artifact JSON and verify any
-   artifact-embedded `report_model` matches the report-model route.
+   artifact-embedded `report_model` is an object that matches the report-model
+   route.
 4. Read operator-supplied PDF bytes and already-extracted PDF text, failing
    closed when text extraction is empty or the raw PDF bytes contain a
    sensitive leak pattern.
@@ -80,7 +88,8 @@ Acceptance criteria:
   malformed or missing export data produces a structured runner failure, not a
   traceback.
 - If the artifact includes `report_model`, it must match the report-model route
-  exactly, preventing a scorecard built from one model and export from another.
+  exactly, and non-object `report_model` values must fail closed, preventing a
+  scorecard built from one model and export from another.
 - PDF bytes and extracted PDF text are read from operator-supplied files because
   ATLAS does not expose a PDF download route; empty PDF text and raw PDF-byte
   leaks fail before the scorecard can treat extraction as successful.
@@ -114,7 +123,8 @@ request ID, and path templates matching the existing public deflection report
 routes. The `/report-model` response supplies the canonical `deflection.v1`
 model. The `/artifact` response supplies the paid artifact and its
 `evidence_export`. If the artifact also carries `report_model`, the runner
-compares it to the route model and fails on drift.
+requires that value to be an object, compares it to the route model, and fails
+on malformed or drifted artifact models.
 
 The runner reads local PDF bytes and extracted PDF text supplied by the
 operator. This matches current production delivery: the PDF is an email
@@ -160,19 +170,19 @@ Parked hardening: none.
 
 ## Verification
 
-- Focused live-runner pytest for `tests/test_run_deflection_full_report_qa_live_runner.py` - 9 passed.
+- Focused live-runner pytest for `tests/test_run_deflection_full_report_qa_live_runner.py` - 12 passed.
 - Python compile check for the live-runner script and its test - passed.
 - Extracted pipeline CI enrollment audit - OK, 185 matching tests enrolled.
 - Whitespace diff check - passed.
-- Full extracted pipeline bundle via `scripts/run_extracted_pipeline_checks.sh` - package audits passed; reasoning-core suite 295 passed; extracted-content suite 4569 passed, 10 skipped.
+- Full extracted pipeline bundle via `scripts/run_extracted_pipeline_checks.sh` - package audits passed; reasoning-core suite 295 passed; extracted-content suite 4572 passed, 10 skipped.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/extracted_pipeline_checks.yml` | 4 |
-| `plans/PR-Deflection-Full-Report-QA-Live-Runner.md` | 178 |
-| `scripts/run_deflection_full_report_qa_live_runner.py` | 436 |
+| `plans/PR-Deflection-Full-Report-QA-Live-Runner.md` | 188 |
+| `scripts/run_deflection_full_report_qa_live_runner.py` | 439 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_run_deflection_full_report_qa_live_runner.py` | 500 |
-| **Total** | **1119** |
+| `tests/test_run_deflection_full_report_qa_live_runner.py` | 529 |
+| **Total** | **1161** |

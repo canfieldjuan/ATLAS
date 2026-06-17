@@ -7,6 +7,8 @@ import sys
 import urllib.error
 from typing import Any
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "run_deflection_full_report_qa_live_runner.py"
@@ -412,6 +414,33 @@ def test_artifact_report_model_drift_fails_closed(monkeypatch, tmp_path) -> None
     assert code == 1
     payload = _payload(tmp_path)
     assert payload["errors"] == ["artifact.report_model must match the report-model route"]
+
+
+@pytest.mark.parametrize(
+    "raw_report_model",
+    [
+        None,
+        "not-an-object",
+        ["not", "an", "object"],
+    ],
+)
+def test_artifact_report_model_must_be_object_when_present(
+    monkeypatch,
+    tmp_path,
+    raw_report_model,
+) -> None:
+    def _urlopen(request, *, timeout):
+        if request.full_url.endswith("/report-model"):
+            return FakeResponse(200, _report_model())
+        return FakeResponse(200, _artifact(report_model=raw_report_model))
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", _urlopen)
+
+    code = runner.main(_base_args(tmp_path))
+
+    assert code == 1
+    payload = _payload(tmp_path)
+    assert payload["errors"] == ["artifact.report_model must be an object when present"]
 
 
 def test_invalid_json_response_fails_without_raw_body(monkeypatch, tmp_path) -> None:
