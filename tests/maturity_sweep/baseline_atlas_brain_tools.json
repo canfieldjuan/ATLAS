@@ -1,0 +1,80 @@
+{
+  "atlas_brain/tools/calendar.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/tools/display.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "atlas_brain/tools/email.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "atlas_brain/tools/notify.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/tools/presence.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/tools/reminder.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "atlas_brain/tools/risk_sensors.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/tools/scheduling.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 6
+    },
+    "score": 6
+  },
+  "atlas_brain/tools/security.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/tools/time.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/tools/traffic.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "atlas_brain/tools/weather.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2
+    },
+    "score": 2
+  }
+}
