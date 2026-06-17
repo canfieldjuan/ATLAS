@@ -8,6 +8,32 @@ interface UseApiDataResult<T> {
   refreshing: boolean
 }
 
+function dependencyKey(deps: unknown[]): string {
+  const seen = new WeakSet<object>()
+  try {
+    return JSON.stringify(deps, (_key, value: unknown) => {
+      if (typeof value === 'bigint') {
+        return `${value.toString()}n`
+      }
+      if (typeof value === 'symbol') {
+        return value.toString()
+      }
+      if (typeof value === 'function') {
+        return `[Function:${value.name || 'anonymous'}]`
+      }
+      if (value && typeof value === 'object') {
+        if (seen.has(value)) {
+          return '[Circular]'
+        }
+        seen.add(value)
+      }
+      return value
+    }) ?? 'undefined'
+  } catch {
+    return deps.map((value) => Object.prototype.toString.call(value)).join('|')
+  }
+}
+
 export default function useApiData<T>(
   fetcher: () => Promise<T>,
   deps: unknown[] = [],
@@ -19,7 +45,7 @@ export default function useApiData<T>(
   const requestIdRef = useRef(0)
   const mountedRef = useRef(true)
   const fetcherRef = useRef(fetcher)
-  const depsKey = JSON.stringify(deps)
+  const depsKey = dependencyKey(deps)
 
   useEffect(() => {
     fetcherRef.current = fetcher
@@ -52,6 +78,7 @@ export default function useApiData<T>(
 
   useEffect(() => {
     mountedRef.current = true
+    requestIdRef.current += 1
     const timeout = window.setTimeout(() => {
       load(false)
     }, 0)

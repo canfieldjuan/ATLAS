@@ -13,6 +13,9 @@
     "smoke:deflection-submit-live": "node scripts/faq-deflection-submit-live-smoke.mjs",
     "preview": "vite preview"
   },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "dependencies": {
     "@vercel/blob": "^2.4.0",
     "clsx": "^2.1.1",

@@ -39,7 +39,7 @@
     "plugins": [
       "expo-router",
       [
-        "@siteed/expo-audio-studio",
+        "@siteed/audio-studio",
         {
           "microphonePermission": "Atlas needs microphone access for voice conversations"
         }

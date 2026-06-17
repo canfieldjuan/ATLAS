@@ -37,6 +37,9 @@
     "verify:blog-geo": "node scripts/verify-blog-geo-prerender.mjs",
     "verify:landing-page-geo": "node scripts/verify-landing-page-geo-prerender.mjs"
   },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "dependencies": {
     "clsx": "^2.1.1",
     "gsap": "^3.15.0",

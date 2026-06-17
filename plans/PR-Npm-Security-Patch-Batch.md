@@ -55,6 +55,8 @@ Slice phase: Production hardening
 
 ### Files touched
 
+- `.github/workflows/atlas_intel_ui_checks.yml`
+- `.github/workflows/portfolio_ui_checks.yml`
 - `HARDENING.md`
 - `atlas-admin-ui/package-lock.json`
 - `atlas-admin-ui/package.json`
@@ -74,8 +76,10 @@ Slice phase: Production hardening
 - `atlas-intel-ui/src/pages/ContentOpsAssetsReview.tsx`
 - `atlas-intel-ui/src/pages/b2b/B2BCampaigns.tsx`
 - `atlas-intel-ui/src/pages/b2b/B2BDashboard.tsx`
+- `atlas-mobile/app.json`
 - `atlas-mobile/package-lock.json`
 - `atlas-mobile/package.json`
+- `atlas-mobile/src/hooks/useAudioCapture.ts`
 - `atlas-ui/package-lock.json`
 - `atlas-ui/package.json`
 - `plans/PR-Npm-Security-Patch-Batch.md`
@@ -96,12 +100,19 @@ compatibility gaps:
   Node globals are available to tests included by the app tsconfig.
 - `atlas-intel-ui` keeps the stricter hook lint pass by moving direct effect
   state updates and initial loads behind scheduled callbacks, while preserving
-  existing request-id and unmount guards.
-- `atlas-mobile` accepts the Expo 54 / React Native 0.86 Dependabot graph and
-  updates `@siteed/expo-audio-studio` to the compatible 3.2.1 shim so clean
-  installs resolve. Non-breaking `npm audit fix` clears high/critical mobile
-  findings; the remaining moderate Expo-chain findings require Expo 56 and are
-  deferred.
+  existing request-id and unmount guards. The dependency key serializer now
+  tolerates BigInt, symbols, functions, and circular references, and the
+  request id is invalidated before the deferred load is scheduled.
+- `atlas-mobile` stays on the Expo 54-supported React 19.1 / React Native
+  0.81 graph instead of accepting the unsupported React Native 0.86 bump.
+  Expo-compatible peers (`react-dom`, `react-native-reanimated`,
+  `react-native-worklets`, and `@react-native/metro-config`) are pinned so the
+  lockfile does not resolve optional React Native tooling to the 0.86 line.
+  The deprecated `@siteed/expo-audio-studio` shim is replaced with
+  `@siteed/audio-studio`, including the Expo config plugin entry. Non-breaking
+  `npm audit fix` clears high/critical mobile findings; the remaining moderate
+  Expo-chain findings require Expo 56, React Native 0.86, or a breaking audio
+  package move and are deferred.
 
 ## Intentional
 
@@ -121,10 +132,13 @@ compatibility gaps:
 
 - Dedicated Expo 56 mobile compatibility slice to clear the remaining moderate
   `atlas-mobile` audit findings that require `npm audit fix --force`.
+- CI enrollment for local-only package checks in `atlas-admin-ui`,
+  `atlas-churn-ui`, `atlas-ui`, and `atlas-mobile`.
 - Broad React compiler / ESLint cleanup for `atlas-churn-ui` and `atlas-ui`
   lint debt.
 
-Parked hardening: `Mobile Expo 56 audit cleanup` in `HARDENING.md`.
+Parked hardening: `Mobile Expo 56 audit cleanup` and `Enroll npm security
+package checks in CI` in `HARDENING.md`.
 
 ## Verification
 
@@ -138,8 +152,18 @@ Parked hardening: `Mobile Expo 56 audit cleanup` in `HARDENING.md`.
 - `cd atlas-intel-ui && npm ci && npm audit --audit-level=high` - pass, 0
   vulnerabilities.
 - `cd atlas-intel-ui && npm run lint && npm run build` - pass.
-- `cd atlas-mobile && npm ci && npm audit --audit-level=high` - pass; plain
-  audit still reports 15 moderate Expo-chain findings requiring Expo 56.
+- `cd atlas-mobile && npm ci && npm audit --audit-level=high && npx expo
+  install --check && npx expo config --type public >/tmp/expo-config.out` -
+  pass; plain audit still reports 21 moderate findings requiring Expo 56,
+  React Native 0.86, or a breaking audio package move.
+- `cd atlas-mobile && npm ls react react-dom react-native expo expo-router
+  nativewind react-native-reanimated react-native-worklets @siteed/audio-studio`
+  - pass; the tree resolves to Expo 54.0.35, React 19.1.0, React Native
+  0.81.5, Reanimated 4.1.7, Worklets 0.5.1, and `@siteed/audio-studio` 3.2.0.
+- `cd atlas-mobile && npm ls @react-native/metro-config
+  @react-native/babel-plugin-codegen @react-native/codegen
+  @react-native/js-polyfills react-native` - pass; React Native Metro/codegen
+  tooling resolves to the 0.81 line.
 - `cd atlas-ui && npm ci && npm audit --audit-level=high` - pass, 0
   vulnerabilities.
 - `cd atlas-ui && npm run build` - pass.
@@ -154,30 +178,34 @@ Parked hardening: `Mobile Expo 56 audit cleanup` in `HARDENING.md`.
 
 | File | LOC |
 |---|---:|
-| `HARDENING.md` | 31 |
-| `atlas-admin-ui/package-lock.json` | 1649 |
-| `atlas-admin-ui/package.json` | 18 |
-| `atlas-churn-ui/package-lock.json` | 2649 |
-| `atlas-churn-ui/package.json` | 28 |
+| `.github/workflows/atlas_intel_ui_checks.yml` | 2 |
+| `.github/workflows/portfolio_ui_checks.yml` | 2 |
+| `HARDENING.md` | 42 |
+| `atlas-admin-ui/package-lock.json` | 1652 |
+| `atlas-admin-ui/package.json` | 21 |
+| `atlas-churn-ui/package-lock.json` | 2652 |
+| `atlas-churn-ui/package.json` | 31 |
 | `atlas-churn-ui/src/components/AtlasHeroScene.test.tsx` | 2 |
 | `atlas-churn-ui/src/components/AtlasRobotScene.test.tsx` | 2 |
 | `atlas-churn-ui/src/pages/Dashboard.test.tsx` | 2 |
 | `atlas-churn-ui/src/pages/IncidentAlerts.test.tsx` | 2 |
 | `atlas-churn-ui/src/pages/PipelineReview.test.tsx` | 2 |
 | `atlas-churn-ui/tsconfig.app.json` | 2 |
-| `atlas-intel-ui/package-lock.json` | 1909 |
-| `atlas-intel-ui/package.json` | 24 |
-| `atlas-intel-ui/src/hooks/useApiData.ts` | 61 |
+| `atlas-intel-ui/package-lock.json` | 1912 |
+| `atlas-intel-ui/package.json` | 27 |
+| `atlas-intel-ui/src/hooks/useApiData.ts` | 88 |
 | `atlas-intel-ui/src/hooks/useFilterParams.ts` | 21 |
 | `atlas-intel-ui/src/pages/BrandCompare.tsx` | 4 |
 | `atlas-intel-ui/src/pages/ContentOpsAssetsReview.tsx` | 51 |
 | `atlas-intel-ui/src/pages/b2b/B2BCampaigns.tsx` | 7 |
 | `atlas-intel-ui/src/pages/b2b/B2BDashboard.tsx` | 7 |
-| `atlas-mobile/package-lock.json` | 5462 |
-| `atlas-mobile/package.json` | 18 |
-| `atlas-ui/package-lock.json` | 1932 |
-| `atlas-ui/package.json` | 22 |
-| `plans/PR-Npm-Security-Patch-Batch.md` | 183 |
-| `portfolio-ui/package-lock.json` | 319 |
-| `portfolio-ui/package.json` | 18 |
-| **Total** | **14425** |
+| `atlas-mobile/app.json` | 2 |
+| `atlas-mobile/package-lock.json` | 8759 |
+| `atlas-mobile/package.json` | 12 |
+| `atlas-mobile/src/hooks/useAudioCapture.ts` | 2 |
+| `atlas-ui/package-lock.json` | 1935 |
+| `atlas-ui/package.json` | 25 |
+| `plans/PR-Npm-Security-Patch-Batch.md` | 211 |
+| `portfolio-ui/package-lock.json` | 304 |
+| `portfolio-ui/package.json` | 21 |
+| **Total** | **17802** |
