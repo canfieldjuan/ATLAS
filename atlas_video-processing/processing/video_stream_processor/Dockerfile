@@ -1,6 +1,6 @@
 # Use an official Python runtime as a parent image
 #checkov:skip=CKV_DOCKER_2:Video stream processor is a worker process and does not expose an HTTP health endpoint.
-FROM python:3.9-slim-bullseye
+FROM python:3.13-slim-bullseye
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
