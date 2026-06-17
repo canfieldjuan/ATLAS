@@ -30,6 +30,26 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-06-17
+
+### Enroll npm security package checks in CI
+- File/location: `.github/workflows/`, `atlas-admin-ui`, `atlas-churn-ui`, `atlas-ui`, `atlas-mobile`.
+- Description: This batch proves admin, churn, atlas-ui, and mobile dependency updates locally, but only the existing Intel and portfolio workflows exercise npm package checks in CI.
+- Why it matters: Security dependency batches should not depend on local-only build/audit evidence for packages that can drift again; CI enrollment would make future Dependabot triage cheaper and harder to accidentally under-test.
+- Effort: M
+- Category: security
+- Owner/session: Codex security/dependencies
+- Found during: PR-Npm-Security-Patch-Batch review
+
+### Mobile Expo 56 audit cleanup
+- File/location: `atlas-mobile/package-lock.json`, Expo/React Native dependency graph.
+- Description: `npm audit --audit-level=high` passes after this slice, but plain `npm audit` still reports 21 moderate findings in the Expo, React Native, and audio config-plugin chain; npm says clearing them requires `npm audit fix --force`, which would install `expo@56.0.12`, `react-native@0.86.0`, or downgrade `@siteed/audio-studio`.
+- Why it matters: The remaining findings are below the high-severity security gate used for this batch, but they still represent mobile dependency debt that should be handled in a dedicated Expo 56 compatibility slice with runtime verification.
+- Effort: M
+- Category: security
+- Owner/session: Codex security/dependencies
+- Found during: PR-Npm-Security-Patch-Batch
+
 ## 2026-06-16
 
 ### Rotate archived IndexNow key
@@ -88,17 +108,6 @@ register under `docs/technical-debt/`.
 - Owner/session: Codex content-ops/deflection-product-proof
 - Found during: PR-Deflection-Question-Label-Quality review
 
-## 2026-06-13
-
-### portfolio-ui npm audit vulnerabilities
-- File/location: `portfolio-ui/package-lock.json`
-- Description: `npm ci` in `portfolio-ui` reports 3 dependency audit findings (1 moderate, 2 high).
-- Why it matters: Dependency vulnerabilities can become deploy-time security exposure, but resolving them may require package upgrades outside this repeat-metric copy slice.
-- Effort: M
-- Category: security
-- Owner/session: Codex deflection/clustering
-- Found during: PR-Deflection-Repeat-Metric-Alignment
-
 ## 2026-06-07
 
 ### Landing-page variants pass audits but are not meaningfully distinct
@@ -127,17 +136,6 @@ register under `docs/technical-debt/`.
 - Category: correctness
 - Owner/session: Codex Gate A live output-quality proof
 - Found during: PR-Gate-A-Live-Output-Quality-Proof
-
-## 2026-05-29
-
-### atlas-intel-ui npm audit vulnerabilities
-- File/location: `atlas-intel-ui/package-lock.json`
-- Description: `npm ci` reports 6 dependency audit findings (2 moderate, 4 high).
-- Why it matters: Dependency vulnerabilities can become deploy-time security exposure, but resolving them may require package upgrades outside this UI rendering slice.
-- Effort: M
-- Category: security
-- Owner/session: Codex FAQ deflection report UI slice
-- Found during: PR-FAQ-Deflection-Report-UI-Readonly
 
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),

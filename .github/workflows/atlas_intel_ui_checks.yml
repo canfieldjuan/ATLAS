@@ -42,7 +42,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "20.20.0"
           cache: "npm"
           cache-dependency-path: atlas-intel-ui/package-lock.json
 

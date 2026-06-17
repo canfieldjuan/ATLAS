@@ -812,7 +812,7 @@ describe('PipelineReview watchlist delivery ops', () => {
 
     expect(await screen.findByText('Company Signal Queue')).toBeInTheDocument()
     expect(screen.getByText('Operator Focus')).toBeInTheDocument()
-    expect(screen.getByText('No review-action history yet. Once analysts approve or suppress groups, impact and rebuild outcomes will show here.')).toBeInTheDocument()
+    expect(await screen.findByText('No review-action history yet. Once analysts approve or suppress groups, impact and rebuild outcomes will show here.')).toBeInTheDocument()
     expect(screen.getByText('Pending Candidate Groups')).toBeInTheDocument()
     expect(api.fetchCompanySignalReviewImpactSummary).toHaveBeenCalledWith({ window_days: 30, top_n: 8 })
     expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenCalledWith({

@@ -3,7 +3,7 @@ import {
   useAudioRecorder,
   type RecordingConfig,
   type AudioDataEvent,
-} from '@siteed/expo-audio-studio';
+} from '@siteed/audio-studio';
 import { AUDIO_CONFIG } from '../utils/constants';
 import { useAtlasStore } from '../state/store';
 

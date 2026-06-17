@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useRef } from 'react'
+import { useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 type FilterType = 'string' | 'number' | 'boolean'
@@ -33,28 +33,23 @@ function hasValue(v: unknown, cfg: FilterFieldConfig): boolean {
 
 export default function useFilterParams<T extends Record<string, unknown>>(config: FilterConfig) {
   const [searchParams, setSearchParams] = useSearchParams()
-  const searchString = searchParams.toString()
-  const configRef = useRef(config)
-  configRef.current = config
 
   const filters = useMemo(() => {
-    const cfg = configRef.current
     const result: Record<string, unknown> = {}
-    for (const [key, fieldCfg] of Object.entries(cfg)) {
+    for (const [key, fieldCfg] of Object.entries(config)) {
       const raw = searchParams.get(key)
       const val = coerce(raw, fieldCfg)
       result[key] = val !== undefined ? val : (fieldCfg.default ?? (fieldCfg.type === 'string' ? '' : undefined))
     }
     return result as T
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchString])
+  }, [config, searchParams])
 
   const setFilter = useCallback(
     (key: keyof T & string, value: unknown) => {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev)
-          const fieldCfg = configRef.current[key]
+          const fieldCfg = config[key]
           if (value === undefined || value === null || value === '' || (fieldCfg && value === fieldCfg.default)) {
             next.delete(key)
           } else {
@@ -65,7 +60,7 @@ export default function useFilterParams<T extends Record<string, unknown>>(confi
         { replace: true },
       )
     },
-    [setSearchParams],
+    [config, setSearchParams],
   )
 
   const clearFilter = useCallback(
@@ -87,17 +82,15 @@ export default function useFilterParams<T extends Record<string, unknown>>(confi
   }, [setSearchParams])
 
   const activeFilterEntries = useMemo(() => {
-    const cfg = configRef.current
     const entries: { key: string; label: string; value: string }[] = []
-    for (const [key, fieldCfg] of Object.entries(cfg)) {
+    for (const [key, fieldCfg] of Object.entries(config)) {
       const v = filters[key as keyof T]
       if (hasValue(v, fieldCfg)) {
         entries.push({ key, label: `${fieldCfg.label}: ${v}`, value: String(v) })
       }
     }
     return entries
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchString])
+  }, [config, filters])
 
   return { filters, setFilter, clearFilter, clearAll, activeFilterEntries }
 }

@@ -27,7 +27,12 @@ export default function B2BDashboard() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void load()
+    }, 0)
+    return () => window.clearTimeout(timeout)
+  }, [])
 
   // If no vendors tracked yet, redirect to onboarding
   useEffect(() => {
