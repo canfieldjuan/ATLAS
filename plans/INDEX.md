@@ -1,6 +1,6 @@
 # Plan archive index
 
-1107 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1108 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -1103,6 +1103,7 @@
 - [PR-Support-Ticket-Smoke-Draft-Export-Ids](archive/PR-Support-Ticket-Smoke-Draft-Export-Ids.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Support-Ticket-Source-Context-Live-Validation](archive/PR-Support-Ticket-Source-Context-Live-Validation.md) - lane: content-ops/support-ticket-input-provider | phase: functional validation
 - [PR-Track-Preflight-Dotenv-Fix](archive/PR-Track-Preflight-Dotenv-Fix.md) - lane: content-ops/deflection-tracking | phase: workflow/process
+- [PR-TypeScript-Major-Batch](archive/PR-TypeScript-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-UI-Test-Enrollment-Audit](archive/PR-UI-Test-Enrollment-Audit.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
 - [PR-Workflow-Action-Pin-OIDC-Audit](archive/PR-Workflow-Action-Pin-OIDC-Audit.md) - lane: security/workflow | phase: Production hardening
 - [PR-Workflow-Service-Image-Digests](archive/PR-Workflow-Service-Image-Digests.md) - lane: security/workflow | phase: Production hardening
