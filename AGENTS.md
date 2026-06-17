@@ -181,6 +181,10 @@ named in Deferred or explicitly marked none.
 - R3 Security/auth ... R14 Codebase verification: Pass/Fail/N-A
 (List the rules the changed paths trigger, plus R14; cite file:line on any Fail.)
 
+**boundary-probe:** <N-A, or what guard-shaped probe applied + result. Required
+before LGTM on guards, validators, caps, classifiers, gates, sanitizers,
+denylists, parser admission rules, or safety checkers.>
+
 **AI reconciliation:** AI findings reviewed: Y/N. All fixed or waived: Y/N.
 Waivers justified in PR body: Y/N.
 
@@ -744,6 +748,12 @@ Before LGTM, the reviewer confirms:
       denylist/regex/phrase-matcher/pattern-list detection, the coverage
       includes an allowed near-miss fixture or the plan names the future PR
       that will add it.
+- [ ] For guard-shaped PRs (guards, validators, caps, classifiers, gates,
+      sanitizers, denylists, parser admission rules, or safety checkers), the
+      verdict includes `boundary-probe: <what applied + result>` before LGTM.
+      Missing proof is BLOCKER for security, billing, data deletion,
+      customer-visible output, or CI/release gates; otherwise it is at least
+      MAJOR.
 - [ ] No drift from the plan's stated scope (no scope creep, no
       "while I was at it" cleanups beyond the slice's contract).
 - [ ] Defensible trade-offs are explained in **Intentional**.

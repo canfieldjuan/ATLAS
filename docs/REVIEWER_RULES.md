@@ -163,6 +163,37 @@ changed code; a shared-function or contract change lacks a caller/test/artifact
 spot-check; or skipped verification is omitted instead of listed as "not
 verified."
 
+## Boundary-probe before LGTM on guard-shaped PRs
+
+Before LGTM on any PR whose change is a guard, validator, cap, classifier,
+gate, sanitizer, denylist, parser admission rule, or safety checker, run a
+boundary probe and state `boundary-probe: <what applied + result>` in the
+review.
+
+A guard usually fails on its second side. Check both sides:
+
+- **Both error directions:** test one input that should pass but might be
+  rejected, and one input that should fail but might pass.
+- **Partial/mixed input:** test some-required-keys-present-some-missing, and
+  mixed valid/invalid collections. Do not test only full-valid and empty.
+- **Boundary values:** test min-1/min/max/max+1, empty, single-item, and
+  large-but-valid where relevant.
+- **Falsy/default defeat:** any `x or d`, `x || d`, or `if not x` default on a
+  cap, limit, count, permission, or threshold needs probes for `0`, `""`,
+  `False`, and past-the-max values. For `??`, probe only null/undefined.
+- **Original-vs-sanitized path:** verify downstream code uses the sanitized or
+  validated value, not the original raw value after the check.
+- **Constructed metadata:** a sanitizer must clean ids, keys, filenames,
+  labels, source ids, and derived paths it constructs from input, not only
+  field values it copies.
+- **Negative test exists:** never LGTM a guard whose tests only prove good
+  input passes. Require at least one test proving bad input fails, or record a
+  justified waiver.
+
+If the guard protects security, billing, data deletion, customer-visible
+output, or CI/release gates, missing boundary proof is BLOCKER. Otherwise it is
+at least MAJOR.
+
 ---
 
 ## Path-based rule triggers
@@ -182,6 +213,7 @@ these for the paths it touches:
 | `atlas_brain/config.py`, env/config | R11, R12 |
 | `scripts/audit_*.py`, `scripts/check_*.py`, evaluators / gate predicates | R2 (failure-branch fixtures per `AGENTS.md` 3h/3i), R10 |
 | `extracted_*/` synced files | R1, R10 (manifest sync discipline) |
+| Guard, validator, cap, classifier, gate, sanitizer, denylist, parser admission rule, or safety checker changes | R2, R14 (boundary-probe before LGTM) |
 | Review comments that name a defect class ("all X", "class of Y", "same failure mode") | R13 (held-out/propertied proof that the class, not only the example, is fixed) |
 | All reviewer verdicts | R14 (checked-out PR-head and codebase-backed verification) |
 
