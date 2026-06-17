@@ -21,6 +21,17 @@ then fed through the same model-anchored scorecard. The buyer hosted-result
 surface itself remains an `atlas-portfolio/web` follow-up, not an ATLAS
 `portfolio-ui` claim.
 
+Review fix root cause: the first validator pass derived PDF observations from
+artifact text too loosely in some places and too narrowly in others. Bare-number
+searching could certify missing count lines, renderer-formatted counts could be
+rejected, live result URLs/source IDs could leak past the detector, malformed
+export arrays could crash before a sanitized scorecard was written, and the PDF
+row-cap assertions were disabled. This update fixes those roots at the
+observation boundary: PDF counts must appear near their labels, renderer count
+forms are accepted, source ID leaks are checked against the actual model/export
+IDs, malformed arrays stay inside scorecard assertions, and default PDF caps
+remain active through displayed-row observations.
+
 The diff may exceed the soft cap because this is another cross-surface bridge:
 the checker, negative fixtures, CI enrollment, and plan/archive housekeeping
 ship together so the live runner has a tested validator to call.
@@ -41,10 +52,16 @@ Slice phase: Functional validation
    pointer copy, and leak-sensitive raw strings.
 4. Add evidence-export assertions through the existing scorecard path; no raw
    evidence values are copied into the output scorecard.
-5. Add negative tests for bad PDF bytes, missing PDF model count, leak strings,
-   and mismatched export totals.
-6. Enroll the test in `scripts/run_extracted_pipeline_checks.sh`.
-7. Archive the merged #1621 hosted-smoke plan as teardown housekeeping, while
+5. Anchor PDF count visibility to nearby rendered labels, including
+   comma-formatted counts and rounded renderer dollar amounts.
+6. Keep default PDF row-cap assertions active by deriving displayed row counts
+   from visible ranked-question and question-detail text.
+7. Add negative tests for bad PDF bytes, missing PDF model count, live
+   URL/request-id leaks, Zendesk/Freshdesk-style source ID leaks, label-anchor
+   false positives, missing row-cap observations, malformed export arrays, and
+   mismatched export totals.
+8. Enroll the test in `scripts/run_extracted_pipeline_checks.sh`.
+9. Archive the merged #1621 hosted-smoke plan as teardown housekeeping, while
    explicitly not treating it as buyer hosted-result proof.
 
 ### Files touched
@@ -68,6 +85,15 @@ Acceptance criteria:
   private notes, local paths, or PDF text.
 - PDF observations are present only when the PDF bytes/text satisfy the
   artifact checks; missing required PDF counts fail the required-metric guard.
+- PDF count observations are label-anchored and accept the renderer's rounded
+  dollar and comma-formatted count displays.
+- PDF displayed-row observations keep the default ranked-question and
+  question-detail caps active.
+- Leak checks include both result URL paths, concrete `content-ops-...` request
+  IDs, and actual source IDs from the report model/evidence export without
+  echoing those values in the scorecard.
+- Malformed evidence-export arrays produce structured failure assertions rather
+  than crashing before output is written.
 - Evidence-export shape/count mismatches fail through the existing
   `deflection_full_report_qa_scorecard.v1` assertions.
 - Bad PDF bytes, missing visible count, and leak strings are all proven to fail
@@ -91,8 +117,10 @@ The checker loads `report_model` and evidence export JSON, reads PDF bytes and
 extracted PDF text, and computes sanitized artifact assertions. It derives
 canonical model counts from the structured sections already consumed by the
 scorecard. A count is included in the `pdf` observation only when the PDF text
-contains that model value in an acceptable display form; otherwise the
-`harness.surface.pdf.count.<metric>.present` assertion fails.
+contains that model value near the rendered label in an acceptable display form;
+otherwise the `harness.surface.pdf.count.<metric>.present` assertion fails.
+Displayed row observations are derived from visible ranked-question and
+question-detail text so the scorecard's PDF cap assertions stay enabled.
 
 The evidence export is passed directly into the existing scorecard path, while
 the checker derives an `evidence_export` observation from the export summary.
@@ -113,6 +141,8 @@ slice owns the model-anchored artifact contract that runner must satisfy.
   the uncapped audit surface; the checker output still stays sanitized.
 - This PR does not claim the ATLAS `portfolio-ui` result page is the buyer
   hosted surface. The actual buyer page is `atlas-portfolio/web`.
+- The validator does not echo leaked request IDs/source IDs in failed
+  assertions; failures report only `"matched"` versus `"absent"`.
 
 ## Deferred
 
@@ -129,17 +159,17 @@ Parked hardening: none.
 ## Verification
 
 - `pytest tests/test_smoke_content_ops_deflection_pdf_export_validators.py -q`
-  (5 passed).
-- `scripts/run_extracted_pipeline_checks.sh` via bash (4436 passed, 10 skipped).
+  (10 passed).
+- `scripts/run_extracted_pipeline_checks.sh` via bash (4441 passed, 10 skipped).
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Deflection-Full-Report-QA-PDF-Export-Validators.md` | 145 |
+| `plans/PR-Deflection-Full-Report-QA-PDF-Export-Validators.md` | 175 |
 | `plans/archive/PR-Deflection-Full-Report-QA-Hosted-Smoke.md` | 0 |
-| `scripts/check_deflection_full_report_pdf_export_artifacts.py` | 336 |
+| `scripts/check_deflection_full_report_pdf_export_artifacts.py` | 552 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` | 215 |
-| **Total** | **700** |
+| `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` | 388 |
+| **Total** | **1119** |

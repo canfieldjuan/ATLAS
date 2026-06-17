@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from extracted_content_pipeline.faq_deflection_report import (  # noqa: E402
+    DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS,
     build_deflection_full_report_qa_deterministic_harness,
 )
 
@@ -37,17 +38,67 @@ REQUIRED_PDF_MARKERS = (
     "Question Details and Evidence",
     "complete evidence export",
 )
+PDF_COUNT_LABELS = {
+    "repeat_ticket_count": (
+        r"question-level repeat tickets",
+        r"repeat tickets",
+    ),
+    "generated_question_count": (
+        r"ranked questions",
+    ),
+    "ranked_question_count": (
+        r"ranked questions",
+        r"ranked question opportunities",
+    ),
+    "drafted_answer_count": (
+        r"publishable answers drafted",
+        r"publishable answers?",
+    ),
+    "no_proven_answer_count": (
+        r"questions still needing",
+        r"no proven answers?",
+        r"approved resolution",
+    ),
+    "ticket_source_count": (
+        r"ticket sources represented",
+        r"source tickets",
+        r"source rows",
+    ),
+    "estimated_support_cost": (
+        r"repeated-question work",
+        r"support cost",
+        r"assisted-contact handling",
+        r"sizes to about",
+    ),
+}
 LEAK_PATTERNS = (
-    ("request_id", re.compile(r"\brequest[_ -]?id\b", re.IGNORECASE)),
-    ("result_url", re.compile(r"https?://\S+/services/faq-deflection/results/\S+", re.IGNORECASE)),
+    (
+        "request_id",
+        re.compile(
+            r"\b(?:request[_ -]?id|content-ops-[A-Za-z0-9_-]{8,})\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "result_url",
+        re.compile(
+            r"https?://[^\s\"'<>]+/"
+            r"(?:systems/support-ticket-deflection|services/faq-deflection)/results/"
+            r"[^\s\"'<>]+",
+            re.IGNORECASE,
+        ),
+    ),
     ("customer_email", re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")),
     ("absolute_local_path", re.compile(r"(?<!\w)(?:/home/|/tmp/)")),
     ("stripe_checkout_session_id", re.compile(r"\bcs_(?:test|live)_[A-Za-z0-9_]+\b")),
     ("stripe_payment_intent_id", re.compile(r"\bpi_[A-Za-z0-9_]+\b")),
-    ("raw_evidence_quote", re.compile(r"\b(?:evidence_quote|raw quoted evidence)\b", re.IGNORECASE)),
-    ("source_id_list", re.compile(r"\bticket[-_][A-Za-z0-9][A-Za-z0-9_.:-]*\b")),
+    (
+        "raw_evidence_quote",
+        re.compile(r"\b(?:evidence_quote|raw quoted evidence)\b", re.IGNORECASE),
+    ),
     ("private_note", re.compile(r"\bprivate note\b|\binternal note\b", re.IGNORECASE)),
 )
+SOURCE_ID_TOKEN_PATTERN = re.compile(r"\bticket[-_][A-Za-z0-9][A-Za-z0-9_.:-]*\b")
 
 
 def _load_object(path: Path, label: str) -> dict[str, Any]:
@@ -93,6 +144,19 @@ def _rows_count(data: Mapping[str, Any]) -> int:
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
         return 0
     return len([row for row in rows if isinstance(row, Mapping)])
+
+
+def _rows(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    rows = data.get("rows")
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+        return []
+    return [row for row in rows if isinstance(row, Mapping)]
+
+
+def _sequence(value: Any) -> list[Any]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return list(value)
 
 
 def _number(value: Any) -> float:
@@ -151,30 +215,157 @@ def _normal_text(text: str) -> str:
 def _number_forms(value: Any, *, money: bool = False) -> tuple[str, ...]:
     numeric = _number(value)
     whole = int(numeric)
-    forms = {str(whole)}
-    if not numeric.is_integer():
-        forms.add(f"{numeric:.1f}")
-        forms.add(f"{numeric:.2f}")
     if money:
-        forms.add(f"${whole:,}")
-        forms.add(f"${numeric:,.2f}")
-        forms.add(f"{whole:,}")
+        rounded = int(numeric + 0.5)
+        forms = {f"${rounded:,}", f"${numeric:,.2f}"}
+        if numeric.is_integer():
+            forms.add(f"${whole:,}")
+    else:
+        forms = {str(whole), f"{whole:,}"}
+        if not numeric.is_integer():
+            forms.add(f"{numeric:.1f}")
+            forms.add(f"{numeric:.2f}")
     return tuple(sorted(forms, key=len, reverse=True))
 
 
-def _text_has_value(text: str, value: Any, *, money: bool = False) -> bool:
-    haystack = _normal_text(text)
-    for form in _number_forms(value, money=money):
-        if re.search(rf"(?<![\w$]){re.escape(form)}(?!\w)", haystack):
-            return True
+def _count_line_candidates(text: str) -> list[str]:
+    lines = [_normal_text(line) for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    candidates = list(lines)
+    for index, line in enumerate(lines[:-1]):
+        candidates.append(_normal_text(f"{line} {lines[index + 1]}"))
+    return candidates
+
+
+def _line_has_labeled_value(line: str, *, labels: Sequence[str], forms: Sequence[str]) -> bool:
+    for label in labels:
+        label_pattern = re.compile(label, re.IGNORECASE)
+        if not label_pattern.search(line):
+            continue
+        for form in forms:
+            value_pattern = re.compile(
+                rf"(?<![\w$]){re.escape(form)}(?!\w)",
+                re.IGNORECASE,
+            )
+            if value_pattern.search(line):
+                return True
     return False
 
+
+def _text_has_labeled_value(text: str, key: str, value: Any, *, money: bool = False) -> bool:
+    labels = PDF_COUNT_LABELS.get(key, ())
+    if not labels:
+        return False
+    forms = _number_forms(value, money=money)
+    return any(
+        _line_has_labeled_value(candidate, labels=labels, forms=forms)
+        for candidate in _count_line_candidates(text)
+    )
+
+
+def _source_ids_from_export(evidence_export: Mapping[str, Any]) -> set[str]:
+    source_ids: set[str] = set()
+    for row in _sequence(evidence_export.get("evidence_rows")):
+        if isinstance(row, Mapping):
+            source_id = str(row.get("source_id") or "").strip()
+            if _source_id_candidate(source_id):
+                source_ids.add(source_id)
+    for question in _sequence(evidence_export.get("questions")):
+        if not isinstance(question, Mapping):
+            continue
+        for raw_source_id in _sequence(question.get("source_ids")):
+            source_id = str(raw_source_id or "").strip()
+            if _source_id_candidate(source_id):
+                source_ids.add(source_id)
+    return source_ids
+
+
+def _source_ids_from_model(report_model: Mapping[str, Any]) -> set[str]:
+    source_ids: set[str] = set()
+    for section_id in ("ranked_questions", "question_details"):
+        for row in _rows(_section_data(report_model, section_id)):
+            for raw_source_id in _sequence(row.get("source_ids")):
+                source_id = str(raw_source_id or "").strip()
+                if _source_id_candidate(source_id):
+                    source_ids.add(source_id)
+    return source_ids
+
+
+def _source_id_candidate(value: str) -> bool:
+    return len(value) >= 3 and not value.isdigit()
+
+
+def _text_contains_source_id(text: str, source_id: str) -> bool:
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9_.:-]){re.escape(source_id)}(?![A-Za-z0-9_.:-])"
+    )
+    return bool(pattern.search(text))
+
+
+def _source_id_leak_present(text: str, source_ids: set[str]) -> bool:
+    if SOURCE_ID_TOKEN_PATTERN.search(text):
+        return True
+    return any(_text_contains_source_id(text, source_id) for source_id in source_ids)
+
+
+def _section_text(text: str, marker: str, end_markers: Sequence[str]) -> str:
+    haystack = text.casefold()
+    start = haystack.find(marker.casefold())
+    if start < 0:
+        return ""
+    section_start = start + len(marker)
+    ends = [
+        index
+        for end_marker in end_markers
+        if (index := haystack.find(end_marker.casefold(), section_start)) >= 0
+    ]
+    section_end = min(ends) if ends else len(text)
+    return text[section_start:section_end]
+
+
+def _visible_question_rows(section_text: str, rows: Sequence[Mapping[str, Any]]) -> int:
+    haystack = _normal_text(section_text).casefold()
+    visible = 0
+    for row in rows:
+        question = _normal_text(str(row.get("question") or ""))
+        if question and question.casefold() in haystack:
+            visible += 1
+    return visible
+
+
+def _pdf_displayed_rows(report_model: Mapping[str, Any], pdf_text: str) -> dict[str, int]:
+    ranked_section = _section_text(
+        pdf_text,
+        "Ranked Question Opportunities",
+        ("Resolution Outcome Diagnostics", "Question Details and Evidence"),
+    )
+    detail_section = _section_text(
+        pdf_text,
+        "Question Details and Evidence",
+        ("Complete Evidence",),
+    )
+    ranked_rows = _rows(_section_data(report_model, "ranked_questions"))
+    detail_rows = _rows(_section_data(report_model, "question_details"))
+    caps = DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS.get("pdf", {})
+    ranked_cap = _int(caps.get("ranked_questions")) if isinstance(caps, Mapping) else 0
+    detail_cap = _int(caps.get("question_details")) if isinstance(caps, Mapping) else 0
+    return {
+        "ranked_questions": _visible_question_rows(
+            ranked_section,
+            ranked_rows[:ranked_cap] if ranked_cap else ranked_rows,
+        ),
+        "question_details": _visible_question_rows(
+            detail_section,
+            detail_rows[:detail_cap] if detail_cap else detail_rows,
+        ),
+    }
 
 def _pdf_artifact_assertions(
     *,
     pdf_bytes: bytes,
     pdf_text: str,
     counts: Mapping[str, Any],
+    source_ids: set[str],
 ) -> list[dict[str, Any]]:
     assertions = [
         _assertion(
@@ -200,19 +391,17 @@ def _pdf_artifact_assertions(
             actual="present" if marker.casefold() in normalized_text else "missing",
         ))
     for key in PDF_COUNT_KEYS:
+        visible = _text_has_labeled_value(
+            pdf_text,
+            key,
+            counts.get(key),
+            money=key == "estimated_support_cost",
+        )
         assertions.append(_assertion(
             f"artifact.pdf.text.count.{key}",
-            _text_has_value(
-                pdf_text,
-                counts.get(key),
-                money=key == "estimated_support_cost",
-            ),
+            visible,
             expected=counts.get(key),
-            actual="visible" if _text_has_value(
-                pdf_text,
-                counts.get(key),
-                money=key == "estimated_support_cost",
-            ) else "missing",
+            actual="visible" if visible else "missing",
         ))
     for leak_id, pattern in LEAK_PATTERNS:
         matched = bool(pattern.search(pdf_text))
@@ -222,11 +411,19 @@ def _pdf_artifact_assertions(
             expected="absent",
             actual="matched" if matched else "absent",
         ))
+    source_id_matched = _source_id_leak_present(pdf_text, source_ids)
+    assertions.append(_assertion(
+        "artifact.pdf.leak.source_id_list",
+        not source_id_matched,
+        expected="absent",
+        actual="matched" if source_id_matched else "absent",
+    ))
     return assertions
 
 
 def _pdf_observation(
     *,
+    report_model: Mapping[str, Any],
     pdf_text: str,
     counts: Mapping[str, Any],
     artifact_assertions: Sequence[Mapping[str, Any]],
@@ -246,9 +443,23 @@ def _pdf_observation(
 
     visible_counts: dict[str, Any] = {}
     for key in PDF_COUNT_KEYS:
-        if _text_has_value(pdf_text, counts.get(key), money=key == "estimated_support_cost"):
+        if _text_has_labeled_value(
+            pdf_text,
+            key,
+            counts.get(key),
+            money=key == "estimated_support_cost",
+        ):
             visible_counts[key] = counts.get(key)
-    return {"counts": visible_counts}
+    return {
+        "counts": visible_counts,
+        "displayed_rows": _pdf_displayed_rows(report_model, pdf_text),
+    }
+
+
+def _safe_sequence_len(value: Any) -> int:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return 0
+    return len(value)
 
 
 def build_pdf_export_scorecard(
@@ -262,13 +473,19 @@ def build_pdf_export_scorecard(
     """Return a sanitized scorecard for PDF/export artifacts."""
 
     counts = _model_counts(report_model)
+    source_ids = (
+        _source_ids_from_export(evidence_export)
+        | _source_ids_from_model(report_model)
+    )
     artifact_assertions = _pdf_artifact_assertions(
         pdf_bytes=pdf_bytes,
         pdf_text=pdf_text,
         counts=counts,
+        source_ids=source_ids,
     )
     observations = {
         "pdf": _pdf_observation(
+            report_model=report_model,
             pdf_text=pdf_text,
             counts=counts,
             artifact_assertions=artifact_assertions,
@@ -279,7 +496,6 @@ def build_pdf_export_scorecard(
         report_model,
         evidence_export=evidence_export,
         surface_observations=observations,
-        surface_caps={"pdf": {}},
         required_surfaces=required_surfaces,
     )
     assertions = [dict(assertion) for assertion in scorecard["assertions"]]
@@ -294,8 +510,8 @@ def build_pdf_export_scorecard(
             "text_chars": len(pdf_text),
         },
         "evidence_export": {
-            "questions": len(evidence_export.get("questions") or []),
-            "evidence_rows": len(evidence_export.get("evidence_rows") or []),
+            "questions": _safe_sequence_len(evidence_export.get("questions")),
+            "evidence_rows": _safe_sequence_len(evidence_export.get("evidence_rows")),
         },
     }
     return result

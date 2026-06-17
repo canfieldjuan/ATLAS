@@ -50,11 +50,29 @@ def _report_model() -> dict[str, object]:
             },
             {
                 "id": "ranked_questions",
-                "data": {"rows": [{"rank": 1}, {"rank": 2}]},
+                "data": {
+                    "rows": [
+                        {"rank": 1, "question": "How do I export attribution reports?"},
+                        {"rank": 2, "question": "How do I invite teammates?"},
+                    ],
+                },
             },
             {
                 "id": "question_details",
-                "data": {"rows": [{"rank": 1}, {"rank": 2}]},
+                "data": {
+                    "rows": [
+                        {
+                            "rank": 1,
+                            "question": "How do I export attribution reports?",
+                            "source_ids": ["zd-100"],
+                        },
+                        {
+                            "rank": 2,
+                            "question": "How do I invite teammates?",
+                            "source_ids": ["fd-200"],
+                        },
+                    ],
+                },
             },
             {
                 "id": "complete_evidence",
@@ -80,7 +98,16 @@ def _evidence_export() -> dict[str, object]:
             "no_proven_answer_count": 1,
         },
         "questions": [{}, {}],
-        "evidence_rows": [{} for _ in range(8)],
+        "evidence_rows": [
+            {"source_id": "zd-100"},
+            {"source_id": "fd-200"},
+            {},
+            {},
+            {},
+            {},
+            {},
+            {},
+        ],
     }
 
 
@@ -100,8 +127,12 @@ def _pdf_text() -> str:
 
     Ranked Question Opportunities
     2 ranked questions appear in the curated PDF.
+    How do I export attribution reports?
+    How do I invite teammates?
 
     Question Details and Evidence
+    How do I export attribution reports?
+    How do I invite teammates?
     The PDF is curated for sharing. Use the complete evidence export for the
     uncapped audit trail.
     """
@@ -163,12 +194,35 @@ def test_pdf_export_validator_fails_missing_visible_model_count() -> None:
     assert "harness.surface.pdf.count.estimated_support_cost.present" in failed
 
 
-def test_pdf_export_validator_fails_leak_strings_without_echoing_them() -> None:
+def test_pdf_export_validator_detects_live_urls_and_request_ids() -> None:
+    leaked_text = (
+        f"{_pdf_text()}\n"
+        "https://juancanfield.com/systems/support-ticket-deflection/results/"
+        "content-ops-1234567890abcdef\n"
+        "content-ops-1234567890abcdef"
+    )
+
     scorecard = checker.build_pdf_export_scorecard(
         report_model=_report_model(),
         evidence_export=_evidence_export(),
         pdf_bytes=_pdf_bytes(),
-        pdf_text=f"{_pdf_text()}\nSource IDs: ticket-export-1\nraw quoted evidence",
+        pdf_text=leaked_text,
+    )
+
+    assert scorecard["ok"] is False
+    failed = _failed_ids(scorecard)
+    assert "artifact.pdf.leak.result_url" in failed
+    assert "artifact.pdf.leak.request_id" in failed
+    encoded = json.dumps(scorecard, sort_keys=True)
+    assert "content-ops-1234567890abcdef" not in encoded
+
+
+def test_pdf_export_validator_detects_dynamic_source_id_leaks_without_echoing_them() -> None:
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=_report_model(),
+        evidence_export=_evidence_export(),
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=f"{_pdf_text()}\nSource IDs: zd-100, fd-200\nraw quoted evidence",
     )
 
     assert scorecard["ok"] is False
@@ -176,8 +230,85 @@ def test_pdf_export_validator_fails_leak_strings_without_echoing_them() -> None:
     assert "artifact.pdf.leak.source_id_list" in failed
     assert "artifact.pdf.leak.raw_evidence_quote" in failed
     encoded = json.dumps(scorecard, sort_keys=True)
-    assert "ticket-export-1" not in encoded
+    assert "zd-100" not in encoded
+    assert "fd-200" not in encoded
     assert "raw quoted evidence" not in encoded
+
+
+def test_pdf_export_validator_anchors_count_checks_to_labels() -> None:
+    text = """
+    Support Tax Confirmation
+    This report found 8 question-level repeat tickets across 2 ranked questions.
+    The expected support cost is $108.
+    Page 1
+
+    Ranked Question Opportunities
+    How do I export attribution reports?
+    How do I invite teammates?
+
+    Question Details and Evidence
+    How do I export attribution reports?
+    How do I invite teammates?
+    Use the complete evidence export for the uncapped audit trail.
+    """
+
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=_report_model(),
+        evidence_export=_evidence_export(),
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=text,
+    )
+
+    assert scorecard["ok"] is False
+    failed = _failed_ids(scorecard)
+    assert "artifact.pdf.text.count.drafted_answer_count" in failed
+    assert "artifact.pdf.text.count.no_proven_answer_count" in failed
+
+
+def test_pdf_export_validator_accepts_renderer_count_and_money_display_forms() -> None:
+    model = _report_model()
+    support_tax = model["sections"][0]["data"]  # type: ignore[index]
+    support_tax["repeat_ticket_count"] = 1234  # type: ignore[index]
+    support_tax["generated_question_count"] = 1234  # type: ignore[index]
+    support_tax["ticket_source_count"] = 1234  # type: ignore[index]
+    support_tax["estimated_support_cost"] = 67.5  # type: ignore[index]
+    text = _pdf_text().replace(
+        "8 question-level repeat tickets across 2 ranked questions",
+        "1,234 question-level repeat tickets across 1,234 ranked questions",
+    ).replace(
+        "$108",
+        "$68",
+    ).replace(
+        "grounded in 8 source tickets",
+        "grounded in 1,234 source tickets",
+    )
+
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=model,
+        evidence_export=_evidence_export(),
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=text,
+    )
+
+    failed = _failed_ids(scorecard)
+    assert "artifact.pdf.text.count.repeat_ticket_count" not in failed
+    assert "artifact.pdf.text.count.generated_question_count" not in failed
+    assert "artifact.pdf.text.count.ticket_source_count" not in failed
+    assert "artifact.pdf.text.count.estimated_support_cost" not in failed
+
+
+def test_pdf_export_validator_keeps_pdf_row_cap_observations_enabled() -> None:
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=_report_model(),
+        evidence_export=_evidence_export(),
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=_pdf_text().replace("How do I invite teammates?", ""),
+    )
+
+    assert scorecard["ok"] is False
+    failed = _failed_ids(scorecard)
+    assert "surface.pdf.displayed_rows.ranked_questions" in failed
+    assert "surface.pdf.displayed_rows.question_details" in failed
 
 
 def test_pdf_export_validator_cli_fails_mismatched_export_totals(tmp_path: Path) -> None:
@@ -213,3 +344,45 @@ def test_pdf_export_validator_cli_fails_mismatched_export_totals(tmp_path: Path)
     failed = _failed_ids(payload)
     assert "evidence_export.summary.evidence_row_count" in failed
     assert "surface.evidence_export.count.evidence_row_count" in failed
+
+
+def test_pdf_export_validator_cli_fails_malformed_export_arrays_without_crashing(
+    tmp_path: Path,
+) -> None:
+    report_model = tmp_path / "report_model.json"
+    export = tmp_path / "evidence_export.json"
+    pdf_bytes = tmp_path / "report.pdf"
+    pdf_text = tmp_path / "report_pdf_text.txt"
+    output = tmp_path / "scorecard.json"
+    bad_export = _evidence_export()
+    bad_export["questions"] = {"not": "a list"}
+    bad_export["evidence_rows"] = 7
+
+    _write_json(report_model, _report_model())
+    _write_json(export, bad_export)
+    pdf_bytes.write_bytes(_pdf_bytes())
+    pdf_text.write_text(_pdf_text(), encoding="utf-8")
+
+    code = checker.main([
+        "--report-model",
+        str(report_model),
+        "--evidence-export",
+        str(export),
+        "--pdf-bytes",
+        str(pdf_bytes),
+        "--pdf-text",
+        str(pdf_text),
+        "--output",
+        str(output),
+    ])
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["artifacts"]["evidence_export"] == {
+        "questions": 0,
+        "evidence_rows": 0,
+    }
+    failed = _failed_ids(payload)
+    assert "evidence_export.questions.present" in failed
+    assert "evidence_export.evidence_rows.present" in failed
