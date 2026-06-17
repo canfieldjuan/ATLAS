@@ -1,0 +1,74 @@
+{
+  "artifact_date": "2026-06-17",
+  "controlled_request": {
+    "snapshot_smoke_classification": "smoke_checker_drift",
+    "snapshot_smoke_note": "The submit smoke reported teaser.full_answer answer/steps as forbidden, but the checked-in snapshot contract allows answer and steps inside teaser.full_answer.",
+    "source_shape": "zendesk_full_thread_csv_fixture",
+    "submit_created_request_id": true,
+    "submit_smoke_errors": [
+      "faq_deflection_report.result.snapshot leaked forbidden fields: $.teaser.full_answer.answer, $.teaser.full_answer.steps"
+    ],
+    "submit_smoke_ok": false,
+    "submit_status": 200
+  },
+  "deferred_next_slice": "Fix the hosted generated-asset/report artifact path so fresh paid deflection artifacts expose deflection.v1 report_model and evidence_export, then rerun this live artifact proof.",
+  "issue": 1612,
+  "live_runner": {
+    "errors": [
+      "report-model endpoint must return 200, got 404",
+      "artifact.evidence_export must be an object"
+    ],
+    "fetches": {
+      "artifact": {
+        "status": 200
+      },
+      "report_model": {
+        "errors": [
+          "http_error"
+        ],
+        "status": 404
+      }
+    },
+    "ok": false,
+    "schema_version": "deflection_full_report_qa_live_runner.v1",
+    "scorecard_status": "skipped_due_to_payload_errors"
+  },
+  "ok": false,
+  "paid_unlock": {
+    "after_artifact_status": 200,
+    "before_artifact_status": 403,
+    "ok": true,
+    "replay_payload_status": "already_processed",
+    "replay_webhook_status": 200,
+    "webhook_status": 200
+  },
+  "pdf_bytes": {
+    "bytes": 7139,
+    "committed": false,
+    "source": "locally_rendered_from_live_paid_artifact_with_delivery_renderer",
+    "text_chars": 3261,
+    "text_errors": [],
+    "text_extraction_ok": true
+  },
+  "redaction": {
+    "bearer_tokens_committed": false,
+    "customer_email_committed": false,
+    "local_absolute_paths_committed": false,
+    "private_notes_committed": false,
+    "raw_artifact_committed": false,
+    "raw_evidence_committed": false,
+    "raw_pdf_committed": false,
+    "raw_report_model_committed": false,
+    "request_id_committed": false,
+    "result_url_committed": false,
+    "source_ids_committed": false,
+    "stripe_checkout_session_id_committed": false,
+    "stripe_payment_intent_id_committed": false
+  },
+  "result": "failed_upstream_live_artifact_contract",
+  "schema_version": "deflection_full_report_qa_live_artifact.v1",
+  "upstream_blockers": [
+    "Hosted report-model endpoint returned 404 for the fresh paid request.",
+    "Hosted artifact endpoint returned 200 but exposed legacy artifact keys only; evidence_export was not present as an object."
+  ]
+}
