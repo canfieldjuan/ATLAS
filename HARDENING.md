@@ -32,6 +32,15 @@ register under `docs/technical-debt/`.
 
 ## 2026-06-17
 
+### Align deflection submit smoke forbidden snapshot paths with teaser contract
+- File/location: `scripts/smoke_content_ops_deflection_submit_handoff.py`, `docs/frontend/content_ops_faq_report_contract.md`
+- Description: The submit handoff smoke reports `teaser.full_answer.answer` and `teaser.full_answer.steps` as forbidden, but the checked-in snapshot contract permits answer text and steps inside `teaser.full_answer`.
+- Why it matters: A false paywall-leak report can steer QA work toward removing contract-required teaser content instead of fixing real paid-artifact delivery gaps.
+- Effort: S
+- Category: correctness
+- Owner/session: Codex content-ops/deflection-full-report-qa
+- Found during: PR-Deflection-Full-Report-QA-Live-Artifact review
+
 ### Mobile Expo 56 audit cleanup
 - File/location: `atlas-mobile/package-lock.json`, Expo/React Native dependency graph.
 - Description: `npm audit --audit-level=high` passes after this slice, but plain `npm audit` still reports 21 moderate findings in the Expo, React Native, and audio config-plugin chain; npm says clearing them requires `npm audit fix --force`, which would install `expo@56.0.12`, `react-native@0.86.0`, or downgrade `@siteed/audio-studio`.
