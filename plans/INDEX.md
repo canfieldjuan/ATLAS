@@ -1,6 +1,6 @@
 # Plan archive index
 
-1096 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1098 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -698,6 +698,7 @@
 - [PR-Deflection-Full-Report-QA-Hosted-Smoke](archive/PR-Deflection-Full-Report-QA-Hosted-Smoke.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Full-Report-QA-Live-Runner](archive/PR-Deflection-Full-Report-QA-Live-Runner.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Full-Report-QA-PDF-Export-Validators](archive/PR-Deflection-Full-Report-QA-PDF-Export-Validators.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
+- [PR-Deflection-Full-Report-QA-PDF-Text-Extraction](archive/PR-Deflection-Full-Report-QA-PDF-Text-Extraction.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Full-Report-QA-Redaction-Policy](archive/PR-Deflection-Full-Report-QA-Redaction-Policy.md) - lane: content-ops/deflection-full-report-qa | phase: Production hardening
 - [PR-Deflection-Full-Report-QA-Scorecard](archive/PR-Deflection-Full-Report-QA-Scorecard.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Full-Thread-Export-Guidance](archive/PR-Deflection-Full-Thread-Export-Guidance.md) - lane: deflection/clustering-raw-data | phase: Product polish
