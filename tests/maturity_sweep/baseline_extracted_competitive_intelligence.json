@@ -1,0 +1,220 @@
+{
+  "extracted_competitive_intelligence/_standalone/auth.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_competitive_intelligence/_standalone/config.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_competitive_intelligence/api/b2b_vendor_briefing.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "extracted_competitive_intelligence/autonomous/tasks/_b2b_batch_utils.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "extracted_competitive_intelligence/autonomous/tasks/_b2b_cross_vendor_synthesis.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 15
+    },
+    "score": 16
+  },
+  "extracted_competitive_intelligence/autonomous/tasks/b2b_battle_cards.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2,
+      "SWALLOWED_EXCEPT": 4,
+      "UNGUARDED_INDEX": 11
+    },
+    "score": 28
+  },
+  "extracted_competitive_intelligence/autonomous/tasks/b2b_churn_intelligence.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_competitive_intelligence/autonomous/tasks/b2b_vendor_briefing.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 10,
+      "UNGUARDED_INDEX": 13
+    },
+    "score": 59
+  },
+  "extracted_competitive_intelligence/autonomous/visibility.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1
+    },
+    "score": 1
+  },
+  "extracted_competitive_intelligence/mcp/b2b/_shared.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "extracted_competitive_intelligence/mcp/b2b/cross_vendor.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_competitive_intelligence/mcp/b2b/displacement.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_competitive_intelligence/mcp/b2b/server.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 12
+  },
+  "extracted_competitive_intelligence/mcp/b2b/vendor_registry.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_competitive_intelligence/reasoning/cross_vendor_selection.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 13
+  },
+  "extracted_competitive_intelligence/reasoning/single_pass_prompts/battle_card_reasoning.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1
+    },
+    "score": 1
+  },
+  "extracted_competitive_intelligence/reasoning/single_pass_prompts/cross_vendor_battle.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2
+    },
+    "score": 2
+  },
+  "extracted_competitive_intelligence/services/b2b/cache_runner.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_competitive_intelligence/services/b2b/challenger_dashboard_claims.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_competitive_intelligence/services/b2b/corrections.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_competitive_intelligence/services/b2b/enrichment_contract.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "extracted_competitive_intelligence/services/b2b/vendor_briefing_api_ports.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_competitive_intelligence/services/b2b/vendor_briefing_repository.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "extracted_competitive_intelligence/services/b2b/webhook_dispatcher.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_competitive_intelligence/services/b2b_competitive_sets.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 6
+  },
+  "extracted_competitive_intelligence/services/llm_router.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_competitive_intelligence/services/scraping/sources.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_competitive_intelligence/services/vendor_registry.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "extracted_competitive_intelligence/services/vendor_target_selection.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_competitive_intelligence/storage/models.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 11
+  },
+  "extracted_competitive_intelligence/templates/email/__init__.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "extracted_competitive_intelligence/templates/email/vendor_briefing.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  }
+}
