@@ -20,7 +20,7 @@ sys.modules[SPEC.name] = checker
 SPEC.loader.exec_module(checker)
 
 
-RAW_REQUEST_ID_FIXTURE = "content-ops-" + "45c06a6950ec4677a214368d6e4dc44f"
+RAW_REQUEST_ID_FIXTURE = "content-ops-fixture-45c06a6950ec4677a214368d6e4dc44f"
 RAW_RESULT_URL_FIXTURE = (
     "https://www.juancanfield.com/systems/support-ticket-deflection/results/"
     + RAW_REQUEST_ID_FIXTURE
