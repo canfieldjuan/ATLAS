@@ -53,6 +53,7 @@ on:
       - "atlas_brain/agents/**"
       - "atlas_brain/capabilities/**"
       - "atlas_brain/tools/**"
+      - "atlas_brain/services/scraping/**"
   push:
     branches:
       - main
@@ -95,6 +96,7 @@ on:
       - "atlas_brain/agents/**"
       - "atlas_brain/capabilities/**"
       - "atlas_brain/tools/**"
+      - "atlas_brain/services/scraping/**"
 
 jobs:
   maturity-sweep:
@@ -332,3 +334,28 @@ jobs:
               "${common_sensitive_args[@]}"
             echo "::endgroup::"
           done
+
+      - name: Maturity sweep atlas_brain B2e scraping ratchet gate (blocking)
+        run: |
+          set -euo pipefail
+          common_sensitive_args=(
+            --sensitive-glob '**/billing/**'
+            --sensitive-glob '**/billing*'
+            --sensitive-glob '**/paid*'
+            --sensitive-glob '**/auth/**'
+            --sensitive-glob '**/auth*'
+            --sensitive-glob '**/webhook*'
+            --sensitive-glob '**/webhooks/**'
+            --sensitive-glob '**/*webhook*/**'
+            --sensitive-glob '**/payment*'
+            --sensitive-glob '**/invoicing/**'
+            --sensitive-glob '**/*invoice*'
+            --sensitive-glob '**/*deletion*'
+            --sensitive-glob '**/delete*/**'
+            --sensitive-glob 'atlas_brain/services/scraping/**'
+          )
+          python scripts/maturity_sweep.py atlas_brain/services/scraping \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_atlas_brain_services_scraping.json \
+            --min-score 8 \
+            "${common_sensitive_args[@]}"
