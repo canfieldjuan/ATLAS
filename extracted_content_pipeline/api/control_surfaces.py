@@ -72,7 +72,10 @@ from ..generation_plan import build_generation_plan, build_generation_plan_from_
 from ..faq_deflection_report import (
     DEFAULT_DEFLECTION_SNAPSHOT_TOP_N,
     DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT,
+    DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+    DEFLECTION_REPORT_SCHEMA_VERSION,
     build_deflection_snapshot,
+    deflection_report_model_contract_shape,
 )
 from ..landing_page_input_contract import landing_page_seo_geo_aeo_input_contracts
 from ..ingestion_diagnostics import inspect_ingestion_file, inspect_ingestion_rows
@@ -137,6 +140,8 @@ InputProvider = ContentOpsInputProvider
 
 logger = logging.getLogger(__name__)
 
+DEFLECTION_PROCESS_CONTRACT_SCHEMA_VERSION = "deflection_report_process.v1"
+DEFLECTION_PROCESS_CONTRACT_PATH = "/deflection-reports/process-contract"
 _MAX_INPUT_KEYS = 50
 _MAX_INPUT_DEPTH = 6
 _MAX_INPUT_STRING_CHARS = 10000
@@ -816,6 +821,13 @@ def create_content_ops_control_surface_router(
         )
 
     public_deflection_dependencies = list(deflection_report_public_dependencies or ())
+
+    @router.get(
+        DEFLECTION_PROCESS_CONTRACT_PATH,
+        dependencies=public_deflection_dependencies,
+    )
+    async def deflection_report_process_contract() -> dict[str, Any]:
+        return _deflection_report_process_contract_payload(resolved_config.prefix)
 
     @router.get(
         "/deflection-reports/{request_id}/snapshot",
@@ -2851,6 +2863,30 @@ def _input_provider_response_metadata(value: Any) -> dict[str, Any]:
         key: value[key]
         for key in sorted(_INPUT_PROVIDER_RESPONSE_METADATA_KEYS)
         if key in value
+    }
+
+
+def _deflection_report_process_contract_payload(prefix: str) -> dict[str, Any]:
+    base = _clean(prefix).rstrip("/")
+    route_base = f"{base}/deflection-reports" if base else "/deflection-reports"
+    return {
+        "schema_version": DEFLECTION_PROCESS_CONTRACT_SCHEMA_VERSION,
+        "service": "content_ops_deflection_reports",
+        "contract": {
+            "report_model_schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
+            "report_model_contract": deflection_report_model_contract_shape(),
+            "evidence_export_schema_version": DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+            "paid_artifact_requires": {
+                "report_model": "object",
+                "evidence_export": "object",
+            },
+        },
+        "routes": {
+            "process_contract": f"{route_base}/process-contract",
+            "snapshot": f"{route_base}/{{request_id}}/snapshot",
+            "artifact": f"{route_base}/{{request_id}}/artifact",
+            "report_model": f"{route_base}/{{request_id}}/report-model",
+        },
     }
 
 
