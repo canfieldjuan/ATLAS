@@ -1,6 +1,6 @@
 # Plan archive index
 
-1115 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1116 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -698,6 +698,7 @@
 - [PR-Deflection-Full-Report-QA-Deterministic-Harness](archive/PR-Deflection-Full-Report-QA-Deterministic-Harness.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Full-Report-QA-Hosted-Smoke](archive/PR-Deflection-Full-Report-QA-Hosted-Smoke.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Full-Report-QA-Live-Artifact](archive/PR-Deflection-Full-Report-QA-Live-Artifact.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
+- [PR-Deflection-Full-Report-QA-Live-Green-Rerun](archive/PR-Deflection-Full-Report-QA-Live-Green-Rerun.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Full-Report-QA-Live-Rerun](archive/PR-Deflection-Full-Report-QA-Live-Rerun.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Full-Report-QA-Live-Runner](archive/PR-Deflection-Full-Report-QA-Live-Runner.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Full-Report-QA-PDF-Export-Validators](archive/PR-Deflection-Full-Report-QA-PDF-Export-Validators.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
