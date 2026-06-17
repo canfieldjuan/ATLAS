@@ -67,6 +67,34 @@ on:
       - "tests/test_*billing*.py"
       - "tests/test_*webhook*.py"
       - "tests/test_invoicing*.py"
+      - "tests/*alert*.py"
+      - "tests/*brand*.py"
+      - "tests/*discovery*.py"
+      - "tests/*escalation*.py"
+      - "tests/*event*.py"
+      - "tests/*job*.py"
+      - "tests/*memory*.py"
+      - "tests/*mode*.py"
+      - "tests/*orchestration*.py"
+      - "tests/*pipeline*.py"
+      - "tests/*presence*.py"
+      - "tests/*schema*.py"
+      - "tests/*template*.py"
+      - "tests/*util*.py"
+      - "tests/**/*alert*.py"
+      - "tests/**/*brand*.py"
+      - "tests/**/*discovery*.py"
+      - "tests/**/*escalation*.py"
+      - "tests/**/*event*.py"
+      - "tests/**/*job*.py"
+      - "tests/**/*memory*.py"
+      - "tests/**/*mode*.py"
+      - "tests/**/*orchestration*.py"
+      - "tests/**/*pipeline*.py"
+      - "tests/**/*presence*.py"
+      - "tests/**/*schema*.py"
+      - "tests/**/*template*.py"
+      - "tests/**/*util*.py"
   push:
     branches:
       - main
@@ -113,6 +141,34 @@ on:
       - "atlas_brain/schemas/**"
       - "atlas_brain/templates/**"
       - "atlas_brain/utils/**"
+      - "tests/*alert*.py"
+      - "tests/*brand*.py"
+      - "tests/*discovery*.py"
+      - "tests/*escalation*.py"
+      - "tests/*event*.py"
+      - "tests/*job*.py"
+      - "tests/*memory*.py"
+      - "tests/*mode*.py"
+      - "tests/*orchestration*.py"
+      - "tests/*pipeline*.py"
+      - "tests/*presence*.py"
+      - "tests/*schema*.py"
+      - "tests/*template*.py"
+      - "tests/*util*.py"
+      - "tests/**/*alert*.py"
+      - "tests/**/*brand*.py"
+      - "tests/**/*discovery*.py"
+      - "tests/**/*escalation*.py"
+      - "tests/**/*event*.py"
+      - "tests/**/*job*.py"
+      - "tests/**/*memory*.py"
+      - "tests/**/*mode*.py"
+      - "tests/**/*orchestration*.py"
+      - "tests/**/*pipeline*.py"
+      - "tests/**/*presence*.py"
+      - "tests/**/*schema*.py"
+      - "tests/**/*template*.py"
+      - "tests/**/*util*.py"
 
 jobs:
   maturity-sweep:
@@ -227,6 +283,7 @@ jobs:
 
       - name: Maturity sweep atlas_brain B2a support ratchet gates (blocking)
         run: |
+          set -euo pipefail
           common_sensitive_args=(
             --sensitive-glob '**/billing/**'
             --sensitive-glob '**/billing*'

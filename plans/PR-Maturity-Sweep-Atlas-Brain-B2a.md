@@ -15,10 +15,10 @@ affect runtime support behavior but are not the crown-jewel money/auth/MCP
 paths covered in B1. It keeps the rollout reviewable by leaving the largest and
 riskier remaining `atlas_brain` directories for B2b/C.
 
-The diff is slightly above the 400 LOC soft cap because this slice adds 14
-generated baseline JSON files. Splitting the same support-lane set further
-would reduce line count but make the workflow coverage harder to review as one
-coherent Phase B2a boundary.
+The diff is above the 400 LOC soft cap because this slice adds 14 generated
+baseline JSON files and explicit B2a source/test workflow trigger globs.
+Splitting the same support-lane set further would reduce line count but make the
+workflow coverage harder to review as one coherent Phase B2a boundary.
 
 ## Scope (this PR)
 
@@ -35,7 +35,8 @@ Slice phase: Production hardening
 2. Add one committed ratchet baseline per lane under `tests/maturity_sweep/`
    so the workflow starts green and blocks only new debt.
 3. Extend the maturity-sweep workflow triggers to run when those lanes or their
-   baselines change.
+   baselines change, plus B2a-related tests so test-only regressions cannot
+   bypass the ratchet.
 4. Prove the gates pass against their committed baselines and that a new
    sensitive-path swallowed exception fails in a scratch copy.
 
@@ -47,7 +48,8 @@ Acceptance criteria:
 - `.github/workflows/maturity_sweep_advisory.yml` runs blocking ratchet gates
   for every B2a lane with no `continue-on-error`.
 - The workflow `pull_request` and `push` path filters include every B2a source
-  lane and baseline so the gates fire on relevant changes.
+  lane, baseline, and B2a-related test glob so the gates fire on relevant
+  changes.
 - Existing B1 gates and baselines remain intact.
 - No `scripts/maturity_sweep.py` detector or ratchet logic changes in this
   slice.
@@ -59,6 +61,8 @@ Affected surfaces:
 Risk areas:
 - Workflow path filters that accidentally omit a lane, turning a gate into a
   no-op on source changes.
+- Workflow path filters that omit B2a tests, turning test-only regressions into
+  no-op PRs for this gate.
 - Baseline paths mismatched to lane paths.
 - Over-broad sensitive globs that make the lane red on arrival, or under-broad
   globs that miss obvious auth/webhook/billing/delete filenames inside support
@@ -145,6 +149,9 @@ Parked hardening: none.
 - B2a ratchet loop over `alerts brand discovery escalation events jobs memory
   modes orchestration pipelines presence schemas templates utils` -- each lane
   printed `ratchet gate passed: no new brittleness above baseline`.
+- Path-filter spot check: `tests/test_brand_voice_validator.py` is covered by
+  the B2a test glob `tests/*brand*.py`, closing the Codex trigger-gap
+  finding.
 - Scratch sensitive-path proof: temporarily added a swallowed exception to
   `atlas_brain/templates/email/invoice.py`; the templates gate exited 1 with
   `new sensitive-path SWALLOWED_EXCEPT (0 -> 1)`, then the scratch function was
@@ -154,8 +161,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/maturity_sweep_advisory.yml` | 81 |
-| `plans/PR-Maturity-Sweep-Atlas-Brain-B2a.md` | 173 |
+| `.github/workflows/maturity_sweep_advisory.yml` | 138 |
+| `plans/PR-Maturity-Sweep-Atlas-Brain-B2a.md` | 180 |
 | `tests/maturity_sweep/baseline_atlas_brain_alerts.json` | 21 |
 | `tests/maturity_sweep/baseline_atlas_brain_brand.json` | 8 |
 | `tests/maturity_sweep/baseline_atlas_brain_discovery.json` | 23 |
@@ -170,4 +177,4 @@ Parked hardening: none.
 | `tests/maturity_sweep/baseline_atlas_brain_schemas.json` | 1 |
 | `tests/maturity_sweep/baseline_atlas_brain_templates.json` | 37 |
 | `tests/maturity_sweep/baseline_atlas_brain_utils.json` | 21 |
-| **Total** | **496** |
+| **Total** | **560** |
