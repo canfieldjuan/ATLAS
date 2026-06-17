@@ -701,6 +701,91 @@ def test_source_rows_do_not_admit_private_note_aliases_as_customer_text(
     assert "missing_source_text" in [warning.code for warning in loaded.warnings]
 
 
+@pytest.mark.parametrize(
+    ("field", "text"),
+    (
+        ("actionbody", "Customer cannot download the invoice PDF."),
+        ("Action Body", "Customer cannot reset the account password."),
+        ("Ticket Description", "The customer cannot export the weekly report."),
+    ),
+)
+def test_source_rows_admit_observed_export_body_aliases(
+    field: str,
+    text: str,
+) -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "observed-1",
+        field: text,
+    }], default_fields={
+        "company_name": "Acme Logistics",
+        "vendor_name": "Atlas",
+        "contact_email": "ops@example.com",
+    })
+
+    assert loaded.warnings == ()
+    assert len(loaded.opportunities) == 1
+    assert loaded.opportunities[0]["evidence"] == [{
+        "text": text,
+        "source_id": "observed-1",
+        "source_type": "support_ticket",
+    }]
+
+
+@pytest.mark.parametrize(
+    "privacy_field",
+    (
+        {"is_private": "1.0"},
+        {"is_private": True},
+        {"is_internal": "yes"},
+        {"public": "0.0"},
+        {"public": 0},
+        {"public": 0.0},
+        {"is_public": False},
+    ),
+)
+def test_source_rows_skip_observed_body_alias_when_row_is_private(
+    privacy_field: dict[str, object],
+) -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "observed-private-1",
+        "actionbody": "Do not publish this internal workaround.",
+        **privacy_field,
+    }], default_fields={
+        "company_name": "Acme Logistics",
+        "vendor_name": "Atlas",
+        "contact_email": "ops@example.com",
+    })
+
+    assert loaded.opportunities == ()
+    assert [warning.as_dict() for warning in loaded.warnings] == [{
+        "code": "private_source_text",
+        "row_index": 1,
+        "field": "text",
+        "message": "Skipped source row because it is marked private/internal.",
+    }]
+
+
+@pytest.mark.parametrize("field", ("internal", "private"))
+def test_source_rows_keep_observed_body_alias_with_benign_private_named_column(
+    field: str,
+) -> None:
+    text = "Customer cannot download the invoice PDF."
+
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "observed-public-1",
+        "actionbody": text,
+        field: "1",
+    }], default_fields={
+        "company_name": "Acme Logistics",
+        "vendor_name": "Atlas",
+        "contact_email": "ops@example.com",
+    })
+
+    assert [warning.code for warning in loaded.warnings] == []
+    assert len(loaded.opportunities) == 1
+    assert loaded.opportunities[0]["evidence"][0]["text"] == text
+
+
 def test_source_rows_do_not_admit_machine_json_payload_as_customer_text() -> None:
     loaded = source_rows_to_campaign_opportunities([{
         "ticket_id": "zd-1",

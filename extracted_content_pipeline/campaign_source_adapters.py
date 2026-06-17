@@ -135,6 +135,9 @@ _TEXT_KEYS = (
     "message",
     "description",
     "issue_description",
+    "ticket_description",
+    "actionbody",
+    "action_body",
     "requester_comment",
     "customer_comment",
     "customer_message",
@@ -208,6 +211,14 @@ _PRIVATE_TEXT_KEYS = (
     "internal_comments",
     "private_comment",
     "private_comments",
+)
+_PRIVATE_ROW_KEYS = (
+    "is_private",
+    "is_internal",
+)
+_PUBLIC_ROW_KEYS = (
+    "public",
+    "is_public",
 )
 _SOURCE_TYPE_KEYS = ("source_type", "type", "kind")
 _SOURCE_TITLE_KEYS = (
@@ -819,6 +830,14 @@ def source_row_to_campaign_opportunity(
 
     lookup = _SourceFieldLookup(row)
     warnings: list[CampaignOpportunityWarning] = []
+    if _is_private_source_row(lookup):
+        warnings.append(CampaignOpportunityWarning(
+            code="private_source_text",
+            row_index=row_index,
+            field="text",
+            message="Skipped source row because it is marked private/internal.",
+        ))
+        return {}, tuple(warnings)
     text, machine_payload_seen = _source_text(lookup)
     if not text:
         if machine_payload_seen:
@@ -1344,6 +1363,30 @@ def _is_private_source_text_key(key: str) -> bool:
         ):
             return True
     return False
+
+
+def _is_private_source_row(row: Mapping[str, Any]) -> bool:
+    for key in _PRIVATE_ROW_KEYS:
+        if _is_truthy_marker(_field_value(row, key)):
+            return True
+    for key in _PUBLIC_ROW_KEYS:
+        if _is_falsey_marker(_field_value(row, key)):
+            return True
+    return False
+
+
+def _is_truthy_marker(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "1.0", "true", "yes", "y"}
+
+
+def _is_falsey_marker(value: Any) -> bool:
+    if isinstance(value, bool):
+        return not value
+    text = str(value if value is not None else "").strip().lower()
+    return text in {"0", "0.0", "false", "no", "n"}
 
 
 def _preserved_source_value(key: str, value: Any) -> Any:

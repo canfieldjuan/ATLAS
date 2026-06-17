@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from extracted_content_pipeline.ingestion_diagnostics import inspect_ingestion_file
 
 
@@ -322,6 +324,90 @@ def test_inspect_source_csv_warns_when_partial_upload_has_machine_json_row(
         "skipped_source_row_count": 1,
         "usable_source_ratio": 0.5,
     }]
+
+
+@pytest.mark.parametrize(
+    ("header", "text"),
+    (
+        ("actionbody", "Customer cannot download the invoice PDF."),
+        ("Ticket Description", "The customer cannot export the weekly report."),
+    ),
+)
+def test_inspect_source_csv_accepts_observed_export_body_aliases(
+    tmp_path: Path,
+    header: str,
+    text: str,
+) -> None:
+    path = tmp_path / "observed-body-alias.csv"
+    path.write_text(
+        f"Ticket ID,{header}\n"
+        f"T-1,{text}\n",
+        encoding="utf-8",
+    )
+
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+        sample_limit=1,
+        default_fields={
+            "company_name": "Acme Logistics",
+            "vendor_name": "Atlas",
+            "contact_email": "ops@example.com",
+        },
+    ).as_dict()
+
+    admission = payload["source_row_admission"]
+    assert payload["ok"] is True
+    assert payload["warning_counts"] == {}
+    assert admission["raw_source_row_count"] == 1
+    assert admission["usable_source_row_count"] == 1
+    assert admission["usable_source_ratio"] == 1.0
+    assert admission["mapped_fields"] == {
+        "source_id": ["Ticket ID"],
+        "source_text": [header],
+    }
+    assert admission["admission_decision"] == {"status": "ACCEPT"}
+    assert admission.get("coverage_warnings", []) == []
+
+
+def test_inspect_source_csv_rejects_observed_body_alias_when_row_is_private(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "private-observed-body-alias.csv"
+    path.write_text(
+        "Ticket ID,actionbody,is_private\n"
+        "T-1,Do not publish this internal workaround.,1.0\n",
+        encoding="utf-8",
+    )
+
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+        sample_limit=1,
+        default_fields={
+            "company_name": "Acme Logistics",
+            "vendor_name": "Atlas",
+            "contact_email": "ops@example.com",
+        },
+    ).as_dict()
+
+    admission = payload["source_row_admission"]
+    assert payload["ok"] is False
+    assert payload["warning_counts"] == {"private_source_text": 1}
+    assert admission["raw_source_row_count"] == 1
+    assert admission["usable_source_row_count"] == 0
+    assert admission["usable_source_ratio"] == 0.0
+    assert admission["mapped_fields"] == {
+        "source_id": ["Ticket ID"],
+        "source_text": ["actionbody"],
+    }
+    assert admission["admission_decision"] == {
+        "status": "REJECT",
+        "reason": "no_usable_source_rows",
+        "location": "source_row_csv",
+    }
 
 
 def test_inspect_source_csv_sample_limit_does_not_make_known_aliases_unmapped(
