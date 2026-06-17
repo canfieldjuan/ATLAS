@@ -43,15 +43,6 @@ register under `docs/technical-debt/`.
 
 ## 2026-06-16
 
-### Add controlled Gitleaks baseline rotation escape hatch
-- File/location: `.github/workflows/security_guardrails.yml`, `gitleaks-baseline-guard`
-- Description: The baseline guard blocks all PR changes to `docs/security/gitleaks-baseline.json`, but its failure message references a dedicated security rotation PR. Add an explicit controlled path, such as requiring a `security-rotation` label plus narrow path ownership, so legitimate post-rotation baseline changes are possible without weakening normal PR protection.
-- Why it matters: The guard correctly prevents baseline poisoning, but without a controlled escape hatch a legitimate provider rotation or history rewrite can get stuck behind the same protection.
-- Effort: S
-- Category: security
-- Owner/session: Codex security/workflow
-- Found during: PR-Security-Guardrail-CI review
-
 ### Rotate archived IndexNow key
 - File/location: Historical `atlas-intel-next` / `_ARCHIVED_atlas-intel-next/scripts/indexnow.ts`
 - Description: The archived IndexNow script previously contained a real IndexNow key. The branch tip now requires `INDEXNOW_KEY`, but the old key remains in git history and should be rotated or replaced at the IndexNow key-hosting location.
