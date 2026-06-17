@@ -314,6 +314,40 @@ _RESOLUTION_ACTION_TERMS = {
     "update",
     "verify",
 }
+_SEMANTIC_SUPPORT_REQUEST_ACTION_TERMS = frozenset(
+    (
+        _RESOLUTION_ACTION_TERMS
+        | {
+            "access",
+            "invite",
+            "login",
+        }
+    )
+    - {
+        "ask",
+        "check",
+        "contact",
+        "open",
+        "review",
+        "send",
+    }
+)
+_SEMANTIC_SUPPORT_SUBJECT_TERMS = frozenset(
+    _SEMANTIC_SUPPORT_REQUEST_ACTION_TERMS
+    | {
+        "billing",
+        "dashboard",
+        "email",
+        "export",
+        "invoice",
+        "login",
+        "password",
+        "payment",
+        "profile",
+        "report",
+        "setting",
+    }
+)
 _RESOLUTION_ACTION_IRREGULAR_PAST_TERMS = {
     "chose": "choose",
     "ran": "run",
@@ -2569,11 +2603,17 @@ def _question_text_matching(
                 normalized = _first_person_issue_question_text(tail, predicate=predicate)
                 if normalized:
                     return normalized
+                normalized = _semantic_support_issue_question_text(tail, predicate=predicate)
+                if normalized:
+                    return normalized
             continue
         normalized = _question_start_text(text, predicate=predicate)
         if normalized:
             return normalized
         normalized = _first_person_issue_question_text(text, predicate=predicate)
+        if normalized:
+            return normalized
+        normalized = _semantic_support_issue_question_text(text, predicate=predicate)
         if normalized:
             return normalized
     return ""
@@ -2655,6 +2695,8 @@ def _question_start_text(
         "como ",
     )
     lowered = text.lower()
+    if lowered.startswith("can not "):
+        return ""
     if lowered.startswith(question_starts):
         normalized = _normalize_question_text(text)
         if resolved_predicate(normalized):
@@ -2713,6 +2755,82 @@ def _first_person_issue_question_text(
             if resolved_predicate(normalized):
                 return normalized
     return ""
+
+
+def _semantic_support_issue_question_text(
+    text: str,
+    *,
+    predicate: Callable[[str], bool] | None = None,
+) -> str:
+    resolved_predicate = predicate or _usable_question
+    sentence = _first_sentence(text)
+    if not sentence:
+        return ""
+    lowered = sentence.lower()
+    unable_patterns = (
+        ("unable to ", "How do I "),
+        ("cannot ", "How do I "),
+        ("can't ", "How do I "),
+        ("can not ", "How do I "),
+    )
+    for prefix, question_prefix in unable_patterns:
+        if lowered.startswith(prefix):
+            remainder = sentence[len(prefix):].strip()
+            if not _starts_with_semantic_support_action(remainder):
+                return ""
+            normalized = _normalize_question_text(f"{question_prefix}{remainder}")
+            if resolved_predicate(normalized):
+                return normalized
+
+    for prefix in ("please ", "pls "):
+        if lowered.startswith(prefix):
+            remainder = sentence[len(prefix):].strip()
+            if not _starts_with_semantic_support_action(remainder):
+                return ""
+            normalized = _normalize_question_text(f"How do I {remainder}")
+            if resolved_predicate(normalized):
+                return normalized
+
+    if _is_semantic_support_keep_failing_issue(sentence):
+        normalized = _normalize_question_text(
+            f"What should I do if {sentence[0].lower()}{sentence[1:]}"
+        )
+        if resolved_predicate(normalized):
+            return normalized
+    return ""
+
+
+def _starts_with_semantic_support_action(value: str) -> bool:
+    lowered = value.lower().strip()
+    if re.match(r"^(?:log|logging)\s+in\b", lowered):
+        return True
+    tokens = re.findall(r"[a-z0-9]+", lowered)
+    return (
+        bool(tokens)
+        and _semantic_support_token(tokens[0]) in _SEMANTIC_SUPPORT_REQUEST_ACTION_TERMS
+    )
+
+
+def _is_semantic_support_keep_failing_issue(value: str) -> bool:
+    match = re.match(r"^(?P<subject>.+?)\s+keeps?\s+failing\b", value.lower().strip())
+    if match is None:
+        return False
+    subject = re.sub(r"^(?:a|an|the)\s+", "", match.group("subject").strip())
+    tokens = re.findall(r"[a-z0-9]+", subject)
+    return any(
+        _semantic_support_token(token) in _SEMANTIC_SUPPORT_SUBJECT_TERMS
+        for token in tokens
+    )
+
+
+def _semantic_support_token(value: str) -> str:
+    if value == "logging":
+        return "login"
+    if value.endswith("ies") and len(value) > 3:
+        return f"{value[:-3]}y"
+    if value.endswith("s") and not value.endswith(("ss", "us", "is", "as")):
+        return value[:-1]
+    return value
 
 
 def _first_sentence(text: str) -> str:
