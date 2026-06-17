@@ -26,13 +26,27 @@ Two bumps qualify as low-risk:
   The only dependency is the pure-Python kafka-python, so the bookworm
   (Debian 12) base carries no native-build risk.
 
-## Scope
+## Scope (this PR)
 
 Slice phase: Production hardening
 
 Two one-line FROM edits to existing Dockerfiles. No application code, no
 compose files, no workflow files, no extracted_* changes. The plan doc is the
 only added file.
+
+### Review Contract
+
+Acceptance criteria:
+- Both FROM pins point at supported tags that resolve on their registries.
+- The drone_client image builds and runs on the new base with kafka-python
+  importable.
+- No application code, compose, workflow, or extracted_* files change.
+
+Risk areas:
+- CUDA minor bump on the production brain image: not built locally; the
+  deploy-time docker compose up --build is the real backstop (no CI build).
+- Worker base-OS currency: addressed by moving to bookworm (Debian 12), not
+  EOL buster (Debian 10).
 
 ### Files touched
 
@@ -88,8 +102,9 @@ Held for separate, dev-gated decisions (not in this PR):
 
 ## Estimated diff size
 
-| Area | LOC |
-|---|---|
-| Dockerfile FROM bumps (2 files) | 4 |
-| This plan doc (added) | ~95 |
-| **Total** | **~99** |
+| File | LOC |
+|---|---:|
+| `Dockerfile` | 2 |
+| `atlas_video-processing/ingest/drone_client/Dockerfile` | 2 |
+| `plans/PR-Docker-Baseimage-Security-Bumps.md` | 110 |
+| **Total** | **114** |
