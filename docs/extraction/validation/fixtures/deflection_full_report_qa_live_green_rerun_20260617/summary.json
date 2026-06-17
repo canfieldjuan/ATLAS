@@ -1,0 +1,620 @@
+{
+  "errors": [],
+  "fetches": {
+    "artifact": {
+      "status": 200
+    },
+    "report_model": {
+      "status": 200
+    }
+  },
+  "inputs": {
+    "base_url_present": true,
+    "pdf_bytes_present": true,
+    "pdf_text_present": false,
+    "preflight_only": false,
+    "request_id_present": true,
+    "token_present": true
+  },
+  "ok": true,
+  "pdf_text": {
+    "source": "extracted_from_pdf_bytes",
+    "verified_from_pdf_bytes": true
+  },
+  "schema_version": "deflection_full_report_qa_live_runner.v1",
+  "scorecard": {
+    "artifacts": {
+      "evidence_export": {
+        "evidence_rows": 2,
+        "questions": 2
+      },
+      "pdf": {
+        "bytes": 5436,
+        "text_chars": 3129
+      }
+    },
+    "assertions": [
+      {
+        "actual": "deflection.v1",
+        "expected": "deflection.v1",
+        "id": "model.schema_version",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.support_tax.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.seo_targets.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.ranked_questions.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.question_details.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.complete_evidence.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.support_tax.data.repeat_ticket_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.support_tax.data.non_repeat_ticket_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.support_tax.data.generated_question_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.support_tax.data.assisted_contact_cost.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.support_tax.data.estimated_support_cost.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.support_tax.data.source_date_window.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.support_tax.data.drafted_answer_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.support_tax.data.no_proven_answer_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.support_tax.data.ticket_source_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.seo_targets.data.phrases.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.seo_targets.data.total_phrase_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.seo_targets.data.displayed_phrase_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.seo_targets.data.omitted_phrase_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.seo_targets.data.limit.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.ranked_questions.data.rows.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.question_details.data.rows.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.complete_evidence.data.question_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.complete_evidence.data.evidence_row_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.complete_evidence.data.source_id_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "model.section.complete_evidence.data.surfaces.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "evidence_export.present",
+        "ok": true
+      },
+      {
+        "actual": "deflection_evidence.v1",
+        "expected": "deflection_evidence.v1",
+        "id": "evidence_export.schema_version",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "evidence_export.summary.question_count",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "evidence_export.summary.evidence_row_count",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "evidence_export.summary.source_id_count",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "evidence_export.summary.drafted_answer_count",
+        "ok": true
+      },
+      {
+        "actual": 0,
+        "expected": 0,
+        "id": "evidence_export.summary.no_proven_answer_count",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "evidence_export.questions.present",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "evidence_export.questions.length",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "evidence_export.evidence_rows.present",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "evidence_export.evidence_rows.length",
+        "ok": true
+      },
+      {
+        "actual": {
+          "counts": true,
+          "displayed_rows": false
+        },
+        "expected": "<redacted-string>",
+        "id": "surface.evidence_export.observation_has_data",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "surface.evidence_export.count.drafted_answer_count",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "surface.evidence_export.count.evidence_question_count",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "surface.evidence_export.count.evidence_row_count",
+        "ok": true
+      },
+      {
+        "actual": 0,
+        "expected": 0,
+        "id": "surface.evidence_export.count.no_proven_answer_count",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "surface.evidence_export.count.source_id_count",
+        "ok": true
+      },
+      {
+        "actual": {
+          "counts": true,
+          "displayed_rows": true
+        },
+        "expected": "<redacted-string>",
+        "id": "surface.pdf.observation_has_data",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "surface.pdf.count.drafted_answer_count",
+        "ok": true
+      },
+      {
+        "actual": 0.0,
+        "expected": 0.0,
+        "id": "surface.pdf.count.estimated_support_cost",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "surface.pdf.count.generated_question_count",
+        "ok": true
+      },
+      {
+        "actual": 0,
+        "expected": 0,
+        "id": "surface.pdf.count.no_proven_answer_count",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "surface.pdf.count.ranked_question_count",
+        "ok": true
+      },
+      {
+        "actual": 0,
+        "expected": 0,
+        "id": "surface.pdf.count.repeat_ticket_count",
+        "ok": true
+      },
+      {
+        "actual": 3,
+        "expected": 3,
+        "id": "surface.pdf.count.ticket_source_count",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "surface.pdf.displayed_rows.question_details",
+        "ok": true
+      },
+      {
+        "actual": 2,
+        "expected": 2,
+        "id": "surface.pdf.displayed_rows.ranked_questions",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.pdf.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.pdf.count.repeat_ticket_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.pdf.count.generated_question_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.pdf.count.ranked_question_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.pdf.count.drafted_answer_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.pdf.count.no_proven_answer_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.pdf.count.ticket_source_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.pdf.count.estimated_support_cost.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.pdf.displayed_rows.question_details.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.pdf.displayed_rows.ranked_questions.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.evidence_export.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.evidence_export.count.evidence_question_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.evidence_export.count.evidence_row_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.evidence_export.count.source_id_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.evidence_export.count.drafted_answer_count.present",
+        "ok": true
+      },
+      {
+        "actual": true,
+        "expected": true,
+        "id": "harness.surface.evidence_export.count.no_proven_answer_count.present",
+        "ok": true
+      },
+      {
+        "actual": "present",
+        "expected": "%PDF-",
+        "id": "artifact.pdf.bytes.header",
+        "ok": true
+      },
+      {
+        "actual": 5436,
+        "expected": ">=32 bytes",
+        "id": "artifact.pdf.bytes.minimum_size",
+        "ok": true
+      },
+      {
+        "actual": "present",
+        "expected": "present",
+        "id": "artifact.pdf.text.marker.support_tax_confirmation",
+        "ok": true
+      },
+      {
+        "actual": "present",
+        "expected": "present",
+        "id": "artifact.pdf.text.marker.ranked_question_opportunities",
+        "ok": true
+      },
+      {
+        "actual": "present",
+        "expected": "present",
+        "id": "artifact.pdf.text.marker.question_details_and_evidence",
+        "ok": true
+      },
+      {
+        "actual": "present",
+        "expected": "present",
+        "id": "artifact.pdf.text.marker.complete_evidence_export",
+        "ok": true
+      },
+      {
+        "actual": "visible",
+        "expected": 0,
+        "id": "artifact.pdf.text.count.repeat_ticket_count",
+        "ok": true
+      },
+      {
+        "actual": "visible",
+        "expected": 2,
+        "id": "artifact.pdf.text.count.generated_question_count",
+        "ok": true
+      },
+      {
+        "actual": "visible",
+        "expected": 2,
+        "id": "artifact.pdf.text.count.ranked_question_count",
+        "ok": true
+      },
+      {
+        "actual": "visible",
+        "expected": 2,
+        "id": "artifact.pdf.text.count.drafted_answer_count",
+        "ok": true
+      },
+      {
+        "actual": "visible",
+        "expected": 0,
+        "id": "artifact.pdf.text.count.no_proven_answer_count",
+        "ok": true
+      },
+      {
+        "actual": "visible",
+        "expected": 3,
+        "id": "artifact.pdf.text.count.ticket_source_count",
+        "ok": true
+      },
+      {
+        "actual": "visible",
+        "expected": 0.0,
+        "id": "artifact.pdf.text.count.estimated_support_cost",
+        "ok": true
+      },
+      {
+        "actual": "absent",
+        "expected": "absent",
+        "id": "artifact.pdf.leak.request_id",
+        "ok": true
+      },
+      {
+        "actual": "absent",
+        "expected": "absent",
+        "id": "artifact.pdf.leak.result_url",
+        "ok": true
+      },
+      {
+        "actual": "absent",
+        "expected": "absent",
+        "id": "artifact.pdf.leak.customer_email",
+        "ok": true
+      },
+      {
+        "actual": "absent",
+        "expected": "absent",
+        "id": "artifact.pdf.leak.absolute_local_path",
+        "ok": true
+      },
+      {
+        "actual": "absent",
+        "expected": "absent",
+        "id": "artifact.pdf.leak.stripe_checkout_session_id",
+        "ok": true
+      },
+      {
+        "actual": "absent",
+        "expected": "absent",
+        "id": "artifact.pdf.leak.stripe_payment_intent_id",
+        "ok": true
+      },
+      {
+        "actual": "absent",
+        "expected": "absent",
+        "id": "artifact.pdf.leak.private_note",
+        "ok": true
+      },
+      {
+        "actual": "absent",
+        "expected": "absent",
+        "id": "artifact.pdf.leak.raw_evidence_quote",
+        "ok": true
+      },
+      {
+        "actual": "absent",
+        "expected": "absent",
+        "id": "artifact.pdf.leak.source_id_list",
+        "ok": true
+      }
+    ],
+    "counts": {
+      "drafted_answer_count": 2,
+      "estimated_support_cost": 0.0,
+      "evidence_question_count": 2,
+      "evidence_row_count": 2,
+      "generated_question_count": 2,
+      "no_proven_answer_count": 0,
+      "outcome_diagnostic_row_count": 0,
+      "question_detail_count": 2,
+      "ranked_question_count": 2,
+      "repeat_ticket_count": 0,
+      "seo_displayed_phrase_count": 2,
+      "seo_omitted_phrase_count": 0,
+      "seo_total_phrase_count": 2,
+      "source_id_count": 2,
+      "ticket_source_count": 3
+    },
+    "ok": true,
+    "schema_version": "deflection_full_report_qa_scorecard.v1",
+    "surfaces": {
+      "observed": [
+        "evidence_export",
+        "pdf"
+      ],
+      "required": [
+        "pdf",
+        "evidence_export"
+      ]
+    }
+  }
+}
