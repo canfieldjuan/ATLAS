@@ -17,6 +17,14 @@ registry-level snapshot/report unification: it does not remove the double-edit,
 but it converts "we forgot to update the snapshot" from a silent paywall leak
 into a failing test. It is intentionally test-only.
 
+The estimate is slightly over the 400 LOC soft cap. The overage is indivisible:
+the in-test fixture, the positive derivation assertions, and the failure-first
+negative leak cases are one guarantee -- a guard that asserts coverage without
+also proving (via injected leaks) that its own detector bites would be a false
+sense of safety, so splitting the negatives into a follow-up would ship an
+unverified guard. The CI-enrollment edit must also land in the same PR, because
+a drift guard that does not run in CI protects nothing.
+
 ## Scope (this PR)
 
 Ownership lane: content-ops/deflection-full-report-qa
@@ -36,9 +44,12 @@ Slice phase: Production hardening
 6. Include failure-first negative tests proving the detector flags an injected
    `source_ids` leak in `top_questions` and an `answer` body leak in a teaser
    preview.
+7. Enroll the new test in CI by adding it to the path filters and pytest
+   invocation of `.github/workflows/atlas_content_ops_deflection_report_checks.yml`.
 
 ### Files touched
 
+- `.github/workflows/atlas_content_ops_deflection_report_checks.yml`
 - `plans/PR-Deflection-Snapshot-Report-Drift-Test.md`
 - `tests/test_deflection_snapshot_report_drift.py`
 
@@ -98,15 +109,19 @@ Parked hardening: none.
 - Drift-catch proof: injecting `source_ids` into the snapshot top-question
   projection turns `test_snapshot_has_no_forbidden_paid_fields` red
   (`$.top_questions[0].source_ids`); reverting restores green.
+- CI enrollment: the exact workflow pytest invocation (with the new file added)
+  -- 45 passed, 3 skipped (pre-existing live-runner skips).
 - Command: `python -m pytest tests/test_deflection_snapshot_report_drift.py
   tests/test_content_ops_deflection_report.py
   tests/test_smoke_content_ops_deflection_submit_handoff.py -q` -- 125 passed.
 - ASCII gate: `scripts/check_ascii_python.sh` -- passed.
+- Workflow YAML: `yaml.safe_load` of the edited workflow -- OK.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Deflection-Snapshot-Report-Drift-Test.md` | 110 |
-| `tests/test_deflection_snapshot_report_drift.py` | 295 |
-| **Total** | **405** |
+| `.github/workflows/atlas_content_ops_deflection_report_checks.yml` | 3 |
+| `plans/PR-Deflection-Snapshot-Report-Drift-Test.md` | 128 |
+| `tests/test_deflection_snapshot_report_drift.py` | 286 |
+| **Total** | **417** |

@@ -16,6 +16,7 @@ on:
       - "scripts/check_deflection_full_report_pdf_export_artifacts.py"
       - "scripts/run_deflection_full_report_qa_live_runner.py"
       - "tests/test_content_ops_deflection_report.py"
+      - "tests/test_deflection_snapshot_report_drift.py"
       - "tests/test_extracted_content_ops_live_execute_harness.py"
       - "tests/test_extracted_ticket_faq_markdown.py"
       - "tests/test_run_deflection_full_report_qa_live_runner.py"
@@ -34,6 +35,7 @@ on:
       - "scripts/check_deflection_full_report_pdf_export_artifacts.py"
       - "scripts/run_deflection_full_report_qa_live_runner.py"
       - "tests/test_content_ops_deflection_report.py"
+      - "tests/test_deflection_snapshot_report_drift.py"
       - "tests/test_extracted_content_ops_live_execute_harness.py"
       - "tests/test_extracted_ticket_faq_markdown.py"
       - "tests/test_run_deflection_full_report_qa_live_runner.py"
@@ -66,6 +68,7 @@ jobs:
             tests/test_extracted_ticket_faq_markdown.py::test_build_ticket_faq_markdown_condenses_overflow_sources_instead_of_truncating \
             tests/test_extracted_content_ops_live_execute_harness.py::test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot_top_n \
             tests/test_content_ops_deflection_report.py::test_deflection_report_cli_ignores_legacy_max_items_cap \
+            tests/test_deflection_snapshot_report_drift.py \
             tests/test_run_deflection_full_report_qa_live_runner.py \
             tests/test_smoke_content_ops_deflection_pdf_export_validators.py \
             -q

@@ -47,12 +47,6 @@ sys.modules[_SPEC.name] = SMOKE
 _SPEC.loader.exec_module(SMOKE)
 
 
-_TEASER_FULL_ANSWER_PATHS = (
-    ("teaser", "full_answer", "answer"),
-    ("teaser", "full_answer", "steps"),
-)
-
-
 def _drift_fixture_result() -> TicketFAQMarkdownResult:
     """Two scoped proven items + two review items so the snapshot exercises
     top_questions, locked_questions, the teaser full answer, and a preview."""
@@ -189,12 +183,27 @@ def test_snapshot_summary_is_derived_from_report(artifact_snapshot) -> None:
 def test_snapshot_top_questions_match_report_ranked_rows(artifact_snapshot) -> None:
     _, snapshot, _, sections = artifact_snapshot
     ranked = _rows_by_rank(sections.get("ranked_questions"))
+    items_by_rank = {
+        rank: item for rank, item in enumerate(_drift_fixture_result().items, start=1)
+    }
 
     assert snapshot["top_questions"], "expected top questions in the snapshot"
     for question in snapshot["top_questions"]:
+        # Pin the full contracted top-question shape, every field to its source,
+        # so corrupting weighted_frequency or customer_wording also fails drift.
+        assert set(question) == {
+            "rank",
+            "question",
+            "ticket_count",
+            "weighted_frequency",
+            "customer_wording",
+        }
         row = ranked[question["rank"]]
+        item = items_by_rank[question["rank"]]
         assert question["question"] == row["question"]
         assert question["ticket_count"] == row["ticket_count"]
+        assert question["weighted_frequency"] == item["weighted_frequency"]
+        assert question["customer_wording"] == item["customer_wording"]
 
 
 def test_snapshot_locked_questions_expose_rank_and_count_only(artifact_snapshot) -> None:
@@ -266,8 +275,10 @@ def test_drift_detector_flags_answer_leak_outside_teaser_full_answer(
     teaser = dict(snapshot["teaser"])
     # An answer body in a preview (not the full_answer) must still be a leak.
     previews = [dict(p) for p in teaser.get("previews", ())]
-    if not previews:
-        pytest.skip("fixture produced no teaser previews to mutate")
+    # Fail closed: the fixture is built to produce a preview, so the guarantee
+    # that a preview answer-body leak is detected must not silently vanish if a
+    # future change stops producing previews.
+    assert previews, "fixture must produce a teaser preview to exercise the leak guard"
     previews[0]["answer"] = "leaked body text"
     teaser["previews"] = previews
     leaked["teaser"] = teaser
