@@ -9,7 +9,9 @@ detector so the paywall-leak half cannot fork its own denylist.
 
 The boundary policy under test (see docs/frontend/content_ops_faq_report_contract.md):
 - snapshot ranked coverage equals the report's ranked questions, no more/fewer;
-- top_questions carry only index-safe fields, derived from the report rows;
+- top_questions carry only index-safe fields: question/ticket_count are pinned to
+  the report ranked rows, and weighted_frequency/customer_wording to the source
+  FAQ items they project from (the report model does not re-expose those two);
 - locked_questions expose rank + ticket_count only (never question text);
 - the single teaser full answer is a genuinely scoped resolution_evidence row;
 - no paid body/evidence field appears outside $.teaser.full_answer.
