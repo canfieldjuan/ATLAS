@@ -25,7 +25,11 @@ Slice phase: Production hardening
    `atlas_brain`, `scripts`, and `extracted_content_pipeline`.
 4. Add a blocking AI content-ops lane ratchet over non-deflection
    `content_ops` Python files in `atlas_brain` and `scripts`.
-5. Commit baselines for both focused lanes.
+5. Add a blocking manifest check for the deployed/non-Python deflection
+   product surface: portfolio UI pages/API routes, Vercel rewrite, frontend
+   contracts/examples, atlas-intel report UI model/test, and deflection SQL
+   migrations.
+6. Commit baselines for both focused Python lanes.
 
 ### Review Contract
 
@@ -39,10 +43,14 @@ Acceptance criteria:
   existing directory sweep behavior untouched.
 - Baseline paths are normalized so Windows-generated baselines compare cleanly
   in Ubuntu CI.
+- The production product surface is explicitly listed and changes fail unless
+  the manifest is updated intentionally.
 
 Affected surfaces:
 - `.github/workflows/maturity_sweep_deflection_content_ops.yml`
+- `scripts/check_deflection_product_surface_manifest.py`
 - `scripts/maturity_sweep_file_lane.py`
+- `tests/maturity_sweep/deflection_product_surface_manifest.json`
 - `tests/maturity_sweep/baseline_deflection_lane.json`
 - `tests/maturity_sweep/baseline_ai_content_ops_lane.json`
 
@@ -61,6 +69,8 @@ Reviewer rules triggered:
 - `extracted_content_pipeline/**` remains covered by its existing broad gate;
   the new deflection lane includes deflection-specific files there so the
   product slice can be reviewed as one lane.
+- The non-Python production product surface is a manifest/enrollment check, not
+  a structural Python maturity score.
 - The AI content-ops lane excludes deflection-named files so it does not
   double-own the deflection-specific gate.
 - This does not enroll every script or every root `atlas_brain` module; those
@@ -77,6 +87,8 @@ Parked hardening: none.
 
 - `python scripts/maturity_sweep_file_lane.py <deflection files> --tests-root tests --baseline tests/maturity_sweep/baseline_deflection_lane.json --update-baseline` - pass, 21 files.
 - `python scripts/maturity_sweep_file_lane.py <ai content ops files> --tests-root tests --baseline tests/maturity_sweep/baseline_ai_content_ops_lane.json --update-baseline` - pass, 68 files.
+- `python scripts/check_deflection_product_surface_manifest.py` - pass, 30 files.
 - `python -m py_compile scripts/maturity_sweep_file_lane.py` - pass.
+- `python -m py_compile scripts/check_deflection_product_surface_manifest.py` - pass.
 - Deflection lane ratchet command - pass.
 - AI content-ops lane ratchet command - pass.
