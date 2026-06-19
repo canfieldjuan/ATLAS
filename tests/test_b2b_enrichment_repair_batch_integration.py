@@ -10,6 +10,11 @@ from atlas_brain.autonomous.tasks import b2b_enrichment_repair as repair_mod
 from atlas_brain.autonomous.tasks.b2b_scrape_intake import _INSERT_SQL
 from atlas_brain.config import settings
 
+# Every test in this module exercises real SQL via the db_pool fixture
+# (live Postgres). Mark the module integration so the unit backstop
+# (`not integration and not e2e`) does not run it without a database.
+pytestmark = pytest.mark.integration
+
 
 def _configure_repair_batch_settings(monkeypatch) -> None:
     monkeypatch.setattr(settings.b2b_churn, "enabled", True, raising=False)

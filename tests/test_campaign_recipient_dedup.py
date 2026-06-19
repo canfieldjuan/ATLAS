@@ -22,6 +22,11 @@ from atlas_brain.autonomous.tasks.campaign_suppression import (
     attach_recipient_strict,
 )
 
+# Every test in this module exercises real SQL via the db_pool fixture
+# (live Postgres). Mark the module integration so the unit backstop
+# (`not integration and not e2e`) does not run it without a database.
+pytestmark = pytest.mark.integration
+
 
 @pytest_asyncio.fixture
 async def cleanup_sequences(db_pool):

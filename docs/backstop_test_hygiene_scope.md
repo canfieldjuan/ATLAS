@@ -15,24 +15,29 @@ dep.
 
 ---
 
-## Slice A -- Mark mislabeled DB-backed tests as `integration`
+## Slice A -- Mark mislabeled DB-backed tests as `integration`  [DONE]
 
-~8 test files use the `db_pool` fixture (a real Postgres pool) but carry no
-`integration` marker, so `not integration and not e2e` runs them against a
+Tests that use the `db_pool` fixture (a real Postgres pool) but carry no
+`integration` marker get run by `not integration and not e2e` against a
 database that isn't there. They are integration tests; mark them so.
 
-Candidates (verify each genuinely needs a live DB vs a mocked pool first):
-- `tests/test_b2b_enrichment_batch_integration.py`  (name says integration, not marked)
-- `tests/test_b2b_enrichment_repair_batch_integration.py`  (same)
-- `tests/test_campaign_recipient_dedup.py`
-- `tests/test_evidence_gate.py`
-- `tests/test_session_id_normalization.py`
-- `tests/test_default_task_seeding.py`
-- `tests/test_voice_session_reuse.py`
-- `tests/test_entity_context.py`
+Auditing the original candidate list corrected it (verify-before-marking
+paid off):
 
-Fix: module-level `pytestmark = pytest.mark.integration` (or per-test). Risk:
-low/mechanical. Size: small.
+- Already correctly marked (class-level `@pytest.mark.integration`), no
+  change needed: `test_session_id_normalization`, `test_default_task_seeding`,
+  `test_voice_session_reuse`, `test_entity_context`.
+- Wholly DB-bound -> module-level `pytestmark = pytest.mark.integration`:
+  `test_b2b_enrichment_batch_integration`,
+  `test_b2b_enrichment_repair_batch_integration`,
+  `test_campaign_recipient_dedup`.
+- **Mixed** file -> per-test markers on the five `db_pool` tests only,
+  leaving the pure-function tests (which use an in-test `_NullPool` stub) in
+  the backstop: `test_evidence_gate`.
+
+Risk: low/mechanical. Size: small. Landed: module markers on 3 files,
+per-test markers on 5 tests in `test_evidence_gate`; the 6 pure-unit tests
+there stay in the backstop.
 
 ## Slice B -- Fix the never-run invoicing MCP/OAuth tests (highest value)
 

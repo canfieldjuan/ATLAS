@@ -37,6 +37,7 @@ def test_rank_floor_case_insensitive():
     assert _rank_floor("Weak") == 1
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_audit_returns_zero_for_empty_review_ids(db_pool):
     result = await audit_witness_evidence_coverage(
@@ -50,6 +51,7 @@ async def test_audit_returns_zero_for_empty_review_ids(db_pool):
     assert result["coverage_ratio"] == 1.0
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_audit_returns_zero_for_empty_vendor(db_pool):
     result = await audit_witness_evidence_coverage(
@@ -133,6 +135,7 @@ async def _seed_claim(
     )
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_audit_counts_strong_backed_review_ids(db_pool, cleanup_claims):
     vendor = f"vendor-{uuid4().hex[:8]}"
@@ -160,6 +163,7 @@ async def test_audit_counts_strong_backed_review_ids(db_pool, cleanup_claims):
     assert result["coverage_ratio"] == round(1 / 3, 3)
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_audit_loosened_to_weak_includes_weak_claims(db_pool, cleanup_claims):
     vendor = f"vendor-{uuid4().hex[:8]}"
@@ -184,6 +188,7 @@ async def test_audit_loosened_to_weak_includes_weak_claims(db_pool, cleanup_clai
     assert str(unbacked_rid) not in result["covered_review_ids"]
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_audit_ignores_invalid_status_rows(db_pool, cleanup_claims):
     vendor = f"vendor-{uuid4().hex[:8]}"

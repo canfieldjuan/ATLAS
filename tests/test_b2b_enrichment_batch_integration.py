@@ -17,6 +17,11 @@ from atlas_brain.services.b2b.cache_runner import (
 from atlas_brain.services.b2b.llm_exact_cache import compute_cache_key
 from atlas_brain.skills import get_skill_registry
 
+# Every test in this module exercises real SQL via the db_pool fixture
+# (live Postgres). Mark the module integration so the unit backstop
+# (`not integration and not e2e`) does not run it without a database.
+pytestmark = pytest.mark.integration
+
 
 def _configure_batch_settings(monkeypatch, *, tier2_model: str | None = None) -> None:
     monkeypatch.setattr(settings.b2b_churn, "enabled", True, raising=False)
