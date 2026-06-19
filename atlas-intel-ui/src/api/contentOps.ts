@@ -341,6 +341,27 @@ export interface ContentOpsIngestionParseErrorResponse {
   byte?: number
 }
 
+export interface ContentOpsSourceRowAdmissionDecisionResponse {
+  status: string
+  reason?: string
+  location?: string
+  message?: string
+  how_to_fix?: string
+}
+
+export interface ContentOpsSourceRowAdmissionResponse {
+  input_format: string
+  raw_source_row_count: number
+  usable_source_row_count: number
+  usable_source_ratio: number | null
+  mapped_fields: Record<string, string[]>
+  ignored_private_fields: string[]
+  populated_unmapped_fields: string[]
+  field_sample_limit: number
+  admission_decision?: ContentOpsSourceRowAdmissionDecisionResponse
+  coverage_warnings?: Array<Record<string, unknown>>
+}
+
 export interface ContentOpsIngestionDiagnosticsResponse {
   ok: boolean
   mode: 'opportunities' | 'source_rows'
@@ -353,6 +374,7 @@ export interface ContentOpsIngestionDiagnosticsResponse {
   samples: Array<Record<string, unknown>>
   source_material?: Array<Record<string, unknown>>
   warnings: ContentOpsIngestionWarning[]
+  source_row_admission?: ContentOpsSourceRowAdmissionResponse
   parse_error?: ContentOpsIngestionParseErrorResponse
 }
 

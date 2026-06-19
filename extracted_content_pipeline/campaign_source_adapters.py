@@ -384,6 +384,13 @@ class SourceRowAdmissionDiagnostics:
                 "status": "REJECT",
                 "reason": "no_usable_source_rows",
                 "location": "source_row_csv",
+                "message": "No usable support-ticket text was found in this file.",
+                "how_to_fix": (
+                    "Re-export your tickets with the customer message or "
+                    "description column included, then upload again. Rows "
+                    "marked private or internal are skipped on purpose and "
+                    "do not count toward usable text."
+                ),
             }
         return {"status": "ACCEPT"}
 

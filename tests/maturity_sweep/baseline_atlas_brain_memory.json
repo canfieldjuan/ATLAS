@@ -1,0 +1,34 @@
+{
+  "atlas_brain/memory/feedback.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/memory/quality.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/memory/rag_client.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/memory/service.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/memory/token_estimator.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  }
+}

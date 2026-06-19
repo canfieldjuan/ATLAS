@@ -1,0 +1,16 @@
+{
+  "atlas_brain/services/speaker_id/embedder.py": {
+    "counts": {
+      "WEAK_CONTRACT": 1
+    },
+    "score": 1
+  },
+  "atlas_brain/services/speaker_id/service.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 13
+  }
+}
