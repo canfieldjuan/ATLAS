@@ -191,10 +191,33 @@ def atlas_workflow_enrollments(root: Path) -> tuple[AtlasWorkflowEnrollment, ...
     return tuple(workflows)
 
 
+def repo_wide_backstop_present(root: Path) -> bool:
+    """Whether the repo-wide unit backstop workflow is the standing catch-all.
+
+    The backstop (`.github/workflows/repo_wide_unit_backstop.yml`) runs the
+    whole `tests/` tree under `pytest -m "not integration and not e2e"` with no
+    per-file path filter, so any unit test it does not exclude is exercised
+    there even without a dedicated `atlas_*_checks.yml` enrollment. When that
+    catch-all exists, the per-file dedicated-enrollment requirement for
+    atlas_brain-importing tests is satisfied (integration/e2e tests run in
+    their own service-backed lanes, which this unit-enrollment audit does not
+    cover).
+    """
+    backstop = root / ".github/workflows/repo_wide_unit_backstop.yml"
+    if not backstop.is_file():
+        return False
+    text = backstop.read_text(encoding="utf-8")
+    return "pytest" in text and "not integration and not e2e" in text
+
+
 def atlas_brain_test_workflow_errors(
     root: Path,
     test_paths: Iterable[str],
 ) -> tuple[str, ...]:
+    # The repo-wide backstop is the catch-all for unit tests; when it exists,
+    # dedicated per-file atlas_*_checks.yml enrollment is no longer required.
+    if repo_wide_backstop_present(root):
+        return ()
     workflows = atlas_workflow_enrollments(root)
     errors: list[str] = []
     for path in atlas_brain_importing_tests(root, test_paths):

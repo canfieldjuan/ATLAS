@@ -330,6 +330,35 @@ def test_atlas_brain_changed_test_accepts_inline_run_step(tmp_path: Path) -> Non
     assert audit.atlas_brain_test_errors == ()
 
 
+def _write_repo_wide_backstop(root: Path) -> None:
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        '      - run: python -m pytest -m "not integration and not e2e" -q\n',
+        encoding="utf-8",
+    )
+
+
+def test_atlas_brain_changed_test_accepts_repo_wide_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # No dedicated atlas_*_checks.yml; the repo-wide backstop is the catch-all.
+    _write_repo_wide_backstop(root)
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert audit.ok
+    assert audit.atlas_brain_test_errors == ()
+
+
 def test_atlas_brain_changed_test_requires_atlas_workflow(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     test_path = _write_atlas_importing_test(root)
