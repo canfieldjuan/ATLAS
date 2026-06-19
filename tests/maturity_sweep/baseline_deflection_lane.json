@@ -84,6 +84,13 @@
     },
     "score": 3
   },
+  "scripts/check_deflection_product_surface_manifest.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 7
+  },
   "scripts/prepare_content_ops_deflection_env.py": {
     "counts": {
       "NO_RAISES_TESTS": 1,
