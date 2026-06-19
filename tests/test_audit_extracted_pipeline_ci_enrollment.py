@@ -463,6 +463,59 @@ def test_atlas_brain_changed_test_rejects_directory_scoped_backstop(tmp_path: Pa
     assert audit.atlas_brain_test_errors != ()
 
 
+def test_atlas_brain_changed_test_rejects_narrowed_marker_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # A narrowed marker expression skips additional tests and is not catch-all
+    # coverage for the unit lane.
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        '      - run: python -m pytest tests/ -m "not integration and not e2e and not slow" -q\n',
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
+def test_atlas_brain_changed_test_rejects_command_in_step_name_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # The command text appears in a YAML name field, not in an executable run
+    # command, so it must not credit the backstop.
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        '      - name: Run python -m pytest tests/ -m "not integration and not e2e"\n'
+        "        run: echo disabled\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
 def test_atlas_brain_docstring_marker_mention_not_exempt(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     path = "tests/test_atlas_widget.py"
