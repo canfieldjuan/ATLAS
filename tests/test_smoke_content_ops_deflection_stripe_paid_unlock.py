@@ -476,13 +476,13 @@ def test_main_reports_database_lookup_failure_before_network(
     monkeypatch,
     tmp_path,
 ) -> None:
-    def _lookup_failure(*_args):
+    async def _lookup_failure(*_args):
         raise OSError("database connection failed")
 
     def _unexpected_network(*_args, **_kwargs):
         raise AssertionError("database lookup failure must stop before network")
 
-    monkeypatch.setattr(smoke, "_lookup_report_account_id", _lookup_failure)
+    monkeypatch.setattr(smoke, "_fetch_report_account_ids", _lookup_failure)
     monkeypatch.setattr(smoke, "_open_http_request", _unexpected_network)
 
     code = smoke.main([
