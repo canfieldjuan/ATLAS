@@ -62,7 +62,7 @@ Risk areas: relaxing the auditor's per-file requirement -- mitigated by gating
 the relaxation on the backstop workflow actually existing and running the
 repo-wide unit suite.
 
-Reviewer rules triggered: R1, R14.
+Reviewer rules triggered: R1, R2, R10, R14.
 
 ## Mechanism
 
@@ -105,7 +105,8 @@ Parked hardening: none.
 
 - `python -c "import yaml; yaml.safe_load(open('.github/workflows/repo_wide_unit_backstop.yml'))"`
   -- valid.
-- `python scripts/audit_workflow_security_posture.py` -- passes.
+- `scripts/audit_workflow_security_posture.py` -- workflow security posture
+  audit passes.
 - `python -m pytest tests/test_audit_extracted_pipeline_ci_enrollment.py -q`
   -- 19 passed (includes the new backstop-aware acceptance test).
 
