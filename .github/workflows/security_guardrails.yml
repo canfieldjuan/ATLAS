@@ -2,6 +2,9 @@ name: Security Guardrails
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   push:
     branches:
       - main
@@ -17,42 +20,33 @@ permissions:
 jobs:
   gitleaks-baseline-guard:
     name: Gitleaks baseline growth guard
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
     steps:
-      - name: Checkout pull request
+      - name: Checkout trusted base
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
 
-      - name: Reject baseline changes after adoption
+      - name: Enforce baseline rotation policy
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "${BASE_REF}"
-
-          if ! git cat-file -e "origin/${BASE_REF}:docs/security/gitleaks-baseline.json" 2>/dev/null; then
-            echo "No baseline exists on ${BASE_REF}; allowing initial adoption baseline."
-            exit 0
-          fi
-
-          if git diff --quiet "origin/${BASE_REF}" -- docs/security/gitleaks-baseline.json; then
-            echo "Gitleaks baseline unchanged."
-            exit 0
-          fi
-
-          cat <<'MSG'
-          Gitleaks baseline changes are blocked by default.
-          Rotate/revoke the exposed provider secret, then use a dedicated security
-          rotation PR to justify any baseline change.
-          MSG
-          git diff --stat "origin/${BASE_REF}" -- docs/security/gitleaks-baseline.json
-          exit 1
+          git fetch --no-tags origin \
+            "${BASE_REF}:refs/remotes/origin/${BASE_REF}" \
+            "pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}"
+          python scripts/check_gitleaks_baseline_rotation.py \
+            --base-ref "origin/${BASE_REF}" \
+            --head-ref "refs/remotes/origin/pr-${PR_NUMBER}" \
+            --labels-json "${PR_LABELS_JSON}"
 
   secrets-pr:
     name: Gitleaks PR secret scan
@@ -63,10 +57,11 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Checkout full history
+      - name: Checkout PR head
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Resolve trusted baseline
         env:
@@ -74,7 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           baseline=".gitleaks-baseline-ci.json"
-          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          git fetch --no-tags origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
           if git cat-file -e "origin/${BASE_REF}:docs/security/gitleaks-baseline.json" 2>/dev/null; then
             git show "origin/${BASE_REF}:docs/security/gitleaks-baseline.json" > "$baseline"
@@ -86,7 +81,9 @@ jobs:
             echo "No Gitleaks baseline found; scanning without a baseline."
           fi
 
-      - name: Scan complete git history
+      - name: Scan pull request commits
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           baseline_args=()
@@ -100,13 +97,13 @@ jobs:
             git \
             --redact \
             --verbose \
-            --log-opts="HEAD" \
+            --log-opts="origin/${BASE_REF}..HEAD" \
             "${baseline_args[@]}" \
             /repo
 
   secrets-full-history:
     name: Gitleaks full-history secret scan
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -150,13 +147,13 @@ jobs:
 
       - name: Upload Gitleaks SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@411bbbe57033eedfc1a82d68c01345aa96c737d7 # v4
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           sarif_file: gitleaks.sarif
 
   pip-audit:
     name: pip-audit (${{ matrix.requirements }})
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -171,6 +168,7 @@ jobs:
           - atlas_video-processing/ingest/drone_client/requirements.txt
           - atlas_video-processing/processing/video_stream_processor/requirements.txt
           - graphiti-wrapper/requirements.txt
+          - requirements.asr.txt
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -189,9 +187,10 @@ jobs:
 
   osv-full:
     name: OSV dependency scan
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
     permissions:
+      actions: read
       contents: read
       security-events: write
     with:
@@ -201,7 +200,7 @@ jobs:
 
   semgrep:
     name: Semgrep SAST
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -232,13 +231,13 @@ jobs:
 
       - name: Upload Semgrep SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@411bbbe57033eedfc1a82d68c01345aa96c737d7 # v4
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           sarif_file: semgrep.sarif
 
   trivy-config:
     name: Trivy config scan
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -249,7 +248,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Scan Docker/IaC configuration
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
           scan-ref: .
@@ -261,17 +260,19 @@ jobs:
 
       - name: Upload Trivy SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@411bbbe57033eedfc1a82d68c01345aa96c737d7 # v4
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           sarif_file: trivy-config.sarif
 
   checkov:
     name: Checkov IaC scan
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: read
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -281,6 +282,14 @@ jobs:
         with:
           directory: .
           framework: dockerfile,github_actions,terraform,yaml
+          output_format: cli,sarif
+          output_file_path: console,checkov.sarif
           quiet: true
           skip_path: ".venv,.venv-*,node_modules,worktrees,data,third_party"
           soft_fail: true
+
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: checkov.sarif
