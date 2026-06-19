@@ -12,7 +12,7 @@ with no automated test execution. That is a silent-coverage hole: a regression
 in `invoicing_readonly_oauth.py` or `invoicing_draft_writer_oauth.py` would not
 be caught by any check.
 
-This slice enrolls those four files in the existing `atlas_invoicing_checks.yml`
+This slice enrolls those four files in the existing `.github/workflows/atlas_invoicing_checks.yml`
 workflow so they run on changes to the invoicing surface.
 
 ## Scope (this PR)
@@ -20,12 +20,12 @@ workflow so they run on changes to the invoicing surface.
 Ownership lane: ci/coverage
 Slice phase: Production hardening
 
-1. Add the four invoicing MCP/OAuth test files to `atlas_invoicing_checks.yml`
+1. Add the four invoicing MCP/OAuth test files to `.github/workflows/atlas_invoicing_checks.yml`
    as a dedicated `Run invoicing MCP + OAuth surface tests` step.
 2. Add `pull_request` and `push` path triggers for the production modules they
    exercise (`invoicing_readonly_server.py`, `invoicing_draft_writer_server.py`,
    `invoicing_readonly_oauth.py`, `invoicing_draft_writer_oauth.py`,
-   `mcp/auth.py`) and for the four test files themselves.
+   `atlas_brain/mcp/auth.py`) and for the four test files themselves.
 
 ### Files touched
 
@@ -36,7 +36,7 @@ Slice phase: Production hardening
 
 Acceptance criteria:
 
-- [ ] The four test files run in CI via `atlas_invoicing_checks.yml`.
+- [ ] The four test files run in CI via `.github/workflows/atlas_invoicing_checks.yml`.
 - [ ] Path triggers cover the production OAuth/server modules they exercise.
 - [ ] No production code changes; CI config only.
 
@@ -45,7 +45,7 @@ Affected surfaces: CI only.
 Risk areas: none beyond surfacing any pre-existing failure in the four
 previously-unrun tests (the intended signal).
 
-Reviewer rules triggered: R1.
+Reviewer rules triggered: R1, R12.
 
 ## Mechanism
 
