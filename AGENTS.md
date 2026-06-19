@@ -662,7 +662,9 @@ the **allowed-files set**, and a **max-files budget**.
 
 - **Stay inside the allowed set.** The allowed files are the failure source you
   identified, not "everything the symptom touches." Touching a file outside the
-  set is presumed scope creep.
+  set is presumed scope creep. Declare `Max files: N` in the plan's *Scope* to
+  have the files-touched audit (`scripts/audit_plan_doc_files_touched.py`)
+  enforce the budget at pre-push/CI -- the PR fails if more than N files change.
 - **Widening the set is a root-cause decision.** If the fix genuinely needs an
   upstream file, name the upstream reason in the baton and the plan **before**
   editing it (this is the §3k trace, not a drive-by). Do not silently grow the
