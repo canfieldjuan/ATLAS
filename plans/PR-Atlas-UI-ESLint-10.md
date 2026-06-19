@@ -8,7 +8,7 @@ This branch also carries the current Security Guardrails PR-startup fix because 
 
 ## Scope (this PR)
 
-Ownership lane: frontend/tooling
+Ownership lane: frontend/atlas-ui-tooling
 Slice phase: production hardening
 
 ### Files touched
@@ -63,6 +63,7 @@ None.
 - The resolved automated review finding is addressed by keeping `eslint-plugin-react-hooks@7.1.1` and `typescript-eslint@8.61.1`, which support ESLint 10 in the lockfile peer graph.
 - Security Guardrails startup failure matches the OSV reusable workflow permission issue fixed by granting `actions: read` to the OSV caller.
 - PR body AI reconciliation uses the local-audit marker `All findings fixed or waived: yes`.
+- Ownership lane is scoped to `frontend/atlas-ui-tooling` so it does not collide with the open Atlas Churn UI ESLint slice.
 
 ## Estimated diff size
 
@@ -71,5 +72,5 @@ None.
 | `.github/workflows/security_guardrails.yml` | ~12 |
 | `atlas-ui/package.json` | 2 |
 | `atlas-ui/package-lock.json` | ~440 |
-| `plans/PR-Atlas-UI-ESLint-10.md` | ~75 |
-| **Total** | **~529** |
+| `plans/PR-Atlas-UI-ESLint-10.md` | ~76 |
+| **Total** | **~530** |
