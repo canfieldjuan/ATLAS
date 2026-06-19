@@ -8,6 +8,7 @@ on:
     paths:
       - ".github/workflows/atlas_invoicing_checks.yml"
       - "requirements.txt"
+      - "atlas_brain/mcp/__init__.py"
       - "atlas_brain/mcp/invoicing_server.py"
       - "atlas_brain/mcp/invoicing_readonly_server.py"
       - "atlas_brain/mcp/invoicing_draft_writer_server.py"
@@ -29,6 +30,7 @@ on:
     paths:
       - ".github/workflows/atlas_invoicing_checks.yml"
       - "requirements.txt"
+      - "atlas_brain/mcp/__init__.py"
       - "atlas_brain/mcp/invoicing_server.py"
       - "atlas_brain/mcp/invoicing_readonly_server.py"
       - "atlas_brain/mcp/invoicing_draft_writer_server.py"
