@@ -1,0 +1,55 @@
+name: Maturity Sweep Competitive Intelligence Surface
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/maturity_sweep_competitive_intelligence_surface.yml"
+      - "scripts/check_competitive_intelligence_product_surface_manifest.py"
+      - "tests/maturity_sweep/competitive_intelligence_product_surface_manifest.json"
+      - "atlas-intel-ui/src/api/b2bClient.ts"
+      - "atlas-intel-ui/src/pages/b2b/**"
+      - "atlas-churn-ui/src/components/Campaign*.tsx"
+      - "atlas-churn-ui/src/pages/Campaign*.tsx"
+      - "atlas-churn-ui/src/pages/Vendor*.tsx"
+      - "atlas_brain/storage/migrations/**"
+      - "extracted_competitive_intelligence/**"
+      - "extracted_content_pipeline/docs/email_campaign_generation_pipeline.md"
+      - "extracted_content_pipeline/examples/campaign_*"
+      - "extracted_content_pipeline/storage/migrations/**"
+      - "portfolio-ui/public/media/gifs/campaign-review.gif"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/maturity_sweep_competitive_intelligence_surface.yml"
+      - "scripts/check_competitive_intelligence_product_surface_manifest.py"
+      - "tests/maturity_sweep/competitive_intelligence_product_surface_manifest.json"
+      - "atlas-intel-ui/src/api/b2bClient.ts"
+      - "atlas-intel-ui/src/pages/b2b/**"
+      - "atlas-churn-ui/src/components/Campaign*.tsx"
+      - "atlas-churn-ui/src/pages/Campaign*.tsx"
+      - "atlas-churn-ui/src/pages/Vendor*.tsx"
+      - "atlas_brain/storage/migrations/**"
+      - "extracted_competitive_intelligence/**"
+      - "extracted_content_pipeline/docs/email_campaign_generation_pipeline.md"
+      - "extracted_content_pipeline/examples/campaign_*"
+      - "extracted_content_pipeline/storage/migrations/**"
+      - "portfolio-ui/public/media/gifs/campaign-review.gif"
+
+jobs:
+  competitive-intelligence-product-surface:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Competitive intelligence product surface manifest (blocking)
+        run: python scripts/check_competitive_intelligence_product_surface_manifest.py
