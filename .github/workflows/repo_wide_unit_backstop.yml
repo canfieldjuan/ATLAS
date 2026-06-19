@@ -50,5 +50,7 @@ jobs:
           # --continue-on-collection-errors so one un-importable module (e.g. an
           # optional-dependency MCP server) cannot abort the whole backstop at
           # collection; import gaps are reported as errors alongside real results.
-          python -m pytest -m "not integration and not e2e" -q \
+          # Scope discovery to tests/ explicitly (not just pytest.ini testpaths)
+          # so root-level test_*.py files are not swept into the unit backstop.
+          python -m pytest tests/ -m "not integration and not e2e" -q \
             --continue-on-collection-errors

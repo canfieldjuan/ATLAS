@@ -339,7 +339,7 @@ def _write_repo_wide_backstop(root: Path) -> None:
         "  repo-wide-unit-backstop:\n"
         "    runs-on: ubuntu-latest\n"
         "    steps:\n"
-        '      - run: python -m pytest -m "not integration and not e2e" -q\n',
+        '      - run: python -m pytest tests/ -m "not integration and not e2e" -q\n',
         encoding="utf-8",
     )
 

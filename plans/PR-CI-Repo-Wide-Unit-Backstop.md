@@ -71,10 +71,11 @@ The workflow installs `requirements.txt` + pytest and runs
 Because it does not path-filter the test set, a file no per-area workflow
 enrolls is still executed here.
 
-`repo_wide_backstop_present()` parses the backstop workflow's YAML `run:` steps
-and returns true only when one invokes `pytest -m "not integration and not
-e2e"` over the whole tree (no per-file target) -- so marker strings lingering
-in a comment/echo, or a path-limited command, do not falsely credit coverage.
+`repo_wide_backstop_present()` scans the backstop workflow's run-command lines
+(text/line based -- the auditor runs in a minimal env without pyyaml) and
+returns true only when one invokes `pytest -m "not integration and not e2e"`
+over the suite (no per-file `.py` target) -- so marker strings lingering in a
+comment/echo, or a path-limited command, do not falsely credit coverage.
 `atlas_brain_test_workflow_errors()` then decides per changed test:
 
 - An `integration`/`e2e`-marked test is **exempt** -- it is service-lane, the
@@ -91,7 +92,7 @@ in a comment/echo, or a path-limited command, do not falsely credit coverage.
   un-importable optional-dependency module cannot zero out the whole run's
   signal.
 - The auditor relaxation is gated on a real repo-wide pytest run step (parsed
-  from the workflow YAML), not raw-text substrings.
+  from the run-command line), not raw-text substrings.
 - Crediting the backstop relaxes **PR-time** per-file gating for unit tests in
   favor of the scheduled/on-demand catch-all: a touched unit test runs in the
   nightly backstop rather than on the PR. This is the deliberate tradeoff of
