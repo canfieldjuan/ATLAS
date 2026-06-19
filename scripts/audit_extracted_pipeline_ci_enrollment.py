@@ -190,11 +190,16 @@ def atlas_workflow_enrollments(root: Path) -> tuple[AtlasWorkflowEnrollment, ...
     return tuple(workflows)
 
 
-# The marker filter used by the repo-wide backstop run step.
-_BACKSTOP_MARKER = re.compile(r"-m\s*[\"']?\s*not integration and not e2e")
+# The exact marker filter used by the repo-wide backstop run step. The quote must
+# close immediately after the unit expression so narrowed expressions such as
+# `not integration and not e2e and not foo` are not credited as catch-all coverage.
+_BACKSTOP_MARKER = re.compile(
+    r"""-m\s*([\"'])\s*not integration and not e2e\s*\1(?=\s|\\|$)"""
+)
 # Pytest test-tree targets. Only the whole tests tree is repo-wide; narrower
 # directories like tests/unit/ and explicit files do not provide catch-all coverage.
 _PYTEST_TEST_TARGET = re.compile(r"(?<!\S)(?:\./)?tests(?:/[^\s\\]*)?(?=\s|\\|$)")
+_PYTEST_COMMAND_LINE = re.compile(r"^(?:python(?:\d+(?:\.\d+)?)?\s+-m\s+pytest|pytest)(?=\s|$)")
 # Real marker syntax only -- a `@pytest.mark.integration/e2e` decorator or a
 # module-level `pytestmark = ... pytest.mark.integration/e2e` -- anchored to the
 # line start so a mention in a comment or docstring does not falsely exempt a
@@ -206,16 +211,37 @@ _INTEGRATION_OR_E2E_MARK = re.compile(
 )
 
 
-def _is_repo_wide_unit_pytest(line: str) -> bool:
-    """Whether a workflow line is a real repo-wide unit pytest command.
+def _workflow_run_command_lines(workflow_text: str) -> tuple[str, ...]:
+    lines = workflow_text.splitlines()
+    commands: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        match = re.match(r"^(?P<indent>\s*)(?:-\s*)?run:\s*(?P<command>.*)$", line)
+        if match is None:
+            index += 1
+            continue
 
-    Requires a non-comment, non-echo line that invokes pytest with the unit
-    marker filter and targets the full tests tree. (Line/text based rather than
-    YAML-parsed: this auditor runs in a minimal env without pyyaml, like its
-    sibling `event_path_filters` regex parsing.)
-    """
+        indent = len(match.group("indent"))
+        command = match.group("command").strip()
+        if command and not command.startswith(("|", ">")):
+            commands.append(command)
+        index += 1
+        while index < len(lines):
+            next_line = lines[index]
+            if next_line.strip() and len(next_line) - len(next_line.lstrip()) <= indent:
+                break
+            stripped = next_line.strip()
+            if stripped and _PYTEST_COMMAND_LINE.match(stripped):
+                commands.append(stripped)
+            index += 1
+    return tuple(commands)
+
+
+def _is_repo_wide_unit_pytest(line: str) -> bool:
+    """Whether a workflow command line is a real repo-wide unit pytest command."""
     stripped = line.strip()
-    if stripped.startswith("#") or "echo" in stripped:
+    if not _PYTEST_COMMAND_LINE.match(stripped):
         return False
     if "pytest" not in stripped or not _BACKSTOP_MARKER.search(stripped):
         return False
@@ -233,17 +259,17 @@ def repo_wide_backstop_present(root: Path) -> bool:
     run-command line invoking `pytest -m "not integration and not e2e"` over the
     full `tests/` tree. Checking the run command -- not raw substrings anywhere
     in the file -- avoids falsely crediting a backstop whose command was removed
-    or narrowed but whose marker strings linger in a comment or echo. The
-    backstop runs the unit suite with no per-file path filter, so a unit test it
-    does not exclude is exercised there even without a dedicated
-    `atlas_*_checks.yml`.
+    or narrowed but whose marker strings linger in a comment, echo, step name,
+    or other non-command YAML field. The backstop runs the unit suite with no
+    per-file path filter, so a unit test it does not exclude is exercised there
+    even without a dedicated `atlas_*_checks.yml`.
     """
     backstop = root / ".github/workflows/repo_wide_unit_backstop.yml"
     if not backstop.is_file():
         return False
     return any(
         _is_repo_wide_unit_pytest(line)
-        for line in backstop.read_text(encoding="utf-8").splitlines()
+        for line in _workflow_run_command_lines(backstop.read_text(encoding="utf-8"))
     )
 
 
