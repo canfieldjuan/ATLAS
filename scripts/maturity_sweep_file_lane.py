@@ -12,17 +12,29 @@ import maturity_sweep
 
 def _iter_python_files(paths):
     seen = set()
+    invalid = []
     for raw in paths:
         path = Path(raw)
-        if not path.exists() or path.suffix != ".py":
+        if not path.exists():
+            invalid.append("%s: missing" % raw)
+            continue
+        if path.suffix != ".py":
+            invalid.append("%s: not a Python file" % raw)
             continue
         if maturity_sweep.is_test_path(path):
+            invalid.append("%s: test files are not valid lane inputs" % raw)
             continue
         key = path.as_posix()
         if key in seen:
             continue
         seen.add(key)
         yield path
+
+    if invalid:
+        details = "\n".join("- %s" % item for item in invalid)
+        raise SystemExit("invalid explicit lane path(s):\n%s" % details)
+    if not seen:
+        raise SystemExit("no production Python files supplied")
 
 
 def sweep_files(paths, tests_root):
