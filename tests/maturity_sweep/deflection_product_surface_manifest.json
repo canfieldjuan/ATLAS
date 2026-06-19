@@ -7,8 +7,10 @@
     "docs/frontend/content_ops_faq_deflection_*",
     "docs/frontend/content_ops_faq_report_contract.md",
     "docs/frontend/content_ops_faq_report_example.json",
-    "portfolio-ui/api/content-ops/deflection/*.js",
+    "portfolio-ui/api/content-ops/deflection/**/*",
     "portfolio-ui/scripts/faq-deflection*.mjs",
+    "portfolio-ui/src/App.tsx",
+    "portfolio-ui/src/pages/Services.tsx",
     "portfolio-ui/src/pages/*Deflection*.tsx",
     "portfolio-ui/src/pages/*deflection*.tsx",
     "portfolio-ui/vercel.json"
@@ -41,8 +43,10 @@
     "portfolio-ui/scripts/faq-deflection-result-page.test.mjs",
     "portfolio-ui/scripts/faq-deflection-submit-live-smoke.mjs",
     "portfolio-ui/scripts/faq-deflection-upload-shell.test.mjs",
+    "portfolio-ui/src/App.tsx",
     "portfolio-ui/src/pages/FaqDeflectionResult.tsx",
     "portfolio-ui/src/pages/FaqDeflectionUpload.tsx",
+    "portfolio-ui/src/pages/Services.tsx",
     "portfolio-ui/vercel.json"
   ]
 }
