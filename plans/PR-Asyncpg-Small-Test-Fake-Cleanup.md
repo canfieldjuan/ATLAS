@@ -58,7 +58,7 @@ The touched files used broad `sys.modules.setdefault(..., MagicMock())` lists to
 
 ## Verification
 
-- Bundled runtime command passed: `python -m py_compile tests/test_b2b_churn_mcp.py tests/test_b2b_signals_mcp_inputs.py tests/test_b2b_scrape_targets_mcp_inputs.py tests/test_b2b_products_mcp.py tests/test_b2b_evidence_mcp.py tests/test_b2b_vendor_registry_mcp.py tests/test_structured_review_parser_supplements.py tests/test_twitter_parser.py tests/test_trustpilot_parser.py`.
+- Bundled runtime command passed: python -m py_compile over `tests/test_b2b_churn_mcp.py`, `tests/test_b2b_signals_mcp_inputs.py`, `tests/test_b2b_scrape_targets_mcp_inputs.py`, `tests/test_b2b_products_mcp.py`, `tests/test_b2b_evidence_mcp.py`, `tests/test_b2b_vendor_registry_mcp.py`, `tests/test_structured_review_parser_supplements.py`, `tests/test_twitter_parser.py`, and `tests/test_trustpilot_parser.py`.
 - CI Pre-push Audit passed on this branch after #1712 merged the backstop-aware enrollment auditor.
 - CI PR Body Contract passed after the PR body gained the required Parked hardening section.
 - CI AI Reconciliation passed.
