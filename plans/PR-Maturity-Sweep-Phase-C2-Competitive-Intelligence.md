@@ -89,10 +89,7 @@ Risk areas:
   are not listed in the product-surface manifest.
 - Baseline churn that could accept unrelated debt.
 
-Reviewer rules triggered:
-- R2 Test evidence.
-- R12 Deployment safety and CI enrollment.
-- R14 Codebase verification.
+- Reviewer rules triggered: R2, R10, R12, R14.
 
 ### Files touched
 
