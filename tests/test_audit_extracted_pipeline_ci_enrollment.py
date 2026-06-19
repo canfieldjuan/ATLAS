@@ -359,6 +359,33 @@ def test_atlas_brain_changed_test_accepts_repo_wide_backstop(tmp_path: Path) -> 
     assert audit.atlas_brain_test_errors == ()
 
 
+def test_atlas_brain_changed_test_rejects_comment_only_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # A backstop file whose marker text appears only in a comment (no real
+    # pytest command) must NOT credit coverage.
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "# pytest run (not integration and not e2e) was removed from this file\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo disabled\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
 def test_atlas_brain_changed_test_requires_atlas_workflow(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     test_path = _write_atlas_importing_test(root)

@@ -191,6 +191,15 @@ def atlas_workflow_enrollments(root: Path) -> tuple[AtlasWorkflowEnrollment, ...
     return tuple(workflows)
 
 
+# Matches the actual backstop command, e.g.
+#   python -m pytest -m "not integration and not e2e" -q
+# i.e. `not integration and not e2e` used as a `-m` marker filter on a pytest
+# invocation -- not the bare strings appearing in a comment.
+_BACKSTOP_PYTEST_CMD = re.compile(
+    r"pytest\b[^\n]*-m\s*[\"']?\s*not integration and not e2e"
+)
+
+
 def repo_wide_backstop_present(root: Path) -> bool:
     """Whether the repo-wide unit backstop workflow is the standing catch-all.
 
@@ -201,13 +210,14 @@ def repo_wide_backstop_present(root: Path) -> bool:
     catch-all exists, the per-file dedicated-enrollment requirement for
     atlas_brain-importing tests is satisfied (integration/e2e tests run in
     their own service-backed lanes, which this unit-enrollment audit does not
-    cover).
+    cover). Detection matches the actual `pytest -m "not integration and not
+    e2e"` invocation (not loose substrings) so the strings appearing only in a
+    comment do not falsely credit a backstop whose command was removed.
     """
     backstop = root / ".github/workflows/repo_wide_unit_backstop.yml"
     if not backstop.is_file():
         return False
-    text = backstop.read_text(encoding="utf-8")
-    return "pytest" in text and "not integration and not e2e" in text
+    return bool(_BACKSTOP_PYTEST_CMD.search(backstop.read_text(encoding="utf-8")))
 
 
 def atlas_brain_test_workflow_errors(
