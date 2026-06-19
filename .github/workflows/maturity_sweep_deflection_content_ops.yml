@@ -9,12 +9,25 @@ on:
       - ".github/workflows/maturity_sweep_deflection_content_ops.yml"
       - "scripts/maturity_sweep.py"
       - "scripts/maturity_sweep_file_lane.py"
+      - "scripts/check_deflection_product_surface_manifest.py"
       - "tests/**"
       - "extracted_content_pipeline/**"
+      - "atlas-intel-ui/scripts/content-ops-deflection-report-ui.test.mjs"
+      - "atlas-intel-ui/src/domain/contentOps/*Deflection*"
+      - "atlas-intel-ui/src/domain/contentOps/*deflection*"
       - "atlas_brain/*content_ops*.py"
       - "atlas_brain/**/*content_ops*.py"
       - "atlas_brain/*deflection*.py"
       - "atlas_brain/**/*deflection*.py"
+      - "atlas_brain/storage/migrations/*deflection*.sql"
+      - "docs/frontend/content_ops_faq_deflection_*"
+      - "docs/frontend/content_ops_faq_report_contract.md"
+      - "docs/frontend/content_ops_faq_report_example.json"
+      - "portfolio-ui/api/content-ops/deflection/**"
+      - "portfolio-ui/scripts/faq-deflection*.mjs"
+      - "portfolio-ui/src/pages/*Deflection*.tsx"
+      - "portfolio-ui/src/pages/*deflection*.tsx"
+      - "portfolio-ui/vercel.json"
       - "scripts/*content_ops*.py"
       - "scripts/**/*content_ops*.py"
       - "scripts/*deflection*.py"
@@ -26,12 +39,25 @@ on:
       - ".github/workflows/maturity_sweep_deflection_content_ops.yml"
       - "scripts/maturity_sweep.py"
       - "scripts/maturity_sweep_file_lane.py"
+      - "scripts/check_deflection_product_surface_manifest.py"
       - "tests/**"
       - "extracted_content_pipeline/**"
+      - "atlas-intel-ui/scripts/content-ops-deflection-report-ui.test.mjs"
+      - "atlas-intel-ui/src/domain/contentOps/*Deflection*"
+      - "atlas-intel-ui/src/domain/contentOps/*deflection*"
       - "atlas_brain/*content_ops*.py"
       - "atlas_brain/**/*content_ops*.py"
       - "atlas_brain/*deflection*.py"
       - "atlas_brain/**/*deflection*.py"
+      - "atlas_brain/storage/migrations/*deflection*.sql"
+      - "docs/frontend/content_ops_faq_deflection_*"
+      - "docs/frontend/content_ops_faq_report_contract.md"
+      - "docs/frontend/content_ops_faq_report_example.json"
+      - "portfolio-ui/api/content-ops/deflection/**"
+      - "portfolio-ui/scripts/faq-deflection*.mjs"
+      - "portfolio-ui/src/pages/*Deflection*.tsx"
+      - "portfolio-ui/src/pages/*deflection*.tsx"
+      - "portfolio-ui/vercel.json"
       - "scripts/*content_ops*.py"
       - "scripts/**/*content_ops*.py"
       - "scripts/*deflection*.py"
@@ -54,6 +80,9 @@ jobs:
 
       - name: Sweep unit tests (blocking)
         run: python -m pytest tests/test_maturity_sweep.py --noconftest -q
+
+      - name: Deflection product surface manifest (blocking)
+        run: python scripts/check_deflection_product_surface_manifest.py
 
       - name: Deflection and AI content ops ratchet gates (blocking)
         run: |
