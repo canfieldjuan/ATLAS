@@ -8,6 +8,7 @@ on:
     paths:
       - ".github/workflows/maturity_sweep_competitive_intelligence_surface.yml"
       - "scripts/check_competitive_intelligence_product_surface_manifest.py"
+      - "tests/test_competitive_intelligence_product_surface_manifest.py"
       - "tests/maturity_sweep/competitive_intelligence_product_surface_manifest.json"
       - "atlas-intel-ui/src/api/b2bClient.ts"
       - "atlas-intel-ui/src/pages/b2b/**"
@@ -26,6 +27,7 @@ on:
     paths:
       - ".github/workflows/maturity_sweep_competitive_intelligence_surface.yml"
       - "scripts/check_competitive_intelligence_product_surface_manifest.py"
+      - "tests/test_competitive_intelligence_product_surface_manifest.py"
       - "tests/maturity_sweep/competitive_intelligence_product_surface_manifest.json"
       - "atlas-intel-ui/src/api/b2bClient.ts"
       - "atlas-intel-ui/src/pages/b2b/**"
