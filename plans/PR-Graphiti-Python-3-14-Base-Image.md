@@ -16,13 +16,11 @@ Slice phase: Production hardening
 1. Update `Dockerfile.graphiti` from `python:3.11-slim` to `python:3.14-slim`.
 2. Verify the Graphiti Docker requirements can resolve CPython 3.14 Linux wheels,
    including PyTorch CPU and compiled dependencies.
-3. Carry the shared Security Guardrails workflow repair already proven on the
-   adjacent Dependabot branches.
+3. Keep this slice limited to the Graphiti Docker base-image bump and plan doc.
 
 ### Files touched
 
 - `Dockerfile.graphiti`
-- `.github/workflows/security_guardrails.yml`
 - `plans/PR-Graphiti-Python-3-14-Base-Image.md`
 
 ### Review Contract
@@ -35,10 +33,9 @@ Acceptance criteria:
       `pydantic-core`, `asyncpg`, `scipy`, and `scikit-learn`.
 - [ ] No Graphiti application code, runtime command, port, healthcheck, or
       requirements file changes are included in this slice.
-- [ ] PR-level guardrails have the same workflow fix used by the recently green
-      Dependabot branches.
+- [ ] No workflow or repository-wide guardrail changes are included in this slice.
 
-Affected surfaces: Docker runtime image / local Graphiti deployment / CI guardrails.
+Affected surfaces: Docker runtime image / local Graphiti deployment.
 
 Risk areas: dependency compatibility / runtime image build / deployment safety.
 
@@ -70,10 +67,7 @@ breakers.
 
 - Add a dedicated Docker build smoke for `Dockerfile.graphiti` if/when the
   Graphiti local image becomes a CI-enforced release artifact.
-
-## Parked hardening
-
-None.
+- Parked hardening: none.
 
 ## Verification
 
@@ -90,6 +84,5 @@ None.
 | File | LOC |
 |---|---:|
 | `Dockerfile.graphiti` | ~1 |
-| `.github/workflows/security_guardrails.yml` | shared repair |
-| `plans/PR-Graphiti-Python-3-14-Base-Image.md` | ~80 |
-| **Total** | **~106** |
+| `plans/PR-Graphiti-Python-3-14-Base-Image.md` | ~78 |
+| **Total** | **~79** |
