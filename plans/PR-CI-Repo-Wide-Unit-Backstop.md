@@ -71,13 +71,16 @@ The workflow installs `requirements.txt` + pytest and runs
 Because it does not path-filter the test set, a file no per-area workflow
 enrolls is still executed here.
 
-`repo_wide_backstop_present()` returns true when
-`.github/workflows/repo_wide_unit_backstop.yml` exists and contains the
-repo-wide pytest invocation. `atlas_brain_test_workflow_errors()` returns no
-errors in that case: the backstop is the catch-all for unit tests, and
-`integration`/`e2e` tests run in their own service-backed lanes that this
-unit-enrollment audit does not cover. When the backstop is absent the auditor's
-existing per-file dedicated-enrollment logic is unchanged.
+`repo_wide_backstop_present()` parses the backstop workflow's YAML `run:` steps
+and returns true only when one invokes `pytest -m "not integration and not
+e2e"` over the whole tree (no per-file target) -- so marker strings lingering
+in a comment/echo, or a path-limited command, do not falsely credit coverage.
+`atlas_brain_test_workflow_errors()` then decides per changed test:
+
+- An `integration`/`e2e`-marked test is **exempt** -- it is service-lane, the
+  backstop skips it, and this unit-enrollment audit does not cover it.
+- A unit test is treated as enrolled when the backstop runs it; otherwise the
+  existing per-file dedicated-enrollment logic applies unchanged.
 
 ## Intentional
 
@@ -87,15 +90,25 @@ existing per-file dedicated-enrollment logic is unchanged.
 - `--continue-on-collection-errors` stays as belt-and-suspenders: one
   un-importable optional-dependency module cannot zero out the whole run's
   signal.
-- The auditor relaxation is deliberately gated on the backstop file existing
-  and running the repo-wide unit command, not an unconditional bypass.
+- The auditor relaxation is gated on a real repo-wide pytest run step (parsed
+  from the workflow YAML), not raw-text substrings.
+- Crediting the backstop relaxes **PR-time** per-file gating for unit tests in
+  favor of the scheduled/on-demand catch-all: a touched unit test runs in the
+  nightly backstop rather than on the PR. This is the deliberate tradeoff of
+  the backstop-aware approach; per-area path-filtered checks remain the fast
+  PR-time layer for the files they already cover.
+- Integration/e2e atlas_brain tests are exempted rather than credited to the
+  backstop (which never runs them), so the auditor makes no false coverage
+  claim for them.
 
 ## Deferred
 
 - The backstop's first run is expected red until the residual
-  `setdefault("asyncpg", MagicMock())` planters (~37 files) are isolated; that
-  cleanup is a tracked follow-up in `docs/backstop_test_hygiene_scope.md`, not
-  a blocker for an advisory check.
+  `setdefault("asyncpg", MagicMock())` planters (~37 files) are isolated, AND
+  the unmarked live/DB tests (e.g. `tests/test_evidence_claim_builder_live.py`,
+  which opens a real asyncpg pool but marks only `asyncio`) are marked or
+  excluded so the scheduled run stays unit-only. Both are tracked follow-ups in
+  `docs/backstop_test_hygiene_scope.md`, not blockers for an advisory check.
 - Optionally gate merges on a green backstop once its runtime/flake profile is
   known.
 
@@ -108,14 +121,15 @@ Parked hardening: none.
 - `scripts/audit_workflow_security_posture.py` -- workflow security posture
   audit passes.
 - `python -m pytest tests/test_audit_extracted_pipeline_ci_enrollment.py -q`
-  -- 19 passed (includes the new backstop-aware acceptance test).
+  -- 21 passed (adds backstop-accept, comment-only-reject, and
+  integration-exempt cases).
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/repo_wide_unit_backstop.yml` | 54 |
-| `scripts/audit_extracted_pipeline_ci_enrollment.py` | ~25 |
-| `tests/test_audit_extracted_pipeline_ci_enrollment.py` | ~28 |
-| `plans/PR-CI-Repo-Wide-Unit-Backstop.md` | ~135 |
-| **Total** | **~242** |
+| `scripts/audit_extracted_pipeline_ci_enrollment.py` | ~60 |
+| `tests/test_audit_extracted_pipeline_ci_enrollment.py` | ~75 |
+| `plans/PR-CI-Repo-Wide-Unit-Backstop.md` | ~165 |
+| **Total** | **~354** |

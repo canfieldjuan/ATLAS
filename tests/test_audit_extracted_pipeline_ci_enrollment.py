@@ -359,6 +359,30 @@ def test_atlas_brain_changed_test_accepts_repo_wide_backstop(tmp_path: Path) -> 
     assert audit.atlas_brain_test_errors == ()
 
 
+def test_atlas_brain_integration_test_exempt_from_unit_enrollment(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    # An integration-marked atlas_brain test is service-lane: not subject to the
+    # unit-workflow enrollment requirement, and the unit backstop intentionally
+    # skips it. No atlas workflow, no backstop -- still exempt.
+    path = "tests/test_atlas_widget.py"
+    (root / path).write_text(
+        "import pytest\n"
+        "from atlas_brain.widgets import build_widget\n\n"
+        "pytestmark = pytest.mark.integration\n\n"
+        "def test_widget():\n"
+        "    assert build_widget\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(path,),
+    )
+
+    assert audit.ok
+    assert audit.atlas_brain_test_errors == ()
+
+
 def test_atlas_brain_changed_test_rejects_comment_only_backstop(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     test_path = _write_atlas_importing_test(root)
