@@ -45,10 +45,25 @@ _SELF_POOL_LIVE_FILES = {
 }
 
 
+def _markexpr_excludes_integration(config) -> bool:
+    markexpr = getattr(config.option, "markexpr", "") or ""
+    return "not integration" in " ".join(markexpr.lower().split())
+
+
+def pytest_ignore_collect(collection_path, config):
+    if _markexpr_excludes_integration(config):
+        if Path(str(collection_path)).name in _SELF_POOL_LIVE_FILES:
+            return True
+    return None
+
+
 def pytest_collection_modifyitems(session, config, items):
     integration = pytest.mark.integration
     for item in items:
-        if "db_pool" in item.fixturenames or Path(str(item.fspath)).name in _SELF_POOL_LIVE_FILES:
+        if (
+            "db_pool" in item.fixturenames
+            or Path(str(item.fspath)).name in _SELF_POOL_LIVE_FILES
+        ):
             item.add_marker(integration)
 
 
