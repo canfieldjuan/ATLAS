@@ -19,8 +19,9 @@ Slice phase: Robust testing
    cannot replace the real driver.
 2. `tests/conftest.py`: mark tests that request the shared `db_pool` fixture as
    `integration`, keeping pure unit tests in mixed files inside the unit lane.
-3. `tests/conftest.py`: keep a smaller explicit allowlist only for live files
-   that create their own pools and do not request `db_pool`.
+3. `tests/conftest.py`: skip self-pooling live files before module import when
+   the marker expression explicitly excludes `integration`; otherwise keep the
+   explicit marker allowlist for those files when integration tests are selected.
 4. `plans/PR-Backstop-Green-Follow-Up.md`: document this cleanup slice for the
    local PR review contract.
 
@@ -38,14 +39,16 @@ remaining true unit failures before this harness boundary is validated.
 
 Acceptance criteria:
 
-- [ ] Pytest collection still succeeds with the collection hook signature pytest
-      expects.
+- [ ] Pytest collection still succeeds with the collection hook signatures
+      pytest expects.
 - [ ] Unit backstop collection sees the real `asyncpg` module when requirements
       install it, so legacy per-file setdefault fakes cannot replace it.
 - [ ] Tests using the shared `db_pool` fixture are marked `integration` before
       marker filtering.
-- [ ] Self-pooling live files without `db_pool` remain excluded through the
-      explicit filename allowlist.
+- [ ] Self-pooling live files without `db_pool` are ignored before module import
+      when the active marker expression excludes `integration`.
+- [ ] The same self-pooling live files are still marked `integration` when they
+      are collected for integration-aware runs.
 - [ ] Pure unit tests in mixed files such as `tests/test_evidence_gate.py` stay
       in the unit-only backstop lane.
 - [ ] No production code or backstop command changes.
@@ -55,7 +58,8 @@ backstop follow-up plan doc.
 
 Risk areas: over-marking a unit test as integration, or changing pytest
 collection behavior for unrelated tests. Mitigated by marking at item level for
-`db_pool` users and keeping the file allowlist only for self-pooling live files.
+`db_pool` users and pre-collection skipping only the self-pooling live-file
+allowlist when `integration` is explicitly excluded.
 
 Reviewer rules triggered: R1.
 
@@ -64,11 +68,14 @@ Reviewer rules triggered: R1.
 Pytest loads `tests/conftest.py` before collecting test modules. Importing the
 real `asyncpg` driver there means older per-file helpers that use
 `sys.modules.setdefault("asyncpg", ...)` become no-ops in the CI/backstop
-environment where requirements install the driver. The collection hook then
-adds the existing `integration` marker to tests that request `db_pool`, plus a
-short list of self-pooling live files that create their own pools and do not use
-that fixture. This keeps the repo-wide unit backstop focused on unit tests
-without excluding pure unit tests that share a file with DB-backed tests.
+environment where requirements install the driver. For the unit backstop marker
+expression, the ignore hook skips the short list of self-pooling live files
+before module import, so live-only dependencies cannot fail collection before
+marker deselection. For collected tests, the item hook adds the existing
+`integration` marker to tests that request `db_pool`, plus that same short list
+of self-pooling live files. This keeps the repo-wide unit backstop focused on
+unit tests without excluding pure unit tests that share a file with DB-backed
+tests.
 
 ## Intentional
 
@@ -78,6 +85,8 @@ without excluding pure unit tests that share a file with DB-backed tests.
   existing `integration` marker rather than faking service state.
 - Mark DB-backed tests at item level where possible so mixed files retain unit
   coverage.
+- Skip only self-pooling live files before import when `integration` is
+  explicitly excluded from the active marker expression.
 - Leave #1712 focused on the advisory backstop/auditor workflow.
 
 ## Deferred
@@ -95,17 +104,20 @@ cleanup slice.
 
 ## Verification
 
-- Local py_compile for tests/conftest.py and tests/test_mcp_servers.py passed.
+- Local py_compile for `tests/conftest.py` passed with the bundled Codex Python
+  runtime.
+- Local inspection of the bundled pytest hookspec confirmed
+  `pytest_ignore_collect(collection_path, config)` is the expected signature.
 - Local inspection confirmed `tests/test_evidence_gate.py` DB-backed tests use
   `db_pool` while its pure unit tests do not.
 - Full backstop validation should run in CI or an environment after
-  requirements install, because the local Codex runtime did not have `asyncpg`
-  installed.
+  requirements install, because the local shell Python was unavailable and the
+  local Codex runtime did not have project requirements installed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Backstop-Green-Follow-Up.md` | ~110 |
-| `tests/conftest.py` | ~35 |
-| **Total** | **~145** |
+| `plans/PR-Backstop-Green-Follow-Up.md` | ~120 |
+| `tests/conftest.py` | ~45 |
+| **Total** | **~165** |
