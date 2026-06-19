@@ -44,6 +44,8 @@ _SELF_POOL_LIVE_FILES = {
     "test_vendor_dashboard_claims_live.py",
 }
 
+_INTEGRATION_FIXTURE_NAMES = {"db_pool", "live_pool"}
+
 
 def _markexpr_excludes_integration(config) -> bool:
     markexpr = getattr(config.option, "markexpr", "") or ""
@@ -61,7 +63,7 @@ def pytest_collection_modifyitems(session, config, items):
     integration = pytest.mark.integration
     for item in items:
         if (
-            "db_pool" in item.fixturenames
+            _INTEGRATION_FIXTURE_NAMES.intersection(item.fixturenames)
             or Path(str(item.fspath)).name in _SELF_POOL_LIVE_FILES
         ):
             item.add_marker(integration)
