@@ -7,6 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+# This exercises the standalone graphiti-wrapper service by loading its
+# main.py, whose deps (graphiti_core, neo4j) are not brain runtime deps. Mark
+# e2e and skip cleanly at module load when those deps are absent so the unit
+# backstop (`not integration and not e2e`) does not error collecting it.
+pytestmark = pytest.mark.e2e
 
 _ROOT = Path(__file__).resolve().parents[1]
 _WRAPPER_DIR = _ROOT / "graphiti-wrapper"
@@ -18,7 +23,13 @@ if str(_WRAPPER_DIR) not in sys.path:
 _SPEC = importlib.util.spec_from_file_location("graphiti_wrapper_main", _MODULE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(_MODULE)
+try:
+    _SPEC.loader.exec_module(_MODULE)
+except Exception as exc:  # graphiti-wrapper service deps not installed here
+    pytest.skip(
+        f"graphiti-wrapper service deps unavailable: {exc}",
+        allow_module_level=True,
+    )
 
 
 def _make_settings():

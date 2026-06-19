@@ -126,19 +126,55 @@ Two distinct test-only problems to fix:
 
 Risk: test-only. Size: small-medium.
 
-## Slice D -- Categorize and handle the remaining collection errors
+## Slice D -- Categorize and handle the remaining collection errors  [DONE]
 
-Per-file, ~5 files:
-- `tests/test_cloud_latency.py` -- imports `openai`; it is an external-API
-  latency test. Mark `e2e` (or skip-if-no-key). 
-- `tests/test_graphiti_wrapper_health.py` -- exercises the Graphiti service;
-  mark `e2e`.
-- `tests/test_atlas_content_ops_input_provider.py` -- `asyncpg.__spec__ is not
-  set` (an import/mocking quirk); fix the import or guard.
-- `tests/test_competitive_intelligence.py`, `tests/test_b2b_phase4_causality_gate.py`
-  -- need a per-file look (likely import-time service/dep dependence).
+Investigation split the five into two genuinely-external tests (fixed here)
+and three heavy-dep **leak victims** (legit unit tests; do NOT mislabel them
+e2e -- they need Slice F below).
 
-Risk: low per file. Size: small.
+Fixed here:
+- `tests/test_cloud_latency.py` -- external Fireworks/Together latency
+  benchmark; `openai` is not a brain runtime dep. Added module-level
+  `pytest.importorskip("openai")` + `pytestmark = pytest.mark.e2e`. Verified:
+  collects as a clean skip under the backstop filter, no error.
+- `tests/test_graphiti_wrapper_health.py` -- loads the standalone
+  graphiti-wrapper `main.py` (deps `graphiti_core`, `neo4j` are not brain
+  deps). Added `pytestmark = pytest.mark.e2e` and a module-level
+  `pytest.skip(allow_module_level=True)` guard around `exec_module` so an
+  absent service dep skips cleanly instead of erroring collection.
+
+Re-classified as heavy-dep leak victims (NOT fixed here; see Slice F):
+- `tests/test_atlas_content_ops_input_provider.py` -- its **collection-time**
+  `@pytest.mark.skipif(importlib.util.find_spec("asyncpg") is None, ...)`
+  raises `asyncpg.__spec__ is not set` when a sibling has planted a bare
+  `types.ModuleType("asyncpg")` (no `__spec__`). It is a legitimate unit test
+  that skips correctly when asyncpg is genuinely absent.
+- `tests/test_competitive_intelligence.py`,
+  `tests/test_b2b_phase4_causality_gate.py` -- stub nothing themselves; they
+  just `from atlas_brain.autonomous.tasks... import`. Under whole-suite
+  collection a sibling's `sys.modules["asyncpg"] = <bare module>` (direct
+  assignment, overrides real asyncpg) breaks their import chain.
+
+Risk: low. Size: small (two marker/guard edits).
+
+## Slice F -- Stop the heavy-dep (`asyncpg`/`torch`/...) sys.modules leak
+
+Promoted from the Slice C deferred note once Slice D showed it is actively
+breaking three otherwise-green unit tests (incl. a content-ops lane file).
+Same bug class as Slice C, wider blast radius: many b2b/backfill tests plant
+fake heavy deps into `sys.modules` and never restore -- two shapes, both
+leaky:
+- `sys.modules.setdefault("asyncpg", MagicMock())` (collection-order
+  dependent: wins only if asyncpg not yet imported, but then persists).
+- `sys.modules["asyncpg"] = types.ModuleType("asyncpg")` (direct assignment:
+  unconditionally overrides real asyncpg; the bare module has `__spec__=None`,
+  which is what makes `find_spec` raise).
+
+Fix: generalize the Slice C `stub_mcp` save/restore into a `stub_modules`
+helper (or shared autouse fixture) and route every heavy-dep stub through it
+so nothing outlives its own module import. Then the three Slice D victims
+collect under the full suite with no change to themselves. Risk: test-only but
+broad (audit every planter). Size: medium. Gates a fully-clean Slice E.
 
 ## Slice E -- Reintroduce the backstop
 
@@ -152,9 +188,13 @@ belt-and-suspenders. Size: small (the workflow already exists). Gated on A-D.
 
 ## Sequencing
 
-- A, C, D are independent test-file changes -- parallelizable.
-- B is the substantive one (production + dependency); isolate it.
-- E is last, gated on A-D landing.
+- A, C, D are independent test-file changes -- parallelizable. [all DONE]
+- B is enrollment-only (no production change after the Slice B correction).
+  [DONE]
+- F (heavy-dep leak) surfaced during D; it is the last substantive cleanup
+  and gates a fully-clean E.
+- E is last, gated on A-D landing and F (or E ships with
+  `--continue-on-collection-errors` tolerating the F victims until F lands).
 
 ## Meta note
 
