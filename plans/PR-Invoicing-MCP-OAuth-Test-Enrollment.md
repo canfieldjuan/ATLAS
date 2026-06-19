@@ -25,7 +25,8 @@ Slice phase: Production hardening
 2. Add `pull_request` and `push` path triggers for the production modules they
    exercise (`invoicing_readonly_server.py`, `invoicing_draft_writer_server.py`,
    `invoicing_readonly_oauth.py`, `invoicing_draft_writer_oauth.py`,
-   `atlas_brain/mcp/auth.py`) and for the four test files themselves.
+   `atlas_brain/mcp/auth.py`, `atlas_brain/config_defaults.py`) and for the
+   four test files themselves.
 
 ### Files touched
 
