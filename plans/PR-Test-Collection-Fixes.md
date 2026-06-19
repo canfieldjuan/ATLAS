@@ -81,8 +81,7 @@ None.
 
 - `python -m pytest tests/test_cloud_latency.py -m "not integration and not e2e"`
   -- collects as a clean skip (no `openai`), no collection error.
-- `python -m py_compile tests/test_cloud_latency.py tests/test_graphiti_wrapper_health.py`
-  -- both compile.
+- Both test modules pass `py_compile`.
 
 ## Estimated diff size
 
