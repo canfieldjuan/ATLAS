@@ -74,7 +74,7 @@ enrolls is still executed here.
 `repo_wide_backstop_present()` scans the backstop workflow's run-command lines
 (text/line based -- the auditor runs in a minimal env without pyyaml) and
 returns true only when one invokes `pytest -m "not integration and not e2e"`
-over the suite (no per-file `.py` target) -- so marker strings lingering in a
+over the suite (no per-file test target) -- so marker strings lingering in a
 comment/echo, or a path-limited command, do not falsely credit coverage.
 `atlas_brain_test_workflow_errors()` then decides per changed test:
 
