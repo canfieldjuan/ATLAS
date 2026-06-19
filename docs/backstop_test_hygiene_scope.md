@@ -39,37 +39,64 @@ Risk: low/mechanical. Size: small. Landed: module markers on 3 files,
 per-test markers on 5 tests in `test_evidence_gate`; the 6 pure-unit tests
 there stay in the backstop.
 
-## Slice B -- Fix the never-run invoicing MCP/OAuth tests (highest value)
+## Slice B -- Enroll the never-run invoicing MCP/OAuth tests (NOT a prod fix)
 
 `test_invoicing_readonly_mcp`, `test_invoicing_readonly_oauth`,
 `test_invoicing_draft_writer_mcp`, `test_invoicing_draft_writer_oauth` are
-enrolled in **zero** workflows -- they never run in CI today. They fail to
-import because production code
-(`atlas_brain/mcp/invoicing_readonly_oauth.py:19`) does
-`from mcp.server.auth.provider import ...`, but the installed `mcp>=1.26.0`
-has no `mcp.server.auth` (`'mcp.server' is not a package`). This is a real,
-untested production import.
+enrolled in **zero** workflows -- they never run in CI today. That part of
+the finding stands.
 
-Fix: determine which `mcp` version exposes `mcp.server.auth` (or what it was
-renamed to) and either pin/upgrade `mcp` or update the import to the current
-API; then enroll these tests in `atlas_invoicing_checks.yml` so they actually
-run. Risk: touches production OAuth server code + a dependency pin. Size:
-medium (the meatiest slice; do not bundle with the others).
+**Correction (the earlier framing was wrong):** the production import is
+NOT broken. `atlas_brain/mcp/invoicing_readonly_oauth.py:19` does
+`from mcp.server.auth.provider import OAuthAuthorizationServerProvider, ...`,
+which are real symbols in the official `mcp>=1.26.0` SDK. That module is
+live -- it is imported by the live `invoicing_readonly_server.py:24` and is
+the shipped OAuth connector pattern (Claude/Codex connect through it; see
+`docs/MCP_CHATGPT_OAUTH_ROLLOUT_RUNBOOK.md`). It is neither dead code nor a
+version mismatch. The `'mcp.server' is not a package` error seen in the
+full-suite run was **not** a real import failure -- it was caused by sibling
+tests poisoning `sys.modules` (see Slice C), plus this sandbox simply not
+having `mcp` installed (`No module named 'mcp'`; CI installs it via
+`requirements.txt`).
 
-## Slice C -- Fix stale/leaky MCP test mocks (content-ops MCP tests)
+Fix: just enroll these four files in `atlas_invoicing_checks.yml`. Do not
+touch production OAuth code and do not re-pin `mcp`. The enrollment must land
+*together with* the Slice C isolation fix, or the leak will make them fail.
+Risk: CI-config only. Size: small.
 
-`test_mcp_content_ops_deflection_readonly` (enrolled in 1 workflow) and
-`test_mcp_content_ops_marketer_verify` (2) DO run today, yet failed in the
-full-suite collection with `_MockFastMCP.tool() got an unexpected keyword
-argument 'structured_output'` and `'_MockFastMCP' object has no attribute
-'custom_route'`. The `_MockFastMCP` stand-ins are defined inside the test files
-and have drifted behind the server code.
+## Slice C -- Stop the global `mcp` MagicMock leak (the real root cause)
 
-Investigate first: do they pass in isolation (their own workflow) but break
-under whole-suite collection because a mock / `sys.modules` patch from another
-`*_mcp.py` test leaks across files? If so the fix is isolation; if the mock is
-simply stale, update it to match the FastMCP API (`structured_output`,
-`custom_route`). Risk: test-only. Size: small-medium.
+This is the linchpin, not a side issue. Eight tests
+(`test_b2b_churn_mcp`, `test_b2b_products_mcp`, `test_b2b_signals_mcp_inputs`,
+`test_b2b_vendor_registry_mcp`, `test_b2b_scrape_targets_mcp_inputs`,
+`test_b2b_evidence_mcp`, `test_b2b_source_impact`,
+`test_mcp_content_ops_marketer_verify`) do, at **module top level with no
+teardown**, e.g.:
+
+```
+sys.modules.setdefault("mcp", MagicMock())
+sys.modules.setdefault("mcp.server", MagicMock())
+sys.modules.setdefault("mcp.server.fastmcp", _fastmcp_mod)  # _fastmcp_mod.FastMCP = _MockFastMCP
+```
+
+`setdefault` plants the fake whenever `mcp` has not been imported *yet* --
+true even when real `mcp` is installed, if no earlier test imported it. Once
+planted, `mcp` is a MagicMock for the rest of the pytest session, so any
+later test importing real `mcp.server.auth.provider` (the invoicing OAuth
+tests) gets `'mcp.server' is not a package`. In their own single-file
+workflows these b2b tests pass; under whole-suite collection they poison
+everything downstream. This is exactly why the backstop choked on `mcp`.
+
+Two distinct test-only problems to fix:
+1. **Isolation/leak:** make the stub session-safe -- use a `conftest`
+   fixture with proper teardown, or only stub when real `mcp` is genuinely
+   absent and restore `sys.modules` after, so real-`mcp` tests are unaffected.
+2. **Stale fakes:** the hand-rolled `_MockFastMCP` has drifted behind the
+   real FastMCP API (`tool(... structured_output=...)`, `custom_route`).
+   Where the stub exists only to dodge a heavy import, prefer importing real
+   `mcp` (it is in `requirements.txt`) over maintaining a divergent fake.
+
+Risk: test-only. Size: small-medium.
 
 ## Slice D -- Categorize and handle the remaining collection errors
 
@@ -105,8 +132,9 @@ belt-and-suspenders. Size: small (the workflow already exists). Gated on A-D.
 
 That four invoicing MCP/OAuth test files are enrolled in zero workflows is
 itself the exact problem the backstop exists to catch: tests that pass review
-and ship while never running. Slice B both fixes them and enrolls them; the
-backstop (slice E) is the standing guard so it cannot recur silently.
+and ship while never running. Slice B enrolls them (production is fine -- the
+OAuth server is live via Claude/Codex); the backstop (slice E) is the standing
+guard so it cannot recur silently.
 
 Related but separate: broaden `audit_extracted_pipeline_ci_enrollment.py`
 (make it workflow-aware) so un-enrolled files are flagged at PR time, not only
