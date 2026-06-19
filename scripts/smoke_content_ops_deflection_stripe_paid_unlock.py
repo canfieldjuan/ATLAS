@@ -176,31 +176,51 @@ def _open_http_request(request: urllib.request.Request, *, timeout: float) -> An
     return urllib.request.urlopen(request, timeout=timeout)
 
 
+def _report_lookup_error(exc: BaseException) -> RuntimeError:
+    detail = _redact_error_detail(exc)
+    message = "persisted report lookup failed"
+    if detail:
+        message = f"{message}: {detail}"
+    return RuntimeError(message)
+
+
 async def _fetch_report_account_ids(database_url: str, request_id: str) -> list[str]:
     try:
         import asyncpg  # type: ignore[import-not-found]
     except ImportError as exc:  # pragma: no cover - host dependency
         raise RuntimeError("asyncpg is required to derive account_id from the report row") from exc
 
-    pool = await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=1)
     try:
-        rows = await pool.fetch(
-            """
-            SELECT account_id::text AS account_id
-            FROM content_ops_deflection_reports
-            WHERE request_id = $1
-            ORDER BY created_at DESC
-            LIMIT 2
-            """,
-            request_id,
-        )
-    finally:
-        await pool.close()
+        pool = await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=1)
+        try:
+            rows = await pool.fetch(
+                """
+                SELECT account_id::text AS account_id
+                FROM content_ops_deflection_reports
+                WHERE request_id = $1
+                ORDER BY created_at DESC
+                LIMIT 2
+                """,
+                request_id,
+            )
+        finally:
+            await pool.close()
+    except (
+        OSError,
+        TimeoutError,
+        ValueError,
+        asyncio.TimeoutError,
+        asyncpg.PostgresError,
+    ) as exc:
+        raise _report_lookup_error(exc) from exc
     return [_clean(row["account_id"]) for row in rows if _clean(row["account_id"])]
 
 
 def _lookup_report_account_id(database_url: str, request_id: str) -> str:
-    account_ids = asyncio.run(_fetch_report_account_ids(database_url, request_id))
+    try:
+        account_ids = asyncio.run(_fetch_report_account_ids(database_url, request_id))
+    except (OSError, TimeoutError, ValueError, asyncio.TimeoutError) as exc:
+        raise _report_lookup_error(exc) from exc
     if not account_ids:
         raise RuntimeError("persisted deflection report row was not found")
     if len(account_ids) > 1:
@@ -236,12 +256,6 @@ def _resolve_metadata(args: argparse.Namespace) -> tuple[MetadataResolution | No
         )
     except RuntimeError as exc:
         return (None, [str(exc)])
-    except Exception as exc:
-        detail = _redact_error_detail(exc)
-        error = "persisted report lookup failed"
-        if detail:
-            error = f"{error}: {detail}"
-        return (None, [error])
 
     if account_id_explicit and supplied_account_id and supplied_account_id != persisted_account_id:
         return (
