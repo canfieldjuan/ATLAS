@@ -5,8 +5,8 @@
 #1712 adds the advisory repo-wide unit backstop/auditor change, but the first
 backstop runs surfaced two harness-boundary problems that should be fixed in a
 follow-up instead of widening #1712: legacy import-time `asyncpg` fakes can
-poison later DB fixture tests, and several live/service-backed DB tests need to
-sit outside the unit-only backstop lane.
+poison later DB fixture tests, and live/service-backed DB tests need to sit
+outside the unit-only backstop lane without dropping mixed-file unit coverage.
 
 ## Scope (this PR)
 
@@ -17,10 +17,11 @@ Slice phase: Robust testing
    `asyncpg.exceptions` before test module collection when the dependency is
    installed, so legacy `sys.modules.setdefault("asyncpg", MagicMock())` helpers
    cannot replace the real driver.
-2. `tests/conftest.py`: mark the known live/service-backed DB test files as
-   `integration` during collection so `-m "not integration and not e2e"`
-   remains the unit-only lane.
-3. `plans/PR-Backstop-Green-Follow-Up.md`: document this cleanup slice for the
+2. `tests/conftest.py`: mark tests that request the shared `db_pool` fixture as
+   `integration`, keeping pure unit tests in mixed files inside the unit lane.
+3. `tests/conftest.py`: keep a smaller explicit allowlist only for live files
+   that create their own pools and do not request `db_pool`.
+4. `plans/PR-Backstop-Green-Follow-Up.md`: document this cleanup slice for the
    local PR review contract.
 
 Out of scope: expanding #1712, changing the backstop command, or fixing
@@ -41,16 +42,20 @@ Acceptance criteria:
       expects.
 - [ ] Unit backstop collection sees the real `asyncpg` module when requirements
       install it, so legacy per-file setdefault fakes cannot replace it.
-- [ ] Known live/service-backed DB tests are marked `integration` before marker
-      filtering so they are excluded from the unit-only backstop.
+- [ ] Tests using the shared `db_pool` fixture are marked `integration` before
+      marker filtering.
+- [ ] Self-pooling live files without `db_pool` remain excluded through the
+      explicit filename allowlist.
+- [ ] Pure unit tests in mixed files such as `tests/test_evidence_gate.py` stay
+      in the unit-only backstop lane.
 - [ ] No production code or backstop command changes.
 
 Affected surfaces: pytest collection, test marker classification, and the
 backstop follow-up plan doc.
 
 Risk areas: over-marking a unit test as integration, or changing pytest
-collection behavior for unrelated tests. Mitigated by limiting the hook to an
-explicit filename allowlist and by using the full pytest hook signature.
+collection behavior for unrelated tests. Mitigated by marking at item level for
+`db_pool` users and keeping the file allowlist only for self-pooling live files.
 
 Reviewer rules triggered: R1.
 
@@ -60,8 +65,10 @@ Pytest loads `tests/conftest.py` before collecting test modules. Importing the
 real `asyncpg` driver there means older per-file helpers that use
 `sys.modules.setdefault("asyncpg", ...)` become no-ops in the CI/backstop
 environment where requirements install the driver. The collection hook then
-adds the existing `integration` marker to the known live DB/service files so the
-repo-wide unit backstop deselects them without changing the backstop expression.
+adds the existing `integration` marker to tests that request `db_pool`, plus a
+short list of self-pooling live files that create their own pools and do not use
+that fixture. This keeps the repo-wide unit backstop focused on unit tests
+without excluding pure unit tests that share a file with DB-backed tests.
 
 ## Intentional
 
@@ -69,6 +76,8 @@ repo-wide unit backstop deselects them without changing the backstop expression.
   historical test module that contains the same `asyncpg` setdefault pattern.
 - Keep live/service-backed tests classified out of the unit lane using the
   existing `integration` marker rather than faking service state.
+- Mark DB-backed tests at item level where possible so mixed files retain unit
+  coverage.
 - Leave #1712 focused on the advisory backstop/auditor workflow.
 
 ## Deferred
@@ -87,6 +96,8 @@ cleanup slice.
 ## Verification
 
 - Local py_compile for tests/conftest.py and tests/test_mcp_servers.py passed.
+- Local inspection confirmed `tests/test_evidence_gate.py` DB-backed tests use
+  `db_pool` while its pure unit tests do not.
 - Full backstop validation should run in CI or an environment after
   requirements install, because the local Codex runtime did not have `asyncpg`
   installed.
@@ -95,6 +106,6 @@ cleanup slice.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Backstop-Green-Follow-Up.md` | ~90 |
+| `plans/PR-Backstop-Green-Follow-Up.md` | ~110 |
 | `tests/conftest.py` | ~35 |
-| **Total** | **~125** |
+| **Total** | **~145** |

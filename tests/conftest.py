@@ -33,17 +33,12 @@ except ModuleNotFoundError:
     pass
 
 
-_INTEGRATION_TEST_FILES = {
+_SELF_POOL_LIVE_FILES = {
     "test_b2b_challenger_claims_api_live.py",
-    "test_b2b_enrichment_batch_integration.py",
-    "test_b2b_enrichment_repair_batch_integration.py",
     "test_b2b_vendor_claims_api_live.py",
-    "test_campaign_recipient_dedup.py",
-    "test_comparisons_live.py",
     "test_evidence_claim_audit_live.py",
     "test_evidence_claim_builder_live.py",
     "test_evidence_claim_repository_live.py",
-    "test_evidence_gate.py",
     "test_live_autonomous.py",
     "test_reasoning_live.py",
     "test_vendor_dashboard_claims_live.py",
@@ -53,7 +48,7 @@ _INTEGRATION_TEST_FILES = {
 def pytest_collection_modifyitems(session, config, items):
     integration = pytest.mark.integration
     for item in items:
-        if Path(str(item.fspath)).name in _INTEGRATION_TEST_FILES:
+        if "db_pool" in item.fixturenames or Path(str(item.fspath)).name in _SELF_POOL_LIVE_FILES:
             item.add_marker(integration)
 
 
