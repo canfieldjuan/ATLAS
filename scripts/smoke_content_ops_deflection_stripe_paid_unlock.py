@@ -135,10 +135,13 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         errors.append("ATLAS_SAAS_STRIPE_WEBHOOK_SECRET, STRIPE_WEBHOOK_SECRET, or --webhook-secret is required")
     derive_account_id = bool(getattr(args, "derive_account_id_from_report", False))
     account_id = _clean(args.account_id)
+    account_id_explicit = bool(
+        getattr(args, "account_id_explicit", bool(account_id))
+    )
     if not account_id:
         if not derive_account_id:
             errors.append("ATLAS_ACCOUNT_ID, ATLAS_FAQ_SEARCH_ACCOUNT_ID, or --account-id is required")
-    else:
+    elif not derive_account_id or account_id_explicit:
         try:
             uuid.UUID(account_id)
         except ValueError:
@@ -233,6 +236,12 @@ def _resolve_metadata(args: argparse.Namespace) -> tuple[MetadataResolution | No
         )
     except RuntimeError as exc:
         return (None, [str(exc)])
+    except Exception as exc:
+        detail = _redact_error_detail(exc)
+        error = "persisted report lookup failed"
+        if detail:
+            error = f"{error}: {detail}"
+        return (None, [error])
 
     if account_id_explicit and supplied_account_id and supplied_account_id != persisted_account_id:
         return (
@@ -457,7 +466,10 @@ def _write_result(path: Path | None, payload: Mapping[str, Any]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = _build_parser().parse_args(raw_argv)
-    args.account_id_explicit = "--account-id" in raw_argv
+    args.account_id_explicit = any(
+        value == "--account-id" or value.startswith("--account-id=")
+        for value in raw_argv
+    )
     preflight_errors = _validate_args(args)
     event_id = _clean(args.event_id) or _generated_id("evt_content_ops_deflection_paid")
     session_id = _clean(args.session_id) or _generated_id("cs_content_ops_deflection")
