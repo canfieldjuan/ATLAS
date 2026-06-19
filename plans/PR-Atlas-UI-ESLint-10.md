@@ -62,13 +62,14 @@ None.
 - Verified the branch is refreshed onto current `main` so the latest merged fixes are included.
 - The resolved automated review finding is addressed by keeping `eslint-plugin-react-hooks@7.1.1` and `typescript-eslint@8.61.1`, which support ESLint 10 in the lockfile peer graph.
 - Security Guardrails startup failure matches the OSV reusable workflow permission issue fixed by granting `actions: read` to the OSV caller.
+- PR body AI reconciliation uses the local-audit marker `All findings fixed or waived: yes`.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/security_guardrails.yml` | ~12 |
-| `atlas-ui/package.json` | 1 |
+| `atlas-ui/package.json` | 2 |
 | `atlas-ui/package-lock.json` | ~440 |
-| `plans/PR-Atlas-UI-ESLint-10.md` | ~76 |
+| `plans/PR-Atlas-UI-ESLint-10.md` | ~75 |
 | **Total** | **~529** |
