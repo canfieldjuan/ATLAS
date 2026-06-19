@@ -1,7 +1,7 @@
 {
   "patterns": [
     "atlas-intel-ui/src/api/b2bClient.ts",
-    "atlas-intel-ui/src/pages/b2b/*.tsx",
+    "atlas-intel-ui/src/pages/b2b/**/*.tsx",
     "atlas-churn-ui/src/components/Campaign*.tsx",
     "atlas-churn-ui/src/pages/Campaign*.tsx",
     "atlas-churn-ui/src/pages/Vendor*.tsx",
