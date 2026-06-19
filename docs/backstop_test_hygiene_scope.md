@@ -192,13 +192,20 @@ Slice E shows any still biting, convert those specific files to
 `stub_missing_module` the same way. The inert `torch`/`numpy`/etc. stubs are
 likewise left until proven to matter.
 
-## Slice E -- Reintroduce the backstop
+## Slice E -- Reintroduce the backstop  [DONE]
 
-Restore the backstop workflow + plan from
-`claude/pr-ci-repo-wide-unit-backstop` (branched fresh off `main`), confirm the
-suite now collects and runs with only intended `integration`/`e2e` skips, and
-decide advisory vs. gating. Keep `--continue-on-collection-errors` as a
-belt-and-suspenders. Size: small (the workflow already exists). Gated on A-D.
+Restored `.github/workflows/repo_wide_unit_backstop.yml` +
+`plans/PR-CI-Repo-Wide-Unit-Backstop.md` from the closed
+`claude/pr-ci-repo-wide-unit-backstop` branch onto this effort's branch (which
+carries A-F), so the backstop ships together with the fixes that let it run
+clean. Workflow unchanged from its resilient final state: schedule + manual
+dispatch + a `pull_request` trigger scoped to the workflow file only, running
+`pytest -m "not integration and not e2e" -q --continue-on-collection-errors`.
+YAML validated; `scripts/audit_workflow_security_posture.py` passes. Introduced
+**advisory** (not a merge gate) for its debut so its runtime/flake profile and
+any residual gaps (the 37 `setdefault` planters) are observed first. The
+self-scoped `pull_request` trigger makes the backstop run on this PR -- its CI
+result is the live proof the suite now collects.
 
 ---
 
