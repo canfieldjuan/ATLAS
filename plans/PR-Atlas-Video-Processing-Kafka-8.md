@@ -9,7 +9,7 @@ broker configuration instead of only changing the image tag.
 
 ## Scope (this PR)
 
-Ownership lane: atlas-video-processing/infra
+Ownership lane: atlas-video-processing/kafka-infra
 Slice phase: Production hardening
 
 1. Update the compose Kafka image from `confluentinc/cp-kafka:5.5.3` to
