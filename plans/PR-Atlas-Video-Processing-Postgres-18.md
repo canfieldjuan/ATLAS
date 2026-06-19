@@ -90,5 +90,5 @@ None.
 |---|---:|
 | `atlas_video-processing/docker-compose.yml` | ~6 |
 | `.github/workflows/security_guardrails.yml` | shared repair |
-| `plans/PR-Atlas-Video-Processing-Postgres-18.md` | ~80 |
-| **Total** | **~86** |
+| `plans/PR-Atlas-Video-Processing-Postgres-18.md` | ~108 |
+| **Total** | **~114** |
