@@ -10,7 +10,7 @@ re-injects the fix baton after compaction, and a `/fix-mode` skill to arm it.
 The push-time audit only catches strays after the work is done; this stops them
 at the edit.
 
-This PR is over the 400-LOC soft cap (~513). The overage is intentional and
+This PR is over the 400-LOC soft cap (~566). The overage is intentional and
 indivisible: the gitignore enablement, the two hooks, the `/fix-mode` skill, and
 the fail-open test matrix are one unit -- a half-wired hook set (e.g. a deny hook
 with no skill to arm it, or a skill writing a baton no hook reads) would be worse
@@ -21,7 +21,7 @@ fail-open/deny test coverage, not new behavior.
 
 Ownership lane: process/agent-guidance
 Slice phase: Production hardening
-Max files: 7
+Max files: 8
 
 The hooks are committed and active in `.claude/settings.json` (team-wide) but
 **fail open**: they do nothing unless a gitignored fix-mode baton exists, and any
@@ -36,6 +36,7 @@ unarmed checkout are never blocked.
 - `.claude/hooks/inject_fix_mode.py`
 - `.claude/skills/fix-mode/SKILL.md`
 - `tests/test_fix_mode_hook.py`
+- `.github/workflows/pre_push_audit.yml`
 - `plans/PR-Fix-Mode-Claude-Code-Enforcement.md`
 
 ### Review Contract
@@ -88,9 +89,22 @@ tracked.
   ASCII-only.
 - The allowed-set lives in the hook; the count budget stays in the #1716
   pre-push audit -- two composable layers, no stateful counting in the hook.
+- Targets are normalized (collapse `..`/`.`, unify separators) before glob
+  matching so `scripts/../tests/foo.py` cannot bypass `scripts/*`, and the
+  control files (`.claude/fix-mode-state.json`, `SESSION_STATE.local.md`) are
+  always editable so `/fix-mode off` / widen are never locked out.
+- `tests/test_fix_mode_hook.py` is enrolled in the
+  `.github/workflows/pre_push_audit.yml` PR-review tooling test list so the hook
+  is PR-gated, not only covered by the scheduled backstop.
 
 ## Deferred
 
+- Constraining **Bash** writes during fix mode (shell redirection / `python -c` /
+  `sed` writing outside the allowed set bypass the `Edit|Write|MultiEdit` hook).
+  Out of scope here: this hook is a cooperative guardrail for the agent's own
+  Edit/Write path, not an adversarial sandbox, and intercepting arbitrary
+  write-capable shell commands is a separate, heuristic-heavy slice. (Tracked in
+  #1714.)
 - A `PreCompact` snapshot hook: `SessionStart` `matcher: compact` already
   re-injects the on-disk baton after auto-compaction, so PreCompact adds little;
   revisit if volatile in-context findings need snapshotting first. (Tracked in
@@ -123,9 +137,10 @@ None.
 |---|---:|
 | `.gitignore` | 8 |
 | `.claude/settings.json` | 26 |
-| `.claude/hooks/check_edit_budget.py` | 105 |
+| `.claude/hooks/check_edit_budget.py` | 120 |
 | `.claude/hooks/inject_fix_mode.py` | 70 |
 | `.claude/skills/fix-mode/SKILL.md` | 50 |
-| `tests/test_fix_mode_hook.py` | 130 |
-| `plans/PR-Fix-Mode-Claude-Code-Enforcement.md` | ~124 |
-| **Total** | **~513** |
+| `.github/workflows/pre_push_audit.yml` | 1 |
+| `tests/test_fix_mode_hook.py` | 153 |
+| `plans/PR-Fix-Mode-Claude-Code-Enforcement.md` | ~138 |
+| **Total** | **~566** |

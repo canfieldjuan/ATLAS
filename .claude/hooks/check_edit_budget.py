@@ -38,13 +38,26 @@ def _targets(tool_input: dict) -> list[str]:
     return targets
 
 
+# Control files the armed session must always be able to edit, regardless of the
+# allowed set -- so `/fix-mode off`, widening the baton, and updating the human
+# state file are never locked out.
+_ALWAYS_ALLOWED = {".claude/fix-mode-state.json", "SESSION_STATE.local.md"}
+
+
 def _relativize(path: str, project_dir: str) -> str:
+    """Repo-relative, normalized POSIX path (collapses '..'/'.', unifies seps).
+
+    Normalizing before glob matching closes the `scripts/../tests/foo.py` bypass
+    (it resolves to `tests/foo.py`, which no longer matches `scripts/*`) and
+    makes Windows `\\` separators match `/`-based globs.
+    """
     try:
-        if os.path.isabs(path):
-            return os.path.relpath(path, project_dir)
+        candidate = path.replace("\\", "/")
+        if os.path.isabs(path) or os.path.isabs(candidate):
+            candidate = os.path.relpath(path, project_dir)
+        return os.path.normpath(candidate).replace("\\", "/")
     except ValueError:
         return path
-    return path
 
 
 def _deny(reason: str) -> None:
@@ -88,6 +101,8 @@ def main() -> int:
 
         for target in _targets(tool_input):
             rel = _relativize(target, project_dir)
+            if rel in _ALWAYS_ALLOWED:
+                continue  # control files stay editable so /fix-mode off + widen work
             if not any(fnmatch.fnmatch(rel, str(pat)) for pat in allowed):
                 _deny(
                     f"{rel} is outside the fix-mode allowed set "

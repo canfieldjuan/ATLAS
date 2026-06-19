@@ -112,6 +112,29 @@ def test_absolute_path_is_relativized_before_match(tmp_path):
     assert _decision(result.stdout) is None
 
 
+def test_traversal_path_cannot_bypass_allowed_set(tmp_path):
+    # `scripts/../tests/foo.py` matches `scripts/*` by raw fnmatch but resolves
+    # to `tests/foo.py`; normalization must catch the escape and deny it.
+    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"]})
+    result = _run(CHECK_HOOK, _edit("scripts/../tests/foo.py"), tmp_path)
+    assert _decision(result.stdout) == "deny"
+
+
+def test_baton_control_file_is_always_editable(tmp_path):
+    # Even with an allowed set that omits it, the baton must stay editable so
+    # `/fix-mode off` / widen are never locked out.
+    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"]})
+    result = _run(CHECK_HOOK, _edit(".claude/fix-mode-state.json"), tmp_path)
+    assert result.returncode == 0
+    assert _decision(result.stdout) is None
+
+
+def test_session_state_file_is_always_editable(tmp_path):
+    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"]})
+    result = _run(CHECK_HOOK, _edit("SESSION_STATE.local.md"), tmp_path)
+    assert _decision(result.stdout) is None
+
+
 def test_inject_emits_context_when_active(tmp_path):
     _write_baton(
         tmp_path,
