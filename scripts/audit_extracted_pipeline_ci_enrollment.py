@@ -59,8 +59,7 @@ class EnrollmentAudit:
             )
         if self.missing_from_push_filters:
             failures.append(
-                "missing from push filters: "
-                + ", ".join(self.missing_from_push_filters)
+                "missing from push filters: " + ", ".join(self.missing_from_push_filters)
             )
         failures.extend(self.atlas_brain_test_errors)
         return tuple(failures)
@@ -193,9 +192,9 @@ def atlas_workflow_enrollments(root: Path) -> tuple[AtlasWorkflowEnrollment, ...
 
 # The marker filter used by the repo-wide backstop run step.
 _BACKSTOP_MARKER = re.compile(r"-m\s*[\"']?\s*not integration and not e2e")
-# A per-file pytest target (e.g. tests/foo.py); a path-limited command is not
-# repo-wide and does not provide catch-all coverage.
-_EXPLICIT_TEST_PATH = re.compile(r"\btests/\S+\.py\b")
+# Pytest test-tree targets. Only the whole tests tree is repo-wide; narrower
+# directories like tests/unit/ and explicit files do not provide catch-all coverage.
+_PYTEST_TEST_TARGET = re.compile(r"(?<!\S)(?:\./)?tests(?:/[^\s\\]*)?(?=\s|\\|$)")
 # Real marker syntax only -- a `@pytest.mark.integration/e2e` decorator or a
 # module-level `pytestmark = ... pytest.mark.integration/e2e` -- anchored to the
 # line start so a mention in a comment or docstring does not falsely exempt a
@@ -211,7 +210,7 @@ def _is_repo_wide_unit_pytest(line: str) -> bool:
     """Whether a workflow line is a real repo-wide unit pytest command.
 
     Requires a non-comment, non-echo line that invokes pytest with the unit
-    marker filter and no explicit per-file target. (Line/text based rather than
+    marker filter and targets the full tests tree. (Line/text based rather than
     YAML-parsed: this auditor runs in a minimal env without pyyaml, like its
     sibling `event_path_filters` regex parsing.)
     """
@@ -220,7 +219,11 @@ def _is_repo_wide_unit_pytest(line: str) -> bool:
         return False
     if "pytest" not in stripped or not _BACKSTOP_MARKER.search(stripped):
         return False
-    return not _EXPLICIT_TEST_PATH.search(stripped)
+    targets = [
+        target[2:] if target.startswith("./") else target
+        for target in _PYTEST_TEST_TARGET.findall(stripped)
+    ]
+    return bool(targets) and all(target in {"tests", "tests/"} for target in targets)
 
 
 def repo_wide_backstop_present(root: Path) -> bool:
@@ -228,11 +231,11 @@ def repo_wide_backstop_present(root: Path) -> bool:
 
     True only when `.github/workflows/repo_wide_unit_backstop.yml` has a real
     run-command line invoking `pytest -m "not integration and not e2e"` over the
-    whole tree (no per-file target). Checking the run command -- not raw
-    substrings anywhere in the file -- avoids falsely crediting a backstop whose
-    command was removed but whose marker strings linger in a comment or echo.
-    The backstop runs the unit suite with no per-file path filter, so a unit
-    test it does not exclude is exercised there even without a dedicated
+    full `tests/` tree. Checking the run command -- not raw substrings anywhere
+    in the file -- avoids falsely crediting a backstop whose command was removed
+    or narrowed but whose marker strings linger in a comment or echo. The
+    backstop runs the unit suite with no per-file path filter, so a unit test it
+    does not exclude is exercised there even without a dedicated
     `atlas_*_checks.yml`.
     """
     backstop = root / ".github/workflows/repo_wide_unit_backstop.yml"
