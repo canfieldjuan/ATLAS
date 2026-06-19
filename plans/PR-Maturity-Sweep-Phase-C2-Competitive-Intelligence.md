@@ -22,6 +22,11 @@ Intel B2B UI, Atlas Churn vendor/campaign UI, competitive storage migrations,
 extracted campaign docs/examples, extracted campaign migrations, and the
 portfolio campaign-review media surface.
 
+The over-budget size is intentional and indivisible: the workflow, checker,
+fixture tests, and full current manifest must land together so CI can both run
+and fail closed on added or removed production-surface files. Splitting the
+manifest from enforcement would create a temporary false-green gap.
+
 ## Scope (this PR)
 
 Ownership lane: ci/maturity-sweep
@@ -34,6 +39,8 @@ Slice phase: Production hardening
 4. Add a blocking competitive-intelligence product-surface manifest guard for
    adjacent UI, storage, docs/examples, and media files that are not scored by
    the Python maturity sweep.
+5. Add focused fixture tests proving the product-surface checker passes on a
+   matched manifest and fails for missing or untracked discovered files.
 
 ### Review Contract
 
@@ -52,13 +59,18 @@ Acceptance criteria:
 - A companion product-surface workflow runs
   `scripts/check_competitive_intelligence_product_surface_manifest.py` for the
   competitive-intelligence UI/storage/docs/media surface.
+- The Atlas Intel B2B UI discovery glob is recursive so future subdirectories
+  do not bypass the manifest guard.
 - The product-surface manifest is generated from the current tree and must be
   updated intentionally when a discovered file is added or removed.
+- Fixture tests cover the checker happy path, missing expected file, and newly
+  discovered untracked file failure modes.
 
 Affected surfaces:
 - `.github/workflows/maturity_sweep_advisory.yml`
 - `.github/workflows/maturity_sweep_competitive_intelligence_surface.yml`
 - `scripts/check_competitive_intelligence_product_surface_manifest.py`
+- `tests/test_competitive_intelligence_product_surface_manifest.py`
 - `tests/maturity_sweep/baseline_extracted_competitive_intelligence.json`
 - `tests/maturity_sweep/competitive_intelligence_product_surface_manifest.json`
 - `atlas-intel-ui/src/api/b2bClient.ts` and `atlas-intel-ui/src/pages/b2b/**`
@@ -88,6 +100,7 @@ Reviewer rules triggered:
 - `.github/workflows/maturity_sweep_competitive_intelligence_surface.yml`
 - `plans/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md`
 - `scripts/check_competitive_intelligence_product_surface_manifest.py`
+- `tests/test_competitive_intelligence_product_surface_manifest.py`
 - `tests/maturity_sweep/baseline_extracted_competitive_intelligence.json`
 - `tests/maturity_sweep/competitive_intelligence_product_surface_manifest.json`
 
@@ -126,8 +139,10 @@ fail the check until the manifest is updated intentionally.
   data, MCP, campaign, and storage surfaces.
 - The product-surface manifest is intentionally separate from the Python score
   gate because it includes TSX, SQL, JSON, Markdown, and media files.
-- `extracted_llm_infrastructure` is deferred to keep this PR under the soft
-  diff budget.
+- The product-surface workflow, checker, tests, and full manifest are kept in
+  one PR so the new guard has no enforcement/baseline gap.
+- `extracted_llm_infrastructure` is deferred to keep this PR scoped to the
+  competitive-intelligence lane.
 
 ## Deferred
 
@@ -144,7 +159,8 @@ Parked hardening: none.
 - Path-filter spot check for `extracted_competitive_intelligence/**` and retained `tests/**` - pass.
 - Scratch negative proof in `extracted_competitive_intelligence/services/vendor_registry.py` - pass. A temporary swallowed-exception probe failed with `score increased (8 -> 13)` and `new sensitive-path SWALLOWED_EXCEPT (1 -> 2)`; the scratch code was removed and the clean C2 command reran successfully.
 - `python scripts/check_competitive_intelligence_product_surface_manifest.py` - pass, 171 files.
-- `python -m py_compile scripts/check_competitive_intelligence_product_surface_manifest.py` - pass.
+- `python -m py_compile scripts/check_competitive_intelligence_product_surface_manifest.py tests/test_competitive_intelligence_product_surface_manifest.py` - pass.
+- `python -m pytest tests/test_competitive_intelligence_product_surface_manifest.py -q` - pass, 3 passed.
 - `python scripts/sync_pr_plan.py plans/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md --check` - pass.
 
 ## Estimated diff size
@@ -152,9 +168,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/maturity_sweep_advisory.yml` | 11 |
-| `.github/workflows/maturity_sweep_competitive_intelligence_surface.yml` | 55 |
-| `plans/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md` | 160 |
+| `.github/workflows/maturity_sweep_competitive_intelligence_surface.yml` | 57 |
+| `plans/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md` | 178 |
 | `scripts/check_competitive_intelligence_product_surface_manifest.py` | 74 |
+| `tests/test_competitive_intelligence_product_surface_manifest.py` | 83 |
 | `tests/maturity_sweep/baseline_extracted_competitive_intelligence.json` | 220 |
 | `tests/maturity_sweep/competitive_intelligence_product_surface_manifest.json` | 196 |
-| **Total** | **716** |
+| **Total** | **819** |
