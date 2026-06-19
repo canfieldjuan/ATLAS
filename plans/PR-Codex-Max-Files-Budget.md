@@ -13,7 +13,7 @@ Code pre-edit-hook track is a separate later slice under #1714.
 
 ## Scope (this PR)
 
-Ownership lane: ci/coverage
+Ownership lane: process/agent-guidance
 Slice phase: Production hardening
 Max files: 4
 
