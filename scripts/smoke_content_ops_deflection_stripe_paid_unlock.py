@@ -225,7 +225,7 @@ def _lookup_report_account_id(database_url: str, request_id: str) -> str:
         raise RuntimeError("persisted deflection report row was not found")
     if len(account_ids) > 1:
         raise RuntimeError("persisted deflection report request_id is ambiguous")
-    account_id = account_ids[0]
+    account_id = next(iter(account_ids))
     try:
         uuid.UUID(account_id)
     except ValueError as exc:
