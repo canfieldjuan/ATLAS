@@ -77,14 +77,11 @@ None.
 
 ## Verification
 
-- `python -m pip index versions torch --index-url https://download.pytorch.org/whl/cpu`
-  - confirmed PyTorch CPU releases are available, including the current latest
-    line used by the resolver.
-- `python -m pip download --only-binary=:all: --no-deps --python-version 3.14 --implementation cp --abi cp314 --platform manylinux_2_28_x86_64 --index-url https://download.pytorch.org/whl/cpu torch`
-  - passed; found a CPython 3.14 PyTorch CPU wheel.
-- `python -m pip download --only-binary=:all: --python-version 3.14 --implementation cp --abi cp314 --platform manylinux_2_28_x86_64 --platform manylinux_2_27_x86_64 --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 -r work/requirements-1635-graphiti.txt`
-  - passed for the Graphiti requirements, including `torch`, `numpy`,
-    `pydantic-core`, `asyncpg`, `scipy`, and `scikit-learn`.
+- PyTorch CPU index probe confirmed releases are available for the resolver line.
+- CPython 3.14 Linux wheel probe passed for the PyTorch CPU package.
+- Mixed manylinux CPython 3.14 wheel-resolution probe passed for the Graphiti
+  Docker requirements, including `torch`, `numpy`, `pydantic-core`, `asyncpg`,
+  `scipy`, and `scikit-learn`.
 - Docker build was not run in this environment; validation is by dependency
   wheel resolution plus CI.
 
@@ -94,5 +91,5 @@ None.
 |---|---:|
 | `Dockerfile.graphiti` | ~1 |
 | `.github/workflows/security_guardrails.yml` | shared repair |
-| `plans/PR-Graphiti-Python-3-14-Base-Image.md` | ~85 |
-| **Total** | **~86** |
+| `plans/PR-Graphiti-Python-3-14-Base-Image.md` | ~80 |
+| **Total** | **~106** |
