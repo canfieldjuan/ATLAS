@@ -651,6 +651,30 @@ not after a full review round. Chasing the symptom one layer at a time -- fix
 the named case, ship, get bounced one layer deeper, repeat -- is the
 tail-chasing this gate exists to stop.
 
+### 3l. PR fix mode (constrain the fix loop)
+
+A **fix loop** -- iterating on red CI or review comments on an already-open PR
+-- is where sessions burn the most time and tokens: broad exploration, edits to
+files outside the real failure source, and re-orientation after every
+compaction. Before editing in a fix loop, record a **fix baton** in
+`SESSION_STATE.local.md` (the `PR Fix Mode` block) capturing the failure source,
+the **allowed-files set**, and a **max-files budget**.
+
+- **Stay inside the allowed set.** The allowed files are the failure source you
+  identified, not "everything the symptom touches." Touching a file outside the
+  set is presumed scope creep.
+- **Widening the set is a root-cause decision.** If the fix genuinely needs an
+  upstream file, name the upstream reason in the baton and the plan **before**
+  editing it (this is the §3k trace, not a drive-by). Do not silently grow the
+  diff.
+- **One judgment pass, no auto-loop.** Bot findings are advisory inputs you
+  disposition deliberately (resolve or waive with a reason); there is no
+  "address every comment" reflex (§4a.1).
+- **The baton is the compaction handoff.** Keep the current failing
+  check/comment, the last useful log finding, the next exact action, and
+  do-not-redo notes current, so a post-compaction resume continues instead of
+  re-exploring. Update it before and after each push.
+
 ---
 
 ## 4. Reviewer workflow
