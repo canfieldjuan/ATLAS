@@ -54,8 +54,9 @@ Acceptance criteria:
       changes trigger it.
 - [ ] The auditor credits backstop coverage only for a real full-`tests/` run:
       changed `atlas_brain`-importing unit tests pass when the backstop exists,
-      but comment-only, shell-comment-only, per-file, and directory-scoped
-      backstop commands still fail enrollment.
+      but comment-only, shell-comment-only, step-name-only, per-file,
+      directory-scoped, and narrowed-marker backstop commands still fail
+      enrollment.
 
 Affected surfaces: CI + the CI-enrollment auditor; no application code.
 
@@ -72,13 +73,14 @@ The workflow installs `requirements.txt` + pytest and runs
 Because it does not path-filter the test set below `tests/`, a file no per-area
 workflow enrolls is still executed here.
 
-`repo_wide_backstop_present()` scans the backstop workflow's run-command lines
-(text/line based -- the auditor runs in a minimal env without pyyaml) and
-returns true only when one invokes `pytest -m "not integration and not e2e"`
-against the full `tests/` tree. Marker strings lingering in a comment/echo, a
-per-file command, or a narrower directory command such as `tests/unit/` do not
-falsely credit coverage. `atlas_brain_test_workflow_errors()` then decides per
-changed test:
+`repo_wide_backstop_present()` scans the backstop workflow's executable
+run-command lines (text/line based -- the auditor runs in a minimal env without
+pyyaml) and returns true only when one invokes
+`pytest -m "not integration and not e2e"` against the full `tests/` tree.
+Marker strings lingering in a comment, echo, step name, per-file command,
+narrower directory command such as `tests/unit/`, or narrowed marker expression
+such as `not integration and not e2e and not slow` do not falsely credit
+coverage. `atlas_brain_test_workflow_errors()` then decides per changed test:
 
 - An `integration`/`e2e`-marked test is **exempt** -- it is service-lane, the
   backstop skips it, and this unit-enrollment audit does not cover it.
@@ -124,8 +126,9 @@ Parked hardening: none.
 - `scripts/audit_workflow_security_posture.py` -- workflow security posture
   audit passes.
 - `python -m pytest tests/test_audit_extracted_pipeline_ci_enrollment.py -q`
-  -- 24 passed (adds backstop-accept, comment-only-reject,
-  run-block-comment-reject, directory-scoped-reject, integration-exempt, and
+  -- 26 passed (adds backstop-accept, comment-only-reject,
+  run-block-comment-reject, directory-scoped-reject,
+  narrowed-marker-reject, step-name-command-reject, integration-exempt, and
   docstring-not-exempt cases).
 
 ## Estimated diff size
@@ -133,7 +136,7 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/repo_wide_unit_backstop.yml` | 54 |
-| `scripts/audit_extracted_pipeline_ci_enrollment.py` | ~65 |
-| `tests/test_audit_extracted_pipeline_ci_enrollment.py` | ~95 |
-| `plans/PR-CI-Repo-Wide-Unit-Backstop.md` | ~170 |
-| **Total** | **~384** |
+| `scripts/audit_extracted_pipeline_ci_enrollment.py` | ~80 |
+| `tests/test_audit_extracted_pipeline_ci_enrollment.py` | ~125 |
+| `plans/PR-CI-Repo-Wide-Unit-Backstop.md` | ~175 |
+| **Total** | **~434** |
