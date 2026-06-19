@@ -59,11 +59,15 @@ Reviewer rules triggered: R1, R14.
 ## Mechanism
 
 A single job installs `requirements.txt` + pytest and runs
-`python -m pytest -m "not integration and not e2e" -q`. Because it does not
-path-filter the test set, a file that no per-area workflow enrolls is still
-executed here. The `pull_request` path filter is the workflow file itself, which
-makes the backstop self-exercising on this PR (immediate proof it runs) while
-keeping it off the critical path of normal PRs.
+`python -m pytest -m "not integration and not e2e" -q
+--continue-on-collection-errors`. Because it does not path-filter the test set, a
+file that no per-area workflow enrolls is still executed here.
+`--continue-on-collection-errors` keeps one un-importable module (e.g. an
+optional-dependency MCP server whose mock has drifted) from aborting the whole
+run at collection; import gaps surface as reported errors next to real results
+instead of zeroing out the signal. The `pull_request` path filter is the workflow
+file itself, which makes the backstop self-exercising on this PR (immediate proof
+it runs) while keeping it off the critical path of normal PRs.
 
 ## Intentional
 
@@ -78,6 +82,14 @@ keeping it off the critical path of normal PRs.
 
 ## Deferred
 
+- Resolve the import-gap modules the backstop's first run surfaced: ~11 test
+  modules cannot be collected in a base `requirements.txt` env -- mostly MCP
+  servers (`mcp.server.auth` absent; the `_MockFastMCP` fallback has drifted
+  behind `structured_output` / `custom_route`), plus an `asyncpg.__spec__`
+  import quirk and a few others. Decide per family whether to install the real
+  dependency in this job, refresh the mock, or mark them so the backstop can go
+  green. Until then this check stays red by design (it is reporting real gaps,
+  not a regression in this slice).
 - Broaden `audit_extracted_pipeline_ci_enrollment.py` (and make it
   workflow-aware) so deflection/content-ops test families are flagged for
   enrollment at PR time, not only caught nightly by this backstop.
@@ -99,6 +111,6 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/repo_wide_unit_backstop.yml` | 52 |
-| `plans/PR-CI-Repo-Wide-Unit-Backstop.md` | 95 |
-| **Total** | **147** |
+| `.github/workflows/repo_wide_unit_backstop.yml` | 54 |
+| `plans/PR-CI-Repo-Wide-Unit-Backstop.md` | 116 |
+| **Total** | **170** |
