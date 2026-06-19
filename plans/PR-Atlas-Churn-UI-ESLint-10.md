@@ -62,6 +62,7 @@ None.
 - Verified `eslint-plugin-react-hooks@7.1.1` publishes peer support for `eslint` `^10.0.0`.
 - Refreshed the branch onto current `main` so the latest merged fixes are included.
 - Security Guardrails startup failure matches the OSV reusable workflow permission issue fixed by granting `actions: read` to the OSV caller.
+- PR body AI reconciliation uses the local-audit marker `All findings fixed or waived: yes`.
 
 ## Estimated diff size
 
@@ -70,5 +71,5 @@ None.
 | `.github/workflows/security_guardrails.yml` | ~10 |
 | `atlas-churn-ui/package.json` | 1 |
 | `atlas-churn-ui/package-lock.json` | ~430 |
-| `plans/PR-Atlas-Churn-UI-ESLint-10.md` | ~75 |
-| **Total** | **~516** |
+| `plans/PR-Atlas-Churn-UI-ESLint-10.md` | ~76 |
+| **Total** | **~517** |
