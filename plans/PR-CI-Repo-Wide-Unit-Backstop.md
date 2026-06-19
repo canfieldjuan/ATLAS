@@ -121,8 +121,8 @@ Parked hardening: none.
 - `scripts/audit_workflow_security_posture.py` -- workflow security posture
   audit passes.
 - `python -m pytest tests/test_audit_extracted_pipeline_ci_enrollment.py -q`
-  -- 21 passed (adds backstop-accept, comment-only-reject, and
-  integration-exempt cases).
+  -- 23 passed (adds backstop-accept, comment-only-reject,
+  run-block-comment-reject, integration-exempt, and docstring-not-exempt cases).
 
 ## Estimated diff size
 

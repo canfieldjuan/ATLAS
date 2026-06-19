@@ -196,9 +196,15 @@ _BACKSTOP_MARKER = re.compile(r"-m\s*[\"']?\s*not integration and not e2e")
 # A per-file pytest target (e.g. tests/foo.py); a path-limited command is not
 # repo-wide and does not provide catch-all coverage.
 _EXPLICIT_TEST_PATH = re.compile(r"\btests/\S+\.py\b")
-# Either a `@pytest.mark.integration/e2e` decorator or a module-level
-# `pytestmark = pytest.mark.integration/e2e`.
-_INTEGRATION_OR_E2E_MARK = re.compile(r"pytest\.mark\.(?:integration|e2e)\b")
+# Real marker syntax only -- a `@pytest.mark.integration/e2e` decorator or a
+# module-level `pytestmark = ... pytest.mark.integration/e2e` -- anchored to the
+# line start so a mention in a comment or docstring does not falsely exempt a
+# unit test.
+_INTEGRATION_OR_E2E_MARK = re.compile(
+    r"^\s*(?:@pytest\.mark\.(?:integration|e2e)\b"
+    r"|pytestmark\s*=.*\bpytest\.mark\.(?:integration|e2e)\b)",
+    re.MULTILINE,
+)
 
 
 def _is_repo_wide_unit_pytest(line: str) -> bool:

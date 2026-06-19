@@ -410,6 +410,56 @@ def test_atlas_brain_changed_test_rejects_comment_only_backstop(tmp_path: Path) 
     assert audit.atlas_brain_test_errors != ()
 
 
+def test_atlas_brain_changed_test_rejects_run_block_comment_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # The pytest command appears only as a shell comment inside a `run: |`
+    # block -- not a real invocation, so it must not credit the backstop.
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: |\n"
+        '          # python -m pytest -m "not integration and not e2e" -q (off)\n'
+        "          echo disabled\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
+def test_atlas_brain_docstring_marker_mention_not_exempt(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    path = "tests/test_atlas_widget.py"
+    # A docstring/comment mention of the marker is not a real marker; the test
+    # must NOT be exempted from unit enrollment.
+    (root / path).write_text(
+        '"""Example that mentions pytest.mark.integration in prose."""\n'
+        "from atlas_brain.widgets import build_widget\n\n"
+        "def test_widget():\n"
+        "    assert build_widget\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
 def test_atlas_brain_changed_test_requires_atlas_workflow(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     test_path = _write_atlas_importing_test(root)
