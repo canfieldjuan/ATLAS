@@ -1378,3 +1378,17 @@ Compose files for sub-services:
   identifiers and string literals.
 - **No `--no-verify`**: never bypass pre-commit / CI gates without explicit
   user authorization.
+
+## Compact Instructions
+
+When compacting this conversation, preserve verbatim (do not summarize away):
+
+- The active operator-assigned lane and the **owned active PR** (number, branch,
+  latest pushed SHA) from `SESSION_STATE.local.md`.
+- The full **PR Fix Mode** baton when a fix loop is active: allowed-files set +
+  max-files budget, current failing check/comment, last useful log finding, next
+  exact action, and do-not-redo notes.
+
+These are the fields a post-compaction resume needs to continue a fix loop
+without re-exploring or touching files outside the declared scope (see
+`AGENTS.md` §3l). When in doubt, keep the baton and drop narrative.
