@@ -1,0 +1,178 @@
+{
+  "atlas_brain/mcp/auth.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "UNGUARDED_INDEX": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/mcp/b2b/_shared.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/mcp/b2b/corrections.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/mcp/b2b/crm_events.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/mcp/b2b/cross_vendor.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/mcp/b2b/displacement.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/mcp/b2b/evidence.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 18,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 10
+  },
+  "atlas_brain/mcp/b2b/pipeline.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/mcp/b2b/products.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/mcp/b2b/reviews.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/mcp/b2b/scrape_targets.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/mcp/b2b/server.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/mcp/b2b/signals.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/mcp/b2b/vendor_history.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/mcp/b2b/vendor_registry.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/mcp/b2b/write_intelligence.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 6
+  },
+  "atlas_brain/mcp/calendar_server.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 9
+  },
+  "atlas_brain/mcp/content_ops_deflection_readonly_server.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/mcp/content_ops_marketer_verify_oauth.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "WEAK_CONTRACT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/mcp/content_ops_marketer_verify_server.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/mcp/crm_server.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 11
+  },
+  "atlas_brain/mcp/intelligence_server.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/mcp/invoicing_draft_writer_server.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/mcp/invoicing_readonly_oauth.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/mcp/invoicing_server.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 17
+  },
+  "atlas_brain/mcp/scraper_server.py": {
+    "counts": {
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 4
+  }
+}

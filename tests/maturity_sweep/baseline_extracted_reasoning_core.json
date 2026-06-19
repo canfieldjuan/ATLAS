@@ -1,0 +1,98 @@
+{
+  "extracted_reasoning_core/_synthesis.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 1,
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 16
+  },
+  "extracted_reasoning_core/api.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 6
+  },
+  "extracted_reasoning_core/archetypes.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 26
+  },
+  "extracted_reasoning_core/evidence_engine.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 16
+  },
+  "extracted_reasoning_core/graph_helpers.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "extracted_reasoning_core/graph_nodes.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_reasoning_core/pack_registry.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_reasoning_core/semantic_cache_keys.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INPUT": 4
+    },
+    "score": 24
+  },
+  "extracted_reasoning_core/state.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_reasoning_core/temporal.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "extracted_reasoning_core/tiers.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_reasoning_core/types.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_reasoning_core/wedge_registry.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  }
+}

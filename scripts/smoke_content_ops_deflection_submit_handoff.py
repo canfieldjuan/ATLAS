@@ -47,6 +47,10 @@ FORBIDDEN_SNAPSHOT_KEYS = frozenset({
     "steps",
     "term_mappings",
 })
+ALLOWED_SNAPSHOT_BODY_PATHS = frozenset({
+    ("teaser", "full_answer", "answer"),
+    ("teaser", "full_answer", "steps"),
+})
 OPTIONAL_CUSTOMER_WORDING_QUESTION_SOURCES = frozenset({
     "source_policy",
     "topic_fallback",
@@ -433,18 +437,39 @@ def _multipart_submit_request(
     return _parse_http_json_response("POST", url, request=request, timeout=timeout)
 
 
-def _forbidden_key_paths(value: Any, *, prefix: str = "$") -> list[str]:
+def _snapshot_path_text(path: Sequence[str | int]) -> str:
+    text = "$"
+    for segment in path:
+        if isinstance(segment, int):
+            text += f"[{segment}]"
+        else:
+            text += f".{segment}"
+    return text
+
+
+def _allows_snapshot_body_path(path: tuple[str | int, ...], parent: Mapping[str, Any]) -> bool:
+    return (
+        path in ALLOWED_SNAPSHOT_BODY_PATHS
+        and parent.get("answer_evidence_status") == "resolution_evidence"
+        and parent.get("resolution_evidence_scope") == "scoped"
+    )
+
+
+def _forbidden_key_paths(value: Any, *, path: tuple[str | int, ...] = ()) -> list[str]:
     paths: list[str] = []
     if isinstance(value, Mapping):
         for key, child in value.items():
             key_text = str(key)
-            child_prefix = f"{prefix}.{key_text}"
-            if key_text in FORBIDDEN_SNAPSHOT_KEYS:
-                paths.append(child_prefix)
-            paths.extend(_forbidden_key_paths(child, prefix=child_prefix))
+            child_path = (*path, key_text)
+            if (
+                key_text in FORBIDDEN_SNAPSHOT_KEYS
+                and not _allows_snapshot_body_path(child_path, value)
+            ):
+                paths.append(_snapshot_path_text(child_path))
+            paths.extend(_forbidden_key_paths(child, path=child_path))
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         for index, child in enumerate(value):
-            paths.extend(_forbidden_key_paths(child, prefix=f"{prefix}[{index}]"))
+            paths.extend(_forbidden_key_paths(child, path=(*path, index)))
     return paths
 
 

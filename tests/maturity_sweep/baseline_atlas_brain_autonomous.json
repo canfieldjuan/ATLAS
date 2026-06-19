@@ -1,0 +1,652 @@
+{
+  "atlas_brain/autonomous/__init__.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/autonomous/event_queue.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 13
+  },
+  "atlas_brain/autonomous/presence.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "atlas_brain/autonomous/runner.py": {
+    "counts": {
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 8
+  },
+  "atlas_brain/autonomous/scheduler.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 11
+  },
+  "atlas_brain/autonomous/tasks/_b2b_batch_utils.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "atlas_brain/autonomous/tasks/_b2b_blog_post_generation_host.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 15
+    },
+    "score": 16
+  },
+  "atlas_brain/autonomous/tasks/_b2b_pool_compression.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 11,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 17,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 19
+  },
+  "atlas_brain/autonomous/tasks/_b2b_reasoning_atoms.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 11
+  },
+  "atlas_brain/autonomous/tasks/_b2b_reasoning_contracts.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 11
+  },
+  "atlas_brain/autonomous/tasks/_b2b_shared.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 4,
+      "SWALLOWED_EXCEPT": 26,
+      "UNGUARDED_INDEX": 130
+    },
+    "score": 140
+  },
+  "atlas_brain/autonomous/tasks/_b2b_specificity.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "atlas_brain/autonomous/tasks/_b2b_synthesis_reader.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 5
+    },
+    "score": 25
+  },
+  "atlas_brain/autonomous/tasks/_b2b_synthesis_validation.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 6
+    },
+    "score": 21
+  },
+  "atlas_brain/autonomous/tasks/_b2b_witnesses.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 5
+    },
+    "score": 11
+  },
+  "atlas_brain/autonomous/tasks/_blog_matching.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/_blog_ts.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/_campaign_sequence_context.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/autonomous/tasks/_execution_progress.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/autonomous/tasks/_google_news.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 11
+  },
+  "atlas_brain/autonomous/tasks/action_escalation.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/amazon_seller_campaign_generation.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/autonomous/tasks/anomaly_detection.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/article_enrichment.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/autonomous/tasks/b2b_account_resolution.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 21
+  },
+  "atlas_brain/autonomous/tasks/b2b_accounts_in_motion.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 10
+    },
+    "score": 11
+  },
+  "atlas_brain/autonomous/tasks/b2b_article_correlation.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/autonomous/tasks/b2b_battle_cards.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2,
+      "SWALLOWED_EXCEPT": 4,
+      "UNGUARDED_INDEX": 11
+    },
+    "score": 28
+  },
+  "atlas_brain/autonomous/tasks/b2b_blog_post_generation.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 16,
+      "UNGUARDED_INDEX": 42
+    },
+    "score": 90
+  },
+  "atlas_brain/autonomous/tasks/b2b_campaign_generation.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "HEURISTIC_COMMENT": 3,
+      "SWALLOWED_EXCEPT": 6,
+      "UNGUARDED_INDEX": 27
+    },
+    "score": 43
+  },
+  "atlas_brain/autonomous/tasks/b2b_challenger_brief.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "SWALLOWED_EXCEPT": 5,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 30
+  },
+  "atlas_brain/autonomous/tasks/b2b_churn_alert.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/autonomous/tasks/b2b_churn_intelligence.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "HEURISTIC_COMMENT": 3,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 8,
+      "UNGUARDED_INDEX": 22
+    },
+    "score": 56
+  },
+  "atlas_brain/autonomous/tasks/b2b_churn_reports.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/autonomous/tasks/b2b_enrichment.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 14
+  },
+  "atlas_brain/autonomous/tasks/b2b_enrichment_repair.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 28
+  },
+  "atlas_brain/autonomous/tasks/b2b_keyword_signal.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/autonomous/tasks/b2b_parser_upgrade_maintenance.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/autonomous/tasks/b2b_product_profiles.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 13
+    },
+    "score": 18
+  },
+  "atlas_brain/autonomous/tasks/b2b_reasoning_synthesis.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 2,
+      "HEURISTIC_COMMENT": 1,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 9
+    },
+    "score": 28
+  },
+  "atlas_brain/autonomous/tasks/b2b_report_subscription_delivery.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 23
+  },
+  "atlas_brain/autonomous/tasks/b2b_scrape_intake.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "SWALLOWED_EXCEPT": 13,
+      "UNGUARDED_INDEX": 4,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 76
+  },
+  "atlas_brain/autonomous/tasks/b2b_tenant_report.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 9
+  },
+  "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 10,
+      "UNGUARDED_INDEX": 13
+    },
+    "score": 59
+  },
+  "atlas_brain/autonomous/tasks/b2b_watchlist_alert_delivery.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/autonomous/tasks/blog_post_generation.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 15
+    },
+    "score": 9
+  },
+  "atlas_brain/autonomous/tasks/calendar_reminder.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/campaign_analytics_refresh.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/campaign_audit.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/autonomous/tasks/campaign_send.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/autonomous/tasks/campaign_sequence_progression.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 17
+  },
+  "atlas_brain/autonomous/tasks/campaign_suppression.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 21
+  },
+  "atlas_brain/autonomous/tasks/challenger_target_discovery.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/autonomous/tasks/cleaning_sms_reminder.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/autonomous/tasks/competitive_intelligence.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 9
+  },
+  "atlas_brain/autonomous/tasks/complaint_analysis.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/complaint_content_generation.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 11
+  },
+  "atlas_brain/autonomous/tasks/complaint_enrichment.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 3
+    },
+    "score": 15
+  },
+  "atlas_brain/autonomous/tasks/consumer_analytics_refresh.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/consumer_signal_alerts.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/consumer_weekly_digest.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/crm_event_processing.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 16
+  },
+  "atlas_brain/autonomous/tasks/daily_intelligence.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 16
+  },
+  "atlas_brain/autonomous/tasks/departure_auto_fix.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/departure_check.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/device_health.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 16
+  },
+  "atlas_brain/autonomous/tasks/email_auto_approve.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/autonomous/tasks/email_backfill.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 22
+  },
+  "atlas_brain/autonomous/tasks/email_classifier.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 12
+  },
+  "atlas_brain/autonomous/tasks/email_draft.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/email_intake.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "atlas_brain/autonomous/tasks/email_stale_check.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/autonomous/tasks/gmail_digest.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/invoice_overdue_check.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/knowledge_graph_sync.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/model_swap.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/monthly_invoice_generation.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 7
+    },
+    "score": 13
+  },
+  "atlas_brain/autonomous/tasks/morning_briefing.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 4,
+      "NO_TEST_FILE": 1
+    },
+    "score": 10
+  },
+  "atlas_brain/autonomous/tasks/news_intelligence.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2,
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 19
+  },
+  "atlas_brain/autonomous/tasks/pattern_learning.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/preference_learning.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/product_metadata_sync.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/prospect_enrichment.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 18
+  },
+  "atlas_brain/autonomous/tasks/prospect_matching.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 9
+    },
+    "score": 22
+  },
+  "atlas_brain/autonomous/tasks/provider_cost_sync.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/autonomous/tasks/security_summary.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 9
+  },
+  "atlas_brain/autonomous/tasks/subcategory_intelligence.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 16
+  },
+  "atlas_brain/autonomous/tasks/trial_nurture.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/autonomous/tasks/vendor_target_enrichment.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "atlas_brain/autonomous/tasks/weather_traffic_alerts.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2,
+      "NO_TEST_FILE": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/autonomous/visibility.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1
+    },
+    "score": 1
+  }
+}

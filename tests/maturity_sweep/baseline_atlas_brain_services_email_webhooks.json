@@ -1,0 +1,9 @@
+{
+  "atlas_brain/services/email_webhooks/resend.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 16
+  }
+}

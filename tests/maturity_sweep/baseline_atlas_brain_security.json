@@ -1,0 +1,63 @@
+{
+  "atlas_brain/security/assets/drone_tracker.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/security/assets/sensor_network.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/security/assets/vehicle_tracker.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/security/monitor.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "WEAK_CONTRACT": 6
+    },
+    "score": 10
+  },
+  "atlas_brain/security/network/arp_monitor.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/security/network/port_scan_detector.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/security/network/traffic_analyzer.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/security/wireless/deauth_detector.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "atlas_brain/security/wireless/monitor.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 14
+  }
+}

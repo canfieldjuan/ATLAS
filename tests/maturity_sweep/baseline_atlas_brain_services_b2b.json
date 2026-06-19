@@ -1,0 +1,279 @@
+{
+  "atlas_brain/services/b2b/account_opportunity_claims.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/services/b2b/account_resolver.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 21
+  },
+  "atlas_brain/services/b2b/anthropic_batch.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/services/b2b/cache_runner.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/services/b2b/cache_strategy.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/services/b2b/challenger_dashboard_claims.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/services/b2b/corrections.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/services/b2b/enrichment_budget.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/services/b2b/enrichment_contract.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/services/b2b/enrichment_derivation.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 6,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 10
+  },
+  "atlas_brain/services/b2b/enrichment_domain.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/services/b2b/enrichment_notifications.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/services/b2b/enrichment_pain_competition.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 5
+    },
+    "score": 6
+  },
+  "atlas_brain/services/b2b/enrichment_persistence.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/services/b2b/enrichment_phrase_metadata.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/services/b2b/enrichment_policy_pain.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/services/b2b/enrichment_provider_calls.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 6
+  },
+  "atlas_brain/services/b2b/enrichment_repair.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 17
+  },
+  "atlas_brain/services/b2b/enrichment_repair_policy.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/services/b2b/enrichment_result_contract.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/services/b2b/enrichment_row_runner.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/services/b2b/enrichment_single_runner.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/services/b2b/enrichment_stage_support.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 11
+  },
+  "atlas_brain/services/b2b/enrichment_support.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/services/b2b/enrichment_task_ops.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/services/b2b/enrichment_task_runner.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/services/b2b/enrichment_transport_support.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/services/b2b/evidence_claim.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 6
+  },
+  "atlas_brain/services/b2b/evidence_claim_builder.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 19
+  },
+  "atlas_brain/services/b2b/evidence_claim_repository.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/services/b2b/llm_exact_cache.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 13
+  },
+  "atlas_brain/services/b2b/pdf_renderer.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 11
+  },
+  "atlas_brain/services/b2b/product_claim.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "atlas_brain/services/b2b/product_matching.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/services/b2b/report_trust.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/services/b2b/review_dedup.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 5,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 32
+  },
+  "atlas_brain/services/b2b/vendor_briefing_repository.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/services/b2b/vendor_dashboard_claims.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/services/b2b/vendor_merge.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/services/b2b/watchlist_alerts.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 7
+    },
+    "score": 21
+  },
+  "atlas_brain/services/b2b/webhook_dispatcher.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 5,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 30
+  }
+}
