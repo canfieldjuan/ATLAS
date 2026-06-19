@@ -15,8 +15,6 @@ for _heavy_mod in [
     "transformers",
     "numpy",
     "sentence_transformers",
-    "asyncpg",
-    "asyncpg.exceptions",
     "llama_cpp",
     "dateparser",
     "sse_starlette", "sse_starlette.sse",
