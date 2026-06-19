@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests._mcp_stub import stub_mcp
+
 
 class _MockFastMCP:
     def __init__(self, *args, **kwargs):
@@ -21,13 +23,11 @@ class _MockFastMCP:
 
 sys.modules.setdefault("asyncpg", MagicMock())
 sys.modules.setdefault("asyncpg.exceptions", MagicMock())
-sys.modules.setdefault("mcp", MagicMock())
-sys.modules.setdefault("mcp.server", MagicMock())
-_fastmcp_mod = MagicMock()
-_fastmcp_mod.FastMCP = _MockFastMCP
-sys.modules.setdefault("mcp.server.fastmcp", _fastmcp_mod)
 
-import atlas_brain.mcp.b2b.products as products_mcp
+# Plant the fake `mcp` only while the server module imports, then restore
+# sys.modules so sibling tests that need the real `mcp` are not poisoned.
+with stub_mcp(_MockFastMCP):
+    import atlas_brain.mcp.b2b.products as products_mcp
 
 
 def _install_product_matching_service(monkeypatch, **kwargs):

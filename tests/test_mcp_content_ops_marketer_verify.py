@@ -11,6 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests._mcp_stub import stub_mcp
+
 
 class _MockToolManager:
     def __init__(self) -> None:
@@ -80,11 +82,6 @@ class _TransportSecuritySettings:
         self.__dict__.update(kwargs)
 
 
-sys.modules.setdefault("mcp", MagicMock())
-sys.modules.setdefault("mcp.server", MagicMock())
-_fastmcp_mod = MagicMock()
-_fastmcp_mod.FastMCP = _MockFastMCP
-sys.modules.setdefault("mcp.server.fastmcp", _fastmcp_mod)
 _auth_provider_mod = MagicMock()
 _auth_provider_mod.AccessToken = _OAuthRecord
 _auth_provider_mod.AuthorizationCode = _OAuthRecord
@@ -95,28 +92,37 @@ _auth_provider_mod.ProviderTokenVerifier = _ProviderTokenVerifier
 _auth_provider_mod.RefreshToken = _OAuthRecord
 _auth_provider_mod.TokenError = _OAuthException
 _auth_provider_mod.construct_redirect_uri = lambda redirect_uri, **params: redirect_uri
-sys.modules.setdefault("mcp.server.auth.provider", _auth_provider_mod)
 _auth_settings_mod = MagicMock()
 _auth_settings_mod.AuthSettings = _AuthSettings
 _auth_settings_mod.ClientRegistrationOptions = _ClientRegistrationOptions
-sys.modules.setdefault("mcp.server.auth.settings", _auth_settings_mod)
 _transport_security_mod = MagicMock()
 _transport_security_mod.TransportSecuritySettings = _TransportSecuritySettings
-sys.modules.setdefault("mcp.server.transport_security", _transport_security_mod)
 _shared_auth_mod = MagicMock()
 _shared_auth_mod.OAuthClientInformationFull = _OAuthRecord
 _shared_auth_mod.OAuthToken = _OAuthRecord
-sys.modules.setdefault("mcp.shared.auth", _shared_auth_mod)
 
-from atlas_brain.config import settings
-from atlas_brain.mcp import content_ops_marketer_verify_chatgpt_adapter_server as adapter
-from atlas_brain.mcp import content_ops_marketer_verify_server as verify
-from atlas_brain.mcp.auth import BearerAuthMiddleware
-from atlas_brain.mcp.content_ops_marketer_verify_oauth import (
-    ContentOpsMarketerVerifyOAuthProvider,
-    DEFAULT_CONTENT_OPS_VERIFY_SCOPE,
-    validate_oauth_settings,
-)
+# Plant the fake `mcp` -- including the OAuth submodules this server imports --
+# only while the server modules import, then restore sys.modules so sibling
+# tests that need the real `mcp` (notably the invoicing OAuth tests, which
+# import `mcp.server.auth.provider`) are not poisoned during collection.
+with stub_mcp(
+    _MockFastMCP,
+    extra_modules={
+        "mcp.server.auth.provider": _auth_provider_mod,
+        "mcp.server.auth.settings": _auth_settings_mod,
+        "mcp.server.transport_security": _transport_security_mod,
+        "mcp.shared.auth": _shared_auth_mod,
+    },
+):
+    from atlas_brain.config import settings
+    from atlas_brain.mcp import content_ops_marketer_verify_chatgpt_adapter_server as adapter
+    from atlas_brain.mcp import content_ops_marketer_verify_server as verify
+    from atlas_brain.mcp.auth import BearerAuthMiddleware
+    from atlas_brain.mcp.content_ops_marketer_verify_oauth import (
+        ContentOpsMarketerVerifyOAuthProvider,
+        DEFAULT_CONTENT_OPS_VERIFY_SCOPE,
+        validate_oauth_settings,
+    )
 from extracted_content_pipeline.adversarial_pass import AdversarialFindingCategory
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.claims_map import RegistryClaim

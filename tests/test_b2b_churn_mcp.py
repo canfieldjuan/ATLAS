@@ -44,13 +44,16 @@ class _MockFastMCP:
         pass
 
 
-_mcp_mod = MagicMock()
-_mcp_server_mod = MagicMock()
-_fastmcp_mod = MagicMock()
-_fastmcp_mod.FastMCP = _MockFastMCP
-sys.modules.setdefault("mcp", _mcp_mod)
-sys.modules.setdefault("mcp.server", _mcp_server_mod)
-sys.modules.setdefault("mcp.server.fastmcp", _fastmcp_mod)
+from tests._mcp_stub import stub_mcp
+
+# The b2b tool submodules this test imports inline (inside test bodies) all
+# obtain their FastMCP via `from .server import mcp`, and b2b/server.py is the
+# only module that imports `mcp.server.fastmcp`. Import it here under the fake
+# `mcp` so the shared FastMCP instance is cached; the inline imports then hit
+# the module cache and need no `mcp` package. Restoring sys.modules afterward
+# keeps the fake from poisoning sibling tests that need the real `mcp`.
+with stub_mcp(_MockFastMCP):
+    import atlas_brain.mcp.b2b.server  # noqa: F401
 
 import json
 from datetime import date, datetime, timezone

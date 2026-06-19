@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests._mcp_stub import stub_mcp
+
 
 _asyncpg_mock = MagicMock()
 _asyncpg_exceptions = MagicMock()
@@ -62,14 +64,6 @@ class _MockFastMCP:
         return None
 
 
-_mcp_mod = MagicMock()
-_mcp_server_mod = MagicMock()
-_fastmcp_mod = MagicMock()
-_fastmcp_mod.FastMCP = _MockFastMCP
-sys.modules.setdefault("mcp", _mcp_mod)
-sys.modules.setdefault("mcp.server", _mcp_server_mod)
-sys.modules.setdefault("mcp.server.fastmcp", _fastmcp_mod)
-
 import atlas_brain
 
 from atlas_brain.services.b2b.source_impact import (
@@ -94,7 +88,10 @@ b2b_dashboard = importlib.util.module_from_spec(_dashboard_spec)
 sys.modules["atlas_brain.api.b2b_dashboard"] = b2b_dashboard
 _dashboard_spec.loader.exec_module(b2b_dashboard)
 
-from atlas_brain.mcp.b2b import pipeline as mcp_pipeline
+# Plant the fake `mcp` only while the server module imports, then restore
+# sys.modules so sibling tests that need the real `mcp` are not poisoned.
+with stub_mcp(_MockFastMCP):
+    from atlas_brain.mcp.b2b import pipeline as mcp_pipeline
 
 
 def _mock_pool(fetch_return=None):

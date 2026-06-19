@@ -64,7 +64,24 @@ touch production OAuth code and do not re-pin `mcp`. The enrollment must land
 *together with* the Slice C isolation fix, or the leak will make them fail.
 Risk: CI-config only. Size: small.
 
-## Slice C -- Stop the global `mcp` MagicMock leak (the real root cause)
+## Slice C -- Stop the global `mcp` MagicMock leak (the real root cause)  [DONE]
+
+Landed via `tests/_mcp_stub.py` (`stub_mcp` context manager: save -> plant
+fake -> import server -> restore `sys.modules`) applied to all eight files.
+The `mcp` setdefault blocks are gone; each test plants its fake only for its
+own server import, so nothing survives to poison sibling collection. Verified
+the helper's save/restore semantics directly, including the exact
+invoicing-poison scenario (a real `mcp.server.auth.provider` is no longer
+shadowed after a stub block). Full collection is CI-verified (this sandbox
+lacks `torch`/`mcp`).
+
+Confirmed root cause along the way: the b2b tool submodules only ever call
+`@mcp.tool()` (no kwargs) and `b2b/server.py` is the *sole* importer of
+`mcp.server.fastmcp`. So the `tool() got unexpected keyword 'structured_output'`
+/ missing `custom_route` errors were never "stale mocks" -- they were the
+content-ops server inheriting the b2b passthrough fake because `setdefault`
+let whichever module collected first win. Fixing isolation fixes both that and
+the `'mcp.server' is not a package` failure; no fake signature changes needed.
 
 This is the linchpin, not a side issue. Eight tests
 (`test_b2b_churn_mcp`, `test_b2b_products_mcp`, `test_b2b_signals_mcp_inputs`,
@@ -139,3 +156,11 @@ guard so it cannot recur silently.
 Related but separate: broaden `audit_extracted_pipeline_ci_enrollment.py`
 (make it workflow-aware) so un-enrolled files are flagged at PR time, not only
 caught by the nightly backstop.
+
+Deferred (same bug class as Slice C, not the backstop blocker): the same eight
+tests still stub heavy deps (`torch`, `asyncpg`, `numpy`, ...) into
+`sys.modules` with `setdefault` and no teardown. Those fakes can leak across
+modules too, but they did not cause the invoicing collection failure and a
+fake `torch` is mostly inert in the unit backstop. Fold them into the same
+save/restore window (or a shared autouse fixture) in a follow-up once Slice E
+confirms which, if any, still bite.

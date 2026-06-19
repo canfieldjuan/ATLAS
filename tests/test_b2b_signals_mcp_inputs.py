@@ -8,6 +8,8 @@ from uuid import uuid4
 
 import pytest
 
+from tests._mcp_stub import stub_mcp
+
 
 for _heavy_mod in [
     "PIL", "PIL.Image",
@@ -41,15 +43,10 @@ class _MockFastMCP:
         return None
 
 
-_mcp_mod = MagicMock()
-_mcp_server_mod = MagicMock()
-_fastmcp_mod = MagicMock()
-_fastmcp_mod.FastMCP = _MockFastMCP
-sys.modules.setdefault("mcp", _mcp_mod)
-sys.modules.setdefault("mcp.server", _mcp_server_mod)
-sys.modules.setdefault("mcp.server.fastmcp", _fastmcp_mod)
-
-import atlas_brain.mcp.b2b.signals as signals_mcp
+# Plant the fake `mcp` only while the server module imports, then restore
+# sys.modules so sibling tests that need the real `mcp` are not poisoned.
+with stub_mcp(_MockFastMCP):
+    import atlas_brain.mcp.b2b.signals as signals_mcp
 
 
 def _mock_pool():

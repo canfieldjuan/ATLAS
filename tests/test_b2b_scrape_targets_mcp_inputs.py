@@ -5,12 +5,12 @@ from uuid import uuid4
 
 import pytest
 
+from tests._mcp_stub import stub_mcp
+
 
 for _heavy_mod in [
     "asyncpg",
     "asyncpg.exceptions",
-    "mcp",
-    "mcp.server",
 ]:
     sys.modules.setdefault(_heavy_mod, MagicMock())
 
@@ -28,11 +28,10 @@ class _MockFastMCP:
         return None
 
 
-_fastmcp_mod = MagicMock()
-_fastmcp_mod.FastMCP = _MockFastMCP
-sys.modules.setdefault("mcp.server.fastmcp", _fastmcp_mod)
-
-import atlas_brain.mcp.b2b.scrape_targets as scrape_targets_mcp
+# Plant the fake `mcp` only while the server module imports, then restore
+# sys.modules so sibling tests that need the real `mcp` are not poisoned.
+with stub_mcp(_MockFastMCP):
+    import atlas_brain.mcp.b2b.scrape_targets as scrape_targets_mcp
 
 
 def _mock_pool():
