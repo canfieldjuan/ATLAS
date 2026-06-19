@@ -1,0 +1,50 @@
+name: Repo-Wide Unit Backstop
+
+# The per-area checks are path-filtered and run explicit, hand-maintained test
+# lists, so a test file that no workflow enrolls can pass CI while never
+# executing. This catch-all runs the whole unit suite (no integration/e2e, which
+# need Postgres/Neo4j) so nothing hides indefinitely. It is intentionally NOT a
+# per-PR gate -- it runs on a schedule and on demand, separate from the fast
+# path-filtered checks. The pull_request trigger is scoped to this workflow file
+# only, so changes to the backstop itself are exercised immediately without
+# adding a slow full-suite run to every unrelated PR.
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    # 06:00 UTC daily (~1:00am CDT). UTC<->Central: subtract 5h (CDT) / 6h (CST).
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/repo_wide_unit_backstop.yml"
+
+concurrency:
+  group: repo-wide-unit-backstop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repo-wide-unit-backstop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Run repo-wide unit suite (no integration/e2e)
+        run: |
+          python -m pytest -m "not integration and not e2e" -q
