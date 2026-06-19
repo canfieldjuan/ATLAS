@@ -152,9 +152,9 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/maturity_sweep_advisory.yml` | 11 |
-| `.github/workflows/maturity_sweep_competitive_intelligence_surface.yml` | 50 |
-| `plans/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md` | 150 |
-| `scripts/check_competitive_intelligence_product_surface_manifest.py` | 58 |
+| `.github/workflows/maturity_sweep_competitive_intelligence_surface.yml` | 55 |
+| `plans/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md` | 160 |
+| `scripts/check_competitive_intelligence_product_surface_manifest.py` | 74 |
 | `tests/maturity_sweep/baseline_extracted_competitive_intelligence.json` | 220 |
 | `tests/maturity_sweep/competitive_intelligence_product_surface_manifest.json` | 196 |
-| **Total** | **685** |
+| **Total** | **716** |
