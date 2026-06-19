@@ -1,16 +1,16 @@
 import sys
-import types
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+from tests._module_stub import stub_missing_module
 
-if "asyncpg" not in sys.modules:
-    asyncpg_module = types.ModuleType("asyncpg")
-    asyncpg_module.connect = MagicMock()
-    asyncpg_module.Connection = object
-    asyncpg_module.Record = dict
-    sys.modules["asyncpg"] = asyncpg_module
+# Stub asyncpg only when it is genuinely not importable, so CI (where asyncpg
+# is installed) imports the real module and no sibling test is poisoned.
+stub_missing_module(
+    "asyncpg",
+    attributes={"connect": MagicMock(), "Connection": object, "Record": dict},
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "scripts") not in sys.path:

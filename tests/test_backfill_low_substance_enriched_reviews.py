@@ -1,21 +1,24 @@
 import sys
-import types
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+from tests._module_stub import stub_missing_module
 
-if "asyncpg" not in sys.modules:
-    asyncpg_module = types.ModuleType("asyncpg")
-    asyncpg_module.connect = MagicMock()
-    asyncpg_module.Connection = object
-    asyncpg_module.Record = dict
-    asyncpg_exceptions = types.ModuleType("asyncpg.exceptions")
-    asyncpg_exceptions.UndefinedTableError = Exception
-    asyncpg_module.exceptions = asyncpg_exceptions
-    sys.modules["asyncpg"] = asyncpg_module
-    sys.modules["asyncpg.exceptions"] = asyncpg_exceptions
+# Stub asyncpg (+ asyncpg.exceptions) only when it is genuinely not importable,
+# so CI (where asyncpg is installed) imports the real module and no sibling
+# test is poisoned.
+_asyncpg_stub = stub_missing_module(
+    "asyncpg",
+    attributes={"connect": MagicMock(), "Connection": object, "Record": dict},
+)
+if _asyncpg_stub is not None:
+    _asyncpg_exceptions_stub = stub_missing_module(
+        "asyncpg.exceptions",
+        attributes={"UndefinedTableError": Exception},
+    )
+    _asyncpg_stub.exceptions = _asyncpg_exceptions_stub
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "scripts") not in sys.path:

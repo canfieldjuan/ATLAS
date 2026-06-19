@@ -157,24 +157,40 @@ Re-classified as heavy-dep leak victims (NOT fixed here; see Slice F):
 
 Risk: low. Size: small (two marker/guard edits).
 
-## Slice F -- Stop the heavy-dep (`asyncpg`/`torch`/...) sys.modules leak
+## Slice F -- Stop the heavy-dep (`asyncpg`/`torch`/...) sys.modules leak  [DONE]
 
-Promoted from the Slice C deferred note once Slice D showed it is actively
-breaking three otherwise-green unit tests (incl. a content-ops lane file).
-Same bug class as Slice C, wider blast radius: many b2b/backfill tests plant
-fake heavy deps into `sys.modules` and never restore -- two shapes, both
-leaky:
-- `sys.modules.setdefault("asyncpg", MagicMock())` (collection-order
-  dependent: wins only if asyncpg not yet imported, but then persists).
-- `sys.modules["asyncpg"] = types.ModuleType("asyncpg")` (direct assignment:
-  unconditionally overrides real asyncpg; the bare module has `__spec__=None`,
-  which is what makes `find_spec` raise).
+Audit found 111 test files plant into `sys.modules`, but the *confirmed*
+backstop breakage is `asyncpg`, and only **5** files used the dangerous shape:
 
-Fix: generalize the Slice C `stub_mcp` save/restore into a `stub_modules`
-helper (or shared autouse fixture) and route every heavy-dep stub through it
-so nothing outlives its own module import. Then the three Slice D victims
-collect under the full suite with no change to themselves. Risk: test-only but
-broad (audit every planter). Size: medium. Gates a fully-clean Slice E.
+```
+if "asyncpg" not in sys.modules:
+    sys.modules["asyncpg"] = types.ModuleType("asyncpg")   # bare: __spec__=None
+```
+
+(`test_backfill_g2_reviewer_company_cleanup`,
+`test_backfill_trustpilot_jsonld_company_cleanup`,
+`test_backfill_low_substance_enriched_reviews`,
+`test_plan_parser_upgrade_rescrape_targets`,
+`test_b2b_parser_upgrade_maintenance`.) The bare `ModuleType` both
+unconditionally overrides real asyncpg and carries `__spec__=None`, which is
+exactly the `find_spec` landmine that broke the three Slice D victims.
+
+Landed `tests/_module_stub.py::stub_missing_module(name, attributes=...)` and
+routed all 5 through it. It stubs only when the dep is genuinely not
+importable (so CI, where asyncpg is installed, imports the real module and
+nothing is shadowed) and gives any stub it creates a real `__spec__` (so
+`find_spec` never raises). Verified directly: an installed module is never
+shadowed; an absent one is stubbed with a valid spec; the `'__spec__ is not
+set'` landmine is gone. Collecting a converted file now passes the asyncpg
+boundary (fails only on an unrelated sandbox-missing dep).
+
+Deliberately scoped OUT (not the confirmed breakage; converting blind is
+reckless): the ~37 `setdefault("asyncpg", MagicMock())` planters. `setdefault`
+no-ops once real asyncpg is imported (very likely early under the full suite),
+and a `MagicMock` has a truthy `__spec__` so it does not trip `find_spec`. If
+Slice E shows any still biting, convert those specific files to
+`stub_missing_module` the same way. The inert `torch`/`numpy`/etc. stubs are
+likewise left until proven to matter.
 
 ## Slice E -- Reintroduce the backstop
 

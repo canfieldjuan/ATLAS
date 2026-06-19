@@ -1,15 +1,17 @@
-import types
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests._module_stub import stub_missing_module
 
-if "asyncpg" not in __import__("sys").modules:
-    asyncpg_module = types.ModuleType("asyncpg")
-    asyncpg_module.connect = object
-    asyncpg_module.Connection = object
-    asyncpg_module.Record = dict
-    __import__("sys").modules["asyncpg"] = asyncpg_module
+# Stub asyncpg only when it is genuinely not importable, so CI (where asyncpg
+# is installed) imports the real module and no sibling test is poisoned. The
+# production task module is imported inline in each test below; this top-level
+# stub guarantees asyncpg is resolvable before those imports run.
+stub_missing_module(
+    "asyncpg",
+    attributes={"connect": object, "Connection": object, "Record": dict},
+)
 
 
 @pytest.mark.asyncio
