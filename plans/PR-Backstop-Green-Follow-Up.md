@@ -23,7 +23,9 @@ Slice phase: Robust testing
 3. `tests/conftest.py`: skip self-pooling live files before module import when
    the marker expression explicitly excludes `integration`; otherwise keep the
    explicit marker allowlist for those files when integration tests are selected.
-4. `plans/PR-Backstop-Green-Follow-Up.md`: document this cleanup slice for the
+4. Small test files: remove broad import-time `asyncpg`/`asyncpg.exceptions`
+   fakes where the tests only need unrelated optional dependency stubs.
+5. `plans/PR-Backstop-Green-Follow-Up.md`: document this cleanup slice for the
    local PR review contract.
 
 Out of scope: expanding #1712, changing the backstop command, or fixing
@@ -35,6 +37,13 @@ remaining true unit failures before this harness boundary is validated.
 
 - `plans/PR-Backstop-Green-Follow-Up.md`
 - `tests/conftest.py`
+- `tests/test_b2b_evidence_mcp.py`
+- `tests/test_b2b_products_mcp.py`
+- `tests/test_b2b_scrape_targets_mcp_inputs.py`
+- `tests/test_b2b_signals_mcp_inputs.py`
+- `tests/test_b2b_vendor_registry_mcp.py`
+- `tests/test_trustpilot_parser.py`
+- `tests/test_twitter_parser.py`
 
 ### Review Contract
 
@@ -55,13 +64,14 @@ Acceptance criteria:
       backstop lane.
 - [ ] No production code or backstop command changes.
 
-Affected surfaces: pytest collection, test marker classification, and the
-backstop follow-up plan doc.
+Affected surfaces: pytest collection, test marker classification, and selected
+test import fakes.
 
 Risk areas: over-marking a unit test as integration, or changing pytest
 collection behavior for unrelated tests. Mitigated by marking at item level for
 known DB fixture users and pre-collection skipping only the self-pooling
-live-file allowlist when `integration` is explicitly excluded.
+live-file allowlist when `integration` is explicitly excluded. The per-file fake
+cleanup is limited to deleting `asyncpg` from broad optional-dependency stubs.
 
 Reviewer rules triggered: R1.
 
@@ -79,10 +89,16 @@ marker deselection. For collected tests, the item hook adds the existing
 the repo-wide unit backstop focused on unit tests without excluding pure unit
 tests that share a file with DB-backed tests.
 
+The small per-file deletions remove `asyncpg` from broad historical mock lists
+where the tests do not need an `asyncpg` fake. They complement the harness fix
+without attempting a repo-wide rewrite in this PR.
+
 ## Intentional
 
 - Centralize the source fix in the test harness instead of touching every
   historical test module that contains the same `asyncpg` setdefault pattern.
+- Remove easy broad `asyncpg` fake registrations from small test files where the
+  fake was only part of an unrelated optional-dependency list.
 - Keep live/service-backed tests classified out of the unit lane using the
   existing `integration` marker rather than faking service state.
 - Mark DB-backed tests at item level where possible so mixed files retain unit
@@ -93,8 +109,9 @@ tests that share a file with DB-backed tests.
 
 ## Deferred
 
-- Physically replacing every legacy per-file `asyncpg` setdefault fake can be a
-  later cleanup if reviewers want that churn after this smaller harness fix.
+- Larger physical cleanup of remaining legacy per-file `asyncpg` setdefault
+  fakes can be a later cleanup if reviewers want that churn after this smaller
+  harness fix.
 - Slice 3 residual unit failures should be triaged after the backstop is rerun
   with this boundary fix in place.
 
@@ -108,6 +125,8 @@ cleanup slice.
 
 - Local py_compile for `tests/conftest.py` passed with the bundled Codex Python
   runtime.
+- Local py_compile for the touched small test files passed with the bundled
+  Codex Python runtime.
 - Local inspection of the bundled pytest hookspec confirmed
   `pytest_ignore_collect(collection_path, config)` is the expected signature.
 - Local marker simulation confirmed pure Phase 5b parse items remain unmarked
@@ -126,6 +145,7 @@ cleanup slice.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Backstop-Green-Follow-Up.md` | ~130 |
+| `plans/PR-Backstop-Green-Follow-Up.md` | ~145 |
 | `tests/conftest.py` | ~50 |
-| **Total** | **~180** |
+| Small `asyncpg` fake cleanup test files | ~12 deletions |
+| **Total** | **~205 touched / 12 removed** |
