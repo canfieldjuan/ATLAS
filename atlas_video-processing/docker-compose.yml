@@ -82,7 +82,11 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data/
+      # Postgres major versions cannot reuse an older PGDATA directory. Keep
+      # PG18 on a separate volume and migrate persisted PG13 data by dump/restore.
+      - postgres18_data:/var/lib/postgresql/data/
 
 volumes:
+  # Legacy PG13 data volume. Do not mount this directly into the PG18 service.
   postgres_data:
+  postgres18_data:
