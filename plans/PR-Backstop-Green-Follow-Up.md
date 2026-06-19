@@ -65,8 +65,7 @@ cleanup slice.
 
 ## Verification
 
-- `python -m py_compile tests/conftest.py tests/test_mcp_servers.py` passed
-  locally.
+- Local py_compile for tests/conftest.py and tests/test_mcp_servers.py passed.
 - Full backstop validation should run in CI or an environment after
   requirements install, because the local Codex runtime did not have `asyncpg`
   installed.
