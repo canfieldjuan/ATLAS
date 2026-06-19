@@ -9,6 +9,7 @@ Provides fixtures for:
 
 import asyncio
 import os
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,6 +22,39 @@ os.environ.setdefault("ATLAS_DB_PORT", "5433")
 os.environ.setdefault("ATLAS_DB_DATABASE", "atlas")
 os.environ.setdefault("ATLAS_DB_USER", "atlas")
 os.environ.setdefault("ATLAS_DB_PASSWORD", "atlas_dev_password")
+
+# The unit backstop installs asyncpg, so load the real driver before test module
+# collection. This prevents legacy import-time sys.modules.setdefault("asyncpg",
+# MagicMock()) helpers from poisoning later DB-fixture tests.
+try:
+    import asyncpg  # noqa: F401
+    import asyncpg.exceptions  # noqa: F401
+except ModuleNotFoundError:
+    pass
+
+
+_INTEGRATION_TEST_FILES = {
+    "test_b2b_challenger_claims_api_live.py",
+    "test_b2b_enrichment_batch_integration.py",
+    "test_b2b_enrichment_repair_batch_integration.py",
+    "test_b2b_vendor_claims_api_live.py",
+    "test_campaign_recipient_dedup.py",
+    "test_comparisons_live.py",
+    "test_evidence_claim_audit_live.py",
+    "test_evidence_claim_builder_live.py",
+    "test_evidence_claim_repository_live.py",
+    "test_evidence_gate.py",
+    "test_live_autonomous.py",
+    "test_reasoning_live.py",
+    "test_vendor_dashboard_claims_live.py",
+}
+
+
+def pytest_collection_modifyitems(items):
+    integration = pytest.mark.integration
+    for item in items:
+        if Path(str(item.fspath)).name in _INTEGRATION_TEST_FILES:
+            item.add_marker(integration)
 
 
 @pytest.fixture(scope="session")
