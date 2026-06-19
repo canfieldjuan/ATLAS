@@ -27,6 +27,12 @@ fixture tests, and full current manifest must land together so CI can both run
 and fail closed on added or removed production-surface files. Splitting the
 manifest from enforcement would create a temporary false-green gap.
 
+This PR also carries a one-line CI unblock for `Security Guardrails`: the OSV
+reusable workflow job requested `actions: read` but the caller job did not grant
+it, causing startup failure before any job logs existed. Granting that read-only
+permission lets the trusted scheduled/push OSV reusable workflow start without
+loosening the PR secret-scan job.
+
 ## Scope (this PR)
 
 Ownership lane: ci/maturity-sweep
@@ -41,6 +47,9 @@ Slice phase: Production hardening
    the Python maturity sweep.
 5. Add focused fixture tests proving the product-surface checker passes on a
    matched manifest and fails for missing or untracked discovered files.
+6. Add the missing read-only `actions: read` permission to the trusted OSV
+   reusable workflow caller so the existing Security Guardrails workflow can
+   start.
 
 ### Review Contract
 
@@ -65,10 +74,13 @@ Acceptance criteria:
   updated intentionally when a discovered file is added or removed.
 - Fixture tests cover the checker happy path, missing expected file, and newly
   discovered untracked file failure modes.
+- Security Guardrails no longer fails at workflow startup on the OSV reusable
+  workflow permission check.
 
 Affected surfaces:
 - `.github/workflows/maturity_sweep_advisory.yml`
 - `.github/workflows/maturity_sweep_competitive_intelligence_surface.yml`
+- `.github/workflows/security_guardrails.yml`
 - `scripts/check_competitive_intelligence_product_surface_manifest.py`
 - `tests/test_competitive_intelligence_product_surface_manifest.py`
 - `tests/maturity_sweep/baseline_extracted_competitive_intelligence.json`
@@ -88,6 +100,8 @@ Risk areas:
 - False-green coverage for product-facing UI/storage/media surfaces if they
   are not listed in the product-surface manifest.
 - Baseline churn that could accept unrelated debt.
+- Security workflow startup failure if a reusable workflow permission is not
+  passed through by the caller job.
 
 - Reviewer rules triggered: R2, R10, R12, R14.
 
@@ -95,6 +109,7 @@ Risk areas:
 
 - `.github/workflows/maturity_sweep_advisory.yml`
 - `.github/workflows/maturity_sweep_competitive_intelligence_surface.yml`
+- `.github/workflows/security_guardrails.yml`
 - `plans/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md`
 - `scripts/check_competitive_intelligence_product_surface_manifest.py`
 - `tests/test_competitive_intelligence_product_surface_manifest.py`
@@ -128,6 +143,9 @@ That checker discovers files from the manifest's glob patterns and compares
 them with the committed file list. New or removed UI/storage/docs/media files
 fail the check until the manifest is updated intentionally.
 
+The Security Guardrails OSV reusable workflow caller now passes through the
+read-only `actions: read` permission requested by the reusable workflow.
+
 ## Intentional
 
 - This does not fix existing competitive-intelligence brittleness; it ratchets
@@ -138,6 +156,8 @@ fail the check until the manifest is updated intentionally.
   gate because it includes TSX, SQL, JSON, Markdown, and media files.
 - The product-surface workflow, checker, tests, and full manifest are kept in
   one PR so the new guard has no enforcement/baseline gap.
+- The Security Guardrails permission change is read-only and limited to the
+  trusted OSV reusable workflow caller.
 - `extracted_llm_infrastructure` is deferred to keep this PR scoped to the
   competitive-intelligence lane.
 
@@ -159,6 +179,7 @@ Parked hardening: none.
 - `python -m py_compile scripts/check_competitive_intelligence_product_surface_manifest.py tests/test_competitive_intelligence_product_surface_manifest.py` - pass.
 - `python -m pytest tests/test_competitive_intelligence_product_surface_manifest.py -q` - pass, 3 passed.
 - `python scripts/sync_pr_plan.py plans/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md --check` - pass.
+- Security Guardrails prior startup failure pointed at `.github/workflows/security_guardrails.yml#L185`; the OSV caller now grants the requested `actions: read` permission.
 
 ## Estimated diff size
 
@@ -166,9 +187,10 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/maturity_sweep_advisory.yml` | 11 |
 | `.github/workflows/maturity_sweep_competitive_intelligence_surface.yml` | 57 |
-| `plans/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md` | 178 |
+| `.github/workflows/security_guardrails.yml` | 1 |
+| `plans/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md` | 197 |
 | `scripts/check_competitive_intelligence_product_surface_manifest.py` | 74 |
 | `tests/test_competitive_intelligence_product_surface_manifest.py` | 83 |
 | `tests/maturity_sweep/baseline_extracted_competitive_intelligence.json` | 220 |
 | `tests/maturity_sweep/competitive_intelligence_product_surface_manifest.json` | 196 |
-| **Total** | **819** |
+| **Total** | **839** |
