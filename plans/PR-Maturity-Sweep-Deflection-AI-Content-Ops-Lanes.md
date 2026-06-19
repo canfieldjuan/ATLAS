@@ -89,9 +89,9 @@ Acceptance criteria:
 - `tests/maturity_sweep/baseline_ai_content_ops_lane.json`
 
 Affected surfaces:
-- Deflection and AI content-ops Python files in `atlas_brain/**` and
-  `scripts/**`.
-- Deflection-named Python files in `extracted_content_pipeline/**`.
+- Deflection and AI content-ops Python files in the Atlas brain and repo script
+  directories.
+- Deflection-named extracted content pipeline Python files.
 - Deployed/non-Python deflection product files in portfolio UI, atlas-intel UI,
   frontend docs/contracts, Vercel routing, and storage migrations.
 
