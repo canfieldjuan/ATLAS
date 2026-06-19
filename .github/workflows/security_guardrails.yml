@@ -57,10 +57,11 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Checkout full history
+      - name: Checkout PR head history
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Resolve trusted baseline
         env:
@@ -68,7 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           baseline=".gitleaks-baseline-ci.json"
-          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          git fetch --no-tags origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
           if git cat-file -e "origin/${BASE_REF}:docs/security/gitleaks-baseline.json" 2>/dev/null; then
             git show "origin/${BASE_REF}:docs/security/gitleaks-baseline.json" > "$baseline"
@@ -80,13 +81,17 @@ jobs:
             echo "No Gitleaks baseline found; scanning without a baseline."
           fi
 
-      - name: Scan complete git history
+      - name: Scan pull request commits
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           baseline_args=()
           if [ -s .gitleaks-baseline-ci.json ]; then
             baseline_args=(--baseline-path /repo/.gitleaks-baseline-ci.json)
           fi
+          scan_range="origin/${BASE_REF}..HEAD"
+          echo "Scanning Gitleaks PR range: ${scan_range}"
 
           docker run --rm \
             -v "$PWD:/repo" \
@@ -94,7 +99,7 @@ jobs:
             git \
             --redact \
             --verbose \
-            --log-opts="HEAD" \
+            --log-opts="${scan_range}" \
             "${baseline_args[@]}" \
             /repo
 
