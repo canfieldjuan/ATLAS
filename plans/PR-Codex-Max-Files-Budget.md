@@ -52,9 +52,11 @@ Reviewer rules triggered: R1, R10, R2.
 
 ## Mechanism
 
-`declared_max_files()` parses an optional `Max files: N` line from the plan text
-(mirroring how `scripts/audit_plan_doc_diff_size.py` reads its Total from the
-plan). `main()` moves to argparse -- positional `plan`, optional `base_ref`
+`declared_max_files()` reads an optional `Max files: N` line from the plan's
+*Scope* section only -- so a digit-only mention in other prose or an example
+does not arm the gate -- and fails closed (raising `PlanBudgetError`, exit 2) on
+a present-but-malformed value so a typo cannot silently disable the budget. This
+mirrors how `scripts/audit_plan_doc_diff_size.py` reads its Total from the plan. `main()` moves to argparse -- positional `plan`, optional `base_ref`
 (default `origin/main`), and `--max-files` -- which preserves the existing
 two-positional call in `scripts/pre_push_audit.sh`. The budget resolves to the
 flag if given, else the declared value; when set and the actual changed-file
@@ -102,8 +104,8 @@ None.
 
 | File | LOC |
 |---|---:|
-| `scripts/audit_plan_doc_files_touched.py` | 34 |
-| `tests/test_audit_plan_doc_files_touched.py` | 84 |
+| `scripts/audit_plan_doc_files_touched.py` | 74 |
+| `tests/test_audit_plan_doc_files_touched.py` | 118 |
 | `AGENTS.md` | 3 |
 | `plans/PR-Codex-Max-Files-Budget.md` | ~109 |
-| **Total** | **~230** |
+| **Total** | **~304** |

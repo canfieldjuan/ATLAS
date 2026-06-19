@@ -11,8 +11,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PATH_PATTERN = re.compile(r"`([^`\n]+)`")
-# Optional fix-mode budget declared in the plan Scope, e.g. "Max files: 3".
-MAX_FILES_PATTERN = re.compile(r"(?im)^\s*Max files:\s*(\d+)\b")
+# Optional fix-mode budget declared in the plan *Scope*, e.g. "Max files: 3".
+# Read only from the Scope section (so digit-only mentions in other prose do not
+# trigger the gate) and fail closed on a malformed value (so a typo cannot
+# silently disable the gate).
+SCOPE_HEADING_PATTERN = re.compile(r"^##\s+Scope\b")
+MAX_FILES_LINE_PATTERN = re.compile(r"(?im)^\s*Max files:\s*(\S.*?)\s*$")
+
+
+class PlanBudgetError(ValueError):
+    """A `Max files:` declaration is present in Scope but is not an integer."""
 
 
 @dataclass(frozen=True)
@@ -63,10 +71,37 @@ def claimed_files_touched(text: str) -> set[str]:
     return claimed
 
 
+def _scope_section(text: str) -> str:
+    """The plan's `## Scope` section body (up to the next `## ` heading)."""
+    out: list[str] = []
+    in_scope = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if SCOPE_HEADING_PATTERN.match(line):
+                in_scope = True
+                continue
+            if in_scope:
+                break
+        if in_scope:
+            out.append(line)
+    return "\n".join(out)
+
+
 def declared_max_files(text: str) -> int | None:
-    """The optional `Max files: N` budget declared in the plan, or None."""
-    match = MAX_FILES_PATTERN.search(text)
-    return int(match.group(1)) if match else None
+    """The `Max files: N` budget from the plan's Scope, or None if absent.
+
+    Reads only the Scope section, so a digit-only `Max files:` mention in other
+    prose or an example does not trigger the budget. Fails closed: a present but
+    non-integer value raises `PlanBudgetError` rather than silently disabling the
+    gate.
+    """
+    match = MAX_FILES_LINE_PATTERN.search(_scope_section(text))
+    if match is None:
+        return None
+    raw = match.group(1).strip()
+    if not raw.isdigit():
+        raise PlanBudgetError(f"malformed 'Max files:' value in Scope: {raw!r}")
+    return int(raw)
 
 
 def actual_diff_files(base_ref: str) -> set[str]:
@@ -117,7 +152,12 @@ def main(argv: list[str] | None = None) -> int:
 
     plan_text = plan_path.read_text(encoding="utf-8")
     audit = audit_files_touched(plan_text, actual)
-    budget = args.max_files if args.max_files is not None else declared_max_files(plan_text)
+    try:
+        plan_budget = declared_max_files(plan_text)
+    except PlanBudgetError as exc:
+        print(f"plan budget error: {exc}", file=sys.stderr)
+        return 2
+    budget = args.max_files if args.max_files is not None else plan_budget
     over_budget = budget is not None and len(audit.actual) > budget
 
     print(f"plan doc: {plan_path}")
