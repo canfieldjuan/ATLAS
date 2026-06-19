@@ -203,6 +203,33 @@ def test_metadata_resolution_ignores_env_default_account_when_deriving(
     )
 
 
+def test_validate_args_ignores_non_explicit_env_account_when_deriving() -> None:
+    args = smoke._build_parser().parse_args([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "secret-token",
+        "--webhook-secret",
+        "whsec_test",
+        "--account-id",
+        "acct-123",
+        "--request-id",
+        "content-ops-123",
+        "--database-url",
+        "postgres://example",
+        "--derive-account-id-from-report",
+    ])
+    args.account_id_explicit = False
+
+    assert smoke._validate_args(args) == []
+
+    args.account_id_explicit = True
+
+    assert smoke._validate_args(args) == [
+        "--account-id must be a UUID for the Stripe metadata contract"
+    ]
+
+
 def test_preflight_only_writes_redacted_inputs_without_network(monkeypatch, tmp_path, capsys) -> None:
     def _unexpected(*_args, **_kwargs):
         raise AssertionError("preflight must not call network")
@@ -380,6 +407,37 @@ def test_main_rejects_mismatched_persisted_account_before_network(
     }
 
 
+def test_main_treats_equals_form_account_id_as_explicit(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    def _unexpected_network(*_args, **_kwargs):
+        raise AssertionError("mismatched account must stop before network")
+
+    monkeypatch.setattr(smoke, "_lookup_report_account_id", lambda *_args: ACCOUNT_ID)
+    monkeypatch.setattr(smoke, "_open_http_request", _unexpected_network)
+
+    code = smoke.main([
+        *_without_account_id(_base_args(tmp_path)),
+        f"--account-id={OTHER_ACCOUNT_ID}",
+        "--database-url",
+        "postgres://example",
+        "--derive-account-id-from-report",
+    ])
+    payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["errors"] == [
+        "--account-id does not match the persisted deflection report row"
+    ]
+    assert payload["inputs"]["metadata_resolution"] == {
+        "account_id_source": "persisted_report",
+        "account_id_supplied": True,
+        "report_row_checked": True,
+    }
+
+
 def test_main_reports_missing_persisted_report_before_network(
     monkeypatch,
     tmp_path,
@@ -406,6 +464,42 @@ def test_main_reports_missing_persisted_report_before_network(
     assert code == 1
     assert payload["ok"] is False
     assert payload["errors"] == ["persisted deflection report row was not found"]
+    assert payload["inputs"]["metadata_resolution"] == {
+        "account_id_source": "unresolved",
+        "account_id_supplied": False,
+        "report_row_checked": False,
+    }
+    assert "postgres://example" not in json.dumps(payload)
+
+
+def test_main_reports_database_lookup_failure_before_network(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    def _lookup_failure(*_args):
+        raise OSError("database connection failed")
+
+    def _unexpected_network(*_args, **_kwargs):
+        raise AssertionError("database lookup failure must stop before network")
+
+    monkeypatch.setattr(smoke, "_lookup_report_account_id", _lookup_failure)
+    monkeypatch.setattr(smoke, "_open_http_request", _unexpected_network)
+
+    code = smoke.main([
+        *_without_account_id(_base_args(tmp_path)),
+        "--account-id",
+        "",
+        "--database-url",
+        "postgres://example",
+        "--derive-account-id-from-report",
+    ])
+    payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["errors"] == [
+        "persisted report lookup failed: database connection failed"
+    ]
     assert payload["inputs"]["metadata_resolution"] == {
         "account_id_source": "unresolved",
         "account_id_supplied": False,
