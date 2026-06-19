@@ -90,6 +90,14 @@ it runs) while keeping it off the critical path of normal PRs.
   dependency in this job, refresh the mock, or mark them so the backstop can go
   green. Until then this check stays red by design (it is reporting real gaps,
   not a regression in this slice).
+- Resolve the unmarked DB-backed tests the backstop surfaced (review comment):
+  tests using the `db_pool` fixture marked only `@pytest.mark.asyncio` (e.g.
+  `tests/test_session_id_normalization.py`) are not excluded by
+  `not integration and not e2e`, so they fail against no Postgres. Either add a
+  Postgres service to this job or mark those tests `integration`. This, with the
+  import gaps above, is why the backstop is **advisory** (informational, not a
+  merge gate) at debut: a green backstop requires the repo's service-dependent
+  tests to be marked/provisioned, which is the larger test-hygiene follow-up.
 - Broaden `audit_extracted_pipeline_ci_enrollment.py` (and make it
   workflow-aware) so deflection/content-ops test families are flagged for
   enrollment at PR time, not only caught nightly by this backstop.
