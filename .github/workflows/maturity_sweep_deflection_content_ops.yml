@@ -11,7 +11,8 @@ on:
       - "scripts/maturity_sweep_file_lane.py"
       - "scripts/check_deflection_product_surface_manifest.py"
       - "tests/**"
-      - "extracted_content_pipeline/**"
+      - "extracted_content_pipeline/*deflection*.py"
+      - "extracted_content_pipeline/**/*deflection*.py"
       - "atlas-intel-ui/scripts/content-ops-deflection-report-ui.test.mjs"
       - "atlas-intel-ui/src/domain/contentOps/*Deflection*"
       - "atlas-intel-ui/src/domain/contentOps/*deflection*"
@@ -25,6 +26,8 @@ on:
       - "docs/frontend/content_ops_faq_report_example.json"
       - "portfolio-ui/api/content-ops/deflection/**"
       - "portfolio-ui/scripts/faq-deflection*.mjs"
+      - "portfolio-ui/src/App.tsx"
+      - "portfolio-ui/src/pages/Services.tsx"
       - "portfolio-ui/src/pages/*Deflection*.tsx"
       - "portfolio-ui/src/pages/*deflection*.tsx"
       - "portfolio-ui/vercel.json"
@@ -41,7 +44,8 @@ on:
       - "scripts/maturity_sweep_file_lane.py"
       - "scripts/check_deflection_product_surface_manifest.py"
       - "tests/**"
-      - "extracted_content_pipeline/**"
+      - "extracted_content_pipeline/*deflection*.py"
+      - "extracted_content_pipeline/**/*deflection*.py"
       - "atlas-intel-ui/scripts/content-ops-deflection-report-ui.test.mjs"
       - "atlas-intel-ui/src/domain/contentOps/*Deflection*"
       - "atlas-intel-ui/src/domain/contentOps/*deflection*"
@@ -55,6 +59,8 @@ on:
       - "docs/frontend/content_ops_faq_report_example.json"
       - "portfolio-ui/api/content-ops/deflection/**"
       - "portfolio-ui/scripts/faq-deflection*.mjs"
+      - "portfolio-ui/src/App.tsx"
+      - "portfolio-ui/src/pages/Services.tsx"
       - "portfolio-ui/src/pages/*Deflection*.tsx"
       - "portfolio-ui/src/pages/*deflection*.tsx"
       - "portfolio-ui/vercel.json"
@@ -78,8 +84,13 @@ jobs:
       - name: Install pytest
         run: python -m pip install --quiet pytest
 
-      - name: Sweep unit tests (blocking)
-        run: python -m pytest tests/test_maturity_sweep.py --noconftest -q
+      - name: Sweep and lane unit tests (blocking)
+        run: |
+          python -m pytest tests/test_maturity_sweep.py --noconftest -q
+          python -m pytest \
+            tests/test_maturity_sweep_file_lane.py \
+            tests/test_deflection_product_surface_manifest.py \
+            --noconftest -q
 
       - name: Deflection product surface manifest (blocking)
         run: python scripts/check_deflection_product_surface_manifest.py
