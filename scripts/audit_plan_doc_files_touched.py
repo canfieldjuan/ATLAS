@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import re
 import subprocess
 import sys
@@ -10,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PATH_PATTERN = re.compile(r"`([^`\n]+)`")
+# Optional fix-mode budget declared in the plan Scope, e.g. "Max files: 3".
+MAX_FILES_PATTERN = re.compile(r"(?im)^\s*Max files:\s*(\d+)\b")
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,12 @@ def claimed_files_touched(text: str) -> set[str]:
     return claimed
 
 
+def declared_max_files(text: str) -> int | None:
+    """The optional `Max files: N` budget declared in the plan, or None."""
+    match = MAX_FILES_PATTERN.search(text)
+    return int(match.group(1)) if match else None
+
+
 def actual_diff_files(base_ref: str) -> set[str]:
     result = subprocess.run(
         ["git", "diff", "--name-only", f"{base_ref}...HEAD"],
@@ -81,37 +90,52 @@ def _print_paths(label: str, paths: set[str]) -> None:
         print(f"{label:<15} {path}")
 
 
-def main() -> int:
-    if len(sys.argv) not in (2, 3):
-        print("usage: audit_plan_doc_files_touched.py PLAN [BASE_REF]", file=sys.stderr)
-        return 2
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Compare a plan doc's declared files against the git diff."
+    )
+    parser.add_argument("plan", help="path to the plan doc")
+    parser.add_argument("base_ref", nargs="?", default="origin/main")
+    parser.add_argument(
+        "--max-files",
+        type=int,
+        default=None,
+        help="override the plan's `Max files: N` budget (fix-mode budget cap)",
+    )
+    args = parser.parse_args(argv)
 
-    plan_path = Path(sys.argv[1])
-    base_ref = sys.argv[2] if len(sys.argv) == 3 else "origin/main"
+    plan_path = Path(args.plan)
     if not plan_path.exists():
         print(f"plan doc not found: {plan_path}", file=sys.stderr)
         return 2
 
     try:
-        actual = actual_diff_files(base_ref)
+        actual = actual_diff_files(args.base_ref)
     except RuntimeError as exc:
         print(f"failed to read git diff: {exc}", file=sys.stderr)
         return 2
 
-    audit = audit_files_touched(plan_path.read_text(encoding="utf-8"), actual)
+    plan_text = plan_path.read_text(encoding="utf-8")
+    audit = audit_files_touched(plan_text, actual)
+    budget = args.max_files if args.max_files is not None else declared_max_files(plan_text)
+    over_budget = budget is not None and len(audit.actual) > budget
 
     print(f"plan doc: {plan_path}")
-    print(f"base ref: {base_ref}")
+    print(f"base ref: {args.base_ref}")
     print(f"claimed files: {len(audit.claimed)}")
     print(f"actual files: {len(audit.actual)}")
+    if budget is not None:
+        print(f"max files: {budget}")
     print("-" * 60)
 
-    if audit.ok:
+    if audit.ok and not over_budget:
         print("OK             plan files match git diff")
         return 0
 
     _print_paths("MISSING", audit.missing_in_plan)
     _print_paths("EXTRA", audit.extra_in_plan)
+    if over_budget:
+        print(f"OVER BUDGET     {len(audit.actual)} files changed, max {budget}")
     return 1
 
 
