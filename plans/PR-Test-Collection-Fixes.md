@@ -13,9 +13,11 @@ time rather than reporting a clean skip:
   `graphiti-wrapper/main.py` at import time, whose deps (`graphiti_core`,
   `neo4j`) are not brain runtime deps.
 
-Both are legitimately external/cross-service tests; they should be marked `e2e`
-and skip cleanly when their optional deps are absent, instead of erroring
-collection.
+They should skip cleanly when their optional deps are absent instead of
+erroring collection. `test_cloud_latency` genuinely calls live external APIs,
+so it is `e2e`; `test_graphiti_wrapper_health`'s tests are fully mocked, so
+they stay in the unit lane and only the cross-service module load is gated on
+the optional deps.
 
 ## Scope (this PR)
 
@@ -23,11 +25,14 @@ Ownership lane: ci/coverage
 Slice phase: Production hardening
 
 1. `tests/test_cloud_latency.py`: add module-level `pytest.importorskip("openai")`
-   and `pytestmark = pytest.mark.e2e` so it skips cleanly without the SDK/keys.
-2. `tests/test_graphiti_wrapper_health.py`: add `pytestmark = pytest.mark.e2e`
-   and guard the cross-service `exec_module` with a module-level
-   `pytest.skip(allow_module_level=True)` narrowed to `ImportError`, so an
-   absent service dep skips but a real syntax/runtime regression still fails.
+   and `pytestmark = pytest.mark.e2e` so it skips cleanly without the SDK/keys
+   (it is an external live-API benchmark).
+2. `tests/test_graphiti_wrapper_health.py`: preflight the named optional service
+   deps with `pytest.importorskip("neo4j")` / `pytest.importorskip("graphiti_core")`
+   before `exec_module`, and run `exec_module` unguarded. No `e2e` marker: the
+   health/readiness tests are fully mocked, so when the deps are present they
+   run in the unit lane, and a real import regression in `main.py` or its local
+   modules still fails (only the named absent deps skip).
 
 ### Files touched
 
@@ -39,34 +44,45 @@ Slice phase: Production hardening
 
 Acceptance criteria:
 
-- [ ] Both modules collect as clean skips under `not integration and not e2e`
-      when their optional deps are absent.
-- [ ] The graphiti guard only skips on `ImportError`, not arbitrary exceptions.
+- [ ] Both modules collect as clean skips in a brain-only env (no `openai`,
+      no `neo4j`/`graphiti_core`) instead of erroring collection.
+- [ ] `test_graphiti_wrapper_health` skips only on the named absent optional
+      deps; a real import regression in `main.py` or its local modules fails.
+- [ ] `test_graphiti_wrapper_health` carries no `e2e` marker, so its mocked
+      tests run in the unit lane when the deps are present.
 - [ ] No production code changes; test classification only.
 
 Affected surfaces: tests only.
 
-Risk areas: over-broad skip masking a real failure -- mitigated by narrowing
-the graphiti guard to `ImportError`.
+Risk areas: a skip masking a real failure -- mitigated by preflighting only the
+named optional deps (`neo4j`, `graphiti_core`) and running `exec_module`
+unguarded so other import regressions propagate.
 
 Reviewer rules triggered: R1.
 
 ## Mechanism
 
-`pytest.importorskip("openai")` raises `Skipped` at module import when `openai`
-is not installed, so collection records a skip instead of an `ImportError`. The
-`e2e` marker keeps both modules out of the unit lane (`not integration and not
-e2e`). For graphiti, `exec_module` is wrapped so that an `ImportError` (the
-wrapper's `graphiti_core`/`neo4j` deps missing in a brain-only env) becomes a
-module-level skip, while any other exception (a real regression in
-`graphiti-wrapper/main.py`) propagates and fails the e2e test.
+`pytest.importorskip(name)` raises `Skipped` at module import when `name` is not
+installed, recording a clean skip instead of an `ImportError`. `test_cloud_latency`
+preflights `openai` and is marked `e2e` (it makes live Fireworks/Together
+calls). `test_graphiti_wrapper_health` preflights the named service deps
+`neo4j` and `graphiti_core`, then `exec_module`s `graphiti-wrapper/main.py`
+**unguarded**: in a brain-only env the preflight skips before the load is
+attempted, while if those deps are present a genuine import regression in
+`main.py` or one of its local modules (e.g. `embedder_factory`) propagates as a
+failure rather than a silent skip. The module is not marked `e2e` because its
+health/readiness tests patch `AsyncGraphDatabase`, the embedder preload, and
+the readiness gate -- they need no live services and belong in the unit lane.
 
 ## Intentional
 
 - Test classification only; the test bodies and assertions are unchanged.
-- The graphiti guard is deliberately `ImportError`-only (not `except
-  Exception`) so startup-breaking regressions in the wrapper are not silently
-  skipped in the environment where the e2e test should run.
+- The graphiti skip is preflight-on-named-deps (not a broad `except`) so
+  regressions in the wrapper's own modules still fail in the environment where
+  the test can run -- per reviewer feedback (Codex + Copilot) on the prior
+  combined PR.
+- No `e2e` marker on the mocked graphiti tests, so they execute in the
+  repo-wide unit lane when `neo4j`/`graphiti_core` are installed.
 
 ## Deferred
 

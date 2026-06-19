@@ -7,11 +7,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-# This exercises the standalone graphiti-wrapper service by loading its
-# main.py, whose deps (graphiti_core, neo4j) are not brain runtime deps. Mark
-# e2e and skip cleanly at module load when those deps are absent so the unit
-# backstop (`not integration and not e2e`) does not error collecting it.
-pytestmark = pytest.mark.e2e
+# main.py belongs to the standalone graphiti-wrapper service; its service deps
+# (neo4j, graphiti_core) are not brain runtime deps. Skip the whole module only
+# when those named optional deps are absent (e.g. a brain-only env). When they
+# are present the health/readiness tests below are fully mocked (no live
+# services), so they stay in the normal unit lane -- no e2e marker -- and a real
+# import regression in main.py or its local modules still fails because
+# exec_module is not wrapped in a broad guard.
+pytest.importorskip("neo4j")
+pytest.importorskip("graphiti_core")
 
 _ROOT = Path(__file__).resolve().parents[1]
 _WRAPPER_DIR = _ROOT / "graphiti-wrapper"
@@ -23,15 +27,7 @@ if str(_WRAPPER_DIR) not in sys.path:
 _SPEC = importlib.util.spec_from_file_location("graphiti_wrapper_main", _MODULE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
-try:
-    _SPEC.loader.exec_module(_MODULE)
-except ImportError as exc:  # only skip when the wrapper's service deps are absent
-    # Narrow to ImportError so a real syntax/runtime regression in the
-    # graphiti-wrapper module surfaces as a failure instead of a silent skip.
-    pytest.skip(
-        f"graphiti-wrapper service deps unavailable: {exc}",
-        allow_module_level=True,
-    )
+_SPEC.loader.exec_module(_MODULE)
 
 
 def _make_settings():
