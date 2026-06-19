@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-import yaml
-
 
 DEFAULT_ENROLLED_TEST_PATTERNS = (
     "tests/test_audit_extracted_pipeline_ci_enrollment.py",
@@ -203,40 +201,41 @@ _EXPLICIT_TEST_PATH = re.compile(r"\btests/\S+\.py\b")
 _INTEGRATION_OR_E2E_MARK = re.compile(r"pytest\.mark\.(?:integration|e2e)\b")
 
 
-def _is_repo_wide_unit_pytest(command: str) -> bool:
-    if "pytest" not in command or not _BACKSTOP_MARKER.search(command):
+def _is_repo_wide_unit_pytest(line: str) -> bool:
+    """Whether a workflow line is a real repo-wide unit pytest command.
+
+    Requires a non-comment, non-echo line that invokes pytest with the unit
+    marker filter and no explicit per-file target. (Line/text based rather than
+    YAML-parsed: this auditor runs in a minimal env without pyyaml, like its
+    sibling `event_path_filters` regex parsing.)
+    """
+    stripped = line.strip()
+    if stripped.startswith("#") or "echo" in stripped:
         return False
-    return not _EXPLICIT_TEST_PATH.search(command)
+    if "pytest" not in stripped or not _BACKSTOP_MARKER.search(stripped):
+        return False
+    return not _EXPLICIT_TEST_PATH.search(stripped)
 
 
 def repo_wide_backstop_present(root: Path) -> bool:
     """Whether the repo-wide unit backstop workflow is the standing catch-all.
 
     True only when `.github/workflows/repo_wide_unit_backstop.yml` has a real
-    `run:` step invoking `pytest -m "not integration and not e2e"` over the
-    whole tree (no per-file target). Parsing the YAML run steps -- rather than
-    scanning raw text -- avoids falsely crediting a backstop whose command was
-    removed but whose marker strings linger in a comment or echo. The backstop
-    runs the unit suite with no per-file path filter, so a unit test it does
-    not exclude is exercised there even without a dedicated `atlas_*_checks.yml`.
+    run-command line invoking `pytest -m "not integration and not e2e"` over the
+    whole tree (no per-file target). Checking the run command -- not raw
+    substrings anywhere in the file -- avoids falsely crediting a backstop whose
+    command was removed but whose marker strings linger in a comment or echo.
+    The backstop runs the unit suite with no per-file path filter, so a unit
+    test it does not exclude is exercised there even without a dedicated
+    `atlas_*_checks.yml`.
     """
     backstop = root / ".github/workflows/repo_wide_unit_backstop.yml"
     if not backstop.is_file():
         return False
-    try:
-        data = yaml.safe_load(backstop.read_text(encoding="utf-8"))
-    except yaml.YAMLError:
-        return False
-    if not isinstance(data, dict):
-        return False
-    for job in (data.get("jobs") or {}).values():
-        if not isinstance(job, dict):
-            continue
-        for step in job.get("steps") or []:
-            run = step.get("run") if isinstance(step, dict) else None
-            if isinstance(run, str) and _is_repo_wide_unit_pytest(run):
-                return True
-    return False
+    return any(
+        _is_repo_wide_unit_pytest(line)
+        for line in backstop.read_text(encoding="utf-8").splitlines()
+    )
 
 
 def _test_marked_integration_or_e2e(root: Path, path: str) -> bool:
