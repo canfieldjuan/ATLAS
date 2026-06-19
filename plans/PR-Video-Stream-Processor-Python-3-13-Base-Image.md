@@ -48,8 +48,9 @@ Reviewer rules triggered: R1, R2, R11, R12, R14.
 
 The Dockerfile now uses `python:3.13-slim-bookworm`. The rest of the image build
 remains unchanged: install the existing OpenCV system libraries, install
-`requirements.txt`, copy the worker source, create the `atlas` user, and run
-`video_stream_processor.py`.
+`requirements.txt`, copy the worker source, create the `atlas` user, and run the
+worker entrypoint at
+`atlas_video-processing/processing/video_stream_processor/video_stream_processor.py`.
 
 Using bookworm fixes the review finding about the generated bullseye tag while
 keeping the maintenance intent of the Dependabot PR: move this worker to Python
