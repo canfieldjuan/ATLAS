@@ -33,6 +33,27 @@ remaining true unit failures before this harness boundary is validated.
 - `plans/PR-Backstop-Green-Follow-Up.md`
 - `tests/conftest.py`
 
+### Review Contract
+
+Acceptance criteria:
+
+- [ ] Pytest collection still succeeds with the collection hook signature pytest
+      expects.
+- [ ] Unit backstop collection sees the real `asyncpg` module when requirements
+      install it, so legacy per-file setdefault fakes cannot replace it.
+- [ ] Known live/service-backed DB tests are marked `integration` before marker
+      filtering so they are excluded from the unit-only backstop.
+- [ ] No production code or backstop command changes.
+
+Affected surfaces: pytest collection, test marker classification, and the
+backstop follow-up plan doc.
+
+Risk areas: over-marking a unit test as integration, or changing pytest
+collection behavior for unrelated tests. Mitigated by limiting the hook to an
+explicit filename allowlist and by using the full pytest hook signature.
+
+Reviewer rules triggered: R1.
+
 ## Mechanism
 
 Pytest loads `tests/conftest.py` before collecting test modules. Importing the
@@ -74,6 +95,6 @@ cleanup slice.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Backstop-Green-Follow-Up.md` | ~70 |
-| `tests/conftest.py` | ~34 |
-| **Total** | **~104** |
+| `plans/PR-Backstop-Green-Follow-Up.md` | ~90 |
+| `tests/conftest.py` | ~35 |
+| **Total** | **~125** |

@@ -50,7 +50,7 @@ _INTEGRATION_TEST_FILES = {
 }
 
 
-def pytest_collection_modifyitems(items):
+def pytest_collection_modifyitems(session, config, items):
     integration = pytest.mark.integration
     for item in items:
         if Path(str(item.fspath)).name in _INTEGRATION_TEST_FILES:
