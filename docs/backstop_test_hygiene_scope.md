@@ -39,12 +39,23 @@ Risk: low/mechanical. Size: small. Landed: module markers on 3 files,
 per-test markers on 5 tests in `test_evidence_gate`; the 6 pure-unit tests
 there stay in the backstop.
 
-## Slice B -- Enroll the never-run invoicing MCP/OAuth tests (NOT a prod fix)
+## Slice B -- Enroll the never-run invoicing MCP/OAuth tests (NOT a prod fix)  [DONE]
 
 `test_invoicing_readonly_mcp`, `test_invoicing_readonly_oauth`,
 `test_invoicing_draft_writer_mcp`, `test_invoicing_draft_writer_oauth` are
 enrolled in **zero** workflows -- they never run in CI today. That part of
 the finding stands.
+
+Landed: added all four files to `atlas_invoicing_checks.yml` as a dedicated
+`Run invoicing MCP + OAuth surface tests` step, plus path triggers for the
+production modules they exercise (`invoicing_readonly_server.py`,
+`invoicing_draft_writer_server.py`, `invoicing_readonly_oauth.py`,
+`invoicing_draft_writer_oauth.py`, `mcp/auth.py`) and the four test files
+themselves. All four are unit tests (no `integration`/`e2e` markers, no
+`db_pool`); the two `_oauth` files import real `mcp.server.auth.provider`,
+which resolves because the dedicated workflow installs `requirements.txt`
+(`mcp>=1.26.0`) and -- thanks to Slice C -- no sibling test poisons `mcp`
+first. No production OAuth code touched; no `mcp` re-pin.
 
 **Correction (the earlier framing was wrong):** the production import is
 NOT broken. `atlas_brain/mcp/invoicing_readonly_oauth.py:19` does

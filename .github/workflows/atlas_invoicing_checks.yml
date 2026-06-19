@@ -9,10 +9,19 @@ on:
       - ".github/workflows/atlas_invoicing_checks.yml"
       - "requirements.txt"
       - "atlas_brain/mcp/invoicing_server.py"
+      - "atlas_brain/mcp/invoicing_readonly_server.py"
+      - "atlas_brain/mcp/invoicing_draft_writer_server.py"
+      - "atlas_brain/mcp/invoicing_readonly_oauth.py"
+      - "atlas_brain/mcp/invoicing_draft_writer_oauth.py"
+      - "atlas_brain/mcp/auth.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "tests/test_monthly_invoice_generation.py"
+      - "tests/test_invoicing_readonly_mcp.py"
+      - "tests/test_invoicing_readonly_oauth.py"
+      - "tests/test_invoicing_draft_writer_mcp.py"
+      - "tests/test_invoicing_draft_writer_oauth.py"
   push:
     branches:
       - main
@@ -20,10 +29,19 @@ on:
       - ".github/workflows/atlas_invoicing_checks.yml"
       - "requirements.txt"
       - "atlas_brain/mcp/invoicing_server.py"
+      - "atlas_brain/mcp/invoicing_readonly_server.py"
+      - "atlas_brain/mcp/invoicing_draft_writer_server.py"
+      - "atlas_brain/mcp/invoicing_readonly_oauth.py"
+      - "atlas_brain/mcp/invoicing_draft_writer_oauth.py"
+      - "atlas_brain/mcp/auth.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "tests/test_monthly_invoice_generation.py"
+      - "tests/test_invoicing_readonly_mcp.py"
+      - "tests/test_invoicing_readonly_oauth.py"
+      - "tests/test_invoicing_draft_writer_mcp.py"
+      - "tests/test_invoicing_draft_writer_oauth.py"
 
 jobs:
   atlas-invoicing-checks:
@@ -49,4 +67,13 @@ jobs:
           python -m pytest \
             tests/test_monthly_invoice_generation.py \
             -k "update_invoice_clears_needs_hours_when_line_items_are_billable or line_items_are_billable_requires_all_positive_quantities" \
+            -q
+
+      - name: Run invoicing MCP + OAuth surface tests
+        run: |
+          python -m pytest \
+            tests/test_invoicing_readonly_mcp.py \
+            tests/test_invoicing_readonly_oauth.py \
+            tests/test_invoicing_draft_writer_mcp.py \
+            tests/test_invoicing_draft_writer_oauth.py \
             -q
