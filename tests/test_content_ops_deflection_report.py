@@ -1617,6 +1617,95 @@ def test_deflection_report_payload_scrubs_identifier_fields_markdown_and_keys() 
     assert "[redacted-identifier]" in encoded
 
 
+def test_deflection_report_payload_scrubs_local_entity_shapes() -> None:
+    scrubbed = scrub_deflection_report_payload(
+        {
+            "source_id": "ticket-source-a",
+            "source_ids": [
+                "ticket-source-a",
+                "owner@example.com",
+                "123 Maple Street",
+                "customer: jane doe",
+            ],
+            "answer": (
+                "Customer: Jane Doe asked us to ship the replacement to "
+                "123 Maple Street Apt 4B. Their migration token is "
+                "CUST-9XQ7-ABCD."
+            ),
+            "steps": [
+                "Requester name is Maria Garcia.",
+                "requester name is maria garcia.",
+                "Mail the label to 44 W 9th St Unit 12.",
+                "Search for profile code A9X4Q7Z2 before replying.",
+            ],
+        }
+    )
+
+    encoded = json.dumps(scrubbed, sort_keys=True)
+
+    for raw_fragment in (
+        "Jane Doe",
+        "123 Maple",
+        "CUST-9XQ7-ABCD",
+        "Maria Garcia",
+        "maria garcia",
+        "44 W 9th",
+        "A9X4Q7Z2",
+    ):
+        assert raw_fragment not in encoded
+    assert scrubbed["source_id"] == "ticket-source-a"
+    assert scrubbed["source_ids"] == [
+        "ticket-source-a",
+        "[redacted-email]",
+        "[redacted-address]",
+        "customer: [redacted-name]",
+    ]
+    assert "[redacted-name]" in encoded
+    assert "[redacted-address]" in encoded
+    assert "[redacted-identifier]" in encoded
+
+
+def test_deflection_report_payload_preserves_local_entity_near_misses() -> None:
+    scrubbed = scrub_deflection_report_payload(
+        {
+            "source_id": "ticket-source-a",
+            "answer": (
+                "Northstar Analytics follows ISO-9001. Customer: Reset Password "
+                "is a heading, not a person. The 2026 count is 1234567, the "
+                "price is $49, and ticket-source-a stays usable. "
+                "CVE-2021-44228 affected a dependency, SKU ABC12345 is active, "
+                "iPhone15Pro and Windows11 are supported, ISO27001 and HIPAA2026 "
+                "remain valid, Q4FY2026 is a reporting label, campaign2026 is a "
+                "campaign tag, 4 tickets are on the way, 4 invoices in one place, "
+                "and 4 cases in court."
+            ),
+        }
+    )
+
+    answer = scrubbed["answer"]
+    assert "Northstar Analytics" in answer
+    assert "ISO-9001" in answer
+    assert "Customer: Reset Password" in answer
+    assert "2026" in answer
+    assert "1234567" in answer
+    assert "$49" in answer
+    assert "ticket-source-a" in answer
+    assert "CVE-2021-44228" in answer
+    assert "SKU ABC12345" in answer
+    assert "iPhone15Pro" in answer
+    assert "Windows11" in answer
+    assert "ISO27001" in answer
+    assert "HIPAA2026" in answer
+    assert "Q4FY2026" in answer
+    assert "campaign2026" in answer
+    assert "4 tickets are on the way" in answer
+    assert "4 invoices in one place" in answer
+    assert "4 cases in court" in answer
+    assert "[redacted-name]" not in answer
+    assert "[redacted-address]" not in answer
+    assert "[redacted-identifier]" not in answer
+
+
 def test_deflection_snapshot_marks_question_only_exports_absent_resolution_evidence() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",

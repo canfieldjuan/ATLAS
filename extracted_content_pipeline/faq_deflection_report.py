@@ -75,9 +75,117 @@ _DEFLECTION_IDENTIFIER_RE = re.compile(
     re.IGNORECASE,
 )
 _DEFLECTION_REDACTION_ARTIFACT_RE = re.compile(
-    r"\[(?:redacted(?!-(?:email|identifier|phone|text)\])|removed|hidden)[^\]]*\]"
+    r"\[(?:redacted(?!-(?:address|email|identifier|name|phone|text)\])|removed|hidden)[^\]]*\]"
     r"|\bX{4,}\b",
     re.IGNORECASE,
+)
+_DEFLECTION_PERSON_NAME_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"(?P<prefix>"
+    r"(?i:(?:customer|requester|contact|client|user|agent|member|person|name)"
+    r"(?:\s+name)?\s*(?:is|:|=|-)\s*)"
+    r")"
+    r"(?P<name>"
+    r"[A-Za-z][A-Za-z'.-]+"
+    r"(?:\s+[A-Za-z][A-Za-z'.-]+){1,2}"
+    r")"
+    r"(?=$|[\s,.;:!?)]|</)",
+)
+_DEFLECTION_PERSON_NAME_REJECT_TOKENS = frozenset(
+    {
+        "account",
+        "analytics",
+        "api",
+        "billing",
+        "case",
+        "claim",
+        "dashboard",
+        "desk",
+        "export",
+        "faq",
+        "help",
+        "invoice",
+        "password",
+        "portal",
+        "report",
+        "reporting",
+        "reset",
+        "source",
+        "sso",
+        "support",
+        "ticket",
+        "token",
+    }
+)
+_DEFLECTION_STREET_ADDRESS_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"\d{1,6}\s+"
+    r"(?P<street_body>"
+    r"(?:[NSEW]\.?\s+)?"
+    r"(?:[A-Z0-9][A-Za-z0-9'.-]*\s+){0,6}"
+    r")"
+    r"(?P<street_suffix>"
+    r"Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|"
+    r"Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Way|Place|Pl\.?|Terrace|Ter\.?|"
+    r"Circle|Cir\.?|Highway|Hwy\.?"
+    r")"
+    r"(?:\s+(?:Apt|Apartment|Suite|Ste\.?|Unit|#)\s*[A-Za-z0-9-]+)?"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}",
+    re.IGNORECASE,
+)
+_DEFLECTION_STREET_ADDRESS_REJECT_TOKENS = frozenset(
+    {
+        "are",
+        "case",
+        "cases",
+        "claim",
+        "claims",
+        "in",
+        "invoice",
+        "invoices",
+        "is",
+        "one",
+        "on",
+        "the",
+        "ticket",
+        "tickets",
+    }
+)
+_DEFLECTION_CONTEXTUAL_OPAQUE_IDENTIFIER_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"(?P<prefix>"
+    r"(?i:(?:account|case|claim|contact|customer|member|order|profile|ref|"
+    r"reference|session|token|user)(?:\s+(?:code|id|identifier|token))?"
+    r"|(?:code|id|identifier|token))"
+    r"\s*(?:is|:|=|-)?\s*)"
+    r"(?P<identifier>"
+    r"(?:[A-Z0-9]{8,}|[A-Z0-9]{3,}(?:[-_][A-Z0-9]{3,})+)"
+    r")"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}",
+    re.IGNORECASE,
+)
+_DEFLECTION_OPAQUE_IDENTIFIER_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"(?:[A-Z0-9]{8,}|[A-Z0-9]{3,}(?:[-_][A-Z0-9]{3,})+)"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}",
+    re.IGNORECASE,
+)
+_DEFLECTION_OPAQUE_IDENTIFIER_PREFIXES = (
+    "acct",
+    "account",
+    "case",
+    "claim",
+    "contact",
+    "cust",
+    "customer",
+    "member",
+    "ord",
+    "order",
+    "profile",
+    "ref",
+    "session",
+    "user",
+    "usr",
 )
 _DEFLECTION_IDENTIFIER_KEYS = frozenset(
     {
@@ -2524,11 +2632,7 @@ def _should_preserve_source_link(value: str) -> bool:
     text = _text(value)
     if not text:
         return False
-    return not (
-        _DEFLECTION_EMAIL_RE.search(text)
-        or _DEFLECTION_PHONE_RE.search(text)
-        or _DEFLECTION_REDACTION_ARTIFACT_RE.search(text)
-    )
+    return not _has_deflection_source_link_pii(text)
 
 
 def _protect_source_link_mentions(
@@ -2635,7 +2739,119 @@ def _scrub_deflection_text(value: str) -> str:
     text = _DEFLECTION_REDACTION_ARTIFACT_RE.sub("[redacted-text]", value)
     text = _DEFLECTION_EMAIL_RE.sub("[redacted-email]", text)
     text = _DEFLECTION_PHONE_RE.sub("[redacted-phone]", text)
+    text = _DEFLECTION_STREET_ADDRESS_RE.sub(_redact_deflection_street_address, text)
+    text = _DEFLECTION_PERSON_NAME_RE.sub(_redact_deflection_person_name, text)
+    text = _DEFLECTION_CONTEXTUAL_OPAQUE_IDENTIFIER_RE.sub(
+        _redact_deflection_contextual_opaque_identifier,
+        text,
+    )
+    text = _DEFLECTION_OPAQUE_IDENTIFIER_RE.sub(
+        _redact_deflection_opaque_identifier,
+        text,
+    )
     return _DEFLECTION_IDENTIFIER_RE.sub("[redacted-identifier]", text)
+
+
+def _redact_deflection_street_address(match: re.Match[str]) -> str:
+    if not _looks_like_deflection_street_address(match):
+        return match.group(0)
+    return "[redacted-address]"
+
+
+def _looks_like_deflection_street_address(match: re.Match[str]) -> bool:
+    body = match.group("street_body")
+    tokens = [
+        token.casefold()
+        for token in re.findall(r"[A-Za-z]+", body)
+        if token.casefold() not in {"n", "s", "e", "w"}
+    ]
+    if any(token in _DEFLECTION_STREET_ADDRESS_REJECT_TOKENS for token in tokens):
+        return False
+    return bool(tokens or re.search(r"\d", body))
+
+
+def _redact_deflection_person_name(match: re.Match[str]) -> str:
+    candidate = match.group("name")
+    if not _looks_like_deflection_person_name(candidate):
+        return match.group(0)
+    return f"{match.group('prefix')}[redacted-name]"
+
+
+def _looks_like_deflection_person_name(value: str) -> bool:
+    tokens = [
+        token.strip(" .'-").casefold()
+        for token in value.split()
+        if token.strip(" .'-")
+    ]
+    if len(tokens) < 2 or len(tokens) > 3:
+        return False
+    if any(token in _DEFLECTION_PERSON_NAME_REJECT_TOKENS for token in tokens):
+        return False
+    return all(len(token) >= 2 for token in tokens)
+
+
+def _redact_deflection_contextual_opaque_identifier(match: re.Match[str]) -> str:
+    token = match.group("identifier")
+    if not _looks_like_deflection_opaque_identifier(token, require_prefix=False):
+        return match.group(0)
+    return f"{match.group('prefix')}[redacted-identifier]"
+
+
+def _redact_deflection_opaque_identifier(match: re.Match[str]) -> str:
+    token = match.group(0)
+    if not _looks_like_deflection_opaque_identifier(token, require_prefix=True):
+        return token
+    return "[redacted-identifier]"
+
+
+def _looks_like_deflection_opaque_identifier(
+    value: str,
+    *,
+    require_prefix: bool,
+) -> bool:
+    compact = re.sub(r"[-_]", "", value)
+    if len(compact) < 8:
+        return False
+    if not any(char.isalpha() for char in compact):
+        return False
+    digit_count = sum(1 for char in compact if char.isdigit())
+    if digit_count < 1:
+        return False
+    lowered = value.casefold()
+    if require_prefix and not lowered.startswith(_DEFLECTION_OPAQUE_IDENTIFIER_PREFIXES):
+        return False
+    return digit_count >= 1
+
+
+def _has_deflection_source_link_pii(value: str) -> bool:
+    if (
+        _DEFLECTION_EMAIL_RE.search(value)
+        or _DEFLECTION_PHONE_RE.search(value)
+        or _DEFLECTION_REDACTION_ARTIFACT_RE.search(value)
+    ):
+        return True
+    if any(
+        _looks_like_deflection_street_address(match)
+        for match in _DEFLECTION_STREET_ADDRESS_RE.finditer(value)
+    ):
+        return True
+    if any(
+        _looks_like_deflection_person_name(match.group("name"))
+        for match in _DEFLECTION_PERSON_NAME_RE.finditer(value)
+    ):
+        return True
+    if any(
+        _looks_like_deflection_opaque_identifier(
+            match.group("identifier"),
+            require_prefix=False,
+        )
+        for match in _DEFLECTION_CONTEXTUAL_OPAQUE_IDENTIFIER_RE.finditer(value)
+    ):
+        return True
+    return any(
+        _looks_like_deflection_opaque_identifier(match.group(0), require_prefix=True)
+        for match in _DEFLECTION_OPAQUE_IDENTIFIER_RE.finditer(value)
+    )
 
 
 def _json_ready(value: Any) -> Any:
