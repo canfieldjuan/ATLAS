@@ -42,7 +42,6 @@ export default function DataTable<T>({
 
   // Reset to page 0 when data length changes (new fetch / filter)
   const dataLen = data.length
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setPage(0) }, [dataLen])
 
   const sorted = useMemo(() => {

@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components, react-hooks/set-state-in-effect */
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 
 const TOKEN_KEY = 'atlas_token'
