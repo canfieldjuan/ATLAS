@@ -1,6 +1,6 @@
 # Plan archive index
 
-1137 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1138 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -782,6 +782,7 @@
 - [PR-Deflection-Synonym-Clustering-Recall](archive/PR-Deflection-Synonym-Clustering-Recall.md) - lane: deflection/clustering-raw-data | phase: Production hardening
 - [PR-Deflection-Teaser-Locked-Dedupe](archive/PR-Deflection-Teaser-Locked-Dedupe.md) - lane: content-ops/faq-deflection-teaser | phase: Product polish
 - [PR-Deflection-Teaser-Top-Answer](archive/PR-Deflection-Teaser-Top-Answer.md) - lane: content-ops/faq-deflection-teaser | phase: Product polish
+- [PR-Deflection-Test-Mode-Checkout-Proof-Helper](archive/PR-Deflection-Test-Mode-Checkout-Proof-Helper.md) - lane: content-ops/report-delivery-live-funnel | phase: Functional validation
 - [PR-Deflection-To-Content-Upsell](archive/PR-Deflection-To-Content-Upsell.md) - lane: content-ops/deflection-to-content-upsell | phase: Workflow/process
 - [PR-Deflection-Uncap-Paid-Report](archive/PR-Deflection-Uncap-Paid-Report.md) - lane: content-ops/faq-deflection | phase: Production hardening
 - [PR-Deflection-Zendesk-API-Live-Smoke](archive/PR-Deflection-Zendesk-API-Live-Smoke.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation

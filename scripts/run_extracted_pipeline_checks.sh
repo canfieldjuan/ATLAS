@@ -58,6 +58,7 @@ pytest \
   tests/test_smoke_content_ops_deflection_submit_handoff.py \
   tests/test_smoke_content_ops_deflection_portfolio_result_page.py \
   tests/test_smoke_content_ops_deflection_stripe_paid_unlock.py \
+  tests/test_run_deflection_test_mode_checkout_proof.py \
   tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py \
   tests/test_smoke_content_ops_deflection_pdf_export_validators.py \
   tests/test_run_deflection_full_report_qa_live_runner.py \
