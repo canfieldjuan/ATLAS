@@ -1,6 +1,6 @@
 # Plan archive index
 
-1149 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1150 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -666,6 +666,7 @@
 - [PR-Decouple-PoolCompression-1](archive/PR-Decouple-PoolCompression-1.md)
 - [PR-Deflection-Answer-Copy-Polish](archive/PR-Deflection-Answer-Copy-Polish.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
 - [PR-Deflection-Async-Payment-Fulfillment](archive/PR-Deflection-Async-Payment-Fulfillment.md) - lane: deflection/go-live | phase: Production hardening
+- [PR-Deflection-Backend-PII-Scrub](archive/PR-Deflection-Backend-PII-Scrub.md) - lane: content-ops/deflection-privacy | phase: Production hardening
 - [PR-Deflection-Badge-Deterministic-Clustering](archive/PR-Deflection-Badge-Deterministic-Clustering.md) - lane: ai-content-ops/faq-support-ticket-deflection | phase: Product polish
 - [PR-Deflection-Blob-Fetch-Hardening](archive/PR-Deflection-Blob-Fetch-Hardening.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Blob-Upload-Tempfile](archive/PR-Deflection-Blob-Upload-Tempfile.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
