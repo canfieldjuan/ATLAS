@@ -35,6 +35,7 @@ DEFLECTION_REPORT_SECTION_FIELDS = (
     "surfaces",
     "default_limit",
     "required_data",
+    "snapshot_safe_fields",  # Privacy-boundary field; keep frontend docs in sync.
     "data",
 )
 DEFLECTION_FULL_REPORT_QA_REQUIRED_SURFACES = (
@@ -46,6 +47,9 @@ DEFLECTION_FULL_REPORT_QA_REQUIRED_SURFACES = (
 _UNCAPPED_REPORT_MAX_ITEMS = 0
 _ASSISTED_CONTACT_COST = 13.50
 _ASSISTED_CONTACT_COST_LABEL = "$13.50"
+_ACTION_RESULT_PAGE_LIMIT = 3
+_ACTION_PDF_LIMIT = 10
+_ACTION_BACKLOG_LIMIT = 25
 _SOURCE_EXAMPLE_LIMIT = 3
 _DEFLECTION_BOUNDARY_LEFT = r"(?<![A-Za-z0-9])"
 _DEFLECTION_BOUNDARY_RIGHT = r"(?![A-Za-z0-9])"
@@ -327,6 +331,7 @@ class DeflectionReportSectionDefinition:
     surfaces: tuple[str, ...]
     default_limit: int | None
     required_data: tuple[str, ...]
+    snapshot_safe_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -339,6 +344,7 @@ class DeflectionReportSection:
     surfaces: tuple[str, ...]
     default_limit: int | None
     required_data: tuple[str, ...]
+    snapshot_safe_fields: tuple[str, ...]
     data: dict[str, Any]
     markdown_lines: tuple[str, ...]
 
@@ -350,6 +356,7 @@ class DeflectionReportSection:
             "surfaces": list(self.surfaces),
             "default_limit": self.default_limit,
             "required_data": list(self.required_data),
+            "snapshot_safe_fields": list(self.snapshot_safe_fields),
             "data": _json_ready(self.data),
         }
 
@@ -419,6 +426,15 @@ _DEFLECTION_REPORT_SECTION_DEFINITIONS = (
             "no_proven_answer_count",
             "ticket_source_count",
         ),
+        snapshot_safe_fields=(
+            "repeat_ticket_count",
+            "non_repeat_ticket_count",
+            "generated_question_count",
+            "drafted_answer_count",
+            "no_proven_answer_count",
+            "ticket_source_count",
+            "source_date_window",
+        ),
     ),
     DeflectionReportSectionDefinition(
         id="source_file",
@@ -449,6 +465,74 @@ _DEFLECTION_REPORT_SECTION_DEFINITIONS = (
         surfaces=("web", "pdf", "markdown"),
         default_limit=None,
         required_data=("rows",),
+        snapshot_safe_fields=(
+            "rows.rank",
+            "rows.question",
+            "rows.ticket_count",
+            "rows.weighted_frequency",
+            "rows.customer_wording",
+        ),
+    ),
+    DeflectionReportSectionDefinition(
+        id="priority_fix_queue",
+        title="Priority Fix Queue",
+        priority=35,
+        surfaces=("web", "pdf", "email_summary"),
+        default_limit=3,
+        required_data=(
+            "items",
+            "status_counts",
+            "result_page_limit",
+            "pdf_limit",
+            "backlog_limit",
+            "support_cost_basis",
+        ),
+    ),
+    DeflectionReportSectionDefinition(
+        id="top_unresolved_repeats",
+        title="Top Unresolved Repeats",
+        priority=36,
+        surfaces=("web", "pdf"),
+        default_limit=3,
+        required_data=(
+            "items",
+            "top_item_count",
+            "support_cost_basis",
+        ),
+    ),
+    DeflectionReportSectionDefinition(
+        id="drafted_resolutions",
+        title="Drafted Resolutions Ready to Publish",
+        priority=37,
+        surfaces=("web", "pdf", "email_summary"),
+        default_limit=3,
+        required_data=(
+            "items",
+            "top_item_count",
+        ),
+    ),
+    DeflectionReportSectionDefinition(
+        id="already_covered_still_recurring",
+        title="Already Covered but Still Recurring",
+        priority=38,
+        surfaces=("web", "pdf"),
+        default_limit=3,
+        required_data=(
+            "items",
+            "top_item_count",
+        ),
+    ),
+    DeflectionReportSectionDefinition(
+        id="backlog_table",
+        title="Backlog Table",
+        priority=39,
+        surfaces=("web", "pdf", "export"),
+        default_limit=25,
+        required_data=(
+            "items",
+            "total_item_count",
+            "default_limit",
+        ),
     ),
     DeflectionReportSectionDefinition(
         id="outcome_diagnostics",
@@ -471,6 +555,14 @@ _DEFLECTION_REPORT_SECTION_DEFINITIONS = (
         surfaces=("web", "pdf", "markdown"),
         default_limit=None,
         required_data=("rows",),
+        snapshot_safe_fields=(
+            "rows.rank",
+            "rows.question",
+            "rows.answer_evidence_status",
+            "rows.resolution_evidence_scope",
+            "rows.weighted_frequency",
+            "rows.source_count",
+        ),
     ),
     DeflectionReportSectionDefinition(
         id="complete_evidence",
@@ -493,6 +585,38 @@ DEFLECTION_REPORT_SECTION_REGISTRY: Mapping[str, DeflectionReportSectionDefiniti
         for definition in _DEFLECTION_REPORT_SECTION_DEFINITIONS
     })
 )
+_SNAPSHOT_REQUIRED_SECTION_IDS = frozenset({
+    "support_tax",
+    "ranked_questions",
+    "question_details",
+})
+_SNAPSHOT_REQUIRED_SUPPORT_TAX_FIELDS = frozenset({
+    "repeat_ticket_count",
+    "non_repeat_ticket_count",
+    "generated_question_count",
+    "drafted_answer_count",
+    "no_proven_answer_count",
+})
+_SNAPSHOT_REQUIRED_RANKED_ROW_FIELDS = frozenset({
+    "rank",
+    "question",
+    "ticket_count",
+    "weighted_frequency",
+    "customer_wording",
+})
+_SNAPSHOT_REQUIRED_DETAIL_PROJECTION_FIELDS = frozenset({
+    "rank",
+    "question",
+    "answer_evidence_status",
+    "resolution_evidence_scope",
+    "weighted_frequency",
+    "source_count",
+})
+_SNAPSHOT_REQUIRED_DETAIL_TEASER_FIELDS = frozenset({
+    *_SNAPSHOT_REQUIRED_DETAIL_PROJECTION_FIELDS,
+    "answer",
+    "steps",
+})
 
 
 def deflection_report_model_contract_shape() -> dict[str, Any]:
@@ -510,6 +634,7 @@ def deflection_report_model_contract_shape() -> dict[str, Any]:
                 "surfaces": list(definition.surfaces),
                 "default_limit": definition.default_limit,
                 "required_data": list(definition.required_data),
+                "snapshot_safe_fields": list(definition.snapshot_safe_fields),
             }
             for definition in _DEFLECTION_REPORT_SECTION_DEFINITIONS
         ],
@@ -1250,6 +1375,15 @@ def build_deflection_snapshot(
         raise ValueError("top_n must be positive")
     if teaser_preview_count < 0:
         raise ValueError("teaser_preview_count must be non-negative")
+    report_model = _artifact_report_model(artifact)
+    if report_model is not None and _report_model_supports_snapshot_projection(
+        report_model
+    ):
+        return _build_deflection_snapshot_from_report_model(
+            report_model,
+            top_n=top_n,
+            teaser_preview_count=teaser_preview_count,
+        )
     summary = _artifact_summary(artifact)
     items = _artifact_items(artifact)
     snapshot_summary: dict[str, Any] = {
@@ -1296,6 +1430,208 @@ def build_deflection_snapshot(
         locked_questions=locked_questions,
         teaser=teaser,
     )
+
+
+def _build_deflection_snapshot_from_report_model(
+    report_model: Mapping[str, Any],
+    *,
+    top_n: int,
+    teaser_preview_count: int,
+) -> DeflectionSnapshot:
+    sections = _snapshot_report_model_projection(report_model)
+    support_tax = sections.get("support_tax", {})
+    ranked_rows = _snapshot_rows(sections.get("ranked_questions"))
+    detail_rows = _report_model_section_rows(report_model, "question_details")
+    snapshot_summary: dict[str, Any] = {
+        "generated": _int(support_tax.get("generated_question_count")),
+        "drafted_answer_count": _int(support_tax.get("drafted_answer_count")),
+        "no_proven_answer_count": _int(support_tax.get("no_proven_answer_count")),
+        "support_ticket_resolution_evidence_present": _int(
+            support_tax.get("drafted_answer_count")
+        ) > 0,
+        "support_ticket_resolution_evidence_count": _int(
+            support_tax.get("drafted_answer_count")
+        ),
+        "repeat_ticket_count": _int(support_tax.get("repeat_ticket_count")),
+        "non_repeat_ticket_count": _int(support_tax.get("non_repeat_ticket_count")),
+    }
+    source_date_window = support_tax.get("source_date_window")
+    if isinstance(source_date_window, Mapping):
+        snapshot_summary.update(_summary_source_date_window(source_date_window))
+
+    top_questions = [
+        {
+            "rank": _int(row.get("rank")) or index,
+            "question": _text(row.get("question")),
+            "ticket_count": _int(row.get("ticket_count")),
+            "weighted_frequency": _int(row.get("weighted_frequency")),
+            "customer_wording": _text(row.get("customer_wording")),
+        }
+        for index, row in enumerate(ranked_rows[:top_n], start=1)
+    ]
+    teaser = _snapshot_teaser(detail_rows, preview_count=teaser_preview_count)
+    teaser_full_rank = _teaser_full_answer_rank(teaser)
+    locked_questions = tuple(
+        {
+            "rank": _int(row.get("rank")) or rank,
+            "ticket_count": _int(row.get("ticket_count")),
+        }
+        for rank, row in enumerate(ranked_rows[top_n:], start=top_n + 1)
+        if (_int(row.get("rank")) or rank) != teaser_full_rank
+    )
+    return DeflectionSnapshot(
+        summary=snapshot_summary,
+        top_questions=tuple(top_questions),
+        locked_questions=locked_questions,
+        teaser=teaser,
+    )
+
+
+def _artifact_report_model(
+    artifact: DeflectionReportArtifact | Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    if isinstance(artifact, DeflectionReportArtifact):
+        return artifact.report_model.as_dict()
+    value = artifact.get("report_model")
+    return value if isinstance(value, Mapping) else None
+
+
+def _report_model_supports_snapshot_projection(report_model: Mapping[str, Any]) -> bool:
+    sections = _snapshot_report_model_projection(report_model)
+    if not _SNAPSHOT_REQUIRED_SECTION_IDS <= set(sections):
+        return False
+    support_tax = sections.get("support_tax", {})
+    if not _mapping_has_fields(support_tax, _SNAPSHOT_REQUIRED_SUPPORT_TAX_FIELDS):
+        return False
+    ranked_rows = _snapshot_rows(sections.get("ranked_questions"))
+    detail_projection_rows = _snapshot_rows(sections.get("question_details"))
+    detail_rows = _report_model_section_rows(report_model, "question_details")
+    generated_count = _int(support_tax.get("generated_question_count"))
+    if generated_count > 0 and not ranked_rows:
+        return False
+    if len(detail_rows) < len(ranked_rows):
+        return False
+    return (
+        _rows_have_fields(ranked_rows, _SNAPSHOT_REQUIRED_RANKED_ROW_FIELDS)
+        and _rows_have_fields(
+            detail_projection_rows,
+            _SNAPSHOT_REQUIRED_DETAIL_PROJECTION_FIELDS,
+        )
+        and _rows_have_fields(
+            detail_rows,
+            _SNAPSHOT_REQUIRED_DETAIL_TEASER_FIELDS,
+        )
+    )
+
+
+def _snapshot_report_model_projection(
+    report_model: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    raw_sections = report_model.get("sections")
+    if not isinstance(raw_sections, Sequence) or isinstance(
+        raw_sections,
+        (str, bytes, bytearray),
+    ):
+        return {}
+    sections: dict[str, dict[str, Any]] = {}
+    for raw in raw_sections:
+        if not isinstance(raw, Mapping):
+            continue
+        section_id = _text(raw.get("id"))
+        definition = DEFLECTION_REPORT_SECTION_REGISTRY.get(section_id)
+        if definition is None or not definition.snapshot_safe_fields:
+            continue
+        data = raw.get("data")
+        if not isinstance(data, Mapping):
+            continue
+        projected = _snapshot_safe_section_data(
+            data,
+            definition.snapshot_safe_fields,
+        )
+        if projected:
+            sections[section_id] = projected
+    return sections
+
+
+def _report_model_section_rows(
+    report_model: Mapping[str, Any],
+    section_id: str,
+) -> tuple[Mapping[str, Any], ...]:
+    data = _report_model_section_data(report_model, section_id)
+    return _snapshot_rows(data)
+
+
+def _report_model_section_data(
+    report_model: Mapping[str, Any],
+    section_id: str,
+) -> Mapping[str, Any] | None:
+    raw_sections = report_model.get("sections")
+    if not isinstance(raw_sections, Sequence) or isinstance(
+        raw_sections,
+        (str, bytes, bytearray),
+    ):
+        return None
+    for raw in raw_sections:
+        if not isinstance(raw, Mapping):
+            continue
+        if _text(raw.get("id")) != section_id:
+            continue
+        data = raw.get("data")
+        return data if isinstance(data, Mapping) else None
+    return None
+
+
+def _mapping_has_fields(data: Mapping[str, Any], fields: frozenset[str]) -> bool:
+    return fields <= set(data)
+
+
+def _rows_have_fields(
+    rows: Sequence[Mapping[str, Any]],
+    fields: frozenset[str],
+) -> bool:
+    return all(fields <= set(row) for row in rows)
+
+
+def _snapshot_safe_section_data(
+    data: Mapping[str, Any],
+    safe_fields: Sequence[str],
+) -> dict[str, Any]:
+    direct_fields = tuple(field for field in safe_fields if "." not in field)
+    row_fields = tuple(
+        field.removeprefix("rows.")
+        for field in safe_fields
+        if field.startswith("rows.")
+    )
+    out: dict[str, Any] = {
+        field: _json_ready(data[field])
+        for field in direct_fields
+        if field in data
+    }
+    if row_fields:
+        rows = data.get("rows")
+        if isinstance(rows, Sequence) and not isinstance(
+            rows,
+            (str, bytes, bytearray),
+        ):
+            out["rows"] = [
+                {
+                    field: _json_ready(row[field])
+                    for field in row_fields
+                    if isinstance(row, Mapping) and field in row
+                }
+                for row in rows
+                if isinstance(row, Mapping)
+            ]
+    return out
+
+
+def _snapshot_rows(section_data: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(section_data, Mapping):
+        return ()
+    rows = section_data.get("rows")
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+        return ()
+    return tuple(row for row in rows if isinstance(row, Mapping))
 
 
 def deflection_snapshot_content_opportunities(
@@ -1428,6 +1764,31 @@ def build_deflection_report_model(
             data={"rows": _ranked_question_rows(items)},
             markdown_lines=_ranked_opportunity_section(items),
         ),
+        _report_section(
+            section_id="priority_fix_queue",
+            data=_priority_fix_queue_data(items),
+            markdown_lines=[],
+        ),
+        _report_section(
+            section_id="top_unresolved_repeats",
+            data=_top_unresolved_repeats_data(items),
+            markdown_lines=[],
+        ),
+        _report_section(
+            section_id="drafted_resolutions",
+            data=_drafted_resolutions_data(items),
+            markdown_lines=[],
+        ),
+        _report_section(
+            section_id="already_covered_still_recurring",
+            data=_already_covered_still_recurring_data(items),
+            markdown_lines=[],
+        ),
+        _report_section(
+            section_id="backlog_table",
+            data=_backlog_table_data(items),
+            markdown_lines=[],
+        ),
     ])
     diagnostics_lines = _outcome_diagnostics_section(items, resolved_summary)
     if diagnostics_lines:
@@ -1498,6 +1859,7 @@ def _report_section(
         surfaces=definition.surfaces,
         default_limit=definition.default_limit,
         required_data=definition.required_data,
+        snapshot_safe_fields=definition.snapshot_safe_fields,
         data=dict(data),
         markdown_lines=tuple(markdown_lines),
     )
@@ -1558,6 +1920,13 @@ def _ranked_question_rows(
             "rank": index,
             "question": _text(item.get("question")),
             "ticket_count": _ticket_count(item),
+            "weighted_frequency": _int(
+                item.get("weighted_frequency") or item.get("frequency")
+            ),
+            "customer_wording": _snapshot_customer_wording(
+                item,
+                _text(item.get("question")),
+            ),
             "estimated_support_cost": _support_cost(_ticket_count(item)),
             "opportunity_score": _int(item.get("opportunity_score")),
             "answer_status": _status_label(item),
@@ -1596,6 +1965,233 @@ def _outcome_diagnostics_data(
     }
 
 
+def _priority_fix_queue_data(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    action_items = _action_items(items)
+    model_limit = max(_ACTION_RESULT_PAGE_LIMIT, _ACTION_PDF_LIMIT)
+    return {
+        "items": action_items[:model_limit],
+        "status_counts": _action_status_counts(action_items),
+        "result_page_limit": _ACTION_RESULT_PAGE_LIMIT,
+        "pdf_limit": _ACTION_PDF_LIMIT,
+        "backlog_limit": _ACTION_BACKLOG_LIMIT,
+        "support_cost_basis": _action_support_cost_basis(),
+    }
+
+
+def _top_unresolved_repeats_data(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    unresolved = [
+        item for item in _action_items(items)
+        if item["status"] in {"Needs answer", "Needs review", "Low confidence"}
+        and _int(item.get("ticket_count")) >= 2
+    ]
+    top_items = unresolved[:_ACTION_RESULT_PAGE_LIMIT]
+    return {
+        "items": top_items,
+        "top_item_count": len(top_items),
+        "support_cost_basis": _action_support_cost_basis(),
+    }
+
+
+def _drafted_resolutions_data(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    drafted = [
+        item for item in _action_items(items)
+        if item["status"] == "Draft ready"
+    ][:_ACTION_RESULT_PAGE_LIMIT]
+    return {
+        "items": drafted,
+        "top_item_count": len(drafted),
+    }
+
+
+def _already_covered_still_recurring_data(
+    items: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    recurring = [
+        item for item in _action_items(items)
+        if item["status"] == "Already covered but still recurring"
+    ][:_ACTION_RESULT_PAGE_LIMIT]
+    return {
+        "items": recurring,
+        "top_item_count": len(recurring),
+    }
+
+
+def _backlog_table_data(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    action_items = _action_items(items)
+    return {
+        "items": action_items[:_ACTION_BACKLOG_LIMIT],
+        "total_item_count": len(action_items),
+        "default_limit": _ACTION_BACKLOG_LIMIT,
+    }
+
+
+def _action_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    rows = [
+        _action_item(rank, item)
+        for rank, item in enumerate(items, start=1)
+    ]
+    return sorted(
+        rows,
+        key=lambda row: (
+            -float(row["estimated_support_cost"]),
+            -_int(row["opportunity_score"]),
+            _int(row["rank"]),
+        ),
+    )
+
+
+def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
+    status = _action_status(item)
+    ticket_count = _ticket_count(item)
+    return {
+        "rank": rank,
+        "question": _text(item.get("question")),
+        "status": status,
+        "owner_lane": _action_owner_lane(item),
+        "fix_type": _action_fix_type(status),
+        "csat_signal": _action_csat_signal(item),
+        "confidence": _action_confidence(item),
+        "recommended_title": _action_recommended_title(item),
+        "recommended_action": _action_recommended_action(status),
+        "representative_phrasing": _action_representative_phrasing(item),
+        "ticket_count": ticket_count,
+        "estimated_support_cost": _support_cost(ticket_count),
+        "support_cost_formula": "ticket_count * assisted_contact_cost",
+        "support_cost_source": "default_assisted_contact_benchmark",
+        "opportunity_score": _int(item.get("opportunity_score")),
+        "top_evidence": _action_top_evidence(item),
+    }
+
+
+def _action_status(item: Mapping[str, Any]) -> str:
+    if _ticket_count(item) <= 0 or not _text(item.get("question")):
+        return "Low confidence"
+    if _text(item.get("answer_evidence_status")) != _RESOLUTION_EVIDENCE_STATUS:
+        return "Needs answer"
+    diagnostics = _item_outcome_diagnostics(item)
+    if (
+        _int(diagnostics.get("reopened_ticket_count")) > 0
+        or _int(diagnostics.get("negative_csat_ticket_count")) > 0
+    ):
+        return "Already covered but still recurring"
+    if _text(item.get("answer")):
+        return "Draft ready"
+    return "Needs review"
+
+
+def _action_owner_lane(item: Mapping[str, Any]) -> str:
+    topic = _text(item.get("topic"))
+    return topic or "Unknown"
+
+
+def _action_fix_type(status: str) -> str:
+    return {
+        "Draft ready": "publish_help_center_answer",
+        "Needs answer": "create_missing_answer",
+        "Needs review": "review_resolution_evidence",
+        "Low confidence": "review_cluster_quality",
+        "Already covered but still recurring": "improve_discoverability_or_answer_quality",
+    }.get(status, "Unknown")
+
+
+def _action_csat_signal(item: Mapping[str, Any]) -> dict[str, Any]:
+    diagnostics = _item_outcome_diagnostics(item)
+    present_count = _int(diagnostics.get("csat_present_count"))
+    negative_count = _int(diagnostics.get("negative_csat_ticket_count"))
+    if present_count <= 0:
+        return {
+            "status": "insufficient_data",
+            "csat_present_count": 0,
+            "negative_csat_ticket_count": 0,
+            "numeric_average": None,
+        }
+    average: float | None = None
+    if present_count >= 3 and diagnostics.get("csat_score_average") is not None:
+        average = float(diagnostics.get("csat_score_average"))
+    return {
+        "status": "present" if average is not None else "sparse",
+        "csat_present_count": present_count,
+        "negative_csat_ticket_count": negative_count,
+        "numeric_average": average,
+    }
+
+
+def _action_confidence(item: Mapping[str, Any]) -> str:
+    ticket_count = _ticket_count(item)
+    if ticket_count >= 5 and _source_count(item) >= 3:
+        return "high"
+    if ticket_count >= 2:
+        return "medium"
+    return "low"
+
+
+def _action_recommended_title(item: Mapping[str, Any]) -> str:
+    return _snapshot_customer_wording(item, _text(item.get("question"))) or _text(
+        item.get("question")
+    )
+
+
+def _action_recommended_action(status: str) -> str:
+    return {
+        "Draft ready": "Publish or adapt the drafted resolution into help-center or macro copy.",
+        "Needs answer": "Write and approve the missing answer for this repeated customer question.",
+        "Needs review": "Review the available evidence before publishing customer-facing guidance.",
+        "Low confidence": "Review the cluster before assigning a content fix.",
+        "Already covered but still recurring": "Improve discoverability, search wording, macro use, or answer quality.",
+    }.get(status, "Review before taking action.")
+
+
+def _action_representative_phrasing(item: Mapping[str, Any]) -> list[str]:
+    phrases: list[str] = []
+    for value in (
+        item.get("customer_wording"),
+        item.get("question"),
+        item.get("topic"),
+    ):
+        text = _text(value)
+        if text and text not in phrases:
+            phrases.append(text)
+    return phrases[:3]
+
+
+def _action_top_evidence(item: Mapping[str, Any]) -> list[dict[str, Any]]:
+    source_ids = _texts(item.get("source_ids"))
+    quotes = _texts(item.get("evidence_quotes"))
+    rows: list[dict[str, Any]] = []
+    used_quotes: set[int] = set()
+    for source_id in source_ids[:_SOURCE_EXAMPLE_LIMIT]:
+        quote_index, quote = _evidence_quote_for_source(source_id, quotes, used_quotes)
+        if quote_index is not None:
+            used_quotes.add(quote_index)
+        rows.append({
+            "source_id": source_id,
+            "evidence_quote": quote,
+        })
+    if rows:
+        return rows
+    return [
+        {"source_id": "", "evidence_quote": quote}
+        for quote in quotes[:_SOURCE_EXAMPLE_LIMIT]
+    ]
+
+
+def _action_support_cost_basis() -> dict[str, Any]:
+    return {
+        "status": "benchmark_only",
+        "assisted_contact_cost": _ASSISTED_CONTACT_COST,
+        "formula": "ticket_count * assisted_contact_cost",
+        "source": "default_assisted_contact_benchmark",
+    }
+
+
+def _action_status_counts(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        status = _text(item.get("status")) or "Unknown"
+        counts[status] = counts.get(status, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _question_detail_rows(
     items: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1607,6 +2203,10 @@ def _question_detail_rows(
             "customer_wording": _text(item.get("customer_wording")),
             "topic": _text(item.get("topic")),
             "ticket_count": _ticket_count(item),
+            "weighted_frequency": _int(
+                item.get("weighted_frequency") or item.get("frequency")
+            ),
+            "source_count": _source_count(item),
             "estimated_support_cost": _support_cost(_ticket_count(item)),
             "answer_status": _status_label(item),
             "answer_evidence_status": _text(item.get("answer_evidence_status")),
@@ -2297,6 +2897,9 @@ def _teaser_preview(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _source_count(item: Mapping[str, Any]) -> int:
+    explicit = _int(item.get("source_count"))
+    if explicit > 0:
+        return explicit
     source_count = len(_texts(item.get("source_ids")))
     return source_count or _int(item.get("ticket_count"))
 

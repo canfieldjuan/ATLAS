@@ -286,9 +286,17 @@ def test_content_ops_faq_report_contract_links_example() -> None:
     assert "report_model: DeflectionStructuredReport;" in doc
     assert 'schema_version: "deflection.v1";' in doc
     assert 'id:' in doc and '"complete_evidence"' in doc
+    assert '"priority_fix_queue"' in doc
+    assert '"top_unresolved_repeats"' in doc
+    assert '"drafted_resolutions"' in doc
+    assert '"already_covered_still_recurring"' in doc
+    assert '"backlog_table"' in doc
     assert "required_data: string[]" in doc
+    assert "snapshot_safe_fields: string[]" in doc
+    assert "snapshot.teaser.full_answer" in doc
     assert "Skip unknown section IDs" in doc
     assert "Treat `complete_evidence` as export-only" in doc
+    assert "one-off" in doc and "repeat accounting" in doc
     assert "persist `report_model`" in doc
     assert "tolerate a missing or unsupported `report_model`" in doc
     assert "/content-ops/deflection-reports/{request_id}/report-model" in doc

@@ -91,6 +91,11 @@ type DeflectionReportSection = {
     | "source_file"
     | "seo_targets"
     | "ranked_questions"
+    | "priority_fix_queue"
+    | "top_unresolved_repeats"
+    | "drafted_resolutions"
+    | "already_covered_still_recurring"
+    | "backlog_table"
     | "outcome_diagnostics"
     | "question_details"
     | "complete_evidence"
@@ -100,6 +105,7 @@ type DeflectionReportSection = {
   surfaces: Array<"web" | "pdf" | "email_summary" | "markdown" | "export" | string>;
   default_limit: number | null;
   required_data: string[];
+  snapshot_safe_fields: string[];
   data: Record<string, unknown>;
 };
 ```
@@ -110,6 +116,10 @@ Renderer rules:
 - Skip unknown section IDs or unsupported `surfaces` values rather than failing.
 - Use `required_data` as the section's top-level data contract. A listed key is
   expected to be present in `data`; nested shapes stay section-specific.
+- Treat `snapshot_safe_fields` as the free Snapshot allowlist. A listed field
+  must be safe to emit for every projected row in that section; paid answer
+  bodies and steps are not snapshot-safe section fields. The only free answer
+  body is the separately gated `snapshot.teaser.full_answer`.
 - Treat `complete_evidence` as export-only. It summarizes export size and should
   not be inlined into web/PDF surfaces.
 - Breaking shape changes bump `schema_version`; additive sections should keep
@@ -144,6 +154,19 @@ link to or attach that export.
 contains the answer status, publishable copy or no-proven-answer guidance,
 vocabulary mappings, and representative source evidence for each ranked
 question.
+
+The action-oriented paid sections are a work queue, not a full ticket archive:
+
+- `priority_fix_queue` carries enough ranked items for the largest advertised
+  bounded surface (`pdf_limit`, currently 10) while `result_page_limit` tells
+  the result page to render only the top three.
+- `top_unresolved_repeats` contains unresolved repeated questions only; one-off
+  questions stay out of repeat accounting.
+- `drafted_resolutions` contains publishable or adaptable answer drafts.
+- `already_covered_still_recurring` flags proven answers whose status/CSAT
+  signals suggest discoverability or answer-quality work.
+- `backlog_table` is the broader bounded paid backlog; complete source evidence
+  remains in `evidence_export`.
 
 The paid artifact also includes a complete evidence export:
 
