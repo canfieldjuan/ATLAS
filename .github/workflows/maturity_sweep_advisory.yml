@@ -23,6 +23,7 @@ on:
       - "extracted_quality_gate/**"
       - "extracted_evidence_to_story/**"
       - "extracted_competitive_intelligence/**"
+      - "extracted_llm_infrastructure/**"
       - "atlas_brain/api/**"
       - "atlas_brain/auth/**"
       - "atlas_brain/autonomous/**"
@@ -70,6 +71,7 @@ on:
       - "extracted_quality_gate/**"
       - "extracted_evidence_to_story/**"
       - "extracted_competitive_intelligence/**"
+      - "extracted_llm_infrastructure/**"
       - "atlas_brain/api/**"
       - "atlas_brain/auth/**"
       - "atlas_brain/autonomous/**"
@@ -173,6 +175,15 @@ jobs:
             --baseline tests/maturity_sweep/baseline_extracted_competitive_intelligence.json \
             --min-score 8 \
             --sensitive-glob 'extracted_competitive_intelligence/**'
+
+      - name: Maturity sweep Phase C3 LLM infrastructure ratchet gate (blocking)
+        run: |
+          set -euo pipefail
+          python scripts/maturity_sweep.py extracted_llm_infrastructure \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_extracted_llm_infrastructure.json \
+            --min-score 8 \
+            --sensitive-glob 'extracted_llm_infrastructure/**'
 
       - name: Maturity sweep atlas_brain/api ratchet gate (blocking)
         run: |
