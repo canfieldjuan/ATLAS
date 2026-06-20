@@ -64,7 +64,7 @@ _DEFLECTION_IDENTIFIER_RE = re.compile(
     r"(?:account|accounts|acct|case|cases|claim|claims|confirmation|"
     r"confirmations|customer|customers|id|ids|invoice|invoices|member|"
     r"members|order|orders|ref|refs|reference|references|ticket|tickets)"
-    r"\s*(?:#|number|no\.?)?\s*[:#-]?\s*\d{4,}"
+    r"\s*(?:#|number|no\.?|is)?\s*[:#-]?\s*\d{4,}"
     rf"{_DEFLECTION_BOUNDARY_RIGHT}"
     r"|"
     rf"{_DEFLECTION_BOUNDARY_LEFT}"
@@ -86,8 +86,9 @@ _DEFLECTION_PERSON_NAME_RE = re.compile(
     r"(?:\s+name)?\s*(?:is|:|=|-)\s*)"
     r")"
     r"(?P<name>"
-    r"[A-Za-z][A-Za-z'.-]+"
-    r"(?:\s+[A-Za-z][A-Za-z'.-]+){1,2}"
+    r"[A-Za-z][A-Za-z'-]+"
+    r"\s+[A-Za-z][A-Za-z'-]+"
+    r"(?:\s+[A-Z][A-Za-z'-]+)?"
     r")"
     r"(?=$|[\s,.;:!?)]|</)",
 )
@@ -99,22 +100,30 @@ _DEFLECTION_PERSON_NAME_REJECT_TOKENS = frozenset(
         "billing",
         "case",
         "claim",
+        "client",
+        "contact",
+        "customer",
         "dashboard",
         "desk",
         "export",
         "faq",
         "help",
         "invoice",
+        "member",
+        "name",
         "password",
+        "person",
         "portal",
         "report",
         "reporting",
+        "requester",
         "reset",
         "source",
         "sso",
         "support",
         "ticket",
         "token",
+        "user",
     }
 )
 _DEFLECTION_STREET_ADDRESS_RE = re.compile(
@@ -159,7 +168,7 @@ _DEFLECTION_CONTEXTUAL_OPAQUE_IDENTIFIER_RE = re.compile(
     r"|(?:code|id|identifier|token))"
     r"\s*(?:is|:|=|-)?\s*)"
     r"(?P<identifier>"
-    r"(?:[A-Z0-9]{8,}|[A-Z0-9]{3,}(?:[-_][A-Z0-9]{3,})+)"
+    r"(?:[A-Z0-9]{3,}(?:[-_][A-Z0-9]{3,})+|[A-Z0-9]{8,}|\d{4,})"
     r")"
     rf"{_DEFLECTION_BOUNDARY_RIGHT}",
     re.IGNORECASE,
@@ -186,6 +195,17 @@ _DEFLECTION_OPAQUE_IDENTIFIER_PREFIXES = (
     "session",
     "user",
     "usr",
+)
+_DEFLECTION_TECHNICAL_IDENTIFIER_RE = re.compile(
+    r"(?:"
+    r"CVE-\d{4}-\d{4,}"
+    r"|CWE-\d{1,6}"
+    r"|GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}"
+    r"|ISO[-_ ]?\d{3,5}"
+    r"|HIPAA[-_ ]?\d{2,4}"
+    r"|SKU[-_ ]?\d{4,}"
+    r")",
+    re.IGNORECASE,
 )
 _DEFLECTION_IDENTIFIER_KEYS = frozenset(
     {
@@ -2771,10 +2791,76 @@ def _looks_like_deflection_street_address(match: re.Match[str]) -> bool:
 
 
 def _redact_deflection_person_name(match: re.Match[str]) -> str:
-    candidate = match.group("name")
-    if not _looks_like_deflection_person_name(candidate):
+    decision = _deflection_person_name_match_decision(match)
+    if not decision.redact:
         return match.group(0)
-    return f"{match.group('prefix')}[redacted-name]"
+    return f"{match.group('prefix')}[redacted-name]{decision.trailing_text}"
+
+
+@dataclass(frozen=True)
+class _DeflectionPersonNameDecision:
+    redact: bool
+    trailing_text: str = ""
+
+
+def _deflection_person_name_match_decision(
+    match: re.Match[str],
+) -> _DeflectionPersonNameDecision:
+    candidate = match.group("name")
+    if _looks_like_deflection_person_name(candidate):
+        return _DeflectionPersonNameDecision(redact=True)
+    shortened = _shortest_deflection_person_name_candidate(candidate)
+    if shortened is not None:
+        _, trailing = shortened
+        return _DeflectionPersonNameDecision(redact=True, trailing_text=trailing)
+    if _looks_like_deflection_cued_person_name(candidate, match.group("prefix")):
+        return _DeflectionPersonNameDecision(redact=True)
+    return _DeflectionPersonNameDecision(redact=False)
+
+
+def _deflection_person_name_match_is_pii(match: re.Match[str]) -> bool:
+    return _deflection_person_name_match_decision(match).redact
+
+
+def _looks_like_deflection_cued_person_name(value: str, prefix: str) -> bool:
+    if not _is_strong_deflection_person_name_cue(prefix):
+        return False
+    tokens = [
+        token.strip(" .'-").casefold()
+        for token in value.split()
+        if token.strip(" .'-")
+    ]
+    if len(tokens) < 2 or len(tokens) > 3:
+        return False
+    if all(token in _DEFLECTION_PERSON_NAME_REJECT_TOKENS for token in tokens):
+        return False
+    return all(len(token) >= 2 for token in tokens)
+
+
+def _is_strong_deflection_person_name_cue(prefix: str) -> bool:
+    normalized = " ".join(prefix.strip().casefold().split())
+    return " name" in f" {normalized}" or normalized.endswith(" is")
+
+
+def _shortest_deflection_person_name_candidate(value: str) -> tuple[str, str] | None:
+    parts = value.split()
+    if len(parts) != 3:
+        return None
+    first_two = " ".join(parts[:2])
+    trailing = parts[2]
+    if (
+        trailing.strip(" .'-").casefold() not in _DEFLECTION_PERSON_NAME_REJECT_TOKENS
+        or not _looks_like_deflection_person_name(first_two)
+    ):
+        return None
+    return first_two, f" {trailing}"
+
+
+def _redact_deflection_contextual_opaque_identifier(match: re.Match[str]) -> str:
+    token = match.group("identifier")
+    if not _looks_like_deflection_opaque_identifier(token, require_prefix=False):
+        return match.group(0)
+    return f"{match.group('prefix')}[redacted-identifier]"
 
 
 def _looks_like_deflection_person_name(value: str) -> bool:
@@ -2788,13 +2874,6 @@ def _looks_like_deflection_person_name(value: str) -> bool:
     if any(token in _DEFLECTION_PERSON_NAME_REJECT_TOKENS for token in tokens):
         return False
     return all(len(token) >= 2 for token in tokens)
-
-
-def _redact_deflection_contextual_opaque_identifier(match: re.Match[str]) -> str:
-    token = match.group("identifier")
-    if not _looks_like_deflection_opaque_identifier(token, require_prefix=False):
-        return match.group(0)
-    return f"{match.group('prefix')}[redacted-identifier]"
 
 
 def _redact_deflection_opaque_identifier(match: re.Match[str]) -> str:
@@ -2812,8 +2891,10 @@ def _looks_like_deflection_opaque_identifier(
     compact = re.sub(r"[-_]", "", value)
     if len(compact) < 8:
         return False
-    if not any(char.isalpha() for char in compact):
+    if _looks_like_deflection_technical_identifier(value):
         return False
+    if not any(char.isalpha() for char in compact):
+        return not require_prefix
     digit_count = sum(1 for char in compact if char.isdigit())
     if digit_count < 1:
         return False
@@ -2823,11 +2904,16 @@ def _looks_like_deflection_opaque_identifier(
     return digit_count >= 1
 
 
+def _looks_like_deflection_technical_identifier(value: str) -> bool:
+    return bool(_DEFLECTION_TECHNICAL_IDENTIFIER_RE.fullmatch(value.strip()))
+
+
 def _has_deflection_source_link_pii(value: str) -> bool:
     if (
         _DEFLECTION_EMAIL_RE.search(value)
         or _DEFLECTION_PHONE_RE.search(value)
         or _DEFLECTION_REDACTION_ARTIFACT_RE.search(value)
+        or _has_deflection_labeled_identifier_pii(value)
     ):
         return True
     if any(
@@ -2836,7 +2922,7 @@ def _has_deflection_source_link_pii(value: str) -> bool:
     ):
         return True
     if any(
-        _looks_like_deflection_person_name(match.group("name"))
+        _deflection_person_name_match_is_pii(match)
         for match in _DEFLECTION_PERSON_NAME_RE.finditer(value)
     ):
         return True
@@ -2852,6 +2938,18 @@ def _has_deflection_source_link_pii(value: str) -> bool:
         _looks_like_deflection_opaque_identifier(match.group(0), require_prefix=True)
         for match in _DEFLECTION_OPAQUE_IDENTIFIER_RE.finditer(value)
     )
+
+
+def _has_deflection_labeled_identifier_pii(value: str) -> bool:
+    return bool(
+        _DEFLECTION_IDENTIFIER_RE.search(value)
+        and not _looks_like_deflection_source_link_identifier(value)
+    )
+
+
+def _looks_like_deflection_source_link_identifier(value: str) -> bool:
+    text = _text(value).strip().casefold()
+    return bool(re.fullmatch(r"(?:ticket|source)-[a-z0-9][a-z0-9_-]*", text))
 
 
 def _json_ready(value: Any) -> Any:

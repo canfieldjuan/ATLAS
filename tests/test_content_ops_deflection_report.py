@@ -1677,6 +1677,72 @@ def test_deflection_report_payload_scrubs_local_entity_shapes() -> None:
     assert "[redacted-identifier]" in encoded
 
 
+def test_deflection_report_payload_scrubs_pii_regression_shapes() -> None:
+    uuid_value = "123e4567-e89b-12d3-a456-426614174000"
+    scrubbed = scrub_deflection_report_payload(
+        {
+            "source_id": "customer is Jane Smith ticket",
+            "source_ids": [
+                "account is 1234567",
+                "customer is John Member",
+                "ticket-source-a",
+            ],
+            "answer": (
+                "The customer is Jane Smith ticket was closed. "
+                "Requester name is Maria Elena Garcia account is active. "
+                "Requester name is Jane Client. "
+                f"The customer id is {uuid_value}. "
+                "customer id is 12345678 and the ordinary count is 12345678. "
+                "customer id is ISO9X4Q7ABCD, session token is SKU90X4Q7AB, "
+                "and account id is HIPAA9X4Q7AB. "
+                "case CVE-2021-44228, order SKU-12345678, and "
+                "reference ISO-27001 should stay readable. HIPAA2026 too."
+            ),
+            "steps": [
+                "agent is Alex Chen member was reassigned.",
+                "session token is CUST-9XQ7-ABCD.",
+                "reference ISO27001 remains a standard.",
+            ],
+        }
+    )
+
+    answer = scrubbed["answer"]
+    encoded = json.dumps(scrubbed, sort_keys=True)
+    for raw_fragment in (
+        "Jane Smith",
+        "Maria Elena Garcia",
+        "Jane Client",
+        "John Member",
+        uuid_value,
+        "customer id is 12345678",
+        "account is 1234567",
+        "ISO9X4Q7ABCD",
+        "SKU90X4Q7AB",
+        "HIPAA9X4Q7AB",
+        "Alex Chen",
+        "CUST-9XQ7-ABCD",
+    ):
+        assert raw_fragment not in encoded
+    assert "customer is [redacted-name] ticket was closed" in answer
+    assert "Requester name is [redacted-name] account is active" in answer
+    assert "Requester name is [redacted-name]" in answer
+    assert "customer id is [redacted-identifier]" in answer
+    assert "ordinary count is 12345678" in answer
+    assert "case CVE-2021-44228" in answer
+    assert "order SKU-12345678" in answer
+    assert "reference ISO-27001" in answer
+    assert "HIPAA2026" in answer
+    assert scrubbed["source_id"] == "customer is [redacted-name] ticket"
+    assert scrubbed["source_ids"] == [
+        "[redacted-identifier]",
+        "customer is [redacted-name]",
+        "ticket-source-a",
+    ]
+    assert scrubbed["steps"][0] == "agent is [redacted-name] member was reassigned."
+    assert scrubbed["steps"][1] == "session token is [redacted-identifier]."
+    assert scrubbed["steps"][2] == "reference ISO27001 remains a standard."
+
+
 def test_deflection_report_payload_preserves_local_entity_near_misses() -> None:
     scrubbed = scrub_deflection_report_payload(
         {
