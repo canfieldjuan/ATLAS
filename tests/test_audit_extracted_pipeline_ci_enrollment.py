@@ -330,6 +330,214 @@ def test_atlas_brain_changed_test_accepts_inline_run_step(tmp_path: Path) -> Non
     assert audit.atlas_brain_test_errors == ()
 
 
+def _write_repo_wide_backstop(root: Path) -> None:
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        '      - run: python -m pytest tests/ -m "not integration and not e2e" -q\n',
+        encoding="utf-8",
+    )
+
+
+def test_atlas_brain_changed_test_accepts_repo_wide_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # No dedicated atlas_*_checks.yml; the repo-wide backstop is the catch-all.
+    _write_repo_wide_backstop(root)
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert audit.ok
+    assert audit.atlas_brain_test_errors == ()
+
+
+def test_atlas_brain_integration_test_exempt_from_unit_enrollment(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    # An integration-marked atlas_brain test is service-lane: not subject to the
+    # unit-workflow enrollment requirement, and the unit backstop intentionally
+    # skips it. No atlas workflow, no backstop -- still exempt.
+    path = "tests/test_atlas_widget.py"
+    (root / path).write_text(
+        "import pytest\n"
+        "from atlas_brain.widgets import build_widget\n\n"
+        "pytestmark = pytest.mark.integration\n\n"
+        "def test_widget():\n"
+        "    assert build_widget\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(path,),
+    )
+
+    assert audit.ok
+    assert audit.atlas_brain_test_errors == ()
+
+
+def test_atlas_brain_changed_test_rejects_comment_only_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # A backstop file whose marker text appears only in a comment (no real
+    # pytest command) must NOT credit coverage.
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "# pytest run (not integration and not e2e) was removed from this file\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo disabled\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
+def test_atlas_brain_changed_test_rejects_run_block_comment_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # The pytest command appears only as a shell comment inside a `run: |`
+    # block -- not a real invocation, so it must not credit the backstop.
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: |\n"
+        '          # python -m pytest -m "not integration and not e2e" -q (off)\n'
+        "          echo disabled\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
+def test_atlas_brain_changed_test_rejects_directory_scoped_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # A directory-scoped run has the marker but is not the repo-wide catch-all.
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        '      - run: python -m pytest tests/unit/ -m "not integration and not e2e" -q\n',
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
+def test_atlas_brain_changed_test_rejects_narrowed_marker_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # A narrowed marker expression skips additional tests and is not catch-all
+    # coverage for the unit lane.
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        '      - run: python -m pytest tests/ -m "not integration and not e2e and not slow" -q\n',
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
+def test_atlas_brain_changed_test_rejects_command_in_step_name_backstop(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    # The command text appears in a YAML name field, not in an executable run
+    # command, so it must not credit the backstop.
+    (root / ".github/workflows/repo_wide_unit_backstop.yml").write_text(
+        "name: Repo-Wide Unit Backstop\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "jobs:\n"
+        "  repo-wide-unit-backstop:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        '      - name: Run python -m pytest tests/ -m "not integration and not e2e"\n'
+        "        run: echo disabled\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
+def test_atlas_brain_docstring_marker_mention_not_exempt(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    path = "tests/test_atlas_widget.py"
+    # A docstring/comment mention of the marker is not a real marker; the test
+    # must NOT be exempted from unit enrollment.
+    (root / path).write_text(
+        '"""Example that mentions pytest.mark.integration in prose."""\n'
+        "from atlas_brain.widgets import build_widget\n\n"
+        "def test_widget():\n"
+        "    assert build_widget\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(path,),
+    )
+
+    assert not audit.ok
+    assert audit.atlas_brain_test_errors != ()
+
+
 def test_atlas_brain_changed_test_requires_atlas_workflow(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     test_path = _write_atlas_importing_test(root)
