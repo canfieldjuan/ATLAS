@@ -852,8 +852,9 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
         setSignupError(msg)
       }
     } finally {
-      if (sessionRequestIdRef.current !== requestId) return
-      setSignupLoading(false)
+      if (sessionRequestIdRef.current === requestId) {
+        setSignupLoading(false)
+      }
     }
   }
 

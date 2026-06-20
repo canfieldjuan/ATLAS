@@ -13,8 +13,11 @@ on:
       - "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py"
       - "atlas_brain/mcp/content_ops_marketer_verify_server.py"
       - "atlas_brain/_content_ops_calibration_library.py"
+      - "atlas_brain/api/__init__.py"
+      - "atlas_brain/auth/**"
       - "atlas_brain/api/content_ops_calibration_library.py"
       - "atlas_brain/storage/migrations/335_content_ops_calibration_library.sql"
+      - "atlas_brain/storage/migrations/338_saas_users_is_admin.sql"
       - "atlas_brain/_content_ops_claim_registry.py"
       - "atlas_brain/api/content_ops_claim_registry.py"
       - "atlas_brain/storage/migrations/334_content_ops_claim_registry.sql"
@@ -30,6 +33,8 @@ on:
       - "scripts/start_content_ops_marketer_verify_oauth_server.py"
       - "tests/test_atlas_content_ops_review_workflow.py"
       - "tests/test_content_ops_calibration_library.py"
+      - "tests/test_content_ops_calibration_library_live_db.py"
+      - "tests/test_content_ops_calibration_library_live_app.py"
       - "tests/test_content_ops_calibration_library_api.py"
       - "tests/test_content_ops_claim_registry_api.py"
       - "tests/test_check_content_ops_marketer_verify_claude_hosted_oauth.py"
@@ -49,8 +54,11 @@ on:
       - "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py"
       - "atlas_brain/mcp/content_ops_marketer_verify_server.py"
       - "atlas_brain/_content_ops_calibration_library.py"
+      - "atlas_brain/api/__init__.py"
+      - "atlas_brain/auth/**"
       - "atlas_brain/api/content_ops_calibration_library.py"
       - "atlas_brain/storage/migrations/335_content_ops_calibration_library.sql"
+      - "atlas_brain/storage/migrations/338_saas_users_is_admin.sql"
       - "atlas_brain/_content_ops_claim_registry.py"
       - "atlas_brain/api/content_ops_claim_registry.py"
       - "atlas_brain/storage/migrations/334_content_ops_claim_registry.sql"
@@ -66,6 +74,8 @@ on:
       - "scripts/start_content_ops_marketer_verify_oauth_server.py"
       - "tests/test_atlas_content_ops_review_workflow.py"
       - "tests/test_content_ops_calibration_library.py"
+      - "tests/test_content_ops_calibration_library_live_db.py"
+      - "tests/test_content_ops_calibration_library_live_app.py"
       - "tests/test_content_ops_calibration_library_api.py"
       - "tests/test_content_ops_claim_registry_api.py"
       - "tests/test_check_content_ops_marketer_verify_claude_hosted_oauth.py"
@@ -78,6 +88,22 @@ on:
 jobs:
   atlas-content-ops-review-workflow-checks:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas_migration_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atlas -d atlas_migration_tests"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ATLAS_MIGRATION_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/atlas_migration_tests
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -99,6 +125,8 @@ jobs:
           python -m pytest \
             tests/test_atlas_content_ops_review_workflow.py \
             tests/test_content_ops_calibration_library.py \
+            tests/test_content_ops_calibration_library_live_db.py \
+            tests/test_content_ops_calibration_library_live_app.py \
             tests/test_content_ops_calibration_library_api.py \
             tests/test_content_ops_claim_registry_api.py \
             tests/test_check_content_ops_marketer_verify_claude_hosted_oauth.py \

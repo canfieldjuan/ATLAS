@@ -1,0 +1,1855 @@
+{
+  "scripts/_deflection_http.py": {
+    "counts": {
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 4
+  },
+  "scripts/archive_plans.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 6
+  },
+  "scripts/audit_actionable_review_coverage.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/audit_affiliate_partner_drift.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/audit_ai_reconciliation.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 8
+  },
+  "scripts/audit_b2b_cache_coverage.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/audit_capterra_raw_capture.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "scripts/audit_capterra_target_hygiene.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "scripts/audit_claude_md_claims.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/audit_content_ops_marketing_claims.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/audit_cross_layer_callers.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 5
+    },
+    "score": 11
+  },
+  "scripts/audit_enrichment_schema_version.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/audit_evidence_claims.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/audit_extracted_manifests.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 11
+  },
+  "scripts/audit_extracted_pipeline_ci_enrollment.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "scripts/audit_extracted_standalone.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/audit_g2_raw_capture.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "scripts/audit_g2_target_hygiene.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "scripts/audit_gartner_raw_capture.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "scripts/audit_gartner_target_hygiene.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "scripts/audit_getapp_raw_capture.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "scripts/audit_getapp_target_hygiene.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "scripts/audit_mcp_port_assignments.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 13
+  },
+  "scripts/audit_mcp_tool_names_match_docs.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "scripts/audit_plan_code_consistency.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 19
+  },
+  "scripts/audit_plan_doc.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "scripts/audit_plan_doc_diff_size.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/audit_pr_body.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/audit_pr_session_drift.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/audit_pre_scrape_skip_gates.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 5
+    },
+    "score": 12
+  },
+  "scripts/audit_reasoning_delivery.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/audit_reasoning_retry_churn.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/audit_report_subscription_delivery.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/audit_review_rules_triggered.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 9
+  },
+  "scripts/audit_trustpilot_raw_capture.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "scripts/audit_trustpilot_target_hygiene.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "scripts/audit_ui_test_enrollment.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/audit_witness_field_propagation.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/audit_witness_selection.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/audit_workflow_security_posture.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 9
+  },
+  "scripts/b2b_field_access_inventory.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 10
+  },
+  "scripts/backfill_b2b_reasoning_contracts.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 12
+  },
+  "scripts/backfill_blog_quality_truth.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/backfill_blog_seo.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/backfill_blog_visibility_truth.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/backfill_buyer_authority_roles.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 11
+  },
+  "scripts/backfill_campaign_batch_replay_contracts.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 13
+  },
+  "scripts/backfill_campaign_specificity_truth.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/backfill_community_buying_stage_defaults.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 13
+  },
+  "scripts/backfill_company_names.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 15
+  },
+  "scripts/backfill_company_signal_candidate_groups.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/backfill_cross_source_review_dedup.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/backfill_derived_fields.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 16
+  },
+  "scripts/backfill_firmographics_from_apollo.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 11
+  },
+  "scripts/backfill_g2_reviewer_company_cleanup.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 16
+  },
+  "scripts/backfill_low_substance_enriched_reviews.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 11
+  },
+  "scripts/backfill_org_cache_from_apollo.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/backfill_same_source_review_vendor_fanout.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 10
+  },
+  "scripts/backfill_software_advice_synthetic_id_dedup.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 7
+  },
+  "scripts/backfill_ticket_faq_search_documents.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/backfill_trustpilot_jsonld_company_cleanup.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 16
+  },
+  "scripts/backfill_vendor_target_accounts.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/backfill_witness_grounding.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/backfill_witness_phrase_metadata.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 11
+  },
+  "scripts/backfill_witness_primitives.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "scripts/backfill_witness_quality_fields.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/backfill_witness_source_span_id.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/benchmark_deep_enrichment.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 11
+  },
+  "scripts/benchmark_enrichment.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 17
+  },
+  "scripts/benchmark_pain_classifier.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/benchmark_reasoning.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/blast_full_pipeline.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 11
+  },
+  "scripts/brightdata_dataset_scrape.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/build_b2b_enrichment_dispute_pack.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 15
+  },
+  "scripts/build_content_ops_deflection_report.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "scripts/build_deflection_messy_csv_fixtures.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 7
+    },
+    "score": 6
+  },
+  "scripts/build_evidence_to_story_sources.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/build_extracted_campaign_opportunities_from_sources.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/build_extracted_ticket_faq_markdown.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 14
+  },
+  "scripts/build_synthetic_support_tickets.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 9
+  },
+  "scripts/canary_lineage_direct_evidence.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/capture_zendesk_product_proof_corpus.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 6
+  },
+  "scripts/check_ai_reconciliation_live.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 3,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 13
+  },
+  "scripts/check_competitive_intelligence_product_surface_manifest.py": {
+    "counts": {
+      "WEAK_CONTRACT": 1
+    },
+    "score": 1
+  },
+  "scripts/check_content_ops_faq_macro_lifecycle_artifact.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "scripts/check_content_ops_faq_search_route_contract.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 6
+  },
+  "scripts/check_content_ops_marketer_verify_claude_hosted_oauth.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 6
+  },
+  "scripts/check_content_ops_marketer_verify_dual_client_rollout.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/check_content_ops_marketer_verify_oauth_discovery.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/check_content_ops_marketer_verify_oauth_e2e.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/check_deflection_full_report_hosted_smoke.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/check_deflection_full_report_pdf_export_artifacts.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 7
+  },
+  "scripts/check_deflection_full_report_proof_bundle.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "scripts/check_deflection_process_contract.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "scripts/check_deflection_product_surface_manifest.py": {
+    "counts": {
+      "WEAK_CONTRACT": 1
+    },
+    "score": 1
+  },
+  "scripts/check_extracted_campaign_reasoning_postgres.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/check_extracted_competitive_intelligence_imports.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/check_extracted_content_install.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/check_extracted_imports.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/check_extracted_llm_infrastructure_imports.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/check_gitleaks_baseline_rotation.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "scripts/check_invoicing_draft_writer_funnel_routes.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "scripts/check_invoicing_draft_writer_live_write.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  },
+  "scripts/check_invoicing_draft_writer_mcp_connector.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "scripts/check_invoicing_draft_writer_oauth_discovery.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "scripts/check_invoicing_draft_writer_oauth_e2e.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 8
+  },
+  "scripts/check_invoicing_readonly_mcp_connector.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "scripts/check_invoicing_readonly_oauth_discovery.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "scripts/check_invoicing_readonly_oauth_e2e.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 8
+  },
+  "scripts/check_reasoning_rollout_readiness.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 11
+  },
+  "scripts/check_review_body_r14.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 4
+  },
+  "scripts/check_session_pr_ownership.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/cleanup_accounts_in_motion_pollution.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 5
+    },
+    "score": 13
+  },
+  "scripts/cleanup_b2b_noise.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 14
+  },
+  "scripts/cleanup_b2b_review_duplicates.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 13
+  },
+  "scripts/cleanup_content_ops_faq_macro_sandbox.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/cleanup_extracted_campaign_reasoning_contexts.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/cluster_other_pain.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 22
+  },
+  "scripts/content_ops_faq_cli_rules.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 10
+  },
+  "scripts/content_ops_faq_smoke_profile.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 3
+    },
+    "score": 18
+  },
+  "scripts/content_ops_source_postgres_smoke_helpers.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/debug/diagnose_voice_system.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1
+    },
+    "score": 7
+  },
+  "scripts/debug/model_benchmark.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/debug/verify_atlas_router_multiturn.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 21,
+      "NO_TEST_FILE": 1
+    },
+    "score": 15
+  },
+  "scripts/debug/verify_booking_multiturn.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 13,
+      "NO_TEST_FILE": 1
+    },
+    "score": 15
+  },
+  "scripts/debug/verify_calendar_multiturn.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 9,
+      "NO_TEST_FILE": 1
+    },
+    "score": 15
+  },
+  "scripts/debug/verify_email_multiturn.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 16,
+      "NO_TEST_FILE": 1
+    },
+    "score": 15
+  },
+  "scripts/debug/verify_reminder_multiturn.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 11,
+      "NO_TEST_FILE": 1
+    },
+    "score": 15
+  },
+  "scripts/debug/verify_session_metadata.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 10,
+      "NO_TEST_FILE": 1
+    },
+    "score": 15
+  },
+  "scripts/debug/verify_workflow_state.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 16,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 17
+  },
+  "scripts/demand_opportunity_report.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 5
+    },
+    "score": 18
+  },
+  "scripts/download_mcauley_dataset.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/drain_hardening.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 24
+  },
+  "scripts/enrich_resolved_companies_apollo.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/enroll_voice.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 5,
+      "WEAK_CONTRACT": 3
+    },
+    "score": 29
+  },
+  "scripts/evaluate_csv_admission_threshold_evidence.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 16
+  },
+  "scripts/evaluate_models.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 6
+    },
+    "score": 30
+  },
+  "scripts/evaluate_support_ticket_generated_content.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/evaluate_zendesk_product_proof_corpus.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/export_content_ops_cfpb_sources.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 15
+  },
+  "scripts/export_content_ops_claim_evidence_prompt_packets.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/export_content_ops_review_sources.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 19
+  },
+  "scripts/export_extracted_campaign_drafts.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/export_extracted_content_assets.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/export_training_data.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 11
+  },
+  "scripts/finalize_v4_enrichments.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 16
+  },
+  "scripts/finetune_model.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 13
+  },
+  "scripts/generate_debt_register.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 14
+  },
+  "scripts/import_amazon_reviews.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 22
+  },
+  "scripts/import_b2b_reviews.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "scripts/import_calendar_contacts.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 5,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 21
+  },
+  "scripts/import_content_ops_claim_evidence_prompt_responses.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/ingest_extracted_campaign_webhook.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 3
+  },
+  "scripts/inspect_extracted_content_ingestion.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/list_extracted_campaign_reasoning_contexts.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/load_extracted_blog_blueprints.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/load_extracted_campaign_opportunities.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/match_metadata_extra.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 4,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1,
+      "WEAK_CONTRACT": 2
+    },
+    "score": 34
+  },
+  "scripts/match_product_metadata.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 20
+  },
+  "scripts/maturity_sweep.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 5,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 2,
+      "WEAK_CONTRACT": 25
+    },
+    "score": 21
+  },
+  "scripts/maturity_sweep_file_lane.py": {
+    "counts": {
+      "WEAK_CONTRACT": 2
+    },
+    "score": 2
+  },
+  "scripts/migrate_bundled_posts_to_db.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 14
+  },
+  "scripts/plan_parser_upgrade_rescrape_targets.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "HEURISTIC_COMMENT": 3,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 29
+  },
+  "scripts/prepare_content_ops_deflection_env.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/prepare_extracted_seller_campaign_opportunities.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/progress_extracted_campaign_sequences.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "scripts/rag_learning.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 11
+  },
+  "scripts/re_enrich_no_signal.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "WEAK_CONTRACT": 3
+    },
+    "score": 16
+  },
+  "scripts/re_enrich_other_pain.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 18
+  },
+  "scripts/read_extracted_campaign_visibility.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/rebuild_b2b_reasoning_delivery.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/rebuild_blog_charts.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/reconcile_battle_card_quality.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 2,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 14
+  },
+  "scripts/reconcile_content_ops_faq_macro_writebacks.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/refresh_extracted_campaign_analytics.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/refresh_extracted_seller_category_intelligence.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/regenerate_b2b_intelligence_reports.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/render_hybrid_reasoning_report_summary.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 12
+  },
+  "scripts/requeue_30d_v3_witness_candidates.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/requeue_phase8b_tier2_redo.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 12
+  },
+  "scripts/reset_enrichment_baseline.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 10
+  },
+  "scripts/review_extracted_campaign_drafts.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/review_extracted_content_assets.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/rockchip/convert_whisper_to_rknn.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/rockchip/convert_yolo_to_rknn.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/rockchip/setup_conversion.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 10
+  },
+  "scripts/run_b2b_enrichment_until_exhausted.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 13
+  },
+  "scripts/run_content_ops_claim_evidence_artifact.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/run_content_ops_claim_evidence_manual_benchmark.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/run_deflection_full_report_qa_live_runner.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/run_deflection_test_mode_checkout_proof.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/run_extracted_campaign_generation_example.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 6
+  },
+  "scripts/run_extracted_campaign_generation_postgres.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/run_extracted_content_pipeline_migrations.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/run_extracted_podcast_idea_extraction.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/run_extracted_podcast_repurpose_generation.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/run_extracted_podcast_transcript_import.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/run_hybrid_reasoning_checks_with_report.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/sample_and_import.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 7,
+      "UNGUARDED_INDEX": 3,
+      "UNGUARDED_INPUT": 4
+    },
+    "score": 63
+  },
+  "scripts/sample_pain_benchmark_corpus.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 11
+  },
+  "scripts/seed_content_ops_faq_saas_demo.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 5,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 24
+  },
+  "scripts/seed_detached_campaign_batch_demo.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 13
+  },
+  "scripts/seed_evidence_claim_shadow.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "scripts/seed_faq_macro_writeback_live_smoke_draft.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 9
+  },
+  "scripts/semantic_diff_advisor.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 8,
+      "WEAK_CONTRACT": 14
+    },
+    "score": 21
+  },
+  "scripts/send_content_ops_deflection_report_deliveries.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/send_extracted_campaigns.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "scripts/setup_content_ops_zendesk_credentials.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/setup_google_calendar.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2,
+      "UNGUARDED_INPUT": 2,
+      "WEAK_CONTRACT": 2
+    },
+    "score": 25
+  },
+  "scripts/setup_google_gmail.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2,
+      "UNGUARDED_INPUT": 2,
+      "WEAK_CONTRACT": 2
+    },
+    "score": 25
+  },
+  "scripts/setup_google_oauth.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 3,
+      "WEAK_CONTRACT": 2
+    },
+    "score": 32
+  },
+  "scripts/setup_sip_recording.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 10
+  },
+  "scripts/smoke_content_ops_cfpb_faq_markdown.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "scripts/smoke_content_ops_cfpb_source_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/smoke_content_ops_deflection_paid_postgres.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_deflection_portfolio_result_page.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/smoke_content_ops_deflection_stripe_paid_unlock.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/smoke_content_ops_deflection_submit_handoff.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 15
+  },
+  "scripts/smoke_content_ops_faq_lifecycle.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 11
+  },
+  "scripts/smoke_content_ops_faq_lifecycle_run.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "scripts/smoke_content_ops_faq_macro_live_zendesk.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_faq_macro_sandbox_e2e.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_faq_macro_sandbox_lifecycle.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_faq_output_proof.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 16
+  },
+  "scripts/smoke_content_ops_faq_saas_demo_route_e2e.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/smoke_content_ops_faq_scale_run.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "scripts/smoke_content_ops_faq_search_concurrency.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "scripts/smoke_content_ops_faq_search_route_concurrency.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/smoke_content_ops_faq_search_seeded_route_e2e.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 19
+  },
+  "scripts/smoke_content_ops_gate_a_live_quality.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "scripts/smoke_content_ops_ingestion_file_route.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "scripts/smoke_content_ops_ingestion_file_route_inprocess_load.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_ingestion_file_route_multiprocess_load.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_live_generation.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 5
+    },
+    "score": 6
+  },
+  "scripts/smoke_content_ops_review_source_generation.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/smoke_content_ops_review_source_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/smoke_content_ops_source_file_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/smoke_content_ops_support_ticket_package.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 9
+  },
+  "scripts/smoke_content_ops_upload_source_public_asset.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 9
+  },
+  "scripts/smoke_extracted_competitive_intelligence_imports.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 9
+  },
+  "scripts/smoke_extracted_competitive_intelligence_standalone.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 14
+  },
+  "scripts/smoke_extracted_content_ops_execution.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 8
+  },
+  "scripts/smoke_extracted_content_pipeline_host.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 3,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 10
+  },
+  "scripts/smoke_extracted_llm_infrastructure_imports.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/smoke_extracted_llm_infrastructure_standalone.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 25,
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1,
+      "WEAK_CONTRACT": 4
+    },
+    "score": 20
+  },
+  "scripts/smoke_extracted_pipeline_imports.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 9
+  },
+  "scripts/smoke_extracted_pipeline_standalone.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 1,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 9
+  },
+  "scripts/smoke_extracted_reasoning_core_standalone.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 6
+  },
+  "scripts/smoke_test_reasoning.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1,
+      "WEAK_CONTRACT": 3
+    },
+    "score": 11
+  },
+  "scripts/smoke_truthful_artifacts.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "scripts/start_content_ops_marketer_verify_chatgpt_adapter_oauth_server.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "scripts/start_content_ops_marketer_verify_oauth_server.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/start_invoicing_draft_writer_oauth_server.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/start_invoicing_readonly_oauth_server.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/summarize_review_misses.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 10
+  },
+  "scripts/sync_pr_plan.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "scripts/tier2_model_ab.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/upsert_extracted_campaign_reasoning_contexts.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 10
+  },
+  "scripts/validate_content_ops_claim_evidence_fixture.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/validate_content_ops_claim_evidence_result.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  }
+}

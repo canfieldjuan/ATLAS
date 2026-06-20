@@ -219,8 +219,9 @@ export default function BlogReview() {
         source_report_date: null,
       })
     } finally {
-      if (detailRequestIdRef.current !== requestId) return
-      setLoadingDetail(false)
+      if (detailRequestIdRef.current === requestId) {
+        setLoadingDetail(false)
+      }
     }
   }, [setSearchParams, statusFilter])
 

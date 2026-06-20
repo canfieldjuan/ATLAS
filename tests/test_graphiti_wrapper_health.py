@@ -7,6 +7,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+# main.py belongs to the standalone graphiti-wrapper service; its service deps
+# (neo4j, graphiti_core) are not brain runtime deps. Skip the whole module only
+# when those named optional deps are absent (e.g. a brain-only env). When they
+# are present the health/readiness tests below are fully mocked (no live
+# services), so they stay in the normal unit lane -- no e2e marker -- and a real
+# import regression in main.py or its local modules still fails because
+# exec_module is not wrapped in a broad guard.
+pytest.importorskip("neo4j")
+pytest.importorskip("graphiti_core")
 
 _ROOT = Path(__file__).resolve().parents[1]
 _WRAPPER_DIR = _ROOT / "graphiti-wrapper"

@@ -59,8 +59,7 @@ class EnrollmentAudit:
             )
         if self.missing_from_push_filters:
             failures.append(
-                "missing from push filters: "
-                + ", ".join(self.missing_from_push_filters)
+                "missing from push filters: " + ", ".join(self.missing_from_push_filters)
             )
         failures.extend(self.atlas_brain_test_errors)
         return tuple(failures)
@@ -191,13 +190,118 @@ def atlas_workflow_enrollments(root: Path) -> tuple[AtlasWorkflowEnrollment, ...
     return tuple(workflows)
 
 
+# The exact marker filter used by the repo-wide backstop run step. The quote must
+# close immediately after the unit expression so narrowed expressions such as
+# `not integration and not e2e and not foo` are not credited as catch-all coverage.
+_BACKSTOP_MARKER = re.compile(
+    r"""-m\s*([\"'])\s*not integration and not e2e\s*\1(?=\s|\\|$)"""
+)
+# Pytest test-tree targets. Only the whole tests tree is repo-wide; narrower
+# directories like tests/unit/ and explicit files do not provide catch-all coverage.
+_PYTEST_TEST_TARGET = re.compile(r"(?<!\S)(?:\./)?tests(?:/[^\s\\]*)?(?=\s|\\|$)")
+_PYTEST_COMMAND_LINE = re.compile(r"^(?:python(?:\d+(?:\.\d+)?)?\s+-m\s+pytest|pytest)(?=\s|$)")
+# Real marker syntax only -- a `@pytest.mark.integration/e2e` decorator or a
+# module-level `pytestmark = ... pytest.mark.integration/e2e` -- anchored to the
+# line start so a mention in a comment or docstring does not falsely exempt a
+# unit test.
+_INTEGRATION_OR_E2E_MARK = re.compile(
+    r"^\s*(?:@pytest\.mark\.(?:integration|e2e)\b"
+    r"|pytestmark\s*=.*\bpytest\.mark\.(?:integration|e2e)\b)",
+    re.MULTILINE,
+)
+
+
+def _workflow_run_command_lines(workflow_text: str) -> tuple[str, ...]:
+    lines = workflow_text.splitlines()
+    commands: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        match = re.match(r"^(?P<indent>\s*)(?:-\s*)?run:\s*(?P<command>.*)$", line)
+        if match is None:
+            index += 1
+            continue
+
+        indent = len(match.group("indent"))
+        command = match.group("command").strip()
+        if command and not command.startswith(("|", ">")):
+            commands.append(command)
+        index += 1
+        while index < len(lines):
+            next_line = lines[index]
+            if next_line.strip() and len(next_line) - len(next_line.lstrip()) <= indent:
+                break
+            stripped = next_line.strip()
+            if stripped and _PYTEST_COMMAND_LINE.match(stripped):
+                commands.append(stripped)
+            index += 1
+    return tuple(commands)
+
+
+def _is_repo_wide_unit_pytest(line: str) -> bool:
+    """Whether a workflow command line is a real repo-wide unit pytest command."""
+    stripped = line.strip()
+    if not _PYTEST_COMMAND_LINE.match(stripped):
+        return False
+    if "pytest" not in stripped or not _BACKSTOP_MARKER.search(stripped):
+        return False
+    targets = [
+        target[2:] if target.startswith("./") else target
+        for target in _PYTEST_TEST_TARGET.findall(stripped)
+    ]
+    return bool(targets) and all(target in {"tests", "tests/"} for target in targets)
+
+
+def repo_wide_backstop_present(root: Path) -> bool:
+    """Whether the repo-wide unit backstop workflow is the standing catch-all.
+
+    True only when `.github/workflows/repo_wide_unit_backstop.yml` has a real
+    run-command line invoking `pytest -m "not integration and not e2e"` over the
+    full `tests/` tree. Checking the run command -- not raw substrings anywhere
+    in the file -- avoids falsely crediting a backstop whose command was removed
+    or narrowed but whose marker strings linger in a comment, echo, step name,
+    or other non-command YAML field. The backstop runs the unit suite with no
+    per-file path filter, so a unit test it does not exclude is exercised there
+    even without a dedicated `atlas_*_checks.yml`.
+    """
+    backstop = root / ".github/workflows/repo_wide_unit_backstop.yml"
+    if not backstop.is_file():
+        return False
+    return any(
+        _is_repo_wide_unit_pytest(line)
+        for line in _workflow_run_command_lines(backstop.read_text(encoding="utf-8"))
+    )
+
+
+def _test_marked_integration_or_e2e(root: Path, path: str) -> bool:
+    test_file = root / path
+    if not test_file.is_file():
+        return False
+    return bool(
+        _INTEGRATION_OR_E2E_MARK.search(test_file.read_text(encoding="utf-8"))
+    )
+
+
 def atlas_brain_test_workflow_errors(
     root: Path,
     test_paths: Iterable[str],
 ) -> tuple[str, ...]:
+    backstop = repo_wide_backstop_present(root)
     workflows = atlas_workflow_enrollments(root)
     errors: list[str] = []
     for path in atlas_brain_importing_tests(root, test_paths):
+        # Integration/e2e tests belong to service-backed lanes: the unit
+        # backstop runs `-m "not integration and not e2e"` and this unit
+        # enrollment audit does not cover them, so do not demand a unit
+        # workflow for them.
+        if _test_marked_integration_or_e2e(root, path):
+            continue
+        # Unit test: when the repo-wide backstop runs it, treat it as enrolled
+        # even without a dedicated atlas_*_checks.yml. This intentionally
+        # relaxes PR-time per-file gating in favor of the scheduled catch-all
+        # (the backstop is advisory/scheduled, not a per-PR gate).
+        if backstop:
+            continue
         if not workflows:
             errors.append(
                 f"{path} imports atlas_brain.* but no atlas_*_checks.yml workflow exists"

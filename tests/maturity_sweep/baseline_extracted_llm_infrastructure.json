@@ -1,0 +1,150 @@
+{
+  "extracted_llm_infrastructure/_standalone/config.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_llm_infrastructure/_standalone/database.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_llm_infrastructure/_standalone/registry.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_llm_infrastructure/pipelines/llm.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 4
+    },
+    "score": 20
+  },
+  "extracted_llm_infrastructure/reasoning/semantic_cache.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_llm_infrastructure/services/b2b/anthropic_batch.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_llm_infrastructure/services/b2b/cache_strategy.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_llm_infrastructure/services/b2b/llm_exact_cache.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 13
+  },
+  "extracted_llm_infrastructure/services/cost/budget.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 5
+  },
+  "extracted_llm_infrastructure/services/cost/cache_savings.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "extracted_llm_infrastructure/services/cost/openai_billing.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "extracted_llm_infrastructure/services/llm/anthropic.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 14
+  },
+  "extracted_llm_infrastructure/services/llm/cloud.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_llm_infrastructure/services/llm/groq.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 6
+  },
+  "extracted_llm_infrastructure/services/llm/ollama.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "extracted_llm_infrastructure/services/llm/openrouter.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 23
+  },
+  "extracted_llm_infrastructure/services/llm/together.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 6
+  },
+  "extracted_llm_infrastructure/services/llm/vllm.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "extracted_llm_infrastructure/services/llm_router.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_llm_infrastructure/services/provider_cost_sync.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "extracted_llm_infrastructure/services/tracing.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 6
+  },
+  "extracted_llm_infrastructure/skills/registry.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 10
+  }
+}

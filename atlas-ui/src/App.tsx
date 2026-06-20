@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, type CSSProperties } from 'react';
 import { Avatar } from './components/Avatar/Avatar';
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { useAtlas } from './hooks/useAtlas';
@@ -130,10 +130,10 @@ function App() {
             style={{
               left: `${Math.random() * 100}%`,
               top: `${Math.random() * 100}%`,
-              ['--duration' as any]: `${8 + Math.random() * 15}s`,
+              '--duration': `${8 + Math.random() * 15}s`,
               opacity: Math.random() * 0.6,
               boxShadow: '0 0 4px rgba(34,211,238,0.5)'
-            }}
+            } as CSSProperties}
           />
         ))}
       </div>
