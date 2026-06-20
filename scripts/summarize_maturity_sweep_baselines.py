@@ -32,7 +32,7 @@ def lane_name(path: Path) -> str:
 
 
 def _int_field(value: object, *, path: Path, field: str) -> int:
-    if not isinstance(value, int):
+    if not isinstance(value, int) or isinstance(value, bool):
         raise BaselineError(f"{path}: {field} must be an integer")
     return value
 
@@ -53,7 +53,9 @@ def summarize_baseline(path: Path) -> LaneSummary:
             raise BaselineError(f"{path}: baseline file keys must be strings")
         if not isinstance(entry, dict):
             raise BaselineError(f"{path}: {file_path} entry must be an object")
-        score = _int_field(entry.get("score", 0), path=path, field=f"{file_path}.score")
+        if "score" not in entry:
+            raise BaselineError(f"{path}: {file_path}.score is required")
+        score = _int_field(entry["score"], path=path, field=f"{file_path}.score")
         total_score += score
         top_score = max(top_score, score)
         raw_counts = entry.get("counts", {})
@@ -113,6 +115,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.top_counts < 0:
+            raise BaselineError("--top-counts must be greater than or equal to 0")
         summaries = collect_summaries(args.patterns)
     except BaselineError as exc:
         print(f"maturity baseline summary: {exc}", file=sys.stderr)
@@ -121,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps([asdict(item) for item in summaries], indent=2, sort_keys=True))
     else:
-        print(render_text(summaries, top_counts=max(args.top_counts, 0)), end="")
+        print(render_text(summaries, top_counts=args.top_counts), end="")
     return 0
 
 

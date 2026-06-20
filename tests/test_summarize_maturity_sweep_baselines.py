@@ -100,6 +100,61 @@ def test_malformed_count_fails_closed(tmp_path: Path, capsys) -> None:
     assert "counts.NO_TEST_FILE must be an integer" in capsys.readouterr().err
 
 
+def test_boolean_score_fails_closed(tmp_path: Path, capsys) -> None:
+    write_json(
+        tmp_path / "baseline_bad.json",
+        {"bad/a.py": {"score": True, "counts": {"NO_TEST_FILE": 1}}},
+    )
+
+    assert MOD.main([str(tmp_path / "baseline_*.json")]) == 1
+
+    assert "bad/a.py.score must be an integer" in capsys.readouterr().err
+
+
+def test_boolean_count_fails_closed(tmp_path: Path, capsys) -> None:
+    write_json(
+        tmp_path / "baseline_bad.json",
+        {"bad/a.py": {"score": 4, "counts": {"NO_TEST_FILE": False}}},
+    )
+
+    assert MOD.main([str(tmp_path / "baseline_*.json")]) == 1
+
+    assert "counts.NO_TEST_FILE must be an integer" in capsys.readouterr().err
+
+
+def test_missing_score_fails_closed(tmp_path: Path, capsys) -> None:
+    write_json(
+        tmp_path / "baseline_bad.json",
+        {"bad/a.py": {"counts": {"NO_TEST_FILE": 1}}},
+    )
+
+    assert MOD.main([str(tmp_path / "baseline_*.json")]) == 1
+
+    assert "bad/a.py.score is required" in capsys.readouterr().err
+
+
+def test_missing_counts_is_treated_as_empty_map(tmp_path: Path, capsys) -> None:
+    write_json(tmp_path / "baseline_lane.json", {"lane/a.py": {"score": 4}})
+
+    assert MOD.main([str(tmp_path / "baseline_*.json")]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "lane files total_score top_score top_findings",
+        "lane 1 4 4 -",
+    ]
+
+
+def test_negative_top_counts_fails_closed(tmp_path: Path, capsys) -> None:
+    write_json(
+        tmp_path / "baseline_lane.json",
+        {"lane/a.py": {"score": 4, "counts": {"NO_TEST_FILE": 1}}},
+    )
+
+    assert MOD.main([str(tmp_path / "baseline_*.json"), "--top-counts", "-1"]) == 1
+
+    assert "--top-counts must be greater than or equal to 0" in capsys.readouterr().err
+
+
 def test_no_matching_baselines_fails_closed(tmp_path: Path, capsys) -> None:
     assert MOD.main([str(tmp_path / "missing_*.json")]) == 1
 
