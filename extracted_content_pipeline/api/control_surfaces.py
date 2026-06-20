@@ -177,12 +177,15 @@ _DEFLECTION_REPORT_SEARCH_TEXT_FIELDS = (
     "when_to_contact_support",
     "answer_evidence_status",
 )
-_DEFLECTION_REPORT_SEARCH_SEQUENCE_FIELDS = (
+_DEFLECTION_REPORT_SEARCH_NUMBER_FIELDS = (
+    "ticket_count",
+    "opportunity_score",
+)
+_DEFLECTION_REPORT_SEARCH_STRING_ARRAY_FIELDS = (
     "steps",
     "action_items",
     "source_ids",
     "source_labels",
-    "term_mappings",
 )
 
 
@@ -3545,17 +3548,36 @@ def _deflection_report_artifact_items(
 
 def _deflection_report_full_item(item: Mapping[str, Any]) -> dict[str, Any] | None:
     for field in _DEFLECTION_REPORT_SEARCH_TEXT_FIELDS:
-        if not _clean(item.get(field)):
+        if not isinstance(item.get(field), str):
             return None
-    for field in _DEFLECTION_REPORT_SEARCH_SEQUENCE_FIELDS:
-        value = item.get(field)
-        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+    for field in _DEFLECTION_REPORT_SEARCH_NUMBER_FIELDS:
+        if not _deflection_report_renderable_number(item.get(field)):
             return None
-    if _nonnegative_int(item.get("ticket_count")) <= 0 and _nonnegative_int(
-        item.get("frequency")
-    ) <= 0:
+    for field in _DEFLECTION_REPORT_SEARCH_STRING_ARRAY_FIELDS:
+        if not _deflection_report_string_array(item.get(field)):
+            return None
+    if not _deflection_report_term_mappings(item.get("term_mappings")):
         return None
     return dict(item)
+
+
+def _deflection_report_renderable_number(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float))
+
+
+def _deflection_report_string_array(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _deflection_report_term_mappings(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    required_fields = ("customer_term", "documentation_term", "suggestion")
+    return all(
+        isinstance(mapping, Mapping)
+        and all(isinstance(mapping.get(field), str) for field in required_fields)
+        for mapping in value
+    )
 
 
 def _deflection_report_item_score(
