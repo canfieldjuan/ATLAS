@@ -1,0 +1,100 @@
+{
+  "input": {
+    "raw_source_values_recorded": false,
+    "source_format": "json",
+    "source_path_recorded": false,
+    "zendesk_thread_import": true
+  },
+  "rows": {
+    "included_row_count": 50,
+    "skipped_row_count": 0,
+    "source_row_count": 50,
+    "truncated_row_count": 0
+  },
+  "s1_readiness": {
+    "cost_basis": {
+      "reason": "report can use the benchmark assisted-contact formula only",
+      "status": "partial"
+    },
+    "csat_prioritization": {
+      "reason": "CSAT is present but sparse or non-numeric",
+      "status": "partial"
+    },
+    "owner_lane_fix_type": {
+      "reason": "cluster labels exist, but owner lane/fix type require Unknown fallback",
+      "status": "partial"
+    },
+    "snippet_projection_safety": {
+      "reason": "scrub ran on text fields, but unlabeled data cannot prove open-set recall",
+      "status": "partial"
+    },
+    "support_resolution_evidence": {
+      "reason": "resolution evidence is present",
+      "status": "ready"
+    }
+  },
+  "safety": {
+    "raw_source_values_recorded": false,
+    "snippets_recorded": false,
+    "source_ids_recorded": false,
+    "summary_only": true
+  },
+  "schema_version": "deflection_signal_spike.v1",
+  "signals": {
+    "cost_basis": {
+      "basis": "benchmark_only",
+      "coverage": 0.0,
+      "readiness": "partial",
+      "reason": "report can use the benchmark assisted-contact formula only",
+      "requires_formula_source_label": true,
+      "rows_with_source_cost_fields": 0
+    },
+    "csat": {
+      "basis": "textual",
+      "coverage": 0.58,
+      "numeric_average": null,
+      "numeric_score_count": 0,
+      "readiness": "partial",
+      "reason": "CSAT is present but sparse or non-numeric",
+      "rows_with_csat": 29,
+      "textual_rating_count": 29
+    },
+    "owner_lane_fix_type": {
+      "readiness": "partial",
+      "reason": "cluster labels exist, but owner lane/fix type require Unknown fallback",
+      "rows_with_cluster_label": 50,
+      "rows_with_structured_context": 0,
+      "structured_context_coverage": 0.0,
+      "unknown_fallback_required": true
+    },
+    "snippet_projection_safety": {
+      "raw_snippets_recorded": false,
+      "readiness": "partial",
+      "reason": "scrub ran on text fields, but unlabeled data cannot prove open-set recall",
+      "requires_fail_closed_snapshot_allowlist": true,
+      "requires_shared_detector_contract": true,
+      "text_fields_changed_by_scrub": 8,
+      "text_fields_checked": 140
+    },
+    "support_resolution_evidence": {
+      "coverage": 0.8,
+      "readiness": "ready",
+      "reason": "resolution evidence is present",
+      "rows_with_resolution_evidence": 40
+    },
+    "ticket_status": {
+      "coverage": 1.0,
+      "readiness": "ready",
+      "reason": "ticket status signal covers all included rows",
+      "rows_with_status": 50,
+      "summary": {
+        "open": 21,
+        "resolved": 29
+      }
+    }
+  },
+  "warnings": {
+    "import_warning_codes": {},
+    "package_warning_codes": {}
+  }
+}
