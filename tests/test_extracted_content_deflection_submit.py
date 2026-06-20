@@ -712,6 +712,7 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
             "# Report\n\n"
             "How do I reset access for jane.doe@acme.com?\n"
             "Call _555-123-4567_ and confirm account 4829103.\n"
+            "Customer: Jane Doe moved to 123 Maple Street Apt 4B.\n"
         ),
         "summary": {
             "generated": 1,
@@ -726,10 +727,16 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
                     "customer_wording": "Call 555-123-4567 for account 4829103.",
                     "weighted_frequency": 2,
                     "ticket_count": 2,
-                    "answer": "Reset _jane.doe@acme.com_ after confirming account 4829103.",
+                    "answer": (
+                        "Reset _jane.doe@acme.com_ after confirming account 4829103 "
+                        "for customer: Jane Doe at 123 Maple Street Apt 4B."
+                    ),
                     "steps": [
                         "Remove XXXXX before publishing.",
                         "Escalate case 999999 if the reset still fails.",
+                        "Check opaque migration token CUST-9XQ7-ABCD.",
+                        "Requester name is Jane Doe.",
+                        "Mail a label to 123 Maple Street Apt 4B.",
                     ],
                     "source_ids": ["4829103", "777777"],
                     "evidence_quotes": [
@@ -758,6 +765,7 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
                                 "question": "How do I reset jane.doe@acme.com?",
                                 "answer": (
                                     "Confirm account 4829103 for jane.doe@acme.com."
+                                    " Requester name is Jane Doe at 123 Maple Street."
                                 ),
                             }
                         ]
@@ -813,6 +821,9 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
         "4829103",
         "777777",
         "999999",
+        "jane doe",
+        "123 maple",
+        "cust-9xq7-abcd",
         "xxxxx",
     ):
         assert raw_fragment not in encoded
@@ -822,6 +833,9 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
     assert teaser_answer["steps"] == [
         "Remove [redacted-text] before publishing.",
         "Escalate [redacted-identifier] if the reset still fails.",
+        "Check opaque migration token [redacted-identifier].",
+        "Requester name is [redacted-name]",
+        "Mail a label to [redacted-address].",
     ]
     artifact_sources = record.artifact["faq_result"]["items"][0]["source_ids"]
     assert artifact_sources == ["4829103", "777777"]
@@ -834,6 +848,9 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
         "acme.com",
         "555-123-4567",
         "999999",
+        "jane doe",
+        "123 maple",
+        "cust-9xq7-abcd",
         "xxxxx",
     ):
         assert raw_fragment not in artifact_encoded
@@ -842,6 +859,8 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
     assert "[redacted-email]" in encoded
     assert "[redacted-phone]" in encoded
     assert "[redacted-identifier]" in encoded
+    assert "[redacted-name]" in encoded
+    assert "[redacted-address]" in encoded
     assert "[redacted-text]" in encoded
 
 
