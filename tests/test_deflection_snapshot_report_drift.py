@@ -42,11 +42,19 @@ _SPEC = importlib.util.spec_from_file_location(
 )
 assert _SPEC is not None
 assert _SPEC.loader is not None
-SMOKE = importlib.util.module_from_spec(_SPEC)
-# Register before exec so the module's frozen dataclasses can resolve their own
-# __module__ during class creation (importlib does not auto-register).
-sys.modules[_SPEC.name] = SMOKE
-_SPEC.loader.exec_module(SMOKE)
+_EXISTING_SMOKE = sys.modules.get(_SPEC.name)
+if _EXISTING_SMOKE is not None:
+    # The sibling submit-handoff smoke test registers the same module name.
+    # Reuse its already-executed module so test collection does not exec this
+    # file a second time, which would create duplicate frozen-dataclass
+    # identities under the same module name.
+    SMOKE = _EXISTING_SMOKE
+else:
+    SMOKE = importlib.util.module_from_spec(_SPEC)
+    # Register before exec so the module's frozen dataclasses can resolve their
+    # own __module__ during class creation (importlib does not auto-register).
+    sys.modules[_SPEC.name] = SMOKE
+    _SPEC.loader.exec_module(SMOKE)
 
 
 def _drift_fixture_result() -> TicketFAQMarkdownResult:
@@ -266,7 +274,7 @@ def test_drift_detector_flags_injected_top_question_leak(artifact_snapshot) -> N
         *snapshot["top_questions"][1:],
     ]
     paths = SMOKE._forbidden_key_paths(leaked)
-    assert any("source_ids" in path for path in paths)
+    assert "$.top_questions[0].source_ids" in paths
 
 
 def test_drift_detector_flags_answer_leak_outside_teaser_full_answer(
@@ -285,4 +293,4 @@ def test_drift_detector_flags_answer_leak_outside_teaser_full_answer(
     teaser["previews"] = previews
     leaked["teaser"] = teaser
     paths = SMOKE._forbidden_key_paths(leaked)
-    assert any(path.endswith("answer") for path in paths)
+    assert "$.teaser.previews[0].answer" in paths
