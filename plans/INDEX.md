@@ -1,6 +1,6 @@
 # Plan archive index
 
-1133 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1134 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -729,6 +729,7 @@
 - [PR-Deflection-Paid-Report-Reframe](archive/PR-Deflection-Paid-Report-Reframe.md) - lane: content-ops/faq-deflection-paid-report | phase: Product polish
 - [PR-Deflection-Paid-Result-Page-Consolidated-View](archive/PR-Deflection-Paid-Result-Page-Consolidated-View.md) - lane: content-ops/deflection-launch-readiness | phase: Product polish
 - [PR-Deflection-Paid-Unlock-Diagnostics](archive/PR-Deflection-Paid-Unlock-Diagnostics.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
+- [PR-Deflection-Paid-Unlock-Metadata-Guard](archive/PR-Deflection-Paid-Unlock-Metadata-Guard.md) - lane: content-ops/report-delivery-live-funnel | phase: Production hardening
 - [PR-Deflection-Parser-Breakage-Evidence-Runner](archive/PR-Deflection-Parser-Breakage-Evidence-Runner.md) - lane: content-ops/deflection-parser-testing | phase: Robust testing
 - [PR-Deflection-Parser-CSV-Field-Limit](archive/PR-Deflection-Parser-CSV-Field-Limit.md) - lane: content-ops/deflection-parser-testing | phase: Robust testing
 - [PR-Deflection-Parser-Diagnostics-Parse-Errors](archive/PR-Deflection-Parser-Diagnostics-Parse-Errors.md) - lane: content-ops/deflection-parser-testing | phase: Production hardening
