@@ -32,7 +32,11 @@ Slice phase: Vertical slice
 3. Fail closed on missing credentials, malformed packet files, bad packet
    schema, provider HTTP failures, malformed provider envelopes, invalid JSON
    content, unsafe output paths, and invalid stability counts.
-4. Enroll the new CLI test in the extracted pipeline checks and workflow path
+4. Reject incomplete provider completions, avoid packet/output path clobbering,
+   disable provider-side storage by default, adapt token limits for OpenAI
+   o-series models, and strip provider-unsupported strict-schema constraints
+   for Azure/fine-tuned targets while preserving local validation.
+5. Enroll the new CLI test in the extracted pipeline checks and workflow path
    filters.
 
 ### Review Contract
@@ -46,6 +50,14 @@ Slice phase: Vertical slice
         output.
   - [ ] Error envelopes do not include API keys or provider response bodies.
   - [ ] Invalid packets are rejected before any HTTP call.
+  - [ ] Output cannot overwrite the prompt-packet input artifact.
+  - [ ] Non-`stop` finish reasons are rejected before response rows are written.
+  - [ ] Default provider requests send `store: false` and omit metadata unless
+        storage is explicitly requested.
+  - [ ] O-series model ids use `max_completion_tokens`; non-o-series model ids
+        keep `max_tokens` by default.
+  - [ ] Azure/fine-tuned structured-output requests use compatible schemas
+        without weakening local response validation.
   - [ ] Main and stability rerun rows retain the existing importer shape.
   - [ ] New tests are enrolled in local extracted checks and workflow path
         filters.
@@ -75,13 +87,19 @@ adapter POSTs to `<api-base-url>/chat/completions` with:
 - the packet `response_schema` wrapped as `response_format:
   {type: json_schema, strict: true}`;
 - deterministic defaults (`temperature=0`, bounded max tokens);
-- run metadata for main vs stability reruns.
+- `store: false` by default, with run metadata only when
+  `--store-completions` opts into provider retention.
 
 The provider response is accepted only when the chat-completions envelope
-contains JSON object content. The existing benchmark decoder then validates
-`supports`, `confidence`, and `reason` before any response row is written.
-Provider failures raise typed local exceptions so the benchmark runner records
-only the exception class, not provider bodies, prompts, or API keys.
+contains a `stop` finish reason and JSON object content. OpenAI o-series model
+ids use `max_completion_tokens`; other model ids keep `max_tokens` unless the
+operator overrides the token-limit field. Azure endpoints and fine-tuned model
+ids use a compatible structured-output schema with unsupported constraints
+removed from the provider request, while the existing benchmark decoder still
+validates `supports`, `confidence`, and `reason` locally before any response
+row is written. Provider failures raise typed local exceptions so the
+benchmark runner records only the exception class, not provider bodies,
+prompts, or API keys.
 
 The CLI writes the same response-row format consumed by the deterministic
 response importer, so the existing manual benchmark runner can still build the
@@ -115,18 +133,18 @@ Parked hardening: none.
 ## Verification
 
 - `scripts/run_content_ops_claim_evidence_prompt_provider.py` and `tests/test_content_ops_claim_evidence_prompt_provider_cli.py` py-compile check - passed.
-- `python -m pytest tests/test_content_ops_claim_evidence_prompt_provider_cli.py -q` - 6 passed.
-- `python -m pytest tests/test_extracted_content_claim_evidence_benchmark.py tests/test_content_ops_claim_evidence_prompt_packets_cli.py tests/test_content_ops_claim_evidence_prompt_provider_cli.py tests/test_content_ops_claim_evidence_response_import_cli.py -q` - 98 passed.
+- `python -m pytest tests/test_content_ops_claim_evidence_prompt_provider_cli.py -q` - 12 passed.
+- `python -m pytest tests/test_extracted_content_claim_evidence_benchmark.py tests/test_content_ops_claim_evidence_prompt_packets_cli.py tests/test_content_ops_claim_evidence_prompt_provider_cli.py tests/test_content_ops_claim_evidence_response_import_cli.py -q` - 104 passed.
 - `scripts/check_ascii_python.sh` via bash - passed.
-- `scripts/run_extracted_pipeline_checks.sh` via bash - 4708 passed, 15 skipped.
+- `scripts/run_extracted_pipeline_checks.sh` via bash - 4714 passed, 15 skipped.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/extracted_pipeline_checks.yml` | 4 |
-| `plans/PR-Content-Ops-Claim-Evidence-Provider-Adapters.md` | 132 |
-| `scripts/run_content_ops_claim_evidence_prompt_provider.py` | 433 |
+| `plans/PR-Content-Ops-Claim-Evidence-Provider-Adapters.md` | 150 |
+| `scripts/run_content_ops_claim_evidence_prompt_provider.py` | 584 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_content_ops_claim_evidence_prompt_provider_cli.py` | 252 |
-| **Total** | **822** |
+| `tests/test_content_ops_claim_evidence_prompt_provider_cli.py` | 452 |
+| **Total** | **1191** |

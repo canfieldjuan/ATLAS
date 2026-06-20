@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 import sys
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -30,6 +31,33 @@ VALID_ROW_FORMATS = (FORMAT_AUTO, ROW_FORMAT_JSON, ROW_FORMAT_JSONL)
 DEFAULT_API_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_TOKENS = 320
+TOKEN_LIMIT_AUTO = "auto"
+TOKEN_LIMIT_MAX_TOKENS = "max_tokens"
+TOKEN_LIMIT_MAX_COMPLETION_TOKENS = "max_completion_tokens"
+VALID_TOKEN_LIMIT_FIELDS = (
+    TOKEN_LIMIT_AUTO,
+    TOKEN_LIMIT_MAX_TOKENS,
+    TOKEN_LIMIT_MAX_COMPLETION_TOKENS,
+)
+SCHEMA_MODE_AUTO = "auto"
+SCHEMA_MODE_CANONICAL = "canonical"
+SCHEMA_MODE_COMPATIBLE = "compatible"
+VALID_SCHEMA_MODES = (SCHEMA_MODE_AUTO, SCHEMA_MODE_CANONICAL, SCHEMA_MODE_COMPATIBLE)
+ACCEPTABLE_FINISH_REASONS = frozenset({"stop"})
+UNSUPPORTED_STRICT_SCHEMA_KEYS = frozenset(
+    {
+        "format",
+        "maxItems",
+        "maxLength",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minimum",
+        "multipleOf",
+        "pattern",
+        "patternProperties",
+    }
+)
 
 
 class ProviderConfigurationError(RuntimeError):
@@ -90,6 +118,23 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument(
+        "--token-limit-field",
+        choices=VALID_TOKEN_LIMIT_FIELDS,
+        default=TOKEN_LIMIT_AUTO,
+        help="Token limit field to send. Auto uses max_completion_tokens for OpenAI o-series model ids.",
+    )
+    parser.add_argument(
+        "--schema-mode",
+        choices=VALID_SCHEMA_MODES,
+        default=SCHEMA_MODE_AUTO,
+        help="Structured-output schema mode. Auto strips provider-unsupported constraints for Azure or fine-tuned model ids.",
+    )
+    parser.add_argument(
+        "--store-completions",
+        action="store_true",
+        help="Allow providers that support storage to retain completions and attach run metadata.",
+    )
     parser.add_argument("--temperature", type=float, default=0.0)
     return parser
 
@@ -170,19 +215,69 @@ def _typed_rows(
 
 
 def _chat_completions_url(api_base_url: str) -> str:
+    if not isinstance(api_base_url, str) or not api_base_url.strip():
+        raise ProviderConfigurationError()
     base = api_base_url.rstrip("/")
+    parsed = urlparse(base)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ProviderConfigurationError()
     if base.endswith("/chat/completions"):
         return base
     return f"{base}/chat/completions"
 
 
-def _response_format(packet: ClaimEvidencePromptPacket) -> dict[str, object]:
+def _strip_unsupported_schema_constraints(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _strip_unsupported_schema_constraints(item)
+            for key, item in value.items()
+            if key not in UNSUPPORTED_STRICT_SCHEMA_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_unsupported_schema_constraints(item) for item in value]
+    return value
+
+
+def _is_fine_tuned_model(model_id: str) -> bool:
+    normalized = model_id.strip().lower()
+    return normalized.startswith("ft:") or ":ft:" in normalized
+
+
+def _requires_compatible_schema(api_base_url: str, model_id: str) -> bool:
+    return "azure" in api_base_url.lower() or _is_fine_tuned_model(model_id)
+
+
+def _schema_for_provider(
+    packet: ClaimEvidencePromptPacket,
+    *,
+    api_base_url: str,
+    schema_mode: str,
+) -> Mapping[str, object]:
+    if schema_mode == SCHEMA_MODE_COMPATIBLE or (
+        schema_mode == SCHEMA_MODE_AUTO
+        and _requires_compatible_schema(api_base_url, packet.model_id)
+    ):
+        sanitized = _strip_unsupported_schema_constraints(packet.response_schema)
+        return sanitized if isinstance(sanitized, Mapping) else packet.response_schema
+    return packet.response_schema
+
+
+def _response_format(
+    packet: ClaimEvidencePromptPacket,
+    *,
+    api_base_url: str,
+    schema_mode: str,
+) -> dict[str, object]:
     return {
         "type": "json_schema",
         "json_schema": {
             "name": "claim_evidence_response",
             "strict": True,
-            "schema": packet.response_schema,
+            "schema": _schema_for_provider(
+                packet,
+                api_base_url=api_base_url,
+                schema_mode=schema_mode,
+            ),
         },
     }
 
@@ -195,6 +290,8 @@ def _extract_content_json(data: object) -> Mapping[str, object]:
         raise ProviderResponseShapeError()
     first = choices[0]
     if not isinstance(first, Mapping):
+        raise ProviderResponseShapeError()
+    if first.get("finish_reason") not in ACCEPTABLE_FINISH_REASONS:
         raise ProviderResponseShapeError()
     message = first.get("message")
     if not isinstance(message, Mapping):
@@ -211,12 +308,30 @@ def _extract_content_json(data: object) -> Mapping[str, object]:
     return decoded
 
 
+def _uses_max_completion_tokens(model_id: str) -> bool:
+    normalized = model_id.strip().lower()
+    if normalized.startswith(("o1", "o3", "o4")):
+        return True
+    return any(marker in normalized for marker in ("/o1", "/o3", "/o4"))
+
+
+def _token_limit_field(model_id: str, requested_field: str) -> str:
+    if requested_field == TOKEN_LIMIT_AUTO:
+        if _uses_max_completion_tokens(model_id):
+            return TOKEN_LIMIT_MAX_COMPLETION_TOKENS
+        return TOKEN_LIMIT_MAX_TOKENS
+    return requested_field
+
+
 def _build_openai_compatible_provider(
     *,
     api_base_url: str,
     api_key: str,
     timeout_seconds: float,
     max_tokens: int,
+    token_limit_field: str,
+    schema_mode: str,
+    store_completions: bool,
     temperature: float,
     client: httpx.Client | None = None,
 ):
@@ -226,9 +341,14 @@ def _build_openai_compatible_provider(
         raise ProviderConfigurationError()
     if max_tokens <= 0:
         raise ProviderConfigurationError()
+    if token_limit_field not in VALID_TOKEN_LIMIT_FIELDS:
+        raise ProviderConfigurationError()
+    if schema_mode not in VALID_SCHEMA_MODES:
+        raise ProviderConfigurationError()
 
     own_client = client is None
     active_client = client or httpx.Client(timeout=timeout_seconds)
+    endpoint = _chat_completions_url(api_base_url)
 
     def provider(
         packet: ClaimEvidencePromptPacket,
@@ -238,6 +358,7 @@ def _build_openai_compatible_provider(
         metadata = {"run_type": run_type}
         if run_id:
             metadata["run_id"] = run_id
+        limit_field = _token_limit_field(packet.model_id, token_limit_field)
         payload: dict[str, object] = {
             "model": packet.model_id,
             "messages": [
@@ -250,14 +371,20 @@ def _build_openai_compatible_provider(
                 },
                 {"role": "user", "content": packet.prompt},
             ],
-            "response_format": _response_format(packet),
-            "max_tokens": max_tokens,
+            "response_format": _response_format(
+                packet,
+                api_base_url=api_base_url,
+                schema_mode=schema_mode,
+            ),
+            limit_field: max_tokens,
             "temperature": temperature,
-            "metadata": metadata,
+            "store": bool(store_completions),
         }
+        if store_completions:
+            payload["metadata"] = metadata
         try:
             response = active_client.post(
-                _chat_completions_url(api_base_url),
+                endpoint,
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
@@ -296,17 +423,25 @@ def _write_rows(path: Path, content: str) -> str | None:
     return None
 
 
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except OSError:
+        return left.absolute() == right.absolute()
+
+
 def _error_payload(
     errors: Sequence[str],
     *,
     output_path: Path | None = None,
     output_format: str | None = None,
+    response_count: int = 0,
 ) -> dict[str, Any]:
     return {
         "ok": False,
         "output_path": str(output_path) if output_path is not None else "",
         "output_format": output_format or "",
-        "response_count": 0,
+        "response_count": response_count,
         "errors": list(errors),
     }
 
@@ -322,6 +457,9 @@ def run_prompt_packets_with_openai_compatible_provider(
     stability_run_count: int = 0,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    token_limit_field: str = TOKEN_LIMIT_AUTO,
+    schema_mode: str = SCHEMA_MODE_AUTO,
+    store_completions: bool = False,
     temperature: float = 0.0,
     client: httpx.Client | None = None,
 ) -> tuple[int, dict[str, Any]]:
@@ -339,6 +477,12 @@ def run_prompt_packets_with_openai_compatible_provider(
     )
     if response_format_error:
         return 2, _error_payload((response_format_error,), output_path=output_path)
+    if _same_path(output_path, packets_path):
+        return 2, _error_payload(
+            ("output path must differ from packets path",),
+            output_path=output_path,
+            output_format=response_format,
+        )
 
     packets_text, read_error = _read_text(packets_path, "packets")
     if read_error:
@@ -366,6 +510,9 @@ def run_prompt_packets_with_openai_compatible_provider(
             api_key=api_key,
             timeout_seconds=timeout_seconds,
             max_tokens=max_tokens,
+            token_limit_field=token_limit_field,
+            schema_mode=schema_mode,
+            store_completions=store_completions,
             temperature=temperature,
             client=client,
         )
@@ -391,12 +538,13 @@ def run_prompt_packets_with_openai_compatible_provider(
             output_format=response_format,
         )
 
-    write_error = _write_rows(output_path, _render_rows(run.rows, response_format or ""))
+    write_error = _write_rows(output_path, _render_rows(run.rows, response_format))
     if write_error:
         return 2, _error_payload(
             (write_error,),
             output_path=output_path,
             output_format=response_format,
+            response_count=len(run.rows),
         )
 
     return (
@@ -423,6 +571,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         stability_run_count=args.stability_run_count,
         timeout_seconds=args.timeout_seconds,
         max_tokens=args.max_tokens,
+        token_limit_field=args.token_limit_field,
+        schema_mode=args.schema_mode,
+        store_completions=args.store_completions,
         temperature=args.temperature,
     )
     print(json.dumps(payload, sort_keys=True))
