@@ -192,7 +192,7 @@ def test_json_request_preserves_http_error_status_through_real_wrapper(monkeypat
         assert timeout == 30.0
         raise _http_error(request.full_url, 409, {"detail": "already paid"})
 
-    monkeypatch.setattr(proof.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(proof.deflection_http.urllib.request, "urlopen", _urlopen)
 
     result = proof._json_request(
         "POST",
@@ -214,7 +214,7 @@ def test_json_request_redacts_transport_errors_through_real_wrapper(monkeypatch)
             f"https://juancanfield.com/systems/support-ticket-deflection/results/{REQUEST_ID}"
         )
 
-    monkeypatch.setattr(proof.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(proof.deflection_http.urllib.request, "urlopen", _urlopen)
 
     result = proof._json_request(
         "GET",

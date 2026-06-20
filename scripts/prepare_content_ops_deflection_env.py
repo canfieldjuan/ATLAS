@@ -11,29 +11,28 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from _deflection_http import (  # noqa: E402
+    HttpResponse as HttpJsonResponse,
+    json_request as _shared_json_request,
+    open_http_request as _open_http_request,
+)
+
 LOCAL_BASE_URL_HOSTS = frozenset({"localhost", "0.0.0.0", "::1"})
 B2B_PRODUCTS = frozenset({"b2b_retention", "b2b_challenger"})
 B2B_PLAN_ORDER = ("b2b_trial", "b2b_starter", "b2b_growth", "b2b_pro")
 MIN_B2B_PLAN = "b2b_growth"
 BAD_PLAN_STATUSES = frozenset({"past_due", "canceled"})
 ENV_KEYS = ("ATLAS_API_BASE_URL", "ATLAS_B2B_JWT", "ATLAS_ACCOUNT_ID")
-
-
-@dataclass(frozen=True)
-class HttpJsonResponse:
-    status: int | None
-    payload: Any
-    raw_text: str
-    errors: tuple[str, ...] = ()
 
 
 class HandoffError(Exception):
@@ -103,10 +102,6 @@ def _join_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
-def _open_http_request(request: urllib.request.Request, *, timeout: float) -> Any:
-    return urllib.request.urlopen(request, timeout=timeout)
-
-
 def _json_request(
     method: str,
     url: str,
@@ -115,41 +110,17 @@ def _json_request(
     body: Mapping[str, Any] | None = None,
     token: str = "",
 ) -> HttpJsonResponse:
-    encoded_body = None
-    headers = {"Accept": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    if body is not None:
-        encoded_body = json.dumps(body, separators=(",", ":")).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=encoded_body, headers=headers, method=method)
-    try:
-        with _open_http_request(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-            status = response.getcode()
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-        status = exc.code
-    except urllib.error.URLError as exc:
-        return HttpJsonResponse(
-            status=None,
-            payload=None,
-            raw_text="",
-            errors=(f"network error calling {url}: {exc.reason}",),
-        )
-
-    if not raw:
-        return HttpJsonResponse(status=status, payload=None, raw_text=raw)
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return HttpJsonResponse(
-            status=status,
-            payload=None,
-            raw_text=raw,
-            errors=(f"response from {url} was not valid JSON",),
-        )
-    return HttpJsonResponse(status=status, payload=payload, raw_text=raw)
+    return _shared_json_request(
+        method,
+        url,
+        timeout=timeout,
+        body=body,
+        token=token,
+        opener=_open_http_request,
+        redactor=lambda exc: _clean(getattr(exc, "reason", exc)),
+        transport_error_template="network error calling {url}: {error}",
+        invalid_json_template="response from {url} was not valid JSON",
+    )
 
 
 def _login(base_url: str, email: str, password: str, *, timeout: float) -> tuple[str, list[str]]:

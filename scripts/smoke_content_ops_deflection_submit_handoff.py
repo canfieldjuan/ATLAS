@@ -8,11 +8,9 @@ import json
 import math
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 import sys
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -20,6 +18,17 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from _deflection_http import (  # noqa: E402
+    HttpResponse as HttpJsonResponse,
+    json_request as _shared_json_request,
+    json_response_from_request as _shared_json_response_from_request,
+    open_http_request as _open_http_request,
+)
+
 DEFAULT_CSV_FILE = (
     ROOT
     / "docs"
@@ -70,14 +79,6 @@ try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional host dependency
     load_dotenv = None
-
-
-@dataclass(frozen=True)
-class HttpJsonResponse:
-    status: int | None
-    payload: Any
-    raw_text: str
-    errors: tuple[str, ...] = ()
 
 
 def _load_dotenv_files() -> None:
@@ -312,10 +313,6 @@ def _submit_fields(args: argparse.Namespace) -> dict[str, str]:
     return fields
 
 
-def _open_http_request(request: urllib.request.Request, *, timeout: float) -> Any:
-    return urllib.request.urlopen(request, timeout=timeout)
-
-
 def _parse_http_json_response(
     method: str,
     url: str,
@@ -323,32 +320,14 @@ def _parse_http_json_response(
     request: urllib.request.Request,
     timeout: float,
 ) -> HttpJsonResponse:
-    try:
-        with _open_http_request(request, timeout=timeout) as response:
-            status = int(getattr(response, "status", None) or response.getcode())
-            raw = response.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        status = int(exc.code)
-        raw = exc.read().decode("utf-8", errors="replace")
-    except (OSError, TimeoutError, urllib.error.URLError) as exc:
-        return HttpJsonResponse(
-            status=None,
-            payload=None,
-            raw_text="",
-            errors=(f"{method} {url} transport failed: {exc}",),
-        )
-    if not raw.strip():
-        return HttpJsonResponse(status=status, payload=None, raw_text=raw)
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        return HttpJsonResponse(
-            status=status,
-            payload=None,
-            raw_text=raw[:2000],
-            errors=(f"{method} {url} returned invalid JSON: {exc.msg}",),
-        )
-    return HttpJsonResponse(status=status, payload=payload, raw_text=raw[:2000])
+    return _shared_json_response_from_request(
+        method,
+        url,
+        request=request,
+        timeout=timeout,
+        opener=_open_http_request,
+        truncate_text=2000,
+    )
 
 
 def _json_request(
@@ -359,16 +338,15 @@ def _json_request(
     timeout: float,
     body: Mapping[str, Any] | None = None,
 ) -> HttpJsonResponse:
-    encoded_body = None
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {token}",
-    }
-    if body is not None:
-        encoded_body = json.dumps(body, separators=(",", ":")).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=encoded_body, headers=headers, method=method)
-    return _parse_http_json_response(method, url, request=request, timeout=timeout)
+    return _shared_json_request(
+        method,
+        url,
+        token=token,
+        timeout=timeout,
+        body=body,
+        opener=_open_http_request,
+        truncate_text=2000,
+    )
 
 
 def _multipart_escape(value: str) -> str:

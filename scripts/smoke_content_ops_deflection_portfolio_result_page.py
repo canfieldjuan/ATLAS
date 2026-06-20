@@ -9,7 +9,6 @@ import json
 import math
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 import sys
 import urllib.error
@@ -19,6 +18,17 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from _deflection_http import (  # noqa: E402
+    HttpResponse as HttpResult,
+    json_request as _shared_json_request,
+    open_http_request as _open_http_request,
+    read_http_error as _read_http_error,
+)
+
 LOCAL_HOSTS = frozenset({"localhost", "0.0.0.0", "::1"})
 SNAPSHOT_PATH_TEMPLATE = "/api/v1/content-ops/deflection-reports/{request_id}/snapshot"
 ARTIFACT_PATH_TEMPLATE = "/api/v1/content-ops/deflection-reports/{request_id}/artifact"
@@ -50,14 +60,6 @@ try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional host dependency
     load_dotenv = None
-
-
-@dataclass(frozen=True)
-class HttpResult:
-    status: int | None
-    text: str
-    payload: Any = None
-    errors: tuple[str, ...] = ()
 
 
 class UnlockCtaParser(HTMLParser):
@@ -185,16 +187,6 @@ def _join_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
-def _open_http_request(request: urllib.request.Request, *, timeout: float) -> Any:
-    return urllib.request.urlopen(request, timeout=timeout)
-
-
-def _read_http_error(exc: urllib.error.HTTPError) -> str:
-    if not exc.fp:
-        return ""
-    return exc.read().decode("utf-8", errors="replace")
-
-
 def _fetch_text(url: str, *, timeout: float) -> HttpResult:
     request = urllib.request.Request(url, headers={"Accept": "text/html"})
     try:
@@ -209,32 +201,17 @@ def _fetch_text(url: str, *, timeout: float) -> HttpResult:
 
 
 def _fetch_json(url: str, *, token: str, timeout: float) -> HttpResult:
-    request = urllib.request.Request(
+    return _shared_json_request(
+        "GET",
         url,
-        headers={
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
+        token=token,
+        timeout=timeout,
+        opener=_open_http_request,
+        http_error_template="HTTP {status}",
+        transport_error_template="{error}",
+        invalid_json_template="{error}",
+        invalid_json_status=None,
     )
-    try:
-        with _open_http_request(request, timeout=timeout) as response:
-            text = response.read().decode("utf-8", errors="replace")
-            return HttpResult(
-                status=int(response.getcode()),
-                text=text,
-                payload=json.loads(text) if text else None,
-            )
-    except urllib.error.HTTPError as exc:
-        text = _read_http_error(exc)
-        payload = None
-        if text:
-            try:
-                payload = json.loads(text)
-            except json.JSONDecodeError:
-                payload = None
-        return HttpResult(status=int(exc.code), text=text, payload=payload, errors=(f"HTTP {exc.code}",))
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        return HttpResult(status=None, text="", errors=(str(exc),))
 
 
 def _snapshot_errors(snapshot: Any) -> list[str]:

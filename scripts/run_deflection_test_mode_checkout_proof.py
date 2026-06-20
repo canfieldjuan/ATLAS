@@ -14,16 +14,17 @@ from pathlib import Path
 import sys
 import time
 from typing import Any
-import urllib.error
 import urllib.parse
-import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import _deflection_http as deflection_http  # noqa: E402
 import smoke_content_ops_deflection_stripe_paid_unlock as paid_unlock
+
+HttpResult = deflection_http.HttpResponse
 
 AUTHORIZATION_PATH_TEMPLATE = (
     "/api/v1/content-ops/deflection-reports/{request_id}/checkout-authorization"
@@ -58,14 +59,6 @@ try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional host dependency
     load_dotenv = None
-
-
-@dataclass(frozen=True)
-class HttpResult:
-    status: int | None
-    payload: Any = None
-    text: str = ""
-    errors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -198,47 +191,30 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
 
 
 def _open_http_request(request: urllib.request.Request, *, timeout: float) -> Any:
-    return urllib.request.urlopen(request, timeout=timeout)
+    return deflection_http.open_http_request(request, timeout=timeout)
 
 
 def _authorization_header(token: str) -> str:
-    value = _clean(token)
-    if value.lower().startswith("bearer "):
-        return value
-    return f"Bearer {value}"
+    return deflection_http.bearer_header(token)
 
 
-def _read_http_error(exc: urllib.error.HTTPError) -> str:
-    if not exc.fp:
-        return ""
-    return exc.read().decode("utf-8", errors="replace")
+def _read_http_error(exc: deflection_http.urllib.error.HTTPError) -> str:
+    return deflection_http.read_http_error(exc)
 
 
 def _json_request(method: str, url: str, *, token: str, timeout: float) -> HttpResult:
-    request = urllib.request.Request(
+    return deflection_http.json_request(
+        method,
         url,
-        headers={"Accept": "application/json", "Authorization": _authorization_header(token)},
-        method=method,
+        authorization=_authorization_header(token),
+        timeout=timeout,
+        redactor=_redact_text,
+        opener=_open_http_request,
+        http_error_template="HTTP {status}",
+        transport_error_template="{error}",
+        invalid_json_template="{error}",
+        invalid_json_status=None,
     )
-    try:
-        with _open_http_request(request, timeout=timeout) as response:
-            text = response.read().decode("utf-8", errors="replace")
-            return HttpResult(
-                status=int(response.getcode()),
-                text=text,
-                payload=json.loads(text) if text else None,
-            )
-    except urllib.error.HTTPError as exc:
-        text = _read_http_error(exc)
-        payload = None
-        if text:
-            try:
-                payload = json.loads(text)
-            except json.JSONDecodeError:
-                payload = None
-        return HttpResult(status=int(exc.code), payload=payload, text=text, errors=(f"HTTP {exc.code}",))
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        return HttpResult(status=None, errors=(_redact_text(exc),))
 
 
 def _authorization_url(args: argparse.Namespace) -> str:
