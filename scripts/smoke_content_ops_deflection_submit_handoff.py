@@ -90,6 +90,7 @@ _HTTP_ERROR_BODY_REDACTIONS = (
     ),
     (re.compile(r"\b\d{6,}\b"), "[id-redacted]"),
 )
+_HTTP_ERROR_SOURCE_ID_KEYS = frozenset({"source_id", "source_ids"})
 
 try:
     from dotenv import load_dotenv
@@ -314,6 +315,14 @@ def _redact_http_error_body(value: str) -> str:
     return text
 
 
+def _redact_http_error_json_value(path: tuple[str, ...], value: Any) -> Any | None:
+    if not path or path[-1] not in _HTTP_ERROR_SOURCE_ID_KEYS:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return None
+    return "[source-id-redacted]"
+
+
 def _submit_body(args: argparse.Namespace) -> dict[str, Any]:
     body: dict[str, Any] = {
         "blob_url": _clean(args.blob_url),
@@ -351,6 +360,7 @@ def _parse_http_json_response(
         timeout=timeout,
         opener=_open_http_request,
         error_body_redactor=_redact_http_error_body,
+        error_body_json_value_redactor=_redact_http_error_json_value,
         truncate_text=2000,
     )
 
@@ -371,6 +381,7 @@ def _json_request(
         body=body,
         opener=_open_http_request,
         error_body_redactor=_redact_http_error_body,
+        error_body_json_value_redactor=_redact_http_error_json_value,
         truncate_text=2000,
     )
 

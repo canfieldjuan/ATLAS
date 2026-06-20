@@ -1332,6 +1332,40 @@ def test_json_request_redacts_escaped_url_and_source_id_values_without_corruptin
     assert "https://blob.example.com/tickets.csv?[redacted]" in serialized
 
 
+def test_json_request_redacts_opaque_source_id_values_by_key_without_broadening_regex(monkeypatch):
+    raw_body = (
+        b'{"detail":"validation failed",'
+        b'"source_id":"opaque-src-A",'
+        b'"source_ids":["tinyAlpha",321],'
+        b'"trace_id":"opaque-trace-B",'
+        b'"received_count":1500000}'
+    )
+
+    monkeypatch.setattr(
+        smoke,
+        "_open_http_request",
+        _fake_open([(422, raw_body)], []),
+    )
+
+    response = smoke._json_request(
+        "GET",
+        "https://atlas.example.com/probe",
+        token="secret",
+        timeout=1.0,
+    )
+
+    serialized = json.dumps(response.payload, sort_keys=True) + response.raw_text
+    assert response.status == 422
+    assert response.payload["source_id"] == "[source-id-redacted]"
+    assert response.payload["source_ids"] == ["[source-id-redacted]", "[source-id-redacted]"]
+    assert response.payload["trace_id"] == "opaque-trace-B"
+    assert response.payload["received_count"] == 1500000
+    assert "opaque-src-A" not in serialized
+    assert "tinyAlpha" not in serialized
+    assert "321" not in serialized
+    assert "opaque-trace-B" in serialized
+
+
 def test_json_request_preserves_success_request_id(monkeypatch):
     monkeypatch.setattr(
         smoke,
