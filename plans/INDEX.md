@@ -1,6 +1,6 @@
 # Plan archive index
 
-1148 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1149 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -209,6 +209,7 @@
 - [PR-Content-Ops-Cache-Policy-UI](archive/PR-Content-Ops-Cache-Policy-UI.md) - lane: content-ops/cost-surfacing | phase: Product polish
 - [PR-Content-Ops-Cache-Savings-Rollup](archive/PR-Content-Ops-Cache-Savings-Rollup.md) - lane: content-ops/cost-surfacing | phase: Production hardening
 - [PR-Content-Ops-Cache-Savings-UI](archive/PR-Content-Ops-Cache-Savings-UI.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Calibration-Admin-Live-App-Smoke](archive/PR-Content-Ops-Calibration-Admin-Live-App-Smoke.md) - lane: content-ops/calibration-live-verification | phase: Functional validation
 - [PR-Content-Ops-Calibration-Admin-Surface](archive/PR-Content-Ops-Calibration-Admin-Surface.md) - lane: content-ops/review-contract | phase: Functional validation
 - [PR-Content-Ops-Calibration-Anchors-Verify](archive/PR-Content-Ops-Calibration-Anchors-Verify.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Calibration-Library](archive/PR-Content-Ops-Calibration-Library.md) - lane: content-ops/review-contract | phase: Vertical slice
