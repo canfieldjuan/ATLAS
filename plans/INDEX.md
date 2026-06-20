@@ -1,6 +1,6 @@
 # Plan archive index
 
-1135 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1140 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -16,6 +16,7 @@
 - [PR-Archive-On-Merge-Ritual](archive/PR-Archive-On-Merge-Ritual.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Archive-Remaining-Merged-Plans](archive/PR-Archive-Remaining-Merged-Plans.md) - lane: dev-workflow/plan-archive-housekeeping | phase: Workflow/process
 - [PR-Atlas-Brain-Test-CI-Enrollment-Audit](archive/PR-Atlas-Brain-Test-CI-Enrollment-Audit.md) - lane: content-ops/faq-deflection | phase: Workflow/process
+- [PR-Atlas-Churn-UI-ESLint-10](archive/PR-Atlas-Churn-UI-ESLint-10.md) - lane: frontend/tooling | phase: Production hardening
 - [PR-Atlas-Local-PR-Body-Preflight](archive/PR-Atlas-Local-PR-Body-Preflight.md) - lane: atlas-workflow | phase: Workflow/process.
 - [PR-Atlas-Local-Review-CI](archive/PR-Atlas-Local-Review-CI.md) - lane: atlas-workflow | phase: Workflow/process.
 - [PR-Atlas-Slice-Phase-Audit](archive/PR-Atlas-Slice-Phase-Audit.md) - lane: atlas-workflow | phase: Workflow/process.
@@ -24,6 +25,7 @@
 - [PR-Atlas-Support-Ticket-Provider-Execute-Proof](archive/PR-Atlas-Support-Ticket-Provider-Execute-Proof.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Atlas-Support-Ticket-Provider-Warning-Route-Proof](archive/PR-Atlas-Support-Ticket-Provider-Warning-Route-Proof.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Atlas-Thin-Slice-Hardening-Contract](archive/PR-Atlas-Thin-Slice-Hardening-Contract.md) - lane: atlas-workflow
+- [PR-Atlas-UI-ESLint-10](archive/PR-Atlas-UI-ESLint-10.md) - lane: frontend/atlas-ui-tooling | phase: Production hardening
 - [PR-Atlas-UI-Lint-B2B-Reports](archive/PR-Atlas-UI-Lint-B2B-Reports.md)
 - [PR-Atlas-Workflow-Phase-Contract](archive/PR-Atlas-Workflow-Phase-Contract.md) - lane: atlas-workflow | phase: Workflow/process.
 - [PR-Audit-Agents-Auditor-Principles](archive/PR-Audit-Agents-Auditor-Principles.md)
@@ -782,6 +784,7 @@
 - [PR-Deflection-Synonym-Clustering-Recall](archive/PR-Deflection-Synonym-Clustering-Recall.md) - lane: deflection/clustering-raw-data | phase: Production hardening
 - [PR-Deflection-Teaser-Locked-Dedupe](archive/PR-Deflection-Teaser-Locked-Dedupe.md) - lane: content-ops/faq-deflection-teaser | phase: Product polish
 - [PR-Deflection-Teaser-Top-Answer](archive/PR-Deflection-Teaser-Top-Answer.md) - lane: content-ops/faq-deflection-teaser | phase: Product polish
+- [PR-Deflection-Test-Mode-Checkout-Proof-Helper](archive/PR-Deflection-Test-Mode-Checkout-Proof-Helper.md) - lane: content-ops/report-delivery-live-funnel | phase: Functional validation
 - [PR-Deflection-To-Content-Upsell](archive/PR-Deflection-To-Content-Upsell.md) - lane: content-ops/deflection-to-content-upsell | phase: Workflow/process
 - [PR-Deflection-Uncap-Paid-Report](archive/PR-Deflection-Uncap-Paid-Report.md) - lane: content-ops/faq-deflection | phase: Production hardening
 - [PR-Deflection-Zendesk-API-Live-Smoke](archive/PR-Deflection-Zendesk-API-Live-Smoke.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
@@ -944,6 +947,7 @@
 - [PR-Generated-Asset-Repair-Telemetry](archive/PR-Generated-Asset-Repair-Telemetry.md)
 - [PR-Gitignore-Secret-Env-Hardening](archive/PR-Gitignore-Secret-Env-Hardening.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Gitleaks-Baseline-Rotation-Escape-Hatch](archive/PR-Gitleaks-Baseline-Rotation-Escape-Hatch.md) - lane: security/workflow | phase: Production hardening
+- [PR-Graphiti-Python-3-14-Base-Image](archive/PR-Graphiti-Python-3-14-Base-Image.md) - lane: graphiti/runtime-image | phase: Production hardening
 - [PR-Hardening-Drain](archive/PR-Hardening-Drain.md) - lane: governance/hardening-drain | phase: Workflow/process
 - [PR-Intel-UI-CI-Enrollment-Close-Hole](archive/PR-Intel-UI-CI-Enrollment-Close-Hole.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
 - [PR-Invoice-Email-Signature](archive/PR-Invoice-Email-Signature.md) - lane: invoicing/cover-email-signature | phase: Product polish
@@ -1132,6 +1136,7 @@
 - [PR-Track-Preflight-Dotenv-Fix](archive/PR-Track-Preflight-Dotenv-Fix.md) - lane: content-ops/deflection-tracking | phase: workflow/process
 - [PR-TypeScript-Major-Batch](archive/PR-TypeScript-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-UI-Test-Enrollment-Audit](archive/PR-UI-Test-Enrollment-Audit.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
+- [PR-Video-Stream-Processor-Python-3-13-Base-Image](archive/PR-Video-Stream-Processor-Python-3-13-Base-Image.md) - lane: video-processing/stream-worker-runtime | phase: Production hardening
 - [PR-Workflow-Action-Pin-OIDC-Audit](archive/PR-Workflow-Action-Pin-OIDC-Audit.md) - lane: security/workflow | phase: Production hardening
 - [PR-Workflow-Service-Image-Digests](archive/PR-Workflow-Service-Image-Digests.md) - lane: security/workflow | phase: Production hardening
 - [PR-Workflow-Setup-Python-Pin](archive/PR-Workflow-Setup-Python-Pin.md) - lane: security/workflow | phase: Production hardening

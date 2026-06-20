@@ -2,7 +2,7 @@ export type AtlasState = 'idle' | 'listening' | 'processing' | 'speaking' | 'rea
 
 export interface AtlasMessage {
   type: string;
-  payload?: any;
+  payload?: unknown;
 }
 
 export interface AudioAnalysis {
