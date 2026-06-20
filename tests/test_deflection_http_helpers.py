@@ -138,6 +138,48 @@ def test_json_request_structural_redaction_preserves_numeric_json_fields(monkeyp
     assert result.errors == ("HTTP 422",)
 
 
+def test_json_request_keyed_error_redaction_preserves_unrelated_opaque_strings(monkeypatch) -> None:
+    def _urlopen(request, *, timeout):
+        assert timeout == 7
+        raise _http_error(
+            request.full_url,
+            422,
+            {
+                "source_id": "opaque-source-A",
+                "trace_id": "opaque-trace-B",
+                "source_ids": ["shortA", 12345],
+                "received_count": 1500000,
+            },
+        )
+
+    def _redact_keyed_value(path: tuple[str, ...], value: Any) -> Any | None:
+        if path and path[-1] in {"source_id", "source_ids"} and isinstance(value, (str, int)):
+            return "[source-id-redacted]"
+        return None
+
+    monkeypatch.setattr(http.urllib.request, "urlopen", _urlopen)
+
+    result = http.json_request(
+        "POST",
+        "https://atlas.example.com/proof",
+        timeout=7,
+        http_error_template="HTTP {status}",
+        error_body_redactor=lambda raw: raw,
+        error_body_json_value_redactor=_redact_keyed_value,
+    )
+
+    assert result.status == 422
+    assert result.payload == {
+        "source_id": "[source-id-redacted]",
+        "trace_id": "opaque-trace-B",
+        "source_ids": ["[source-id-redacted]", "[source-id-redacted]"],
+        "received_count": 1500000,
+    }
+    assert "opaque-source-A" not in result.raw_text
+    assert "shortA" not in result.raw_text
+    assert "opaque-trace-B" in result.raw_text
+
+
 def test_json_request_redacts_transport_error(monkeypatch) -> None:
     def _urlopen(_request, *, timeout):
         assert timeout == 3

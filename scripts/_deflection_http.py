@@ -13,6 +13,7 @@ import urllib.request
 
 Redactor = Callable[[Any], str]
 TextRedactor = Callable[[str], str]
+JsonValueRedactor = Callable[[tuple[str, ...], Any], Any | None]
 Opener = Callable[[urllib.request.Request], Any]
 _KEEP_STATUS = object()
 
@@ -58,22 +59,47 @@ def _encoded_body(
     return json.dumps(body, separators=(",", ":")).encode("utf-8")
 
 
-def _redact_json_string_values(value: Any, redactor: TextRedactor) -> Any:
+def _redact_json_string_values(
+    value: Any,
+    redactor: TextRedactor,
+    json_value_redactor: JsonValueRedactor | None = None,
+    path: tuple[str, ...] = (),
+) -> Any:
+    if json_value_redactor is not None:
+        replacement = json_value_redactor(path, value)
+        if replacement is not None:
+            return replacement
     if isinstance(value, str):
         return redactor(value)
     if isinstance(value, list):
-        return [_redact_json_string_values(item, redactor) for item in value]
+        return [
+            _redact_json_string_values(item, redactor, json_value_redactor, path)
+            for item in value
+        ]
     if isinstance(value, dict):
-        return {key: _redact_json_string_values(item, redactor) for key, item in value.items()}
+        return {
+            key: _redact_json_string_values(
+                item,
+                redactor,
+                json_value_redactor,
+                path + (str(key),),
+            )
+            for key, item in value.items()
+        }
     return value
 
 
-def _redact_error_body(raw: str, redactor: TextRedactor) -> str:
+def _redact_error_body(
+    raw: str,
+    redactor: TextRedactor,
+    json_value_redactor: JsonValueRedactor | None = None,
+) -> str:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return redactor(raw)
-    return json.dumps(_redact_json_string_values(payload, redactor), separators=(",", ":"))
+    redacted = _redact_json_string_values(payload, redactor, json_value_redactor)
+    return json.dumps(redacted, separators=(",", ":"))
 
 
 def json_request(
@@ -93,6 +119,7 @@ def json_request(
     invalid_json_template: str = "{method} {url} returned invalid JSON: {error}",
     invalid_json_status: int | None | object = _KEEP_STATUS,
     error_body_redactor: TextRedactor | None = None,
+    error_body_json_value_redactor: JsonValueRedactor | None = None,
     truncate_text: int | None = None,
 ) -> HttpResponse:
     encoded_body = _encoded_body(body, data)
@@ -118,6 +145,7 @@ def json_request(
         invalid_json_template=invalid_json_template,
         invalid_json_status=invalid_json_status,
         error_body_redactor=error_body_redactor,
+        error_body_json_value_redactor=error_body_json_value_redactor,
         truncate_text=truncate_text,
     )
 
@@ -135,6 +163,7 @@ def json_response_from_request(
     invalid_json_template: str = "{method} {url} returned invalid JSON: {error}",
     invalid_json_status: int | None | object = _KEEP_STATUS,
     error_body_redactor: TextRedactor | None = None,
+    error_body_json_value_redactor: JsonValueRedactor | None = None,
     truncate_text: int | None = None,
 ) -> HttpResponse:
     http_errors: tuple[str, ...] = ()
@@ -157,7 +186,7 @@ def json_response_from_request(
         )
 
     if error_body_redactor is not None and status >= 400:
-        raw = _redact_error_body(raw, error_body_redactor)
+        raw = _redact_error_body(raw, error_body_redactor, error_body_json_value_redactor)
     stored_raw = raw if truncate_text is None else raw[:truncate_text]
     if not raw.strip():
         return HttpResponse(
