@@ -729,7 +729,9 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
                     "ticket_count": 2,
                     "answer": (
                         "Reset _jane.doe@acme.com_ after confirming account 4829103 "
-                        "for customer: Jane Doe at 123 Maple Street Apt 4B."
+                        "for customer: Jane Doe at 123 Maple Street Apt 4B. "
+                        "The customer is Jane Smith ticket was closed. "
+                        "The customer id is 123e4567-e89b-12d3-a456-426614174000."
                     ),
                     "steps": [
                         "Remove XXXXX before publishing.",
@@ -737,6 +739,8 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
                         "Check opaque migration token CUST-9XQ7-ABCD.",
                         "Requester name is Jane Doe.",
                         "Mail a label to 123 Maple Street Apt 4B.",
+                        "customer id is 12345678.",
+                        "case CVE-2021-44228 should remain diagnostic context.",
                     ],
                     "source_ids": ["4829103", "777777"],
                     "evidence_quotes": [
@@ -822,11 +826,16 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
         "777777",
         "999999",
         "jane doe",
+        "jane smith",
         "123 maple",
         "cust-9xq7-abcd",
+        "123e4567-e89b-12d3-a456-426614174000",
+        "customer id is 12345678",
         "xxxxx",
     ):
         assert raw_fragment not in encoded
+    assert "cve-2021-44228" in encoded
+    assert "ticket was closed" in encoded
     teaser_answer = record.snapshot["teaser"]["full_answer"]
     assert "[redacted-email]" in teaser_answer["answer"]
     assert "[redacted-identifier]" in teaser_answer["answer"]
@@ -834,8 +843,10 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
         "Remove [redacted-text] before publishing.",
         "Escalate [redacted-identifier] if the reset still fails.",
         "Check opaque migration token [redacted-identifier].",
-        "Requester name is [redacted-name]",
+        "Requester name is [redacted-name].",
         "Mail a label to [redacted-address].",
+        "customer id is [redacted-identifier].",
+        "case CVE-2021-44228 should remain diagnostic context.",
     ]
     artifact_sources = record.artifact["faq_result"]["items"][0]["source_ids"]
     assert artifact_sources == ["4829103", "777777"]
