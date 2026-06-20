@@ -35,7 +35,19 @@ SCHEMA_VERSION = "deflection_signal_spike.v1"
 _READINESS_READY = "ready"
 _READINESS_PARTIAL = "partial"
 _READINESS_INSUFFICIENT = "insufficient_data"
+_MIN_CSAT_AVERAGE_COUNT = 3
 
+_SOURCE_ID_KEYS = frozenset({
+    "sourceid",
+    "id",
+    "ticketid",
+    "ticketnumber",
+    "caseid",
+    "casenumber",
+    "conversationid",
+    "conversationnumber",
+    "requestid",
+})
 _RESOLUTION_KEYS = frozenset({
     "resolution",
     "resolutiontext",
@@ -83,6 +95,22 @@ _STRUCTURED_CONTEXT_KEYS = frozenset({
     "productname",
     "subproduct",
     "subproductname",
+    "issue",
+    "issuetype",
+    "subissue",
+    "subissuetype",
+    "category",
+    "paincategory",
+    "intent",
+    "topic",
+})
+_OWNER_PRODUCT_KEYS = frozenset({
+    "product",
+    "productname",
+    "subproduct",
+    "subproductname",
+})
+_OWNER_PROBLEM_KEYS = frozenset({
     "issue",
     "issuetype",
     "subissue",
@@ -155,11 +183,16 @@ def probe_signal_availability(
     normalized_rows = _normalized_rows(package)
     included_count = int(package.metadata.get("included_row_count") or 0)
     raw_rows = [row for row in rows if isinstance(row, Mapping)]
+    included_raw_rows = _included_raw_rows(
+        raw_rows,
+        normalized_rows,
+        max_rows=max_rows,
+    )
 
     resolution = _resolution_signal(package, included_count)
     status = _status_signal(package, included_count)
     csat = _csat_signal(package, included_count)
-    cost = _cost_signal(raw_rows, included_count)
+    cost = _cost_signal(included_raw_rows, included_count)
     owner_lane = _owner_lane_signal(normalized_rows, included_count)
     snippet_safety = _snippet_safety_signal(normalized_rows, included_count)
     readiness = {
@@ -297,6 +330,8 @@ def _source_rows(
 def _looks_like_zendesk_thread(material: Any) -> bool:
     entries: Sequence[Any]
     if isinstance(material, Mapping):
+        if _looks_like_zendesk_thread_entry(material):
+            return True
         tickets = material.get("tickets")
         if not isinstance(tickets, Sequence) or isinstance(tickets, (str, bytes, bytearray)):
             return False
@@ -306,15 +341,19 @@ def _looks_like_zendesk_thread(material: Any) -> bool:
     else:
         return False
     first = next((entry for entry in entries if isinstance(entry, Mapping)), None)
-    if not isinstance(first, Mapping):
+    return _looks_like_zendesk_thread_entry(first)
+
+
+def _looks_like_zendesk_thread_entry(entry: Any) -> bool:
+    if not isinstance(entry, Mapping):
         return False
-    ticket = first.get("ticket") if isinstance(first.get("ticket"), Mapping) else first
-    comments = first.get("comments")
+    ticket = entry.get("ticket") if isinstance(entry.get("ticket"), Mapping) else entry
+    comments = entry.get("comments")
     has_comments = isinstance(comments, Mapping) or (
         isinstance(comments, Sequence)
         and not isinstance(comments, (str, bytes, bytearray))
     )
-    has_ticket_wrapper = isinstance(first.get("ticket"), Mapping)
+    has_ticket_wrapper = isinstance(entry.get("ticket"), Mapping)
     return isinstance(ticket, Mapping) and (
         has_ticket_wrapper or (has_comments and "requester_id" in ticket)
     )
@@ -378,7 +417,11 @@ def _csat_signal(package: Any, included_count: int) -> dict[str, Any]:
         "numeric_score_count": score_count,
         "textual_rating_count": textual_count,
         "coverage": _ratio(present_count, included_count),
-        "numeric_average": package.metadata.get("csat_score_average"),
+        "numeric_average": (
+            package.metadata.get("csat_score_average")
+            if score_count >= _MIN_CSAT_AVERAGE_COUNT
+            else None
+        ),
     }
 
 
@@ -408,13 +451,14 @@ def _cost_signal(rows: Sequence[Mapping[str, Any]], included_count: int) -> dict
 
 def _owner_lane_signal(rows: Sequence[Mapping[str, Any]], included_count: int) -> dict[str, Any]:
     structured_rows = _rows_with_matching_fields(rows, _STRUCTURED_CONTEXT_KEYS)
+    complete_context_rows = sum(1 for row in rows if _has_complete_owner_context(row))
     cluster_rows = sum(1 for row in rows if _clean(row.get("support_ticket_cluster")))
     if included_count == 0:
         readiness = _READINESS_INSUFFICIENT
         reason = "no included rows to classify"
-    elif structured_rows == included_count:
+    elif complete_context_rows == included_count:
         readiness = _READINESS_READY
-        reason = "structured product/issue/category fields cover all rows"
+        reason = "product plus issue/category context covers all rows"
     elif structured_rows:
         readiness = _READINESS_PARTIAL
         reason = "deterministic context exists, but Unknown fallback is required"
@@ -428,10 +472,23 @@ def _owner_lane_signal(rows: Sequence[Mapping[str, Any]], included_count: int) -
         "readiness": readiness,
         "reason": reason,
         "rows_with_structured_context": structured_rows,
+        "rows_with_complete_context": complete_context_rows,
         "rows_with_cluster_label": cluster_rows,
         "structured_context_coverage": _ratio(structured_rows, included_count),
-        "unknown_fallback_required": structured_rows < included_count,
+        "complete_context_coverage": _ratio(complete_context_rows, included_count),
+        "unknown_fallback_required": complete_context_rows < included_count,
     }
+
+
+def _has_complete_owner_context(row: Mapping[str, Any]) -> bool:
+    keys_with_values = {
+        _key(key)
+        for key, value in row.items()
+        if _clean(value)
+    }
+    return bool(keys_with_values & _OWNER_PRODUCT_KEYS) and bool(
+        keys_with_values & _OWNER_PROBLEM_KEYS
+    )
 
 
 def _snippet_safety_signal(rows: Sequence[Mapping[str, Any]], included_count: int) -> dict[str, Any]:
@@ -472,6 +529,34 @@ def _rows_with_matching_fields(
         if any(_key(key) in wanted_keys and _clean(value) for key, value in row.items()):
             count += 1
     return count
+
+
+def _included_raw_rows(
+    raw_rows: Sequence[Mapping[str, Any]],
+    included_rows: Sequence[Mapping[str, Any]],
+    *,
+    max_rows: int,
+) -> list[Mapping[str, Any]]:
+    included_counts = Counter(
+        _clean(row.get("source_id"))
+        for row in included_rows
+        if _clean(row.get("source_id"))
+    )
+    included: list[Mapping[str, Any]] = []
+    for index, row in enumerate(raw_rows[:max_rows], start=1):
+        source_id = _row_source_id(row, fallback=f"ticket-{index}")
+        if included_counts[source_id] <= 0:
+            continue
+        included.append(row)
+        included_counts[source_id] -= 1
+    return included
+
+
+def _row_source_id(row: Mapping[str, Any], *, fallback: str) -> str:
+    for key, value in row.items():
+        if _key(key) in _SOURCE_ID_KEYS and _clean(value):
+            return _clean(value)
+    return fallback
 
 
 def _coverage_readiness(count: int, total: int) -> str:

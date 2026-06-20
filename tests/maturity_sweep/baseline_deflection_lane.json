@@ -100,6 +100,14 @@
     },
     "score": 14
   },
+  "scripts/probe_deflection_signal_spike.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
   "scripts/run_deflection_full_report_qa_live_runner.py": {
     "counts": {
       "NO_RAISES_TESTS": 1,

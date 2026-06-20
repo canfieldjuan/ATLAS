@@ -38,6 +38,10 @@ Slice phase: Functional validation
    plus output redaction/no-raw-source guarantees.
 4. Enroll the probe test in extracted checks and commit a summary-only run
    against the existing sanitized Zendesk-shaped product-proof corpus.
+5. Fix review-discovered overclaim cases before S1 consumes the spike: cost
+   fields count only included rows, single-ticket Zendesk exports auto-detect,
+   singleton CSAT averages are suppressed, and owner-lane/fix-type readiness
+   requires product plus problem context.
 
 ### Review Contract
 
@@ -69,6 +73,8 @@ Slice phase: Functional validation
 - `plans/PR-Deflection-Signal-Spike.md`
 - `scripts/probe_deflection_signal_spike.py`
 - `scripts/run_extracted_pipeline_checks.sh`
+- `tests/maturity_sweep/baseline_deflection_lane.json`
+- `tests/maturity_sweep/baseline_scripts.json`
 - `tests/test_probe_deflection_signal_spike.py`
 
 ## Mechanism
@@ -86,10 +92,10 @@ and normalized rows:
 - support-resolution evidence count and readiness;
 - status/CSAT coverage and CSAT basis (`numeric`, `textual`, `mixed`, or
   `absent`);
-- source cost-field availability versus the current benchmark-only report cost
-  basis;
-- structured context coverage for product/issue/category fields and explicit
-  `Unknown` fallback pressure;
+- source cost-field availability on the included/truncated row set, versus the
+  current benchmark-only report cost basis;
+- structured context coverage, complete product-plus-problem context coverage,
+  and explicit `Unknown` fallback pressure;
 - scrub/projection safety counts for customer text/resolution text, with a
   hard statement that S1 still needs fail-closed allowlist projection for
   snippet-bearing fields.
@@ -98,6 +104,9 @@ The CLI writes this aggregate JSON to stdout or `--output`. It never writes raw
 rows, source IDs, snippets, emails, URLs, or scrubbed text samples. The
 `--require-s1-ready` mode is a fail-closed reviewer/operator guard for cases
 where the caller expects every S1 dependency to be at least partial/ready.
+Numeric CSAT averages are omitted until at least three numeric scores are
+included, so a one-ticket export cannot reveal a per-ticket satisfaction value
+inside a summary-only artifact.
 
 The committed
 `docs/extraction/validation/fixtures/deflection_signal_spike_20260620/summary.json`
@@ -115,6 +124,10 @@ fail-closed allowlist plus shared detector contract lands.
   are synthetic or summary-only outputs from already-sanitized fixtures.
 - No attempt to infer owner lane or fix type with an LLM. This slice measures
   deterministic field availability and reports `Unknown` fallback pressure.
+- Maturity-sweep baseline updates are narrow and intentional: they accept the
+  reviewed-benign heuristic score for the new probe script only. The
+  `_intable()` swallowed-except remains a boolean predicate, not an error
+  boundary, and parse failures still fail closed via `SystemExit`.
 - Snippet safety remains `partial` by design: without labeled PII recall data,
   the spike can prove the hardened scrub is invoked and can count redactions,
   but it cannot prove open-set recall. That root privacy boundary remains S1's
@@ -132,14 +145,15 @@ fail-closed allowlist plus shared detector contract lands.
   summary-only run against the existing sanitized Zendesk-shaped product-proof
   corpus, not a new raw/customer export.
 
-Parked hardening: none.
+Parked hardening: none. The maturity-sweep baseline entries are accepted
+heuristic inventory for this new operator probe, not parked product debt.
 
 ## Verification
 
 - Command: `python -m py_compile` on `scripts/probe_deflection_signal_spike.py`
   and `tests/test_probe_deflection_signal_spike.py` -- passed.
 - Command: `python -m pytest` on `tests/test_probe_deflection_signal_spike.py`
-  with `-q` -- 4 passed.
+  with `-q` -- 9 passed.
 - Command: `python` on `scripts/audit_extracted_pipeline_ci_enrollment.py` --
   passed; 187 matching tests enrolled.
 - Command: `python` on `scripts/probe_deflection_signal_spike.py` with
@@ -148,20 +162,35 @@ Parked hardening: none.
   `docs/extraction/validation/fixtures/deflection_signal_spike_20260620/summary.json`,
   and `--require-s1-ready` -- passed; regenerated the committed summary-only
   spike artifact.
+- Command: `python scripts/maturity_sweep.py scripts --tests-root tests
+  --baseline tests/maturity_sweep/baseline_scripts.json --update-baseline` --
+  passed; then baseline diff was narrowed to the new probe entry only.
+- Command: `python scripts/maturity_sweep.py scripts --tests-root tests
+  --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8
+  --sensitive-glob 'scripts/**'` -- passed; ratchet gate reported no new
+  brittleness above baseline.
+- Command: Python invocation of `scripts/maturity_sweep_file_lane.py` over the CI
+  deflection-file lane with `--tests-root tests --baseline
+  tests/maturity_sweep/baseline_deflection_lane.json --update-baseline` --
+  passed; then baseline diff was narrowed to the new probe entry only.
+- Command: Python invocation of `scripts/maturity_sweep_file_lane.py` over the CI
+  deflection-file lane with `--tests-root tests --baseline
+  tests/maturity_sweep/baseline_deflection_lane.json --min-score 8` plus the
+  workflow sensitive globs -- passed; ratchet gate reported no new brittleness
+  above baseline.
 - Command: `scripts/run_extracted_pipeline_checks.sh` through bash -- passed;
-  reasoning core 295 passed, extracted content 4722 passed / 15 skipped.
-- Command: `scripts/push_pr.sh` with `tmp/pr_body_deflection_signal_spike.md`
-  and force-with-lease branch push args -- passed; local PR review passed in the
-  managed pre-push hook.
+  reasoning core 295 passed, extracted content 4727 passed / 15 skipped.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/extracted_pipeline_checks.yml` | 4 |
-| `docs/extraction/validation/fixtures/deflection_signal_spike_20260620/summary.json` | 100 |
-| `plans/PR-Deflection-Signal-Spike.md` | 167 |
-| `scripts/probe_deflection_signal_spike.py` | 561 |
+| `docs/extraction/validation/fixtures/deflection_signal_spike_20260620/summary.json` | 102 |
+| `plans/PR-Deflection-Signal-Spike.md` | 196 |
+| `scripts/probe_deflection_signal_spike.py` | 646 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_probe_deflection_signal_spike.py` | 166 |
-| **Total** | **999** |
+| `tests/maturity_sweep/baseline_deflection_lane.json` | 8 |
+| `tests/maturity_sweep/baseline_scripts.json` | 8 |
+| `tests/test_probe_deflection_signal_spike.py` | 305 |
+| **Total** | **1270** |

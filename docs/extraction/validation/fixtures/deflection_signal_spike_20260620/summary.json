@@ -60,9 +60,11 @@
       "textual_rating_count": 29
     },
     "owner_lane_fix_type": {
+      "complete_context_coverage": 0.0,
       "readiness": "partial",
       "reason": "cluster labels exist, but owner lane/fix type require Unknown fallback",
       "rows_with_cluster_label": 50,
+      "rows_with_complete_context": 0,
       "rows_with_structured_context": 0,
       "structured_context_coverage": 0.0,
       "unknown_fallback_required": true
