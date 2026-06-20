@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import argparse
+from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 from pathlib import Path
@@ -40,6 +43,7 @@ from extracted_content_pipeline.ticket_faq_markdown import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "build_content_ops_deflection_report.py"
+RETENTION_SCRIPT = ROOT / "scripts" / "purge_content_ops_deflection_reports.py"
 SAAS_DEMO = ROOT / "extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv"
 SPEC = importlib.util.spec_from_file_location(
     "build_content_ops_deflection_report",
@@ -49,6 +53,14 @@ assert SPEC is not None
 assert SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+RETENTION_SPEC = importlib.util.spec_from_file_location(
+    "purge_content_ops_deflection_reports",
+    RETENTION_SCRIPT,
+)
+assert RETENTION_SPEC is not None
+assert RETENTION_SPEC.loader is not None
+RETENTION_MODULE = importlib.util.module_from_spec(RETENTION_SPEC)
+RETENTION_SPEC.loader.exec_module(RETENTION_MODULE)
 
 
 def _report_access_snapshot(question: str, *, generated: int = 1) -> dict[str, object]:
@@ -2686,6 +2698,297 @@ async def test_postgres_list_reports_uses_account_scope_optional_paid_filter_and
     assert pool.calls[2][1] == ("acct-1",)
     assert "ORDER BY created_at DESC" in pool.calls[2][0]
     assert "LIMIT $" not in pool.calls[2][0]
+
+
+@pytest.mark.asyncio
+async def test_in_memory_report_retention_deletes_only_old_rows_with_limit() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+    await _save_retention_report(store, "acct-1", "oldest")
+    await _save_retention_report(store, "acct-1", "old")
+    await _save_retention_report(store, "acct-1", "fresh")
+    await _save_retention_report(store, "acct-2", "other-old")
+    _set_report_created_at(store, "acct-1", "oldest", now - timedelta(days=70))
+    _set_report_created_at(store, "acct-1", "old", now - timedelta(days=45))
+    _set_report_created_at(store, "acct-1", "fresh", now - timedelta(days=2))
+    _set_report_created_at(store, "acct-2", "other-old", now - timedelta(days=50))
+    cutoff = now - timedelta(days=30)
+
+    assert await store.count_reports_older_than(cutoff=cutoff) == 3
+    assert await store.delete_reports_older_than(cutoff=cutoff, limit=2) == 2
+
+    assert await store.get_artifact_record(account_id="acct-1", request_id="oldest") is None
+    assert await store.get_artifact_record(account_id="acct-2", request_id="other-old") is None
+    assert await store.get_artifact_record(account_id="acct-1", request_id="old") is not None
+    assert await store.get_artifact_record(account_id="acct-1", request_id="fresh") is not None
+    assert await store.count_reports_older_than(cutoff=cutoff) == 1
+    assert await store.delete_reports_older_than(cutoff=cutoff) == 1
+    assert await store.get_artifact_record(account_id="acct-1", request_id="old") is None
+    assert await store.get_artifact_record(account_id="acct-1", request_id="fresh") is not None
+
+
+@pytest.mark.asyncio
+async def test_report_retention_store_rejects_unsafe_boundaries() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    aware_cutoff = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await store.count_reports_older_than(cutoff=datetime(2026, 6, 1))
+    with pytest.raises(ValueError, match="limit must be greater than 0"):
+        await store.delete_reports_older_than(cutoff=aware_cutoff, limit=0)
+    with pytest.raises(ValueError, match="limit must be greater than 0"):
+        await store.delete_reports_older_than(cutoff=aware_cutoff, limit=False)
+
+
+@pytest.mark.asyncio
+async def test_postgres_report_retention_uses_cutoff_and_limited_delete() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
+            self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
+            self.execute_result = "DELETE 2"
+
+        async def fetchval(self, query: str, *args: object) -> int:
+            self.fetchval_calls.append((query, args))
+            return 3
+
+        async def execute(self, query: str, *args: object) -> str:
+            self.execute_calls.append((query, args))
+            return self.execute_result
+
+    pool = _Pool()
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+    cutoff = datetime(2026, 5, 1, tzinfo=timezone.utc)
+
+    assert await store.count_reports_older_than(cutoff=cutoff) == 3
+    assert pool.fetchval_calls[0][1] == (cutoff,)
+    assert "created_at < $1" in pool.fetchval_calls[0][0]
+    assert await store.delete_reports_older_than(cutoff=cutoff, limit=25) == 2
+    limited_query, limited_args = pool.execute_calls[0]
+    assert limited_args == (cutoff, 25)
+    assert "WITH doomed AS" in limited_query
+    assert "LIMIT $2" in limited_query
+    pool.execute_result = "DELETE 4"
+    assert await store.delete_reports_older_than(cutoff=cutoff) == 4
+    unbounded_query, unbounded_args = pool.execute_calls[1]
+    assert unbounded_args == (cutoff,)
+    assert "DELETE FROM content_ops_deflection_reports" in unbounded_query
+    assert "LIMIT" not in unbounded_query
+
+
+@pytest.mark.asyncio
+async def test_postgres_report_retention_fails_closed_on_unparseable_delete_count() -> None:
+    class _Pool:
+        async def execute(self, _query: str, *_args: object) -> str:
+            return "DELETE unknown"
+
+    store = PostgresDeflectionReportArtifactStore(pool=_Pool())
+    cutoff = datetime(2026, 5, 1, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="could not parse database command count"):
+        await store.delete_reports_older_than(cutoff=cutoff)
+
+
+@pytest.mark.asyncio
+async def test_retention_runner_dry_run_counts_without_deleting_or_exposing_payload() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+    await _save_retention_report(store, "acct-1", "old", delivery_email="buyer@example.com")
+    await _save_retention_report(store, "acct-1", "fresh")
+    _set_report_created_at(store, "acct-1", "old", now - timedelta(days=40))
+    _set_report_created_at(store, "acct-1", "fresh", now - timedelta(days=2))
+
+    code, payload = await RETENTION_MODULE.run_deflection_report_retention_purge(
+        _retention_args(retention_days=30),
+        object(),
+        store=store,
+        now=now,
+    )
+
+    assert code == 0
+    assert payload == {
+        "ok": True,
+        "dry_run": True,
+        "retention_days": 30,
+        "cutoff": "2026-05-21T12:00:00+00:00",
+        "candidate_count": 1,
+        "deleted_count": 0,
+        "limit": None,
+    }
+    assert "buyer@example.com" not in json.dumps(payload)
+    assert await store.get_artifact_record(account_id="acct-1", request_id="old") is not None
+
+
+@pytest.mark.asyncio
+async def test_retention_runner_requires_confirm_delete_and_valid_bounds() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+    await _save_retention_report(store, "acct-1", "oldest")
+    await _save_retention_report(store, "acct-1", "old")
+    _set_report_created_at(store, "acct-1", "oldest", now - timedelta(days=80))
+    _set_report_created_at(store, "acct-1", "old", now - timedelta(days=40))
+
+    code, payload = await RETENTION_MODULE.run_deflection_report_retention_purge(
+        _retention_args(retention_days=30, limit=1, confirm_delete=True),
+        object(),
+        store=store,
+        now=now,
+    )
+
+    assert code == 0
+    assert payload["dry_run"] is False
+    assert payload["candidate_count"] == 2
+    assert payload["deleted_count"] == 1
+    assert payload["limit"] == 1
+    assert await store.get_artifact_record(account_id="acct-1", request_id="oldest") is None
+    assert await store.get_artifact_record(account_id="acct-1", request_id="old") is not None
+    with pytest.raises(SystemExit, match="--retention-days must be greater than 0"):
+        RETENTION_MODULE._validate_args(_retention_args(retention_days=0))
+    with pytest.raises(SystemExit, match="--limit must be greater than 0"):
+        RETENTION_MODULE._validate_args(_retention_args(retention_days=30, limit=0))
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await RETENTION_MODULE.run_deflection_report_retention_purge(
+            _retention_args(retention_days=30),
+            object(),
+            store=store,
+            now=datetime(2026, 6, 20, 12, 0),
+        )
+
+
+@pytest.mark.asyncio
+async def test_retention_runner_rejects_invalid_args_before_opening_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_create_pool(_database_url: str) -> object:
+        raise AssertionError("pool must not open before argument validation")
+
+    monkeypatch.setattr(RETENTION_MODULE, "_create_pool", fail_create_pool)
+
+    with pytest.raises(SystemExit, match="--retention-days must be greater than 0"):
+        await RETENTION_MODULE._main([
+            "--database-url",
+            "postgres://example",
+            "--retention-days",
+            "0",
+            "--confirm-delete",
+        ])
+
+
+def test_retention_runner_resolves_database_url_from_non_argv_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("ATLAS_TEST_RETENTION_DSN", "postgres://env-secret")
+    dsn_file = tmp_path / "dsn.txt"
+    dsn_file.write_text("postgres://file-secret\n")
+
+    assert (
+        RETENTION_MODULE._resolve_database_url(
+            _retention_args(database_url=None, database_url_env="ATLAS_TEST_RETENTION_DSN")
+        )
+        == "postgres://env-secret"
+    )
+    assert (
+        RETENTION_MODULE._resolve_database_url(
+            _retention_args(database_url=None, database_url_file=dsn_file)
+        )
+        == "postgres://file-secret"
+    )
+    with pytest.raises(SystemExit, match="provide exactly one database URL source"):
+        RETENTION_MODULE._validate_args(
+            _retention_args(
+                database_url="postgres://argv-secret",
+                database_url_env="ATLAS_TEST_RETENTION_DSN",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_retention_runner_preflights_output_before_opening_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    blocked_parent = tmp_path / "not-a-directory"
+    blocked_parent.write_text("already a file")
+
+    async def fail_create_pool(_database_url: str) -> object:
+        raise AssertionError("pool must not open before output preflight")
+
+    monkeypatch.setattr(RETENTION_MODULE, "_create_pool", fail_create_pool)
+    monkeypatch.setenv("ATLAS_TEST_RETENTION_DSN", "postgres://env-secret")
+
+    with pytest.raises(SystemExit, match="could not prepare --output path"):
+        await RETENTION_MODULE._main(
+            [
+                "--database-url-env",
+                "ATLAS_TEST_RETENTION_DSN",
+                "--retention-days",
+                "30",
+                "--confirm-delete",
+                "--output",
+                str(blocked_parent / "summary.json"),
+            ]
+        )
+
+
+def test_retention_runner_output_failure_after_purge_falls_back_to_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail_emit(_payload: Mapping[str, object], *, output: Path | None = None) -> None:
+        raise OSError("late write failure")
+
+    monkeypatch.setattr(RETENTION_MODULE, "_emit_payload", fail_emit)
+
+    RETENTION_MODULE._emit_payload_after_purge(
+        {"ok": True, "deleted_count": 1},
+        output=Path("summary.json"),
+    )
+
+    fallback = json.loads(capsys.readouterr().out)
+    assert fallback["ok"] is True
+    assert fallback["deleted_count"] == 1
+    assert fallback["output_error"] == "failed to write --output: OSError"
+
+
+async def _save_retention_report(
+    store: InMemoryDeflectionReportArtifactStore,
+    account_id: str,
+    request_id: str,
+    *,
+    delivery_email: str | None = None,
+) -> None:
+    await store.save_report(
+        account_id=account_id,
+        request_id=request_id,
+        snapshot=_report_access_snapshot(f"Question {request_id}"),
+        artifact={"markdown": f"# Report {request_id}"},
+        delivery_email=delivery_email,
+    )
+
+
+def _set_report_created_at(
+    store: InMemoryDeflectionReportArtifactStore,
+    account_id: str,
+    request_id: str,
+    created_at: datetime,
+) -> None:
+    store._created_at_by_key[(account_id, request_id)] = created_at
+
+
+def _retention_args(**overrides: object) -> argparse.Namespace:
+    values: dict[str, object] = {
+        "database_url": "postgres://example",
+        "database_url_env": None,
+        "database_url_file": None,
+        "retention_days": 30,
+        "limit": None,
+        "confirm_delete": False,
+        "output": None,
+        "json": True,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
 
 
 def test_deflection_snapshot_content_opportunities_are_unpaid_safe() -> None:

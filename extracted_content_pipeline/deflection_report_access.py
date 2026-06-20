@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from .faq_deflection_report import DEFLECTION_REPORT_SCHEMA_VERSION
@@ -103,12 +104,24 @@ class DeflectionReportArtifactStore(Protocol):
     ) -> bool:
         """Relock a paid report. Returns False when no matching row exists."""
 
+    async def count_reports_older_than(self, *, cutoff: datetime) -> int:
+        """Count report rows older than the retention cutoff."""
+
+    async def delete_reports_older_than(
+        self,
+        *,
+        cutoff: datetime,
+        limit: int | None = None,
+    ) -> int:
+        """Delete report rows older than the retention cutoff."""
+
 
 class InMemoryDeflectionReportArtifactStore:
     """Test store with the same tenant/request semantics as the Postgres store."""
 
     def __init__(self) -> None:
         self._rows: dict[tuple[str, str], DeflectionReportAccessRecord] = {}
+        self._created_at_by_key: dict[tuple[str, str], datetime] = {}
 
     async def save_report(
         self,
@@ -119,8 +132,12 @@ class InMemoryDeflectionReportArtifactStore:
         artifact: Mapping[str, Any],
         delivery_email: str | None = None,
     ) -> None:
-        key = (_required_text(account_id, "account_id"), _required_text(request_id, "request_id"))
+        key = (
+            _required_text(account_id, "account_id"),
+            _required_text(request_id, "request_id"),
+        )
         existing = self._rows.get(key)
+        self._created_at_by_key.setdefault(key, datetime.now(timezone.utc))
         cleaned_delivery_email = _clean(delivery_email)
         self._rows[key] = DeflectionReportAccessRecord(
             account_id=key[0],
@@ -165,6 +182,9 @@ class InMemoryDeflectionReportArtifactStore:
                     snapshot=dict(row.snapshot),
                     paid=row.paid,
                     delivery_email=row.delivery_email,
+                    created_at=self._created_at_by_key.get(
+                        (row.account_id, row.request_id)
+                    ),
                 )
             )
         return tuple(out)
@@ -209,6 +229,37 @@ class InMemoryDeflectionReportArtifactStore:
             delivery_email=row.delivery_email,
         )
         return True
+
+    async def count_reports_older_than(self, *, cutoff: datetime) -> int:
+        resolved_cutoff = _required_cutoff(cutoff)
+        fallback = datetime.now(timezone.utc)
+        return sum(
+            1
+            for key in self._rows
+            if self._created_at_by_key.get(key, fallback) < resolved_cutoff
+        )
+
+    async def delete_reports_older_than(
+        self,
+        *,
+        cutoff: datetime,
+        limit: int | None = None,
+    ) -> int:
+        resolved_cutoff = _required_cutoff(cutoff)
+        resolved_limit = _optional_positive_limit(limit)
+        fallback = datetime.now(timezone.utc)
+        keys = [
+            key
+            for key in self._rows
+            if self._created_at_by_key.get(key, fallback) < resolved_cutoff
+        ]
+        keys.sort(key=lambda key: self._created_at_by_key.get(key, fallback))
+        if resolved_limit is not None:
+            keys = keys[:resolved_limit]
+        for key in keys:
+            self._rows.pop(key, None)
+            self._created_at_by_key.pop(key, None)
+        return len(keys)
 
     async def mark_unpaid(
         self,
@@ -370,6 +421,53 @@ class PostgresDeflectionReportArtifactStore:
         )
         return parse_command_tag(result)
 
+    async def count_reports_older_than(self, *, cutoff: datetime) -> int:
+        count = await self.pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_reports
+            WHERE created_at < $1
+            """,
+            _required_cutoff(cutoff),
+        )
+        return int(count or 0)
+
+    async def delete_reports_older_than(
+        self,
+        *,
+        cutoff: datetime,
+        limit: int | None = None,
+    ) -> int:
+        resolved_cutoff = _required_cutoff(cutoff)
+        resolved_limit = _optional_positive_limit(limit)
+        if resolved_limit is None:
+            result = await self.pool.execute(
+                """
+                DELETE FROM content_ops_deflection_reports
+                WHERE created_at < $1
+                """,
+                resolved_cutoff,
+            )
+        else:
+            result = await self.pool.execute(
+                """
+                WITH doomed AS (
+                    SELECT account_id, request_id
+                    FROM content_ops_deflection_reports
+                    WHERE created_at < $1
+                    ORDER BY created_at ASC
+                    LIMIT $2
+                )
+                DELETE FROM content_ops_deflection_reports reports
+                USING doomed
+                WHERE reports.account_id = doomed.account_id
+                  AND reports.request_id = doomed.request_id
+                """,
+                resolved_cutoff,
+                resolved_limit,
+            )
+        return _parse_command_count(result)
+
     async def mark_unpaid(
         self,
         *,
@@ -490,6 +588,39 @@ def _bounded_limit(value: Any) -> int:
     except (TypeError, ValueError):
         parsed = 25
     return max(1, min(parsed, 100))
+
+
+def _optional_positive_limit(value: Any) -> int | None:
+    if value is None:
+        return None
+    parsed = _parse_int(value)
+    if parsed is None or parsed < 1:
+        raise ValueError("limit must be greater than 0")
+    return parsed
+
+
+def _required_cutoff(value: Any) -> datetime:
+    if not isinstance(value, datetime):
+        raise ValueError("cutoff must be a datetime")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("cutoff must be timezone-aware")
+    return value
+
+
+def _parse_command_count(result: Any) -> int:
+    if isinstance(result, bool):
+        raise ValueError("database command count must not be boolean")
+    if isinstance(result, int):
+        if result < 0:
+            raise ValueError("database command count must not be negative")
+        return result
+    if not isinstance(result, str):
+        raise ValueError("database command tag must be a string or integer")
+    text = result.strip()
+    _command, separator, count_text = text.rpartition(" ")
+    if not separator or not count_text.isdecimal():
+        raise ValueError(f"could not parse database command count from {result!r}")
+    return int(count_text)
 
 
 def _optional_int(value: Any) -> int | None:

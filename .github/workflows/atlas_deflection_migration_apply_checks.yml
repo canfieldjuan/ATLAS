@@ -12,6 +12,7 @@ on:
       - "atlas_brain/storage/migrations/332_content_ops_deflection_report_deliveries.sql"
       - "atlas_brain/storage/migrations/336_content_ops_deflection_paid_reconciliation.sql"
       - "atlas_brain/storage/migrations/337_content_ops_deflection_reconciliation_null_session.sql"
+      - "atlas_brain/storage/migrations/339_content_ops_deflection_reports_retention_index.sql"
   push:
     branches:
       - main
@@ -22,6 +23,7 @@ on:
       - "atlas_brain/storage/migrations/332_content_ops_deflection_report_deliveries.sql"
       - "atlas_brain/storage/migrations/336_content_ops_deflection_paid_reconciliation.sql"
       - "atlas_brain/storage/migrations/337_content_ops_deflection_reconciliation_null_session.sql"
+      - "atlas_brain/storage/migrations/339_content_ops_deflection_reports_retention_index.sql"
 
 jobs:
   atlas-deflection-migration-apply-checks:
