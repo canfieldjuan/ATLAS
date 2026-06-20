@@ -242,8 +242,9 @@ export default function SubscriptionModal({
       if (saveRequestIdRef.current !== requestId) return
       setError(err instanceof Error ? err.message : 'Failed to save subscription')
     } finally {
-      if (saveRequestIdRef.current !== requestId) return
-      setSaving(false)
+      if (saveRequestIdRef.current === requestId) {
+        setSaving(false)
+      }
     }
   }
 
