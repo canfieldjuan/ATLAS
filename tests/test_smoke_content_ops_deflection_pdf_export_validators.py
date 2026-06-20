@@ -406,6 +406,45 @@ def test_pdf_export_validator_keeps_pdf_row_cap_observations_enabled() -> None:
     assert "surface.pdf.displayed_rows.question_details" in failed
 
 
+def test_pdf_export_validator_does_not_treat_body_copy_as_section_end() -> None:
+    text = """
+    Support Ticket Deflection Report
+
+    Support Tax Confirmation
+    This report found 8 question-level repeat tickets across 2 ranked questions.
+    At the benchmark, that repeated-question work sizes to about $108.
+    Publishable answers drafted from proven resolutions: 1
+    Questions still needing an approved resolution: 1
+    Ticket sources represented: 8
+
+    Ranked Question Opportunities
+    1 | How do I export attribution reports? | 0 | $0 | 0
+    2 | How do I invite teammates? | 0 | $0 | 0
+
+    Question Details and Evidence
+    How do I export attribution reports?
+    Ticket backing: 1 source tickets; complete source details are in the
+    complete evidence export.
+    How do I invite teammates?
+    Complete Evidence export details stay available in the downloadable JSON,
+    but this sentence is body copy, not a section heading.
+    Ticket backing: 1 source tickets; complete source details are in the
+    complete evidence export.
+    Complete Evidence
+    """
+
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=_report_model(),
+        evidence_export=_evidence_export(),
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=text,
+    )
+
+    assert scorecard["ok"] is True
+    failed = _failed_ids(scorecard)
+    assert "surface.pdf.displayed_rows.question_details" not in failed
+
+
 def test_pdf_export_validator_cli_fails_mismatched_export_totals(tmp_path: Path) -> None:
     report_model = tmp_path / "report_model.json"
     export = tmp_path / "evidence_export.json"

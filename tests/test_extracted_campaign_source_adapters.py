@@ -701,6 +701,220 @@ def test_source_rows_do_not_admit_private_note_aliases_as_customer_text(
     assert "missing_source_text" in [warning.code for warning in loaded.warnings]
 
 
+@pytest.mark.parametrize(
+    ("field", "text"),
+    (
+        ("actionbody", "Customer cannot download the invoice PDF."),
+        ("Action Body", "Customer cannot reset the account password."),
+        ("Ticket Description", "The customer cannot export the weekly report."),
+    ),
+)
+def test_source_rows_admit_observed_export_body_aliases(
+    field: str,
+    text: str,
+) -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "observed-1",
+        field: text,
+    }], default_fields={
+        "company_name": "Acme Logistics",
+        "vendor_name": "Atlas",
+        "contact_email": "ops@example.com",
+    })
+
+    assert loaded.warnings == ()
+    assert len(loaded.opportunities) == 1
+    assert loaded.opportunities[0]["evidence"] == [{
+        "text": text,
+        "source_id": "observed-1",
+        "source_type": "support_ticket",
+    }]
+
+
+@pytest.mark.parametrize(
+    "privacy_field",
+    (
+        {"is_private": "1.0"},
+        {"is_private": True},
+        {"is_internal": "yes"},
+        {"public": "0.0"},
+        {"public": 0},
+        {"public": 0.0},
+        {"is_public": False},
+    ),
+)
+def test_source_rows_skip_observed_body_alias_when_row_is_private(
+    privacy_field: dict[str, object],
+) -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "observed-private-1",
+        "actionbody": "Do not publish this internal workaround.",
+        **privacy_field,
+    }], default_fields={
+        "company_name": "Acme Logistics",
+        "vendor_name": "Atlas",
+        "contact_email": "ops@example.com",
+    })
+
+    assert loaded.opportunities == ()
+    assert [warning.as_dict() for warning in loaded.warnings] == [{
+        "code": "private_source_text",
+        "row_index": 1,
+        "field": "text",
+        "message": "Skipped source row because it is marked private/internal.",
+    }]
+
+
+@pytest.mark.parametrize("field", ("internal", "private"))
+def test_source_rows_keep_observed_body_alias_with_benign_private_named_column(
+    field: str,
+) -> None:
+    text = "Customer cannot download the invoice PDF."
+
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "observed-public-1",
+        "actionbody": text,
+        field: "1",
+    }], default_fields={
+        "company_name": "Acme Logistics",
+        "vendor_name": "Atlas",
+        "contact_email": "ops@example.com",
+    })
+
+    assert [warning.code for warning in loaded.warnings] == []
+    assert len(loaded.opportunities) == 1
+    assert loaded.opportunities[0]["evidence"][0]["text"] == text
+
+
+def test_source_rows_do_not_admit_machine_json_payload_as_customer_text() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": '{"event":"ticket_created","id":123}',
+    }])
+
+    assert loaded.opportunities == ()
+    warnings = [warning.as_dict() for warning in loaded.warnings]
+    assert warnings == [{
+        "code": "machine_source_payload_text",
+        "row_index": 1,
+        "field": "text",
+        "message": (
+            "Skipped source row because the mapped text field contains a "
+            "machine JSON payload, not customer wording."
+        ),
+    }]
+
+
+def test_source_rows_keep_human_text_that_mentions_json_payload() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": 'The API returned {"event":"ticket_created"} after export.',
+    }])
+
+    assert len(loaded.opportunities) == 1
+    assert "machine_source_payload_text" not in [
+        warning.code for warning in loaded.warnings
+    ]
+    assert '{"event":"ticket_created"}' in loaded.opportunities[0]["evidence"][0]["text"]
+
+
+def test_source_rows_keep_json_object_with_customer_message_value() -> None:
+    message = '{"message":"I cannot export the weekly report from billing."}'
+
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": message,
+    }])
+
+    assert len(loaded.opportunities) == 1
+    assert "machine_source_payload_text" not in [
+        warning.code for warning in loaded.warnings
+    ]
+    assert (
+        loaded.opportunities[0]["evidence"][0]["text"]
+        == "I cannot export the weekly report from billing."
+    )
+
+
+def test_source_rows_keep_short_json_customer_message_value() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": '{"message":"Cannot login"}',
+    }])
+
+    assert len(loaded.opportunities) == 1
+    assert "machine_source_payload_text" not in [
+        warning.code for warning in loaded.warnings
+    ]
+    assert loaded.opportunities[0]["evidence"][0]["text"] == "Cannot login"
+
+
+def test_source_rows_reject_verbose_machine_json_metadata() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": '{"event":"ticket created from zendesk webhook"}',
+    }])
+
+    assert loaded.opportunities == ()
+    assert [warning.code for warning in loaded.warnings] == [
+        "machine_source_payload_text",
+    ]
+
+
+def test_source_rows_continue_past_machine_json_alias_to_human_text() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": '{"event":"ticket_created"}',
+        "description": "Customer cannot export the weekly report.",
+    }])
+
+    assert len(loaded.opportunities) == 1
+    assert "machine_source_payload_text" not in [
+        warning.code for warning in loaded.warnings
+    ]
+    assert (
+        loaded.opportunities[0]["evidence"][0]["text"]
+        == "Customer cannot export the weekly report."
+    )
+
+
+def test_source_rows_inspect_structured_machine_json_before_stringifying() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": {"event": "ticket_created", "id": 123},
+    }])
+
+    assert loaded.opportunities == ()
+    assert [warning.code for warning in loaded.warnings] == [
+        "machine_source_payload_text",
+    ]
+
+
+def test_source_rows_reject_structured_machine_json_under_message_key() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": {"message": {"event": "ticket_created", "id": 123}},
+    }])
+
+    assert loaded.opportunities == ()
+    assert [warning.code for warning in loaded.warnings] == [
+        "machine_source_payload_text",
+    ]
+
+
+def test_source_rows_keep_structured_customer_json_message_value() -> None:
+    loaded = source_rows_to_campaign_opportunities([{
+        "ticket_id": "zd-1",
+        "message": {"message": "Refund please"},
+    }])
+
+    assert len(loaded.opportunities) == 1
+    assert "machine_source_payload_text" not in [
+        warning.code for warning in loaded.warnings
+    ]
+    assert loaded.opportunities[0]["evidence"][0]["text"] == "Refund please"
+
+
 @pytest.mark.parametrize("encoding", ("utf-16-le", "utf-16-be"))
 def test_load_source_rows_infers_bomless_utf16_after_utf8_failure(
     tmp_path: Path,
@@ -1677,6 +1891,115 @@ def test_load_source_campaign_opportunities_from_jsonl(tmp_path: Path) -> None:
         "complaint-1",
     ]
     assert loaded.opportunities[1]["evidence"][0]["source_type"] == "complaint"
+
+
+def test_load_source_rows_from_jsonl_skips_malformed_line_with_warning(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        "\n".join([
+            json.dumps({
+                "id": "ticket-1",
+                "company": "Acme",
+                "vendor": "Zendesk",
+                "message": "The export keeps failing.",
+            }),
+            "",
+            '{"id": "broken", "message": ',
+            json.dumps({
+                "id": "ticket-2",
+                "company": "Beta",
+                "vendor": "HubSpot",
+                "message": "The renewal quote is wrong.",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="jsonl",
+    )
+
+    assert [row["id"] for row in rows] == ["ticket-1", "ticket-2"]
+    assert [warning.as_dict() for warning in warnings] == [{
+        "code": "malformed_jsonl_line",
+        "message": (
+            "Skipped JSONL source row because it is not valid JSON "
+            "(Expecting value at column 28)."
+        ),
+        "row_index": 3,
+        "field": "jsonl",
+    }]
+    assert "broken" not in warnings[0].message
+
+    loaded = source_rows_to_campaign_opportunities(rows)
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "ticket-1",
+        "ticket-2",
+    ]
+    assert "__atlas_jsonl_source_line" not in loaded.opportunities[0]
+    assert [
+        warning.row_index
+        for warning in loaded.warnings
+        if warning.code == "missing_contact_email"
+    ] == [1, 4]
+
+
+def test_load_source_rows_from_jsonl_does_not_drop_malformed_line_warning(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        "\n".join([
+            json.dumps({
+                "id": "ticket-1",
+                "company": "Acme",
+                "vendor": "Zendesk",
+                "message": "The export keeps failing.",
+            }),
+            '{"id": "broken", "message": ',
+        ]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Malformed JSONL source row at line 2"):
+        load_source_rows_from_file(path, file_format="jsonl")
+
+
+def test_load_source_rows_from_valid_jsonl_stays_warning_free(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        "\n".join([
+            "",
+            json.dumps({
+                "id": "ticket-1",
+                "company": "Acme",
+                "vendor": "Zendesk",
+                "message": "The export keeps failing.",
+            }),
+            "   ",
+            json.dumps({
+                "id": "ticket-2",
+                "company": "Beta",
+                "vendor": "HubSpot",
+                "message": "The renewal quote is wrong.",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="jsonl",
+    )
+
+    assert [row["id"] for row in rows] == ["ticket-1", "ticket-2"]
+    assert warnings == ()
 
 
 def test_load_source_campaign_opportunities_from_csv(tmp_path: Path) -> None:

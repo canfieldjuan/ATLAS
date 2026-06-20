@@ -44,6 +44,121 @@ def test_zendesk_product_proof_corpus_records_full_csv_admission() -> None:
         assert case["raw_source_row_count"] == 50
         assert case["usable_source_ratio"] == 1.0
         assert case["coverage_warnings"] == []
+    assert summary["breakage_matrix"]["case_count"] == 6
+    assert summary["breakage_matrix"]["blocking_case_count"] == 0
+    assert summary["breakage_matrix"]["known_gap_count"] == 0
+
+
+def test_breakage_matrix_scores_fail_closed_warning_and_known_gap() -> None:
+    cases = {case["name"]: case for case in MOD.evaluate_breakage_matrix()}
+
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "observed_outcome"
+    ] == "REJECT"
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "admission_status"
+    ] == "REJECT"
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "admission_decision_reason"
+    ] == "no_usable_source_rows"
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "admission_decision_location"
+    ] == "source_row_csv"
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "decision_matched"
+    ] is True
+    assert cases["unknown_body_like_column_rejects_zero_usable"][
+        "populated_unmapped_fields"
+    ] == ["Conversation Text"]
+
+    assert cases["private_note_only_rejects_zero_usable"]["observed_outcome"] == (
+        "REJECT"
+    )
+    assert cases["private_note_only_rejects_zero_usable"][
+        "ignored_private_fields"
+    ] == ["Internal Notes"]
+    assert cases["private_note_only_rejects_zero_usable"][
+        "admission_decision_reason"
+    ] == "no_usable_source_rows"
+    assert cases["private_note_only_rejects_zero_usable"][
+        "admission_decision_location"
+    ] == "source_row_csv"
+
+    assert cases["status_timestamp_only_rejects_zero_usable"][
+        "observed_outcome"
+    ] == "REJECT"
+    assert cases["status_timestamp_only_rejects_zero_usable"][
+        "populated_unmapped_fields"
+    ] == ["Status", "First Response", "Last Response"]
+    assert cases["status_timestamp_only_rejects_zero_usable"][
+        "admission_decision_reason"
+    ] == "no_usable_source_rows"
+    assert cases["status_timestamp_only_rejects_zero_usable"][
+        "admission_decision_location"
+    ] == "source_row_csv"
+
+    partial = cases["partial_blank_rows_warns_without_rejecting"]
+    assert partial["observed_outcome"] == "ACCEPT_WITH_WARNING"
+    assert partial["coverage_warnings"] == [{
+        "code": "partial_source_row_coverage",
+        "location": "source_row_csv",
+        "raw_source_row_count": 2,
+        "usable_source_row_count": 1,
+        "skipped_source_row_count": 1,
+        "usable_source_ratio": 0.5,
+    }]
+
+    assert cases["header_only_csv_has_no_policy_decision"]["observed_outcome"] == (
+        "NO_POLICY_DECISION"
+    )
+    json_payload = cases["json_blob_message_rejects_zero_usable"]
+    assert json_payload["case_status"] == "ok"
+    assert json_payload["known_gap"] is False
+    assert json_payload["observed_outcome"] == "REJECT"
+    assert json_payload["admission_status"] == "REJECT"
+    assert json_payload["admission_decision_reason"] == "no_usable_source_rows"
+    assert json_payload["admission_decision_location"] == "source_row_csv"
+
+
+def test_breakage_matrix_expected_guard_mismatch_blocks() -> None:
+    case = MOD.CsvBreakageCase(
+        name="broken_expectation",
+        description="A mismatch should fail the evidence runner.",
+        fieldnames=("Ticket ID", "Message"),
+        rows=({"Ticket ID": "T-1", "Message": "Customer cannot export reports."},),
+        expected_outcome="REJECT",
+    )
+
+    result = MOD.evaluate_breakage_case(case)
+
+    assert result["observed_outcome"] == "ACCEPT_CLEAN"
+    assert result["case_status"] == "failed"
+    assert MOD._breakage_blocking_codes([result]) == [
+        "broken_expectation:unexpected_breakage_outcome"
+    ]
+
+
+def test_breakage_matrix_reject_reason_mismatch_blocks() -> None:
+    case = MOD.CsvBreakageCase(
+        name="wrong_reject_reason",
+        description="Reject cases must assert the exact reason and location.",
+        fieldnames=("Ticket ID", "Conversation Text"),
+        rows=({"Ticket ID": "T-1", "Conversation Text": "Cannot export reports."},),
+        expected_outcome="REJECT",
+        expected_decision_reason="wrong_reason",
+        expected_decision_location="source_row_csv",
+    )
+
+    result = MOD.evaluate_breakage_case(case)
+
+    assert result["observed_outcome"] == "REJECT"
+    assert result["admission_decision_reason"] == "no_usable_source_rows"
+    assert result["admission_decision_location"] == "source_row_csv"
+    assert result["decision_matched"] is False
+    assert result["case_status"] == "failed"
+    assert MOD._breakage_blocking_codes([result]) == [
+        "wrong_reject_reason:unexpected_breakage_outcome"
+    ]
 
 
 def test_public_comments_projection_ignores_private_note_column() -> None:
@@ -259,3 +374,6 @@ def test_main_writes_summary_and_doc(tmp_path: Path) -> None:
     assert summary["observed_min_usable_source_ratio"] == 1.0
     proof = doc.read_text(encoding="utf-8")
     assert "does not choose a low non-zero reject threshold" in proof
+    assert "## Parser Breakage Matrix" in proof
+    assert "json_blob_message_rejects_zero_usable" in proof
+    assert "Known fail-open gaps: `0`" in proof

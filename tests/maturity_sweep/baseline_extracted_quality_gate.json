@@ -1,0 +1,66 @@
+{
+  "extracted_quality_gate/blog_pack.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 3
+  },
+  "extracted_quality_gate/campaign_pack.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 6
+  },
+  "extracted_quality_gate/evidence_pack.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "extracted_quality_gate/landing_page_pack.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_quality_gate/landing_page_section_contract.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_quality_gate/product_claim.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
+  "extracted_quality_gate/report_pack.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_quality_gate/sales_brief_pack.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "extracted_quality_gate/types.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "extracted_quality_gate/witness_pack.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  }
+}

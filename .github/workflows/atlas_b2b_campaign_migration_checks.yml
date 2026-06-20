@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
         env:
           POSTGRES_USER: atlas
           POSTGRES_PASSWORD: atlas
@@ -44,10 +44,10 @@ jobs:
       ATLAS_MIGRATION_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/atlas_migration_tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: "pip"

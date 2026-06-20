@@ -15,12 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
@@ -60,5 +60,8 @@ jobs:
       # in CI rather than only in local dev.
       - name: PR-review tooling unit tests
         run: |
-          python -m pip install --quiet pytest pytest-asyncio
-          python -m pytest tests/test_local_pr_review.py tests/test_audit_ai_reconciliation.py tests/test_audit_review_rules_triggered.py tests/test_summarize_review_misses.py tests/test_check_ai_reconciliation_live.py tests/test_pre_push_audit_workflow.py tests/test_check_review_body_r14.py tests/test_push_pr_wrapper.py tests/test_audit_pr_body.py tests/test_check_deflection_full_report_proof_bundle.py -q
+          python -m pip install --quiet pytest pytest-asyncio pyyaml
+          python -m pytest tests/test_local_pr_review.py tests/test_audit_ai_reconciliation.py tests/test_audit_review_rules_triggered.py tests/test_summarize_review_misses.py tests/test_check_ai_reconciliation_live.py tests/test_pre_push_audit_workflow.py tests/test_check_review_body_r14.py tests/test_push_pr_wrapper.py tests/test_audit_pr_body.py tests/test_check_deflection_full_report_proof_bundle.py tests/test_check_gitleaks_baseline_rotation.py tests/test_security_guardrails_workflow.py tests/test_audit_workflow_security_posture.py tests/test_claude_workflow_security.py tests/test_fix_mode_hook.py -q
+
+      - name: Workflow security posture audit
+        run: python scripts/audit_workflow_security_posture.py .github/workflows

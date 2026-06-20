@@ -1,0 +1,83 @@
+{
+  "atlas_brain/agents/entity_tracker.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 8
+  },
+  "atlas_brain/agents/graphs/atlas.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 6,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 32
+  },
+  "atlas_brain/agents/graphs/email_query.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/agents/graphs/home.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "atlas_brain/agents/graphs/presence.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/agents/graphs/receptionist.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/agents/graphs/security.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/agents/graphs/state.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/agents/graphs/workflow_state.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 11
+  },
+  "atlas_brain/agents/interface.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 4
+    },
+    "score": 20
+  },
+  "atlas_brain/agents/memory.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/agents/tools.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 12
+  }
+}

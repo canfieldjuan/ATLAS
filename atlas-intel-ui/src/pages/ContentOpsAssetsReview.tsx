@@ -304,36 +304,43 @@ export default function ContentOpsAssetsReview() {
   }, [asset, params])
 
   useEffect(() => {
-    void load(false)
+    const timeout = window.setTimeout(() => {
+      void load(false)
+    }, 0)
+    return () => window.clearTimeout(timeout)
   }, [load])
 
   useEffect(() => {
     const id = detailRow && asset === 'faq_markdown' ? assetId(detailRow) : ''
-    if (!id) {
-      setMacroPublishHistory({ kind: 'idle' })
-      return
-    }
-
     let active = true
-    setMacroPublishHistory({ kind: 'loading', draftId: id })
-    fetchGeneratedFaqMacroPublishAttempts(id, { limit: 5 })
-      .then((response) => {
-        if (active) {
-          setMacroPublishHistory({ kind: 'loaded', draftId: id, response })
-        }
-      })
-      .catch((err) => {
-        if (active) {
-          setMacroPublishHistory({
-            kind: 'error',
-            draftId: id,
-            message: err instanceof Error ? err.message : String(err),
-          })
-        }
-      })
+    const timeout = window.setTimeout(() => {
+      if (!active) return
+      if (!id) {
+        setMacroPublishHistory({ kind: 'idle' })
+        return
+      }
+
+      setMacroPublishHistory({ kind: 'loading', draftId: id })
+      fetchGeneratedFaqMacroPublishAttempts(id, { limit: 5 })
+        .then((response) => {
+          if (active) {
+            setMacroPublishHistory({ kind: 'loaded', draftId: id, response })
+          }
+        })
+        .catch((err) => {
+          if (active) {
+            setMacroPublishHistory({
+              kind: 'error',
+              draftId: id,
+              message: err instanceof Error ? err.message : String(err),
+            })
+          }
+        })
+    }, 0)
 
     return () => {
       active = false
+      window.clearTimeout(timeout)
     }
   }, [asset, detailRow])
 

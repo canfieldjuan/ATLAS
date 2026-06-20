@@ -181,6 +181,10 @@ named in Deferred or explicitly marked none.
 - R3 Security/auth ... R14 Codebase verification: Pass/Fail/N-A
 (List the rules the changed paths trigger, plus R14; cite file:line on any Fail.)
 
+**boundary-probe:** <N-A, or what guard-shaped probe applied + result. Required
+before LGTM on guards, validators, caps, classifiers, gates, sanitizers,
+denylists, parser admission rules, or safety checkers.>
+
 **AI reconciliation:** AI findings reviewed: Y/N. All fixed or waived: Y/N.
 Waivers justified in PR body: Y/N.
 
@@ -647,6 +651,32 @@ not after a full review round. Chasing the symptom one layer at a time -- fix
 the named case, ship, get bounced one layer deeper, repeat -- is the
 tail-chasing this gate exists to stop.
 
+### 3l. PR fix mode (constrain the fix loop)
+
+A **fix loop** -- iterating on red CI or review comments on an already-open PR
+-- is where sessions burn the most time and tokens: broad exploration, edits to
+files outside the real failure source, and re-orientation after every
+compaction. Before editing in a fix loop, record a **fix baton** in
+`SESSION_STATE.local.md` (the `PR Fix Mode` block) capturing the failure source,
+the **allowed-files set**, and a **max-files budget**.
+
+- **Stay inside the allowed set.** The allowed files are the failure source you
+  identified, not "everything the symptom touches." Touching a file outside the
+  set is presumed scope creep. Declare `Max files: N` in the plan's *Scope* to
+  have the files-touched audit (`scripts/audit_plan_doc_files_touched.py`)
+  enforce the budget at pre-push/CI -- the PR fails if more than N files change.
+- **Widening the set is a root-cause decision.** If the fix genuinely needs an
+  upstream file, name the upstream reason in the baton and the plan **before**
+  editing it (this is the §3k trace, not a drive-by). Do not silently grow the
+  diff.
+- **One judgment pass, no auto-loop.** Bot findings are advisory inputs you
+  disposition deliberately (resolve or waive with a reason); there is no
+  "address every comment" reflex (§4a.1).
+- **The baton is the compaction handoff.** Keep the current failing
+  check/comment, the last useful log finding, the next exact action, and
+  do-not-redo notes current, so a post-compaction resume continues instead of
+  re-exploring. Update it before and after each push.
+
 ---
 
 ## 4. Reviewer workflow
@@ -744,6 +774,12 @@ Before LGTM, the reviewer confirms:
       denylist/regex/phrase-matcher/pattern-list detection, the coverage
       includes an allowed near-miss fixture or the plan names the future PR
       that will add it.
+- [ ] For guard-shaped PRs (guards, validators, caps, classifiers, gates,
+      sanitizers, denylists, parser admission rules, or safety checkers), the
+      verdict includes `boundary-probe: <what applied + result>` before LGTM.
+      Missing proof is BLOCKER for security, billing, data deletion,
+      customer-visible output, or CI/release gates; otherwise it is at least
+      MAJOR.
 - [ ] No drift from the plan's stated scope (no scope creep, no
       "while I was at it" cleanups beyond the slice's contract).
 - [ ] Defensible trade-offs are explained in **Intentional**.

@@ -30,16 +30,27 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
-## 2026-06-16
+## 2026-06-17
 
-### Add controlled Gitleaks baseline rotation escape hatch
-- File/location: `.github/workflows/security_guardrails.yml`, `gitleaks-baseline-guard`
-- Description: The baseline guard blocks all PR changes to `docs/security/gitleaks-baseline.json`, but its failure message references a dedicated security rotation PR. Add an explicit controlled path, such as requiring a `security-rotation` label plus narrow path ownership, so legitimate post-rotation baseline changes are possible without weakening normal PR protection.
-- Why it matters: The guard correctly prevents baseline poisoning, but without a controlled escape hatch a legitimate provider rotation or history rewrite can get stuck behind the same protection.
-- Effort: S
+### Churn and Atlas UI lint debt blocks ESLint 10
+- File/location: `atlas-churn-ui/src/**`, `atlas-ui/src/**`, ESLint React-hooks/compiler-rule surfaces.
+- Description: A trial ESLint 10 batch exposed that `npm run lint` currently fails in `atlas-churn-ui` with 118 errors and in `atlas-ui` with 24 errors, mostly existing React hooks purity/set-state-in-effect/ref-access findings plus a few `any`/unsafe-finally findings. CI currently builds these packages but does not run their lint scripts.
+- Why it matters: Their standalone ESLint 10 Dependabot PRs cannot be responsibly batched as lint-compatible until the existing lint debt is reduced or the package lint policy is deliberately narrowed.
+- Effort: M
+- Category: tech-debt
+- Owner/session: Codex security/dependencies
+- Found during: PR-ESLint-10-Web-Batch
+
+### Mobile Expo 56 audit cleanup
+- File/location: `atlas-mobile/package-lock.json`, Expo/React Native dependency graph.
+- Description: `npm audit --audit-level=high` passes after this slice, but plain `npm audit` still reports 21 moderate findings in the Expo, React Native, and audio config-plugin chain; npm says clearing them requires `npm audit fix --force`, which would install `expo@56.0.12`, `react-native@0.86.0`, or downgrade `@siteed/audio-studio`.
+- Why it matters: The remaining findings are below the high-severity security gate used for this batch, but they still represent mobile dependency debt that should be handled in a dedicated Expo 56 compatibility slice with runtime verification.
+- Effort: M
 - Category: security
-- Owner/session: Codex security/workflow
-- Found during: PR-Security-Guardrail-CI review
+- Owner/session: Codex security/dependencies
+- Found during: PR-Npm-Security-Patch-Batch
+
+## 2026-06-16
 
 ### Rotate archived IndexNow key
 - File/location: Historical `atlas-intel-next` / `_ARCHIVED_atlas-intel-next/scripts/indexnow.ts`
@@ -50,29 +61,20 @@ register under `docs/technical-debt/`.
 - Owner/session: Codex security/workflow
 - Found during: PR-Security-Guardrail-CI review
 
-### Audit remaining workflow action pins and Claude OIDC trigger
-- File/location: `.github/workflows/*.yml`, especially `.github/workflows/claude.yml`
-- Description: This security guardrail PR pins the newly introduced security workflows to immutable action SHAs and confirms there are no `pull_request_target` triggers. Existing product workflows still use mutable action tags, and `claude.yml` grants `id-token: write` to the Claude action when `@claude` is invoked in issue or PR review surfaces.
-- Why it matters: Mutable action tags and broad OIDC grants can become CI compromise paths if a third-party action is compromised or a workflow trigger trusts attacker-controlled input.
+### Pin remaining mutable workflow supply-chain refs
+- File/location: `.github/workflows/*.yml`, `.github/workflows/*.yaml`
+- Description: The workflow posture audit now reports existing mutable GitHub Action refs and reusable workflow refs as warnings. `claude.yml` has been owner-gated and SHA-pinned, `actions/setup-python@v5` has been drained to a SHA pin, and workflow service images have been drained to digest pins. Existing product/check workflows still use other mutable refs and should be drained through dedicated pinning or Dependabot-triage slices.
+- Why it matters: Mutable action tags and reusable workflow refs can become CI compromise paths if a third-party action or tag is compromised or repointed.
 - Effort: M
 - Category: security
 - Owner/session: Codex security/workflow
-- Found during: PR-Security-Guardrail-CI review
+- Found during: PR-Security-Guardrail-CI review; narrowed during PR-Workflow-Action-Pin-OIDC-Audit
 
 ### Burn down advisory security scanner backlog
 - File/location: `.github/workflows/security_guardrails.yml`, GitHub code scanning results for Semgrep, Trivy, Checkov, pip-audit, and OSV.
 - Description: The first adoption run surfaced existing Semgrep findings, Trivy HIGH/CRITICAL config findings, and dependency CVEs. This PR keeps the sweep informative so `main` does not launch permanently red, but the findings still need triage and ratcheting to blocking gates.
 - Why it matters: Advisory scans are only useful if the backlog is burned down and the gates are tightened once known debt is fixed or explicitly waived.
 - Effort: L
-- Category: security
-- Owner/session: Codex security/workflow
-- Found during: PR-Security-Guardrail-CI review
-
-### Pin or retire floating ASR dependency audit input
-- File/location: `requirements.asr.txt`
-- Description: `requirements.asr.txt` installs `nemo_toolkit[asr]` from `NVIDIA/NeMo@main`, so pip-audit would resolve a moving upstream dependency graph on every scheduled run. The advisory pip-audit matrix excludes this file entirely, which means the ASR dependency stack has zero CVE coverage until the requirement is pinned to a tag/commit or retired.
-- Why it matters: Security scans need deterministic inputs; a floating VCS requirement can fail or change results without any Atlas code change, but excluding it is still a conscious CVE-coverage gap that must be closed.
-- Effort: M
 - Category: security
 - Owner/session: Codex security/workflow
 - Found during: PR-Security-Guardrail-CI review
@@ -96,17 +98,6 @@ register under `docs/technical-debt/`.
 - Category: polish
 - Owner/session: Codex content-ops/deflection-product-proof
 - Found during: PR-Deflection-Question-Label-Quality review
-
-## 2026-06-13
-
-### portfolio-ui npm audit vulnerabilities
-- File/location: `portfolio-ui/package-lock.json`
-- Description: `npm ci` in `portfolio-ui` reports 3 dependency audit findings (1 moderate, 2 high).
-- Why it matters: Dependency vulnerabilities can become deploy-time security exposure, but resolving them may require package upgrades outside this repeat-metric copy slice.
-- Effort: M
-- Category: security
-- Owner/session: Codex deflection/clustering
-- Found during: PR-Deflection-Repeat-Metric-Alignment
 
 ## 2026-06-07
 
@@ -136,17 +127,6 @@ register under `docs/technical-debt/`.
 - Category: correctness
 - Owner/session: Codex Gate A live output-quality proof
 - Found during: PR-Gate-A-Live-Output-Quality-Proof
-
-## 2026-05-29
-
-### atlas-intel-ui npm audit vulnerabilities
-- File/location: `atlas-intel-ui/package-lock.json`
-- Description: `npm ci` reports 6 dependency audit findings (2 moderate, 4 high).
-- Why it matters: Dependency vulnerabilities can become deploy-time security exposure, but resolving them may require package upgrades outside this UI rendering slice.
-- Effort: M
-- Category: security
-- Owner/session: Codex FAQ deflection report UI slice
-- Found during: PR-FAQ-Deflection-Report-UI-Readonly
 
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),

@@ -1,0 +1,78 @@
+name: NPM Package Checks
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/npm_package_checks.yml"
+      - "atlas-admin-ui/**"
+      - "atlas-churn-ui/**"
+      - "atlas-mobile/**"
+      - "atlas-ui/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/npm_package_checks.yml"
+      - "atlas-admin-ui/**"
+      - "atlas-churn-ui/**"
+      - "atlas-mobile/**"
+      - "atlas-ui/**"
+
+jobs:
+  npm-package-checks:
+    name: ${{ matrix.package }} checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - atlas-admin-ui
+          - atlas-churn-ui
+          - atlas-mobile
+          - atlas-ui
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.20.0"
+          cache: "npm"
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.package }}
+        run: npm ci
+
+      - name: High-severity audit
+        working-directory: ${{ matrix.package }}
+        run: npm audit --audit-level=high
+
+      - name: Run package checks
+        working-directory: ${{ matrix.package }}
+        run: |
+          case "${{ matrix.package }}" in
+            atlas-admin-ui)
+              npm run lint
+              npm run build
+              ;;
+            atlas-churn-ui)
+              npm test
+              npm run build
+              ;;
+            atlas-mobile)
+              npx expo install --check
+              npx expo config --type public >/tmp/expo-config.out
+              npm ls react react-dom react-native expo expo-router nativewind react-native-reanimated react-native-worklets @siteed/audio-studio
+              npm ls @react-native/metro-config @react-native/babel-plugin-codegen @react-native/codegen @react-native/js-polyfills react-native
+              ;;
+            atlas-ui)
+              npm run build
+              ;;
+          esac

@@ -58,6 +58,96 @@ test('domain mapper preserves full ingestion source material separately from sam
   )
 })
 
+test('domain mapper preserves ingestion parse errors', () => {
+  const diagnostics = fromWireIngestionDiagnostics({
+    ok: false,
+    mode: 'source_rows',
+    source: 'tickets.csv',
+    opportunity_count: 0,
+    warning_count: 0,
+    warning_counts: {},
+    missing_field_counts: {},
+    source_type_counts: {},
+    samples: [],
+    warnings: [],
+    parse_error: {
+      code: 'csv_parse_error',
+      message: 'CSV customer data could not be parsed.',
+      how_to_fix: 'Export a valid CSV.',
+      location: 'source_row_csv',
+      row_index: 3,
+      line: 3,
+      column: 12,
+      encoding: 'utf-8',
+      byte: 42,
+    },
+  })
+
+  assert.deepEqual(diagnostics.parseError, {
+    code: 'csv_parse_error',
+    message: 'CSV customer data could not be parsed.',
+    howToFix: 'Export a valid CSV.',
+    location: 'source_row_csv',
+    rowIndex: 3,
+    line: 3,
+    column: 12,
+    encoding: 'utf-8',
+    byte: 42,
+  })
+})
+
+test('domain mapper preserves source-row admission guidance', () => {
+  const diagnostics = fromWireIngestionDiagnostics({
+    ok: false,
+    mode: 'source_rows',
+    source: 'tickets.csv',
+    opportunity_count: 0,
+    warning_count: 0,
+    warning_counts: {},
+    missing_field_counts: {},
+    source_type_counts: {},
+    samples: [],
+    warnings: [],
+    source_row_admission: {
+      input_format: 'csv',
+      raw_source_row_count: 1,
+      usable_source_row_count: 0,
+      usable_source_ratio: 0,
+      mapped_fields: { source_id: ['Ticket ID'] },
+      ignored_private_fields: ['Internal Notes'],
+      populated_unmapped_fields: ['Conversation Text'],
+      field_sample_limit: 12,
+      admission_decision: {
+        status: 'REJECT',
+        reason: 'no_usable_source_rows',
+        location: 'source_row_csv',
+        message: 'No usable support-ticket text was found in this file.',
+        how_to_fix: 'Re-export your tickets with customer text.',
+      },
+      coverage_warnings: [],
+    },
+  })
+
+  assert.deepEqual(diagnostics.sourceRowAdmission, {
+    inputFormat: 'csv',
+    rawSourceRowCount: 1,
+    usableSourceRowCount: 0,
+    usableSourceRatio: 0,
+    mappedFields: { source_id: ['Ticket ID'] },
+    ignoredPrivateFields: ['Internal Notes'],
+    populatedUnmappedFields: ['Conversation Text'],
+    fieldSampleLimit: 12,
+    admissionDecision: {
+      status: 'REJECT',
+      reason: 'no_usable_source_rows',
+      location: 'source_row_csv',
+      message: 'No usable support-ticket text was found in this file.',
+      howToFix: 'Re-export your tickets with customer text.',
+    },
+    coverageWarnings: [],
+  })
+})
+
 test('domain import request can opt into full source material', () => {
   assert.deepEqual(
     toWireIngestionImportRequest({
@@ -116,4 +206,24 @@ test('new run import handoff applies persisted target ids to the run inputs', ()
   )
   assert.equal(newRunSource.includes('next.source_material = sourceMaterial.map'), false)
   assert.equal(newRunSource.includes('onApplySourceMaterial(sourceMaterial)'), false)
+})
+
+test('new run page renders parser issues from ingestion diagnostics', () => {
+  assert.ok(newRunSource.includes('diagnostics.parseError'))
+  assert.ok(newRunSource.includes('state.diagnostics.parseError'))
+  assert.ok(newRunSource.includes('function IngestionParseErrorNotice'))
+  assert.ok(newRunSource.includes('Parser issue'))
+  assert.ok(newRunSource.includes('parseError.howToFix'))
+})
+
+test('new run page renders source-row admission guidance', () => {
+  assert.ok(newRunSource.includes('sourceRowAdmission?.admissionDecision'))
+  assert.ok(newRunSource.includes('function SourceRowAdmissionRejectNotice'))
+  assert.ok(newRunSource.includes('Upload guidance'))
+  assert.ok(newRunSource.includes('decision.howToFix'))
+  assert.ok(
+    newRunSource.includes(
+      'state.diagnostics.sourceRowAdmission?.admissionDecision?.status',
+    ),
+  )
 })

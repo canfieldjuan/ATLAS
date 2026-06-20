@@ -34,6 +34,7 @@ _CSV_UTF8_MOJIBAKE_MARKER_TAIL_CHARS = max(
 ) - 1
 _CSV_IMPLAUSIBLE_LEGACY_FALLBACK_CHARS = ("\u00ff", "\u00fe")
 _CSV_READ_CHUNK_BYTES = 64 * 1024
+_CSV_FIELD_SIZE_LIMIT = 16 * 1024 * 1024
 _CSV_BOM_ENCODINGS = (
     (b"\xff\xfe\x00\x00", "utf-32"),
     (b"\x00\x00\xfe\xff", "utf-32"),
@@ -345,22 +346,30 @@ def normalize_campaign_opportunity_rows(
                 )
             )
             continue
+        row_index = _source_row_warning_index(row, index)
         normalized = normalize_campaign_opportunity(row, target_mode=target_mode)
         if not normalized:
             warnings.append(
                 CampaignOpportunityWarning(
                     code="empty_row",
-                    row_index=index,
+                    row_index=row_index,
                     message="Skipped row because it did not contain usable values.",
                 )
             )
             continue
         opportunities.append(normalized)
-        warnings.extend(_validation_warnings(normalized, row_index=index))
+        warnings.extend(_validation_warnings(normalized, row_index=row_index))
     return CampaignOpportunityLoadResult(
         opportunities=tuple(opportunities),
         warnings=tuple(warnings),
     )
+
+
+def _source_row_warning_index(row: Mapping[str, Any], fallback: int) -> int:
+    raw_index = getattr(row, "source_row_index", None)
+    if isinstance(raw_index, int) and raw_index > 0:
+        return raw_index
+    return fallback
 
 
 @dataclass(frozen=True)
@@ -466,6 +475,7 @@ def _load_csv_dict_rows_result(
 ) -> CsvDictRowsLoadResult:
     if max_rows is not None and max_rows < 1:
         raise ValueError("max_rows must be at least 1")
+    _ensure_csv_field_size_limit()
     rows: list[dict[str, Any]] = []
     source_row_count = 0
     encoding_plan = _csv_encoding_plan(path)
@@ -1006,6 +1016,7 @@ def _csv_decode_warnings_from_stats(
 
 
 def _select_csv_delimiter(text: str) -> _CsvDelimiterCandidate:
+    _ensure_csv_field_size_limit()
     candidates = tuple(
         _score_csv_delimiter(text, delimiter=delimiter, quotechar=quotechar)
         for delimiter in _CSV_DETECT_DELIMITERS
@@ -1023,6 +1034,7 @@ def _select_csv_delimiter_from_stream(
     path: Path,
     plan: _CsvEncodingPlan,
 ) -> _CsvDelimiterCandidate:
+    _ensure_csv_field_size_limit()
     candidates = tuple(
         _score_csv_delimiter_stream(
             path,
@@ -1210,6 +1222,16 @@ def _csv_short_row_uses_competing_delimiter(
 
 def _csv_delimiter_sample_text(text: str) -> str:
     return "\n".join(text.splitlines()[:_CSV_DELIMITER_SAMPLE_LINES])
+
+
+def _ensure_csv_field_size_limit(
+    minimum: int = _CSV_FIELD_SIZE_LIMIT,
+) -> int:
+    current = csv.field_size_limit()
+    if current < minimum:
+        csv.field_size_limit(minimum)
+        return minimum
+    return current
 
 
 def _csv_delimiter_dialect(

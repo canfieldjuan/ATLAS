@@ -27,7 +27,7 @@ const robotModule = vi.hoisted(() => {
     return timeline
   }
 
-  const Robot = vi.fn().mockImplementation(() => {
+  const Robot = vi.fn().mockImplementation(function Robot() {
     const instance = {
       destroyed: false,
       walk: vi.fn(() => makeTimeline()),

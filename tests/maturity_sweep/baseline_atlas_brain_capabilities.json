@@ -1,0 +1,69 @@
+{
+  "atlas_brain/capabilities/actions.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 9
+  },
+  "atlas_brain/capabilities/backends/homeassistant.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/capabilities/backends/homeassistant_ws.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/capabilities/backends/mqtt.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/capabilities/device_resolver.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 17
+  },
+  "atlas_brain/capabilities/devices/media.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/capabilities/devices/switches.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "atlas_brain/capabilities/homeassistant.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "atlas_brain/capabilities/intent_parser.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 23
+  },
+  "atlas_brain/capabilities/state_cache.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  }
+}

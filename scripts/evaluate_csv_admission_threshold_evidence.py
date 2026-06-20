@@ -49,6 +49,20 @@ class CsvAdmissionCase:
     expected_full_coverage: bool
 
 
+@dataclass(frozen=True)
+class CsvBreakageCase:
+    """One synthetic parser-admission edge case to score."""
+
+    name: str
+    description: str
+    fieldnames: tuple[str, ...]
+    rows: tuple[dict[str, str], ...]
+    expected_outcome: str
+    expected_decision_reason: str | None = None
+    expected_decision_location: str | None = None
+    known_gap: bool = False
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     corpus = _load_corpus(args.corpus)
@@ -89,7 +103,10 @@ def evaluate_zendesk_corpus(
         evaluate_observed_csv(name=name, path=path)
         for name, path in observed_csvs
     )
-    blocking = _blocking_codes(case_results)
+    breakage_results = evaluate_breakage_matrix()
+    blocking = _blocking_codes(case_results) + _breakage_blocking_codes(
+        breakage_results
+    )
     ratios = [
         float(result["usable_source_ratio"])
         for result in case_results
@@ -118,6 +135,22 @@ def evaluate_zendesk_corpus(
             "Operator-supplied observed CSVs are evidence only until a later "
             "policy slice promotes a threshold."
         ),
+        "breakage_matrix": {
+            "case_count": len(breakage_results),
+            "blocking_case_count": sum(
+                1 for result in breakage_results if result.get("case_status") == "failed"
+            ),
+            "known_gap_count": sum(
+                1 for result in breakage_results if result.get("case_status") == "known_gap"
+            ),
+            "cases": breakage_results,
+            "conclusion": (
+                "Synthetic breakage cases prove parser mechanics only. "
+                "Fail-closed and warning expectations are blocking; known "
+                "fail-open cases are recorded as explicit gaps and do not set "
+                "low-coverage reject policy."
+            ),
+        },
         "cases": case_results,
     }
 
@@ -147,6 +180,42 @@ def evaluate_observed_csv(*, name: str, path: Path) -> dict[str, Any]:
     )
 
 
+def evaluate_breakage_matrix() -> list[dict[str, Any]]:
+    """Run synthetic parser breakage cases through the real CSV diagnostics."""
+
+    return [evaluate_breakage_case(case) for case in _breakage_cases()]
+
+
+def evaluate_breakage_case(case: CsvBreakageCase) -> dict[str, Any]:
+    """Write one breakage case to CSV and score the observed admission outcome."""
+
+    with TemporaryDirectory(prefix="atlas-csv-breakage-") as tmp_dir:
+        path = Path(tmp_dir) / f"{case.name}.csv"
+        _write_csv(path, fieldnames=case.fieldnames, rows=case.rows)
+        result = _evaluate_csv_path(
+            name=case.name,
+            description=case.description,
+            path=path,
+            expected_full_coverage=False,
+        )
+    observed = _observed_admission_outcome(result)
+    decision_matched = _breakage_decision_matches(case, result)
+    matched = observed == case.expected_outcome and decision_matched
+    status = "ok" if matched else "failed"
+    if case.known_gap and matched:
+        status = "known_gap"
+    return {
+        **result,
+        "expected_outcome": case.expected_outcome,
+        "observed_outcome": observed,
+        "expected_decision_reason": case.expected_decision_reason,
+        "expected_decision_location": case.expected_decision_location,
+        "decision_matched": decision_matched,
+        "known_gap": case.known_gap,
+        "case_status": status,
+    }
+
+
 def _evaluate_csv_path(
     *,
     name: str,
@@ -172,6 +241,9 @@ def _evaluate_csv_path(
         "ok": payload.get("ok") is True,
         "warning_counts": dict(payload.get("warning_counts") or {}),
         "admission_status": decision.get("status"),
+        "admission_decision": decision,
+        "admission_decision_reason": decision.get("reason"),
+        "admission_decision_location": decision.get("location"),
         "raw_source_row_count": _int(admission.get("raw_source_row_count")),
         "usable_source_row_count": _int(admission.get("usable_source_row_count")),
         "usable_source_ratio": usable_ratio,
@@ -204,6 +276,36 @@ def _blocking_codes(case_results: Sequence[Mapping[str, Any]]) -> list[str]:
         if result.get("case_status") == "failed":
             codes.append(f"{result.get('name')}:unexpected_admission_result")
     return codes
+
+
+def _breakage_blocking_codes(case_results: Sequence[Mapping[str, Any]]) -> list[str]:
+    return [
+        f"{result.get('name')}:unexpected_breakage_outcome"
+        for result in case_results
+        if result.get("case_status") == "failed"
+    ]
+
+
+def _observed_admission_outcome(result: Mapping[str, Any]) -> str:
+    if result.get("admission_status") == "REJECT":
+        return "REJECT"
+    if result.get("coverage_warnings"):
+        return "ACCEPT_WITH_WARNING"
+    if result.get("admission_status") == "ACCEPT":
+        return "ACCEPT_CLEAN"
+    return "NO_POLICY_DECISION"
+
+
+def _breakage_decision_matches(
+    case: CsvBreakageCase,
+    result: Mapping[str, Any],
+) -> bool:
+    if case.expected_decision_reason is None and case.expected_decision_location is None:
+        return True
+    return (
+        result.get("admission_decision_reason") == case.expected_decision_reason
+        and result.get("admission_decision_location") == case.expected_decision_location
+    )
 
 
 def _zendesk_cases(corpus: Mapping[str, Any]) -> tuple[CsvAdmissionCase, ...]:
@@ -246,6 +348,69 @@ def _zendesk_cases(corpus: Mapping[str, Any]) -> tuple[CsvAdmissionCase, ...]:
             fieldnames=("Ticket ID", "Subject", "Description", "Internal Notes"),
             rows=description_rows,
             expected_full_coverage=True,
+        ),
+    )
+
+
+def _breakage_cases() -> tuple[CsvBreakageCase, ...]:
+    return (
+        CsvBreakageCase(
+            name="unknown_body_like_column_rejects_zero_usable",
+            description="Populated body-like column is not mapped and must reject.",
+            fieldnames=("Ticket ID", "Conversation Text"),
+            rows=({"Ticket ID": "T-1", "Conversation Text": "Cannot export reports."},),
+            expected_outcome="REJECT",
+            expected_decision_reason="no_usable_source_rows",
+            expected_decision_location="source_row_csv",
+        ),
+        CsvBreakageCase(
+            name="private_note_only_rejects_zero_usable",
+            description="Private/internal-only rows must not count as usable text.",
+            fieldnames=("Ticket ID", "Internal Notes"),
+            rows=({"Ticket ID": "T-1", "Internal Notes": "Private workaround."},),
+            expected_outcome="REJECT",
+            expected_decision_reason="no_usable_source_rows",
+            expected_decision_location="source_row_csv",
+        ),
+        CsvBreakageCase(
+            name="status_timestamp_only_rejects_zero_usable",
+            description="Status/SLA timestamp columns alone are not customer wording.",
+            fieldnames=("Ticket ID", "Status", "First Response", "Last Response"),
+            rows=({
+                "Ticket ID": "T-1",
+                "Status": "open",
+                "First Response": "2026-01-01",
+                "Last Response": "2026-01-02",
+            },),
+            expected_outcome="REJECT",
+            expected_decision_reason="no_usable_source_rows",
+            expected_decision_location="source_row_csv",
+        ),
+        CsvBreakageCase(
+            name="partial_blank_rows_warns_without_rejecting",
+            description="Some usable rows plus blanks should accept with coverage warning.",
+            fieldnames=("Ticket ID", "Message"),
+            rows=(
+                {"Ticket ID": "T-1", "Message": "Customer cannot export reports."},
+                {"Ticket ID": "T-2", "Message": ""},
+            ),
+            expected_outcome="ACCEPT_WITH_WARNING",
+        ),
+        CsvBreakageCase(
+            name="header_only_csv_has_no_policy_decision",
+            description="Header-only CSV has no hard source-row admission decision.",
+            fieldnames=("Ticket ID", "Message"),
+            rows=(),
+            expected_outcome="NO_POLICY_DECISION",
+        ),
+        CsvBreakageCase(
+            name="json_blob_message_rejects_zero_usable",
+            description="Machine JSON in a mapped text field must not count as usable text.",
+            fieldnames=("Ticket ID", "Message"),
+            rows=({"Ticket ID": "T-1", "Message": '{"event":"ticket_created","id":123}'},),
+            expected_outcome="REJECT",
+            expected_decision_reason="no_usable_source_rows",
+            expected_decision_location="source_row_csv",
         ),
     )
 
@@ -327,6 +492,21 @@ def _proof_doc(summary: Mapping[str, Any]) -> str:
         )
         for case in summary["cases"]
     )
+    breakage_rows = "\n".join(
+        "| {name} | {case_status} | {expected} | {observed} | {raw} | {usable} | {status} | {reason} | {location} | {warnings} |".format(
+            name=case["name"],
+            case_status=case["case_status"],
+            expected=case["expected_outcome"],
+            observed=case["observed_outcome"],
+            raw=case["raw_source_row_count"],
+            usable=case["usable_source_row_count"],
+            status=case["admission_status"],
+            reason=case["admission_decision_reason"] or "",
+            location=case["admission_decision_location"] or "",
+            warnings=len(case["coverage_warnings"]),
+        )
+        for case in summary["breakage_matrix"]["cases"]
+    )
     return f"""# Deflection CSV Admission Threshold Evidence
 
 Date: 2026-06-15
@@ -361,6 +541,20 @@ threshold still needs observed partial-coverage exports, not a synthetic ratio
 derived from a clean corpus. Operator-supplied observed CSVs are recorded as
 evidence and do not block this runner until a later policy slice promotes a
 threshold.
+
+## Parser Breakage Matrix
+
+These synthetic cases break parser mechanics through the same CSV diagnostics
+path. They prove whether current guards fail closed, warn, or expose a known
+fail-open gap. They do not justify a low-coverage threshold.
+
+| Case | Case status | Expected outcome | Observed outcome | Raw rows | Usable rows | Admission | Decision reason | Decision location | Coverage warnings |
+|---|---|---|---|---:|---:|---|---|---|---:|
+{breakage_rows}
+
+Known fail-open gaps: `{summary["breakage_matrix"]["known_gap_count"]}`
+
+{summary["breakage_matrix"]["conclusion"]}
 
 ## Artifact Links
 

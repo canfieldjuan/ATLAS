@@ -17,13 +17,10 @@ Slice phase: Production hardening
    the legacy `postgres_data` volume.
 3. Keep the legacy `postgres_data` volume definition visible so existing local
    PG13 data is not deleted or hidden by the compose edit.
-4. Carry the shared Security Guardrails workflow repair already proven on the
-   adjacent Dependabot branches.
 
 ### Files touched
 
 - `atlas_video-processing/docker-compose.yml`
-- `.github/workflows/security_guardrails.yml`
 - `plans/PR-Atlas-Video-Processing-Postgres-18.md`
 
 ### Review Contract
@@ -37,10 +34,8 @@ Acceptance criteria:
       dump/restore into the new Postgres 18 volume.
 - [ ] No application runtime code, database schema, or service wiring changes
       are included in this slice.
-- [ ] PR-level guardrails have the same workflow fix used by the recently green
-      Dependabot branches.
 
-Affected surfaces: config / local compose database / CI guardrails.
+Affected surfaces: config / local compose database.
 
 Risk areas: data-loss / backcompat / migration / deployment safety.
 
@@ -70,10 +65,7 @@ old persisted state explicit. It is not mounted into the PG18 service.
 
 - A follow-up can add a scripted Postgres dump/restore helper if this compose
   database carries production-like persisted data in more than local/dev use.
-
-## Parked hardening
-
-None.
+- Parked hardening: none.
 
 ## Verification
 
@@ -81,6 +73,9 @@ None.
   `postgres_data` into Postgres 18 was the blocking issue.
 - Updated `atlas_video-processing/docker-compose.yml` so Postgres 18 uses
   `postgres18_data` and documents dump/restore for existing PG13 data.
+- Merged current `origin/main` and resolved stale security guardrails workflow
+  drift by keeping `origin/main`; this PR now only changes compose config and
+  its plan.
 - Docker compose was not run in this environment; validation is by compose-file
   inspection only.
 
@@ -88,7 +83,6 @@ None.
 
 | File | LOC |
 |---|---:|
-| `atlas_video-processing/docker-compose.yml` | ~6 |
-| `.github/workflows/security_guardrails.yml` | shared repair |
-| `plans/PR-Atlas-Video-Processing-Postgres-18.md` | ~108 |
-| **Total** | **~114** |
+| `atlas_video-processing/docker-compose.yml` | 8 |
+| `plans/PR-Atlas-Video-Processing-Postgres-18.md` | 88 |
+| **Total** | **96** |

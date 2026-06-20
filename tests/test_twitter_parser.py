@@ -9,7 +9,6 @@ for _mod in (
     "torch", "torchaudio", "transformers", "accelerate", "bitsandbytes",
     "PIL", "PIL.Image", "numpy", "cv2", "sounddevice", "soundfile",
     "nemo.collections", "nemo.collections.asr", "nemo.collections.asr.models",
-    "asyncpg",
     "playwright", "playwright.async_api", "curl_cffi", "curl_cffi.requests",
 ):
     sys.modules.setdefault(_mod, MagicMock())

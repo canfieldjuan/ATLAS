@@ -342,6 +342,45 @@ export function fromWireIngestionDiagnostics(
       rowIndex: warning.row_index,
       field: warning.field,
     })),
+    sourceRowAdmission: wire.source_row_admission
+      ? {
+          inputFormat: wire.source_row_admission.input_format,
+          rawSourceRowCount: wire.source_row_admission.raw_source_row_count,
+          usableSourceRowCount: wire.source_row_admission.usable_source_row_count,
+          usableSourceRatio: wire.source_row_admission.usable_source_ratio,
+          mappedFields: { ...wire.source_row_admission.mapped_fields },
+          ignoredPrivateFields: [...wire.source_row_admission.ignored_private_fields],
+          populatedUnmappedFields: [
+            ...wire.source_row_admission.populated_unmapped_fields,
+          ],
+          fieldSampleLimit: wire.source_row_admission.field_sample_limit,
+          admissionDecision: wire.source_row_admission.admission_decision
+            ? {
+                status: wire.source_row_admission.admission_decision.status,
+                reason: wire.source_row_admission.admission_decision.reason,
+                location: wire.source_row_admission.admission_decision.location,
+                message: wire.source_row_admission.admission_decision.message,
+                howToFix: wire.source_row_admission.admission_decision.how_to_fix,
+              }
+            : undefined,
+          coverageWarnings: (wire.source_row_admission.coverage_warnings ?? []).map(
+            (warning) => ({ ...warning }),
+          ),
+        }
+      : undefined,
+    parseError: wire.parse_error
+      ? {
+          code: wire.parse_error.code,
+          message: wire.parse_error.message,
+          howToFix: wire.parse_error.how_to_fix,
+          location: wire.parse_error.location,
+          rowIndex: wire.parse_error.row_index,
+          line: wire.parse_error.line,
+          column: wire.parse_error.column,
+          encoding: wire.parse_error.encoding,
+          byte: wire.parse_error.byte,
+        }
+      : undefined,
   }
 }
 

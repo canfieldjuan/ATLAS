@@ -33,3 +33,29 @@ def test_pre_push_audit_workflow_enrolls_full_report_redaction_checker_tests() -
     text = WORKFLOW.read_text(encoding="utf-8")
 
     assert "tests/test_check_deflection_full_report_proof_bundle.py" in text
+
+
+def test_pre_push_audit_workflow_enrolls_gitleaks_baseline_rotation_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tests/test_check_gitleaks_baseline_rotation.py" in text
+
+
+def test_pre_push_audit_workflow_enrolls_security_guardrails_workflow_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tests/test_security_guardrails_workflow.py" in text
+
+
+def test_pre_push_audit_workflow_enrolls_workflow_security_posture_audit() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tests/test_audit_workflow_security_posture.py" in text
+    assert "pytest pytest-asyncio pyyaml" in text
+    assert "python scripts/audit_workflow_security_posture.py .github/workflows" in text
+
+
+def test_pre_push_audit_workflow_enrolls_claude_workflow_security_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tests/test_claude_workflow_security.py" in text

@@ -8,6 +8,32 @@ interface UseApiDataResult<T> {
   refreshing: boolean
 }
 
+function dependencyKey(deps: unknown[]): string {
+  const seen = new WeakSet<object>()
+  try {
+    return JSON.stringify(deps, (_key, value: unknown) => {
+      if (typeof value === 'bigint') {
+        return `${value.toString()}n`
+      }
+      if (typeof value === 'symbol') {
+        return value.toString()
+      }
+      if (typeof value === 'function') {
+        return `[Function:${value.name || 'anonymous'}]`
+      }
+      if (value && typeof value === 'object') {
+        if (seen.has(value)) {
+          return '[Circular]'
+        }
+        seen.add(value)
+      }
+      return value
+    }) ?? 'undefined'
+  } catch {
+    return deps.map((value) => Object.prototype.toString.call(value)).join('|')
+  }
+}
+
 export default function useApiData<T>(
   fetcher: () => Promise<T>,
   deps: unknown[] = [],
@@ -18,43 +44,49 @@ export default function useApiData<T>(
   const [refreshing, setRefreshing] = useState(false)
   const requestIdRef = useRef(0)
   const mountedRef = useRef(true)
+  const fetcherRef = useRef(fetcher)
+  const depsKey = dependencyKey(deps)
 
-  const load = useCallback(
-    async (isRefresh: boolean) => {
-      const id = ++requestIdRef.current
-      if (isRefresh) {
-        setRefreshing(true)
-      } else {
-        setLoading(true)
+  useEffect(() => {
+    fetcherRef.current = fetcher
+  }, [fetcher])
+
+  const load = useCallback(async (isRefresh: boolean) => {
+    const id = ++requestIdRef.current
+    if (isRefresh) {
+      setRefreshing(true)
+    } else {
+      setLoading(true)
+    }
+    setError(null)
+    try {
+      const result = await fetcherRef.current()
+      if (mountedRef.current && id === requestIdRef.current) {
+        setData(result)
       }
-      setError(null)
-      try {
-        const result = await fetcher()
-        if (mountedRef.current && id === requestIdRef.current) {
-          setData(result)
-        }
-      } catch (err) {
-        if (mountedRef.current && id === requestIdRef.current) {
-          setError(err instanceof Error ? err : new Error(String(err)))
-        }
-      } finally {
-        if (mountedRef.current && id === requestIdRef.current) {
-          setLoading(false)
-          setRefreshing(false)
-        }
+    } catch (err) {
+      if (mountedRef.current && id === requestIdRef.current) {
+        setError(err instanceof Error ? err : new Error(String(err)))
       }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    deps,
-  )
+    } finally {
+      if (mountedRef.current && id === requestIdRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     mountedRef.current = true
-    load(false)
+    requestIdRef.current += 1
+    const timeout = window.setTimeout(() => {
+      load(false)
+    }, 0)
     return () => {
       mountedRef.current = false
+      window.clearTimeout(timeout)
     }
-  }, [load])
+  }, [depsKey, load])
 
   const refresh = useCallback(() => {
     load(true)

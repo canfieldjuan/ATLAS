@@ -1,0 +1,75 @@
+{
+  "atlas_brain/voice/audio_capture.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_TEST_FILE": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 15
+  },
+  "atlas_brain/voice/command_executor.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/voice/frame_processor.py": {
+    "counts": {
+      "WEAK_CONTRACT": 1
+    },
+    "score": 1
+  },
+  "atlas_brain/voice/free_mode.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/voice/launcher.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "SWALLOWED_EXCEPT": 4
+    },
+    "score": 24
+  },
+  "atlas_brain/voice/pipeline.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 2,
+      "SWALLOWED_EXCEPT": 5,
+      "UNGUARDED_INDEX": 20,
+      "UNGUARDED_INPUT": 1,
+      "WEAK_CONTRACT": 6
+    },
+    "score": 40
+  },
+  "atlas_brain/voice/playback.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/voice/segmenter.py": {
+    "counts": {
+      "WEAK_CONTRACT": 1
+    },
+    "score": 1
+  },
+  "atlas_brain/voice/tts_kokoro.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/voice/vad/silero.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 10
+  }
+}

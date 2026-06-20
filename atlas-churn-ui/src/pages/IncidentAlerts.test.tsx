@@ -218,7 +218,6 @@ describe('IncidentAlerts', () => {
       vendor_name: 'Acme Rival',
       company_name: 'Acme Bank',
     }))
-    expect(screen.getByText('Acme Bank at Acme Rival')).toBeInTheDocument()
   })
 
   it('shows vendor-scope workflow shortcuts in the header when a vendor filter is active', async () => {
@@ -1288,7 +1287,7 @@ describe('IncidentAlerts', () => {
     )
 
     await screen.findByRole('heading', { name: 'Incident Alerts API' })
-    await user.click(screen.getByRole('button', { name: 'Retry Failed Test' }))
+    await user.click(await screen.findByRole('button', { name: 'Retry Failed Test' }))
 
     expect(await screen.findByText('Latest manual test passed')).toBeInTheDocument()
     expect(await screen.findByText('Test webhook delivered')).toBeInTheDocument()

@@ -37,7 +37,12 @@ export default function B2BCampaigns() {
     }
   }, [statusFilter])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void load()
+    }, 0)
+    return () => window.clearTimeout(timeout)
+  }, [load])
 
   const handleGenerate = async () => {
     if (!genVendor) return

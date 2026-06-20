@@ -163,7 +163,7 @@ describe('Dashboard', () => {
     )
 
     expect(await screen.findByRole('heading', { name: 'Churn Signals Overview' })).toBeInTheDocument()
-    const companyRow = screen.getByText('Beta Corp').closest('tr')
+    const companyRow = (await screen.findByText('Beta Corp')).closest('tr')
     expect(companyRow).not.toBeNull()
     const row = within(companyRow as HTMLTableRowElement)
     expect(row.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import extracted_content_pipeline.campaign_customer_data as campaign_customer_data
 from extracted_content_pipeline.campaign_customer_data import (
     FileIntelligenceRepository,
     load_campaign_opportunities_from_file,
@@ -17,6 +18,37 @@ from extracted_content_pipeline.campaign_ports import TenantScope
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "scripts/run_extracted_campaign_generation_example.py"
+
+
+def test_csv_field_size_limit_helper_is_monotonic(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+    current_limit = 32 * 1024 * 1024
+
+    def fake_field_size_limit(value: int | None = None) -> int:
+        nonlocal current_limit
+        if value is None:
+            return current_limit
+        calls.append(value)
+        old = current_limit
+        current_limit = value
+        return old
+
+    monkeypatch.setattr(
+        campaign_customer_data.csv,
+        "field_size_limit",
+        fake_field_size_limit,
+    )
+
+    assert campaign_customer_data._ensure_csv_field_size_limit(16 * 1024 * 1024) == (
+        32 * 1024 * 1024
+    )
+    assert calls == []
+
+    current_limit = 128 * 1024
+    assert campaign_customer_data._ensure_csv_field_size_limit(16 * 1024 * 1024) == (
+        16 * 1024 * 1024
+    )
+    assert calls == [16 * 1024 * 1024]
 
 
 def test_load_campaign_opportunities_from_json_payload_preserves_custom_fields(

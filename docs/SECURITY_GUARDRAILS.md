@@ -20,6 +20,17 @@ the checked-out PR head. A lightweight PR guard also rejects changes to that
 baseline, so a future PR cannot add a secret and hide it by growing the
 baseline.
 
+Legitimate baseline rotations are allowed only through a narrow controlled
+path: rotate or revoke the exposed provider credential first, add the
+`security-rotation` PR label, and keep the diff limited to
+`docs/security/gitleaks-baseline.json`, `docs/SECURITY_GUARDRAILS.md`,
+`HARDENING.md`, and the slice plan under `plans/PR-*.md`. The label alone is
+not enough; product-code or workflow changes in the same PR still fail the
+baseline guard. The baseline guard runs from trusted base-branch workflow code
+on `pull_request_target`, fetches the PR head only as git data, parses labels
+from GitHub's JSON event payload, and rejects candidate baselines that drop
+trusted-base fingerprints.
+
 Current blocking posture: new unbaselined secrets block PRs; Semgrep, Trivy,
 Checkov, pip-audit, and OSV are advisory/report-only until their adoption
 backlogs are triaged and ratcheted.
@@ -30,17 +41,17 @@ backlogs are triaged and ratcheted.
   findings from the first trusted-main adoption scan while still failing on new
   leaks.
 - Python SCA: pip-audit runs in advisory mode against deterministic tracked
-  requirements files: `requirements.txt`, `atlas_edge/requirements.txt`, both
-  `atlas_video-processing/**/requirements.txt` service files, and
-  `graphiti-wrapper/requirements.txt`. `requirements.asr.txt` is parked until
-  its floating `NVIDIA/NeMo@main` dependency is pinned.
+  requirements files: `requirements.txt`, `requirements.asr.txt`,
+  `atlas_edge/requirements.txt`, both `atlas_video-processing/**/requirements.txt`
+  service files, and `graphiti-wrapper/requirements.txt`.
 - Ecosystem SCA: OSV Scanner runs recursively across the repository and reports
   dependency vulnerabilities to GitHub code scanning.
 - SAST: Semgrep runs `p/default`, `p/owasp-top-ten`, and `p/python` across the
   repository and uploads SARIF in advisory mode.
 - IaC/container config: Trivy config mode and Checkov scan Dockerfiles,
   Docker Compose, GitHub Actions, and Terraform if Terraform is added later.
-  These are advisory until the initial HIGH/CRITICAL backlog is triaged.
+  Trivy and Checkov upload SARIF in advisory mode until the initial
+  HIGH/CRITICAL backlog is triaged.
 
 These checks are repository-level guardrails. They are not tied to one Atlas
 product unless the scanner finding points at product-specific files.
@@ -53,6 +64,16 @@ The security workflows introduced here pin third-party GitHub Actions by commit
 SHA and pin the Gitleaks container image by digest. The rest of the repository's
 older workflow actions are intentionally left to a follow-up fleet-wide pinning
 and OIDC review so this slice stays focused on the new guardrails.
+
+Workflow supply-chain posture is checked by
+`scripts/audit_workflow_security_posture.py`. It fails unapproved
+`pull_request_target` jobs and unapproved `id-token: write` / `write-all`
+usage, while reporting existing mutable action, reusable workflow, and
+container/service image refs as warnings until the fleet-wide pin drain is
+complete. Allowances are per expected job shape rather than whole-file
+exceptions. `claude.yml` keeps `id-token: write` for the Claude Code action,
+but the job is owner-gated, uses read-only GitHub token permissions, and pins
+its third-party actions by commit SHA.
 
 The adoption pass also removed current-tree secret-shaped fallback literals from
 the GraphRAG Supabase API routes and the archived IndexNow script. Those paths
@@ -103,16 +124,12 @@ decide whether to rewrite history or keep the redacted baseline as the permanent
 
 - Rotate/revoke the provider credentials exposed in historical commit
   `d63a9b77b9727766e14e523626c22dd6c1c80da8`.
-- Add a controlled Gitleaks baseline rotation escape hatch for legitimate
-  post-rotation baseline changes.
 - Rotate the archived IndexNow key that was removed from the branch tip but
   remains in git history.
-- Audit and pin remaining non-security workflow actions, and review
-  `.github/workflows/claude.yml`'s `id-token: write` trigger posture.
+- Pin remaining mutable action, reusable workflow, and container/service image
+  refs across non-security product/check workflows.
 - Burn down advisory Semgrep, Trivy, Checkov, pip-audit, and OSV findings, then
   ratchet the relevant scans from advisory to blocking.
-- Pin or retire the floating `NVIDIA/NeMo@main` requirement in
-  `requirements.asr.txt` before adding that file back to pip-audit.
 - Add per-image Trivy image scans to image publish workflows when those
   production image build/push paths are named.
 - Tune ZAP baseline rules after the first configured staging run produces a

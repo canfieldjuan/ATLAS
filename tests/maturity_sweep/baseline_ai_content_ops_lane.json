@@ -1,0 +1,394 @@
+{
+  "atlas_brain/_content_ops_calibration_library.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/_content_ops_claim_registry.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/_content_ops_input_provider.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/_content_ops_reasoning.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/api/content_ops_brand_voice_profiles.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "atlas_brain/api/content_ops_zendesk_export.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "atlas_brain/mcp/content_ops_marketer_verify_oauth.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "WEAK_CONTRACT": 2
+    },
+    "score": 10
+  },
+  "atlas_brain/mcp/content_ops_marketer_verify_server.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 5
+  },
+  "scripts/audit_content_ops_marketing_claims.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/check_content_ops_faq_macro_lifecycle_artifact.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1
+    },
+    "score": 8
+  },
+  "scripts/check_content_ops_faq_search_route_contract.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 4
+    },
+    "score": 6
+  },
+  "scripts/check_content_ops_marketer_verify_claude_hosted_oauth.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1,
+      "WEAK_CONTRACT": 1
+    },
+    "score": 6
+  },
+  "scripts/check_content_ops_marketer_verify_dual_client_rollout.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/check_content_ops_marketer_verify_oauth_discovery.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/check_content_ops_marketer_verify_oauth_e2e.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/cleanup_content_ops_faq_macro_sandbox.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/content_ops_faq_cli_rules.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 10
+  },
+  "scripts/content_ops_faq_smoke_profile.py": {
+    "counts": {
+      "NO_TEST_FILE": 1,
+      "UNGUARDED_INPUT": 3
+    },
+    "score": 18
+  },
+  "scripts/content_ops_source_postgres_smoke_helpers.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/export_content_ops_cfpb_sources.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 15
+  },
+  "scripts/export_content_ops_claim_evidence_prompt_packets.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/export_content_ops_review_sources.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 19
+  },
+  "scripts/import_content_ops_claim_evidence_prompt_responses.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/reconcile_content_ops_faq_macro_writebacks.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/run_content_ops_claim_evidence_artifact.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/run_content_ops_claim_evidence_manual_benchmark.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/seed_content_ops_faq_saas_demo.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 5,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 24
+  },
+  "scripts/setup_content_ops_zendesk_credentials.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/smoke_content_ops_cfpb_faq_markdown.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "scripts/smoke_content_ops_cfpb_source_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/smoke_content_ops_faq_lifecycle.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 11
+  },
+  "scripts/smoke_content_ops_faq_lifecycle_run.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "scripts/smoke_content_ops_faq_macro_live_zendesk.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_faq_macro_sandbox_e2e.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_faq_macro_sandbox_lifecycle.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_faq_output_proof.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 16
+  },
+  "scripts/smoke_content_ops_faq_saas_demo_route_e2e.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/smoke_content_ops_faq_scale_run.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "scripts/smoke_content_ops_faq_search_concurrency.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "scripts/smoke_content_ops_faq_search_route_concurrency.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/smoke_content_ops_faq_search_seeded_route_e2e.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 19
+  },
+  "scripts/smoke_content_ops_gate_a_live_quality.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 4
+  },
+  "scripts/smoke_content_ops_ingestion_file_route.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 9
+  },
+  "scripts/smoke_content_ops_ingestion_file_route_inprocess_load.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_ingestion_file_route_multiprocess_load.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "scripts/smoke_content_ops_live_generation.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 5
+    },
+    "score": 6
+  },
+  "scripts/smoke_content_ops_review_source_generation.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/smoke_content_ops_review_source_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/smoke_content_ops_source_file_postgres.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 10
+  },
+  "scripts/smoke_content_ops_support_ticket_package.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 9
+  },
+  "scripts/smoke_content_ops_upload_source_public_asset.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 9
+  },
+  "scripts/smoke_extracted_content_ops_execution.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 2,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 8
+  },
+  "scripts/start_content_ops_marketer_verify_chatgpt_adapter_oauth_server.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "scripts/start_content_ops_marketer_verify_oauth_server.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/validate_content_ops_claim_evidence_fixture.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
+  "scripts/validate_content_ops_claim_evidence_result.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  }
+}

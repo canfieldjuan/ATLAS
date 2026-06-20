@@ -358,6 +358,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    fileParallelism: false,
     setupFiles: './src/test/setup.ts',
   },
 })

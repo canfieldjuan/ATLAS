@@ -1,6 +1,6 @@
 # Use an official Python runtime as a parent image
 #checkov:skip=CKV_DOCKER_2:Drone ingest is a worker process and does not expose an HTTP health endpoint.
-FROM python:3.9-slim-buster
+FROM python:3.11-slim-bookworm
 
 # Set the working directory in the container
 WORKDIR /app
