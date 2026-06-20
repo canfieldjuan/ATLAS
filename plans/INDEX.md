@@ -1,6 +1,6 @@
 # Plan archive index
 
-1153 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1154 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -776,6 +776,7 @@
 - [PR-Deflection-Resolution-Evidence-Preview-Signal](archive/PR-Deflection-Resolution-Evidence-Preview-Signal.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-SaaS-Demo-Dotenv-Preflight](archive/PR-Deflection-SaaS-Demo-Dotenv-Preflight.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Safe-Label-Disambiguation](archive/PR-Deflection-Safe-Label-Disambiguation.md) - lane: deflection/clustering | phase: Production hardening
+- [PR-Deflection-Scrub-Regression](archive/PR-Deflection-Scrub-Regression.md) - lane: content-ops/deflection-privacy | phase: Production hardening
 - [PR-Deflection-Section-Registry](archive/PR-Deflection-Section-Registry.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-See-Something-Invariant](archive/PR-Deflection-See-Something-Invariant.md) - lane: content-ops/deflection-parser | phase: Production hardening
 - [PR-Deflection-Semantic-Question-Detection](archive/PR-Deflection-Semantic-Question-Detection.md) - lane: content-ops/deflection-parser | phase: Product polish
