@@ -938,6 +938,47 @@ async def test_deflection_report_search_skips_compact_and_malformed_items() -> N
 
 
 @pytest.mark.asyncio
+async def test_deflection_report_search_only_returns_portfolio_renderable_items() -> None:
+    invalid_items = [
+        _search_item(when_to_contact_support=None),
+        _search_item(answer_evidence_status=None),
+        _search_item(ticket_count="2"),
+        _search_item(opportunity_score="6"),
+        _search_item(steps=["Open Analytics.", {"bad": "shape"}]),
+        _search_item(action_items=[1]),
+        _search_item(source_ids="ticket-export-1"),
+        _search_item(source_labels=["ticket-export-1", 1]),
+        _search_item(term_mappings=[None]),
+        _search_item(term_mappings=[{
+            "customer_term": "export",
+            "documentation_term": "download report",
+        }]),
+    ]
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-portfolio-submit",
+        request_id="content-ops-search-renderable",
+        snapshot={"summary": {}},
+        artifact=_search_artifact([*invalid_items, _search_item()]),
+    )
+    await store.mark_paid(
+        account_id="acct-portfolio-submit",
+        request_id="content-ops-search-renderable",
+        payment_reference="checkout-session:search",
+    )
+    router = _router(store)
+    search = _route(router, "/ops/deflection-reports/{request_id}/search", "POST")
+
+    payload = await search.endpoint(
+        payload=api_module.DeflectionReportSearchModel(q="export", limit=10),
+        request_id="content-ops-search-renderable",
+    )
+
+    assert payload["count"] == 1
+    assert payload["results"][0]["item"] == _search_item()
+
+
+@pytest.mark.asyncio
 async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     unsafe_artifact = {
