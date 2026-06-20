@@ -108,6 +108,13 @@
     },
     "score": 11
   },
+  "scripts/run_deflection_test_mode_checkout_proof.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 6
+  },
   "scripts/send_content_ops_deflection_report_deliveries.py": {
     "counts": {
       "UNGUARDED_INDEX": 1
