@@ -9,6 +9,7 @@ Provides fixtures for:
 
 import asyncio
 import os
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,6 +22,51 @@ os.environ.setdefault("ATLAS_DB_PORT", "5433")
 os.environ.setdefault("ATLAS_DB_DATABASE", "atlas")
 os.environ.setdefault("ATLAS_DB_USER", "atlas")
 os.environ.setdefault("ATLAS_DB_PASSWORD", "atlas_dev_password")
+
+# The unit backstop installs asyncpg, so load the real driver before test module
+# collection. This prevents legacy import-time sys.modules.setdefault("asyncpg",
+# MagicMock()) helpers from poisoning later DB-fixture tests.
+try:
+    import asyncpg  # noqa: F401
+    import asyncpg.exceptions  # noqa: F401
+except ModuleNotFoundError:
+    pass
+
+
+_SELF_POOL_LIVE_FILES = {
+    "test_b2b_challenger_claims_api_live.py",
+    "test_b2b_vendor_claims_api_live.py",
+    "test_evidence_claim_audit_live.py",
+    "test_evidence_claim_builder_live.py",
+    "test_evidence_claim_repository_live.py",
+    "test_live_autonomous.py",
+    "test_reasoning_live.py",
+    "test_vendor_dashboard_claims_live.py",
+}
+
+_INTEGRATION_FIXTURE_NAMES = {"db_pool", "live_pool"}
+
+
+def _markexpr_excludes_integration(config) -> bool:
+    markexpr = getattr(config.option, "markexpr", "") or ""
+    return "not integration" in " ".join(markexpr.lower().split())
+
+
+def pytest_ignore_collect(collection_path, config):
+    if _markexpr_excludes_integration(config):
+        if Path(str(collection_path)).name in _SELF_POOL_LIVE_FILES:
+            return True
+    return None
+
+
+def pytest_collection_modifyitems(session, config, items):
+    integration = pytest.mark.integration
+    for item in items:
+        if (
+            _INTEGRATION_FIXTURE_NAMES.intersection(item.fixturenames)
+            or Path(str(item.fspath)).name in _SELF_POOL_LIVE_FILES
+        ):
+            item.add_marker(integration)
 
 
 @pytest.fixture(scope="session")

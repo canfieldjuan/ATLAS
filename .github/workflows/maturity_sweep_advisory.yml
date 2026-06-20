@@ -22,6 +22,7 @@ on:
       - "extracted_reasoning_core/**"
       - "extracted_quality_gate/**"
       - "extracted_evidence_to_story/**"
+      - "extracted_competitive_intelligence/**"
       - "atlas_brain/api/**"
       - "atlas_brain/auth/**"
       - "atlas_brain/autonomous/**"
@@ -68,6 +69,7 @@ on:
       - "extracted_reasoning_core/**"
       - "extracted_quality_gate/**"
       - "extracted_evidence_to_story/**"
+      - "extracted_competitive_intelligence/**"
       - "atlas_brain/api/**"
       - "atlas_brain/auth/**"
       - "atlas_brain/autonomous/**"
@@ -162,6 +164,15 @@ jobs:
               --sensitive-glob "${lane}/**"
             echo "::endgroup::"
           done
+
+      - name: Maturity sweep Phase C2 competitive intelligence ratchet gate (blocking)
+        run: |
+          set -euo pipefail
+          python scripts/maturity_sweep.py extracted_competitive_intelligence \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_extracted_competitive_intelligence.json \
+            --min-score 8 \
+            --sensitive-glob 'extracted_competitive_intelligence/**'
 
       - name: Maturity sweep atlas_brain/api ratchet gate (blocking)
         run: |

@@ -51,9 +51,24 @@ Dirty state expected: yes | no
 
 <One sentence: e.g. "Opened #1234 and stopped; waiting for operator signal.">
 
+## PR Fix Mode (active fix loop)
+
+Active: yes | no   (fill in only while iterating on red CI / review comments)
+PR: #<number or none>
+Branch: <branch>
+Latest commit: <sha at last push>
+Allowed files (max N=<n>):
+- <path or glob -- the failure source, not everything the symptom touches>
+Current failing check / comment: <e.g. live-reconciliation: copilot :194,:226>
+Last useful log finding: <the single line that localized it>
+Next exact action: <one sentence>
+Do-NOT-redo: <paths ruled out, checks already green, dead ends>
+
 ## Resume Checklist
 
 - [ ] Read this file before any PR action.
+- [ ] If PR Fix Mode is active, read its block before any edit; do not touch
+      files outside Allowed files (widening requires the §3k upstream reason).
 - [ ] Run `gh pr list --state open`.
 - [ ] Run `git log --oneline -15 origin/main`.
 - [ ] Confirm the current PR is listed under "Owned Active PR" or "PRs This

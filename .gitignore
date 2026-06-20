@@ -101,7 +101,14 @@ requirements.freeze.bak
 *.crt
 *.key
 *.pem
-.claude/
+# .claude/: keep everything ignored by default, then re-include only the shared,
+# scrubbed fix-mode config. Personal overrides and the local baton stay ignored.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
+.claude/settings.local.json
+.claude/fix-mode-state.json
 .vercel
 .env*.local
 .playwright-mcp/
