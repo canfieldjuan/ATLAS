@@ -1263,6 +1263,94 @@ def test_json_request_preserves_http_error_status(monkeypatch):
     assert response.errors == ()
 
 
+def test_json_request_redacts_sensitive_http_error_body(monkeypatch):
+    def _return_http_error_response(_request, *, timeout):
+        assert timeout == 1.0
+        return FakeResponse(
+            422,
+            {
+                "detail": (
+                    "Bearer token-secret failed for content-ops-sensitive-123 "
+                    "lead@example.com source zendesk:123456 "
+                    "https://blob.example.com/tickets.csv?sig=signed-secret"
+                )
+            },
+        )
+
+    monkeypatch.setattr(smoke, "_open_http_request", _return_http_error_response)
+
+    response = smoke._json_request(
+        "GET",
+        "https://atlas.example.com/probe",
+        token="secret",
+        timeout=1.0,
+    )
+
+    serialized = json.dumps(response.payload, sort_keys=True) + response.raw_text
+    assert response.status == 422
+    assert "token-secret" not in serialized
+    assert "content-ops-sensitive-123" not in serialized
+    assert "lead@example.com" not in serialized
+    assert "zendesk:123456" not in serialized
+    assert "sig=signed-secret" not in serialized
+    assert "Bearer [redacted]" in serialized
+    assert "content-ops-[redacted]" in serialized
+
+
+def test_json_request_redacts_escaped_url_and_source_id_values_without_corrupting_numbers(monkeypatch):
+    raw_body = (
+        b'{"detail":"Bearer token-secret failed for content-ops-sensitive-123",'
+        b'"source_id":"ticket-1",'
+        b'"source_ids":["row:1","zendesk:123456"],'
+        b'"received_count":1500000,'
+        b'"signed_url":"https:\\/\\/blob.example.com\\/tickets.csv?sig=signed-secret"}'
+    )
+
+    monkeypatch.setattr(
+        smoke,
+        "_open_http_request",
+        _fake_open([(422, raw_body)], []),
+    )
+
+    response = smoke._json_request(
+        "GET",
+        "https://atlas.example.com/probe",
+        token="secret",
+        timeout=1.0,
+    )
+
+    serialized = json.dumps(response.payload, sort_keys=True) + response.raw_text
+    assert response.status == 422
+    assert response.payload["received_count"] == 1500000
+    assert "token-secret" not in serialized
+    assert "content-ops-sensitive-123" not in serialized
+    assert "ticket-1" not in serialized
+    assert "row:1" not in serialized
+    assert "zendesk:123456" not in serialized
+    assert "sig=signed-secret" not in serialized
+    assert "[source-id-redacted]" in serialized
+    assert "https://blob.example.com/tickets.csv?[redacted]" in serialized
+
+
+def test_json_request_preserves_success_request_id(monkeypatch):
+    monkeypatch.setattr(
+        smoke,
+        "_open_http_request",
+        _fake_open([(200, _submit_payload(request_id="content-ops-keep-123"))], []),
+    )
+
+    response = smoke._json_request(
+        "POST",
+        "https://atlas.example.com/probe",
+        token="secret",
+        timeout=1.0,
+        body={"ok": True},
+    )
+
+    assert response.status == 200
+    assert response.payload["request_id"] == "content-ops-keep-123"
+
+
 def test_main_preflight_writes_redacted_result(tmp_path, capsys):
     result_path = tmp_path / "preflight.json"
 

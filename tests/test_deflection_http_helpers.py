@@ -63,6 +63,81 @@ def test_json_request_preserves_http_error_status(monkeypatch) -> None:
     assert result.errors == ("HTTP 409",)
 
 
+def test_json_request_redacts_http_error_body_before_payload_parse(monkeypatch) -> None:
+    def _urlopen(request, *, timeout):
+        assert timeout == 7
+        raise _http_error(
+            request.full_url,
+            422,
+            {
+                "detail": (
+                    "Bearer sk_test_secret for content-ops-proof-123 "
+                    "buyer@example.com at https://blob.example.com/file.csv?sig=secret"
+                )
+            },
+        )
+
+    def _redact_body(raw: str) -> str:
+        return (
+            raw.replace("sk_test_secret", "[stripe-redacted]")
+            .replace("content-ops-proof-123", "content-ops-[redacted]")
+            .replace("buyer@example.com", "[email-redacted]")
+            .replace("sig=secret", "sig=[redacted]")
+        )
+
+    monkeypatch.setattr(http.urllib.request, "urlopen", _urlopen)
+
+    result = http.json_request(
+        "POST",
+        "https://atlas.example.com/proof",
+        timeout=7,
+        http_error_template="HTTP {status}",
+        error_body_redactor=_redact_body,
+    )
+
+    assert result.status == 422
+    assert result.errors == ("HTTP 422",)
+    serialized = json.dumps(result.payload, sort_keys=True) + result.raw_text
+    assert "sk_test_secret" not in serialized
+    assert "content-ops-proof-123" not in serialized
+    assert "buyer@example.com" not in serialized
+    assert "sig=secret" not in serialized
+    assert "[stripe-redacted]" in serialized
+
+
+def test_json_request_structural_redaction_preserves_numeric_json_fields(monkeypatch) -> None:
+    def _urlopen(request, *, timeout):
+        assert timeout == 7
+        raise _http_error(
+            request.full_url,
+            422,
+            {
+                "detail": "Bearer sk_test_secret for batch 1500000",
+                "received_count": 1500000,
+            },
+        )
+
+    def _redact_body(raw: str) -> str:
+        return raw.replace("sk_test_secret", "[stripe-redacted]").replace("1500000", "[id-redacted]")
+
+    monkeypatch.setattr(http.urllib.request, "urlopen", _urlopen)
+
+    result = http.json_request(
+        "POST",
+        "https://atlas.example.com/proof",
+        timeout=7,
+        http_error_template="HTTP {status}",
+        error_body_redactor=_redact_body,
+    )
+
+    assert result.status == 422
+    assert result.payload == {
+        "detail": "Bearer [stripe-redacted] for batch [id-redacted]",
+        "received_count": 1500000,
+    }
+    assert result.errors == ("HTTP 422",)
+
+
 def test_json_request_redacts_transport_error(monkeypatch) -> None:
     def _urlopen(_request, *, timeout):
         assert timeout == 3
@@ -157,4 +232,3 @@ def test_json_request_rejects_ambiguous_body_inputs() -> None:
             body={"ok": True},
             data=b"raw",
         )
-
