@@ -1,6 +1,6 @@
 # Plan archive index
 
-1138 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1140 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -16,6 +16,7 @@
 - [PR-Archive-On-Merge-Ritual](archive/PR-Archive-On-Merge-Ritual.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Archive-Remaining-Merged-Plans](archive/PR-Archive-Remaining-Merged-Plans.md) - lane: dev-workflow/plan-archive-housekeeping | phase: Workflow/process
 - [PR-Atlas-Brain-Test-CI-Enrollment-Audit](archive/PR-Atlas-Brain-Test-CI-Enrollment-Audit.md) - lane: content-ops/faq-deflection | phase: Workflow/process
+- [PR-Atlas-Churn-UI-ESLint-10](archive/PR-Atlas-Churn-UI-ESLint-10.md) - lane: frontend/tooling | phase: Production hardening
 - [PR-Atlas-Local-PR-Body-Preflight](archive/PR-Atlas-Local-PR-Body-Preflight.md) - lane: atlas-workflow | phase: Workflow/process.
 - [PR-Atlas-Local-Review-CI](archive/PR-Atlas-Local-Review-CI.md) - lane: atlas-workflow | phase: Workflow/process.
 - [PR-Atlas-Slice-Phase-Audit](archive/PR-Atlas-Slice-Phase-Audit.md) - lane: atlas-workflow | phase: Workflow/process.
@@ -24,6 +25,7 @@
 - [PR-Atlas-Support-Ticket-Provider-Execute-Proof](archive/PR-Atlas-Support-Ticket-Provider-Execute-Proof.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Atlas-Support-Ticket-Provider-Warning-Route-Proof](archive/PR-Atlas-Support-Ticket-Provider-Warning-Route-Proof.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Atlas-Thin-Slice-Hardening-Contract](archive/PR-Atlas-Thin-Slice-Hardening-Contract.md) - lane: atlas-workflow
+- [PR-Atlas-UI-ESLint-10](archive/PR-Atlas-UI-ESLint-10.md) - lane: frontend/atlas-ui-tooling | phase: Production hardening
 - [PR-Atlas-UI-Lint-B2B-Reports](archive/PR-Atlas-UI-Lint-B2B-Reports.md)
 - [PR-Atlas-Workflow-Phase-Contract](archive/PR-Atlas-Workflow-Phase-Contract.md) - lane: atlas-workflow | phase: Workflow/process.
 - [PR-Audit-Agents-Auditor-Principles](archive/PR-Audit-Agents-Auditor-Principles.md)
