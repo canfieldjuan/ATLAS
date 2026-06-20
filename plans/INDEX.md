@@ -1,6 +1,6 @@
 # Plan archive index
 
-1143 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1144 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -713,6 +713,7 @@
 - [PR-Deflection-Full-Volume-Live-Proof](archive/PR-Deflection-Full-Volume-Live-Proof.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
 - [PR-Deflection-Full-Volume-Smoke-Gates](archive/PR-Deflection-Full-Volume-Smoke-Gates.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
 - [PR-Deflection-Full-Volume-Submit-Limit](archive/PR-Deflection-Full-Volume-Submit-Limit.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
+- [PR-Deflection-HTTP-Error-Body-Redaction](archive/PR-Deflection-HTTP-Error-Body-Redaction.md) - lane: content-ops/report-delivery-live-funnel | phase: Production hardening
 - [PR-Deflection-HTTP-Helper-Consolidation](archive/PR-Deflection-HTTP-Helper-Consolidation.md) - lane: content-ops/report-delivery-live-funnel | phase: Production hardening
 - [PR-Deflection-Help-Center-Prose](archive/PR-Deflection-Help-Center-Prose.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
 - [PR-Deflection-Html-Strip-Before-Clustering](archive/PR-Deflection-Html-Strip-Before-Clustering.md) - lane: go-live-deflection-cleanup | phase: Production hardening
