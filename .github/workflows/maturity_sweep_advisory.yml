@@ -17,6 +17,7 @@ on:
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
       - "scripts/maturity_sweep.py"
+      - "scripts/**"
       - "tests/**"
       - "extracted_content_pipeline/**"
       - "extracted_reasoning_core/**"
@@ -65,6 +66,7 @@ on:
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
       - "scripts/maturity_sweep.py"
+      - "scripts/**"
       - "tests/**"
       - "extracted_content_pipeline/**"
       - "extracted_reasoning_core/**"
@@ -184,6 +186,15 @@ jobs:
             --baseline tests/maturity_sweep/baseline_extracted_llm_infrastructure.json \
             --min-score 8 \
             --sensitive-glob 'extracted_llm_infrastructure/**'
+
+      - name: Maturity sweep Phase C4 scripts ratchet gate (blocking)
+        run: |
+          set -euo pipefail
+          python scripts/maturity_sweep.py scripts \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_scripts.json \
+            --min-score 8 \
+            --sensitive-glob 'scripts/**'
 
       - name: Maturity sweep atlas_brain/api ratchet gate (blocking)
         run: |
