@@ -1,0 +1,140 @@
+{
+  "schema_version": "deflection_pii_eval_corpus.v1",
+  "source": {
+    "kind": "surrogated_eval",
+    "raw_label_spans_persisted": false,
+    "raw_source_persisted": false,
+    "surrogate_positions_are_recall_labels": true
+  },
+  "summary": {
+    "cue_less_person_name_count": 1,
+    "cue_prefixed_person_name_count": 1,
+    "label_count": 8,
+    "labels_by_class": {
+      "email": 1,
+      "order_id": 1,
+      "payment_card": 1,
+      "person_name": 2,
+      "phone": 1,
+      "ssn": 1,
+      "street_address": 1
+    },
+    "labels_by_severity": {
+      "high": 6,
+      "medium": 2
+    },
+    "must_survive_count": 3,
+    "ticket_count": 1
+  },
+  "tickets": [
+    {
+      "fields": {
+        "agent_reply": "Customer Jordan Lee can keep CVE-2021-44228 and ISO 27001 references in the report.",
+        "customer_message": "Email alex.rivera@example.test or call 555-010-4301. Order order_SYNTH_2001 ships to 1842 Pine Street.",
+        "private_note": "SSN 123-45-6789 and card 4111 1111 1111 1111.",
+        "source_id": "ticket-eval-safe-001",
+        "subject": "Refund for Maya Chen"
+      },
+      "labels": [
+        {
+          "class": "person_name",
+          "end": 19,
+          "name_subtype": "cue_prefixed",
+          "origin_field": "agent_reply",
+          "severity": "high",
+          "span": "Jordan Lee",
+          "start": 9,
+          "surrogate_id": "person_name-002"
+        },
+        {
+          "class": "email",
+          "end": 30,
+          "origin_field": "customer_message",
+          "severity": "high",
+          "span": "alex.rivera@example.test",
+          "start": 6,
+          "surrogate_id": "email-001"
+        },
+        {
+          "class": "phone",
+          "end": 51,
+          "origin_field": "customer_message",
+          "severity": "high",
+          "span": "555-010-4301",
+          "start": 39,
+          "surrogate_id": "phone-001"
+        },
+        {
+          "class": "order_id",
+          "end": 75,
+          "origin_field": "customer_message",
+          "severity": "medium",
+          "span": "order_SYNTH_2001",
+          "start": 59,
+          "surrogate_id": "order_id-001"
+        },
+        {
+          "class": "street_address",
+          "end": 101,
+          "origin_field": "customer_message",
+          "severity": "medium",
+          "span": "1842 Pine Street",
+          "start": 85,
+          "surrogate_id": "street_address-001"
+        },
+        {
+          "class": "ssn",
+          "end": 15,
+          "origin_field": "private_note",
+          "severity": "high",
+          "span": "123-45-6789",
+          "start": 4,
+          "surrogate_id": "ssn-001"
+        },
+        {
+          "class": "payment_card",
+          "end": 44,
+          "origin_field": "private_note",
+          "severity": "high",
+          "span": "4111 1111 1111 1111",
+          "start": 25,
+          "surrogate_id": "payment_card-001"
+        },
+        {
+          "class": "person_name",
+          "end": 20,
+          "name_subtype": "cue_less",
+          "origin_field": "subject",
+          "severity": "high",
+          "span": "Maya Chen",
+          "start": 11,
+          "surrogate_id": "person_name-001"
+        }
+      ],
+      "must_survive": [
+        {
+          "end": 43,
+          "origin_field": "agent_reply",
+          "reason": "security_reference",
+          "span": "CVE-2021-44228",
+          "start": 29
+        },
+        {
+          "end": 57,
+          "origin_field": "agent_reply",
+          "reason": "compliance_reference",
+          "span": "ISO 27001",
+          "start": 48
+        },
+        {
+          "end": 20,
+          "origin_field": "source_id",
+          "reason": "tenant_source_id",
+          "span": "ticket-eval-safe-001",
+          "start": 0
+        }
+      ],
+      "ticket_id": "pii-eval-001"
+    }
+  ]
+}

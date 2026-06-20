@@ -1,0 +1,432 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+from extracted_content_pipeline.deflection_pii_eval_corpus import (
+    SCHEMA_VERSION,
+    build_surrogate_eval_corpus,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "build_deflection_pii_surrogate_eval_corpus.py"
+TINY_FIXTURE = (
+    ROOT
+    / "docs/extraction/validation/fixtures/deflection_pii_surrogate_eval_tiny.json"
+)
+SPEC = importlib.util.spec_from_file_location(
+    "build_deflection_pii_surrogate_eval_corpus",
+    SCRIPT,
+)
+assert SPEC is not None
+assert SPEC.loader is not None
+CLI = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = CLI
+SPEC.loader.exec_module(CLI)
+
+
+def _valid_source() -> dict:
+    return {
+        "schema_version": "deflection_pii_labeled_source.v1",
+        "records": [
+            {
+                "fields": {
+                    "subject": "Refund for Alice Baker",
+                    "customer_message": (
+                        "Email alice.baker@example.com or call 202-555-0188. "
+                        "Order ORD-98765 ships to 99 Real Street."
+                    ),
+                    "agent_reply": (
+                        "Customer Alice Baker can keep CVE-2021-44228 and ISO 27001 "
+                        "references in the report."
+                    ),
+                    "private_note": "SSN 111-22-3333 and card 4242 4242 4242 4242.",
+                    "source_id": "ticket-eval-safe-001",
+                },
+                "labels": [
+                    {
+                        "span": "Alice Baker",
+                        "class": "person_name",
+                        "origin_field": "subject",
+                        "name_subtype": "cue_less",
+                    },
+                    {
+                        "span": "alice.baker@example.com",
+                        "class": "email",
+                        "origin_field": "customer_message",
+                    },
+                    {
+                        "span": "202-555-0188",
+                        "class": "phone",
+                        "origin_field": "customer_message",
+                    },
+                    {
+                        "span": "ORD-98765",
+                        "class": "order_id",
+                        "origin_field": "customer_message",
+                    },
+                    {
+                        "span": "99 Real Street",
+                        "class": "street_address",
+                        "origin_field": "customer_message",
+                    },
+                    {
+                        "span": "Alice Baker",
+                        "class": "person_name",
+                        "origin_field": "agent_reply",
+                        "name_subtype": "cue_prefixed",
+                    },
+                    {
+                        "span": "111-22-3333",
+                        "class": "ssn",
+                        "origin_field": "private_note",
+                    },
+                    {
+                        "span": "4242 4242 4242 4242",
+                        "class": "payment_card",
+                        "origin_field": "private_note",
+                    },
+                ],
+                "must_survive": [
+                    {
+                        "span": "CVE-2021-44228",
+                        "origin_field": "agent_reply",
+                        "reason": "security_reference",
+                    },
+                    {
+                        "span": "ISO 27001",
+                        "origin_field": "agent_reply",
+                        "reason": "compliance_reference",
+                    },
+                    {
+                        "span": "ticket-eval-safe-001",
+                        "origin_field": "source_id",
+                        "reason": "tenant_source_id",
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def test_surrogate_artifact_rewrites_labels_and_drops_raw_pii() -> None:
+    result = build_surrogate_eval_corpus(_valid_source())
+
+    assert result.ok
+    assert result.artifact is not None
+    artifact = result.artifact
+    rendered = json.dumps(artifact, sort_keys=True)
+    assert artifact["schema_version"] == SCHEMA_VERSION
+    assert artifact["source"] == {
+        "kind": "surrogated_eval",
+        "raw_source_persisted": False,
+        "raw_label_spans_persisted": False,
+        "surrogate_positions_are_recall_labels": True,
+    }
+    for raw in (
+        "Alice Baker",
+        "alice.baker@example.com",
+        "202-555-0188",
+        "ORD-98765",
+        "99 Real Street",
+        "111-22-3333",
+        "4242 4242 4242 4242",
+    ):
+        assert raw not in rendered
+
+    ticket = artifact["tickets"][0]
+    fields = ticket["fields"]
+    labels = ticket["labels"]
+    for label in labels:
+        text = fields[label["origin_field"]]
+        assert text[label["start"]:label["end"]] == label["span"]
+    assert artifact["summary"]["labels_by_severity"] == {
+        "high": 6,
+        "medium": 2,
+    }
+    assert artifact["summary"]["cue_less_person_name_count"] == 1
+    assert artifact["summary"]["cue_prefixed_person_name_count"] == 1
+
+
+def test_must_survive_tokens_are_preserved_for_precision_scoring() -> None:
+    artifact = build_surrogate_eval_corpus(_valid_source()).artifact
+    assert artifact is not None
+    ticket = artifact["tickets"][0]
+    records = {item["span"]: item for item in ticket["must_survive"]}
+
+    assert set(records) == {
+        "CVE-2021-44228",
+        "ISO 27001",
+        "ticket-eval-safe-001",
+    }
+    for token, record in records.items():
+        text = ticket["fields"][record["origin_field"]]
+        assert text[record["start"]:record["end"]] == token
+
+
+def test_repeated_raw_spans_are_surrogated_by_occurrence() -> None:
+    result = build_surrogate_eval_corpus({
+        "records": [
+            {
+                "fields": {
+                    "customer_message": (
+                        "Email repeated@example.com first, then repeated@example.com again."
+                    )
+                },
+                "labels": [
+                    {
+                        "span": "repeated@example.com",
+                        "class": "email",
+                        "origin_field": "customer_message",
+                    },
+                    {
+                        "span": "repeated@example.com",
+                        "class": "email",
+                        "origin_field": "customer_message",
+                    },
+                ],
+            }
+        ]
+    })
+
+    assert result.ok
+    assert result.artifact is not None
+    rendered = json.dumps(result.artifact, sort_keys=True)
+    assert "repeated@example.com" not in rendered
+    labels = result.artifact["tickets"][0]["labels"]
+    assert [label["span"] for label in labels] == [
+        "alex.rivera@example.test",
+        "maya.chen@example.test",
+    ]
+
+
+def test_unlabeled_pii_in_rendered_output_fails_closed_without_raw_echo() -> None:
+    result = build_surrogate_eval_corpus({
+        "records": [
+            {
+                "fields": {
+                    "customer_message": (
+                        "Customer is John Doe. Email leak.real@gmail.com, "
+                        "call 212-555-7788, SSN 987-65-4321, card "
+                        "4000 0000 0000 0002, ship to 44 Cedar Street."
+                    )
+                },
+                "labels": [
+                    {
+                        "span": "John Doe",
+                        "class": "person_name",
+                        "origin_field": "customer_message",
+                        "name_subtype": "cue_prefixed",
+                    }
+                ],
+            }
+        ]
+    })
+
+    assert not result.ok
+    rendered = json.dumps({"errors": result.errors}, sort_keys=True)
+    for raw in (
+        "leak.real@gmail.com",
+        "212-555-7788",
+        "987-65-4321",
+        "4000 0000 0000 0002",
+        "44 Cedar Street",
+    ):
+        assert raw not in rendered
+    assert {error["code"] for error in result.errors} == {"unlabeled_pii_detected"}
+    assert {"email", "phone", "ssn", "payment_card", "street_address"} <= {
+        error["detector"] for error in result.errors
+    }
+
+
+def test_surrogate_never_reuses_matching_raw_span() -> None:
+    result = build_surrogate_eval_corpus({
+        "records": [
+            {
+                "fields": {"subject": "Maya Chen asked for an export."},
+                "labels": [
+                    {
+                        "span": "Maya Chen",
+                        "class": "person_name",
+                        "origin_field": "subject",
+                        "name_subtype": "cue_less",
+                    }
+                ],
+            }
+        ]
+    })
+
+    assert result.ok
+    assert result.artifact is not None
+    rendered = json.dumps(result.artifact, sort_keys=True)
+    assert "Maya Chen" not in rendered
+    label = result.artifact["tickets"][0]["labels"][0]
+    assert label["span"] == "Jordan Lee"
+
+
+def test_raw_label_span_remaining_after_partial_occurrence_replacement_fails() -> None:
+    result = build_surrogate_eval_corpus({
+        "records": [
+            {
+                "fields": {
+                    "customer_message": (
+                        "Email repeat.raw@example.com first, then "
+                        "repeat.raw@example.com again."
+                    )
+                },
+                "labels": [
+                    {
+                        "span": "repeat.raw@example.com",
+                        "class": "email",
+                        "origin_field": "customer_message",
+                        "occurrence": 2,
+                    }
+                ],
+            }
+        ]
+    })
+
+    assert not result.ok
+    rendered = json.dumps({"errors": result.errors}, sort_keys=True)
+    assert "repeat.raw@example.com" not in rendered
+    assert "raw_label_span_remaining" in {error["code"] for error in result.errors}
+
+
+def test_empty_record_sets_are_rejected() -> None:
+    result = build_surrogate_eval_corpus({"records": []})
+
+    assert not result.ok
+    assert result.artifact is None
+    assert result.errors == ({"code": "source_empty_records"},)
+
+
+def test_must_survive_offsets_track_occurrences_after_surrogation() -> None:
+    result = build_surrogate_eval_corpus({
+        "records": [
+            {
+                "fields": {
+                    "customer_message": (
+                        "Email raw@example.com. Keep ISO 27001 before ISO 27001."
+                    )
+                },
+                "labels": [
+                    {
+                        "span": "raw@example.com",
+                        "class": "email",
+                        "origin_field": "customer_message",
+                    }
+                ],
+                "must_survive": [
+                    {
+                        "span": "ISO 27001",
+                        "origin_field": "customer_message",
+                        "reason": "compliance_reference",
+                    },
+                    {
+                        "span": "ISO 27001",
+                        "origin_field": "customer_message",
+                        "reason": "compliance_reference",
+                    },
+                ],
+            }
+        ]
+    })
+
+    assert result.ok
+    assert result.artifact is not None
+    ticket = result.artifact["tickets"][0]
+    records = ticket["must_survive"]
+    assert records[0]["start"] != records[1]["start"]
+    for record in records:
+        text = ticket["fields"][record["origin_field"]]
+        assert text[record["start"]:record["end"]] == "ISO 27001"
+
+
+def test_malformed_decoded_input_returns_sanitized_errors() -> None:
+    result = build_surrogate_eval_corpus({
+        "records": [
+            None,
+            {
+                "fields": {"customer_message": "Email secret@example.com"},
+                "labels": [
+                    {
+                        "span": "secret@example.com",
+                        "class": "person_name",
+                        "origin_field": "customer_message",
+                    },
+                    {
+                        "span": "missing@example.com",
+                        "class": "email",
+                        "origin_field": "customer_message",
+                    },
+                ],
+            },
+        ]
+    })
+
+    assert not result.ok
+    rendered = json.dumps({"errors": result.errors}, sort_keys=True)
+    assert "secret@example.com" not in rendered
+    assert "missing@example.com" not in rendered
+    assert {error["code"] for error in result.errors} == {
+        "record_not_object",
+        "person_name_missing_subtype",
+        "label_span_not_found",
+    }
+
+
+def test_cli_writes_artifact_and_rejects_invalid_input_without_raw_echo(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "source.json"
+    output = tmp_path / "artifact.json"
+    source.write_text(json.dumps(_valid_source()), encoding="utf-8")
+
+    assert CLI.main([str(source), "--output", str(output), "--pretty"]) == 0
+    assert output.is_file()
+    artifact = json.loads(output.read_text(encoding="utf-8"))
+    assert artifact["summary"]["ticket_count"] == 1
+
+    bad_source = tmp_path / "bad.json"
+    bad_source.write_text(
+        json.dumps({
+            "records": [{
+                "fields": {"customer_message": "Email raw.bad@example.com"},
+                "labels": [{
+                    "span": "missing.bad@example.com",
+                    "class": "email",
+                    "origin_field": "customer_message",
+                }],
+            }]
+        }),
+        encoding="utf-8",
+    )
+    assert CLI.main([str(bad_source), "--output", str(output)]) == 1
+    captured = capsys.readouterr()
+    assert "raw.bad@example.com" not in captured.err
+    assert "missing.bad@example.com" not in captured.err
+    assert "label_span_not_found" in captured.err
+
+
+def test_committed_tiny_fixture_is_surrogate_only() -> None:
+    artifact = json.loads(TINY_FIXTURE.read_text(encoding="utf-8"))
+    rendered = json.dumps(artifact, sort_keys=True)
+
+    assert artifact["schema_version"] == SCHEMA_VERSION
+    assert artifact["summary"]["ticket_count"] == 1
+    assert artifact["summary"]["cue_less_person_name_count"] == 1
+    assert artifact["summary"]["cue_prefixed_person_name_count"] == 1
+    for raw in (
+        "Alice Baker",
+        "alice.baker@example.com",
+        "202-555-0188",
+        "ORD-98765",
+        "99 Real Street",
+        "111-22-3333",
+        "4242 4242 4242 4242",
+    ):
+        assert raw not in rendered

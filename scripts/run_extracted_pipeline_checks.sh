@@ -48,6 +48,7 @@ pytest \
   tests/test_content_ops_faq_report_contract_docs.py \
   tests/test_content_ops_deflection_source_proof_docs.py \
   tests/test_docs_no_raw_deflection_request_ids.py \
+  tests/test_content_ops_deflection_pii_surrogate_eval_corpus.py \
   tests/test_capture_zendesk_product_proof_corpus.py \
   tests/test_evaluate_zendesk_product_proof_corpus.py \
   tests/test_probe_deflection_signal_spike.py \
