@@ -19,6 +19,7 @@ from extracted_content_pipeline.api.control_surfaces import (
     ContentOpsControlSurfaceApiConfig,
     create_content_ops_control_surface_router,
 )
+from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.content_ops_execution import ContentOpsExecutionServices
 from extracted_content_pipeline.deflection_report_access import (
     InMemoryDeflectionReportArtifactStore,
@@ -704,6 +705,147 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
 
 
 @pytest.mark.asyncio
+async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    unsafe_artifact = {
+        "markdown": (
+            "# Report\n\n"
+            "How do I reset access for jane.doe@acme.com?\n"
+            "Call _555-123-4567_ and confirm account 4829103.\n"
+        ),
+        "summary": {
+            "generated": 1,
+            "drafted_answer_count": 1,
+            "no_proven_answer_count": 0,
+        },
+        "faq_result": {
+            "items": [
+                {
+                    "question": "How do I reset access for jane.doe@acme.com?",
+                    "question_source": "customer_wording",
+                    "customer_wording": "Call 555-123-4567 for account 4829103.",
+                    "weighted_frequency": 2,
+                    "ticket_count": 2,
+                    "answer": "Reset _jane.doe@acme.com_ after confirming account 4829103.",
+                    "steps": [
+                        "Remove XXXXX before publishing.",
+                        "Escalate case 999999 if the reset still fails.",
+                    ],
+                    "source_ids": ["4829103", "777777"],
+                    "evidence_quotes": [
+                        "`4829103`: jane.doe@acme.com called _555-123-4567_."
+                    ],
+                    "answer_evidence_status": "resolution_evidence",
+                    "resolution_evidence_scope": "scoped",
+                }
+            ]
+        },
+        "report_model": {
+            "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
+            "title": "Support Ticket Deflection Report",
+            "summary": {"generated": 1},
+            "sections": [
+                {
+                    "id": "question_details",
+                    "title": "Question Details and Evidence",
+                    "priority": 40,
+                    "surfaces": ["web"],
+                    "default_limit": None,
+                    "required_data": ["rows"],
+                    "data": {
+                        "rows": [
+                            {
+                                "question": "How do I reset jane.doe@acme.com?",
+                                "answer": (
+                                    "Confirm account 4829103 for jane.doe@acme.com."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ],
+        },
+        "evidence_export": {
+            "schema_version": DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+            "evidence_rows": [
+                {
+                    "source_id": "4829103",
+                    "evidence_quote": "jane.doe@acme.com called 555-123-4567.",
+                }
+            ],
+        },
+    }
+
+    gated = await api_module._gate_deflection_report_artifacts(
+        {
+            "status": "completed",
+            "steps": [
+                {
+                    "output": "faq_deflection_report",
+                    "status": "completed",
+                    "result": unsafe_artifact,
+                }
+            ],
+        },
+        store_provider=lambda: store,
+        scope=TenantScope(account_id="acct-pii"),
+        request_id="request-pii",
+        top_n=1,
+        teaser_preview_count=1,
+    )
+
+    record = await store.get_artifact_record(
+        account_id="acct-pii",
+        request_id="request-pii",
+    )
+    assert record is not None
+    encoded = json.dumps(
+        {
+            "gated": gated["steps"][0]["result"],
+            "snapshot": record.snapshot,
+        },
+        sort_keys=True,
+    ).lower()
+    for raw_fragment in (
+        "jane.doe",
+        "acme.com",
+        "555-123-4567",
+        "4829103",
+        "777777",
+        "999999",
+        "xxxxx",
+    ):
+        assert raw_fragment not in encoded
+    teaser_answer = record.snapshot["teaser"]["full_answer"]
+    assert "[redacted-email]" in teaser_answer["answer"]
+    assert "[redacted-identifier]" in teaser_answer["answer"]
+    assert teaser_answer["steps"] == [
+        "Remove [redacted-text] before publishing.",
+        "Escalate [redacted-identifier] if the reset still fails.",
+    ]
+    artifact_sources = record.artifact["faq_result"]["items"][0]["source_ids"]
+    assert artifact_sources == ["4829103", "777777"]
+    assert record.artifact["evidence_export"]["evidence_rows"][0]["source_id"] == (
+        "4829103"
+    )
+    artifact_encoded = json.dumps(record.artifact, sort_keys=True).lower()
+    for raw_fragment in (
+        "jane.doe",
+        "acme.com",
+        "555-123-4567",
+        "999999",
+        "xxxxx",
+    ):
+        assert raw_fragment not in artifact_encoded
+    assert "4829103" in artifact_encoded
+    assert "777777" in artifact_encoded
+    assert "[redacted-email]" in encoded
+    assert "[redacted-phone]" in encoded
+    assert "[redacted-identifier]" in encoded
+    assert "[redacted-text]" in encoded
+
+
+@pytest.mark.asyncio
 async def test_deflection_submit_accepts_zendesk_full_thread_blob(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -792,11 +934,14 @@ async def test_deflection_submit_accepts_zendesk_full_thread_blob(
     assert artifact_payload["faq_result"]["items"][0]["resolution_evidence_scope"] == (
         "missing_question_scope"
     )
-    assert list(artifact_payload["faq_result"]["items"][0]["source_ids"]) == ["41"]
+    first_source_ids = list(artifact_payload["faq_result"]["items"][0]["source_ids"])
+    assert first_source_ids == ["41"]
     assert artifact_payload["faq_result"]["items"][1]["answer_evidence_status"] == (
         "resolution_evidence"
     )
-    assert list(artifact_payload["faq_result"]["items"][1]["source_ids"]) == ["2"]
+    second_source_ids = list(artifact_payload["faq_result"]["items"][1]["source_ids"])
+    assert second_source_ids == ["2"]
+    assert first_source_ids[0] != second_source_ids[0]
     assert "duplicate billing event and refunded the extra charge" in (
         artifact_payload["markdown"]
     )

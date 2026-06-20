@@ -76,6 +76,7 @@ from ..faq_deflection_report import (
     DEFLECTION_REPORT_SCHEMA_VERSION,
     build_deflection_snapshot,
     deflection_report_model_contract_shape,
+    scrub_deflection_report_payload,
 )
 from ..landing_page_input_contract import landing_page_seo_geo_aeo_input_contracts
 from ..ingestion_diagnostics import inspect_ingestion_file, inspect_ingestion_rows
@@ -3324,8 +3325,9 @@ async def _gate_deflection_report_artifacts(
                 detail="Deflection report artifact is malformed.",
             )
         try:
+            scrubbed_artifact = scrub_deflection_report_payload(artifact)
             snapshot = build_deflection_snapshot(
-                artifact,
+                scrubbed_artifact,
                 top_n=top_n,
                 teaser_preview_count=teaser_preview_count,
             ).as_dict()
@@ -3333,11 +3335,12 @@ async def _gate_deflection_report_artifacts(
                 snapshot_summary = dict(snapshot.get("summary") or {})
                 snapshot_summary.update(dict(preview_summary_metadata))
                 snapshot["summary"] = snapshot_summary
+            snapshot = scrub_deflection_report_payload(snapshot)
             await store.save_report(
                 account_id=account_id,
                 request_id=request_id,
                 snapshot=snapshot,
-                artifact=dict(artifact),
+                artifact=scrubbed_artifact,
                 delivery_email=delivery_email,
             )
         except ValueError as exc:
