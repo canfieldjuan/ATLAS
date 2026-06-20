@@ -76,6 +76,10 @@ breakers.
 - Mixed manylinux CPython 3.14 wheel-resolution probe passed for the Graphiti
   Docker requirements, including `torch`, `numpy`, `pydantic-core`, `asyncpg`,
   `scipy`, and `scikit-learn`.
+- Path/diff spot check confirmed only `Dockerfile.graphiti` and
+  `plans/PR-Graphiti-Python-3-14-Base-Image.md` differ from `origin/main`;
+  `.github/workflows/security_guardrails.yml` is no longer in this PR diff.
+- `python scripts/sync_pr_plan.py plans/PR-Graphiti-Python-3-14-Base-Image.md origin/main --check` - pass.
 - Docker build was not run in this environment; validation is by dependency
   wheel resolution plus CI.
 
@@ -83,6 +87,6 @@ breakers.
 
 | File | LOC |
 |---|---:|
-| `Dockerfile.graphiti` | ~1 |
-| `plans/PR-Graphiti-Python-3-14-Base-Image.md` | ~78 |
-| **Total** | **~79** |
+| `Dockerfile.graphiti` | 2 |
+| `plans/PR-Graphiti-Python-3-14-Base-Image.md` | 92 |
+| **Total** | **94** |

@@ -1,0 +1,37 @@
+{
+  "atlas_brain/templates/email/estimate_confirmation.py": {
+    "counts": {
+      "NO_TEST_FILE": 1
+    },
+    "score": 6
+  },
+  "atlas_brain/templates/email/invoice.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 11
+  },
+  "atlas_brain/templates/email/report_subscription_delivery.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "atlas_brain/templates/email/vendor_briefing.py": {
+    "counts": {
+      "SWALLOWED_EXCEPT": 2,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 12
+  },
+  "atlas_brain/templates/email/watchlist_alert_delivery.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  }
+}

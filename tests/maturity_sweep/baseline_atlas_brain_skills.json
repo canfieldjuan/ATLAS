@@ -1,0 +1,9 @@
+{
+  "atlas_brain/skills/registry.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1,
+      "UNGUARDED_INPUT": 2
+    },
+    "score": 10
+  }
+}

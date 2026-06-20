@@ -27,6 +27,7 @@ from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownService,
     _RESOLUTION_ACTION_TERMS,
     _output_checks,
+    _question_text,
     _resolution_advisory_signals,
     _resolution_signal_token,
     _resolution_signal_tokens,
@@ -1902,6 +1903,56 @@ def test_build_ticket_faq_markdown_cleans_committed_zendesk_product_corpus_label
     assert not any(question.startswith("Localized support question ") for question in questions)
     assert "What should I do about atla?" not in questions
     assert cluster_labels.isdisjoint({"atla", "atlas"})
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_question"),
+    (
+        ("Unable to reset password", "How do I reset password?"),
+        ("The export keeps failing", "What should I do if the export keeps failing?"),
+        ("please reset my password", "How do I reset my password?"),
+        ("Cannot download invoice", "How do I download invoice?"),
+        ("can't access billing settings", "How do I access billing settings?"),
+        ("The report keeps failing", "What should I do if the report keeps failing?"),
+        ("please update billing email", "How do I update billing email?"),
+        ("Unable to invite teammates", "How do I invite teammates?"),
+        ("Unable to log in", "How do I log in?"),
+        ("please log in", "How do I log in?"),
+        ("Payments keep failing", "What should I do if payments keep failing?"),
+        ("The exports keep failing", "What should I do if the exports keep failing?"),
+        ("can not reset password", "How do I reset password?"),
+    ),
+)
+def test_question_text_recognizes_semantic_support_issue_phrasing(
+    text: str,
+    expected_question: str,
+) -> None:
+    assert _question_text(text) == expected_question
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Please see attached logs",
+        "Unable to attend the webinar",
+        "Unable to attend billing webinar",
+        "The office keeps moving",
+        "Please review when you have time",
+        "Please billing team can ignore this",
+        "Please password is included in the screenshot",
+    ),
+)
+def test_question_text_rejects_semantic_support_issue_near_misses(text: str) -> None:
+    assert _question_text(text) == ""
+
+
+def test_question_text_preserves_existing_question_and_first_person_templates() -> None:
+    assert _question_text("How do I change my email address?") == (
+        "How do I change my email address?"
+    )
+    assert _question_text("I cannot update the email address.") == (
+        "How do I update the email address?"
+    )
 
 
 @pytest.mark.parametrize(

@@ -74,7 +74,10 @@ export default function App() {
     }
   }, [days])
 
-  useEffect(() => { void fetchAll() }, [fetchAll])
+  useEffect(() => {
+    const id = window.setTimeout(() => { void fetchAll() }, 0)
+    return () => window.clearTimeout(id)
+  }, [fetchAll])
 
   // Auto-refresh every 60s
   useEffect(() => {

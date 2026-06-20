@@ -8,7 +8,14 @@ import os
 import time
 
 import pytest
-from openai import OpenAI
+
+# External cloud-latency benchmark: needs live Fireworks/Together API keys and
+# the `openai` SDK, which is not a brain runtime dependency. Mark e2e and skip
+# cleanly at collection when the SDK is absent so the unit backstop
+# (`not integration and not e2e`) does not error collecting it.
+pytestmark = pytest.mark.e2e
+pytest.importorskip("openai")
+from openai import OpenAI  # noqa: E402
 
 # API Keys from environment
 FIREWORKS_API_KEY = os.environ.get("FIREWORKS_API_KEY", "")
