@@ -99,6 +99,12 @@ Parked hardening: none.
 - C3 ratchet command for `extracted_llm_infrastructure` - pass, 41 files scanned and no new brittleness above baseline.
 - Path-filter spot check for `extracted_llm_infrastructure/**` and retained `tests/**` - pass.
 - Scratch negative proof in `extracted_llm_infrastructure/services/llm/openrouter.py` - pass. A temporary swallowed-exception probe failed with `score increased (23 -> 28)` and `new sensitive-path SWALLOWED_EXCEPT (2 -> 3)`; the scratch code was removed and the clean C3 command reran successfully.
+- Scratch negative proof for a new file crossing `--min-score 8` - pass. A
+  temporary `extracted_llm_infrastructure/tmp_new_file_min_score_probe.py`
+  scored 11 from `NO_TEST_FILE`, `UNGUARDED_INPUT`, and `WEAK_CONTRACT`; the
+  shipped C3 command failed with `new file at or above min-score (score 11 >=
+  8)`. The scratch file was removed and the clean C3 command reran
+  successfully.
 - `python scripts/sync_pr_plan.py plans/PR-Maturity-Sweep-Phase-C3-LLM-Infrastructure.md --check` - pass.
 
 ## Estimated diff size
@@ -106,6 +112,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/maturity_sweep_advisory.yml` | 11 |
-| `plans/PR-Maturity-Sweep-Phase-C3-LLM-Infrastructure.md` | 111 |
+| `plans/PR-Maturity-Sweep-Phase-C3-LLM-Infrastructure.md` | 117 |
 | `tests/maturity_sweep/baseline_extracted_llm_infrastructure.json` | 150 |
-| **Total** | **272** |
+| **Total** | **278** |
