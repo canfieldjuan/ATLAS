@@ -9,12 +9,9 @@ import math
 import re
 import zlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any
 
 
@@ -24,6 +21,11 @@ for path in (ROOT, SCRIPT_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from _deflection_http import (  # noqa: E402
+    HttpResponse as HttpResult,
+    json_request as _shared_json_request,
+    open_http_request as _open_http_request,
+)
 from check_deflection_full_report_pdf_export_artifacts import (  # noqa: E402
     DEFAULT_REQUIRED_SURFACES,
     LEAK_PATTERNS as PDF_LEAK_PATTERNS,
@@ -76,13 +78,6 @@ SENSITIVE_PATTERNS = (
     ),
     ("private_note", re.compile(r"\b(?:private|internal)\s+note\b", re.IGNORECASE)),
 )
-
-
-@dataclass(frozen=True)
-class HttpResult:
-    status: int | None
-    payload: Any = None
-    errors: tuple[str, ...] = ()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -175,30 +170,17 @@ def _join_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
-def _open_http_request(request: urllib.request.Request, *, timeout: float) -> Any:
-    return urllib.request.urlopen(request, timeout=timeout)
-
-
 def _fetch_json(url: str, *, token: str, timeout: float) -> HttpResult:
-    request = urllib.request.Request(
+    return _shared_json_request(
+        "GET",
         url,
-        headers={
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
+        token=token,
+        timeout=timeout,
+        opener=_open_http_request,
+        http_error_template="http_error",
+        transport_error_template="network_error",
+        invalid_json_template="invalid_json",
     )
-    try:
-        with _open_http_request(request, timeout=timeout) as response:
-            body = response.read().decode("utf-8", errors="replace")
-            try:
-                payload = json.loads(body) if body else None
-            except json.JSONDecodeError:
-                return HttpResult(status=int(response.getcode()), errors=("invalid_json",))
-            return HttpResult(status=int(response.getcode()), payload=payload)
-    except urllib.error.HTTPError as exc:
-        return HttpResult(status=int(exc.code), errors=("http_error",))
-    except (OSError, urllib.error.URLError):
-        return HttpResult(status=None, errors=("network_error",))
 
 
 def _read_bytes(path: Path, *, label: str) -> tuple[bytes, list[str]]:

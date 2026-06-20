@@ -16,14 +16,22 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from _deflection_http import (  # noqa: E402
+    HttpResponse as HttpResult,
+    json_request as _shared_json_request,
+    open_http_request as _open_http_request,
+)
+
 LOCAL_HOSTS = frozenset({"localhost", "0.0.0.0", "::1"})
 WEBHOOK_PATH = "/webhooks/stripe"
 ARTIFACT_PATH_TEMPLATE = "/api/v1/content-ops/deflection-reports/{request_id}/artifact"
@@ -42,14 +50,6 @@ try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional host dependency
     load_dotenv = None
-
-
-@dataclass(frozen=True)
-class HttpResult:
-    status: int | None
-    text: str
-    payload: Any = None
-    errors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -172,10 +172,6 @@ def _join_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
-def _open_http_request(request: urllib.request.Request, *, timeout: float) -> Any:
-    return urllib.request.urlopen(request, timeout=timeout)
-
-
 def _report_lookup_error(exc: BaseException) -> RuntimeError:
     detail = _redact_error_detail(exc)
     message = "persisted report lookup failed"
@@ -279,12 +275,6 @@ def _resolve_metadata(args: argparse.Namespace) -> tuple[MetadataResolution | No
     )
 
 
-def _read_http_error(exc: urllib.error.HTTPError) -> str:
-    if not exc.fp:
-        return ""
-    return exc.read().decode("utf-8", errors="replace")
-
-
 def _json_request(
     method: str,
     url: str,
@@ -294,33 +284,20 @@ def _json_request(
     body: bytes | None = None,
     stripe_signature: str = "",
 ) -> HttpResult:
-    headers = {"Accept": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-    if stripe_signature:
-        headers["Stripe-Signature"] = stripe_signature
-    request = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        with _open_http_request(request, timeout=timeout) as response:
-            text = response.read().decode("utf-8", errors="replace")
-            return HttpResult(
-                status=int(response.getcode()),
-                text=text,
-                payload=json.loads(text) if text else None,
-            )
-    except urllib.error.HTTPError as exc:
-        text = _read_http_error(exc)
-        payload = None
-        if text:
-            try:
-                payload = json.loads(text)
-            except json.JSONDecodeError:
-                payload = None
-        return HttpResult(status=int(exc.code), text=text, payload=payload, errors=(f"HTTP {exc.code}",))
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        return HttpResult(status=None, text="", errors=(str(exc),))
+    return _shared_json_request(
+        method,
+        url,
+        timeout=timeout,
+        token=token,
+        data=body,
+        stripe_signature=stripe_signature,
+        redactor=_redact_error_detail,
+        opener=_open_http_request,
+        http_error_template="HTTP {status}",
+        transport_error_template="{error}",
+        invalid_json_template="{error}",
+        invalid_json_status=None,
+    )
 
 
 def _stripe_event_payload(
