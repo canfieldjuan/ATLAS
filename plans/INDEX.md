@@ -1,6 +1,6 @@
 # Plan archive index
 
-1147 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1148 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -212,6 +212,7 @@
 - [PR-Content-Ops-Calibration-Admin-Surface](archive/PR-Content-Ops-Calibration-Admin-Surface.md) - lane: content-ops/review-contract | phase: Functional validation
 - [PR-Content-Ops-Calibration-Anchors-Verify](archive/PR-Content-Ops-Calibration-Anchors-Verify.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Calibration-Library](archive/PR-Content-Ops-Calibration-Library.md) - lane: content-ops/review-contract | phase: Vertical slice
+- [PR-Content-Ops-Calibration-Live-DB-Verification](archive/PR-Content-Ops-Calibration-Live-DB-Verification.md) - lane: content-ops/calibration-live-verification | phase: Robust testing
 - [PR-Content-Ops-Calibration-Reader-Persistence](archive/PR-Content-Ops-Calibration-Reader-Persistence.md) - lane: content-ops/review-contract | phase: Functional validation
 - [PR-Content-Ops-Calibration-Reader-Port](archive/PR-Content-Ops-Calibration-Reader-Port.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Call-Meeting-Source-Rows](archive/PR-Content-Ops-Call-Meeting-Source-Rows.md)
