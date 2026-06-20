@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -46,6 +47,115 @@ _UNCAPPED_REPORT_MAX_ITEMS = 0
 _ASSISTED_CONTACT_COST = 13.50
 _ASSISTED_CONTACT_COST_LABEL = "$13.50"
 _SOURCE_EXAMPLE_LIMIT = 3
+_DEFLECTION_BOUNDARY_LEFT = r"(?<![A-Za-z0-9])"
+_DEFLECTION_BOUNDARY_RIGHT = r"(?![A-Za-z0-9])"
+_DEFLECTION_EMAIL_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}"
+)
+_DEFLECTION_PHONE_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}"
+)
+_DEFLECTION_IDENTIFIER_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"(?:account|accounts|acct|case|cases|claim|claims|confirmation|"
+    r"confirmations|customer|customers|id|ids|invoice|invoices|member|"
+    r"members|order|orders|ref|refs|reference|references|ticket|tickets)"
+    r"\s*(?:#|number|no\.?)?\s*[:#-]?\s*\d{4,}"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}"
+    r"|"
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"\d{4,}\s*(?:account|accounts|acct|case|cases|claim|claims|customer|"
+    r"customers|invoice|invoices|member|members|order|orders|ref|refs|"
+    r"reference|references|ticket|tickets)"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}",
+    re.IGNORECASE,
+)
+_DEFLECTION_REDACTION_ARTIFACT_RE = re.compile(
+    r"\[(?:redacted(?!-(?:email|identifier|phone|text)\])|removed|hidden)[^\]]*\]"
+    r"|\bX{4,}\b",
+    re.IGNORECASE,
+)
+_DEFLECTION_IDENTIFIER_KEYS = frozenset(
+    {
+        "account",
+        "account_id",
+        "account_ids",
+        "acct",
+        "acct_id",
+        "acct_ids",
+        "case",
+        "case_id",
+        "case_ids",
+        "claim",
+        "claim_id",
+        "claim_ids",
+        "confirmation",
+        "confirmation_id",
+        "confirmation_ids",
+        "customer",
+        "customer_id",
+        "customer_ids",
+        "invoice",
+        "invoice_id",
+        "invoice_ids",
+        "member",
+        "member_id",
+        "member_ids",
+        "order",
+        "order_id",
+        "order_ids",
+        "ref",
+        "ref_id",
+        "ref_ids",
+        "reference",
+        "reference_id",
+        "reference_ids",
+        "ticket",
+    }
+)
+_DEFLECTION_SOURCE_LINK_KEYS = frozenset(
+    {
+        "source_id",
+        "source_ids",
+        "ticket_id",
+        "ticket_ids",
+    }
+)
+_DEFLECTION_IDENTIFIER_KEY_SUFFIXES = (
+    "_account_id",
+    "_account_ids",
+    "_acct_id",
+    "_acct_ids",
+    "_case_id",
+    "_case_ids",
+    "_claim_id",
+    "_claim_ids",
+    "_confirmation_id",
+    "_confirmation_ids",
+    "_customer_id",
+    "_customer_ids",
+    "_invoice_id",
+    "_invoice_ids",
+    "_member_id",
+    "_member_ids",
+    "_order_id",
+    "_order_ids",
+    "_ref_id",
+    "_ref_ids",
+    "_reference_id",
+    "_reference_ids",
+)
+_DEFLECTION_SOURCE_LINK_KEY_SUFFIXES = (
+    "_source_id",
+    "_source_ids",
+    "_ticket_id",
+    "_ticket_ids",
+)
+_DEFLECTION_IDENTIFIER_TOKEN_PREFIX = "deflection-ref"
 
 
 @dataclass(frozen=True)
@@ -154,6 +264,13 @@ class DeflectionReportArtifact:
 
     def snapshot(self, *, top_n: int = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N) -> DeflectionSnapshot:
         return build_deflection_snapshot(self, top_n=top_n)
+
+
+def scrub_deflection_report_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a JSON payload with supported customer PII classes redacted."""
+
+    scrubber = _DeflectionPayloadScrubber(payload)
+    return scrubber.scrub_payload(payload)
 
 
 _DEFLECTION_REPORT_SECTION_DEFINITIONS = (
@@ -2280,6 +2397,247 @@ def _positive_limit(value: Any) -> int:
     return max(1, min(parsed, 25))
 
 
+class _DeflectionPayloadScrubber:
+    def __init__(self, payload: Mapping[str, Any]) -> None:
+        self._tokens_by_normalized_identifier: dict[str, str] = {}
+        self._tokens_by_raw_identifier: dict[str, str] = {}
+        self._source_links: set[str] = set()
+        self._collect_identifier_tokens(payload)
+
+    def scrub_payload(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        scrubbed = self._scrub_value(value)
+        if not isinstance(scrubbed, dict):
+            return {}
+        return scrubbed
+
+    def _collect_identifier_tokens(self, value: Any, *, identifier_field: bool = False) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                if _is_deflection_source_link_key(key):
+                    self._collect_source_links(item)
+                    continue
+                self._collect_identifier_tokens(
+                    item,
+                    identifier_field=_is_deflection_identifier_key(key),
+                )
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for item in value:
+                self._collect_identifier_tokens(
+                    item,
+                    identifier_field=identifier_field,
+                )
+            return
+        if identifier_field:
+            self._token_for_identifier(value)
+
+    def _collect_source_links(self, value: Any) -> None:
+        if isinstance(value, Mapping):
+            for item in value.values():
+                self._collect_source_links(item)
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for item in value:
+                self._collect_source_links(item)
+            return
+        if isinstance(value, str) and _should_preserve_source_link(value):
+            self._source_links.add(value)
+
+    def _scrub_value(
+        self,
+        value: Any,
+        *,
+        identifier_field: bool = False,
+        source_link_field: bool = False,
+    ) -> Any:
+        if source_link_field:
+            return self._scrub_source_link_value(value)
+        if isinstance(value, Mapping):
+            return {
+                self._scrub_key(key): self._scrub_value(
+                    item,
+                    identifier_field=_is_deflection_identifier_key(key),
+                    source_link_field=_is_deflection_source_link_key(key),
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [
+                self._scrub_value(item, identifier_field=identifier_field)
+                for item in value
+            ]
+        if identifier_field:
+            return self._token_for_identifier(value)
+        if isinstance(value, str):
+            return self._scrub_text(value)
+        return value
+
+    def _scrub_source_link_value(self, value: Any) -> Any:
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [self._scrub_source_link_value(item) for item in value]
+        if isinstance(value, str):
+            return _scrub_source_link_text(value)
+        return value
+
+    def _scrub_key(self, key: Any) -> str:
+        return self._scrub_text(str(key))
+
+    def _token_for_identifier(self, value: Any) -> str:
+        text = _text(value)
+        if not text:
+            return ""
+        existing = self._tokens_by_raw_identifier.get(text)
+        if existing:
+            return existing
+        normalized = _normalize_deflection_identifier(text)
+        token = self._tokens_by_normalized_identifier.get(normalized)
+        if token is None:
+            token = (
+                f"{_DEFLECTION_IDENTIFIER_TOKEN_PREFIX}-"
+                f"{_alpha_index(len(self._tokens_by_normalized_identifier))}"
+            )
+            self._tokens_by_normalized_identifier[normalized] = token
+        self._tokens_by_raw_identifier[text] = token
+        return token
+
+    def _scrub_text(self, value: str) -> str:
+        protected_text, source_link_placeholders = _protect_source_link_mentions(
+            value,
+            self._source_links,
+        )
+        scrubbed = _scrub_deflection_text(
+            _scrub_known_identifier_text(
+                protected_text,
+                self._tokens_by_raw_identifier,
+            )
+        )
+        return _restore_source_link_mentions(scrubbed, source_link_placeholders)
+
+
+def _scrub_source_link_text(value: str) -> str:
+    if _should_preserve_source_link(value):
+        return value
+    return _scrub_deflection_text(value)
+
+
+def _should_preserve_source_link(value: str) -> bool:
+    text = _text(value)
+    if not text:
+        return False
+    return not (
+        _DEFLECTION_EMAIL_RE.search(text)
+        or _DEFLECTION_PHONE_RE.search(text)
+        or _DEFLECTION_REDACTION_ARTIFACT_RE.search(text)
+    )
+
+
+def _protect_source_link_mentions(
+    value: str,
+    source_links: set[str],
+) -> tuple[str, dict[str, str]]:
+    if not source_links:
+        return value, {}
+    placeholders: dict[str, str] = {}
+    out_lines: list[str] = []
+    for line in value.splitlines(keepends=True):
+        if not _line_preserves_source_links(line):
+            out_lines.append(line)
+            continue
+        protected = line
+        for source_link in sorted(source_links, key=len, reverse=True):
+            placeholder = f"DEFLECTIONSOURCELINK{_alpha_index(len(placeholders))}"
+            pattern = re.compile(re.escape(source_link), re.IGNORECASE)
+            if not pattern.search(protected):
+                continue
+            protected = pattern.sub(placeholder, protected)
+            placeholders[placeholder] = source_link
+        out_lines.append(protected)
+    return "".join(out_lines), placeholders
+
+
+def _line_preserves_source_links(value: str) -> bool:
+    text = value.strip().casefold()
+    return (
+        text.startswith("`")
+        or "source id" in text
+        or "source ids" in text
+        or text.startswith("**sources:**")
+        or text.startswith("sources:")
+    )
+
+
+def _restore_source_link_mentions(
+    value: str,
+    placeholders: Mapping[str, str],
+) -> str:
+    text = value
+    for placeholder, source_link in placeholders.items():
+        text = text.replace(placeholder, source_link)
+    return text
+
+
+def _is_deflection_identifier_key(key: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(key).strip().casefold()).strip("_")
+    return normalized in _DEFLECTION_IDENTIFIER_KEYS or normalized.endswith(
+        _DEFLECTION_IDENTIFIER_KEY_SUFFIXES
+    )
+
+
+def _is_deflection_source_link_key(key: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(key).strip().casefold()).strip("_")
+    return normalized in _DEFLECTION_SOURCE_LINK_KEYS or normalized.endswith(
+        _DEFLECTION_SOURCE_LINK_KEY_SUFFIXES
+    )
+
+
+def _normalize_deflection_identifier(value: str) -> str:
+    digit_groups = re.findall(r"\d{4,}", value)
+    if digit_groups:
+        return "|".join(digit_groups)
+    return re.sub(r"\s+", " ", value.strip().casefold())
+
+
+def _alpha_index(index: int) -> str:
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    value = index + 1
+    chars: list[str] = []
+    while value:
+        value, remainder = divmod(value - 1, len(letters))
+        chars.append(letters[remainder])
+    return "".join(reversed(chars))
+
+
+def _scrub_known_identifier_text(
+    value: str,
+    tokens_by_raw_identifier: Mapping[str, str],
+) -> str:
+    text = value
+    for raw_identifier, token in sorted(
+        tokens_by_raw_identifier.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        if not _should_scrub_identifier_inside_text(raw_identifier):
+            continue
+        pattern = re.compile(
+            rf"{_DEFLECTION_BOUNDARY_LEFT}{re.escape(raw_identifier)}{_DEFLECTION_BOUNDARY_RIGHT}",
+            re.IGNORECASE,
+        )
+        text = pattern.sub(token, text)
+    return text
+
+
+def _should_scrub_identifier_inside_text(value: str) -> bool:
+    return bool(re.search(r"\d{4,}", value) or re.search(r"[^A-Za-z0-9]", value))
+
+
+def _scrub_deflection_text(value: str) -> str:
+    text = _DEFLECTION_REDACTION_ARTIFACT_RE.sub("[redacted-text]", value)
+    text = _DEFLECTION_EMAIL_RE.sub("[redacted-email]", text)
+    text = _DEFLECTION_PHONE_RE.sub("[redacted-phone]", text)
+    return _DEFLECTION_IDENTIFIER_RE.sub("[redacted-identifier]", text)
+
+
 def _json_ready(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {str(key): _json_ready(item) for key, item in value.items()}
@@ -2323,4 +2681,5 @@ __all__ = [
     "deflection_snapshot_content_opportunities",
     "render_deflection_report",
     "render_deflection_report_model",
+    "scrub_deflection_report_payload",
 ]

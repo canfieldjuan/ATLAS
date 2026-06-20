@@ -21,6 +21,7 @@ from extracted_content_pipeline.faq_deflection_report import (
     deflection_report_model_contract_shape,
     deflection_snapshot_content_opportunities,
     render_deflection_report_model,
+    scrub_deflection_report_payload,
     _report_section,
 )
 from extracted_content_pipeline.deflection_report_access import (
@@ -1502,6 +1503,118 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
     assert "ticket-export-1" not in encoded
     assert "evidence_quotes" not in encoded
     assert "source_ids" not in encoded
+
+
+def test_deflection_report_payload_scrubs_supported_pii_before_snapshot_projection() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I reset access for jane.doe@acme.com?",
+                "question_source": "customer_wording",
+                "customer_wording": (
+                    "Jane can be reached at 555-123-4567 for account 4829103."
+                ),
+                "topic": "Password reset for jane.doe@acme.com",
+                "weighted_frequency": 4,
+                "ticket_count": 2,
+                "answer": "Send jane.doe@acme.com a reset link.",
+                "steps": [
+                    "Confirm account 4829103 before resetting access.",
+                    "Call (555) 123-4567 if the customer is locked out.",
+                    "Escalate claim 999999 if the reset still fails.",
+                ],
+                "term_mappings": [
+                    {
+                        "customer_term": "Jane's account 4829103",
+                        "documentation_term": "password reset",
+                        "suggestion": "Remove XXXXX before publishing.",
+                        "source_id_count": 2,
+                    }
+                ],
+                "source_ids": ("ticket-source-a", "ticket-source-b"),
+                "evidence_quotes": (
+                    "`ticket-source-a`: jane.doe@acme.com mentioned XXXXX.",
+                    "`ticket-source-b`: Call 555-123-4567 for ref 777777.",
+                ),
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+            },
+        ),
+    )
+    artifact = build_deflection_report_artifact(result).as_dict()
+
+    scrubbed_artifact = scrub_deflection_report_payload(artifact)
+    snapshot = build_deflection_snapshot(scrubbed_artifact).as_dict()
+    encoded = json.dumps(
+        {"artifact": scrubbed_artifact, "snapshot": snapshot},
+        sort_keys=True,
+    ).lower()
+
+    for raw_fragment in (
+        "jane.doe",
+        "acme.com",
+        "555-123-4567",
+        "(555) 123-4567",
+        "4829103",
+        "777777",
+        "999999",
+        "xxxxx",
+    ):
+        assert raw_fragment not in encoded
+    assert scrubbed_artifact["faq_result"]["items"][0]["source_ids"] == [
+        "ticket-source-a",
+        "ticket-source-b",
+    ]
+    assert "[redacted-email]" in encoded
+    assert "[redacted-phone]" in encoded
+    assert "[redacted-identifier]" in encoded
+    assert "[redacted-text]" in encoded
+
+
+def test_deflection_report_payload_scrubs_identifier_fields_markdown_and_keys() -> None:
+    scrubbed = scrub_deflection_report_payload(
+        {
+            "source_id": "4829103",
+            "source_ids": ["777777", "ticket-4829103", "owner@example.com"],
+            "first_source_id": "888888",
+            "account_id": 5550000,
+            "id": "question_details",
+            "note": (
+                "Sources 4829103 and ticket-4829103 reached "
+                "_jane.doe@acme.com_ at _555-123-4567_ about case 999999."
+            ),
+            "jane.doe@acme.com": {"_555-123-4567_": "visible"},
+        }
+    )
+
+    encoded = json.dumps(scrubbed, sort_keys=True).lower()
+
+    for raw_fragment in (
+        "5550000",
+        "999999",
+        "jane.doe",
+        "acme.com",
+        "555-123-4567",
+    ):
+        assert raw_fragment not in encoded
+    assert scrubbed["source_id"] == "4829103"
+    assert scrubbed["source_ids"] == [
+        "777777",
+        "ticket-4829103",
+        "[redacted-email]",
+    ]
+    assert scrubbed["first_source_id"] == "888888"
+    assert scrubbed["account_id"].startswith("deflection-ref-")
+    assert scrubbed["id"] == "question_details"
+    assert "[redacted-email]" in scrubbed
+    assert any("[redacted-phone]" in key for key in scrubbed["[redacted-email]"])
+    assert "[redacted-email]" in encoded
+    assert "[redacted-phone]" in encoded
+    assert "[redacted-identifier]" in encoded
 
 
 def test_deflection_snapshot_marks_question_only_exports_absent_resolution_evidence() -> None:
