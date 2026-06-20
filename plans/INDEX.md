@@ -1,6 +1,6 @@
 # Plan archive index
 
-1154 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1155 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -729,6 +729,7 @@
 - [PR-Deflection-Mxbai-Merge-Spotcheck](archive/PR-Deflection-Mxbai-Merge-Spotcheck.md) - lane: deflection/clustering | phase: Functional validation
 - [PR-Deflection-Outcome-Risk-Diagnostics](archive/PR-Deflection-Outcome-Risk-Diagnostics.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-PDF-Clickable-Navigation](archive/PR-Deflection-PDF-Clickable-Navigation.md) - lane: content-ops/deflection-report-shape | phase: Product polish
+- [PR-Deflection-PII-Surrogate-Eval-Schema](archive/PR-Deflection-PII-Surrogate-Eval-Schema.md) - lane: deflection/pii-recall-precision-testing | phase: Functional validation
 - [PR-Deflection-Paid-Delivery-Queue](archive/PR-Deflection-Paid-Delivery-Queue.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
 - [PR-Deflection-Paid-Delivery-Script](archive/PR-Deflection-Paid-Delivery-Script.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
 - [PR-Deflection-Paid-Delivery-Worker](archive/PR-Deflection-Paid-Delivery-Worker.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
