@@ -12,6 +12,7 @@ import urllib.request
 
 
 Redactor = Callable[[Any], str]
+TextRedactor = Callable[[str], str]
 Opener = Callable[[urllib.request.Request], Any]
 _KEEP_STATUS = object()
 
@@ -57,6 +58,24 @@ def _encoded_body(
     return json.dumps(body, separators=(",", ":")).encode("utf-8")
 
 
+def _redact_json_string_values(value: Any, redactor: TextRedactor) -> Any:
+    if isinstance(value, str):
+        return redactor(value)
+    if isinstance(value, list):
+        return [_redact_json_string_values(item, redactor) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_json_string_values(item, redactor) for key, item in value.items()}
+    return value
+
+
+def _redact_error_body(raw: str, redactor: TextRedactor) -> str:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return redactor(raw)
+    return json.dumps(_redact_json_string_values(payload, redactor), separators=(",", ":"))
+
+
 def json_request(
     method: str,
     url: str,
@@ -73,6 +92,7 @@ def json_request(
     transport_error_template: str = "{method} {url} transport failed: {error}",
     invalid_json_template: str = "{method} {url} returned invalid JSON: {error}",
     invalid_json_status: int | None | object = _KEEP_STATUS,
+    error_body_redactor: TextRedactor | None = None,
     truncate_text: int | None = None,
 ) -> HttpResponse:
     encoded_body = _encoded_body(body, data)
@@ -97,6 +117,7 @@ def json_request(
         transport_error_template=transport_error_template,
         invalid_json_template=invalid_json_template,
         invalid_json_status=invalid_json_status,
+        error_body_redactor=error_body_redactor,
         truncate_text=truncate_text,
     )
 
@@ -113,6 +134,7 @@ def json_response_from_request(
     transport_error_template: str = "{method} {url} transport failed: {error}",
     invalid_json_template: str = "{method} {url} returned invalid JSON: {error}",
     invalid_json_status: int | None | object = _KEEP_STATUS,
+    error_body_redactor: TextRedactor | None = None,
     truncate_text: int | None = None,
 ) -> HttpResponse:
     http_errors: tuple[str, ...] = ()
@@ -134,6 +156,8 @@ def json_response_from_request(
             errors=(transport_error_template.format(method=method, url=url, error=detail),),
         )
 
+    if error_body_redactor is not None and status >= 400:
+        raw = _redact_error_body(raw, error_body_redactor)
     stored_raw = raw if truncate_text is None else raw[:truncate_text]
     if not raw.strip():
         return HttpResponse(

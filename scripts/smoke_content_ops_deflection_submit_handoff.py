@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import os
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 import sys
@@ -74,6 +75,21 @@ VOLUME_GATE_PROFILES: dict[str, dict[str, int]] = {
         "top_question_count": 5,
     },
 }
+_SIGNED_URL_QUERY_RE = re.compile(r"(https?://[^\s\"'<>?]+)\?[^\s\"'<>]+")
+_HTTP_ERROR_BODY_REDACTIONS = (
+    (re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE), "Bearer [redacted]"),
+    (re.compile(r"content-ops-[A-Za-z0-9_-]+"), "content-ops-[redacted]"),
+    (re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE), "[email-redacted]"),
+    (
+        re.compile(
+            r"\b(?:zendesk|freshdesk|intercom|helpscout|ticket|row|zd|source)[-_:]"
+            r"[A-Za-z0-9][A-Za-z0-9._-]*\b",
+            re.IGNORECASE,
+        ),
+        "[source-id-redacted]",
+    ),
+    (re.compile(r"\b\d{6,}\b"), "[id-redacted]"),
+)
 
 try:
     from dotenv import load_dotenv
@@ -290,6 +306,14 @@ def _redacted_blob_host(blob_url: str) -> str:
     return parsed.hostname or ""
 
 
+def _redact_http_error_body(value: str) -> str:
+    text = "" if value is None else str(value)
+    text = _SIGNED_URL_QUERY_RE.sub(r"\1?[redacted]", text)
+    for pattern, replacement in _HTTP_ERROR_BODY_REDACTIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def _submit_body(args: argparse.Namespace) -> dict[str, Any]:
     body: dict[str, Any] = {
         "blob_url": _clean(args.blob_url),
@@ -326,6 +350,7 @@ def _parse_http_json_response(
         request=request,
         timeout=timeout,
         opener=_open_http_request,
+        error_body_redactor=_redact_http_error_body,
         truncate_text=2000,
     )
 
@@ -345,6 +370,7 @@ def _json_request(
         timeout=timeout,
         body=body,
         opener=_open_http_request,
+        error_body_redactor=_redact_http_error_body,
         truncate_text=2000,
     )
 
