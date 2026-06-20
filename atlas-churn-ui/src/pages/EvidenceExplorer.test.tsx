@@ -1294,7 +1294,7 @@ describe('EvidenceExplorer', () => {
     )
 
     expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open account review' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Open account review' })).toHaveAttribute(
       'href',
       '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26offset%3D30%26witness_id%3Dwitness%253Azendesk%253A31',
     )

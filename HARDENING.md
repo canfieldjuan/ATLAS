@@ -32,14 +32,14 @@ register under `docs/technical-debt/`.
 
 ## 2026-06-17
 
-### Align deflection submit smoke forbidden snapshot paths with teaser contract
-- File/location: `scripts/smoke_content_ops_deflection_submit_handoff.py`, `docs/frontend/content_ops_faq_report_contract.md`
-- Description: The submit handoff smoke reports `teaser.full_answer.answer` and `teaser.full_answer.steps` as forbidden, but the checked-in snapshot contract permits answer text and steps inside `teaser.full_answer`.
-- Why it matters: A false paywall-leak report can steer QA work toward removing contract-required teaser content instead of fixing real paid-artifact delivery gaps.
-- Effort: S
-- Category: correctness
-- Owner/session: Codex content-ops/deflection-full-report-qa
-- Found during: PR-Deflection-Full-Report-QA-Live-Artifact review
+### Churn and Atlas UI lint debt blocks ESLint 10
+- File/location: `atlas-churn-ui/src/**`, `atlas-ui/src/**`, ESLint React-hooks/compiler-rule surfaces.
+- Description: A trial ESLint 10 batch exposed that `npm run lint` currently fails in `atlas-churn-ui` with 118 errors and in `atlas-ui` with 24 errors, mostly existing React hooks purity/set-state-in-effect/ref-access findings plus a few `any`/unsafe-finally findings. CI currently builds these packages but does not run their lint scripts.
+- Why it matters: Their standalone ESLint 10 Dependabot PRs cannot be responsibly batched as lint-compatible until the existing lint debt is reduced or the package lint policy is deliberately narrowed.
+- Effort: M
+- Category: tech-debt
+- Owner/session: Codex security/dependencies
+- Found during: PR-ESLint-10-Web-Batch
 
 ### Mobile Expo 56 audit cleanup
 - File/location: `atlas-mobile/package-lock.json`, Expo/React Native dependency graph.

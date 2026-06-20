@@ -148,6 +148,30 @@ def _evidence_export() -> dict[str, object]:
     }
 
 
+def _process_contract(**contract_overrides: Any) -> dict[str, Any]:
+    contract: dict[str, Any] = {
+        "report_model_schema_version": "deflection.v1",
+        "report_model_contract": runner.EXPECTED_REPORT_MODEL_CONTRACT,
+        "evidence_export_schema_version": "deflection_evidence.v1",
+        "paid_artifact_requires": {
+            "report_model": "object",
+            "evidence_export": "object",
+        },
+    }
+    contract.update(contract_overrides)
+    return {
+        "schema_version": "deflection_report_process.v1",
+        "service": "content_ops_deflection_reports",
+        "contract": contract,
+        "routes": {
+            "process_contract": "/api/v1/content-ops/deflection-reports/process-contract",
+            "snapshot": "/api/v1/content-ops/deflection-reports/{request_id}/snapshot",
+            "artifact": "/api/v1/content-ops/deflection-reports/{request_id}/artifact",
+            "report_model": "/api/v1/content-ops/deflection-reports/{request_id}/report-model",
+        },
+    }
+
+
 def _pdf_text() -> str:
     return """
     Support Ticket Deflection Report
@@ -251,6 +275,8 @@ def test_live_runner_extracts_pdf_text_from_renderer_bytes_by_default(
 
     def _urlopen(request, *, timeout):
         calls.append(request.full_url)
+        if request.full_url.endswith("/process-contract"):
+            return FakeResponse(200, _process_contract())
         if request.full_url.endswith(f"/{REQUEST_ID}/report-model"):
             return FakeResponse(200, _pdf_report_model())
         if request.full_url.endswith(f"/{REQUEST_ID}/artifact"):
@@ -285,6 +311,7 @@ def test_live_runner_extracts_pdf_text_from_renderer_bytes_by_default(
     assert payload["inputs"]["pdf_text_present"] is False
     assert payload["scorecard"]["artifacts"]["pdf"]["text_chars"] > 0
     assert calls == [
+        "https://atlas.example.com/api/v1/content-ops/deflection-reports/process-contract",
         f"https://atlas.example.com/api/v1/content-ops/deflection-reports/{REQUEST_ID}/report-model",
         f"https://atlas.example.com/api/v1/content-ops/deflection-reports/{REQUEST_ID}/artifact",
     ]
@@ -345,6 +372,8 @@ def test_live_runner_fetches_live_json_and_writes_redacted_scorecard(
             "headers": dict(request.header_items()),
             "timeout": timeout,
         })
+        if request.full_url.endswith("/process-contract"):
+            return FakeResponse(200, _process_contract())
         if request.full_url.endswith(f"/{REQUEST_ID}/report-model"):
             return FakeResponse(200, _report_model())
         if request.full_url.endswith(f"/{REQUEST_ID}/artifact"):
@@ -360,6 +389,7 @@ def test_live_runner_fetches_live_json_and_writes_redacted_scorecard(
     payload = _payload(tmp_path)
     assert printed == payload
     assert payload["ok"] is True
+    assert payload["fetches"]["process_contract"] == {"status": 200, "ok": True}
     assert payload["fetches"]["report_model"] == {"status": 200}
     assert payload["fetches"]["artifact"] == {"status": 200}
     assert payload["scorecard"]["ok"] is True
@@ -369,6 +399,7 @@ def test_live_runner_fetches_live_json_and_writes_redacted_scorecard(
     }
     assert payload["scorecard"]["artifacts"]["pdf"]["text_chars"] > 0
     assert [call["url"] for call in calls] == [
+        "https://atlas.example.com/api/v1/content-ops/deflection-reports/process-contract",
         f"https://atlas.example.com/api/v1/content-ops/deflection-reports/{REQUEST_ID}/report-model",
         f"https://atlas.example.com/api/v1/content-ops/deflection-reports/{REQUEST_ID}/artifact",
     ]
@@ -570,6 +601,8 @@ def test_unsupported_pdf_stream_filter_fails_before_network(monkeypatch, tmp_pat
 
 def test_artifact_missing_evidence_export_fails_closed(monkeypatch, tmp_path) -> None:
     def _urlopen(request, *, timeout):
+        if request.full_url.endswith("/process-contract"):
+            return FakeResponse(200, _process_contract())
         if request.full_url.endswith("/report-model"):
             return FakeResponse(200, _report_model())
         return FakeResponse(200, {"report_model": _report_model()})
@@ -586,11 +619,59 @@ def test_artifact_missing_evidence_export_fails_closed(monkeypatch, tmp_path) ->
     assert "evidence_rows" not in json.dumps(payload)
 
 
+def test_process_contract_drift_fails_before_paid_artifact_fetches(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls: list[str] = []
+
+    def _urlopen(request, *, timeout):
+        del timeout
+        calls.append(request.full_url)
+        if request.full_url.endswith("/process-contract"):
+            stale_shape = dict(runner.EXPECTED_REPORT_MODEL_CONTRACT)
+            stale_shape["sections"] = [
+                section
+                for section in runner.EXPECTED_REPORT_MODEL_CONTRACT["sections"]
+                if section["id"] != "complete_evidence"
+            ]
+            return FakeResponse(
+                200,
+                _process_contract(report_model_contract=stale_shape),
+            )
+        raise AssertionError("paid artifact endpoints must not be fetched")
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", _urlopen)
+
+    code = runner.main(_base_args(tmp_path))
+
+    assert code == 1
+    payload = _payload(tmp_path)
+    assert calls == [
+        "https://atlas.example.com/api/v1/content-ops/deflection-reports/process-contract"
+    ]
+    assert payload["fetches"] == {
+        "process_contract": {
+            "status": 200,
+            "ok": False,
+            "errors": [
+                "contract.report_model_contract must match current deflection.v1 shape"
+            ],
+        }
+    }
+    assert payload["errors"] == [
+        "process contract preflight failed: "
+        "contract.report_model_contract must match current deflection.v1 shape"
+    ]
+
+
 def test_artifact_report_model_drift_fails_closed(monkeypatch, tmp_path) -> None:
     drifted_model = dict(_report_model())
     drifted_model["title"] = "Different report"
 
     def _urlopen(request, *, timeout):
+        if request.full_url.endswith("/process-contract"):
+            return FakeResponse(200, _process_contract())
         if request.full_url.endswith("/report-model"):
             return FakeResponse(200, _report_model())
         return FakeResponse(200, _artifact(report_model=drifted_model))
@@ -618,6 +699,8 @@ def test_artifact_report_model_must_be_object_when_present(
     raw_report_model,
 ) -> None:
     def _urlopen(request, *, timeout):
+        if request.full_url.endswith("/process-contract"):
+            return FakeResponse(200, _process_contract())
         if request.full_url.endswith("/report-model"):
             return FakeResponse(200, _report_model())
         return FakeResponse(200, _artifact(report_model=raw_report_model))
@@ -633,6 +716,8 @@ def test_artifact_report_model_must_be_object_when_present(
 
 def test_invalid_json_response_fails_without_raw_body(monkeypatch, tmp_path) -> None:
     def _urlopen(request, *, timeout):
+        if request.full_url.endswith("/process-contract"):
+            return FakeResponse(200, _process_contract())
         if request.full_url.endswith("/report-model"):
             return FakeResponse(200, "{not json")
         return FakeResponse(200, _artifact())
@@ -653,6 +738,8 @@ def test_invalid_json_response_fails_without_raw_body(monkeypatch, tmp_path) -> 
 
 def test_http_error_status_is_sanitized(monkeypatch, tmp_path) -> None:
     def _urlopen(request, *, timeout):
+        if request.full_url.endswith("/process-contract"):
+            return FakeResponse(200, _process_contract())
         if request.full_url.endswith("/report-model"):
             raise _http_error(request.full_url, 403)
         return FakeResponse(200, _artifact())
@@ -678,6 +765,8 @@ def test_output_sanitizer_rewrites_sensitive_scorecard_and_returns_one(
     tmp_path,
 ) -> None:
     def _urlopen(request, *, timeout):
+        if request.full_url.endswith("/process-contract"):
+            return FakeResponse(200, _process_contract())
         if request.full_url.endswith("/report-model"):
             return FakeResponse(200, _report_model())
         return FakeResponse(200, _artifact())

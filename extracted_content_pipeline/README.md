@@ -178,6 +178,16 @@ python scripts/smoke_content_ops_support_ticket_package.py \
   --pretty
 ```
 
+For the paid deflection report, the export shape matters. Full-thread provider
+exports that include customer-visible wording and public agent replies can
+produce publishable FAQ answer evidence. Ticket-list or ticket-index exports
+without message bodies/replies are still useful for clustering, repeat-question
+diagnostics, and gap-list preview, but they do not prove answer text. Private
+or internal notes are ignored and must not become customer-facing examples or
+answer proof. The provider-shaped fixture contract lives in
+`examples/support_ticket_provider_exports/README.md`, and the enrolled smoke
+tests pin full-thread, index-only, and private-note behavior.
+
 To produce a quick grounded FAQ artifact from those same support-ticket rows,
 write Markdown directly:
 

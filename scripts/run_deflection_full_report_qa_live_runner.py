@@ -29,6 +29,11 @@ from check_deflection_full_report_pdf_export_artifacts import (  # noqa: E402
     LEAK_PATTERNS as PDF_LEAK_PATTERNS,
     build_pdf_export_scorecard,
 )
+from check_deflection_process_contract import (  # noqa: E402
+    DEFAULT_CONTRACT_PATH as PROCESS_CONTRACT_PATH,
+    EXPECTED_REPORT_MODEL_CONTRACT,
+    check_process_contract,
+)
 
 
 SCHEMA_VERSION = "deflection_full_report_qa_live_runner.v1"
@@ -92,6 +97,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional extracted PDF text override. Omit to extract from --pdf-bytes.",
     )
     parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--process-contract-path", default=PROCESS_CONTRACT_PATH)
     parser.add_argument("--report-model-path-template", default=REPORT_MODEL_PATH_TEMPLATE)
     parser.add_argument("--artifact-path-template", default=ARTIFACT_PATH_TEMPLATE)
     parser.add_argument(
@@ -150,13 +156,14 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
     if not math.isfinite(float(args.timeout)) or float(args.timeout) <= 0:
         errors.append("--timeout must be a positive finite number")
     for attr, label in (
+        ("process_contract_path", "--process-contract-path"),
         ("report_model_path_template", "--report-model-path-template"),
         ("artifact_path_template", "--artifact-path-template"),
     ):
         value = _clean(getattr(args, attr))
         if not value.startswith("/"):
             errors.append(f"{label} must start with /")
-        if "{request_id}" not in value:
+        if label != "--process-contract-path" and "{request_id}" not in value:
             errors.append(f"{label} must include {{request_id}}")
     errors.extend(_validate_file(args.pdf_bytes, label="--pdf-bytes"))
     if args.pdf_text is not None:
@@ -508,6 +515,37 @@ def _fetch_live_inputs(args: argparse.Namespace) -> tuple[HttpResult, HttpResult
     )
 
 
+def _process_contract_preflight(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]:
+    code, payload = check_process_contract(argparse.Namespace(
+        base_url=_clean(args.base_url),
+        token=_clean(args.token),
+        timeout=float(args.timeout),
+        path=_clean(args.process_contract_path),
+        output_result=None,
+        json=False,
+        pretty=False,
+    ))
+    if not isinstance(payload, Mapping):
+        return ["process contract preflight failed"], {"status": None}
+    endpoint = payload.get("endpoint")
+    errors = payload.get("errors")
+    error_list = [
+        str(error)
+        for error in (errors if isinstance(errors, Sequence) and not isinstance(errors, str) else ())
+    ]
+    summary = {
+        "status": endpoint.get("status") if isinstance(endpoint, Mapping) else None,
+        "ok": code == 0 and payload.get("ok") is True,
+    }
+    if error_list:
+        summary["errors"] = error_list
+    return (
+        [f"process contract preflight failed: {error}" for error in error_list]
+        or ([] if summary["ok"] else ["process contract preflight failed"]),
+        summary,
+    )
+
+
 def _live_payload_errors(
     *,
     report_model: HttpResult,
@@ -557,12 +595,23 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     if read_errors:
         return _safe_failure_payload(args, read_errors)
 
+    process_contract_errors, process_contract_summary = _process_contract_preflight(args)
+    if process_contract_errors:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "ok": False,
+            "inputs": _input_summary(args),
+            "fetches": {"process_contract": process_contract_summary},
+            "errors": process_contract_errors,
+        }
+
     report_model_result, artifact_result = _fetch_live_inputs(args)
     payload_errors, report_model, _artifact, evidence_export = _live_payload_errors(
         report_model=report_model_result,
         artifact=artifact_result,
     )
     fetches = {
+        "process_contract": process_contract_summary,
         "report_model": _status_summary(report_model_result),
         "artifact": _status_summary(artifact_result),
     }

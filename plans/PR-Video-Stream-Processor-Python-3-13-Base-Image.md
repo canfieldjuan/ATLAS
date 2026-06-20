@@ -16,13 +16,12 @@ Slice phase: Production hardening
    from Python 3.9 slim bullseye to Python 3.13 slim bookworm.
 2. Keep the worker command, package install flow, system dependency list, and
    non-root runtime user unchanged.
-3. Carry the shared Security Guardrails workflow repair already proven on the
-   adjacent Dependabot branches.
+3. Keep this slice limited to the video stream processor Docker base-image bump
+   and plan doc.
 
 ### Files touched
 
 - `atlas_video-processing/processing/video_stream_processor/Dockerfile`
-- `.github/workflows/security_guardrails.yml`
 - `plans/PR-Video-Stream-Processor-Python-3-13-Base-Image.md`
 
 ### Review Contract
@@ -35,10 +34,10 @@ Acceptance criteria:
       requirements changes in this slice.
 - [ ] The runtime dependency stack has CPython 3.13 Linux wheel coverage for
       `opencv-python-headless`.
-- [ ] PR-level guardrails have the same workflow fix used by the recently green
-      Dependabot branches.
+- [ ] No workflow or repository-wide guardrail changes are included in this
+      slice.
 
-Affected surfaces: video processing worker runtime image / Docker base image / CI guardrails.
+Affected surfaces: video processing worker runtime image / Docker base image.
 
 Risk areas: image tag availability / native library compatibility / worker startup.
 
@@ -70,10 +69,7 @@ keeping the maintenance intent of the Dependabot PR: move this worker to Python
   release artifact.
 - Evaluate whether the OpenCV apt package list can be reduced on bookworm in a
   separate runtime-hardening slice.
-
-## Parked hardening
-
-None.
+- Parked hardening: none.
 
 ## Verification
 
@@ -87,7 +83,6 @@ None.
 
 | File | LOC |
 |---|---:|
-| `atlas_video-processing/processing/video_stream_processor/Dockerfile` | ~1 |
-| `.github/workflows/security_guardrails.yml` | shared repair |
-| `plans/PR-Video-Stream-Processor-Python-3-13-Base-Image.md` | ~80 |
-| **Total** | **~106** |
+| `atlas_video-processing/processing/video_stream_processor/Dockerfile` | 2 |
+| `plans/PR-Video-Stream-Processor-Python-3-13-Base-Image.md` | 88 |
+| **Total** | **90** |

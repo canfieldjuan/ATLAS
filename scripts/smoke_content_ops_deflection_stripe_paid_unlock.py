@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import hmac
 import json
@@ -51,6 +52,14 @@ class HttpResult:
     errors: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class MetadataResolution:
+    account_id: str
+    account_id_source: str
+    account_id_supplied: bool
+    report_row_checked: bool
+
+
 def _load_dotenv_files() -> None:
     if load_dotenv is not None:
         load_dotenv(ROOT / ".env")
@@ -74,6 +83,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--token", default=_env("ATLAS_B2B_JWT", "ATLAS_TOKEN"))
     parser.add_argument("--webhook-secret", default=_env("ATLAS_SAAS_STRIPE_WEBHOOK_SECRET", "STRIPE_WEBHOOK_SECRET"))
     parser.add_argument("--account-id", default=_env("ATLAS_ACCOUNT_ID", "ATLAS_FAQ_SEARCH_ACCOUNT_ID"))
+    parser.add_argument("--database-url", default="")
+    parser.add_argument(
+        "--derive-account-id-from-report",
+        action="store_true",
+        help="Look up the report row and use its account_id for Stripe metadata.",
+    )
     parser.add_argument("--request-id", default=_env("ATLAS_DEFLECTION_REQUEST_ID"))
     parser.add_argument("--event-id", default=_env("ATLAS_DEFLECTION_STRIPE_EVENT_ID"))
     parser.add_argument("--session-id", default=_env("ATLAS_DEFLECTION_STRIPE_SESSION_ID"))
@@ -118,14 +133,21 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         errors.append("ATLAS_B2B_JWT, ATLAS_TOKEN, or --token is required")
     if not _clean(args.webhook_secret):
         errors.append("ATLAS_SAAS_STRIPE_WEBHOOK_SECRET, STRIPE_WEBHOOK_SECRET, or --webhook-secret is required")
+    derive_account_id = bool(getattr(args, "derive_account_id_from_report", False))
     account_id = _clean(args.account_id)
+    account_id_explicit = bool(
+        getattr(args, "account_id_explicit", bool(account_id))
+    )
     if not account_id:
-        errors.append("ATLAS_ACCOUNT_ID, ATLAS_FAQ_SEARCH_ACCOUNT_ID, or --account-id is required")
-    else:
+        if not derive_account_id:
+            errors.append("ATLAS_ACCOUNT_ID, ATLAS_FAQ_SEARCH_ACCOUNT_ID, or --account-id is required")
+    elif not derive_account_id or account_id_explicit:
         try:
             uuid.UUID(account_id)
         except ValueError:
             errors.append("--account-id must be a UUID for the Stripe metadata contract")
+    if derive_account_id and not _clean(getattr(args, "database_url", "")):
+        errors.append("--database-url is required with --derive-account-id-from-report")
     if not _clean(args.request_id):
         errors.append("ATLAS_DEFLECTION_REQUEST_ID or --request-id is required")
     if int(args.amount_total) <= 0:
@@ -152,6 +174,109 @@ def _join_url(base_url: str, path: str) -> str:
 
 def _open_http_request(request: urllib.request.Request, *, timeout: float) -> Any:
     return urllib.request.urlopen(request, timeout=timeout)
+
+
+def _report_lookup_error(exc: BaseException) -> RuntimeError:
+    detail = _redact_error_detail(exc)
+    message = "persisted report lookup failed"
+    if detail:
+        message = f"{message}: {detail}"
+    return RuntimeError(message)
+
+
+async def _fetch_report_account_ids(database_url: str, request_id: str) -> list[str]:
+    try:
+        import asyncpg  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - host dependency
+        raise RuntimeError("asyncpg is required to derive account_id from the report row") from exc
+
+    try:
+        pool = await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=1)
+        try:
+            rows = await pool.fetch(
+                """
+                SELECT account_id::text AS account_id
+                FROM content_ops_deflection_reports
+                WHERE request_id = $1
+                ORDER BY created_at DESC
+                LIMIT 2
+                """,
+                request_id,
+            )
+        finally:
+            await pool.close()
+    except (
+        OSError,
+        TimeoutError,
+        ValueError,
+        asyncio.TimeoutError,
+        asyncpg.PostgresError,
+    ) as exc:
+        raise _report_lookup_error(exc) from exc
+    return [_clean(row["account_id"]) for row in rows if _clean(row["account_id"])]
+
+
+def _lookup_report_account_id(database_url: str, request_id: str) -> str:
+    try:
+        account_ids = asyncio.run(_fetch_report_account_ids(database_url, request_id))
+    except (OSError, TimeoutError, ValueError, asyncio.TimeoutError) as exc:
+        raise _report_lookup_error(exc) from exc
+    if not account_ids:
+        raise RuntimeError("persisted deflection report row was not found")
+    if len(account_ids) > 1:
+        raise RuntimeError("persisted deflection report request_id is ambiguous")
+    account_id = next(iter(account_ids))
+    try:
+        uuid.UUID(account_id)
+    except ValueError as exc:
+        raise RuntimeError("persisted report account_id is not a UUID") from exc
+    return account_id
+
+
+def _resolve_metadata(args: argparse.Namespace) -> tuple[MetadataResolution | None, list[str]]:
+    supplied_account_id = _clean(args.account_id)
+    account_id_explicit = bool(
+        getattr(args, "account_id_explicit", bool(supplied_account_id))
+    )
+    if not bool(getattr(args, "derive_account_id_from_report", False)):
+        return (
+            MetadataResolution(
+                account_id=supplied_account_id,
+                account_id_source="supplied",
+                account_id_supplied=bool(supplied_account_id),
+                report_row_checked=False,
+            ),
+            [],
+        )
+
+    try:
+        persisted_account_id = _lookup_report_account_id(
+            _clean(args.database_url),
+            _clean(args.request_id),
+        )
+    except RuntimeError as exc:
+        return (None, [str(exc)])
+
+    if account_id_explicit and supplied_account_id and supplied_account_id != persisted_account_id:
+        return (
+            MetadataResolution(
+                account_id=persisted_account_id,
+                account_id_source="persisted_report",
+                account_id_supplied=True,
+                report_row_checked=True,
+            ),
+            ["--account-id does not match the persisted deflection report row"],
+        )
+
+    return (
+        MetadataResolution(
+            account_id=persisted_account_id,
+            account_id_source="persisted_report",
+            account_id_supplied=account_id_explicit and bool(supplied_account_id),
+            report_row_checked=True,
+        ),
+        [],
+    )
 
 
 def _read_http_error(exc: urllib.error.HTTPError) -> str:
@@ -295,7 +420,13 @@ def _result_payload(
     replay_webhook: HttpResult | None = None,
     after_artifact: HttpResult | None = None,
     errors: Sequence[str] = (),
+    metadata_resolution: MetadataResolution | None = None,
 ) -> dict[str, Any]:
+    resolved_account_id = (
+        metadata_resolution.account_id
+        if metadata_resolution is not None
+        else _clean(args.account_id)
+    )
     return {
         "ok": not preflight_errors and not errors,
         "preflight_errors": list(preflight_errors),
@@ -303,11 +434,25 @@ def _result_payload(
         "inputs": {
             "base_url": _clean(args.base_url),
             "request_id": _clean(args.request_id),
-            "account_id": _clean(args.account_id),
+            "account_id": resolved_account_id,
             "event_id": event_id,
             "session_id": session_id,
             "token_present": bool(_clean(args.token)),
             "webhook_secret_present": bool(_clean(args.webhook_secret)),
+            "database_url_present": bool(_clean(getattr(args, "database_url", ""))),
+            "metadata_resolution": (
+                {
+                    "account_id_source": metadata_resolution.account_id_source,
+                    "account_id_supplied": metadata_resolution.account_id_supplied,
+                    "report_row_checked": metadata_resolution.report_row_checked,
+                }
+                if metadata_resolution is not None
+                else {
+                    "account_id_source": "unresolved",
+                    "account_id_supplied": bool(_clean(args.account_id)),
+                    "report_row_checked": False,
+                }
+            ),
         },
         "before_artifact": _http_summary(
             before_artifact,
@@ -333,7 +478,12 @@ def _write_result(path: Path | None, payload: Mapping[str, Any]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = _build_parser().parse_args(raw_argv)
+    args.account_id_explicit = any(
+        value == "--account-id" or value.startswith("--account-id=")
+        for value in raw_argv
+    )
     preflight_errors = _validate_args(args)
     event_id = _clean(args.event_id) or _generated_id("evt_content_ops_deflection_paid")
     session_id = _clean(args.session_id) or _generated_id("cs_content_ops_deflection")
@@ -350,6 +500,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             print("preflight failed" if preflight_errors else "preflight passed")
         return 2 if preflight_errors else 0
+
+    metadata_resolution, metadata_errors = _resolve_metadata(args)
+    if metadata_errors:
+        payload = _result_payload(
+            args=args,
+            preflight_errors=(),
+            event_id=event_id,
+            session_id=session_id,
+            metadata_resolution=metadata_resolution,
+            errors=metadata_errors,
+        )
+        _write_result(args.output_result, payload)
+        if args.json:
+            print(json.dumps(payload, sort_keys=True))
+        else:
+            print("stripe paid-unlock smoke failed")
+        return 1
+    if metadata_resolution is None:
+        raise AssertionError("metadata resolution unexpectedly missing")
 
     request_id = _clean(args.request_id)
     artifact_path = _clean(args.artifact_path_template).format(
@@ -372,6 +541,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             session_id=session_id,
             before_artifact=before_artifact,
             errors=errors,
+            metadata_resolution=metadata_resolution,
         )
         _write_result(args.output_result, payload)
         if args.json:
@@ -383,7 +553,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     event = _stripe_event_payload(
         event_id=event_id,
         session_id=session_id,
-        account_id=_clean(args.account_id),
+        account_id=metadata_resolution.account_id,
         request_id=request_id,
         amount_total=int(args.amount_total),
         currency=_clean(args.currency).lower(),
@@ -448,6 +618,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         replay_webhook=replay_webhook,
         after_artifact=after_artifact,
         errors=errors,
+        metadata_resolution=metadata_resolution,
     )
     _write_result(args.output_result, payload)
     if args.json:

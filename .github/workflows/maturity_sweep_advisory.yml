@@ -1,13 +1,11 @@
-name: Maturity Sweep (advisory)
+name: Maturity Sweep
 
 permissions:
   contents: read
 
-# Advisory brittleness triage -- NOT a gate. Ranks files in the content-ops
-# lane by structural-fragility signals (untested modules, happy-path-only
-# tests, swallowed exceptions, unguarded input) and prints a worst-first
-# agenda for an adversarial pass. It never fails the build: it surfaces
-# suspects, judgment stays with the reviewer.
+# Brittleness triage + ratchet gate. The advisory report ranks files in the
+# content-ops lane by structural-fragility signals, while the blocking baseline
+# gate prevents new brittleness without failing on existing debt.
 #
 # It catches STRUCTURAL brittleness only. Semantic / contract / logic bugs
 # (over-broad matchers, fail-open fields, asymmetric token handling) are NOT
@@ -19,17 +17,94 @@ on:
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
       - "scripts/maturity_sweep.py"
-      - "tests/test_maturity_sweep.py"
+      - "tests/**"
       - "extracted_content_pipeline/**"
-      - "tests/test_extracted_*.py"
-      - "tests/test_content_ops_*.py"
+      - "extracted_reasoning_core/**"
+      - "extracted_quality_gate/**"
+      - "extracted_evidence_to_story/**"
+      - "extracted_competitive_intelligence/**"
+      - "atlas_brain/api/**"
+      - "atlas_brain/auth/**"
+      - "atlas_brain/autonomous/**"
+      - "atlas_brain/mcp/**"
+      - "atlas_brain/services/b2b/**"
+      - "atlas_brain/alerts/**"
+      - "atlas_brain/brand/**"
+      - "atlas_brain/discovery/**"
+      - "atlas_brain/escalation/**"
+      - "atlas_brain/events/**"
+      - "atlas_brain/jobs/**"
+      - "atlas_brain/memory/**"
+      - "atlas_brain/modes/**"
+      - "atlas_brain/orchestration/**"
+      - "atlas_brain/pipelines/**"
+      - "atlas_brain/presence/**"
+      - "atlas_brain/schemas/**"
+      - "atlas_brain/templates/**"
+      - "atlas_brain/utils/**"
+      - "atlas_brain/comms/**"
+      - "atlas_brain/services/email_webhooks/**"
+      - "atlas_brain/services/embedding/**"
+      - "atlas_brain/services/llm/**"
+      - "atlas_brain/services/personaplex/**"
+      - "atlas_brain/services/speaker_id/**"
+      - "atlas_brain/skills/**"
+      - "atlas_brain/vision/**"
+      - "atlas_brain/voice/**"
+      - "atlas_brain/reasoning/**"
+      - "atlas_brain/security/**"
+      - "atlas_brain/storage/**"
+      - "atlas_brain/agents/**"
+      - "atlas_brain/capabilities/**"
+      - "atlas_brain/tools/**"
+      - "atlas_brain/services/scraping/**"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
       - "scripts/maturity_sweep.py"
+      - "tests/**"
       - "extracted_content_pipeline/**"
+      - "extracted_reasoning_core/**"
+      - "extracted_quality_gate/**"
+      - "extracted_evidence_to_story/**"
+      - "extracted_competitive_intelligence/**"
+      - "atlas_brain/api/**"
+      - "atlas_brain/auth/**"
+      - "atlas_brain/autonomous/**"
+      - "atlas_brain/mcp/**"
+      - "atlas_brain/services/b2b/**"
+      - "atlas_brain/alerts/**"
+      - "atlas_brain/brand/**"
+      - "atlas_brain/discovery/**"
+      - "atlas_brain/escalation/**"
+      - "atlas_brain/events/**"
+      - "atlas_brain/jobs/**"
+      - "atlas_brain/memory/**"
+      - "atlas_brain/modes/**"
+      - "atlas_brain/orchestration/**"
+      - "atlas_brain/pipelines/**"
+      - "atlas_brain/presence/**"
+      - "atlas_brain/schemas/**"
+      - "atlas_brain/templates/**"
+      - "atlas_brain/utils/**"
+      - "atlas_brain/comms/**"
+      - "atlas_brain/services/email_webhooks/**"
+      - "atlas_brain/services/embedding/**"
+      - "atlas_brain/services/llm/**"
+      - "atlas_brain/services/personaplex/**"
+      - "atlas_brain/services/speaker_id/**"
+      - "atlas_brain/skills/**"
+      - "atlas_brain/vision/**"
+      - "atlas_brain/voice/**"
+      - "atlas_brain/reasoning/**"
+      - "atlas_brain/security/**"
+      - "atlas_brain/storage/**"
+      - "atlas_brain/agents/**"
+      - "atlas_brain/capabilities/**"
+      - "atlas_brain/tools/**"
+      - "atlas_brain/services/scraping/**"
 
 jobs:
   maturity-sweep:
@@ -63,3 +138,254 @@ jobs:
           echo "A green sweep is not a production-hardening stamp."
           echo
           python scripts/maturity_sweep.py extracted_content_pipeline --tests-root tests --top 25
+
+      - name: Maturity sweep ratchet gate (blocking)
+        run: |
+          python scripts/maturity_sweep.py extracted_content_pipeline \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_extracted_content_pipeline.json \
+            --min-score 8 \
+            --sensitive-glob '**/billing/**' \
+            --sensitive-glob '**/paid*' \
+            --sensitive-glob '**/auth/**' \
+            --sensitive-glob '**/webhook*' \
+            --sensitive-glob '**/payment*' \
+            --sensitive-glob '**/*deletion*'
+
+      - name: Maturity sweep Phase C1 extracted core ratchet gates (blocking)
+        run: |
+          set -euo pipefail
+          for lane in extracted_reasoning_core extracted_quality_gate extracted_evidence_to_story; do
+            echo "::group::${lane}"
+            python scripts/maturity_sweep.py "${lane}" \
+              --tests-root tests \
+              --baseline "tests/maturity_sweep/baseline_${lane}.json" \
+              --min-score 8 \
+              --sensitive-glob "${lane}/**"
+            echo "::endgroup::"
+          done
+
+      - name: Maturity sweep Phase C2 competitive intelligence ratchet gate (blocking)
+        run: |
+          set -euo pipefail
+          python scripts/maturity_sweep.py extracted_competitive_intelligence \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_extracted_competitive_intelligence.json \
+            --min-score 8 \
+            --sensitive-glob 'extracted_competitive_intelligence/**'
+
+      - name: Maturity sweep atlas_brain/api ratchet gate (blocking)
+        run: |
+          python scripts/maturity_sweep.py atlas_brain/api \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_atlas_brain_api.json \
+            --min-score 8 \
+            --sensitive-glob '**/billing/**' \
+            --sensitive-glob '**/billing*' \
+            --sensitive-glob '**/paid*' \
+            --sensitive-glob '**/auth/**' \
+            --sensitive-glob '**/auth*' \
+            --sensitive-glob '**/webhook*' \
+            --sensitive-glob '**/webhooks/**' \
+            --sensitive-glob '**/payment*' \
+            --sensitive-glob '**/invoicing/**' \
+            --sensitive-glob '**/*invoice*' \
+            --sensitive-glob '**/*deletion*'
+
+      - name: Maturity sweep atlas_brain/auth ratchet gate (blocking)
+        run: |
+          python scripts/maturity_sweep.py atlas_brain/auth \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_atlas_brain_auth.json \
+            --min-score 8 \
+            --sensitive-glob '**/*'
+
+      - name: Maturity sweep atlas_brain/autonomous ratchet gate (blocking)
+        run: |
+          python scripts/maturity_sweep.py atlas_brain/autonomous \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_atlas_brain_autonomous.json \
+            --min-score 8 \
+            --sensitive-glob '**/billing/**' \
+            --sensitive-glob '**/billing*' \
+            --sensitive-glob '**/paid*' \
+            --sensitive-glob '**/auth/**' \
+            --sensitive-glob '**/webhook*' \
+            --sensitive-glob '**/webhooks/**' \
+            --sensitive-glob '**/payment*' \
+            --sensitive-glob '**/invoicing/**' \
+            --sensitive-glob '**/*invoice*' \
+            --sensitive-glob '**/*deletion*'
+
+      - name: Maturity sweep atlas_brain/mcp ratchet gate (blocking)
+        run: |
+          python scripts/maturity_sweep.py atlas_brain/mcp \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_atlas_brain_mcp.json \
+            --min-score 8 \
+            --sensitive-glob '**/*'
+
+      - name: Maturity sweep atlas_brain/services/b2b ratchet gate (blocking)
+        run: |
+          python scripts/maturity_sweep.py atlas_brain/services/b2b \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_atlas_brain_services_b2b.json \
+            --min-score 8 \
+            --sensitive-glob '**/billing/**' \
+            --sensitive-glob '**/billing*' \
+            --sensitive-glob '**/paid*' \
+            --sensitive-glob '**/auth/**' \
+            --sensitive-glob '**/webhook*' \
+            --sensitive-glob '**/payment*' \
+            --sensitive-glob '**/*deletion*'
+
+      - name: Maturity sweep atlas_brain B2a support ratchet gates (blocking)
+        run: |
+          set -euo pipefail
+          common_sensitive_args=(
+            --sensitive-glob '**/billing/**'
+            --sensitive-glob '**/billing*'
+            --sensitive-glob '**/paid*'
+            --sensitive-glob '**/auth/**'
+            --sensitive-glob '**/auth*'
+            --sensitive-glob '**/webhook*'
+            --sensitive-glob '**/webhooks/**'
+            --sensitive-glob '**/*webhook*/**'
+            --sensitive-glob '**/payment*'
+            --sensitive-glob '**/invoicing/**'
+            --sensitive-glob '**/*invoice*'
+            --sensitive-glob '**/*deletion*'
+          )
+          for lane in alerts brand discovery escalation events jobs memory modes orchestration pipelines presence schemas templates utils; do
+            echo "::group::atlas_brain/${lane}"
+            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+              --tests-root tests \
+              --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
+              --min-score 8 \
+              "${common_sensitive_args[@]}"
+            echo "::endgroup::"
+          done
+
+      - name: Maturity sweep atlas_brain B2b service/comms ratchet gates (blocking)
+        run: |
+          set -euo pipefail
+          common_sensitive_args=(
+            --sensitive-glob '**/billing/**'
+            --sensitive-glob '**/billing*'
+            --sensitive-glob '**/paid*'
+            --sensitive-glob '**/auth/**'
+            --sensitive-glob '**/auth*'
+            --sensitive-glob '**/webhook*'
+            --sensitive-glob '**/webhooks/**'
+            --sensitive-glob '**/*webhook*/**'
+            --sensitive-glob '**/payment*'
+            --sensitive-glob '**/invoicing/**'
+            --sensitive-glob '**/*invoice*'
+            --sensitive-glob '**/*deletion*'
+          )
+          lanes=(
+            comms
+            services/email_webhooks
+            services/embedding
+            services/llm
+            services/personaplex
+            services/speaker_id
+            skills
+            vision
+            voice
+          )
+          for lane in "${lanes[@]}"; do
+            slug="${lane//\//_}"
+            echo "::group::atlas_brain/${lane}"
+            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+              --tests-root tests \
+              --baseline "tests/maturity_sweep/baseline_atlas_brain_${slug}.json" \
+              --min-score 8 \
+              "${common_sensitive_args[@]}"
+            echo "::endgroup::"
+          done
+
+      - name: Maturity sweep atlas_brain B2c core-risk ratchet gates (blocking)
+        run: |
+          set -euo pipefail
+          common_sensitive_args=(
+            --sensitive-glob '**/billing/**'
+            --sensitive-glob '**/billing*'
+            --sensitive-glob '**/paid*'
+            --sensitive-glob '**/auth/**'
+            --sensitive-glob '**/auth*'
+            --sensitive-glob '**/webhook*'
+            --sensitive-glob '**/webhooks/**'
+            --sensitive-glob '**/*webhook*/**'
+            --sensitive-glob '**/payment*'
+            --sensitive-glob '**/invoicing/**'
+            --sensitive-glob '**/*invoice*'
+            --sensitive-glob '**/*deletion*'
+            --sensitive-glob '**/delete*/**'
+            --sensitive-glob 'atlas_brain/security/**'
+            --sensitive-glob 'atlas_brain/storage/**'
+          )
+          for lane in reasoning security storage; do
+            echo "::group::atlas_brain/${lane}"
+            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+              --tests-root tests \
+              --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
+              --min-score 8 \
+              "${common_sensitive_args[@]}"
+            echo "::endgroup::"
+          done
+
+      - name: Maturity sweep atlas_brain B2d runtime-control ratchet gates (blocking)
+        run: |
+          set -euo pipefail
+          common_sensitive_args=(
+            --sensitive-glob '**/billing/**'
+            --sensitive-glob '**/billing*'
+            --sensitive-glob '**/paid*'
+            --sensitive-glob '**/auth/**'
+            --sensitive-glob '**/auth*'
+            --sensitive-glob '**/webhook*'
+            --sensitive-glob '**/webhooks/**'
+            --sensitive-glob '**/*webhook*/**'
+            --sensitive-glob '**/payment*'
+            --sensitive-glob '**/invoicing/**'
+            --sensitive-glob '**/*invoice*'
+            --sensitive-glob '**/*deletion*'
+            --sensitive-glob '**/delete*/**'
+            --sensitive-glob '**/security.py'
+            --sensitive-glob '**/security/**'
+          )
+          for lane in agents capabilities tools; do
+            echo "::group::atlas_brain/${lane}"
+            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+              --tests-root tests \
+              --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
+              --min-score 8 \
+              "${common_sensitive_args[@]}"
+            echo "::endgroup::"
+          done
+
+      - name: Maturity sweep atlas_brain B2e scraping ratchet gate (blocking)
+        run: |
+          set -euo pipefail
+          common_sensitive_args=(
+            --sensitive-glob '**/billing/**'
+            --sensitive-glob '**/billing*'
+            --sensitive-glob '**/paid*'
+            --sensitive-glob '**/auth/**'
+            --sensitive-glob '**/auth*'
+            --sensitive-glob '**/webhook*'
+            --sensitive-glob '**/webhooks/**'
+            --sensitive-glob '**/*webhook*/**'
+            --sensitive-glob '**/payment*'
+            --sensitive-glob '**/invoicing/**'
+            --sensitive-glob '**/*invoice*'
+            --sensitive-glob '**/*deletion*'
+            --sensitive-glob '**/delete*/**'
+            --sensitive-glob 'atlas_brain/services/scraping/**'
+          )
+          python scripts/maturity_sweep.py atlas_brain/services/scraping \
+            --tests-root tests \
+            --baseline tests/maturity_sweep/baseline_atlas_brain_services_scraping.json \
+            --min-score 8 \
+            "${common_sensitive_args[@]}"

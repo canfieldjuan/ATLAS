@@ -23,7 +23,11 @@ from extracted_content_pipeline.content_ops_execution import ContentOpsExecution
 from extracted_content_pipeline.deflection_report_access import (
     InMemoryDeflectionReportArtifactStore,
 )
-from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
+from extracted_content_pipeline.faq_deflection_report import (
+    DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+    DEFLECTION_REPORT_SCHEMA_VERSION,
+    FAQDeflectionReportService,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -764,6 +768,19 @@ async def test_deflection_submit_accepts_zendesk_full_thread_blob(
     ) == {"request_id": payload["request_id"], "paid": True}
 
     artifact_payload = await artifact.endpoint(request_id=payload["request_id"])
+    report_model = artifact_payload["report_model"]
+    evidence_export = artifact_payload["evidence_export"]
+    assert report_model["schema_version"] == DEFLECTION_REPORT_SCHEMA_VERSION
+    assert evidence_export["schema_version"] == DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION
+    assert evidence_export["summary"]["evidence_row_count"] >= 1
+    assert evidence_export["questions"]
+    assert evidence_export["evidence_rows"]
+
+    model = _route(router, "/ops/deflection-reports/{request_id}/report-model", "GET")
+    assert await model.endpoint(request_id=payload["request_id"]) == report_model
+    assert "markdown" not in report_model
+    assert "faq_result" not in report_model
+
     summary = artifact_payload["summary"]
     assert summary["drafted_answer_count"] == 1
     assert summary["support_ticket_resolution_evidence_present"] is True

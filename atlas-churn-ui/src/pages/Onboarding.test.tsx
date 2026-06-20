@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, RouterProvider, Routes, createMemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Onboarding from './Onboarding'
 
 const auth = vi.hoisted(() => ({
@@ -46,6 +46,10 @@ describe('Onboarding', () => {
     api.addTrackedVendor.mockResolvedValue({})
     api.removeTrackedVendor.mockResolvedValue({})
     api.listTrackedVendors.mockResolvedValue({ vendors: [] })
+  })
+
+  afterEach(() => {
+    cleanup()
   })
 
   it('hydrates the search query from the URL and loads matching results', async () => {
@@ -124,8 +128,8 @@ describe('Onboarding', () => {
 
     await router.navigate('/onboarding?q=HubSpot')
 
+    expect(await screen.findByDisplayValue('HubSpot')).toBeInTheDocument()
     await waitFor(() => {
-      expect(screen.getByDisplayValue('HubSpot')).toBeInTheDocument()
       expect(api.searchAvailableVendors).toHaveBeenLastCalledWith('HubSpot')
     })
     router.dispose()
@@ -154,17 +158,19 @@ describe('Onboarding', () => {
 
     await router.navigate('/onboarding?q=HubSpot')
 
+    expect(await screen.findByDisplayValue('HubSpot')).toBeInTheDocument()
     await waitFor(() => {
-      expect(screen.getByDisplayValue('HubSpot')).toBeInTheDocument()
       expect(api.searchAvailableVendors).toHaveBeenLastCalledWith('HubSpot')
     })
 
     zendesk.resolve({ vendors: [{ vendor_name: 'Zendesk', product_category: 'Helpdesk', total_reviews: 120, avg_urgency: 6.2 }] })
+    await zendesk.promise
     await waitFor(() => {
       expect(screen.queryByText('Zendesk')).not.toBeInTheDocument()
     })
 
     hubspot.resolve({ vendors: [{ vendor_name: 'HubSpot', product_category: 'CRM', total_reviews: 220, avg_urgency: 5.8 }] })
+    await hubspot.promise
     expect(await screen.findByText('HubSpot')).toBeInTheDocument()
     router.dispose()
   })

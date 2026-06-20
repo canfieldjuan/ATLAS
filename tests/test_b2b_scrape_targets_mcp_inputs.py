@@ -7,8 +7,6 @@ import pytest
 
 
 for _heavy_mod in [
-    "asyncpg",
-    "asyncpg.exceptions",
     "mcp",
     "mcp.server",
 ]:

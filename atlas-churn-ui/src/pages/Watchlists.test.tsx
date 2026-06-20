@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -890,7 +890,9 @@ describe('Watchlists', () => {
       })
     })
 
-    await router.navigate('/watchlists')
+    await act(async () => {
+      await router.navigate('/watchlists')
+    })
 
     await waitFor(() => {
       expect(screen.getByTestId('location-search').textContent).toBe('')

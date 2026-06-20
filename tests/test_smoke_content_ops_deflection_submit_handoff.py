@@ -429,6 +429,116 @@ def test_validate_submit_envelope_rejects_missing_deflection_step() -> None:
     assert "submit response must include faq_deflection_report step" in errors
 
 
+def test_validate_submit_envelope_allows_contract_teaser_full_answer_body() -> None:
+    snapshot = {
+        **SNAPSHOT,
+        "teaser": {
+            "full_answer": {
+                "rank": 1,
+                "question": "How do I export reports?",
+                "answer": "Open Reports and choose Export.",
+                "steps": ["Open Reports.", "Choose Export."],
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "weighted_frequency": 3,
+                "source_count": 2,
+            },
+            "previews": [],
+        },
+    }
+
+    request_id, validated_snapshot, _diagnostics, errors = smoke._validate_submit_envelope(
+        _submit_payload(snapshot=snapshot)
+    )
+
+    assert request_id == "content-ops-123"
+    assert validated_snapshot is snapshot
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("answer_evidence_status", "draft_needs_review"),
+        ("resolution_evidence_scope", "unscoped"),
+    ),
+)
+def test_validate_submit_envelope_rejects_unscoped_teaser_full_answer_body(
+    field: str,
+    value: str,
+) -> None:
+    full_answer = {
+        "rank": 1,
+        "question": "How do I export reports?",
+        "answer": "Open Reports and choose Export.",
+        "steps": ["Open Reports.", "Choose Export."],
+        "answer_evidence_status": "resolution_evidence",
+        "resolution_evidence_scope": "scoped",
+        "weighted_frequency": 3,
+        "source_count": 2,
+    }
+    full_answer[field] = value
+    snapshot = {
+        **SNAPSHOT,
+        "teaser": {
+            "full_answer": full_answer,
+            "previews": [],
+        },
+    }
+
+    _request_id, _snapshot, _diagnostics, errors = smoke._validate_submit_envelope(
+        _submit_payload(snapshot=snapshot)
+    )
+
+    assert any("$.teaser.full_answer.answer" in error for error in errors)
+    assert any("$.teaser.full_answer.steps" in error for error in errors)
+
+
+def test_validate_submit_envelope_rejects_dotted_key_teaser_alias() -> None:
+    snapshot = {
+        **SNAPSHOT,
+        "teaser.full_answer": {
+            "answer": "Open Reports and choose Export.",
+            "steps": ["Open Reports.", "Choose Export."],
+            "answer_evidence_status": "resolution_evidence",
+            "resolution_evidence_scope": "scoped",
+        },
+    }
+
+    _request_id, _snapshot, _diagnostics, errors = smoke._validate_submit_envelope(
+        _submit_payload(snapshot=snapshot)
+    )
+
+    assert any("$.teaser.full_answer.answer" in error for error in errors)
+    assert any("$.teaser.full_answer.steps" in error for error in errors)
+
+
+def test_validate_submit_envelope_rejects_nested_teaser_full_answer_alias() -> None:
+    snapshot = {
+        **SNAPSHOT,
+        "teaser": {
+            "full_answer": {
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "full_answer": {
+                    "answer": "Open Reports and choose Export.",
+                    "steps": ["Open Reports.", "Choose Export."],
+                    "answer_evidence_status": "resolution_evidence",
+                    "resolution_evidence_scope": "scoped",
+                },
+            },
+            "previews": [],
+        },
+    }
+
+    _request_id, _snapshot, _diagnostics, errors = smoke._validate_submit_envelope(
+        _submit_payload(snapshot=snapshot)
+    )
+
+    assert any("$.teaser.full_answer.full_answer.answer" in error for error in errors)
+    assert any("$.teaser.full_answer.full_answer.steps" in error for error in errors)
+
+
 def test_validate_submit_envelope_rejects_snapshot_leaks() -> None:
     snapshot = {
         **SNAPSHOT,
@@ -446,6 +556,35 @@ def test_validate_submit_envelope_rejects_snapshot_leaks() -> None:
     )
 
     assert any("leaked forbidden fields" in error for error in errors)
+
+
+def test_validate_submit_envelope_rejects_teaser_preview_body_leaks() -> None:
+    snapshot = {
+        **SNAPSHOT,
+        "teaser": {
+            "full_answer": None,
+            "previews": [
+                {
+                    "rank": 1,
+                    "question": "How do I export reports?",
+                    "answer": "Open Reports and choose Export.",
+                    "steps": ["Open Reports.", "Choose Export."],
+                    "answer_evidence_status": "resolution_evidence",
+                    "resolution_evidence_scope": "scoped",
+                    "weighted_frequency": 3,
+                    "source_count": 2,
+                    "body_withheld": True,
+                }
+            ],
+        },
+    }
+
+    _request_id, _snapshot, _diagnostics, errors = smoke._validate_submit_envelope(
+        _submit_payload(snapshot=snapshot)
+    )
+
+    assert any("$.teaser.previews[0].answer" in error for error in errors)
+    assert any("$.teaser.previews[0].steps" in error for error in errors)
 
 
 def test_validate_submit_envelope_rejects_singular_source_id_leak() -> None:

@@ -19,8 +19,6 @@ class _MockFastMCP:
         return None
 
 
-sys.modules.setdefault("asyncpg", MagicMock())
-sys.modules.setdefault("asyncpg.exceptions", MagicMock())
 sys.modules.setdefault("mcp", MagicMock())
 sys.modules.setdefault("mcp.server", MagicMock())
 _fastmcp_mod = MagicMock()

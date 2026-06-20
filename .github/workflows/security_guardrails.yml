@@ -57,11 +57,11 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Checkout PR head
+      - name: Checkout PR head history
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
-          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Resolve trusted baseline
         env:
@@ -90,6 +90,8 @@ jobs:
           if [ -s .gitleaks-baseline-ci.json ]; then
             baseline_args=(--baseline-path /repo/.gitleaks-baseline-ci.json)
           fi
+          scan_range="origin/${BASE_REF}..HEAD"
+          echo "Scanning Gitleaks PR range: ${scan_range}"
 
           docker run --rm \
             -v "$PWD:/repo" \
@@ -97,7 +99,7 @@ jobs:
             git \
             --redact \
             --verbose \
-            --log-opts="origin/${BASE_REF}..HEAD" \
+            --log-opts="${scan_range}" \
             "${baseline_args[@]}" \
             /repo
 

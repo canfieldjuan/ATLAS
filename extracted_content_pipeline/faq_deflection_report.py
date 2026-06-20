@@ -21,6 +21,21 @@ DEFAULT_DEFLECTION_SEO_TARGET_LIMIT = 50
 DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION = "deflection_evidence.v1"
 DEFLECTION_REPORT_SCHEMA_VERSION = "deflection.v1"
 DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION = "deflection_full_report_qa_scorecard.v1"
+DEFLECTION_REPORT_MODEL_FIELDS = (
+    "schema_version",
+    "title",
+    "summary",
+    "sections",
+)
+DEFLECTION_REPORT_SECTION_FIELDS = (
+    "id",
+    "title",
+    "priority",
+    "surfaces",
+    "default_limit",
+    "required_data",
+    "data",
+)
 DEFLECTION_FULL_REPORT_QA_REQUIRED_SURFACES = (
     "email",
     "result_page",
@@ -233,6 +248,29 @@ DEFLECTION_REPORT_SECTION_REGISTRY: Mapping[str, DeflectionReportSectionDefiniti
         for definition in _DEFLECTION_REPORT_SECTION_DEFINITIONS
     })
 )
+
+
+def deflection_report_model_contract_shape() -> dict[str, Any]:
+    """Return the structural contract bound to DEFLECTION_REPORT_SCHEMA_VERSION."""
+
+    return {
+        "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
+        "model_fields": list(DEFLECTION_REPORT_MODEL_FIELDS),
+        "section_fields": list(DEFLECTION_REPORT_SECTION_FIELDS),
+        "sections": [
+            {
+                "id": definition.id,
+                "title": definition.title,
+                "priority": definition.priority,
+                "surfaces": list(definition.surfaces),
+                "default_limit": definition.default_limit,
+                "required_data": list(definition.required_data),
+            }
+            for definition in _DEFLECTION_REPORT_SECTION_DEFINITIONS
+        ],
+    }
+
+
 DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS: Mapping[str, Mapping[str, int]] = (
     MappingProxyType({
         "result_page": MappingProxyType({
@@ -2265,7 +2303,9 @@ __all__ = [
     "DEFAULT_DEFLECTION_SEO_TARGET_LIMIT",
     "DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT",
     "DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION",
+    "DEFLECTION_REPORT_MODEL_FIELDS",
     "DEFLECTION_REPORT_SCHEMA_VERSION",
+    "DEFLECTION_REPORT_SECTION_FIELDS",
     "DEFLECTION_REPORT_SECTION_REGISTRY",
     "DeflectionSnapshot",
     "DeflectionReportArtifact",
@@ -2279,6 +2319,7 @@ __all__ = [
     "build_deflection_full_report_qa_deterministic_harness",
     "build_deflection_full_report_qa_scorecard",
     "deflection_report_summary",
+    "deflection_report_model_contract_shape",
     "deflection_snapshot_content_opportunities",
     "render_deflection_report",
     "render_deflection_report_model",
