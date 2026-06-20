@@ -148,6 +148,7 @@ pytest \
   tests/test_content_ops_claim_registry.py \
   tests/test_content_ops_calibration_library.py \
   tests/test_content_ops_calibration_library_live_db.py \
+  tests/test_content_ops_calibration_library_live_app.py \
   tests/test_content_ops_calibration_library_api.py \
   tests/test_content_ops_claim_registry_api.py \
   tests/test_atlas_content_ops_generated_assets_api.py \
