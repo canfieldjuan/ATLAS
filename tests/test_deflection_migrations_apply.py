@@ -9,6 +9,7 @@ This check is scoped to the deflection chain, which has no such dependency:
 - 332 content_ops_deflection_report_deliveries
 - 336 content_ops_deflection_paid_reconciliation  (#1462 money-path table)
 - 337 reconciliation NULL-session dedup (NOT NULL stripe_session_id)
+- 339 content_ops_deflection_reports retention index
 
 It applies those files in order to a fresh Postgres database and verifies the
 tables exist and the reconciliation table's idempotency constraint holds --
@@ -35,6 +36,7 @@ DEFLECTION_MIGRATION_CHAIN = (
     "336_content_ops_deflection_paid_reconciliation.sql",
 )
 NULL_SESSION_MIGRATION = "337_content_ops_deflection_reconciliation_null_session.sql"
+RETENTION_INDEX_MIGRATION = "339_content_ops_deflection_reports_retention_index.sql"
 
 _TEST_ACCOUNT_ID = "acct-deflection-migration-apply-test"
 
@@ -44,6 +46,12 @@ _RECON_INSERT_SQL = (
     "VALUES ($1, $2, $3, $4, $5) "
     "ON CONFLICT (account_id, request_id, stripe_session_id) DO NOTHING"
 )
+
+
+def test_deflection_retention_index_migration_is_concurrent() -> None:
+    migration_sql = (MIGRATIONS_DIR / RETENTION_INDEX_MIGRATION).read_text()
+
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" in migration_sql
 
 
 def _database_url() -> str | None:
@@ -78,7 +86,12 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
     conn = await asyncpg.connect(database_url)
     try:
         await _reset(conn)
-        await _apply(conn, *DEFLECTION_MIGRATION_CHAIN, NULL_SESSION_MIGRATION)
+        await _apply(
+            conn,
+            *DEFLECTION_MIGRATION_CHAIN,
+            NULL_SESSION_MIGRATION,
+            RETENTION_INDEX_MIGRATION,
+        )
 
         existing = {
             row["tablename"]
@@ -117,6 +130,16 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             "AND column_name = 'stripe_session_id'"
         )
         assert is_nullable == "NO"
+
+        retention_index_exists = await conn.fetchval(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM pg_indexes "
+            "WHERE schemaname = 'public' "
+            "AND tablename = 'content_ops_deflection_reports' "
+            "AND indexname = 'idx_content_ops_deflection_reports_created_at'"
+            ")"
+        )
+        assert retention_index_exists is True
 
         # Non-null dedup (ON CONFLICT DO NOTHING): a second event for the same
         # checkout must not create a duplicate ledger row.
