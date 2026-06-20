@@ -592,6 +592,101 @@ def _router(
     )
 
 
+def _router_with_store_provider(
+    store_provider: Any,
+    *,
+    account_id: str = "acct-portfolio-submit",
+):
+    return create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            deflection_snapshot_top_n=2,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService(),
+        ),
+        deflection_report_store_provider=store_provider,
+        scope_provider=lambda: {"account_id": account_id},
+    )
+
+
+def _search_item(**overrides: Any) -> dict[str, Any]:
+    item = {
+        "rank": 1,
+        "topic": "Reporting exports",
+        "question": "How do I export attribution reports?",
+        "question_source": "customer_wording",
+        "summary": "Customers ask how to export attribution reports.",
+        "frequency": 2,
+        "weighted_frequency": 2,
+        "ticket_count": 2,
+        "opportunity_score": 6,
+        "failure_risk_score": 1,
+        "failure_risk_signals": ["failed_workflow"],
+        "answer": "Open Analytics and click Download report.",
+        "steps": [
+            "Open Analytics.",
+            "Choose the attribution report.",
+            "Click Download report.",
+        ],
+        "action_items": ["Add export wording"],
+        "answer_evidence_status": "resolution_evidence",
+        "resolution_source_count": 2,
+        "when_to_contact_support": "Contact support if export is unavailable.",
+        "evidence_quotes": ["`ticket-export-1`: customer asked about exports"],
+        "source_ids": ["ticket-export-1", "ticket-export-2"],
+        "source_labels": [
+            "ticket-export-1 - How do I export attribution reports?",
+            "ticket-export-2 - Where is the report download?",
+        ],
+        "source_type_counts": {"support_ticket": 2},
+        "weighted_source_volume_by_type": {"support_ticket": 2},
+        "term_mappings": [
+            {
+                "customer_term": "export",
+                "documentation_term": "download report",
+                "suggestion": "Use export wording near download steps.",
+                "source_id_count": 2,
+                "zero_result_source_count": 0,
+                "failure_risk_score": 1,
+                "failure_risk_signals": ["failed_workflow"],
+                "opportunity_score": 6,
+                "first_source_id": "ticket-export-1",
+            }
+        ],
+        "evidence_count": 1,
+        "displayed_evidence_count": 1,
+    }
+    item.update(overrides)
+    return item
+
+
+def _search_artifact(items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "markdown": "# Report",
+        "summary": {"drafted_answer_count": 1},
+        "faq_result": {
+            "items": list(items if items is not None else [_search_item()]),
+        },
+        "report_model": {
+            "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
+            "title": "Support Ticket Deflection Report",
+            "summary": {"drafted_answer_count": 1},
+            "sections": [
+                {
+                    "id": "ranked_questions",
+                    "title": "Ranked questions",
+                    "priority": 30,
+                    "surfaces": ["web"],
+                    "required_data": ["rows"],
+                    "data": {"rows": []},
+                }
+            ],
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_deflection_submit_fetches_blob_and_returns_locked_report(
     monkeypatch: pytest.MonkeyPatch,
@@ -702,6 +797,144 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
     ) == {"request_id": payload["request_id"], "paid": True}
     artifact_payload = await artifact.endpoint(request_id=payload["request_id"])
     assert "lead@acme.example" not in str(artifact_payload)
+
+
+@pytest.mark.asyncio
+async def test_deflection_report_search_returns_full_paid_uploaded_item() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-portfolio-submit",
+        request_id="content-ops-search-1",
+        snapshot={"summary": {}},
+        artifact=_search_artifact(),
+    )
+    await store.mark_paid(
+        account_id="acct-portfolio-submit",
+        request_id="content-ops-search-1",
+        payment_reference="checkout-session:search",
+    )
+    router = _router(store)
+
+    search = _route(router, "/ops/deflection-reports/{request_id}/search", "POST")
+    payload = await search.endpoint(
+        payload=api_module.DeflectionReportSearchModel(q="export report", limit=5),
+        request_id="content-ops-search-1",
+    )
+
+    assert payload["query"] == "export report"
+    assert payload["count"] == 1
+    result = payload["results"][0]
+    assert result["score"] > 0
+    assert result["rank"] == 1
+    assert result["item"] == _search_item()
+    assert "answer_summary" not in result
+
+
+@pytest.mark.asyncio
+async def test_deflection_report_search_keeps_scope_and_paid_gate() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-portfolio-submit",
+        request_id="content-ops-search-locked",
+        snapshot={"summary": {}},
+        artifact=_search_artifact(),
+    )
+    router = _router(store)
+    search = _route(router, "/ops/deflection-reports/{request_id}/search", "POST")
+
+    with pytest.raises(api_module.HTTPException) as locked:
+        await search.endpoint(
+            payload=api_module.DeflectionReportSearchModel(q="export", limit=5),
+            request_id="content-ops-search-locked",
+        )
+    assert locked.value.status_code == 403
+    assert locked.value.detail == "Deflection report is locked."
+
+    other_scope = _router_with_store_provider(lambda: store, account_id="acct-other")
+    other_scope_search = _route(
+        other_scope,
+        "/ops/deflection-reports/{request_id}/search",
+        "POST",
+    )
+    with pytest.raises(api_module.HTTPException) as missing_for_other_account:
+        await other_scope_search.endpoint(
+            payload=api_module.DeflectionReportSearchModel(q="export", limit=5),
+            request_id="content-ops-search-locked",
+        )
+    assert missing_for_other_account.value.status_code == 404
+    assert missing_for_other_account.value.detail == "Deflection report not found."
+
+
+@pytest.mark.asyncio
+async def test_deflection_report_search_validates_query_before_store_access() -> None:
+    def _store_provider() -> InMemoryDeflectionReportArtifactStore:
+        raise AssertionError("store should not be resolved for invalid search")
+
+    router = _router_with_store_provider(_store_provider)
+    search = _route(router, "/ops/deflection-reports/{request_id}/search", "POST")
+
+    with pytest.raises(api_module.HTTPException) as blank:
+        await search.endpoint(
+            payload=api_module.DeflectionReportSearchModel.model_construct(
+                q="   ",
+                limit=5,
+            ),
+            request_id="content-ops-search-invalid",
+        )
+    assert blank.value.status_code == 400
+    assert blank.value.detail == "q is required"
+
+    with pytest.raises(api_module.HTTPException) as too_long:
+        await search.endpoint(
+            payload=api_module.DeflectionReportSearchModel.model_construct(
+                q="x" * (api_module._DEFLECTION_REPORT_SEARCH_MAX_QUERY_CHARS + 1),
+                limit=5,
+            ),
+            request_id="content-ops-search-invalid",
+        )
+    assert too_long.value.status_code == 400
+    assert too_long.value.detail == "q must be 300 characters or fewer"
+
+
+@pytest.mark.asyncio
+async def test_deflection_report_search_skips_compact_and_malformed_items() -> None:
+    compact_row = {
+        "topic": "Billing",
+        "question": "Where is the refund export?",
+        "answer_summary": "Compact search row only.",
+        "ticket_count": 3,
+    }
+    malformed_full_item = _search_item(
+        question="How do I download refund data?",
+        source_labels="ticket-refund-1",
+    )
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-portfolio-submit",
+        request_id="content-ops-search-compact",
+        snapshot={"summary": {}},
+        artifact=_search_artifact([compact_row, malformed_full_item, _search_item()]),
+    )
+    await store.mark_paid(
+        account_id="acct-portfolio-submit",
+        request_id="content-ops-search-compact",
+        payment_reference="checkout-session:search",
+    )
+    router = _router(store)
+    search = _route(router, "/ops/deflection-reports/{request_id}/search", "POST")
+
+    compact_only = await search.endpoint(
+        payload=api_module.DeflectionReportSearchModel(q="refund", limit=5),
+        request_id="content-ops-search-compact",
+    )
+    assert compact_only == {"query": "refund", "count": 0, "results": []}
+
+    full_item = await search.endpoint(
+        payload=api_module.DeflectionReportSearchModel(q="attribution export", limit=99),
+        request_id="content-ops-search-compact",
+    )
+    assert full_item["count"] == 1
+    assert full_item["results"][0]["item"] == _search_item()
 
 
 @pytest.mark.asyncio
