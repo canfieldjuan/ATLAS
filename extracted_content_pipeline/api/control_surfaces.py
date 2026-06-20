@@ -7,6 +7,7 @@ import http.client
 import json
 import logging
 import math
+import re
 import ssl
 import tempfile
 import ipaddress
@@ -165,6 +166,24 @@ _DEFLECTION_SUBMIT_PLATFORMS = frozenset({
     "other",
 })
 _DEFLECTION_SUBMIT_IMPORTER_MODES = frozenset({"csv", "full_thread"})
+_DEFLECTION_REPORT_SEARCH_DEFAULT_LIMIT = 5
+_DEFLECTION_REPORT_SEARCH_MAX_LIMIT = 10
+_DEFLECTION_REPORT_SEARCH_MAX_QUERY_CHARS = 300
+_DEFLECTION_REPORT_SEARCH_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_DEFLECTION_REPORT_SEARCH_TEXT_FIELDS = (
+    "topic",
+    "question",
+    "answer",
+    "when_to_contact_support",
+    "answer_evidence_status",
+)
+_DEFLECTION_REPORT_SEARCH_SEQUENCE_FIELDS = (
+    "steps",
+    "action_items",
+    "source_ids",
+    "source_labels",
+    "term_mappings",
+)
 
 
 @dataclass(frozen=True)
@@ -649,6 +668,26 @@ if BaseModel is not None:
 
         payment_reference: str | None = Field(default=None, max_length=200)
 
+    class DeflectionReportSearchModel(BaseModel):
+        """Request-scoped uploaded report search body."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        q: str = Field(
+            ...,
+            min_length=1,
+            max_length=_DEFLECTION_REPORT_SEARCH_MAX_QUERY_CHARS,
+        )
+        limit: int | None = Field(default=None, ge=1)
+
+        @field_validator("q")
+        @classmethod
+        def _validate_query(cls, value: Any) -> str:
+            text = _clean(value)
+            if not text:
+                raise ValueError("q is required")
+            return str(text)
+
     class _DeflectionReportSubmitFieldsModel(BaseModel):
         """Shared portfolio submit metadata fields."""
 
@@ -714,6 +753,7 @@ else:  # pragma: no cover - module import fallback when FastAPI is unavailable.
     ContentOpsIngestionInspectModel = Any
     ContentOpsIngestionImportModel = Any
     DeflectionReportPaidModel = Any
+    DeflectionReportSearchModel = Any
     DeflectionReportSubmitModel = Any
     DeflectionReportSubmitFieldsModel = Any
 
@@ -890,6 +930,32 @@ def create_content_ops_control_surface_router(
                 detail="Deflection report model is not available.",
             )
         return model
+
+    @router.post(
+        "/deflection-reports/{request_id}/search",
+        dependencies=public_deflection_dependencies,
+    )
+    async def search_deflection_report(
+        payload: DeflectionReportSearchModel = Body(...),
+        request_id: str = PathParam(..., min_length=1, max_length=200),
+    ) -> dict[str, Any]:
+        query = _deflection_report_search_query(payload.q)
+        limit = _deflection_report_search_limit(payload.limit)
+        store = await _resolve_deflection_report_store(deflection_report_store_provider)
+        scope = await _resolve_scope(scope_provider)
+        record = await store.get_artifact_record(
+            account_id=_required_scope_account_id(scope),
+            request_id=request_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="Deflection report not found.")
+        if not record.paid:
+            raise HTTPException(status_code=403, detail="Deflection report is locked.")
+        return _search_deflection_report_artifact(
+            record.artifact,
+            query=query,
+            limit=limit,
+        )
 
     @router.post(
         "/deflection-reports/{request_id}/checkout-authorization",
@@ -3397,6 +3463,145 @@ def _deflection_resolution_preview_summary(
         "support_ticket_resolution_evidence_present": bool(present),
         "support_ticket_resolution_evidence_count": count,
     }
+
+
+def _deflection_report_search_query(value: Any) -> str:
+    query = _clean(value)
+    if not query:
+        raise HTTPException(status_code=400, detail="q is required")
+    if len(query) > _DEFLECTION_REPORT_SEARCH_MAX_QUERY_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "q must be "
+                f"{_DEFLECTION_REPORT_SEARCH_MAX_QUERY_CHARS} characters or fewer"
+            ),
+        )
+    return str(query)
+
+
+def _deflection_report_search_limit(value: Any) -> int:
+    if value is None:
+        return _DEFLECTION_REPORT_SEARCH_DEFAULT_LIMIT
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="limit must be positive") from exc
+    if parsed <= 0:
+        raise HTTPException(status_code=400, detail="limit must be positive")
+    return min(parsed, _DEFLECTION_REPORT_SEARCH_MAX_LIMIT)
+
+
+def _search_deflection_report_artifact(
+    artifact: Mapping[str, Any] | None,
+    *,
+    query: str,
+    limit: int,
+) -> dict[str, Any]:
+    normalized_query = _deflection_report_search_query(query)
+    query_tokens = _deflection_report_search_tokens(normalized_query)
+    if not isinstance(artifact, Mapping) or not query_tokens or limit <= 0:
+        return {"query": normalized_query, "count": 0, "results": []}
+
+    matches: list[dict[str, Any]] = []
+    for rank, item in enumerate(_deflection_report_artifact_items(artifact), start=1):
+        full_item = _deflection_report_full_item(item)
+        if full_item is None:
+            continue
+        score = _deflection_report_item_score(full_item, query_tokens)
+        if score <= 0:
+            continue
+        matches.append({
+            "item": full_item,
+            "score": score,
+            "rank": _nonnegative_int(full_item.get("rank")) or rank,
+        })
+    matches.sort(
+        key=lambda result: (
+            -int(result["score"]),
+            int(result["rank"]),
+            str(result["item"].get("question") or ""),
+        )
+    )
+    selected = matches[:limit]
+    return {
+        "query": normalized_query,
+        "count": len(selected),
+        "results": selected,
+    }
+
+
+def _deflection_report_artifact_items(
+    artifact: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    faq_result = artifact.get("faq_result")
+    if not isinstance(faq_result, Mapping):
+        return ()
+    items = faq_result.get("items")
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
+        return ()
+    return tuple(item for item in items if isinstance(item, Mapping))
+
+
+def _deflection_report_full_item(item: Mapping[str, Any]) -> dict[str, Any] | None:
+    for field in _DEFLECTION_REPORT_SEARCH_TEXT_FIELDS:
+        if not _clean(item.get(field)):
+            return None
+    for field in _DEFLECTION_REPORT_SEARCH_SEQUENCE_FIELDS:
+        value = item.get(field)
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            return None
+    if _nonnegative_int(item.get("ticket_count")) <= 0 and _nonnegative_int(
+        item.get("frequency")
+    ) <= 0:
+        return None
+    return dict(item)
+
+
+def _deflection_report_item_score(
+    item: Mapping[str, Any],
+    query_tokens: Sequence[str],
+) -> int:
+    question_tokens = set(_deflection_report_search_tokens(item.get("question")))
+    topic_tokens = set(_deflection_report_search_tokens(item.get("topic")))
+    text_tokens = _deflection_report_search_tokens(_deflection_report_item_search_text(item))
+    score = 0
+    for token in query_tokens:
+        if token in question_tokens:
+            score += 6
+        if token in topic_tokens:
+            score += 3
+        score += min(text_tokens.count(token), 4)
+    return score
+
+
+def _deflection_report_item_search_text(item: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    for field in ("topic", "question", "answer", "when_to_contact_support"):
+        text = _clean(item.get(field))
+        if text:
+            parts.append(str(text))
+    for field in ("steps", "action_items", "source_labels"):
+        for value in _text_sequence(item.get(field)):
+            parts.append(value)
+    for mapping in item.get("term_mappings") or ():
+        if not isinstance(mapping, Mapping):
+            continue
+        for field in ("customer_term", "documentation_term", "suggestion"):
+            text = _clean(mapping.get(field))
+            if text:
+                parts.append(str(text))
+    return " ".join(parts)
+
+
+def _deflection_report_search_tokens(value: Any) -> list[str]:
+    return _DEFLECTION_REPORT_SEARCH_TOKEN_RE.findall(str(value or "").lower())
+
+
+def _text_sequence(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return ()
+    return tuple(str(item) for item in value if _clean(item))
 
 
 def _nonnegative_int(value: Any) -> int:
