@@ -7,7 +7,9 @@ from pathlib import Path
 
 from extracted_content_pipeline.deflection_pii_eval_corpus import (
     SCHEMA_VERSION,
+    SOURCE_INTAKE_SUMMARY_SCHEMA_VERSION,
     build_surrogate_eval_corpus,
+    summarize_labeled_source,
 )
 
 
@@ -155,6 +157,75 @@ def test_surrogate_artifact_rewrites_labels_and_drops_raw_pii() -> None:
     }
     assert artifact["summary"]["cue_less_person_name_count"] == 1
     assert artifact["summary"]["cue_prefixed_person_name_count"] == 1
+
+
+def test_labeled_source_intake_summary_reports_mix_without_raw_echo() -> None:
+    summary = summarize_labeled_source(_valid_source())
+    rendered = json.dumps(summary, sort_keys=True)
+
+    assert summary["ok"] is True
+    assert summary["schema_version"] == SOURCE_INTAKE_SUMMARY_SCHEMA_VERSION
+    assert summary["source_schema_version"] == "deflection_pii_labeled_source.v1"
+    assert summary["artifact_schema_version"] == SCHEMA_VERSION
+    assert summary["raw_source_persisted"] is False
+    assert summary["raw_label_spans_persisted"] is False
+    assert summary["ticket_count"] == 1
+    assert summary["label_count"] == 9
+    assert summary["labels_by_class"] == {
+        "dob": 1,
+        "email": 1,
+        "order_id": 1,
+        "payment_card": 1,
+        "person_name": 2,
+        "phone": 1,
+        "ssn": 1,
+        "street_address": 1,
+    }
+    assert summary["labels_by_origin_field"] == {
+        "agent_reply": 2,
+        "customer_message": 4,
+        "private_note": 2,
+        "subject": 1,
+    }
+    assert summary["person_name"] == {"cue_less": 1, "cue_prefixed": 1}
+    assert summary["must_survive"] == {
+        "count": 3,
+        "by_reason": {
+            "compliance_reference": 1,
+            "security_reference": 1,
+            "tenant_source_id": 1,
+        },
+    }
+    for raw in (
+        "Alice Baker",
+        "alice.baker@example.com",
+        "202-555-0188",
+        "ORD-98765",
+        "99 Real Street",
+        "1977-06-05",
+        "111-22-3333",
+        "4242 4242 4242 4242",
+    ):
+        assert raw not in rendered
+
+
+def test_labeled_source_intake_summary_requires_schema_without_raw_echo() -> None:
+    source = _valid_source()
+    source["schema_version"] = "wrong.version"
+
+    summary = summarize_labeled_source(source)
+    rendered = json.dumps(summary, sort_keys=True)
+
+    assert summary["ok"] is False
+    assert summary["errors"] == [
+        {
+            "code": "source_schema_version_mismatch",
+            "expected": "deflection_pii_labeled_source.v1",
+            "actual": "wrong.version",
+        }
+    ]
+    assert "Alice Baker" not in rendered
+    assert "alice.baker@example.com" not in rendered
 
 
 def test_must_survive_tokens_are_preserved_for_precision_scoring() -> None:
@@ -445,6 +516,47 @@ def test_cli_writes_artifact_and_rejects_invalid_input_without_raw_echo(
     assert "raw.bad@example.com" not in captured.err
     assert "missing.bad@example.com" not in captured.err
     assert "label_span_not_found" in captured.err
+
+
+def test_cli_writes_summary_without_artifact_and_sanitizes_invalid_summary(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "source.json"
+    summary_output = tmp_path / "summary.json"
+    artifact_output = tmp_path / "artifact.json"
+    source.write_text(json.dumps(_valid_source()), encoding="utf-8")
+
+    assert CLI.main([str(source), "--summary-output", str(summary_output), "--pretty"]) == 0
+    assert summary_output.is_file()
+    assert not artifact_output.exists()
+    summary = json.loads(summary_output.read_text(encoding="utf-8"))
+    assert summary["ok"] is True
+    assert summary["label_count"] == 9
+
+    bad_source = tmp_path / "bad-source.json"
+    bad_source.write_text(
+        json.dumps({
+            "schema_version": "deflection_pii_labeled_source.v1",
+            "records": [{
+                "fields": {"customer_message": "Email raw.bad@example.com"},
+                "labels": [{
+                    "span": "missing.bad@example.com",
+                    "class": "email",
+                    "origin_field": "customer_message",
+                }],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    assert CLI.main([str(bad_source), "--summary-output", str(summary_output)]) == 1
+    summary = json.loads(summary_output.read_text(encoding="utf-8"))
+    captured = capsys.readouterr()
+    rendered = json.dumps(summary, sort_keys=True) + captured.err
+    assert summary["ok"] is False
+    assert "label_span_not_found" in rendered
+    assert "raw.bad@example.com" not in rendered
+    assert "missing.bad@example.com" not in rendered
 
 
 def test_committed_tiny_fixture_is_surrogate_only() -> None:
