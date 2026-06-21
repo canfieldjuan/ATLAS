@@ -2232,6 +2232,64 @@ def test_deflection_report_payload_scrubs_local_entity_shapes() -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw_text", "raw_fragment", "expected_token"),
+    (
+        ("SSN 123-45-6789 was in the note.", "123-45-6789", "[redacted-ssn]"),
+        ("Social security 987-65-4321 appeared.", "987-65-4321", "[redacted-ssn]"),
+        ("Customer record had 212-55-0199.", "212-55-0199", "[redacted-ssn]"),
+        (
+            "Card 4111 1111 1111 1111 was pasted.",
+            "4111 1111 1111 1111",
+            "[redacted-payment-card]",
+        ),
+        (
+            "Card 5555-5555-5555-4444 was pasted.",
+            "5555-5555-5555-4444",
+            "[redacted-payment-card]",
+        ),
+        (
+            "Amex 378282246310005 was pasted.",
+            "378282246310005",
+            "[redacted-payment-card]",
+        ),
+        (
+            "Discover 6011 1111 1111 1117 was pasted.",
+            "6011 1111 1111 1117",
+            "[redacted-payment-card]",
+        ),
+        (
+            "Diners 30569309025904 was pasted.",
+            "30569309025904",
+            "[redacted-payment-card]",
+        ),
+    ),
+)
+def test_deflection_report_payload_scrubs_ssn_and_payment_card_shapes(
+    raw_text: str,
+    raw_fragment: str,
+    expected_token: str,
+) -> None:
+    scrubbed = scrub_deflection_report_payload({raw_text: raw_text})
+
+    encoded = json.dumps(scrubbed, sort_keys=True)
+    assert raw_fragment not in encoded
+    assert expected_token in encoded
+
+
+def test_deflection_report_payload_preserves_card_number_near_misses() -> None:
+    raw_text = (
+        "CVE-2021-44228, ISO 27001, SKU-12345678, price $49, "
+        "and batch number 1234 5678 9012 3456 stayed readable."
+    )
+
+    scrubbed = scrub_deflection_report_payload({"answer": raw_text})
+
+    assert scrubbed["answer"] == raw_text
+    assert "[redacted-payment-card]" not in scrubbed["answer"]
+    assert "[redacted-ssn]" not in scrubbed["answer"]
+
+
+@pytest.mark.parametrize(
     ("raw_text", "expected_text"),
     (
         ("Customer Jordan Lee asked for help.", "Customer [redacted-name] asked for help."),

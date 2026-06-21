@@ -55,7 +55,18 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
         "paid_pdf",
     }
     assert summary["surfaces"]["free_snapshot"]["email"]["expected"] == 1
-    assert summary["surfaces"]["paid_artifact"]["ssn"]["expected"] == 1
+    assert summary["surfaces"]["paid_artifact"]["ssn"] == {
+        "expected": 1,
+        "redacted": 1,
+        "leaks": 0,
+        "recall": 1.0,
+    }
+    assert summary["surfaces"]["paid_artifact"]["payment_card"] == {
+        "expected": 1,
+        "redacted": 1,
+        "leaks": 0,
+        "recall": 1.0,
+    }
     assert set(summary["person_name"]) == {"cue_less", "cue_prefixed"}
     assert summary["headline"] == {
         "free_high_severity_leak_count": 1,
@@ -80,6 +91,10 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     assert summary["leak_samples"]
     assert all(
         sample["surrogate_id"] != "person_name-002"
+        for sample in summary["leak_samples"]
+    )
+    assert all(
+        sample["surrogate_id"] not in {"ssn-001", "payment_card-001"}
         for sample in summary["leak_samples"]
     )
     partial_name_leaks = [

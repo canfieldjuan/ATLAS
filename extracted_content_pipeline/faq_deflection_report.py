@@ -70,6 +70,16 @@ _DEFLECTION_PHONE_RE = re.compile(
     r"(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}"
     rf"{_DEFLECTION_BOUNDARY_RIGHT}"
 )
+_DEFLECTION_SSN_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"\d{3}-\d{2}-\d{4}"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}"
+)
+_DEFLECTION_PAYMENT_CARD_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"(?:\d[\s-]?){12,18}\d"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}"
+)
 _DEFLECTION_IDENTIFIER_RE = re.compile(
     rf"{_DEFLECTION_BOUNDARY_LEFT}"
     r"(?:account|accounts|acct|case|cases|claim|claims|confirmation|"
@@ -3476,6 +3486,8 @@ def _should_scrub_identifier_inside_text(value: str) -> bool:
 
 def _scrub_deflection_text(value: str) -> str:
     text = _DEFLECTION_REDACTION_ARTIFACT_RE.sub("[redacted-text]", value)
+    text = _DEFLECTION_SSN_RE.sub("[redacted-ssn]", text)
+    text = _DEFLECTION_PAYMENT_CARD_RE.sub(_redact_deflection_payment_card, text)
     text = _DEFLECTION_EMAIL_RE.sub("[redacted-email]", text)
     text = _DEFLECTION_PHONE_RE.sub("[redacted-phone]", text)
     text = _DEFLECTION_STREET_ADDRESS_RE.sub(_redact_deflection_street_address, text)
@@ -3493,6 +3505,31 @@ def _scrub_deflection_text(value: str) -> str:
         text,
     )
     return _DEFLECTION_IDENTIFIER_RE.sub(_redact_deflection_labeled_identifier, text)
+
+
+def _redact_deflection_payment_card(match: re.Match[str]) -> str:
+    digits = re.sub(r"\D", "", match.group(0))
+    if not _looks_like_payment_card_number(digits):
+        return match.group(0)
+    return "[redacted-payment-card]"
+
+
+def _looks_like_payment_card_number(digits: str) -> bool:
+    if not 13 <= len(digits) <= 19:
+        return False
+    if len(set(digits)) == 1:
+        return False
+    total = 0
+    should_double = False
+    for char in reversed(digits):
+        value = int(char)
+        if should_double:
+            value *= 2
+            if value > 9:
+                value -= 9
+        total += value
+        should_double = not should_double
+    return total % 10 == 0
 
 
 def _redact_deflection_street_address(match: re.Match[str]) -> str:
