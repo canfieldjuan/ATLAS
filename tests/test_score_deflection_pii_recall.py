@@ -402,9 +402,50 @@ def test_missing_pdf_dependency_skips_paid_pdf_scoring(monkeypatch) -> None:
     assert summary["surfaces"]["paid_pdf"] == {}
 
 
+def test_cli_writes_markdown_summary_without_raw_spans(tmp_path: Path) -> None:
+    json_path = tmp_path / "summary.json"
+    markdown_path = tmp_path / "summary.md"
+
+    exit_code = CLI.main([
+        "--output",
+        str(json_path),
+        "--markdown-output",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    written = json.loads(json_path.read_text(encoding="utf-8"))
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert written["headline"]["free_high_severity_gate_eligible_leak_count"] == 0
+    assert "# Deflection PII Recall Advisory" in markdown
+    assert "| Gate-eligible free high-severity leaks | 0 |" in markdown
+    assert "| Deferred open-set name leaks | 1 |" in markdown
+    cue_less_expected = (
+        4 if written["surface_generation"]["paid_pdf"]["rendered"] else 3
+    )
+    assert f"| cue_less | {cue_less_expected} | 0 | {cue_less_expected} | 0 |" in markdown
+    assert "| Violation count | 0 |" in markdown
+    assert "person_name-001" in markdown
+    for raw_value in (
+        "Maya Chen",
+        "Jordan Lee",
+        "Mary Jane Watson",
+        "alex.rivera@example.test",
+        "555-010-4301",
+        "1990-04-17",
+        "123-45-6789",
+        "4111 1111 1111 1111",
+        "CVE-2021-44228",
+        "ISO 27001",
+        "ticket-eval-safe-001",
+    ):
+        assert raw_value not in markdown
+
+
 def test_cli_writes_failure_summary_and_returns_nonzero(tmp_path: Path) -> None:
     corpus_path = tmp_path / "bad.json"
     output_path = tmp_path / "summary.json"
+    markdown_path = tmp_path / "summary.md"
     corpus_path.write_text('{"schema_version": "wrong", "tickets": []}', encoding="utf-8")
 
     exit_code = CLI.main([
@@ -412,9 +453,14 @@ def test_cli_writes_failure_summary_and_returns_nonzero(tmp_path: Path) -> None:
         str(corpus_path),
         "--output",
         str(output_path),
+        "--markdown-output",
+        str(markdown_path),
     ])
 
     assert exit_code == 1
     written = json.loads(output_path.read_text(encoding="utf-8"))
     assert written["status"] == "failed"
     assert written["blocking_error_codes"]
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "## Blocking Errors" in markdown
+    assert "corpus_empty_tickets" in markdown

@@ -88,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(summary, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+    if args.markdown_output:
+        args.markdown_output.parent.mkdir(parents=True, exist_ok=True)
+        args.markdown_output.write_text(
+            _markdown_summary(summary),
+            encoding="utf-8",
+        )
     if args.json:
         print(json.dumps(summary, sort_keys=True))
     if summary["status"] != "ok":
@@ -173,8 +179,189 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--markdown-output", type=Path)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
+
+
+def _markdown_summary(summary: Mapping[str, Any]) -> str:
+    lines = [
+        "# Deflection PII Recall Advisory",
+        "",
+        _markdown_table(
+            ("Field", "Value"),
+            (
+                ("Status", _clean(summary.get("status"))),
+                ("Schema", _clean(summary.get("schema_version"))),
+            ),
+        ),
+        "",
+    ]
+    if _clean(summary.get("status")) != "ok":
+        lines.extend([
+            "## Blocking Errors",
+            "",
+            _markdown_table(
+                ("Code",),
+                ((code,) for code in _sequence(summary.get("blocking_error_codes"))),
+            ),
+            "",
+        ])
+        return "\n".join(lines).rstrip() + "\n"
+
+    input_summary = summary.get("input")
+    if not isinstance(input_summary, Mapping):
+        input_summary = {}
+    headline = summary.get("headline")
+    if not isinstance(headline, Mapping):
+        headline = {}
+    lines.extend([
+        "## Input",
+        "",
+        _markdown_table(
+            ("Metric", "Value"),
+            (
+                ("Corpus schema", _clean(input_summary.get("schema_version"))),
+                ("Tickets", input_summary.get("ticket_count", 0)),
+                ("Labels", input_summary.get("label_count", 0)),
+                ("Must-survive records", input_summary.get("must_survive_count", 0)),
+            ),
+        ),
+        "",
+        "## Headline",
+        "",
+        _markdown_table(
+            ("Metric", "Value"),
+            (
+                ("Free high-severity leaks (all-in)", headline.get("free_high_severity_leak_count", 0)),
+                ("Free high-severity pass (all-in)", headline.get("free_high_severity_pass", False)),
+                ("Gate-eligible free high-severity leaks", headline.get("free_high_severity_gate_eligible_leak_count", 0)),
+                ("Gate-eligible pass", headline.get("free_high_severity_gate_eligible_pass", False)),
+                ("Deferred open-set name leaks", headline.get("deferred_open_set_name_leak_count", 0)),
+            ),
+        ),
+        "",
+        "## Person Name Split",
+        "",
+        _class_rows_table(summary.get("person_name"), first_header="Subtype"),
+        "",
+        "## Surface Recall",
+        "",
+        _surface_rows_table(summary.get("surfaces")),
+        "",
+        "## Must-Survive Precision",
+        "",
+        _must_survive_table(summary.get("must_survive")),
+        "",
+        "## Leak Samples",
+        "",
+        _leak_samples_table(summary.get("leak_samples")),
+        "",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _class_rows_table(value: Any, *, first_header: str) -> str:
+    if not isinstance(value, Mapping):
+        return _markdown_table((first_header, "Expected", "Redacted", "Leaks", "Recall"), ())
+    return _markdown_table(
+        (first_header, "Expected", "Redacted", "Leaks", "Recall"),
+        (
+            (
+                key,
+                counts.get("expected", 0),
+                counts.get("redacted", 0),
+                counts.get("leaks", 0),
+                _format_recall(counts.get("recall")),
+            )
+            for key, counts in sorted(value.items())
+            if isinstance(counts, Mapping)
+        ),
+    )
+
+
+def _surface_rows_table(value: Any) -> str:
+    rows: list[tuple[Any, ...]] = []
+    if isinstance(value, Mapping):
+        for surface, class_counts in sorted(value.items()):
+            if not isinstance(class_counts, Mapping):
+                continue
+            for pii_class, counts in sorted(class_counts.items()):
+                if not isinstance(counts, Mapping):
+                    continue
+                rows.append((
+                    surface,
+                    pii_class,
+                    counts.get("expected", 0),
+                    counts.get("redacted", 0),
+                    counts.get("leaks", 0),
+                    _format_recall(counts.get("recall")),
+                ))
+    return _markdown_table(
+        ("Surface", "Class", "Expected", "Redacted", "Leaks", "Recall"),
+        rows,
+    )
+
+
+def _must_survive_table(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return _markdown_table(("Metric", "Value"), ())
+    rows: list[tuple[Any, ...]] = [
+        ("Violation count", value.get("violation_count", 0)),
+    ]
+    surface_counts = value.get("surface_counts")
+    if isinstance(surface_counts, Mapping):
+        for surface, counts in sorted(surface_counts.items()):
+            if not isinstance(counts, Mapping):
+                continue
+            rows.append((
+                f"{surface} reached/total",
+                f"{counts.get('reached_surface', 0)}/{counts.get('total_tokens', 0)}",
+            ))
+    return _markdown_table(("Metric", "Value"), rows)
+
+
+def _leak_samples_table(value: Any) -> str:
+    rows: list[tuple[Any, ...]] = []
+    for sample in _sequence(value):
+        if not isinstance(sample, Mapping):
+            continue
+        rows.append((
+            _clean(sample.get("surrogate_id")),
+            _clean(sample.get("class")),
+            _clean(sample.get("name_subtype")),
+            _clean(sample.get("severity")),
+            _clean(sample.get("surface")),
+            _clean(sample.get("leak_kind")),
+        ))
+    return _markdown_table(
+        ("Surrogate ID", "Class", "Name subtype", "Severity", "Surface", "Leak kind"),
+        rows,
+    )
+
+
+def _markdown_table(headers: Sequence[Any], rows: Sequence[Sequence[Any]]) -> str:
+    row_list = list(rows)
+    header_line = "| " + " | ".join(_markdown_cell(header) for header in headers) + " |"
+    separator = "| " + " | ".join("---" for _ in headers) + " |"
+    body = [
+        "| " + " | ".join(_markdown_cell(cell) for cell in row) + " |"
+        for row in row_list
+    ]
+    if not body:
+        body = ["| " + " | ".join("None" for _ in headers) + " |"]
+    return "\n".join([header_line, separator, *body])
+
+
+def _markdown_cell(value: Any) -> str:
+    text = str(value)
+    return text.replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _format_recall(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        return f"{value:.4f}".rstrip("0").rstrip(".")
+    return "n/a"
 
 
 def _load_corpus(path: Path) -> tuple[Mapping[str, Any], list[dict[str, Any]]]:
