@@ -70,6 +70,16 @@ _DEFLECTION_PHONE_RE = re.compile(
     r"(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}"
     rf"{_DEFLECTION_BOUNDARY_RIGHT}"
 )
+_DEFLECTION_SSN_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"\d{3}-\d{2}-\d{4}"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}"
+)
+_DEFLECTION_PAYMENT_CARD_RE = re.compile(
+    r"(?<![A-Za-z0-9@])"
+    r"\d(?:[\s-]?\d){12,63}"
+    r"(?![A-Za-z0-9@])"
+)
 _DEFLECTION_IDENTIFIER_RE = re.compile(
     rf"{_DEFLECTION_BOUNDARY_LEFT}"
     r"(?:account|accounts|acct|case|cases|claim|claims|confirmation|"
@@ -3476,7 +3486,9 @@ def _should_scrub_identifier_inside_text(value: str) -> bool:
 
 def _scrub_deflection_text(value: str) -> str:
     text = _DEFLECTION_REDACTION_ARTIFACT_RE.sub("[redacted-text]", value)
+    text = _DEFLECTION_SSN_RE.sub("[redacted-ssn]", text)
     text = _DEFLECTION_EMAIL_RE.sub("[redacted-email]", text)
+    text = _DEFLECTION_PAYMENT_CARD_RE.sub(_redact_deflection_payment_card, text)
     text = _DEFLECTION_PHONE_RE.sub("[redacted-phone]", text)
     text = _DEFLECTION_STREET_ADDRESS_RE.sub(_redact_deflection_street_address, text)
     text = _DEFLECTION_PERSON_NAME_RE.sub(_redact_deflection_person_name, text)
@@ -3493,6 +3505,51 @@ def _scrub_deflection_text(value: str) -> str:
         text,
     )
     return _DEFLECTION_IDENTIFIER_RE.sub(_redact_deflection_labeled_identifier, text)
+
+
+def _redact_deflection_payment_card(match: re.Match[str]) -> str:
+    replacement = _deflection_payment_card_replacement(match.group(0))
+    if replacement is None:
+        return match.group(0)
+    return replacement
+
+
+def _deflection_payment_card_replacement(value: str) -> str | None:
+    digit_positions = [index for index, char in enumerate(value) if char.isdigit()]
+    digits = "".join(value[index] for index in digit_positions)
+    if _looks_like_payment_card_number(digits):
+        return "[redacted-payment-card]"
+
+    for digit_count in range(min(19, len(digits) - 1), 12, -1):
+        prefix_digits = digits[:digit_count]
+        if not _looks_like_payment_card_number(prefix_digits):
+            continue
+        suffix = value[digit_positions[digit_count - 1] + 1 :]
+        if suffix.startswith("-"):
+            continue
+        if suffix and not suffix[0].isspace():
+            continue
+        return f"[redacted-payment-card]{suffix}"
+
+    return None
+
+
+def _looks_like_payment_card_number(digits: str) -> bool:
+    if not 13 <= len(digits) <= 19:
+        return False
+    if len(set(digits)) == 1:
+        return False
+    total = 0
+    should_double = False
+    for char in reversed(digits):
+        value = int(char)
+        if should_double:
+            value *= 2
+            if value > 9:
+                value -= 9
+        total += value
+        should_double = not should_double
+    return total % 10 == 0
 
 
 def _redact_deflection_street_address(match: re.Match[str]) -> str:
@@ -3701,8 +3758,14 @@ def _has_deflection_source_link_pii(value: str) -> bool:
     if (
         _DEFLECTION_EMAIL_RE.search(value)
         or _DEFLECTION_PHONE_RE.search(value)
+        or _DEFLECTION_SSN_RE.search(value)
         or _DEFLECTION_REDACTION_ARTIFACT_RE.search(value)
         or _has_deflection_labeled_identifier_pii(value)
+    ):
+        return True
+    if any(
+        _deflection_payment_card_replacement(match.group(0)) is not None
+        for match in _DEFLECTION_PAYMENT_CARD_RE.finditer(value)
     ):
         return True
     if any(
