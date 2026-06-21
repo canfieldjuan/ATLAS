@@ -165,12 +165,26 @@ _DEFLECTION_ROLE_PHRASE_TOKENS = frozenset(
         "feature",
         "manager",
         "plan",
+        "platinum",
         "premium",
         "program",
         "research",
         "subscription",
         "success",
         "team",
+    }
+)
+_DEFLECTION_TRAILING_LABEL_CONTEXT_TOKENS = frozenset(
+    {
+        "account",
+        "license",
+        "membership",
+        "package",
+        "plan",
+        "seat",
+        "status",
+        "subscription",
+        "tier",
     }
 )
 _DEFLECTION_STREET_ADDRESS_RE = re.compile(
@@ -3589,11 +3603,14 @@ def _deflection_person_name_match_decision(
     candidate = match.group("name")
     shortened = _shortest_deflection_person_name_candidate(candidate)
     if _is_plain_role_deflection_person_name_cue(match.group("prefix")):
-        if shortened is not None:
+        if shortened is not None and _has_deflection_trailing_label_context(match):
             _, trailing = shortened
             return _DeflectionPersonNameDecision(redact=True, trailing_text=trailing)
         if _looks_like_plain_role_deflection_person_name(candidate):
             return _DeflectionPersonNameDecision(redact=True)
+        if shortened is not None:
+            _, trailing = shortened
+            return _DeflectionPersonNameDecision(redact=True, trailing_text=trailing)
         return _DeflectionPersonNameDecision(redact=False)
     if _looks_like_deflection_person_name(candidate):
         return _DeflectionPersonNameDecision(redact=True)
@@ -3671,6 +3688,16 @@ def _shortest_deflection_person_name_candidate(value: str) -> tuple[str, str] | 
     ):
         return None
     return first_two, f" {trailing}"
+
+
+def _has_deflection_trailing_label_context(match: re.Match[str]) -> bool:
+    suffix = match.string[match.end() :]
+    next_token = re.match(r"\s+([A-Za-z][A-Za-z'-]*)", suffix)
+    return bool(
+        next_token
+        and next_token.group(1).strip(" .'-").casefold()
+        in _DEFLECTION_TRAILING_LABEL_CONTEXT_TOKENS
+    )
 
 
 def _looks_like_deflection_role_phrase(tokens: Sequence[str]) -> bool:

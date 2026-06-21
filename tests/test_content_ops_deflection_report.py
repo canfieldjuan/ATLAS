@@ -2342,12 +2342,20 @@ def test_deflection_report_payload_scrubs_card_before_adjacent_digits(
         ),
         ("Customer Maya Chen Report", "Customer [redacted-name] Report"),
         (
+            "Customer Mary Jane Watson Report plan was upgraded.",
+            "Customer [redacted-name] Report plan was upgraded.",
+        ),
+        (
             "Customer Jane Smith Premium plan was upgraded.",
             "Customer [redacted-name] Premium plan was upgraded.",
         ),
         (
             "Customer Taylor Morgan Platinum account was upgraded.",
             "Customer [redacted-name] Platinum account was upgraded.",
+        ),
+        (
+            "Customer Jane Smith Gold plan was upgraded.",
+            "Customer [redacted-name] Gold plan was upgraded.",
         ),
     ),
 )

@@ -75,16 +75,16 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     if paid_pdf["rendered"]:
         assert summary["person_name"]["cue_prefixed"] == {
             "expected": 5,
-            "redacted": 3,
-            "leaks": 2,
-            "recall": 0.6,
+            "redacted": 5,
+            "leaks": 0,
+            "recall": 1.0,
         }
     else:
         assert summary["person_name"]["cue_prefixed"] == {
             "expected": 3,
-            "redacted": 2,
-            "leaks": 1,
-            "recall": 0.6667,
+            "redacted": 3,
+            "leaks": 0,
+            "recall": 1.0,
         }
     assert summary["person_name"]["cue_less"]["leaks"] > 0
     assert summary["must_survive"]["violation_count"] == 0
@@ -97,19 +97,14 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
         sample["surrogate_id"] not in {"ssn-001", "payment_card-001"}
         for sample in summary["leak_samples"]
     )
-    partial_name_leaks = [
-        sample
+    assert all(
+        sample["surrogate_id"] != "person_name-003"
         for sample in summary["leak_samples"]
-        if sample["surrogate_id"] == "person_name-003"
-    ]
-    expected_partial_surfaces = {"paid_artifact"}
-    if summary["surface_generation"]["paid_pdf"]["rendered"]:
-        expected_partial_surfaces.add("paid_pdf")
-    assert {
-        sample["surface"]
-        for sample in partial_name_leaks
-        if sample["leak_kind"] == "partial_name_token"
-    } == expected_partial_surfaces
+    )
+    assert all(
+        sample["leak_kind"] != "partial_name_token"
+        for sample in summary["leak_samples"]
+    )
     assert all("span" not in sample for sample in summary["leak_samples"])
     assert all("token" not in sample for sample in summary["leak_samples"])
     rendered_samples = json.dumps(summary["leak_samples"], sort_keys=True)
@@ -118,7 +113,17 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     assert "Watson" not in rendered_samples
 
 
-def test_partial_name_token_detection_is_scoped_to_own_ticket() -> None:
+def test_partial_name_token_detection_reports_token_residue() -> None:
+    leak_kind = CLI._label_leak_kind(
+        label={"class": "person_name", "span": "Mary Jane Watson"},
+        baseline_text="Customer Mary Jane Watson Report plan was upgraded.",
+        scrubbed_text="Customer [redacted-name] Watson Report plan was upgraded.",
+    )
+
+    assert leak_kind == "partial_name_token"
+
+
+def test_resolved_partial_name_token_does_not_cross_contaminate_tickets() -> None:
     corpus = _tiny_corpus()
     corpus["tickets"].append(
         {
@@ -151,9 +156,8 @@ def test_partial_name_token_detection_is_scoped_to_own_ticket() -> None:
         for sample in summary["leak_samples"]
         if sample["surrogate_id"] == "person_name-004"
     ] == []
-    assert any(
-        sample["surrogate_id"] == "person_name-003"
-        and sample["leak_kind"] == "partial_name_token"
+    assert all(
+        sample["surrogate_id"] != "person_name-003"
         for sample in summary["leak_samples"]
     )
 
