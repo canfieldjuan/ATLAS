@@ -33,7 +33,7 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     assert summary["input"] == {
         "schema_version": "deflection_pii_eval_corpus.v1",
         "ticket_count": 2,
-        "label_count": 9,
+        "label_count": 10,
         "must_survive_count": 3,
     }
     paid_pdf = summary["surface_generation"]["paid_pdf"]
@@ -62,6 +62,12 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
         "recall": 1.0,
     }
     assert summary["surfaces"]["paid_artifact"]["payment_card"] == {
+        "expected": 1,
+        "redacted": 1,
+        "leaks": 0,
+        "recall": 1.0,
+    }
+    assert summary["surfaces"]["paid_artifact"]["dob"] == {
         "expected": 1,
         "redacted": 1,
         "leaks": 0,
@@ -99,6 +105,10 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     )
     assert all(
         sample["surrogate_id"] != "person_name-003"
+        for sample in summary["leak_samples"]
+    )
+    assert all(
+        sample["surrogate_id"] != "dob-001"
         for sample in summary["leak_samples"]
     )
     assert all(
@@ -278,7 +288,7 @@ def test_malformed_label_span_fails_closed_without_scoring(
         {
             "code": error_code,
             "ticket_index": 1,
-            "label_index": 9,
+            "label_index": 10,
         }
     ]
     assert "email-bad" not in json.dumps(summary, sort_keys=True)

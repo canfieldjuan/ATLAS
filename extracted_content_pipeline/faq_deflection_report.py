@@ -75,6 +75,26 @@ _DEFLECTION_SSN_RE = re.compile(
     r"\d{3}-\d{2}-\d{4}"
     rf"{_DEFLECTION_BOUNDARY_RIGHT}"
 )
+_DEFLECTION_MONTH_RE_FRAGMENT = (
+    r"(?i:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|sept(?:ember)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?)"
+)
+_DEFLECTION_DOB_DATE_RE_FRAGMENT = (
+    r"(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}"
+    r"|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
+    rf"|{_DEFLECTION_MONTH_RE_FRAGMENT}\s+\d{{1,2}},?\s+\d{{4}}"
+    rf"|\d{{1,2}}\s+{_DEFLECTION_MONTH_RE_FRAGMENT}\s+\d{{4}})"
+)
+_DEFLECTION_DOB_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"(?P<prefix>"
+    r"(?i:(?:date\s+of\s+birth|birth\s*date|birthday|dob|d\.o\.b\.|born(?:\s+on)?)"
+    r"\s*(?:is|:|=|-)?\s*)"
+    r")"
+    rf"(?P<dob>{_DEFLECTION_DOB_DATE_RE_FRAGMENT})"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}"
+)
 _DEFLECTION_PAYMENT_CARD_RE = re.compile(
     r"(?<![A-Za-z0-9@])"
     r"\d(?:[\s-]?\d){12,63}"
@@ -3500,6 +3520,7 @@ def _should_scrub_identifier_inside_text(value: str) -> bool:
 
 def _scrub_deflection_text(value: str) -> str:
     text = _DEFLECTION_REDACTION_ARTIFACT_RE.sub("[redacted-text]", value)
+    text = _DEFLECTION_DOB_RE.sub(_redact_deflection_dob, text)
     text = _DEFLECTION_SSN_RE.sub("[redacted-ssn]", text)
     text = _DEFLECTION_EMAIL_RE.sub("[redacted-email]", text)
     text = _DEFLECTION_PAYMENT_CARD_RE.sub(_redact_deflection_payment_card, text)
@@ -3519,6 +3540,10 @@ def _scrub_deflection_text(value: str) -> str:
         text,
     )
     return _DEFLECTION_IDENTIFIER_RE.sub(_redact_deflection_labeled_identifier, text)
+
+
+def _redact_deflection_dob(match: re.Match[str]) -> str:
+    return f"{match.group('prefix')}[redacted-dob]"
 
 
 def _redact_deflection_payment_card(match: re.Match[str]) -> str:
@@ -3786,6 +3811,7 @@ def _has_deflection_source_link_pii(value: str) -> bool:
         _DEFLECTION_EMAIL_RE.search(value)
         or _DEFLECTION_PHONE_RE.search(value)
         or _DEFLECTION_SSN_RE.search(value)
+        or _DEFLECTION_DOB_RE.search(value)
         or _DEFLECTION_REDACTION_ARTIFACT_RE.search(value)
         or _has_deflection_labeled_identifier_pii(value)
     ):

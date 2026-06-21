@@ -41,7 +41,7 @@ def _valid_source() -> dict:
                     ),
                     "agent_reply": (
                         "Customer Alice Baker can keep CVE-2021-44228 and ISO 27001 "
-                        "references in the report."
+                        "references in the report. DOB 1977-06-05 was removed."
                     ),
                     "private_note": "SSN 111-22-3333 and card 4242 4242 4242 4242.",
                     "source_id": "ticket-eval-safe-001",
@@ -78,6 +78,11 @@ def _valid_source() -> dict:
                         "class": "person_name",
                         "origin_field": "agent_reply",
                         "name_subtype": "cue_prefixed",
+                    },
+                    {
+                        "span": "1977-06-05",
+                        "class": "dob",
+                        "origin_field": "agent_reply",
                     },
                     {
                         "span": "111-22-3333",
@@ -132,6 +137,7 @@ def test_surrogate_artifact_rewrites_labels_and_drops_raw_pii() -> None:
         "202-555-0188",
         "ORD-98765",
         "99 Real Street",
+        "1977-06-05",
         "111-22-3333",
         "4242 4242 4242 4242",
     ):
@@ -144,7 +150,7 @@ def test_surrogate_artifact_rewrites_labels_and_drops_raw_pii() -> None:
         text = fields[label["origin_field"]]
         assert text[label["start"]:label["end"]] == label["span"]
     assert artifact["summary"]["labels_by_severity"] == {
-        "high": 6,
+        "high": 7,
         "medium": 2,
     }
     assert artifact["summary"]["cue_less_person_name_count"] == 1
@@ -211,7 +217,8 @@ def test_unlabeled_pii_in_rendered_output_fails_closed_without_raw_echo() -> Non
                     "customer_message": (
                         "Customer is John Doe. Email leak.real@gmail.com, "
                         "call 212-555-7788, SSN 987-65-4321, card "
-                        "4000 0000 0000 0002, ship to 44 Cedar Street."
+                        "4000 0000 0000 0002, DOB 1977-06-05, ship to "
+                        "44 Cedar Street."
                     )
                 },
                 "labels": [
@@ -233,13 +240,41 @@ def test_unlabeled_pii_in_rendered_output_fails_closed_without_raw_echo() -> Non
         "212-555-7788",
         "987-65-4321",
         "4000 0000 0000 0002",
+        "1977-06-05",
         "44 Cedar Street",
     ):
         assert raw not in rendered
     assert {error["code"] for error in result.errors} == {"unlabeled_pii_detected"}
-    assert {"email", "phone", "ssn", "payment_card", "street_address"} <= {
+    assert {"email", "phone", "ssn", "payment_card", "dob", "street_address"} <= {
         error["detector"] for error in result.errors
     }
+
+
+def test_unlabeled_dob_common_cues_fail_closed_without_raw_echo() -> None:
+    for text, raw_dob in (
+        ("Customer is John Doe. Birthday is 1977-06-05.", "1977-06-05"),
+        ("Customer is John Doe. Born 06/05/1977.", "06/05/1977"),
+    ):
+        result = build_surrogate_eval_corpus({
+            "records": [
+                {
+                    "fields": {"customer_message": text},
+                    "labels": [
+                        {
+                            "span": "John Doe",
+                            "class": "person_name",
+                            "origin_field": "customer_message",
+                            "name_subtype": "cue_prefixed",
+                        }
+                    ],
+                }
+            ]
+        })
+
+        assert not result.ok
+        rendered = json.dumps({"errors": result.errors}, sort_keys=True)
+        assert raw_dob not in rendered
+        assert {error["detector"] for error in result.errors} == {"dob"}
 
 
 def test_surrogate_never_reuses_matching_raw_span() -> None:
@@ -426,10 +461,13 @@ def test_committed_tiny_fixture_is_surrogate_only() -> None:
         "202-555-0188",
         "ORD-98765",
         "99 Real Street",
+        "1977-06-05",
         "111-22-3333",
         "4242 4242 4242 4242",
     ):
         assert raw not in rendered
+    assert artifact["summary"]["labels_by_class"]["dob"] == 1
+    assert artifact["summary"]["labels_by_severity"]["high"] == 8
     residual_ticket = artifact["tickets"][1]
     assert residual_ticket["fields"]["agent_reply"] == (
         "Customer Mary Jane Watson Report plan was upgraded."
