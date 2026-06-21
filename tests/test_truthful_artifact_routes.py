@@ -21,7 +21,7 @@ from atlas_brain.auth.dependencies import AuthUser, require_auth
 from atlas_brain.autonomous.tasks.b2b_blog_post_generation import PostBlueprint
 
 
-def _auth_user(plan: str = "b2b_pro") -> AuthUser:
+def _auth_user(plan: str = "b2b_pro", *, is_platform_admin: bool = False) -> AuthUser:
     return AuthUser(
         user_id=str(uuid4()),
         account_id=str(uuid4()),
@@ -30,13 +30,75 @@ def _auth_user(plan: str = "b2b_pro") -> AuthUser:
         role="owner",
         product="b2b_retention",
         is_admin=True,
+        is_platform_admin=is_platform_admin,
     )
+
+
+def _blog_admin_user(plan: str = "b2b_pro") -> AuthUser:
+    return _auth_user(plan=plan, is_platform_admin=True)
+
+
+def test_blog_admin_routes_require_platform_admin_dependency():
+    routes = [
+        route
+        for route in blog_admin_api.router.routes
+        if getattr(route, "path", "").startswith("/admin/blog")
+    ]
+
+    assert len(routes) == 9
+    for route in routes:
+        dependency_names = [
+            getattr(dependency.call, "__name__", "")
+            for dependency in route.dependant.dependencies
+        ]
+        assert "require_blog_admin_user" in dependency_names, route.path
+        assert "require_auth" not in dependency_names, route.path
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs"),
+    [
+        ("get", "/admin/blog/drafts", {}),
+        ("get", "/admin/blog/drafts/summary", {}),
+        ("get", "/admin/blog/quality-trends", {}),
+        ("get", "/admin/blog/quality-diagnostics", {}),
+        ("get", "/admin/blog/drafts/11111111-1111-1111-1111-111111111111", {}),
+        ("get", "/admin/blog/drafts/11111111-1111-1111-1111-111111111111/evidence", {}),
+        ("patch", "/admin/blog/drafts/11111111-1111-1111-1111-111111111111", {"json": {"title": "Updated"}}),
+        ("post", "/admin/blog/drafts/11111111-1111-1111-1111-111111111111/publish", {}),
+        (
+            "post",
+            "/admin/blog/generate",
+            {"json": {"vendor_name": "Acme", "topic_type": "migration_guide"}},
+        ),
+    ],
+)
+def test_blog_admin_routes_reject_account_admin_without_platform_admin(
+    monkeypatch,
+    method,
+    path,
+    kwargs,
+):
+    app = FastAPI()
+    app.include_router(blog_admin_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    def fail_get_db_pool():
+        pytest.fail("blog admin route handler ran before platform-admin authz")
+
+    monkeypatch.setattr(blog_admin_api, "get_db_pool", fail_get_db_pool)
+
+    client = TestClient(app)
+    response = getattr(client, method)(path, **kwargs)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Platform admin access required"}
 
 
 def test_blog_admin_routes_return_truth_fields(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     created_at = datetime(2026, 3, 30, 18, 0, tzinfo=timezone.utc)
     draft_id = uuid4()
@@ -156,7 +218,7 @@ def test_blog_admin_routes_return_truth_fields(monkeypatch):
 def test_blog_admin_summary_returns_quality_rollup(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     class Pool:
         is_initialized = True
@@ -200,7 +262,7 @@ def test_blog_admin_summary_returns_quality_rollup(monkeypatch):
 def test_blog_quality_trends_returns_daily_rollups(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     class Pool:
         is_initialized = True
@@ -1694,7 +1756,7 @@ def test_upsert_report_subscription_library_view_persists_filter_payload(monkeyp
 def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     class Pool:
         is_initialized = True
@@ -1757,7 +1819,7 @@ def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):
 def test_blog_quality_diagnostics_status_counts_ignore_top_n_limit(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     class Pool:
         is_initialized = True
@@ -1814,7 +1876,7 @@ def test_blog_quality_diagnostics_status_counts_ignore_top_n_limit(monkeypatch):
 def test_blog_draft_evidence_uses_canonical_review_basis(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     captured = {}
 
@@ -1862,7 +1924,7 @@ def test_blog_draft_evidence_uses_canonical_review_basis(monkeypatch):
 def test_blog_publish_route_blocks_failed_revalidation(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     draft_id = uuid4()
     created_at = datetime(2026, 3, 30, 18, 0, tzinfo=timezone.utc)
@@ -1949,7 +2011,7 @@ def test_blog_publish_route_blocks_failed_revalidation(monkeypatch):
 def test_blog_publish_route_blocks_unresolved_critical_warnings(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     draft_id = uuid4()
     created_at = datetime(2026, 3, 30, 18, 0, tzinfo=timezone.utc)
@@ -2110,7 +2172,7 @@ def test_tenant_report_routes_return_truth_fields(monkeypatch):
 def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     class Pool:
         is_initialized = True
@@ -2264,7 +2326,7 @@ def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
 def test_blog_manual_generate_backfills_missing_length_fields(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     class Pool:
         is_initialized = True
@@ -2423,7 +2485,7 @@ def test_blog_manual_generate_backfills_missing_length_fields(monkeypatch):
 def test_manual_blog_generate_blocks_recent_rejected_slug(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     class Pool:
         is_initialized = True
@@ -2491,7 +2553,7 @@ def test_manual_blog_generate_blocks_recent_rejected_slug(monkeypatch):
 def test_manual_blog_generate_persists_quality_rejection(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     class Pool:
         is_initialized = True
@@ -2571,7 +2633,7 @@ def test_manual_blog_generate_persists_quality_rejection(monkeypatch):
 def test_manual_blog_generate_blocks_insufficient_blueprint(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    app.dependency_overrides[require_auth] = _blog_admin_user
 
     class Pool:
         is_initialized = True
