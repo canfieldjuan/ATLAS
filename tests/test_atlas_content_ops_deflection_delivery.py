@@ -11,6 +11,7 @@ import pytest
 from atlas_brain.content_ops_deflection_delivery import (
     DELIVERY_CLAIM_STALE_AFTER,
     DeflectionReportDeliveryConfig,
+    deflection_delivery_email_surface_observation,
     deflection_report_result_url,
     send_pending_deflection_report_deliveries,
 )
@@ -19,6 +20,9 @@ from extracted_content_pipeline.campaign_ports import (
     IdempotentReplayConflict,
     SendRequest,
     SendResult,
+)
+from extracted_content_pipeline.faq_deflection_report import (
+    build_deflection_full_report_qa_scorecard,
 )
 
 
@@ -323,7 +327,8 @@ async def test_delivery_worker_sends_pending_paid_report_link(
 async def test_delivery_worker_renders_model_backed_email_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pool = _Pool([_row(artifact=json.dumps(_delivery_report_model_artifact()))])
+    artifact = _delivery_report_model_artifact()
+    pool = _Pool([_row(artifact=json.dumps(artifact))])
     sender = _Sender()
     _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-model-bytes")
 
@@ -382,6 +387,43 @@ async def test_delivery_worker_renders_model_backed_email_summary(
     assert "ticket-secret-action-1" not in request.text_body
     assert "raw action evidence should stay out" not in request.text_body
     assert "ticket-secret-priority-draft" not in request.text_body
+
+    observation = deflection_delivery_email_surface_observation(request.text_body)
+    scorecard = build_deflection_full_report_qa_scorecard(
+        artifact["report_model"],
+        surface_observations={"email": observation},
+    )
+    bad_scorecard = build_deflection_full_report_qa_scorecard(
+        artifact["report_model"],
+        surface_observations={
+            "email": {
+                "displayed_rows": {
+                    "priority_fix_queue": 3,
+                    "drafted_resolutions": 1,
+                },
+            },
+        },
+    )
+
+    assert observation == {
+        "displayed_rows": {
+            "priority_fix_queue": 2,
+            "drafted_resolutions": 1,
+        },
+    }
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    bad_failed = {
+        assertion["id"]
+        for assertion in bad_scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "surface.email.displayed_rows.priority_fix_queue" not in failed
+    assert "surface.email.displayed_rows.drafted_resolutions" not in failed
+    assert "surface.email.displayed_rows.priority_fix_queue" in bad_failed
 
 
 @pytest.mark.asyncio
