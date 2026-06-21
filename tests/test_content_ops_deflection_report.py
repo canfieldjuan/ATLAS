@@ -517,7 +517,175 @@ def test_deflection_action_sections_classify_recurring_covered_answers() -> None
         "negative_csat_ticket_count": 2,
         "numeric_average": 2.0,
     }
+    assert "negative_csat" in recurring["items"][0]["priority_drivers"]
+    assert "reopened_after_answer" in recurring["items"][0]["priority_drivers"]
     assert priority["status_counts"] == {"Already covered but still recurring": 1}
+
+
+def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=22,
+        ticket_source_count=22,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I find the saved analytics dashboard?",
+                "customer_wording": "dashboard answer still not helping",
+                "topic": "analytics",
+                "weighted_frequency": 12,
+                "ticket_count": 6,
+                "opportunity_score": 12,
+                "answer": "Open Analytics and choose Saved dashboards.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "source_ids": tuple(f"ticket-risk-{index}" for index in range(6)),
+                "outcome_diagnostics": {
+                    "csat_present_count": 4,
+                    "csat_score_average": 1.5,
+                    "negative_csat_ticket_count": 3,
+                    "reopened_ticket_count": 1,
+                    "ticket_status_summary": {"reopened": 1, "resolved": 5},
+                },
+            },
+            {
+                "question": "How do I export attribution reports?",
+                "customer_wording": "export attribution reports",
+                "topic": "exports",
+                "weighted_frequency": 11,
+                "ticket_count": 6,
+                "opportunity_score": 12,
+                "answer": "Open Attribution and select Download report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "source_ids": tuple(f"ticket-good-{index}" for index in range(6)),
+                "outcome_diagnostics": {
+                    "csat_present_count": 4,
+                    "csat_score_average": 4.5,
+                    "negative_csat_ticket_count": 0,
+                    "reopened_ticket_count": 0,
+                    "ticket_status_summary": {"resolved": 6},
+                },
+            },
+            {
+                "question": "How do I configure SSO for contractors?",
+                "customer_wording": "contractor SSO setup",
+                "topic": "identity",
+                "weighted_frequency": 7,
+                "ticket_count": 4,
+                "opportunity_score": 9,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": tuple(f"ticket-missing-{index}" for index in range(4)),
+            },
+            {
+                "question": "How do I change invoice contacts?",
+                "customer_wording": "invoice contact change",
+                "topic": "billing",
+                "weighted_frequency": 6,
+                "ticket_count": 4,
+                "opportunity_score": 9,
+                "answer": "Open Billing, choose Contacts, and update the recipient.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "source_ids": tuple(f"ticket-draft-{index}" for index in range(4)),
+            },
+            {
+                "question": "How do I review warehouse sync failures?",
+                "customer_wording": "warehouse sync failed",
+                "topic": "integrations",
+                "weighted_frequency": 5,
+                "ticket_count": 3,
+                "opportunity_score": 8,
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "source_ids": tuple(f"ticket-review-{index}" for index in range(3)),
+            },
+            {
+                "question": "Why did my imported contacts duplicate?",
+                "customer_wording": "contacts imported twice",
+                "topic": "imports",
+                "weighted_frequency": 5,
+                "ticket_count": 3,
+                "opportunity_score": 20,
+                "answer_evidence_status": "draft_needs_review",
+                "source_count": 1,
+                "source_ids": ("ticket-sparse-only",),
+            },
+            {
+                "question": "Can I rename one workspace?",
+                "customer_wording": "rename one workspace",
+                "topic": "workspace",
+                "weighted_frequency": 1,
+                "ticket_count": 1,
+                "opportunity_score": 20,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-one-off",),
+            },
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).as_dict()[
+            "report_model"
+        ]["sections"]
+    }
+    priority = sections["priority_fix_queue"]["data"]
+    items = {item["question"]: item for item in priority["items"]}
+
+    assert priority["items"][0]["question"] == (
+        "How do I find the saved analytics dashboard?"
+    )
+    assert items["How do I find the saved analytics dashboard?"]["status"] == (
+        "Already covered but still recurring"
+    )
+    assert items["How do I export attribution reports?"]["status"] == "Draft ready"
+    assert (
+        items["How do I find the saved analytics dashboard?"]["priority_score"]
+        > items["How do I export attribution reports?"]["priority_score"]
+    )
+    assert items["How do I configure SSO for contractors?"]["status"] == (
+        "Needs answer"
+    )
+    assert "missing_answer" in items[
+        "How do I configure SSO for contractors?"
+    ]["priority_drivers"]
+    assert items["How do I change invoice contacts?"]["status"] == "Draft ready"
+    assert (
+        items["How do I configure SSO for contractors?"]["priority_score"]
+        > items["How do I change invoice contacts?"]["priority_score"]
+    )
+    assert items["How do I review warehouse sync failures?"]["status"] == (
+        "Needs review"
+    )
+    sparse = items["Why did my imported contacts duplicate?"]
+    assert sparse["status"] == "Low confidence"
+    assert sparse["confidence"] == "low"
+    assert sparse["priority_drivers"].count("low_confidence") == 1
+    sparse_score_without_low_penalty = (
+        int(round(sparse["estimated_support_cost"]))
+        + sparse["opportunity_score"]
+        + 5
+    )
+    assert sparse["priority_score"] == sparse_score_without_low_penalty - 25
+    assert items["Can I rename one workspace?"]["status"] == "Low confidence"
+    assert "low_confidence" in items["Can I rename one workspace?"][
+        "priority_drivers"
+    ]
+    assert priority["status_counts"] == {
+        "Already covered but still recurring": 1,
+        "Draft ready": 2,
+        "Low confidence": 2,
+        "Needs answer": 1,
+        "Needs review": 1,
+    }
+
+    unresolved = sections["top_unresolved_repeats"]["data"]
+    unresolved_questions = {item["question"] for item in unresolved["items"]}
+    assert "How do I configure SSO for contractors?" in unresolved_questions
+    assert "How do I review warehouse sync failures?" in unresolved_questions
+    assert "Why did my imported contacts duplicate?" not in unresolved_questions
+    assert "Can I rename one workspace?" not in unresolved_questions
 
 
 def test_deflection_priority_fix_queue_keeps_pdf_limit_items() -> None:

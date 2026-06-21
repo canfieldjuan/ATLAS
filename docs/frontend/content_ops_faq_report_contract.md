@@ -160,8 +160,12 @@ The action-oriented paid sections are a work queue, not a full ticket archive:
 - `priority_fix_queue` carries enough ranked items for the largest advertised
   bounded surface (`pdf_limit`, currently 10) while `result_page_limit` tells
   the result page to render only the top three.
+- Action rows include deterministic `priority_score` and bounded
+  `priority_drivers` enum labels. The score is based on repeat volume,
+  benchmark support cost, answer evidence status, confidence, reopened-ticket
+  signal, and CSAT signal; it is not produced by an LLM or cloud classifier.
 - `top_unresolved_repeats` contains unresolved repeated questions only; one-off
-  questions stay out of repeat accounting.
+  or low-confidence questions stay out of repeat accounting.
 - `drafted_resolutions` contains publishable or adaptable answer drafts.
 - `already_covered_still_recurring` flags proven answers whose status/CSAT
   signals suggest discoverability or answer-quality work.
