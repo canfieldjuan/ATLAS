@@ -14,6 +14,12 @@ the merged scorer in extracted-checks and uploading its JSON summary as an
 artifact. It intentionally leaves the leak KPI advisory, because the larger
 operator-derived corpus and threshold decision are still open in #1742.
 
+Review update root cause: the first workflow wiring placed the advisory writer
+after the extracted test bundle without an explicit step condition and did not
+install the PDF renderer dependency. That meant a red test bundle could suppress
+the advisory output, and a clean runner could produce an advisory result with
+the paid-PDF surface skipped. This PR fixes both at the workflow boundary.
+
 ## Scope (this PR)
 
 Ownership lane: deflection/pii-recall-precision-testing
@@ -29,6 +35,9 @@ Slice phase: Vertical slice
    to report leaks; that is the point of the advisory artifact.
 4. Add a small workflow-contract test so the pinned upload step and scorer
    command cannot disappear while tests stay green.
+5. Install the PDF renderer dependency in this workflow and keep the write/upload
+   steps running when prior checks fail, so red extracted checks still preserve
+   the advisory JSON when the job is not cancelled.
 
 ### Files touched
 
@@ -47,6 +56,10 @@ Slice phase: Vertical slice
   - [ ] The artifact is advisory: the command may fail on script/runtime errors,
         but a nonzero `free_high_severity_leak_count` in the tiny fixture does
         not fail CI.
+  - [ ] Red extracted checks do not suppress the advisory write/upload steps
+        when the job is not cancelled.
+  - [ ] The workflow installs the PDF renderer dependency so the paid-PDF surface
+        is scored on clean CI runners.
   - [ ] A CI-facing test verifies the workflow still contains the scorer run,
         artifact path/name, pinned upload action, and no threshold-gating flag.
   - [ ] No scrubber, detector, scorer math, real corpus, or threshold change
@@ -59,18 +72,21 @@ Slice phase: Vertical slice
 
 ## Mechanism
 
-The workflow creates `artifacts/deflection-pii-recall`, runs the existing scorer
-with `--output artifacts/deflection-pii-recall/deflection-pii-recall-advisory.json`,
+The workflow installs `fpdf2>=2.8.0`, creates `artifacts/deflection-pii-recall`,
+runs the existing scorer with
+`--output artifacts/deflection-pii-recall/deflection-pii-recall-advisory.json`,
 then uploads that directory with `actions/upload-artifact` pinned to the current
-v4.6.2 SHA. The scorer still exits nonzero for malformed inputs or runtime
-failures, so CI detects broken measurement plumbing. The current measured leak
-counts remain data inside the uploaded JSON; the workflow does not parse or gate
-on those counts.
+v4.6.2 SHA. The write and upload steps use GitHub's not-cancelled condition so a
+red test bundle does not suppress the advisory output. The scorer still exits
+nonzero for malformed inputs or runtime failures, so CI detects broken
+measurement plumbing; when the scorer can write its structured error summary,
+the upload step still preserves it. The current measured leak counts remain data
+inside the uploaded JSON; the workflow does not parse or gate on those counts.
 
 The test reads `.github/workflows/extracted_pipeline_checks.yml` as text and
 checks the contract markers that matter for this workflow slice: scorer command,
-output filename, artifact name, pinned upload action, and absence of a
-threshold/gating flag.
+output filename, artifact name, pinned upload action, PDF dependency, non-cancelled
+step conditions, and absence of a threshold/gating flag.
 
 ## Intentional
 
@@ -93,8 +109,8 @@ Parked hardening: none.
 
 - git ls-remote https://github.com/actions/upload-artifact.git refs/tags/v4 refs/tags/v4.6.2 -- both resolve to `ea165f8d65b6e75b540449e92b4886f43607fa02`.
 - python -m py_compile tests/test_extracted_pipeline_pii_recall_advisory_artifact.py
-- pytest tests/test_extracted_pipeline_pii_recall_advisory_artifact.py -- 3 passed.
-- python scripts/score_deflection_pii_recall.py --output /tmp/deflection-pii-recall-artifact-test/deflection-pii-recall-advisory.json --json -- status ok and wrote a non-empty JSON artifact.
+- pytest tests/test_extracted_pipeline_pii_recall_advisory_artifact.py -- 4 passed.
+- python scripts/score_deflection_pii_recall.py --output /tmp/deflection-pii-recall-artifact-test/deflection-pii-recall-advisory.json --json -- status ok, wrote a non-empty JSON artifact, and reported paid_pdf skipped=false.
 - python scripts/audit_extracted_pipeline_ci_enrollment.py -- OK: 188 matching tests are enrolled.
 - bash scripts/check_ascii_python.sh -- passed.
 
@@ -102,8 +118,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/extracted_pipeline_checks.yml` | 16 |
-| `plans/PR-Deflection-PII-Recall-Advisory-Artifact.md` | 109 |
+| `.github/workflows/extracted_pipeline_checks.yml` | 20 |
+| `plans/PR-Deflection-PII-Recall-Advisory-Artifact.md` | 125 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_extracted_pipeline_pii_recall_advisory_artifact.py` | 44 |
-| **Total** | **170** |
+| `tests/test_extracted_pipeline_pii_recall_advisory_artifact.py` | 69 |
+| **Total** | **215** |
