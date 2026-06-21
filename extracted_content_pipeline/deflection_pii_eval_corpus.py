@@ -69,6 +69,17 @@ _SURROGATES = {
 
 _BOUNDARY_LEFT = r"(?<![A-Za-z0-9])"
 _BOUNDARY_RIGHT = r"(?![A-Za-z0-9])"
+_MONTH_RE_FRAGMENT = (
+    r"(?i:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|sept(?:ember)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?)"
+)
+_DOB_DATE_RE_FRAGMENT = (
+    r"(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}"
+    r"|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
+    rf"|{_MONTH_RE_FRAGMENT}\s+\d{{1,2}},?\s+\d{{4}}"
+    rf"|\d{{1,2}}\s+{_MONTH_RE_FRAGMENT}\s+\d{{4}})"
+)
 _LEAK_DETECTORS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("email", re.compile(
         rf"{_BOUNDARY_LEFT}[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}}{_BOUNDARY_RIGHT}"
@@ -78,6 +89,12 @@ _LEAK_DETECTORS: tuple[tuple[str, re.Pattern[str]], ...] = (
     )),
     ("ssn", re.compile(rf"{_BOUNDARY_LEFT}\d{{3}}-\d{{2}}-\d{{4}}{_BOUNDARY_RIGHT}")),
     ("payment_card", re.compile(rf"{_BOUNDARY_LEFT}(?:\d[ -]?){{13,19}}{_BOUNDARY_RIGHT}")),
+    ("dob", re.compile(
+        rf"{_BOUNDARY_LEFT}"
+        r"(?i:(?:date\s+of\s+birth|birth\s*date|birthday|dob|d\.o\.b\.|born(?:\s+on)?)"
+        r"\s*(?:is|:|=|-)?\s*)"
+        rf"(?P<dob>{_DOB_DATE_RE_FRAGMENT}){_BOUNDARY_RIGHT}"
+    )),
     ("street_address", re.compile(
         rf"{_BOUNDARY_LEFT}"
         r"\d{1,6}\s+"
@@ -433,7 +450,12 @@ def _output_leak_errors(
             continue
         for detector_name, pattern in _LEAK_DETECTORS:
             for match in pattern.finditer(text):
-                start, end = match.span("name") if detector_name == "person_name" else match.span()
+                if detector_name == "person_name":
+                    start, end = match.span("name")
+                elif detector_name == "dob":
+                    start, end = match.span("dob")
+                else:
+                    start, end = match.span()
                 if _is_recorded_surrogate_span(output_labels, origin_field, start, end):
                     continue
                 errors.append(_error(

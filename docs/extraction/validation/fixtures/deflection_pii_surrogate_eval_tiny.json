@@ -9,8 +9,9 @@
   "summary": {
     "cue_less_person_name_count": 1,
     "cue_prefixed_person_name_count": 2,
-    "label_count": 9,
+    "label_count": 10,
     "labels_by_class": {
+      "dob": 1,
       "email": 1,
       "order_id": 1,
       "payment_card": 1,
@@ -20,7 +21,7 @@
       "street_address": 1
     },
     "labels_by_severity": {
-      "high": 7,
+      "high": 8,
       "medium": 2
     },
     "must_survive_count": 3,
@@ -29,7 +30,7 @@
   "tickets": [
     {
       "fields": {
-        "agent_reply": "Customer Jordan Lee can keep CVE-2021-44228 and ISO 27001 references in the report.",
+        "agent_reply": "Customer Jordan Lee can keep CVE-2021-44228 and ISO 27001 references in the report. DOB 1990-04-17 was removed.",
         "customer_message": "Email alex.rivera@example.test or call 555-010-4301. Order order_SYNTH_2001 ships to 1842 Pine Street.",
         "private_note": "SSN 123-45-6789 and card 4111 1111 1111 1111.",
         "source_id": "ticket-eval-safe-001",
@@ -45,6 +46,15 @@
           "span": "Jordan Lee",
           "start": 9,
           "surrogate_id": "person_name-002"
+        },
+        {
+          "class": "dob",
+          "end": 98,
+          "origin_field": "agent_reply",
+          "severity": "high",
+          "span": "1990-04-17",
+          "start": 88,
+          "surrogate_id": "dob-001"
         },
         {
           "class": "email",

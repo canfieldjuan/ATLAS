@@ -2287,6 +2287,49 @@ def test_deflection_report_payload_scrubs_ssn_and_payment_card_shapes(
     assert expected_token in encoded
 
 
+@pytest.mark.parametrize(
+    ("raw_text", "raw_fragment"),
+    (
+        ("DOB 1990-04-17 was pasted.", "1990-04-17"),
+        ("dob: 1984/11/02 was pasted.", "1984/11/02"),
+        ("Date of birth is 04/17/1990.", "04/17/1990"),
+        ("Birthdate=11-02-1984 appeared.", "11-02-1984"),
+        ("Customer was born on April 17, 1990.", "April 17, 1990"),
+        ("Customer was born on 17 April 1990.", "17 April 1990"),
+        ("birthday is 1990-05-03.", "1990-05-03"),
+        ("Customer was born 05/03/1990.", "05/03/1990"),
+    ),
+)
+def test_deflection_report_payload_scrubs_context_cued_dob_shapes(
+    raw_text: str,
+    raw_fragment: str,
+) -> None:
+    scrubbed = scrub_deflection_report_payload({raw_text: raw_text})
+
+    encoded = json.dumps(scrubbed, sort_keys=True)
+    assert raw_fragment not in encoded
+    assert "[redacted-dob]" in encoded
+
+
+@pytest.mark.parametrize(
+    "raw_text",
+    (
+        "Report date 1990-04-17 stayed readable.",
+        "The launch happened on April 17, 1990.",
+        "CVE-2021-44228 and ISO 27001 stayed readable.",
+        "The 2026 count is 1234567 and the price is $49.",
+        "DOB policy changed in 2026 without listing a birth date.",
+        "Born to lead in 2024 stayed readable.",
+        "The birthday reminder for 2026-01-15 stayed readable.",
+    ),
+)
+def test_deflection_report_payload_preserves_dob_near_misses(raw_text: str) -> None:
+    scrubbed = scrub_deflection_report_payload({"answer": raw_text})
+
+    assert scrubbed["answer"] == raw_text
+    assert "[redacted-dob]" not in scrubbed["answer"]
+
+
 def test_deflection_report_payload_preserves_card_number_near_misses() -> None:
     raw_text = (
         "CVE-2021-44228, ISO 27001, SKU-12345678, price $49, "
