@@ -1,6 +1,6 @@
 # Plan archive index
 
-1172 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1173 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -665,6 +665,7 @@
 - [PR-Decouple-CompIntel-1](archive/PR-Decouple-CompIntel-1.md)
 - [PR-Decouple-PoolCompression-1](archive/PR-Decouple-PoolCompression-1.md)
 - [PR-Deflection-Action-Section-Contract](archive/PR-Deflection-Action-Section-Contract.md) - lane: content-ops/deflection-report-actionability | phase: Vertical slice
+- [PR-Deflection-Action-Section-QA-Scorecard](archive/PR-Deflection-Action-Section-QA-Scorecard.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Functional validation
 - [PR-Deflection-Answer-Copy-Polish](archive/PR-Deflection-Answer-Copy-Polish.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
 - [PR-Deflection-Async-Payment-Fulfillment](archive/PR-Deflection-Async-Payment-Fulfillment.md) - lane: deflection/go-live | phase: Production hardening
 - [PR-Deflection-Backend-PII-Scrub](archive/PR-Deflection-Backend-PII-Scrub.md) - lane: content-ops/deflection-privacy | phase: Production hardening
