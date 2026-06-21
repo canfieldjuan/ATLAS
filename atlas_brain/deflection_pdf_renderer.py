@@ -36,6 +36,34 @@ _QUESTION_DETAIL_CAP_NOTE = (
     "for PDF readability; download the complete evidence export for the full "
     "uncapped evidence archive."
 )
+_ACTION_SECTION_INTROS = {
+    "priority_fix_queue": (
+        "Use this queue as the first-pass work plan for the help center or macro "
+        "backlog. Items are ranked by repeat volume, benchmark support cost, "
+        "answer status, confidence, and available outcome signals."
+    ),
+    "top_unresolved_repeats": (
+        "These repeated customer questions still need an approved answer. The "
+        "support-cost estimate sizes the repeated assisted-contact work that "
+        "stays unresolved for each question."
+    ),
+    "drafted_resolutions": (
+        "These repeated questions have drafted or adaptable resolution copy. "
+        "Review, approve, and publish the answer where it belongs."
+    ),
+    "already_covered_still_recurring": (
+        "These questions appear to have a covered answer but still recur. Treat "
+        "them as discoverability, clarity, or answer-quality follow-ups."
+    ),
+}
+_ACTION_SECTION_EMPTY_MESSAGES = {
+    "priority_fix_queue": "No priority action items were generated for this run.",
+    "top_unresolved_repeats": "No unresolved repeated questions were generated for this run.",
+    "drafted_resolutions": "No drafted resolutions were generated for this run.",
+    "already_covered_still_recurring": (
+        "No covered-but-still-recurring questions were generated for this run."
+    ),
+}
 
 _UNICODE_MAP = str.maketrans({
     "\u2014": "--",
@@ -225,6 +253,8 @@ def _report_model_section_pdf_lines(section: Mapping[str, Any]) -> list[str]:
         return _ranked_questions_model_pdf_lines(section)
     if section_id == "outcome_diagnostics":
         return _outcome_diagnostics_model_pdf_lines(section)
+    if section_id in _ACTION_SECTION_INTROS:
+        return _action_section_model_pdf_lines(section, section_id=section_id)
     if section_id == "question_details":
         return _question_details_model_pdf_lines(section)
     return []
@@ -476,6 +506,70 @@ def _question_details_model_pdf_lines(section: Mapping[str, Any]) -> list[str]:
     if len(rows) > PDF_QUESTION_DETAIL_LIMIT:
         lines.extend(["", _QUESTION_DETAIL_CAP_NOTE, ""])
     return lines
+
+
+def _action_section_model_pdf_lines(
+    section: Mapping[str, Any],
+    *,
+    section_id: str,
+) -> list[str]:
+    data = _section_data(section)
+    rows = _model_rows(data.get("items"))
+    title = _model_text(section.get("title")) or _action_section_title(section_id)
+    lines = [
+        f"## {title}",
+        "",
+        _ACTION_SECTION_INTROS[section_id],
+        "",
+        (
+            "Complete source IDs and raw evidence quotes stay in the complete "
+            "evidence export, not this curated PDF."
+        ),
+        "",
+    ]
+    if not rows:
+        return [*lines, _ACTION_SECTION_EMPTY_MESSAGES[section_id], ""]
+
+    limit = _action_section_pdf_limit(data, row_count=len(rows))
+    lines.extend([
+        (
+            "| Rank | Question | Status | Tickets | Support cost | Priority | "
+            "Owner lane | Recommended action |"
+        ),
+        "|---:|---|---|---:|---:|---:|---|---|",
+    ])
+    for index, row in enumerate(rows[:limit], start=1):
+        rank = _model_int(row.get("rank")) or index
+        lines.append(
+            "| "
+            f"{rank} | "
+            f"{_model_cell(row.get('question'))} | "
+            f"{_model_cell(row.get('status'))} | "
+            f"{_model_count(_model_int(row.get('ticket_count')))} | "
+            f"{_model_money(row.get('estimated_support_cost'))} | "
+            f"{_model_int(row.get('priority_score'))} | "
+            f"{_model_cell(row.get('owner_lane'))} | "
+            f"{_model_cell(row.get('recommended_action'))} |"
+        )
+    if len(rows) > limit:
+        lines.extend([
+            "",
+            (
+                f"{title} capped at {_model_count(limit)} items for PDF readability; "
+                "download the complete evidence export for the full evidence archive."
+            ),
+        ])
+    lines.append("")
+    return lines
+
+
+def _action_section_pdf_limit(data: Mapping[str, Any], *, row_count: int) -> int:
+    limit = _model_int(data.get("pdf_limit")) or row_count
+    return max(1, min(limit, row_count))
+
+
+def _action_section_title(section_id: str) -> str:
+    return section_id.replace("_", " ").title()
 
 
 def _publishable_answer_model_pdf_lines(

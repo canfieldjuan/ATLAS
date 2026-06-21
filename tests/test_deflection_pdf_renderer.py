@@ -254,6 +254,89 @@ def test_report_model_pdf_markdown_caps_rows_and_skips_non_pdf_sections() -> Non
     assert "complete evidence export" in model_markdown
 
 
+def test_report_model_pdf_markdown_renders_action_sections_with_pdf_limit() -> None:
+    section_ids = (
+        "priority_fix_queue",
+        "top_unresolved_repeats",
+        "drafted_resolutions",
+        "already_covered_still_recurring",
+    )
+    sections = []
+    for priority, section_id in enumerate(section_ids, start=35):
+        sections.append(
+            {
+                "id": section_id,
+                "title": section_id.replace("_", " ").title(),
+                "priority": priority,
+                "surfaces": ["web", "pdf"],
+                "default_limit": 3,
+                "required_data": ["items", "result_page_limit", "pdf_limit"],
+                "data": {
+                    "result_page_limit": 3,
+                    "pdf_limit": 10,
+                    "items": [
+                        {
+                            "rank": index,
+                            "question": f"Action question {section_id} {index}",
+                            "status": "Needs answer",
+                            "ticket_count": index,
+                            "estimated_support_cost": index * 13.5,
+                            "priority_score": 100 - index,
+                            "owner_lane": f"Lane {index}",
+                            "recommended_action": (
+                                f"Fix action {section_id} {index}"
+                            ),
+                            "representative_phrasing": [
+                                f"RAW_REPRESENTATIVE_PHRASE_{section_id}_{index}"
+                            ],
+                            "source_ids": (
+                                f"RAW_SOURCE_ID_{section_id}_{index}",
+                            ),
+                            "top_evidence": [
+                                {
+                                    "source_id": (
+                                        f"RAW_TOP_EVIDENCE_SOURCE_{section_id}_{index}"
+                                    ),
+                                    "evidence_quote": (
+                                        f"RAW_TOP_EVIDENCE_QUOTE_{section_id}_{index}"
+                                    ),
+                                }
+                            ],
+                        }
+                        for index in range(1, 13)
+                    ],
+                },
+            }
+        )
+    artifact = {
+        "report_model": {
+            "schema_version": "deflection.v1",
+            "title": "Action PDF",
+            "sections": sections,
+        }
+    }
+
+    model_markdown = _artifact_report_model_pdf_markdown(artifact)
+
+    for section_id in section_ids:
+        assert f"## {section_id.replace('_', ' ').title()}" in model_markdown
+        assert f"Action question {section_id} 3" in model_markdown
+        assert f"Action question {section_id} 10" in model_markdown
+        assert f"Action question {section_id} 11" not in model_markdown
+        assert f"Fix action {section_id} 10" in model_markdown
+        assert f"RAW_REPRESENTATIVE_PHRASE_{section_id}_1" not in model_markdown
+        assert f"RAW_SOURCE_ID_{section_id}_1" not in model_markdown
+        assert f"RAW_TOP_EVIDENCE_SOURCE_{section_id}_1" not in model_markdown
+        assert f"RAW_TOP_EVIDENCE_QUOTE_{section_id}_1" not in model_markdown
+    assert "Complete source IDs and raw evidence quotes stay" in model_markdown
+    assert "capped at 10 items for PDF readability" in model_markdown
+
+    pdf_bytes = render_deflection_full_report_pdf(artifact)
+
+    assert pdf_bytes[:5] == b"%PDF-"
+    assert len(pdf_bytes) > 1000
+
+
 def test_curated_pdf_markdown_caps_ranked_table_and_question_details() -> None:
     curated = _curate_markdown_for_pdf(_large_markdown())
 
