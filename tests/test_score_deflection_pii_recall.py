@@ -75,6 +75,9 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     }
     assert set(summary["person_name"]) == {"cue_less", "cue_prefixed"}
     assert summary["headline"] == {
+        "deferred_open_set_name_leak_count": 1,
+        "free_high_severity_gate_eligible_leak_count": 0,
+        "free_high_severity_gate_eligible_pass": True,
         "free_high_severity_leak_count": 1,
         "free_high_severity_pass": False,
     }
@@ -202,6 +205,41 @@ def test_forced_leak_reports_surface_and_surrogate_without_span() -> None:
     assert {sample["surface"] for sample in matching} >= expected_surfaces
     assert all("span" not in sample for sample in matching)
     assert "UNSCRUBBED_SENTINEL" not in json.dumps(
+        summary["leak_samples"],
+        sort_keys=True,
+    )
+
+
+def test_gate_eligible_headline_excludes_only_deferred_open_set_names() -> None:
+    corpus = _tiny_corpus()
+    ticket = corpus["tickets"][0]
+    ticket["fields"]["subject"] = (
+        f"{ticket['fields']['subject']} UNSCRUBBED_HIGH_SEV"
+    )
+    ticket["labels"].append(
+        {
+            "class": "custom_token",
+            "origin_field": "subject",
+            "severity": "high",
+            "span": "UNSCRUBBED_HIGH_SEV",
+            "surrogate_id": "custom-high-sev-001",
+        }
+    )
+
+    summary = CLI.score_corpus(corpus)
+
+    assert summary["headline"] == {
+        "deferred_open_set_name_leak_count": 1,
+        "free_high_severity_gate_eligible_leak_count": 1,
+        "free_high_severity_gate_eligible_pass": False,
+        "free_high_severity_leak_count": 2,
+        "free_high_severity_pass": False,
+    }
+    assert {
+        sample["surrogate_id"]
+        for sample in summary["leak_samples"]
+    } >= {"custom-high-sev-001", "person_name-001"}
+    assert "UNSCRUBBED_HIGH_SEV" not in json.dumps(
         summary["leak_samples"],
         sort_keys=True,
     )
