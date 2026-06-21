@@ -72,6 +72,7 @@ on:
       - "scripts/build_deflection_pii_surrogate_eval_corpus.py"
       - "scripts/score_deflection_pii_recall.py"
       - "tests/test_score_deflection_pii_recall.py"
+      - "tests/test_extracted_pipeline_pii_recall_advisory_artifact.py"
       - "scripts/evaluate_zendesk_product_proof_corpus.py"
       - "scripts/probe_deflection_signal_spike.py"
       - "tests/test_probe_deflection_signal_spike.py"
@@ -214,6 +215,7 @@ on:
       - "scripts/build_deflection_pii_surrogate_eval_corpus.py"
       - "scripts/score_deflection_pii_recall.py"
       - "tests/test_score_deflection_pii_recall.py"
+      - "tests/test_extracted_pipeline_pii_recall_advisory_artifact.py"
       - "scripts/evaluate_zendesk_product_proof_corpus.py"
       - "scripts/probe_deflection_signal_spike.py"
       - "tests/test_probe_deflection_signal_spike.py"
@@ -317,7 +319,23 @@ jobs:
         # pydantic-settings; this is purely the cross-boundary seam test.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-asyncio beautifulsoup4 httpx PyJWT pyyaml pydantic-settings markdown 'fastapi<0.137' python-multipart slowapi
+          python -m pip install pytest pytest-asyncio beautifulsoup4 httpx PyJWT pyyaml pydantic-settings markdown 'fastapi<0.137' python-multipart slowapi 'fpdf2>=2.8.0'
 
       - name: Run extracted pipeline checks
         run: bash scripts/run_extracted_pipeline_checks.sh
+
+      - name: Write deflection PII recall advisory artifact
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p artifacts/deflection-pii-recall
+          python scripts/score_deflection_pii_recall.py \
+            --output artifacts/deflection-pii-recall/deflection-pii-recall-advisory.json \
+            --json
+
+      - name: Upload deflection PII recall advisory artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deflection-pii-recall-advisory
+          path: artifacts/deflection-pii-recall/deflection-pii-recall-advisory.json
+          if-no-files-found: error
