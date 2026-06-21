@@ -1,6 +1,6 @@
 # Plan archive index
 
-1170 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1171 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -730,6 +730,7 @@
 - [PR-Deflection-Mxbai-Merge-Spotcheck](archive/PR-Deflection-Mxbai-Merge-Spotcheck.md) - lane: deflection/clustering | phase: Functional validation
 - [PR-Deflection-Outcome-Risk-Diagnostics](archive/PR-Deflection-Outcome-Risk-Diagnostics.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-PDF-Action-Queue-Contract](archive/PR-Deflection-PDF-Action-Queue-Contract.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
+- [PR-Deflection-PDF-Action-Sections](archive/PR-Deflection-PDF-Action-Sections.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
 - [PR-Deflection-PDF-Clickable-Navigation](archive/PR-Deflection-PDF-Clickable-Navigation.md) - lane: content-ops/deflection-report-shape | phase: Product polish
 - [PR-Deflection-PII-Cued-Name-ISO-Precision](archive/PR-Deflection-PII-Cued-Name-ISO-Precision.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
 - [PR-Deflection-PII-DOB-Scrub](archive/PR-Deflection-PII-DOB-Scrub.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
