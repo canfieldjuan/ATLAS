@@ -2231,6 +2231,93 @@ def test_deflection_report_payload_scrubs_local_entity_shapes() -> None:
     assert "[redacted-identifier]" in encoded
 
 
+@pytest.mark.parametrize(
+    ("raw_text", "expected_text"),
+    (
+        ("Customer Jordan Lee asked for help.", "Customer [redacted-name] asked for help."),
+        ("Requester Maria Garcia reopened it.", "Requester [redacted-name] reopened it."),
+        ("Client Priya Shah needs a refund.", "Client [redacted-name] needs a refund."),
+        ("User Alex Chen reported a bug.", "User [redacted-name] reported a bug."),
+        ("Agent Sam Rivera replied.", "Agent [redacted-name] replied."),
+        ("Member Pat Morgan updated billing.", "Member [redacted-name] updated billing."),
+        (
+            "Customer Jane Smith Account was closed.",
+            "Customer [redacted-name] Account was closed.",
+        ),
+        ("Customer Maya Chen Report", "Customer [redacted-name] Report"),
+        (
+            "Customer Jane Smith Premium plan was upgraded.",
+            "Customer [redacted-name] Premium plan was upgraded.",
+        ),
+        (
+            "Customer Taylor Morgan Platinum account was upgraded.",
+            "Customer [redacted-name] Platinum account was upgraded.",
+        ),
+    ),
+)
+def test_deflection_report_payload_scrubs_plain_role_cued_names(
+    raw_text: str,
+    expected_text: str,
+) -> None:
+    scrubbed = scrub_deflection_report_payload({"answer": raw_text})
+
+    assert scrubbed["answer"] == expected_text
+
+
+@pytest.mark.parametrize(
+    "raw_text",
+    (
+        "Customer Reset Password is a heading.",
+        "Customer Support Portal stayed online.",
+        "Agent Support Desk replied.",
+        "Customer Premium Plan upgrade stayed readable.",
+        "customer Annual Subscription stayed readable.",
+        "Customer Success Manager replied.",
+        "Member Benefits Team answered.",
+        "User Experience Research finished.",
+        "Customer Annual Subscription Premium stayed readable.",
+    ),
+)
+def test_deflection_report_payload_preserves_plain_role_cue_near_misses(
+    raw_text: str,
+) -> None:
+    scrubbed = scrub_deflection_report_payload({"answer": raw_text})
+
+    assert scrubbed["answer"] == raw_text
+    assert "[redacted-name]" not in scrubbed["answer"]
+
+
+def test_deflection_report_payload_scrubs_standard_prefixed_identifier_leaks() -> None:
+    scrubbed = scrub_deflection_report_payload(
+        {
+            "source_id": "ISO customer 123456 should be scrubbed.",
+            "answer": (
+                "customer id is ISO 9X4Q7ABCD12. "
+                "reference ISO ABC123XYZ7. "
+                "HIPAA 4829103 case. "
+                "ISO customer 123456 should be scrubbed. "
+                "ISO 27001 references and reference ISO-27001 stay readable."
+            ),
+        }
+    )
+
+    encoded = json.dumps(scrubbed, sort_keys=True)
+    for raw_fragment in (
+        "ISO 9X4Q7ABCD12",
+        "ISO ABC123XYZ7",
+        "HIPAA 4829103",
+        "customer 123456",
+    ):
+        assert raw_fragment not in encoded
+    assert scrubbed["source_id"] == "ISO [redacted-identifier] should be scrubbed."
+    assert "customer id is [redacted-identifier]" in scrubbed["answer"]
+    assert "reference [redacted-identifier]" in scrubbed["answer"]
+    assert "HIPAA [redacted-identifier]" in scrubbed["answer"]
+    assert "ISO [redacted-identifier] should be scrubbed" in scrubbed["answer"]
+    assert "ISO 27001 references" in scrubbed["answer"]
+    assert "reference ISO-27001" in scrubbed["answer"]
+
+
 def test_deflection_report_payload_scrubs_pii_regression_shapes() -> None:
     uuid_value = "123e4567-e89b-12d3-a456-426614174000"
     scrubbed = scrub_deflection_report_payload(
@@ -2250,7 +2337,8 @@ def test_deflection_report_payload_scrubs_pii_regression_shapes() -> None:
                 "customer id is ISO9X4Q7ABCD, session token is SKU90X4Q7AB, "
                 "and account id is HIPAA9X4Q7AB. "
                 "case CVE-2021-44228, order SKU-12345678, and "
-                "reference ISO-27001 should stay readable. HIPAA2026 too."
+                "reference ISO-27001 should stay readable. ISO 27001 references "
+                "should stay readable too. HIPAA2026 too."
             ),
             "steps": [
                 "agent is Alex Chen member was reassigned.",
@@ -2285,6 +2373,7 @@ def test_deflection_report_payload_scrubs_pii_regression_shapes() -> None:
     assert "case CVE-2021-44228" in answer
     assert "order SKU-12345678" in answer
     assert "reference ISO-27001" in answer
+    assert "ISO 27001 references" in answer
     assert "HIPAA2026" in answer
     assert scrubbed["source_id"] == "customer is [redacted-name] ticket"
     assert scrubbed["source_ids"] == [
@@ -2307,9 +2396,9 @@ def test_deflection_report_payload_preserves_local_entity_near_misses() -> None:
                 "price is $49, and ticket-source-a stays usable. "
                 "CVE-2021-44228 affected a dependency, SKU ABC12345 is active, "
                 "iPhone15Pro and Windows11 are supported, ISO27001 and HIPAA2026 "
-                "remain valid, Q4FY2026 is a reporting label, campaign2026 is a "
-                "campaign tag, 4 tickets are on the way, 4 invoices in one place, "
-                "and 4 cases in court."
+                "remain valid, ISO 27001 references remain valid, Q4FY2026 is a "
+                "reporting label, campaign2026 is a campaign tag, 4 tickets are "
+                "on the way, 4 invoices in one place, and 4 cases in court."
             ),
         }
     )
@@ -2327,6 +2416,7 @@ def test_deflection_report_payload_preserves_local_entity_near_misses() -> None:
     assert "iPhone15Pro" in answer
     assert "Windows11" in answer
     assert "ISO27001" in answer
+    assert "ISO 27001 references" in answer
     assert "HIPAA2026" in answer
     assert "Q4FY2026" in answer
     assert "campaign2026" in answer

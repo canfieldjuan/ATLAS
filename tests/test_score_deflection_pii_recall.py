@@ -57,8 +57,20 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     assert summary["surfaces"]["free_snapshot"]["email"]["expected"] == 1
     assert summary["surfaces"]["paid_artifact"]["ssn"]["expected"] == 1
     assert set(summary["person_name"]) == {"cue_less", "cue_prefixed"}
-    assert isinstance(summary["headline"]["free_high_severity_leak_count"], int)
+    assert summary["headline"] == {
+        "free_high_severity_leak_count": 1,
+        "free_high_severity_pass": False,
+    }
+    assert summary["person_name"]["cue_prefixed"]["expected"] > 0
+    assert summary["person_name"]["cue_prefixed"]["leaks"] == 0
+    assert summary["person_name"]["cue_prefixed"]["recall"] == 1.0
+    assert summary["person_name"]["cue_less"]["leaks"] > 0
+    assert summary["must_survive"]["violation_count"] == 0
     assert summary["leak_samples"]
+    assert all(
+        sample["surrogate_id"] != "person_name-002"
+        for sample in summary["leak_samples"]
+    )
     assert all("span" not in sample for sample in summary["leak_samples"])
 
 
