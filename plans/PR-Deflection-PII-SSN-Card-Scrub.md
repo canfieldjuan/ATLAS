@@ -15,16 +15,28 @@ in paid artifact fields remains full-span residue after the shared deflection
 payload scrub. This change fixes the root for those classes by adding SSN/card
 redaction to the shared scrubber, not by hiding them in the scorer.
 
+Review-update root cause: source-link preservation and card candidate matching
+were separate admission paths around the shared text scrub. The first pass
+taught only the normal text path about SSN/card values, so `source_id`/
+`source_ids` could still preserve those values. The first card candidate also
+ran before email redaction and used a greedy bounded candidate, so numeric email
+local parts, longer hyphenated identifiers, and adjacent expiry/CVV digits could
+be handled incorrectly. The update fixes those roots in the shared scrubber
+boundary logic rather than adding scorer exceptions.
+
 ## Scope (this PR)
 
 Ownership lane: deflection/pii-recall-precision-testing
 Slice phase: Vertical slice
+Max files: 4
 
 1. Add SSN and payment-card redaction to the shared deflection payload scrubber.
 2. Prove the tiny #1742 scorer no longer reports paid-artifact SSN/card leaks
    while the intentionally deferred cue-less name headline gap remains visible.
 3. Keep precision probes for near-miss technical/commercial numbers that should
    survive.
+4. Close the Codex review findings for source-link preservation, numeric-email
+   ordering, longer hyphenated identifiers, and card-plus-expiry/CVV adjacency.
 
 ### Review Contract
 
@@ -38,6 +50,13 @@ Acceptance criteria:
   open-set/NER names are deferred.
 - Existing source-id preservation, ISO/CVE/SKU precision, and ordinary numeric
   near-misses still pass.
+- SSN/card values in source-link fields are scrubbed while ordinary ticket/source
+  IDs remain preserved.
+- Numeric email addresses are redacted as complete emails before card matching.
+- Longer hyphenated numeric identifiers are not split into partial card
+  redactions.
+- Cards followed by adjacent expiry/CVV-style digit tokens still redact the card
+  prefix.
 
 Affected surfaces:
 - Shared deflection paid artifact payload scrub.
@@ -64,9 +83,17 @@ scrub helper. This slice adds two detector branches there:
 
 - SSN shape detection for bounded `###-##-####` values, emitted as
   `[redacted-ssn]`.
-- Payment-card candidate detection for bounded 13-19 digit values with spaces
-  or hyphens, guarded by digit normalization and a Luhn check before emitting
+- Payment-card candidate detection for digit values with spaces or hyphens,
+  guarded by 13-19 digit normalization and a Luhn check before emitting
   `[redacted-payment-card]`.
+
+The review fix reuses those same detectors in source-link preservation before a
+`source_id`/`source_ids` value is allowed through unchanged. It also redacts
+emails before card candidates, broadens card candidate collection enough to see
+adjacent digit tokens, and redacts only a Luhn-valid prefix when the continuation
+is whitespace-separated. Hyphen continuations remain unredacted unless the whole
+candidate is a valid card number, which avoids splitting longer hyphenated
+identifiers.
 
 The scorer remains unchanged except for its assertions: it should observe the
 existing payload scrubber behavior becoming safer. That keeps the measurement
@@ -80,6 +107,8 @@ honest and prevents a false-green scorer-only fix.
   artifact text that survives source selection is scrubbed for SSN/card classes.
 - No raw PII in scorer leak samples; the existing surrogate-id-only reporting
   stays intact.
+- No GitHub self-resolution of bot threads; the code and PR body record the
+  fixes, and the next review/live-reconciliation pass can verify thread state.
 
 ## Deferred
 
@@ -93,7 +122,7 @@ Parked hardening: none.
 
 ## Verification
 
-- pytest tests/test_content_ops_deflection_report.py tests/test_score_deflection_pii_recall.py -q -- 134 passed.
+- pytest tests/test_content_ops_deflection_report.py tests/test_score_deflection_pii_recall.py -q -- 137 passed.
 - python scripts/score_deflection_pii_recall.py --json -- reports paid_artifact `ssn` leaks 0 / recall 1.0, paid_artifact `payment_card` leaks 0 / recall 1.0, leak samples limited to `person_name-001` and `person_name-003`, and the deferred free headline cue-less name failure remains `free_high_severity_leak_count=1`.
 - python -m py_compile extracted_content_pipeline/faq_deflection_report.py tests/test_content_ops_deflection_report.py tests/test_score_deflection_pii_recall.py -- passed.
 - bash scripts/validate_extracted_content_pipeline.sh -- passed.
@@ -106,8 +135,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/faq_deflection_report.py` | 37 |
-| `plans/PR-Deflection-PII-SSN-Card-Scrub.md` | 113 |
-| `tests/test_content_ops_deflection_report.py` | 58 |
+| `extracted_content_pipeline/faq_deflection_report.py` | 63 |
+| `plans/PR-Deflection-PII-SSN-Card-Scrub.md` | 142 |
+| `tests/test_content_ops_deflection_report.py` | 98 |
 | `tests/test_score_deflection_pii_recall.py` | 17 |
-| **Total** | **225** |
+| **Total** | **320** |

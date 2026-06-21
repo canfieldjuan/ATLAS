@@ -2145,7 +2145,13 @@ def test_deflection_report_payload_scrubs_identifier_fields_markdown_and_keys() 
     scrubbed = scrub_deflection_report_payload(
         {
             "source_id": "4829103",
-            "source_ids": ["777777", "ticket-4829103", "owner@example.com"],
+            "source_ids": [
+                "777777",
+                "ticket-4829103",
+                "owner@example.com",
+                "123-45-6789",
+                "4111 1111 1111 1111",
+            ],
             "first_source_id": "888888",
             "account_id": 5550000,
             "id": "question_details",
@@ -2164,6 +2170,9 @@ def test_deflection_report_payload_scrubs_identifier_fields_markdown_and_keys() 
         "999999",
         "jane.doe",
         "acme.com",
+        "owner@example.com",
+        "123-45-6789",
+        "4111 1111 1111 1111",
         "555-123-4567",
     ):
         assert raw_fragment not in encoded
@@ -2172,6 +2181,8 @@ def test_deflection_report_payload_scrubs_identifier_fields_markdown_and_keys() 
         "777777",
         "ticket-4829103",
         "[redacted-email]",
+        "[redacted-ssn]",
+        "[redacted-payment-card]",
     ]
     assert scrubbed["first_source_id"] == "888888"
     assert scrubbed["account_id"].startswith("deflection-ref-")
@@ -2279,7 +2290,8 @@ def test_deflection_report_payload_scrubs_ssn_and_payment_card_shapes(
 def test_deflection_report_payload_preserves_card_number_near_misses() -> None:
     raw_text = (
         "CVE-2021-44228, ISO 27001, SKU-12345678, price $49, "
-        "and batch number 1234 5678 9012 3456 stayed readable."
+        "batch number 1234 5678 9012 3456, and identifier "
+        "11111111-1111-4111-8111-111111111111 stayed readable."
     )
 
     scrubbed = scrub_deflection_report_payload({"answer": raw_text})
@@ -2287,6 +2299,32 @@ def test_deflection_report_payload_preserves_card_number_near_misses() -> None:
     assert scrubbed["answer"] == raw_text
     assert "[redacted-payment-card]" not in scrubbed["answer"]
     assert "[redacted-ssn]" not in scrubbed["answer"]
+
+
+def test_deflection_report_payload_scrubs_numeric_email_as_email() -> None:
+    scrubbed = scrub_deflection_report_payload(
+        {"answer": "Reply to 4111111111111111@example.com about the ticket."}
+    )
+
+    assert scrubbed["answer"] == "Reply to [redacted-email] about the ticket."
+    assert "@example.com" not in scrubbed["answer"]
+    assert "[redacted-payment-card]" not in scrubbed["answer"]
+
+
+@pytest.mark.parametrize(
+    "raw_text",
+    (
+        "Card 4111 1111 1111 1111 05/26 was pasted.",
+        "Card 4111 1111 1111 1111 123 was pasted.",
+    ),
+)
+def test_deflection_report_payload_scrubs_card_before_adjacent_digits(
+    raw_text: str,
+) -> None:
+    scrubbed = scrub_deflection_report_payload({"answer": raw_text})
+
+    assert "4111 1111 1111 1111" not in scrubbed["answer"]
+    assert "[redacted-payment-card]" in scrubbed["answer"]
 
 
 @pytest.mark.parametrize(
