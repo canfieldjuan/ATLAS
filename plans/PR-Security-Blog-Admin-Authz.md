@@ -17,6 +17,20 @@ Slice phase: Production hardening
    authority receive `403`, while the existing blog admin route coverage uses a
    platform-admin test principal.
 
+### Review Contract
+
+- Acceptance criteria:
+  - [ ] Every `/admin/blog/*` route depends on `require_blog_admin_user`
+        instead of depending on `require_auth` directly.
+  - [ ] An authenticated account owner/admin without `is_platform_admin` gets
+        `403` before blog admin route handler or database work can run.
+  - [ ] A platform-admin principal retains access to the existing blog admin
+        route behaviors covered by the route tests.
+- Affected surfaces: FastAPI blog admin API authorization and route tests.
+- Risk areas: security, backward compatibility, accidental platform-admin
+  lockout.
+- Reviewer rules triggered: R1, R2, R3, R5, R14.
+
 ### Files touched
 
 - `atlas_brain/api/blog_admin.py`
@@ -58,7 +72,7 @@ Parked hardening: none.
 
 ## Verification
 
-- Reviewer rules triggered: R1, R2, R5.
+- Reviewer rules triggered: R1, R2, R3, R5, R14.
 - `python -m pytest tests/test_truthful_artifact_routes.py -k "blog_admin or blog_quality or blog_draft_evidence or blog_publish or manual_blog_generate" -q` — passed (`21 passed, 32 deselected`, one existing `pynvml` deprecation warning).
 - `python -m pytest tests/test_truthful_artifact_routes.py tests/test_blog_admin_inputs.py -q` — passed (`56 passed`, one existing `pynvml` deprecation warning).
 - `bash scripts/local_pr_review.sh --current-pr-body-file /tmp/atlas-security-blog-admin-authz-pr-body.md` — passed.
@@ -68,6 +82,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/api/blog_admin.py` | 24 |
-| `plans/PR-Security-Blog-Admin-Authz.md` | 73 |
+| `plans/PR-Security-Blog-Admin-Authz.md` | 87 |
 | `tests/test_truthful_artifact_routes.py` | 90 |
-| **Total** | **187** |
+| **Total** | **201** |
