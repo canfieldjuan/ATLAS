@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from extracted_content_pipeline.deflection_pii_eval_corpus import (
     SCHEMA_VERSION,
     SOURCE_INTAKE_SUMMARY_SCHEMA_VERSION,
@@ -211,21 +213,42 @@ def test_labeled_source_intake_summary_reports_mix_without_raw_echo() -> None:
 
 def test_labeled_source_intake_summary_requires_schema_without_raw_echo() -> None:
     source = _valid_source()
-    source["schema_version"] = "wrong.version"
+    source["schema_version"] = "alice@example.com"
 
     summary = summarize_labeled_source(source)
     rendered = json.dumps(summary, sort_keys=True)
 
     assert summary["ok"] is False
+    assert summary["source_schema_version"] == "invalid"
     assert summary["errors"] == [
         {
             "code": "source_schema_version_mismatch",
             "expected": "deflection_pii_labeled_source.v1",
-            "actual": "wrong.version",
+            "actual": "invalid",
         }
     ]
     assert "Alice Baker" not in rendered
     assert "alice.baker@example.com" not in rendered
+    assert "alice@example.com" not in rendered
+
+
+def test_labeled_source_intake_summary_buckets_unsafe_must_survive_reasons() -> None:
+    source = _valid_source()
+    source["records"][0]["must_survive"][0]["reason"] = "alice@example.com"
+
+    summary = summarize_labeled_source(source)
+    rendered = json.dumps(summary, sort_keys=True)
+
+    assert summary["ok"] is True
+    assert summary["must_survive"] == {
+        "count": 3,
+        "by_reason": {
+            "compliance_reference": 1,
+            "other": 1,
+            "tenant_source_id": 1,
+        },
+    }
+    assert "alice@example.com" not in rendered
 
 
 def test_must_survive_tokens_are_preserved_for_precision_scoring() -> None:
@@ -557,6 +580,24 @@ def test_cli_writes_summary_without_artifact_and_sanitizes_invalid_summary(
     assert "label_span_not_found" in rendered
     assert "raw.bad@example.com" not in rendered
     assert "missing.bad@example.com" not in rendered
+
+
+def test_cli_rejects_colliding_summary_and_artifact_paths(tmp_path: Path) -> None:
+    source = tmp_path / "source.json"
+    shared_output = tmp_path / "pii-output.json"
+    source.write_text(json.dumps(_valid_source()), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        CLI.main([
+            str(source),
+            "--summary-output",
+            str(shared_output),
+            "--output",
+            str(shared_output),
+        ])
+
+    assert exc.value.code == 2
+    assert not shared_output.exists()
 
 
 def test_committed_tiny_fixture_is_surrogate_only() -> None:

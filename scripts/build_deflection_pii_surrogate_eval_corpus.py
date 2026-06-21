@@ -31,9 +31,10 @@ def main(argv: list[str] | None = None) -> int:
             "message": str(exc.__class__.__name__),
         }]})
         return 1
+    result = build_surrogate_eval_corpus(source) if args.output else None
     summary: dict[str, Any] | None = None
     if args.summary_output:
-        summary = summarize_labeled_source(source)
+        summary = summarize_labeled_source(source, build_result=result)
         args.summary_output.parent.mkdir(parents=True, exist_ok=True)
         args.summary_output.write_text(
             json.dumps(summary, indent=2 if args.pretty else None, sort_keys=True) + "\n",
@@ -47,7 +48,8 @@ def main(argv: list[str] | None = None) -> int:
             })
             return 1
 
-    result = build_surrogate_eval_corpus(source)
+    if result is None and args.output:
+        result = build_surrogate_eval_corpus(source)
     if args.output and not result.ok:
         _write_error({
             "ok": False,
@@ -56,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         })
         return 1
     if args.output:
+        assert result is not None
         assert result.artifact is not None
         text = json.dumps(result.artifact, indent=2 if args.pretty else None, sort_keys=True)
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -65,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         "schema_version": SCHEMA_VERSION,
     }
     if args.output:
+        assert result is not None
         assert result.artifact is not None
         payload.update({
             "output": str(args.output),
@@ -91,6 +95,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.output is None and args.summary_output is None:
         parser.error("at least one of --output or --summary-output is required")
+    if (
+        args.output is not None
+        and args.summary_output is not None
+        and args.output.expanduser().resolve() == args.summary_output.expanduser().resolve()
+    ):
+        parser.error("--output and --summary-output must be different paths")
     return args
 
 
