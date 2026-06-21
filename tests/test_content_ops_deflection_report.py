@@ -1551,6 +1551,161 @@ def test_deflection_full_report_qa_scorecard_checks_surface_caps_behaviorally() 
     assert "surface.result_page.displayed_rows.ranked_questions" in failed
 
 
+def test_deflection_full_report_qa_scorecard_checks_action_section_caps() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+    model = json.loads(json.dumps(artifact.report_model.as_dict()))
+    sections = {section["id"]: section for section in model["sections"]}
+    priority_rows = sections["priority_fix_queue"]["data"]["items"]
+    expected_pdf_rows = min(len(priority_rows), 10)
+
+    assert expected_pdf_rows > 0
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        model,
+        evidence_export=export,
+        surface_observations={
+            "pdf": {"displayed_rows": {"priority_fix_queue": expected_pdf_rows}},
+        },
+    )
+    bad_scorecard = build_deflection_full_report_qa_scorecard(
+        model,
+        evidence_export=export,
+        surface_observations={
+            "pdf": {"displayed_rows": {"priority_fix_queue": expected_pdf_rows - 1}},
+        },
+    )
+    harness = build_deflection_full_report_qa_deterministic_harness(
+        model,
+        evidence_export=export,
+    )
+
+    assert scorecard["ok"] is True
+    assert bad_scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in bad_scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "surface.pdf.displayed_rows.priority_fix_queue" in failed
+    assert harness["counts"]["priority_fix_queue_count"] == len(priority_rows)
+    assert any(
+        assertion["id"] == "harness.surface.pdf.displayed_rows.priority_fix_queue.present"
+        and assertion["ok"] is True
+        for assertion in harness["assertions"]
+    )
+
+
+def test_deflection_full_report_qa_scorecard_requires_action_sections() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    model = json.loads(json.dumps(artifact.report_model.as_dict()))
+    model["sections"] = [
+        section
+        for section in model["sections"]
+        if section["id"]
+        not in {
+            "priority_fix_queue",
+            "top_unresolved_repeats",
+            "drafted_resolutions",
+            "already_covered_still_recurring",
+        }
+    ]
+
+    scorecard = build_deflection_full_report_qa_deterministic_harness(model)
+
+    assert scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "model.section.priority_fix_queue.present" in failed
+    assert "model.section.top_unresolved_repeats.present" in failed
+    assert "model.section.drafted_resolutions.present" in failed
+    assert "model.section.already_covered_still_recurring.present" in failed
+
+
+def test_deflection_full_report_qa_harness_defers_result_page_action_row_observer() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+    model = artifact.report_model.as_dict()
+    sections = {section["id"]: section for section in model["sections"]}
+    priority_rows = sections["priority_fix_queue"]["data"]["items"]
+    unresolved_rows = sections["top_unresolved_repeats"]["data"]["items"]
+    drafted_rows = sections["drafted_resolutions"]["data"]["items"]
+    counts = build_deflection_full_report_qa_scorecard(model)["counts"]
+
+    scorecard = build_deflection_full_report_qa_deterministic_harness(
+        model,
+        evidence_export=export,
+        surface_observations={
+            "result_page": {
+                "counts": {
+                    "repeat_ticket_count": counts["repeat_ticket_count"],
+                    "generated_question_count": counts["generated_question_count"],
+                    "ranked_question_count": counts["ranked_question_count"],
+                    "drafted_answer_count": counts["drafted_answer_count"],
+                    "no_proven_answer_count": counts["no_proven_answer_count"],
+                    "ticket_source_count": counts["ticket_source_count"],
+                    "estimated_support_cost": counts["estimated_support_cost"],
+                    "evidence_row_count": len(export["evidence_rows"]),
+                    "source_id_count": export["summary"]["source_id_count"],
+                },
+                "displayed_rows": {
+                    "ranked_questions": counts["ranked_question_count"],
+                    "question_details": counts["question_detail_count"],
+                    "seo_targets": counts["seo_total_phrase_count"],
+                    "outcome_diagnostics": counts["outcome_diagnostic_row_count"],
+                },
+            },
+            "email": {
+                "counts": {
+                    "repeat_ticket_count": counts["repeat_ticket_count"],
+                    "generated_question_count": counts["generated_question_count"],
+                    "drafted_answer_count": counts["drafted_answer_count"],
+                    "no_proven_answer_count": counts["no_proven_answer_count"],
+                    "ticket_source_count": counts["ticket_source_count"],
+                    "estimated_support_cost": counts["estimated_support_cost"],
+                },
+            },
+            "pdf": {
+                "counts": {
+                    "repeat_ticket_count": counts["repeat_ticket_count"],
+                    "generated_question_count": counts["generated_question_count"],
+                    "ranked_question_count": counts["ranked_question_count"],
+                    "drafted_answer_count": counts["drafted_answer_count"],
+                    "no_proven_answer_count": counts["no_proven_answer_count"],
+                    "ticket_source_count": counts["ticket_source_count"],
+                    "estimated_support_cost": counts["estimated_support_cost"],
+                },
+                "displayed_rows": {
+                    "ranked_questions": counts["ranked_question_count"],
+                    "question_details": counts["question_detail_count"],
+                    "priority_fix_queue": len(priority_rows),
+                    "top_unresolved_repeats": len(unresolved_rows),
+                    "drafted_resolutions": len(drafted_rows),
+                },
+            },
+            "evidence_export": {
+                "counts": {
+                    "evidence_question_count": len(export["questions"]),
+                    "evidence_row_count": len(export["evidence_rows"]),
+                    "source_id_count": export["summary"]["source_id_count"],
+                    "drafted_answer_count": counts["drafted_answer_count"],
+                    "no_proven_answer_count": counts["no_proven_answer_count"],
+                },
+            },
+        },
+    )
+
+    assert scorecard["ok"] is True
+    assert not any(
+        assertion["id"]
+        == "harness.surface.result_page.displayed_rows.priority_fix_queue.present"
+        for assertion in scorecard["assertions"]
+    )
+
+
 def test_deflection_full_report_qa_scorecard_honors_zero_row_surface_caps() -> None:
     artifact = build_deflection_report_artifact(_structured_report_fixture_result())
     export = build_deflection_evidence_export(artifact)

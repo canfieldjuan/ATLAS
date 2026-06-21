@@ -38,6 +38,12 @@ REQUIRED_PDF_MARKERS = (
     "Question Details and Evidence",
     "complete evidence export",
 )
+ACTION_SECTION_TITLES = {
+    "priority_fix_queue": "Priority Fix Queue",
+    "top_unresolved_repeats": "Top Unresolved Repeats",
+    "drafted_resolutions": "Drafted Resolutions Ready to Publish",
+    "already_covered_still_recurring": "Already Covered but Still Recurring",
+}
 PDF_COUNT_PATTERNS = {
     "repeat_ticket_count": (
         r"\b{value}\s+question-level\s+repeat tickets\b",
@@ -156,6 +162,13 @@ def _rows(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
         return []
     return [row for row in rows if isinstance(row, Mapping)]
+
+
+def _items(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    items = data.get("items")
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
+        return []
+    return [item for item in items if isinstance(item, Mapping)]
 
 
 def _sequence(value: Any) -> list[Any]:
@@ -368,10 +381,15 @@ def _visible_question_rows(section_text: str, rows: Sequence[Mapping[str, Any]])
 
 
 def _pdf_displayed_rows(report_model: Mapping[str, Any], pdf_text: str) -> dict[str, int]:
+    action_section_end_markers = tuple(ACTION_SECTION_TITLES.values())
     ranked_section = _section_text(
         pdf_text,
         "Ranked Question Opportunities",
-        ("Resolution Outcome Diagnostics", "Question Details and Evidence"),
+        (
+            *action_section_end_markers,
+            "Resolution Outcome Diagnostics",
+            "Question Details and Evidence",
+        ),
     )
     detail_section = _section_text(
         pdf_text,
@@ -383,7 +401,7 @@ def _pdf_displayed_rows(report_model: Mapping[str, Any], pdf_text: str) -> dict[
     caps = DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS.get("pdf", {})
     ranked_cap = _int(caps.get("ranked_questions")) if isinstance(caps, Mapping) else 0
     detail_cap = _int(caps.get("question_details")) if isinstance(caps, Mapping) else 0
-    return {
+    displayed = {
         "ranked_questions": _visible_question_rows(
             ranked_section,
             ranked_rows[:ranked_cap] if ranked_cap else ranked_rows,
@@ -393,9 +411,32 @@ def _pdf_displayed_rows(report_model: Mapping[str, Any], pdf_text: str) -> dict[
             detail_rows[:detail_cap] if detail_cap else detail_rows,
         ),
     }
+    section_end_markers = (
+        *action_section_end_markers,
+        "Resolution Outcome Diagnostics",
+        "Question Details and Evidence",
+        "Complete Evidence",
+    )
+    for section_id, title in ACTION_SECTION_TITLES.items():
+        rows = _items(_section_data(report_model, section_id))
+        if not rows:
+            continue
+        section_text = _section_text(
+            pdf_text,
+            title,
+            tuple(marker for marker in section_end_markers if marker != title),
+        )
+        section_cap = _int(caps.get(section_id)) if isinstance(caps, Mapping) else 0
+        displayed[section_id] = _visible_question_rows(
+            section_text,
+            rows[:section_cap] if section_cap else rows,
+        )
+    return displayed
+
 
 def _pdf_artifact_assertions(
     *,
+    report_model: Mapping[str, Any],
     pdf_bytes: bytes,
     pdf_text: str,
     counts: Mapping[str, Any],
@@ -418,6 +459,16 @@ def _pdf_artifact_assertions(
     ]
     normalized_text = _normal_text(pdf_text).casefold()
     for marker in REQUIRED_PDF_MARKERS:
+        marker_id = re.sub(r"[^a-z0-9]+", "_", marker.casefold()).strip("_")
+        assertions.append(_assertion(
+            f"artifact.pdf.text.marker.{marker_id}",
+            marker.casefold() in normalized_text,
+            expected="present",
+            actual="present" if marker.casefold() in normalized_text else "missing",
+        ))
+    for section_id, marker in ACTION_SECTION_TITLES.items():
+        if not _items(_section_data(report_model, section_id)):
+            continue
         marker_id = re.sub(r"[^a-z0-9]+", "_", marker.casefold()).strip("_")
         assertions.append(_assertion(
             f"artifact.pdf.text.marker.{marker_id}",
@@ -525,6 +576,7 @@ def build_pdf_export_scorecard(
         | _source_ids_from_model(report_payload)
     )
     artifact_assertions = _pdf_artifact_assertions(
+        report_model=report_payload,
         pdf_bytes=pdf_bytes,
         pdf_text=pdf_text,
         counts=counts,
