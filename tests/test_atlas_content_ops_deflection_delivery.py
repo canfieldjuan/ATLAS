@@ -156,6 +156,90 @@ def _delivery_report_model_artifact(
                         ]
                     },
                 },
+                {
+                    "id": "priority_fix_queue",
+                    "title": "Priority Fix Queue",
+                    "priority": 35,
+                    "surfaces": ["web", "pdf", "email_summary"],
+                    "default_limit": 3,
+                    "required_data": ["items", "result_page_limit", "pdf_limit"],
+                    "data": {
+                        "result_page_limit": 2,
+                        "pdf_limit": 10,
+                        "items": [
+                            {
+                                "question": "How do I enable SSO?",
+                                "ticket_count": 6,
+                                "estimated_support_cost": 81.0,
+                                "status": "Draft ready",
+                                "recommended_action": "Review and publish",
+                                "source_ids": ["ticket-secret-priority-draft"],
+                            },
+                            {
+                                "question": "How do I export attribution reports?",
+                                "ticket_count": 9,
+                                "estimated_support_cost": 121.5,
+                                "status": "Needs answer",
+                                "recommended_action": "Create a help-center answer",
+                                "representative_phrasing": [
+                                    "RAW_REPRESENTATIVE_PHRASE_SHOULD_STAY_OUT",
+                                ],
+                                "source_ids": ["ticket-secret-action-1"],
+                                "top_evidence": [
+                                    {
+                                        "source_id": "ticket-secret-action-2",
+                                        "evidence_quote": (
+                                            "raw action evidence should stay out"
+                                        ),
+                                    },
+                                ],
+                            },
+                            {
+                                "question": "How do I update invoice contacts?",
+                                "ticket_count": 4,
+                                "estimated_support_cost": 54.0,
+                                "status": "Needs review",
+                                "recommended_action": "Approve the billing macro",
+                            },
+                            {
+                                "question": "How do I invite an auditor?",
+                                "ticket_count": 3,
+                                "estimated_support_cost": 40.5,
+                                "status": "Needs answer",
+                                "recommended_action": "Create an admin answer",
+                            },
+                        ],
+                    },
+                },
+                {
+                    "id": "drafted_resolutions",
+                    "title": "Drafted Resolutions Ready to Publish",
+                    "priority": 37,
+                    "surfaces": ["web", "pdf", "email_summary"],
+                    "default_limit": 3,
+                    "required_data": ["items", "result_page_limit", "pdf_limit"],
+                    "data": {
+                        "result_page_limit": 1,
+                        "pdf_limit": 10,
+                        "items": [
+                            {
+                                "question": "How do I enable SSO?",
+                                "ticket_count": 6,
+                                "estimated_support_cost": 81.0,
+                                "status": "Draft ready",
+                                "recommended_action": "Review and publish",
+                                "source_ids": ["ticket-secret-draft-1"],
+                            },
+                            {
+                                "question": "How do I change workspace owners?",
+                                "ticket_count": 2,
+                                "estimated_support_cost": 27.0,
+                                "status": "Draft ready",
+                                "recommended_action": "Publish ownership FAQ",
+                            },
+                        ],
+                    },
+                },
             ],
         },
     }
@@ -257,20 +341,170 @@ async def test_delivery_worker_renders_model_backed_email_summary(
     assert "3 publishable answers drafted" in request.html_body
     assert "5 questions still need approved resolution evidence" in request.html_body
     assert "42 ticket sources represented" in request.html_body
+    assert "Next actions" in request.html_body
+    assert "How do I export attribution reports?" in request.html_body
+    assert "9 repeat tickets" in request.html_body
+    assert "$122 estimated handling" in request.html_body
+    assert "Create a help-center answer" in request.html_body
+    assert "How do I update invoice contacts?" in request.html_body
+    assert "How do I invite an auditor?" not in request.html_body
+    assert "Ready to publish" in request.html_body
+    assert "How do I enable SSO?" in request.html_body
+    assert request.html_body.count("How do I enable SSO?") == 1
+    assert "How do I change workspace owners?" not in request.html_body
     assert "curated report PDF is attached" in request.html_body
     assert "full report PDF is attached" not in request.html_body
     assert "The secure results page has the consolidated report" in request.html_body
     assert "RAW MARKDOWN BODY" not in request.html_body
     assert "private evidence quote" not in request.html_body
     assert "ticket-secret-123" not in request.html_body
+    assert "RAW_REPRESENTATIVE_PHRASE_SHOULD_STAY_OUT" not in request.html_body
+    assert "ticket-secret-action-1" not in request.html_body
+    assert "raw action evidence should stay out" not in request.html_body
+    assert "ticket-secret-priority-draft" not in request.html_body
+    assert "ticket-secret-draft-1" not in request.html_body
     assert "resolution_evidence" not in request.html_body
     assert request.text_body is not None
     assert "1,234 repeat tickets across 8 ranked questions" in request.text_body
     assert "$16,659 estimated assisted-contact handling" in request.text_body
+    assert "Next actions" in request.text_body
+    assert "How do I export attribution reports?" in request.text_body
+    assert "How do I update invoice contacts?" in request.text_body
+    assert "How do I invite an auditor?" not in request.text_body
+    assert "Ready to publish" in request.text_body
+    assert "How do I enable SSO?" in request.text_body
+    assert request.text_body.count("How do I enable SSO?") == 1
+    assert "How do I change workspace owners?" not in request.text_body
     assert "curated report PDF is attached" in request.text_body
     assert "RAW MARKDOWN BODY" not in request.text_body
     assert "private evidence quote" not in request.text_body
     assert "ticket-secret-123" not in request.text_body
+    assert "ticket-secret-action-1" not in request.text_body
+    assert "raw action evidence should stay out" not in request.text_body
+    assert "ticket-secret-priority-draft" not in request.text_body
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_omits_malformed_action_summary_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _delivery_report_model_artifact()
+    sections = artifact["report_model"]["sections"]
+    for section in sections:
+        if section["id"] == "priority_fix_queue":
+            section["data"]["items"] = [
+                {"question": "Missing ticket count"},
+                {"ticket_count": 3},
+                {
+                    "question": {
+                        "source_ids": ["ticket-object-leak"],
+                        "evidence_quote": "object evidence leak",
+                    },
+                    "ticket_count": 3,
+                    "estimated_support_cost": 30.0,
+                },
+                "not-a-row",
+            ]
+        if section["id"] == "drafted_resolutions":
+            section["data"]["items"] = "not-a-list"
+    pool = _Pool([_row(artifact=json.dumps(artifact))])
+    sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-model-bytes")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 1
+    request = sender.requests[0]
+    assert "Key numbers" in request.html_body
+    assert "Next actions" not in request.html_body
+    assert "Ready to publish" not in request.html_body
+    assert "Missing ticket count" not in request.html_body
+    assert "ticket-object-leak" not in request.html_body
+    assert "object evidence leak" not in request.html_body
+    assert "not-a-list" not in request.html_body
+    assert request.text_body is not None
+    assert "Next actions" not in request.text_body
+    assert "Ready to publish" not in request.text_body
+    assert "ticket-object-leak" not in request.text_body
+    assert "object evidence leak" not in request.text_body
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_omits_non_scalar_action_optional_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _delivery_report_model_artifact()
+    sections = artifact["report_model"]["sections"]
+    for section in sections:
+        if section["id"] == "priority_fix_queue":
+            section["data"]["items"] = [
+                {
+                    "question": "How do I update audit exports?",
+                    "ticket_count": 5,
+                    "estimated_support_cost": 67.5,
+                    "status": ["status evidence leak"],
+                    "recommended_action": {
+                        "evidence_quote": "action evidence leak",
+                    },
+                },
+            ]
+        if section["id"] == "drafted_resolutions":
+            section["data"]["items"] = []
+    pool = _Pool([_row(artifact=json.dumps(artifact))])
+    sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-model-bytes")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 1
+    request = sender.requests[0]
+    assert "Next actions" in request.html_body
+    assert "How do I update audit exports?" in request.html_body
+    assert "status evidence leak" not in request.html_body
+    assert "action evidence leak" not in request.html_body
+    assert request.text_body is not None
+    assert "How do I update audit exports?" in request.text_body
+    assert "status evidence leak" not in request.text_body
+    assert "action evidence leak" not in request.text_body
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_honors_zero_action_summary_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _delivery_report_model_artifact()
+    sections = artifact["report_model"]["sections"]
+    for section in sections:
+        if section["id"] in {"priority_fix_queue", "drafted_resolutions"}:
+            section["data"]["result_page_limit"] = 0
+    pool = _Pool([_row(artifact=json.dumps(artifact))])
+    sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-model-bytes")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 1
+    request = sender.requests[0]
+    assert "Key numbers" in request.html_body
+    assert "Next actions" not in request.html_body
+    assert "Ready to publish" not in request.html_body
+    assert "How do I export attribution reports?" not in request.html_body
+    assert "How do I enable SSO?" not in request.html_body
+    assert request.text_body is not None
+    assert "Next actions" not in request.text_body
+    assert "Ready to publish" not in request.text_body
 
 
 @pytest.mark.asyncio

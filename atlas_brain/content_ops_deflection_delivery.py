@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 from typing import Any, Literal, Mapping, Protocol
 from urllib.parse import quote
@@ -23,6 +23,7 @@ from extracted_content_pipeline.storage._jsonb_helpers import decode_jsonb_field
 DEFAULT_DEFLECTION_DELIVERY_SUBJECT = "Your FAQ deflection report is ready"
 DELIVERY_CLAIM_STALE_AFTER = "15 minutes"
 MAX_DELIVERY_ERROR_CHARS = 500
+EMAIL_ACTION_SECTION_LIMIT = 3
 
 logger = logging.getLogger("atlas.content_ops_deflection_delivery")
 
@@ -52,6 +53,15 @@ class DeflectionReportDeliverySummary:
 
 
 @dataclass(frozen=True)
+class _DeliveryEmailActionItem:
+    question: str
+    ticket_count: int
+    estimated_support_cost: float | None
+    status: str
+    recommended_action: str
+
+
+@dataclass(frozen=True)
 class _DeliveryEmailSummary:
     repeat_ticket_count: int
     generated_question_count: int
@@ -59,6 +69,8 @@ class _DeliveryEmailSummary:
     drafted_answer_count: int
     no_proven_answer_count: int
     ticket_source_count: int
+    priority_fix_items: tuple[_DeliveryEmailActionItem, ...] = ()
+    drafted_resolution_items: tuple[_DeliveryEmailActionItem, ...] = ()
 
 
 async def send_pending_deflection_report_deliveries(
@@ -337,6 +349,7 @@ def _render_model_summary_html(
         "approved resolution evidence.</li>"
         f"<li>{_html_count(summary.ticket_source_count)} ticket sources represented.</li>"
         "</ul>"
+        f"{_render_action_summary_html(summary)}"
         f"{attachment_copy}"
         "<p>The secure results page has the consolidated report, PDF, and complete "
         "evidence export.</p>"
@@ -367,6 +380,7 @@ def _render_model_summary_text(
         f"- {_email_count(summary.no_proven_answer_count)} questions still need approved "
         "resolution evidence.\n"
         f"- {_email_count(summary.ticket_source_count)} ticket sources represented.\n\n"
+        f"{_render_action_summary_text(summary)}"
         f"{attachment_copy}"
         "The secure results page has the consolidated report, PDF, and complete "
         "evidence export:\n\n"
@@ -380,12 +394,29 @@ def _delivery_email_summary(artifact: Any) -> _DeliveryEmailSummary | None:
     )
     if model is None:
         return None
-    for section in _model_sections(model, "email_summary"):
+    sections = _model_sections(model, "email_summary")
+    for section in sections:
         if _clean(section.get("id")) != "support_tax":
             continue
         summary = _support_tax_email_summary(section)
         if summary is not None:
-            return summary
+            drafted_resolution_items = _section_action_items(
+                sections,
+                "drafted_resolutions",
+            )
+            drafted_questions = {
+                item.question.casefold() for item in drafted_resolution_items
+            }
+            return replace(
+                summary,
+                priority_fix_items=_section_action_items(
+                    sections,
+                    "priority_fix_queue",
+                    excluded_questions=drafted_questions,
+                    excluded_statuses={"draft ready"},
+                ),
+                drafted_resolution_items=drafted_resolution_items,
+            )
     return None
 
 
@@ -434,6 +465,117 @@ def _support_tax_email_summary(
     )
 
 
+def _section_action_items(
+    sections: tuple[dict[str, Any], ...],
+    section_id: str,
+    *,
+    excluded_questions: set[str] | None = None,
+    excluded_statuses: set[str] | None = None,
+) -> tuple[_DeliveryEmailActionItem, ...]:
+    excluded_questions = excluded_questions or set()
+    excluded_statuses = excluded_statuses or set()
+    for section in sections:
+        if _clean(section.get("id")) != section_id:
+            continue
+        data = section.get("data")
+        if not isinstance(data, Mapping):
+            return ()
+        rows = data.get("items")
+        if not isinstance(rows, list):
+            return ()
+        limit = _email_action_limit(data)
+        if limit <= 0:
+            return ()
+        items: list[_DeliveryEmailActionItem] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            item = _email_action_item(row)
+            if item is None:
+                continue
+            if item.question.casefold() in excluded_questions:
+                continue
+            if item.status.casefold() in excluded_statuses:
+                continue
+            items.append(item)
+            if len(items) >= limit:
+                break
+        return tuple(items)
+    return ()
+
+
+def _email_action_limit(data: Mapping[str, Any]) -> int:
+    limit = _strict_int(data.get("result_page_limit"))
+    if limit is None:
+        return EMAIL_ACTION_SECTION_LIMIT
+    if limit <= 0:
+        return 0
+    return min(limit, EMAIL_ACTION_SECTION_LIMIT)
+
+
+def _email_action_item(row: Mapping[str, Any]) -> _DeliveryEmailActionItem | None:
+    question = _strict_text(row.get("question"))
+    ticket_count = _strict_int(row.get("ticket_count"))
+    if not question or ticket_count is None:
+        return None
+    estimated_support_cost = _strict_number(row.get("estimated_support_cost"))
+    return _DeliveryEmailActionItem(
+        question=question,
+        ticket_count=ticket_count,
+        estimated_support_cost=estimated_support_cost,
+        status=_strict_text(row.get("status")) or "",
+        recommended_action=_strict_text(row.get("recommended_action")) or "",
+    )
+
+
+def _render_action_summary_html(summary: _DeliveryEmailSummary) -> str:
+    blocks: list[str] = []
+    if summary.priority_fix_items:
+        blocks.append("<h2>Next actions</h2><ul>")
+        for item in summary.priority_fix_items:
+            blocks.append(f"<li>{_html_action_item(item, include_action=True)}</li>")
+        blocks.append("</ul>")
+    if summary.drafted_resolution_items:
+        blocks.append("<h2>Ready to publish</h2><ul>")
+        for item in summary.drafted_resolution_items:
+            blocks.append(f"<li>{_html_action_item(item, include_action=False)}</li>")
+        blocks.append("</ul>")
+    return "".join(blocks)
+
+
+def _render_action_summary_text(summary: _DeliveryEmailSummary) -> str:
+    blocks: list[str] = []
+    if summary.priority_fix_items:
+        blocks.append("Next actions:\n")
+        for item in summary.priority_fix_items:
+            blocks.append(f"- {_text_action_item(item, include_action=True)}\n")
+        blocks.append("\n")
+    if summary.drafted_resolution_items:
+        blocks.append("Ready to publish:\n")
+        for item in summary.drafted_resolution_items:
+            blocks.append(f"- {_text_action_item(item, include_action=False)}\n")
+        blocks.append("\n")
+    return "".join(blocks)
+
+
+def _html_action_item(item: _DeliveryEmailActionItem, *, include_action: bool) -> str:
+    return _escape(_text_action_item(item, include_action=include_action))
+
+
+def _text_action_item(item: _DeliveryEmailActionItem, *, include_action: bool) -> str:
+    parts = [
+        item.question,
+        f"{_email_count(item.ticket_count)} repeat tickets",
+    ]
+    if item.estimated_support_cost is not None:
+        parts.append(f"{_email_money(item.estimated_support_cost)} estimated handling")
+    if item.status:
+        parts.append(item.status)
+    if include_action and item.recommended_action:
+        parts.append(item.recommended_action)
+    return " - ".join(parts)
+
+
 def _strict_int(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
@@ -457,6 +599,13 @@ def _strict_number(value: Any) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _strict_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
 
 
 def _decoded_artifact(artifact: Any) -> Any:
