@@ -8,24 +8,24 @@
   },
   "summary": {
     "cue_less_person_name_count": 1,
-    "cue_prefixed_person_name_count": 2,
-    "label_count": 10,
+    "cue_prefixed_person_name_count": 3,
+    "label_count": 11,
     "labels_by_class": {
       "dob": 1,
       "email": 1,
       "order_id": 1,
       "payment_card": 1,
-      "person_name": 3,
+      "person_name": 4,
       "phone": 1,
       "ssn": 1,
       "street_address": 1
     },
     "labels_by_severity": {
-      "high": 8,
+      "high": 9,
       "medium": 2
     },
     "must_survive_count": 3,
-    "ticket_count": 2
+    "ticket_count": 3
   },
   "tickets": [
     {
@@ -167,6 +167,28 @@
       ],
       "must_survive": [],
       "ticket_id": "pii-eval-002"
+    },
+    {
+      "fields": {
+        "agent_reply": "Customer Amy Rae Li Report plan was upgraded.",
+        "customer_message": "Can the Report plan stay active after an upgrade?",
+        "source_id": "ticket-eval-safe-003",
+        "subject": "Report plan upgrade"
+      },
+      "labels": [
+        {
+          "class": "person_name",
+          "end": 19,
+          "name_subtype": "cue_prefixed",
+          "origin_field": "agent_reply",
+          "severity": "high",
+          "span": "Amy Rae Li",
+          "start": 9,
+          "surrogate_id": "person_name-004"
+        }
+      ],
+      "must_survive": [],
+      "ticket_id": "pii-eval-003"
     }
   ]
 }

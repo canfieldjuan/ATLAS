@@ -58,9 +58,8 @@ HIGH_SEVERITY_CLASSES = frozenset({
     "person_name",
     "dob",
 })
-# Keep the curated surrogate corpus on 3+ character name tokens; two-letter
-# surnames need an explicit scorer/corpus follow-up before they are reliable.
 PERSON_NAME_TOKEN_MIN_LENGTH = 3
+PERSON_NAME_SHORT_TOKEN_LENGTH = 2
 PERSON_NAME_TOKEN_STOPWORDS = frozenset({
     "agent",
     "client",
@@ -71,6 +70,34 @@ PERSON_NAME_TOKEN_STOPWORDS = frozenset({
     "person",
     "requester",
     "user",
+})
+PERSON_NAME_TOKEN_BOUNDARY_CHARS = r"A-Za-z0-9"
+PERSON_NAME_SHORT_TOKEN_BOUNDARY_CHARS = r"A-Za-z0-9'\-"
+PERSON_NAME_SHORT_TOKEN_STOPWORDS = frozenset({
+    "am",
+    "an",
+    "as",
+    "at",
+    "be",
+    "by",
+    "do",
+    "go",
+    "he",
+    "if",
+    "in",
+    "is",
+    "it",
+    "me",
+    "my",
+    "no",
+    "of",
+    "on",
+    "or",
+    "so",
+    "to",
+    "up",
+    "us",
+    "we",
 })
 
 
@@ -634,18 +661,37 @@ def _label_leak_kind(
 
 def _person_name_token_survives(span: str, scrubbed_text: str) -> bool:
     for token in _person_name_tokens(span):
-        if re.search(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", scrubbed_text):
+        if re.search(_person_name_token_pattern(token), scrubbed_text):
             return True
     return False
 
 
-def _person_name_tokens(span: str) -> tuple[str, ...]:
-    return tuple(
-        token
-        for token in re.findall(r"[A-Za-z][A-Za-z'-]+", span)
-        if len(token) >= PERSON_NAME_TOKEN_MIN_LENGTH
-        and token.casefold() not in PERSON_NAME_TOKEN_STOPWORDS
+def _person_name_token_pattern(token: str) -> str:
+    boundary_chars = (
+        PERSON_NAME_SHORT_TOKEN_BOUNDARY_CHARS
+        if len(token) == PERSON_NAME_SHORT_TOKEN_LENGTH
+        else PERSON_NAME_TOKEN_BOUNDARY_CHARS
     )
+    return rf"(?<![{boundary_chars}]){re.escape(token)}(?![{boundary_chars}])"
+
+
+def _person_name_tokens(span: str) -> tuple[str, ...]:
+    tokens = re.findall(r"[A-Za-z][A-Za-z'-]+", span)
+    filtered: list[str] = []
+    for index, token in enumerate(tokens):
+        normalized = token.casefold()
+        if normalized in PERSON_NAME_TOKEN_STOPWORDS:
+            continue
+        if len(token) >= PERSON_NAME_TOKEN_MIN_LENGTH:
+            filtered.append(token)
+            continue
+        if (
+            len(token) == PERSON_NAME_SHORT_TOKEN_LENGTH
+            and index > 0
+            and normalized not in PERSON_NAME_SHORT_TOKEN_STOPWORDS
+        ):
+            filtered.append(token)
+    return tuple(filtered)
 
 
 def _score_must_survive(

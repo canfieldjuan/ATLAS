@@ -32,8 +32,8 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     assert summary["status"] == "ok"
     assert summary["input"] == {
         "schema_version": "deflection_pii_eval_corpus.v1",
-        "ticket_count": 2,
-        "label_count": 10,
+        "ticket_count": 3,
+        "label_count": 11,
         "must_survive_count": 3,
     }
     paid_pdf = summary["surface_generation"]["paid_pdf"]
@@ -83,15 +83,15 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     }
     if paid_pdf["rendered"]:
         assert summary["person_name"]["cue_prefixed"] == {
-            "expected": 5,
-            "redacted": 5,
+            "expected": 7,
+            "redacted": 7,
             "leaks": 0,
             "recall": 1.0,
         }
     else:
         assert summary["person_name"]["cue_prefixed"] == {
-            "expected": 3,
-            "redacted": 3,
+            "expected": 4,
+            "redacted": 4,
             "leaks": 0,
             "recall": 1.0,
         }
@@ -108,6 +108,10 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     )
     assert all(
         sample["surrogate_id"] != "person_name-003"
+        for sample in summary["leak_samples"]
+    )
+    assert all(
+        sample["surrogate_id"] != "person_name-004"
         for sample in summary["leak_samples"]
     )
     assert all(
@@ -134,6 +138,47 @@ def test_partial_name_token_detection_reports_token_residue() -> None:
     )
 
     assert leak_kind == "partial_name_token"
+
+
+def test_partial_name_token_detection_reports_two_letter_surname_residue() -> None:
+    leak_kind = CLI._label_leak_kind(
+        label={"class": "person_name", "span": "Amy Rae Li"},
+        baseline_text="Customer Amy Rae Li Report plan was upgraded.",
+        scrubbed_text="Customer [redacted-name] Li Report plan was upgraded.",
+    )
+
+    assert leak_kind == "partial_name_token"
+
+
+def test_partial_name_token_detection_ignores_common_two_letter_words() -> None:
+    leak_kind = CLI._label_leak_kind(
+        label={"class": "person_name", "span": "Amy Rae To"},
+        baseline_text="Customer Amy Rae To Report plan was upgraded.",
+        scrubbed_text="Customer [redacted-name] To Report plan was upgraded.",
+    )
+
+    assert leak_kind == ""
+
+
+@pytest.mark.parametrize(
+    "scrubbed_text",
+    (
+        "Customer [redacted-name] Li-ion battery plan was upgraded.",
+        "Customer [redacted-name] Li's plan was upgraded.",
+        "Customer [redacted-name] O'Li plan was upgraded.",
+        "Customer [redacted-name] Link plan was upgraded.",
+    ),
+)
+def test_partial_name_token_detection_ignores_short_token_compounds(
+    scrubbed_text: str,
+) -> None:
+    leak_kind = CLI._label_leak_kind(
+        label={"class": "person_name", "span": "Amy Rae Li"},
+        baseline_text="Customer Amy Rae Li Report plan was upgraded.",
+        scrubbed_text=scrubbed_text,
+    )
+
+    assert leak_kind == ""
 
 
 def test_resolved_partial_name_token_does_not_cross_contaminate_tickets() -> None:
@@ -430,6 +475,7 @@ def test_cli_writes_markdown_summary_without_raw_spans(tmp_path: Path) -> None:
         "Maya Chen",
         "Jordan Lee",
         "Mary Jane Watson",
+        "Amy Rae Li",
         "alex.rivera@example.test",
         "555-010-4301",
         "1990-04-17",
