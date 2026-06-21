@@ -32,8 +32,8 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
     assert summary["status"] == "ok"
     assert summary["input"] == {
         "schema_version": "deflection_pii_eval_corpus.v1",
-        "ticket_count": 1,
-        "label_count": 8,
+        "ticket_count": 2,
+        "label_count": 9,
         "must_survive_count": 3,
     }
     paid_pdf = summary["surface_generation"]["paid_pdf"]
@@ -61,9 +61,20 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
         "free_high_severity_leak_count": 1,
         "free_high_severity_pass": False,
     }
-    assert summary["person_name"]["cue_prefixed"]["expected"] > 0
-    assert summary["person_name"]["cue_prefixed"]["leaks"] == 0
-    assert summary["person_name"]["cue_prefixed"]["recall"] == 1.0
+    if paid_pdf["rendered"]:
+        assert summary["person_name"]["cue_prefixed"] == {
+            "expected": 5,
+            "redacted": 3,
+            "leaks": 2,
+            "recall": 0.6,
+        }
+    else:
+        assert summary["person_name"]["cue_prefixed"] == {
+            "expected": 3,
+            "redacted": 2,
+            "leaks": 1,
+            "recall": 0.6667,
+        }
     assert summary["person_name"]["cue_less"]["leaks"] > 0
     assert summary["must_survive"]["violation_count"] == 0
     assert summary["leak_samples"]
@@ -71,7 +82,65 @@ def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
         sample["surrogate_id"] != "person_name-002"
         for sample in summary["leak_samples"]
     )
+    partial_name_leaks = [
+        sample
+        for sample in summary["leak_samples"]
+        if sample["surrogate_id"] == "person_name-003"
+    ]
+    expected_partial_surfaces = {"paid_artifact"}
+    if summary["surface_generation"]["paid_pdf"]["rendered"]:
+        expected_partial_surfaces.add("paid_pdf")
+    assert {
+        sample["surface"]
+        for sample in partial_name_leaks
+        if sample["leak_kind"] == "partial_name_token"
+    } == expected_partial_surfaces
     assert all("span" not in sample for sample in summary["leak_samples"])
+    assert all("token" not in sample for sample in summary["leak_samples"])
+    rendered_samples = json.dumps(summary["leak_samples"], sort_keys=True)
+    assert "Mary" not in rendered_samples
+    assert "Jane" not in rendered_samples
+    assert "Watson" not in rendered_samples
+
+
+def test_partial_name_token_detection_is_scoped_to_own_ticket() -> None:
+    corpus = _tiny_corpus()
+    corpus["tickets"].append(
+        {
+            "fields": {
+                "agent_reply": "Customer Alice Watson Premium was upgraded.",
+                "customer_message": "Premium update completed.",
+                "source_id": "ticket-eval-safe-003",
+                "subject": "Premium update",
+            },
+            "labels": [
+                {
+                    "class": "person_name",
+                    "name_subtype": "cue_prefixed",
+                    "origin_field": "agent_reply",
+                    "severity": "high",
+                    "span": "Alice Watson",
+                    "surrogate_id": "person_name-004",
+                }
+            ],
+            "must_survive": [],
+            "ticket_id": "pii-eval-003",
+        }
+    )
+
+    summary = CLI.score_corpus(corpus)
+
+    assert summary["status"] == "ok"
+    assert [
+        sample
+        for sample in summary["leak_samples"]
+        if sample["surrogate_id"] == "person_name-004"
+    ] == []
+    assert any(
+        sample["surrogate_id"] == "person_name-003"
+        and sample["leak_kind"] == "partial_name_token"
+        for sample in summary["leak_samples"]
+    )
 
 
 def test_forced_leak_reports_surface_and_surrogate_without_span() -> None:

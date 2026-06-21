@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -56,6 +57,20 @@ HIGH_SEVERITY_CLASSES = frozenset({
     "payment_card",
     "person_name",
     "dob",
+})
+# Keep the curated surrogate corpus on 3+ character name tokens; two-letter
+# surnames need an explicit scorer/corpus follow-up before they are reliable.
+PERSON_NAME_TOKEN_MIN_LENGTH = 3
+PERSON_NAME_TOKEN_STOPWORDS = frozenset({
+    "agent",
+    "client",
+    "contact",
+    "customer",
+    "member",
+    "name",
+    "person",
+    "requester",
+    "user",
 })
 
 
@@ -114,6 +129,7 @@ def score_corpus(corpus: Mapping[str, Any]) -> dict[str, Any]:
         snapshot=scrubbed_snapshot,
         pdf_text=scrubbed_pdf_text,
     )
+    scrubbed_surfaces_by_ticket = _scrubbed_surface_texts_by_ticket(tickets)
 
     labels = _labels(tickets)
     must_survive = _must_survive(tickets)
@@ -121,6 +137,7 @@ def score_corpus(corpus: Mapping[str, Any]) -> dict[str, Any]:
         labels=labels,
         baseline_surfaces=baseline_surfaces,
         scrubbed_surfaces=scrubbed_surfaces,
+        scrubbed_surfaces_by_ticket=scrubbed_surfaces_by_ticket,
     )
     must_survive_result = _score_must_survive(
         records=must_survive,
@@ -340,11 +357,35 @@ def _surface_texts(
     }
 
 
+def _scrubbed_surface_texts_by_ticket(
+    tickets: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, str]]:
+    surfaces: dict[str, dict[str, str]] = {}
+    for index, ticket in enumerate(tickets, start=1):
+        artifact = build_deflection_report_artifact(
+            _faq_result_from_corpus((ticket,)),
+            source_label="deflection_pii_eval_corpus",
+        )
+        scrubbed_artifact = scrub_deflection_report_payload(artifact.as_dict())
+        scrubbed_snapshot = build_deflection_snapshot(scrubbed_artifact).as_dict()
+        _, scrubbed_pdf_text, _ = _paid_pdf_surfaces(
+            baseline_artifact=artifact.as_dict(),
+            scrubbed_artifact=scrubbed_artifact,
+        )
+        surfaces[_ticket_key(ticket, index)] = _surface_texts(
+            artifact=scrubbed_artifact,
+            snapshot=scrubbed_snapshot,
+            pdf_text=scrubbed_pdf_text,
+        )
+    return surfaces
+
+
 def _score_labels(
     *,
     labels: Sequence[Mapping[str, Any]],
     baseline_surfaces: Mapping[str, str],
     scrubbed_surfaces: Mapping[str, str],
+    scrubbed_surfaces_by_ticket: Mapping[str, Mapping[str, str]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     scores: list[dict[str, Any]] = []
     leaks: list[dict[str, Any]] = []
@@ -353,8 +394,19 @@ def _score_labels(
         if not span:
             continue
         for surface in SURFACES:
-            reaches = span in baseline_surfaces.get(surface, "")
-            leaked = reaches and span in scrubbed_surfaces.get(surface, "")
+            baseline_text = baseline_surfaces.get(surface, "")
+            scrubbed_text = scrubbed_surfaces.get(surface, "")
+            reaches = span in baseline_text
+            label_scrubbed_text = scrubbed_surfaces_by_ticket.get(
+                _clean(label.get("_ticket_key")),
+                {},
+            ).get(surface, scrubbed_text)
+            leak_kind = _label_leak_kind(
+                label=label,
+                baseline_text=baseline_text,
+                scrubbed_text=label_scrubbed_text,
+            )
+            leaked = bool(leak_kind)
             score = {
                 "surrogate_id": _clean(label.get("surrogate_id")),
                 "class": _clean(label.get("class")),
@@ -363,6 +415,7 @@ def _score_labels(
                 "surface": surface,
                 "reaches_surface": reaches,
                 "leaked": leaked,
+                "leak_kind": leak_kind,
             }
             scores.append(score)
             if leaked:
@@ -372,8 +425,43 @@ def _score_labels(
                     "severity": score["severity"],
                     "surface": surface,
                     "name_subtype": score["name_subtype"],
+                    "leak_kind": leak_kind,
                 })
     return scores, leaks
+
+
+def _label_leak_kind(
+    *,
+    label: Mapping[str, Any],
+    baseline_text: str,
+    scrubbed_text: str,
+) -> str:
+    span = _clean(label.get("span"))
+    if not span or span not in baseline_text:
+        return ""
+    if span in scrubbed_text:
+        return "full_span"
+    if _clean(label.get("class")) != "person_name":
+        return ""
+    if _person_name_token_survives(span, scrubbed_text):
+        return "partial_name_token"
+    return ""
+
+
+def _person_name_token_survives(span: str, scrubbed_text: str) -> bool:
+    for token in _person_name_tokens(span):
+        if re.search(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", scrubbed_text):
+            return True
+    return False
+
+
+def _person_name_tokens(span: str) -> tuple[str, ...]:
+    return tuple(
+        token
+        for token in re.findall(r"[A-Za-z][A-Za-z'-]+", span)
+        if len(token) >= PERSON_NAME_TOKEN_MIN_LENGTH
+        and token.casefold() not in PERSON_NAME_TOKEN_STOPWORDS
+    )
 
 
 def _score_must_survive(
@@ -479,12 +567,14 @@ def _class_summary(counts: Mapping[str, int]) -> dict[str, Any]:
 
 
 def _labels(tickets: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    return [
-        label
-        for ticket in tickets
-        for label in _sequence(ticket.get("labels"))
-        if isinstance(label, Mapping)
-    ]
+    labels: list[Mapping[str, Any]] = []
+    for index, ticket in enumerate(tickets, start=1):
+        ticket_key = _ticket_key(ticket, index)
+        for label in _sequence(ticket.get("labels")):
+            if not isinstance(label, Mapping):
+                continue
+            labels.append({**label, "_ticket_key": ticket_key})
+    return labels
 
 
 def _must_survive(tickets: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
@@ -494,6 +584,10 @@ def _must_survive(tickets: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any
         for record in _sequence(ticket.get("must_survive"))
         if isinstance(record, Mapping)
     ]
+
+
+def _ticket_key(ticket: Mapping[str, Any], index: int) -> str:
+    return _clean(ticket.get("ticket_id")) or f"ticket-{index:03d}"
 
 
 def _surface_text(value: Any) -> str:

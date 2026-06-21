@@ -417,9 +417,9 @@ def test_committed_tiny_fixture_is_surrogate_only() -> None:
     rendered = json.dumps(artifact, sort_keys=True)
 
     assert artifact["schema_version"] == SCHEMA_VERSION
-    assert artifact["summary"]["ticket_count"] == 1
+    assert artifact["summary"]["ticket_count"] == 2
     assert artifact["summary"]["cue_less_person_name_count"] == 1
-    assert artifact["summary"]["cue_prefixed_person_name_count"] == 1
+    assert artifact["summary"]["cue_prefixed_person_name_count"] == 2
     for raw in (
         "Alice Baker",
         "alice.baker@example.com",
@@ -430,3 +430,19 @@ def test_committed_tiny_fixture_is_surrogate_only() -> None:
         "4242 4242 4242 4242",
     ):
         assert raw not in rendered
+    residual_ticket = artifact["tickets"][1]
+    assert residual_ticket["fields"]["agent_reply"] == (
+        "Customer Mary Jane Watson Report plan was upgraded."
+    )
+    assert residual_ticket["labels"] == [
+        {
+            "class": "person_name",
+            "end": 25,
+            "name_subtype": "cue_prefixed",
+            "origin_field": "agent_reply",
+            "severity": "high",
+            "span": "Mary Jane Watson",
+            "start": 9,
+            "surrogate_id": "person_name-003",
+        }
+    ]

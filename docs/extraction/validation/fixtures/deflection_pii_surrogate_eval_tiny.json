@@ -8,23 +8,23 @@
   },
   "summary": {
     "cue_less_person_name_count": 1,
-    "cue_prefixed_person_name_count": 1,
-    "label_count": 8,
+    "cue_prefixed_person_name_count": 2,
+    "label_count": 9,
     "labels_by_class": {
       "email": 1,
       "order_id": 1,
       "payment_card": 1,
-      "person_name": 2,
+      "person_name": 3,
       "phone": 1,
       "ssn": 1,
       "street_address": 1
     },
     "labels_by_severity": {
-      "high": 6,
+      "high": 7,
       "medium": 2
     },
     "must_survive_count": 3,
-    "ticket_count": 1
+    "ticket_count": 2
   },
   "tickets": [
     {
@@ -135,6 +135,28 @@
         }
       ],
       "ticket_id": "pii-eval-001"
+    },
+    {
+      "fields": {
+        "agent_reply": "Customer Mary Jane Watson Report plan was upgraded.",
+        "customer_message": "Can the Premium plan stay active after an upgrade?",
+        "source_id": "ticket-eval-safe-002",
+        "subject": "Premium plan upgrade"
+      },
+      "labels": [
+        {
+          "class": "person_name",
+          "end": 25,
+          "name_subtype": "cue_prefixed",
+          "origin_field": "agent_reply",
+          "severity": "high",
+          "span": "Mary Jane Watson",
+          "start": 9,
+          "surrogate_id": "person_name-003"
+        }
+      ],
+      "must_survive": [],
+      "ticket_id": "pii-eval-002"
     }
   ]
 }
