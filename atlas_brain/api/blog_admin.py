@@ -37,6 +37,12 @@ _REVIEW_BASIS_CANONICAL = "canonical_reviews"
 router = APIRouter(prefix="/admin/blog", tags=["blog-admin"])
 
 
+async def require_blog_admin_user(user: AuthUser = Depends(require_auth)) -> AuthUser:
+    if bool(getattr(user, "is_platform_admin", False)):
+        return user
+    raise HTTPException(status_code=403, detail="Platform admin access required")
+
+
 def _unwrap_param_default(value: object | None) -> object | None:
     if isinstance(value, Param):
         return value.default
@@ -271,7 +277,7 @@ def _publish_revalidation_report(row) -> dict:
 async def list_drafts(
     status: Optional[str] = Query(None, description="Filter by status"),
     limit: int = Query(50, ge=1, le=200),
-    _user: AuthUser = Depends(require_auth),
+    _user: AuthUser = Depends(require_blog_admin_user),
 ):
     """List blog post drafts, optionally filtered by status."""
     status = _clean_optional_text(status)
@@ -325,7 +331,7 @@ async def list_drafts(
 
 
 @router.get("/drafts/summary")
-async def draft_summary(_user: AuthUser = Depends(require_auth)):
+async def draft_summary(_user: AuthUser = Depends(require_blog_admin_user)):
     """Roll up current blog draft quality and status counts."""
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -425,7 +431,7 @@ async def draft_summary(_user: AuthUser = Depends(require_auth)):
 async def blog_quality_trends(
     days: int = Query(14, ge=1, le=90),
     top_n: int = Query(5, ge=1, le=20),
-    _user: AuthUser = Depends(require_auth),
+    _user: AuthUser = Depends(require_blog_admin_user),
 ):
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -510,7 +516,7 @@ async def blog_quality_trends(
 async def blog_quality_diagnostics(
     days: int = Query(14, ge=1, le=90),
     top_n: int = Query(10, ge=1, le=50),
-    _user: AuthUser = Depends(require_auth),
+    _user: AuthUser = Depends(require_blog_admin_user),
 ):
     from ..autonomous.tasks.b2b_blog_post_generation import _blog_slug_block_reason
 
@@ -716,7 +722,7 @@ async def blog_quality_diagnostics(
 @router.get("/drafts/{draft_id}")
 async def get_draft(
     draft_id: UUID,
-    _user: AuthUser = Depends(require_auth),
+    _user: AuthUser = Depends(require_blog_admin_user),
 ):
     """Get a single blog draft with full content and charts."""
     pool = get_db_pool()
@@ -748,7 +754,7 @@ async def get_draft(
 async def get_draft_evidence(
     draft_id: UUID,
     limit: int = Query(20, ge=1, le=100),
-    _user: AuthUser = Depends(require_auth),
+    _user: AuthUser = Depends(require_blog_admin_user),
 ):
     """Return matching b2b_reviews that back the claims in a blog draft."""
     limit = _clean_int_query(limit, default=20)
@@ -856,7 +862,7 @@ async def get_draft_evidence(
 async def update_draft(
     draft_id: UUID,
     patch: BlogDraftPatch,
-    _user: AuthUser = Depends(require_auth),
+    _user: AuthUser = Depends(require_blog_admin_user),
 ):
     """Edit draft title, content, charts, tags, status, or reviewer notes."""
     pool = get_db_pool()
@@ -912,7 +918,7 @@ async def update_draft(
 @router.post("/drafts/{draft_id}/publish")
 async def publish_draft(
     draft_id: UUID,
-    _user: AuthUser = Depends(require_auth),
+    _user: AuthUser = Depends(require_blog_admin_user),
 ):
     """Publish a draft: set status=published, set published_at, optionally write TS file."""
     pool = get_db_pool()
@@ -1094,7 +1100,7 @@ async def publish_draft(
 @router.post("/generate")
 async def generate_post(
     req: ManualGenerateRequest,
-    _user: AuthUser = Depends(require_auth),
+    _user: AuthUser = Depends(require_blog_admin_user),
 ):
     """Manually trigger blog post generation for a specific vendor + topic type."""
     from ..autonomous.tasks.b2b_blog_post_generation import (
