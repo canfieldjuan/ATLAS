@@ -402,15 +402,21 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
 
     unresolved = section_by_id["top_unresolved_repeats"]["data"]
     assert unresolved["top_item_count"] == 1
+    assert unresolved["result_page_limit"] == 3
+    assert unresolved["pdf_limit"] == 10
     assert unresolved["items"][0]["question"] == "Can I turn on SSO for all users?"
     assert unresolved["items"][0]["estimated_support_cost"] == 40.5
 
     drafted = section_by_id["drafted_resolutions"]["data"]
     assert drafted["top_item_count"] == 1
+    assert drafted["result_page_limit"] == 3
+    assert drafted["pdf_limit"] == 10
     assert drafted["items"][0]["question"] == "How do I export attribution reports?"
 
     recurring = section_by_id["already_covered_still_recurring"]["data"]
     assert recurring["top_item_count"] == 0
+    assert recurring["result_page_limit"] == 3
+    assert recurring["pdf_limit"] == 10
     assert recurring["items"] == []
 
     backlog = section_by_id["backlog_table"]["data"]
@@ -725,33 +731,39 @@ def test_deflection_priority_fix_queue_keeps_pdf_limit_items() -> None:
     assert priority["items"][0]["question"] == "How do I resolve repeat issue 12?"
 
 
-def test_deflection_top_unresolved_repeats_excludes_single_ticket_items() -> None:
+def test_deflection_top_unresolved_repeats_keeps_pdf_limit_items() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",
-        source_count=3,
-        ticket_source_count=3,
+        source_count=13,
+        ticket_source_count=13,
         output_checks={"condensed": True},
         items=(
             {
                 "question": "How do I handle a one-off invoice question?",
                 "customer_wording": "one-off invoice question",
                 "topic": "billing",
-                "weighted_frequency": 1,
+                "weighted_frequency": 99,
                 "ticket_count": 1,
-                "opportunity_score": 9,
+                "opportunity_score": 99,
                 "answer_evidence_status": "draft_needs_review",
                 "source_ids": ("ticket-singleton-1",),
             },
-            {
-                "question": "How do I handle repeated invoice questions?",
-                "customer_wording": "repeated invoice question",
-                "topic": "billing",
-                "weighted_frequency": 2,
-                "ticket_count": 2,
-                "opportunity_score": 8,
-                "answer_evidence_status": "draft_needs_review",
-                "source_ids": ("ticket-repeat-1", "ticket-repeat-2"),
-            },
+            *(
+                {
+                    "question": f"How do I resolve unresolved repeat {index}?",
+                    "customer_wording": f"unresolved repeat {index}",
+                    "topic": "billing",
+                    "weighted_frequency": index,
+                    "ticket_count": index,
+                    "opportunity_score": index,
+                    "answer_evidence_status": "draft_needs_review",
+                    "source_ids": tuple(
+                        f"ticket-unresolved-{index}-{source}"
+                        for source in range(1, index + 1)
+                    ),
+                }
+                for index in range(2, 14)
+            ),
         ),
     )
 
@@ -763,11 +775,102 @@ def test_deflection_top_unresolved_repeats_excludes_single_ticket_items() -> Non
     }
     unresolved = sections["top_unresolved_repeats"]["data"]
 
-    assert unresolved["top_item_count"] == 1
+    assert unresolved["result_page_limit"] == 3
+    assert unresolved["pdf_limit"] == 10
+    assert unresolved["top_item_count"] == 10
+    assert len(unresolved["items"]) == 10
     assert unresolved["items"][0]["question"] == (
-        "How do I handle repeated invoice questions?"
+        "How do I resolve unresolved repeat 13?"
     )
     assert "one-off" not in json.dumps(unresolved, sort_keys=True)
+
+
+def test_deflection_drafted_resolutions_keep_pdf_limit_items() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=12,
+        ticket_source_count=12,
+        output_checks={"condensed": True},
+        items=tuple(
+            {
+                "question": f"How do I publish drafted answer {index}?",
+                "customer_wording": f"drafted answer {index}",
+                "topic": "support",
+                "weighted_frequency": index,
+                "ticket_count": index,
+                "opportunity_score": index,
+                "answer": f"Use the drafted answer for issue {index}.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "source_ids": tuple(
+                    f"ticket-drafted-{index}-{source}"
+                    for source in range(1, index + 1)
+                ),
+            }
+            for index in range(1, 13)
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).as_dict()[
+            "report_model"
+        ]["sections"]
+    }
+    drafted = sections["drafted_resolutions"]["data"]
+
+    assert drafted["result_page_limit"] == 3
+    assert drafted["pdf_limit"] == 10
+    assert drafted["top_item_count"] == 10
+    assert len(drafted["items"]) == 10
+    assert drafted["items"][0]["question"] == "How do I publish drafted answer 12?"
+
+
+def test_deflection_already_covered_still_recurring_keeps_pdf_limit_items() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=12,
+        ticket_source_count=12,
+        output_checks={"condensed": True},
+        items=tuple(
+            {
+                "question": f"How do I find covered answer {index}?",
+                "customer_wording": f"covered answer {index}",
+                "topic": "support",
+                "weighted_frequency": index,
+                "ticket_count": index,
+                "opportunity_score": index,
+                "answer": f"Use the published answer for issue {index}.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "outcome_diagnostics": {
+                    "diagnostic_ticket_count": index,
+                    "outcome_risk_ticket_count": 1,
+                    "reopened_ticket_count": 1,
+                    "negative_csat_ticket_count": 0,
+                },
+                "source_ids": tuple(
+                    f"ticket-covered-{index}-{source}"
+                    for source in range(1, index + 1)
+                ),
+            }
+            for index in range(1, 13)
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).as_dict()[
+            "report_model"
+        ]["sections"]
+    }
+    recurring = sections["already_covered_still_recurring"]["data"]
+
+    assert recurring["result_page_limit"] == 3
+    assert recurring["pdf_limit"] == 10
+    assert recurring["top_item_count"] == 10
+    assert len(recurring["items"]) == 10
+    assert recurring["items"][0]["question"] == "How do I find covered answer 12?"
 
 
 def test_deflection_action_evidence_quotes_match_source_ids() -> None:
@@ -826,6 +929,12 @@ def test_deflection_snapshot_projection_is_allowlist_only() -> None:
     sections["priority_fix_queue"]["data"]["items"][0]["paid_only_note"] = (
         "hidden action detail"
     )
+    sections["top_unresolved_repeats"]["data"]["items"][0]["paid_only_note"] = (
+        "hidden unresolved action detail"
+    )
+    sections["drafted_resolutions"]["data"]["items"][0]["paid_only_note"] = (
+        "hidden drafted action detail"
+    )
     sections["question_details"]["data"]["rows"][1]["answer"] = (
         "LOCKED PAID ANSWER SHOULD NOT PROJECT"
     )
@@ -841,6 +950,8 @@ def test_deflection_snapshot_projection_is_allowlist_only() -> None:
     assert "ticket-export-1" not in encoded
     assert "priority_fix_queue" not in encoded
     assert "hidden action detail" not in encoded
+    assert "hidden unresolved action detail" not in encoded
+    assert "hidden drafted action detail" not in encoded
     assert "LOCKED PAID ANSWER SHOULD NOT PROJECT" not in encoded
     assert "LOCKED PAID STEP SHOULD NOT PROJECT" not in encoded
     assert snapshot["top_questions"][0] == {
@@ -983,7 +1094,13 @@ def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
             36,
             ["web", "pdf"],
             3,
-            ["items", "top_item_count", "support_cost_basis"],
+            [
+                "items",
+                "top_item_count",
+                "result_page_limit",
+                "pdf_limit",
+                "support_cost_basis",
+            ],
             [],
         ),
         (
@@ -991,7 +1108,12 @@ def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
             37,
             ["web", "pdf", "email_summary"],
             3,
-            ["items", "top_item_count"],
+            [
+                "items",
+                "top_item_count",
+                "result_page_limit",
+                "pdf_limit",
+            ],
             [],
         ),
         (
@@ -999,7 +1121,12 @@ def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
             38,
             ["web", "pdf"],
             3,
-            ["items", "top_item_count"],
+            [
+                "items",
+                "top_item_count",
+                "result_page_limit",
+                "pdf_limit",
+            ],
             [],
         ),
         (
@@ -3435,6 +3562,58 @@ def test_stored_deflection_report_model_tolerates_legacy_and_schema_drift() -> N
             },
         ],
     }
+
+
+def test_stored_deflection_report_model_backfills_legacy_action_limits() -> None:
+    artifact = build_deflection_report_artifact(
+        _structured_report_fixture_result()
+    ).as_dict()
+    legacy_artifact = json.loads(json.dumps(artifact))
+    section_by_id = {
+        section["id"]: section
+        for section in legacy_artifact["report_model"]["sections"]
+    }
+    expected_limits = {
+        "priority_fix_queue": {
+            "result_page_limit": 3,
+            "pdf_limit": 10,
+            "backlog_limit": 25,
+        },
+        "top_unresolved_repeats": {
+            "result_page_limit": 3,
+            "pdf_limit": 10,
+        },
+        "drafted_resolutions": {
+            "result_page_limit": 3,
+            "pdf_limit": 10,
+        },
+        "already_covered_still_recurring": {
+            "result_page_limit": 3,
+            "pdf_limit": 10,
+        },
+    }
+    for section_id, limits in expected_limits.items():
+        section = section_by_id[section_id]
+        for key in limits:
+            section["data"].pop(key, None)
+            section["required_data"] = [
+                required for required in section["required_data"]
+                if required != key
+            ]
+
+    payload = stored_deflection_report_model(legacy_artifact)
+    assert payload is not None
+    normalized_sections = {
+        section["id"]: section
+        for section in payload["sections"]
+    }
+    for section_id, limits in expected_limits.items():
+        section = normalized_sections[section_id]
+        for key, expected in limits.items():
+            assert section["data"][key] == expected
+            assert key in section["required_data"]
+            assert key not in section_by_id[section_id]["data"]
+            assert key not in section_by_id[section_id]["required_data"]
 
 
 @pytest.mark.asyncio
