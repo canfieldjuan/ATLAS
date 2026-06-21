@@ -565,6 +565,7 @@ def _stored_report_model_section(value: Any) -> dict[str, Any] | None:
         "surfaces": _text_list(value.get("surfaces")),
         "default_limit": _optional_int(value.get("default_limit")),
         "required_data": required_data,
+        "snapshot_safe_fields": _text_list(value.get("snapshot_safe_fields")),
         "data": data,
     }
 

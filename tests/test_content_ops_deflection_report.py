@@ -290,6 +290,11 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         "support_tax",
         "seo_targets",
         "ranked_questions",
+        "priority_fix_queue",
+        "top_unresolved_repeats",
+        "drafted_resolutions",
+        "already_covered_still_recurring",
+        "backlog_table",
         "outcome_diagnostics",
         "question_details",
         "complete_evidence",
@@ -298,6 +303,11 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         10,
         20,
         30,
+        35,
+        36,
+        37,
+        38,
+        39,
         40,
         50,
         90,
@@ -315,6 +325,15 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         "drafted_answer_count",
         "no_proven_answer_count",
         "ticket_source_count",
+    ]
+    assert support_tax["snapshot_safe_fields"] == [
+        "repeat_ticket_count",
+        "non_repeat_ticket_count",
+        "generated_question_count",
+        "drafted_answer_count",
+        "no_proven_answer_count",
+        "ticket_source_count",
+        "source_date_window",
     ]
     assert support_tax["data"]["repeat_ticket_count"] == 8
     assert support_tax["data"]["annualized_support_cost"] == 2628.0
@@ -346,11 +365,57 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         "rank": 1,
         "question": "How do I export attribution reports?",
         "ticket_count": 5,
+        "weighted_frequency": 8,
+        "customer_wording": "export attribution reports",
         "estimated_support_cost": 67.5,
         "opportunity_score": 21,
         "answer_status": "drafted from resolution evidence",
         "source_proof": "5 source tickets",
     }
+
+    priority_queue = section_by_id["priority_fix_queue"]
+    assert priority_queue["snapshot_safe_fields"] == []
+    assert priority_queue["data"]["support_cost_basis"] == {
+        "status": "benchmark_only",
+        "assisted_contact_cost": 13.5,
+        "formula": "ticket_count * assisted_contact_cost",
+        "source": "default_assisted_contact_benchmark",
+    }
+    assert priority_queue["data"]["status_counts"] == {
+        "Draft ready": 1,
+        "Needs answer": 1,
+    }
+    assert [item["status"] for item in priority_queue["data"]["items"]] == [
+        "Draft ready",
+        "Needs answer",
+    ]
+    assert priority_queue["data"]["items"][0]["fix_type"] == "publish_help_center_answer"
+    assert priority_queue["data"]["items"][0]["owner_lane"] == "exports"
+    assert priority_queue["data"]["items"][0]["estimated_support_cost"] == 67.5
+    assert priority_queue["data"]["items"][0]["csat_signal"] == {
+        "status": "insufficient_data",
+        "csat_present_count": 0,
+        "negative_csat_ticket_count": 0,
+        "numeric_average": None,
+    }
+    assert priority_queue["data"]["items"][1]["fix_type"] == "create_missing_answer"
+
+    unresolved = section_by_id["top_unresolved_repeats"]["data"]
+    assert unresolved["top_item_count"] == 1
+    assert unresolved["items"][0]["question"] == "Can I turn on SSO for all users?"
+    assert unresolved["items"][0]["estimated_support_cost"] == 40.5
+
+    drafted = section_by_id["drafted_resolutions"]["data"]
+    assert drafted["top_item_count"] == 1
+    assert drafted["items"][0]["question"] == "How do I export attribution reports?"
+
+    recurring = section_by_id["already_covered_still_recurring"]["data"]
+    assert recurring["top_item_count"] == 0
+    assert recurring["items"] == []
+
+    backlog = section_by_id["backlog_table"]["data"]
+    assert backlog["total_item_count"] == 2
+    assert backlog["default_limit"] == 25
 
     diagnostics = section_by_id["outcome_diagnostics"]["data"]
     assert diagnostics["outcome_risk_ticket_count"] == 1
@@ -395,110 +460,431 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
     }
 
 
-def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
-    assert deflection_report_model_contract_shape() == {
-        "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
-        "model_fields": [
-            "schema_version",
-            "title",
-            "summary",
-            "sections",
-        ],
-        "section_fields": [
-            "id",
-            "title",
-            "priority",
-            "surfaces",
-            "default_limit",
-            "required_data",
-            "data",
-        ],
-        "sections": [
+def test_deflection_action_sections_classify_recurring_covered_answers() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=4,
+        ticket_source_count=4,
+        output_checks={"condensed": True},
+        items=(
             {
-                "id": "support_tax",
-                "title": "Support Tax Confirmation",
-                "priority": 10,
-                "surfaces": ["web", "pdf", "email_summary", "markdown"],
-                "default_limit": None,
-                "required_data": [
-                    "repeat_ticket_count",
-                    "non_repeat_ticket_count",
-                    "generated_question_count",
-                    "assisted_contact_cost",
-                    "estimated_support_cost",
-                    "source_date_window",
-                    "drafted_answer_count",
-                    "no_proven_answer_count",
-                    "ticket_source_count",
-                ],
+                "question": "How do I fix a stale dashboard?",
+                "customer_wording": "dashboard is stale again",
+                "topic": "analytics",
+                "weighted_frequency": 8,
+                "ticket_count": 4,
+                "opportunity_score": 19,
+                "answer": "Refresh the dashboard cache from Analytics settings.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "source_ids": (
+                    "ticket-dashboard-1",
+                    "ticket-dashboard-2",
+                    "ticket-dashboard-3",
+                    "ticket-dashboard-4",
+                ),
+                "outcome_diagnostics": {
+                    "csat_present_count": 4,
+                    "csat_score_average": 2.0,
+                    "diagnostic_ticket_count": 4,
+                    "negative_csat_ticket_count": 2,
+                    "outcome_risk_ticket_count": 2,
+                    "reopened_ticket_count": 1,
+                    "ticket_status_summary": {"reopened": 1, "resolved": 3},
+                },
             },
-            {
-                "id": "source_file",
-                "title": "Source file",
-                "priority": 15,
-                "surfaces": ["web", "pdf", "markdown"],
-                "default_limit": None,
-                "required_data": ["source_label"],
-            },
-            {
-                "id": "seo_targets",
-                "title": "Your Help-Desk SEO Targeting List",
-                "priority": 20,
-                "surfaces": ["web", "pdf", "markdown"],
-                "default_limit": DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
-                "required_data": [
-                    "phrases",
-                    "total_phrase_count",
-                    "displayed_phrase_count",
-                    "omitted_phrase_count",
-                    "limit",
-                ],
-            },
-            {
-                "id": "ranked_questions",
-                "title": "Ranked Question Opportunities",
-                "priority": 30,
-                "surfaces": ["web", "pdf", "markdown"],
-                "default_limit": None,
-                "required_data": ["rows"],
-            },
-            {
-                "id": "outcome_diagnostics",
-                "title": "Resolution Outcome Diagnostics",
-                "priority": 40,
-                "surfaces": ["web", "pdf", "markdown"],
-                "default_limit": None,
-                "required_data": [
-                    "outcome_diagnostic_ticket_count",
-                    "outcome_risk_ticket_count",
-                    "reopened_ticket_count",
-                    "negative_csat_ticket_count",
-                    "rows",
-                ],
-            },
-            {
-                "id": "question_details",
-                "title": "Question Details and Evidence",
-                "priority": 50,
-                "surfaces": ["web", "pdf", "markdown"],
-                "default_limit": None,
-                "required_data": ["rows"],
-            },
-            {
-                "id": "complete_evidence",
-                "title": "Complete Evidence",
-                "priority": 90,
-                "surfaces": ["export"],
-                "default_limit": None,
-                "required_data": [
-                    "question_count",
-                    "evidence_row_count",
-                    "source_id_count",
-                    "surfaces",
-                ],
-            },
-        ],
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).as_dict()[
+            "report_model"
+        ]["sections"]
     }
+    recurring = sections["already_covered_still_recurring"]["data"]
+    priority = sections["priority_fix_queue"]["data"]
+
+    assert recurring["top_item_count"] == 1
+    assert recurring["items"][0]["status"] == "Already covered but still recurring"
+    assert recurring["items"][0]["fix_type"] == (
+        "improve_discoverability_or_answer_quality"
+    )
+    assert recurring["items"][0]["owner_lane"] == "analytics"
+    assert recurring["items"][0]["csat_signal"] == {
+        "status": "present",
+        "csat_present_count": 4,
+        "negative_csat_ticket_count": 2,
+        "numeric_average": 2.0,
+    }
+    assert priority["status_counts"] == {"Already covered but still recurring": 1}
+
+
+def test_deflection_priority_fix_queue_keeps_pdf_limit_items() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=12,
+        ticket_source_count=12,
+        output_checks={"condensed": True},
+        items=tuple(
+            {
+                "question": f"How do I resolve repeat issue {index}?",
+                "customer_wording": f"repeat issue {index}",
+                "topic": "support",
+                "weighted_frequency": index,
+                "ticket_count": index,
+                "opportunity_score": index,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": tuple(
+                    f"ticket-{index}-{source}" for source in range(1, index + 1)
+                ),
+            }
+            for index in range(1, 13)
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).as_dict()[
+            "report_model"
+        ]["sections"]
+    }
+    priority = sections["priority_fix_queue"]["data"]
+
+    assert priority["result_page_limit"] == 3
+    assert priority["pdf_limit"] == 10
+    assert len(priority["items"]) == 10
+    assert priority["items"][0]["question"] == "How do I resolve repeat issue 12?"
+
+
+def test_deflection_top_unresolved_repeats_excludes_single_ticket_items() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=3,
+        ticket_source_count=3,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I handle a one-off invoice question?",
+                "customer_wording": "one-off invoice question",
+                "topic": "billing",
+                "weighted_frequency": 1,
+                "ticket_count": 1,
+                "opportunity_score": 9,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-singleton-1",),
+            },
+            {
+                "question": "How do I handle repeated invoice questions?",
+                "customer_wording": "repeated invoice question",
+                "topic": "billing",
+                "weighted_frequency": 2,
+                "ticket_count": 2,
+                "opportunity_score": 8,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-repeat-1", "ticket-repeat-2"),
+            },
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).as_dict()[
+            "report_model"
+        ]["sections"]
+    }
+    unresolved = sections["top_unresolved_repeats"]["data"]
+
+    assert unresolved["top_item_count"] == 1
+    assert unresolved["items"][0]["question"] == (
+        "How do I handle repeated invoice questions?"
+    )
+    assert "one-off" not in json.dumps(unresolved, sort_keys=True)
+
+
+def test_deflection_action_evidence_quotes_match_source_ids() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=3,
+        ticket_source_count=3,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I export reports?",
+                "customer_wording": "export reports",
+                "topic": "exports",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 11,
+                "answer": "Open Analytics and export the report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "source_ids": ("ticket-a", "ticket-b", "ticket-c"),
+                "evidence_quotes": (
+                    "`ticket-c` - third ticket quote",
+                    "`ticket-a` - first ticket quote",
+                    "`other-ticket` - unrelated quote",
+                ),
+            },
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).as_dict()[
+            "report_model"
+        ]["sections"]
+    }
+    top_evidence = sections["priority_fix_queue"]["data"]["items"][0]["top_evidence"]
+
+    assert top_evidence == [
+        {"source_id": "ticket-a", "evidence_quote": "`ticket-a` - first ticket quote"},
+        {"source_id": "ticket-b", "evidence_quote": ""},
+        {"source_id": "ticket-c", "evidence_quote": "`ticket-c` - third ticket quote"},
+    ]
+
+
+def test_deflection_snapshot_projection_is_allowlist_only() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    report_model = artifact.report_model.as_dict()
+    sections = {
+        section["id"]: section
+        for section in report_model["sections"]
+    }
+    sections["support_tax"]["data"]["paid_only_metric"] = "must not project"
+    sections["ranked_questions"]["data"]["rows"][0]["source_ids"] = [
+        "ticket-export-1"
+    ]
+    sections["priority_fix_queue"]["data"]["items"][0]["paid_only_note"] = (
+        "hidden action detail"
+    )
+    sections["question_details"]["data"]["rows"][1]["answer"] = (
+        "LOCKED PAID ANSWER SHOULD NOT PROJECT"
+    )
+    sections["question_details"]["data"]["rows"][1]["steps"] = [
+        "LOCKED PAID STEP SHOULD NOT PROJECT"
+    ]
+
+    snapshot = build_deflection_snapshot({"report_model": report_model}, top_n=1).as_dict()
+    encoded = json.dumps(snapshot, sort_keys=True)
+
+    assert "paid_only_metric" not in encoded
+    assert "source_ids" not in encoded
+    assert "ticket-export-1" not in encoded
+    assert "priority_fix_queue" not in encoded
+    assert "hidden action detail" not in encoded
+    assert "LOCKED PAID ANSWER SHOULD NOT PROJECT" not in encoded
+    assert "LOCKED PAID STEP SHOULD NOT PROJECT" not in encoded
+    assert snapshot["top_questions"][0] == {
+        "rank": 1,
+        "question": "How do I export attribution reports?",
+        "ticket_count": 5,
+        "weighted_frequency": 8,
+        "customer_wording": "export attribution reports",
+    }
+
+
+def test_deflection_snapshot_falls_back_when_legacy_model_lacks_row_fields() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    payload = artifact.as_dict()
+    report_model = payload["report_model"]
+    sections = {
+        section["id"]: section
+        for section in report_model["sections"]
+    }
+    for row in sections["ranked_questions"]["data"]["rows"]:
+        row.pop("weighted_frequency", None)
+        row.pop("customer_wording", None)
+    for row in sections["question_details"]["data"]["rows"]:
+        row.pop("source_count", None)
+
+    snapshot = build_deflection_snapshot(payload, top_n=1).as_dict()
+
+    assert snapshot["top_questions"][0] == {
+        "rank": 1,
+        "question": "How do I export attribution reports?",
+        "ticket_count": 5,
+        "weighted_frequency": 8,
+        "customer_wording": "export attribution reports",
+    }
+
+
+def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
+    shape = deflection_report_model_contract_shape()
+
+    assert shape["schema_version"] == DEFLECTION_REPORT_SCHEMA_VERSION
+    assert shape["model_fields"] == [
+        "schema_version",
+        "title",
+        "summary",
+        "sections",
+    ]
+    assert shape["section_fields"] == [
+        "id",
+        "title",
+        "priority",
+        "surfaces",
+        "default_limit",
+        "required_data",
+        "snapshot_safe_fields",
+        "data",
+    ]
+    assert [
+        (
+            section["id"],
+            section["priority"],
+            section["surfaces"],
+            section["default_limit"],
+            section["required_data"],
+            section["snapshot_safe_fields"],
+        )
+        for section in shape["sections"]
+    ] == [
+        (
+            "support_tax",
+            10,
+            ["web", "pdf", "email_summary", "markdown"],
+            None,
+            [
+                "repeat_ticket_count",
+                "non_repeat_ticket_count",
+                "generated_question_count",
+                "assisted_contact_cost",
+                "estimated_support_cost",
+                "source_date_window",
+                "drafted_answer_count",
+                "no_proven_answer_count",
+                "ticket_source_count",
+            ],
+            [
+                "repeat_ticket_count",
+                "non_repeat_ticket_count",
+                "generated_question_count",
+                "drafted_answer_count",
+                "no_proven_answer_count",
+                "ticket_source_count",
+                "source_date_window",
+            ],
+        ),
+        ("source_file", 15, ["web", "pdf", "markdown"], None, ["source_label"], []),
+        (
+            "seo_targets",
+            20,
+            ["web", "pdf", "markdown"],
+            DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
+            [
+                "phrases",
+                "total_phrase_count",
+                "displayed_phrase_count",
+                "omitted_phrase_count",
+                "limit",
+            ],
+            [],
+        ),
+        (
+            "ranked_questions",
+            30,
+            ["web", "pdf", "markdown"],
+            None,
+            ["rows"],
+            [
+                "rows.rank",
+                "rows.question",
+                "rows.ticket_count",
+                "rows.weighted_frequency",
+                "rows.customer_wording",
+            ],
+        ),
+        (
+            "priority_fix_queue",
+            35,
+            ["web", "pdf", "email_summary"],
+            3,
+            [
+                "items",
+                "status_counts",
+                "result_page_limit",
+                "pdf_limit",
+                "backlog_limit",
+                "support_cost_basis",
+            ],
+            [],
+        ),
+        (
+            "top_unresolved_repeats",
+            36,
+            ["web", "pdf"],
+            3,
+            ["items", "top_item_count", "support_cost_basis"],
+            [],
+        ),
+        (
+            "drafted_resolutions",
+            37,
+            ["web", "pdf", "email_summary"],
+            3,
+            ["items", "top_item_count"],
+            [],
+        ),
+        (
+            "already_covered_still_recurring",
+            38,
+            ["web", "pdf"],
+            3,
+            ["items", "top_item_count"],
+            [],
+        ),
+        (
+            "backlog_table",
+            39,
+            ["web", "pdf", "export"],
+            25,
+            ["items", "total_item_count", "default_limit"],
+            [],
+        ),
+        (
+            "outcome_diagnostics",
+            40,
+            ["web", "pdf", "markdown"],
+            None,
+            [
+                "outcome_diagnostic_ticket_count",
+                "outcome_risk_ticket_count",
+                "reopened_ticket_count",
+                "negative_csat_ticket_count",
+                "rows",
+            ],
+            [],
+        ),
+        (
+            "question_details",
+            50,
+            ["web", "pdf", "markdown"],
+            None,
+            ["rows"],
+            [
+                "rows.rank",
+                "rows.question",
+                "rows.answer_evidence_status",
+                "rows.resolution_evidence_scope",
+                "rows.weighted_frequency",
+                "rows.source_count",
+            ],
+        ),
+        (
+            "complete_evidence",
+            90,
+            ["export"],
+            None,
+            [
+                "question_count",
+                "evidence_row_count",
+                "source_id_count",
+                "surfaces",
+            ],
+            [],
+        ),
+    ]
 
 
 def test_deflection_report_section_registry_drives_section_metadata() -> None:
@@ -2672,6 +3058,7 @@ def test_stored_deflection_report_model_tolerates_legacy_and_schema_drift() -> N
                 "surfaces": [],
                 "default_limit": None,
                 "required_data": [],
+                "snapshot_safe_fields": [],
                 "data": {"legacy_count": 3},
             },
             {
@@ -2681,6 +3068,7 @@ def test_stored_deflection_report_model_tolerates_legacy_and_schema_drift() -> N
                 "surfaces": ["web", "pdf"],
                 "default_limit": None,
                 "required_data": ["future_rows"],
+                "snapshot_safe_fields": [],
                 "data": {"future_rows": [{"id": "future-1"}]},
             },
         ],
