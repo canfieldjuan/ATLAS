@@ -753,6 +753,10 @@ DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS: Mapping[str, Mapping[str, int]] = (
         "pdf": MappingProxyType({
             "ranked_questions": 25,
             "question_details": 10,
+            "priority_fix_queue": _ACTION_PDF_LIMIT,
+            "top_unresolved_repeats": _ACTION_PDF_LIMIT,
+            "drafted_resolutions": _ACTION_PDF_LIMIT,
+            "already_covered_still_recurring": _ACTION_PDF_LIMIT,
         }),
     })
 )
@@ -825,6 +829,10 @@ _SCORECARD_COUNT_KEYS = frozenset({
     "seo_omitted_phrase_count",
     "outcome_diagnostic_row_count",
     "question_detail_count",
+    "priority_fix_queue_count",
+    "top_unresolved_repeats_count",
+    "drafted_resolutions_count",
+    "already_covered_still_recurring_count",
 })
 _SCORECARD_SURFACE_KEYS = frozenset({
     "email",
@@ -835,6 +843,17 @@ _SCORECARD_SURFACE_KEYS = frozenset({
     "result_page",
     "web",
 })
+_FULL_REPORT_QA_REQUIRED_MODEL_SECTION_IDS = (
+    "support_tax",
+    "seo_targets",
+    "ranked_questions",
+    "priority_fix_queue",
+    "top_unresolved_repeats",
+    "drafted_resolutions",
+    "already_covered_still_recurring",
+    "question_details",
+    "complete_evidence",
+)
 
 
 class FAQDeflectionReportService:
@@ -982,13 +1001,7 @@ def build_deflection_full_report_qa_scorecard(
         expected=DEFLECTION_REPORT_SCHEMA_VERSION,
         actual=_text(model.get("schema_version")),
     )
-    for section_id in (
-        "support_tax",
-        "seo_targets",
-        "ranked_questions",
-        "question_details",
-        "complete_evidence",
-    ):
+    for section_id in _FULL_REPORT_QA_REQUIRED_MODEL_SECTION_IDS:
         add(
             f"model.section.{section_id}.present",
             section_id in sections,
@@ -1078,6 +1091,7 @@ def build_deflection_full_report_qa_deterministic_harness(
                 surface_id=surface_id,
                 observation=observation,
                 surface_caps=caps,
+                counts=counts,
             )
 
     result = dict(scorecard)
@@ -1111,6 +1125,7 @@ def _add_full_report_qa_required_metric_assertions(
     surface_id: str,
     observation: Mapping[str, Any],
     surface_caps: Mapping[str, Mapping[str, int]],
+    counts: Mapping[str, Any],
 ) -> None:
     observed_counts = (
         observation.get("counts")
@@ -1146,6 +1161,8 @@ def _add_full_report_qa_required_metric_assertions(
             allowed=frozenset(DEFLECTION_REPORT_SECTION_REGISTRY),
             fallback=f"section_{section_index}",
         )
+        if _scorecard_section_total(str(section_id), counts) == 0:
+            continue
         assertions.append({
             "id": (
                 f"harness.surface.{surface_id}.displayed_rows."
@@ -1214,6 +1231,13 @@ def _scorecard_rows_count(data: Mapping[str, Any]) -> int:
     return len([row for row in rows if isinstance(row, Mapping)])
 
 
+def _scorecard_items_count(data: Mapping[str, Any]) -> int:
+    items = data.get("items")
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
+        return 0
+    return len([item for item in items if isinstance(item, Mapping)])
+
+
 def _scorecard_float(value: Any) -> float:
     try:
         return float(value)
@@ -1228,6 +1252,13 @@ def _scorecard_counts(sections: Mapping[str, Mapping[str, Any]]) -> dict[str, An
     diagnostics = _scorecard_section_data(sections, "outcome_diagnostics")
     question_details = _scorecard_section_data(sections, "question_details")
     complete_evidence = _scorecard_section_data(sections, "complete_evidence")
+    priority_fix_queue = _scorecard_section_data(sections, "priority_fix_queue")
+    unresolved_repeats = _scorecard_section_data(sections, "top_unresolved_repeats")
+    drafted_resolutions = _scorecard_section_data(sections, "drafted_resolutions")
+    already_covered_recurring = _scorecard_section_data(
+        sections,
+        "already_covered_still_recurring",
+    )
     return {
         "repeat_ticket_count": _int(support_tax.get("repeat_ticket_count")),
         "generated_question_count": _int(
@@ -1250,6 +1281,12 @@ def _scorecard_counts(sections: Mapping[str, Mapping[str, Any]]) -> dict[str, An
         "seo_omitted_phrase_count": _int(seo_targets.get("omitted_phrase_count")),
         "outcome_diagnostic_row_count": _scorecard_rows_count(diagnostics),
         "question_detail_count": _scorecard_rows_count(question_details),
+        "priority_fix_queue_count": _scorecard_items_count(priority_fix_queue),
+        "top_unresolved_repeats_count": _scorecard_items_count(unresolved_repeats),
+        "drafted_resolutions_count": _scorecard_items_count(drafted_resolutions),
+        "already_covered_still_recurring_count": _scorecard_items_count(
+            already_covered_recurring,
+        ),
     }
 
 
@@ -1333,6 +1370,12 @@ def _scorecard_section_total(section_id: str, counts: Mapping[str, Any]) -> int:
         "outcome_diagnostics": _int(counts.get("outcome_diagnostic_row_count")),
         "question_details": _int(counts.get("question_detail_count")),
         "complete_evidence": _int(counts.get("evidence_row_count")),
+        "priority_fix_queue": _int(counts.get("priority_fix_queue_count")),
+        "top_unresolved_repeats": _int(counts.get("top_unresolved_repeats_count")),
+        "drafted_resolutions": _int(counts.get("drafted_resolutions_count")),
+        "already_covered_still_recurring": _int(
+            counts.get("already_covered_still_recurring_count")
+        ),
     }.get(section_id, 0)
 
 

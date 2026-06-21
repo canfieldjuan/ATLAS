@@ -19,6 +19,32 @@ SPEC.loader.exec_module(checker)
 
 
 def _report_model() -> dict[str, object]:
+    action_sections = [
+        (
+            "priority_fix_queue",
+            "Priority Fix Queue",
+            "How do I export attribution reports?",
+            "Publish the drafted export answer.",
+        ),
+        (
+            "top_unresolved_repeats",
+            "Top Unresolved Repeats",
+            "How do I invite teammates?",
+            "Write and approve the missing teammate answer.",
+        ),
+        (
+            "drafted_resolutions",
+            "Drafted Resolutions Ready to Publish",
+            "How do I export attribution reports?",
+            "Publish or adapt the drafted resolution.",
+        ),
+        (
+            "already_covered_still_recurring",
+            "Already Covered but Still Recurring",
+            "How do I invite teammates?",
+            "Improve discoverability for the teammate answer.",
+        ),
+    ]
     return {
         "schema_version": "deflection.v1",
         "title": "Support Ticket Deflection Report",
@@ -83,6 +109,65 @@ def _report_model() -> dict[str, object]:
                     "surfaces": ["export"],
                 },
             },
+            *[
+                {
+                    "id": section_id,
+                    "title": title,
+                    "data": {
+                        "result_page_limit": 3,
+                        "pdf_limit": 10,
+                        **(
+                            {
+                                "backlog_limit": 25,
+                                "status_counts": {"Needs answer": 1},
+                                "support_cost_basis": {
+                                    "status": "benchmark_only",
+                                    "source": "default_assisted_contact_benchmark",
+                                    "formula": "ticket_count * assisted_contact_cost",
+                                    "assisted_contact_cost": 13.5,
+                                },
+                            }
+                            if section_id == "priority_fix_queue"
+                            else {}
+                        ),
+                        **(
+                            {
+                                "top_item_count": 1,
+                                "support_cost_basis": {
+                                    "status": "benchmark_only",
+                                    "source": "default_assisted_contact_benchmark",
+                                    "formula": "ticket_count * assisted_contact_cost",
+                                    "assisted_contact_cost": 13.5,
+                                },
+                            }
+                            if section_id == "top_unresolved_repeats"
+                            else {}
+                        ),
+                        **(
+                            {"top_item_count": 1}
+                            if section_id
+                            in {
+                                "drafted_resolutions",
+                                "already_covered_still_recurring",
+                            }
+                            else {}
+                        ),
+                        "items": [
+                            {
+                                "rank": 1,
+                                "question": question,
+                                "status": "Needs answer",
+                                "ticket_count": 2,
+                                "estimated_support_cost": 27,
+                                "priority_score": 80,
+                                "owner_lane": "Support docs",
+                                "recommended_action": action,
+                            }
+                        ],
+                    },
+                }
+                for section_id, title, question, action in action_sections
+            ],
         ],
     }
 
@@ -128,6 +213,18 @@ def _pdf_text() -> str:
     Ranked Question Opportunities
     2 ranked questions appear in the curated PDF.
     How do I export attribution reports?
+    How do I invite teammates?
+
+    Priority Fix Queue
+    How do I export attribution reports?
+
+    Top Unresolved Repeats
+    How do I invite teammates?
+
+    Drafted Resolutions Ready to Publish
+    How do I export attribution reports?
+
+    Already Covered but Still Recurring
     How do I invite teammates?
 
     Question Details and Evidence
@@ -406,6 +503,41 @@ def test_pdf_export_validator_keeps_pdf_row_cap_observations_enabled() -> None:
     assert "surface.pdf.displayed_rows.question_details" in failed
 
 
+def test_pdf_export_validator_does_not_count_action_rows_as_ranked_rows() -> None:
+    pdf_text = _pdf_text().replace(
+        "How do I invite teammates?\n\n    Priority Fix Queue",
+        "Priority Fix Queue",
+    )
+
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=_report_model(),
+        evidence_export=_evidence_export(),
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=pdf_text,
+    )
+
+    assert scorecard["ok"] is False
+    failed = _failed_ids(scorecard)
+    assert "surface.pdf.displayed_rows.ranked_questions" in failed
+    assert "surface.pdf.displayed_rows.top_unresolved_repeats" not in failed
+
+
+def test_pdf_export_validator_keeps_action_section_row_cap_observations_enabled() -> None:
+    scorecard = checker.build_pdf_export_scorecard(
+        report_model=_report_model(),
+        evidence_export=_evidence_export(),
+        pdf_bytes=_pdf_bytes(),
+        pdf_text=_pdf_text().replace(
+            "Top Unresolved Repeats\n    How do I invite teammates?",
+            "Top Unresolved Repeats",
+        ),
+    )
+
+    assert scorecard["ok"] is False
+    failed = _failed_ids(scorecard)
+    assert "surface.pdf.displayed_rows.top_unresolved_repeats" in failed
+
+
 def test_pdf_export_validator_does_not_treat_body_copy_as_section_end() -> None:
     text = """
     Support Ticket Deflection Report
@@ -420,6 +552,18 @@ def test_pdf_export_validator_does_not_treat_body_copy_as_section_end() -> None:
     Ranked Question Opportunities
     1 | How do I export attribution reports? | 0 | $0 | 0
     2 | How do I invite teammates? | 0 | $0 | 0
+
+    Priority Fix Queue
+    How do I export attribution reports?
+
+    Top Unresolved Repeats
+    How do I invite teammates?
+
+    Drafted Resolutions Ready to Publish
+    How do I export attribution reports?
+
+    Already Covered but Still Recurring
+    How do I invite teammates?
 
     Question Details and Evidence
     How do I export attribution reports?

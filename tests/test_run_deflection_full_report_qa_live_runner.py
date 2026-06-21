@@ -93,6 +93,49 @@ def _report_model() -> dict[str, object]:
                 },
             },
             {
+                "id": "priority_fix_queue",
+                "priority": 35,
+                "data": {
+                    "items": [],
+                    "status_counts": {},
+                    "result_page_limit": 3,
+                    "pdf_limit": 10,
+                    "backlog_limit": 25,
+                    "support_cost_basis": "assisted_contact_cost",
+                },
+            },
+            {
+                "id": "top_unresolved_repeats",
+                "priority": 36,
+                "data": {
+                    "items": [],
+                    "top_item_count": 0,
+                    "result_page_limit": 3,
+                    "pdf_limit": 10,
+                    "support_cost_basis": "assisted_contact_cost",
+                },
+            },
+            {
+                "id": "drafted_resolutions",
+                "priority": 37,
+                "data": {
+                    "items": [],
+                    "top_item_count": 0,
+                    "result_page_limit": 3,
+                    "pdf_limit": 10,
+                },
+            },
+            {
+                "id": "already_covered_still_recurring",
+                "priority": 38,
+                "data": {
+                    "items": [],
+                    "top_item_count": 0,
+                    "result_page_limit": 3,
+                    "pdf_limit": 10,
+                },
+            },
+            {
                 "id": "question_details",
                 "priority": 50,
                 "data": {
