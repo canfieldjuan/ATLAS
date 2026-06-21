@@ -146,7 +146,7 @@ def score_corpus(corpus: Mapping[str, Any]) -> dict[str, Any]:
     )
     surface_summary = _surface_summary(label_scores)
     person_name_summary = _person_name_summary(label_scores)
-    headline_leak_count = _headline_free_high_severity_leak_count(label_scores)
+    headline_summary = _headline_summary(label_scores)
 
     return {
         "schema_version": SCORE_SCHEMA_VERSION,
@@ -158,10 +158,7 @@ def score_corpus(corpus: Mapping[str, Any]) -> dict[str, Any]:
             "label_count": len(labels),
             "must_survive_count": len(must_survive),
         },
-        "headline": {
-            "free_high_severity_leak_count": headline_leak_count,
-            "free_high_severity_pass": headline_leak_count == 0,
-        },
+        "headline": headline_summary,
         "surfaces": surface_summary,
         "person_name": person_name_summary,
         "must_survive": must_survive_result,
@@ -540,18 +537,46 @@ def _person_name_summary(scores: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _headline_free_high_severity_leak_count(scores: Sequence[Mapping[str, Any]]) -> int:
-    leaked_ids = {
-        _clean(score.get("surrogate_id"))
+def _headline_summary(scores: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    leaked_ids = _free_high_severity_leaked_ids(scores)
+    deferred_open_set_name_ids = {
+        _score_surrogate_id(score)
+        for score in scores
+        if _score_surrogate_id(score) in leaked_ids
+        and _clean(score.get("class")) == "person_name"
+        and _clean(score.get("name_subtype")) == "cue_less"
+    }
+    gate_eligible_ids = leaked_ids - deferred_open_set_name_ids
+    return {
+        "free_high_severity_leak_count": len(leaked_ids),
+        "free_high_severity_pass": len(leaked_ids) == 0,
+        "free_high_severity_gate_eligible_leak_count": len(gate_eligible_ids),
+        "free_high_severity_gate_eligible_pass": len(gate_eligible_ids) == 0,
+        "deferred_open_set_name_leak_count": len(deferred_open_set_name_ids),
+    }
+
+
+def _free_high_severity_leaked_ids(scores: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {
+        leaked_id
         for score in scores
         if score.get("leaked") is True
         and _clean(score.get("surface")) in FREE_SURFACES
-        and (
-            _clean(score.get("severity")) == "high"
-            or _clean(score.get("class")) in HIGH_SEVERITY_CLASSES
-        )
+        and _score_is_high_severity(score)
+        for leaked_id in (_score_surrogate_id(score),)
+        if leaked_id
     }
-    return len({value for value in leaked_ids if value})
+
+
+def _score_is_high_severity(score: Mapping[str, Any]) -> bool:
+    return (
+        _clean(score.get("severity")) == "high"
+        or _clean(score.get("class")) in HIGH_SEVERITY_CLASSES
+    )
+
+
+def _score_surrogate_id(score: Mapping[str, Any]) -> str:
+    return _clean(score.get("surrogate_id"))
 
 
 def _class_summary(counts: Mapping[str, int]) -> dict[str, Any]:
