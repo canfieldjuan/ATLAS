@@ -592,6 +592,8 @@ _DEFLECTION_REPORT_SECTION_DEFINITIONS = (
         required_data=(
             "items",
             "top_item_count",
+            "result_page_limit",
+            "pdf_limit",
             "support_cost_basis",
         ),
     ),
@@ -604,6 +606,8 @@ _DEFLECTION_REPORT_SECTION_DEFINITIONS = (
         required_data=(
             "items",
             "top_item_count",
+            "result_page_limit",
+            "pdf_limit",
         ),
     ),
     DeflectionReportSectionDefinition(
@@ -615,6 +619,8 @@ _DEFLECTION_REPORT_SECTION_DEFINITIONS = (
         required_data=(
             "items",
             "top_item_count",
+            "result_page_limit",
+            "pdf_limit",
         ),
     ),
     DeflectionReportSectionDefinition(
@@ -2075,39 +2081,51 @@ def _priority_fix_queue_data(items: Sequence[Mapping[str, Any]]) -> dict[str, An
 
 def _top_unresolved_repeats_data(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     unresolved = [
-        item for item in _action_items(items)
+        item
+        for item in _action_items(items)
         if item["status"] in {"Needs answer", "Needs review"}
         and _int(item.get("ticket_count")) >= 2
     ]
-    top_items = unresolved[:_ACTION_RESULT_PAGE_LIMIT]
+    model_limit = max(_ACTION_RESULT_PAGE_LIMIT, _ACTION_PDF_LIMIT)
+    top_items = unresolved[:model_limit]
     return {
         "items": top_items,
         "top_item_count": len(top_items),
+        "result_page_limit": _ACTION_RESULT_PAGE_LIMIT,
+        "pdf_limit": _ACTION_PDF_LIMIT,
         "support_cost_basis": _action_support_cost_basis(),
     }
 
 
 def _drafted_resolutions_data(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    model_limit = max(_ACTION_RESULT_PAGE_LIMIT, _ACTION_PDF_LIMIT)
     drafted = [
-        item for item in _action_items(items)
+        item
+        for item in _action_items(items)
         if item["status"] == "Draft ready"
-    ][:_ACTION_RESULT_PAGE_LIMIT]
+    ][:model_limit]
     return {
         "items": drafted,
         "top_item_count": len(drafted),
+        "result_page_limit": _ACTION_RESULT_PAGE_LIMIT,
+        "pdf_limit": _ACTION_PDF_LIMIT,
     }
 
 
 def _already_covered_still_recurring_data(
     items: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    model_limit = max(_ACTION_RESULT_PAGE_LIMIT, _ACTION_PDF_LIMIT)
     recurring = [
-        item for item in _action_items(items)
+        item
+        for item in _action_items(items)
         if item["status"] == "Already covered but still recurring"
-    ][:_ACTION_RESULT_PAGE_LIMIT]
+    ][:model_limit]
     return {
         "items": recurring,
         "top_item_count": len(recurring),
+        "result_page_limit": _ACTION_RESULT_PAGE_LIMIT,
+        "pdf_limit": _ACTION_PDF_LIMIT,
     }
 
 

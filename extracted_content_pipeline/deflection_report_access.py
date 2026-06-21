@@ -496,6 +496,27 @@ class PostgresDeflectionReportArtifactStore:
         return parse_command_tag(result)
 
 
+_STORED_ACTION_SECTION_LIMIT_DEFAULTS = {
+    "priority_fix_queue": {
+        "result_page_limit": 3,
+        "pdf_limit": 10,
+        "backlog_limit": 25,
+    },
+    "top_unresolved_repeats": {
+        "result_page_limit": 3,
+        "pdf_limit": 10,
+    },
+    "drafted_resolutions": {
+        "result_page_limit": 3,
+        "pdf_limit": 10,
+    },
+    "already_covered_still_recurring": {
+        "result_page_limit": 3,
+        "pdf_limit": 10,
+    },
+}
+
+
 def _record_from_row(row: Mapping[str, Any]) -> DeflectionReportAccessRecord:
     snapshot = decode_jsonb_field(row.get("snapshot"), default={})
     artifact = decode_jsonb_field(row.get("artifact"), default={})
@@ -556,6 +577,11 @@ def _stored_report_model_section(value: Any) -> dict[str, Any] | None:
     raw_data = value.get("data")
     data = dict(raw_data) if isinstance(raw_data, Mapping) else {}
     required_data = _text_list(value.get("required_data"))
+    required_data, data = _normalize_stored_action_section_limits(
+        section_id,
+        required_data,
+        data,
+    )
     if any(key not in data for key in required_data):
         return None
     return {
@@ -568,6 +594,27 @@ def _stored_report_model_section(value: Any) -> dict[str, Any] | None:
         "snapshot_safe_fields": _text_list(value.get("snapshot_safe_fields")),
         "data": data,
     }
+
+
+def _normalize_stored_action_section_limits(
+    section_id: str,
+    required_data: list[str],
+    data: dict[str, Any],
+) -> tuple[list[str], dict[str, Any]]:
+    limit_defaults = _STORED_ACTION_SECTION_LIMIT_DEFAULTS.get(section_id)
+    if limit_defaults is None:
+        return required_data, data
+
+    normalized_data = dict(data)
+    for key, default in limit_defaults.items():
+        if _optional_int(normalized_data.get(key)) is None:
+            normalized_data[key] = default
+
+    normalized_required = list(required_data)
+    for key in limit_defaults:
+        if key not in normalized_required:
+            normalized_required.append(key)
+    return normalized_required, normalized_data
 
 
 def _list_record_from_row(row: Mapping[str, Any]) -> DeflectionReportListRecord:

@@ -621,6 +621,8 @@
               ]
             }
           ],
+          "pdf_limit": 10,
+          "result_page_limit": 3,
           "support_cost_basis": {
             "assisted_contact_cost": 13.5,
             "formula": "ticket_count * assisted_contact_cost",
@@ -635,6 +637,8 @@
         "required_data": [
           "items",
           "top_item_count",
+          "result_page_limit",
+          "pdf_limit",
           "support_cost_basis"
         ],
         "snapshot_safe_fields": [],
@@ -689,6 +693,8 @@
               ]
             }
           ],
+          "pdf_limit": 10,
+          "result_page_limit": 3,
           "top_item_count": 1
         },
         "default_limit": 3,
@@ -696,7 +702,9 @@
         "priority": 37,
         "required_data": [
           "items",
-          "top_item_count"
+          "top_item_count",
+          "result_page_limit",
+          "pdf_limit"
         ],
         "snapshot_safe_fields": [],
         "surfaces": [
@@ -709,6 +717,8 @@
       {
         "data": {
           "items": [],
+          "pdf_limit": 10,
+          "result_page_limit": 3,
           "top_item_count": 0
         },
         "default_limit": 3,
@@ -716,7 +726,9 @@
         "priority": 38,
         "required_data": [
           "items",
-          "top_item_count"
+          "top_item_count",
+          "result_page_limit",
+          "pdf_limit"
         ],
         "snapshot_safe_fields": [],
         "surfaces": [
