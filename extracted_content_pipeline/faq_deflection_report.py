@@ -93,8 +93,9 @@ _DEFLECTION_REDACTION_ARTIFACT_RE = re.compile(
 _DEFLECTION_PERSON_NAME_RE = re.compile(
     rf"{_DEFLECTION_BOUNDARY_LEFT}"
     r"(?P<prefix>"
-    r"(?i:(?:customer|requester|contact|client|user|agent|member|person|name)"
-    r"(?:\s+name)?\s*(?:is|:|=|-)\s*)"
+    r"(?i:(?:customer|requester|contact|client|user|agent|member|person)"
+    r"(?:\s+name)?(?:\s*(?:is|:|=|-)\s*|\s+)"
+    r"|name\s*(?:is|:|=|-)\s*)"
     r")"
     r"(?P<name>"
     r"[A-Za-z][A-Za-z'-]+"
@@ -119,9 +120,13 @@ _DEFLECTION_PERSON_NAME_REJECT_TOKENS = frozenset(
         "export",
         "faq",
         "help",
+        "id",
+        "identifier",
         "invoice",
+        "is",
         "member",
         "name",
+        "number",
         "password",
         "person",
         "portal",
@@ -135,6 +140,27 @@ _DEFLECTION_PERSON_NAME_REJECT_TOKENS = frozenset(
         "ticket",
         "token",
         "user",
+        "was",
+        "were",
+        "will",
+    }
+)
+_DEFLECTION_ROLE_PHRASE_TOKENS = frozenset(
+    {
+        "annual",
+        "benefit",
+        "benefits",
+        "cycle",
+        "experience",
+        "feature",
+        "manager",
+        "plan",
+        "premium",
+        "program",
+        "research",
+        "subscription",
+        "success",
+        "team",
     }
 )
 _DEFLECTION_STREET_ADDRESS_RE = re.compile(
@@ -184,6 +210,20 @@ _DEFLECTION_CONTEXTUAL_OPAQUE_IDENTIFIER_RE = re.compile(
     rf"{_DEFLECTION_BOUNDARY_RIGHT}",
     re.IGNORECASE,
 )
+_DEFLECTION_STANDARD_PREFIXED_CONTEXTUAL_IDENTIFIER_RE = re.compile(
+    rf"{_DEFLECTION_BOUNDARY_LEFT}"
+    r"(?P<prefix>"
+    r"(?i:(?:account|case|claim|contact|customer|member|order|profile|ref|"
+    r"reference|session|token|user)(?:\s+(?:code|id|identifier|token))?"
+    r"|(?:code|id|identifier|token))"
+    r"\s*(?:is|:|=|-)?\s*)"
+    r"(?P<identifier>"
+    r"(?:ISO|HIPAA)[-_ ]+"
+    r"(?:[A-Z0-9]{3,}(?:[-_][A-Z0-9]{3,})+|[A-Z0-9]{6,}|\d{4,})"
+    r")"
+    rf"{_DEFLECTION_BOUNDARY_RIGHT}",
+    re.IGNORECASE,
+)
 _DEFLECTION_OPAQUE_IDENTIFIER_RE = re.compile(
     rf"{_DEFLECTION_BOUNDARY_LEFT}"
     r"(?:[A-Z0-9]{8,}|[A-Z0-9]{3,}(?:[-_][A-Z0-9]{3,})+)"
@@ -216,6 +256,10 @@ _DEFLECTION_TECHNICAL_IDENTIFIER_RE = re.compile(
     r"|HIPAA[-_ ]?\d{2,4}"
     r"|SKU[-_ ]?\d{4,}"
     r")",
+    re.IGNORECASE,
+)
+_DEFLECTION_STANDARD_NUMBER_LABEL_RE = re.compile(
+    r"\s*\d{3,5}(?:\s+(?:certification|certifications|reference|references|standard|standards))?\s*",
     re.IGNORECASE,
 )
 _DEFLECTION_IDENTIFIER_KEYS = frozenset(
@@ -3436,6 +3480,10 @@ def _scrub_deflection_text(value: str) -> str:
     text = _DEFLECTION_PHONE_RE.sub("[redacted-phone]", text)
     text = _DEFLECTION_STREET_ADDRESS_RE.sub(_redact_deflection_street_address, text)
     text = _DEFLECTION_PERSON_NAME_RE.sub(_redact_deflection_person_name, text)
+    text = _DEFLECTION_STANDARD_PREFIXED_CONTEXTUAL_IDENTIFIER_RE.sub(
+        _redact_deflection_standard_prefixed_contextual_identifier,
+        text,
+    )
     text = _DEFLECTION_CONTEXTUAL_OPAQUE_IDENTIFIER_RE.sub(
         _redact_deflection_contextual_opaque_identifier,
         text,
@@ -3444,7 +3492,7 @@ def _scrub_deflection_text(value: str) -> str:
         _redact_deflection_opaque_identifier,
         text,
     )
-    return _DEFLECTION_IDENTIFIER_RE.sub("[redacted-identifier]", text)
+    return _DEFLECTION_IDENTIFIER_RE.sub(_redact_deflection_labeled_identifier, text)
 
 
 def _redact_deflection_street_address(match: re.Match[str]) -> str:
@@ -3482,9 +3530,16 @@ def _deflection_person_name_match_decision(
     match: re.Match[str],
 ) -> _DeflectionPersonNameDecision:
     candidate = match.group("name")
+    shortened = _shortest_deflection_person_name_candidate(candidate)
+    if _is_plain_role_deflection_person_name_cue(match.group("prefix")):
+        if shortened is not None:
+            _, trailing = shortened
+            return _DeflectionPersonNameDecision(redact=True, trailing_text=trailing)
+        if _looks_like_plain_role_deflection_person_name(candidate):
+            return _DeflectionPersonNameDecision(redact=True)
+        return _DeflectionPersonNameDecision(redact=False)
     if _looks_like_deflection_person_name(candidate):
         return _DeflectionPersonNameDecision(redact=True)
-    shortened = _shortest_deflection_person_name_candidate(candidate)
     if shortened is not None:
         _, trailing = shortened
         return _DeflectionPersonNameDecision(redact=True, trailing_text=trailing)
@@ -3495,6 +3550,36 @@ def _deflection_person_name_match_decision(
 
 def _deflection_person_name_match_is_pii(match: re.Match[str]) -> bool:
     return _deflection_person_name_match_decision(match).redact
+
+
+def _is_plain_role_deflection_person_name_cue(prefix: str) -> bool:
+    normalized = " ".join(prefix.strip().casefold().split())
+    return normalized in {
+        "agent",
+        "client",
+        "contact",
+        "customer",
+        "member",
+        "person",
+        "requester",
+        "user",
+    }
+
+
+def _looks_like_plain_role_deflection_person_name(value: str) -> bool:
+    tokens = [
+        token.strip(" .'-")
+        for token in value.split()
+        if token.strip(" .'-")
+    ]
+    if len(tokens) < 2 or len(tokens) > 3:
+        return False
+    lowered = [token.casefold() for token in tokens]
+    if any(token in _DEFLECTION_PERSON_NAME_REJECT_TOKENS for token in lowered):
+        return False
+    if _looks_like_deflection_role_phrase(tokens):
+        return False
+    return all(token[0].isupper() and len(token) >= 2 for token in tokens)
 
 
 def _looks_like_deflection_cued_person_name(value: str, prefix: str) -> bool:
@@ -3524,11 +3609,27 @@ def _shortest_deflection_person_name_candidate(value: str) -> tuple[str, str] | 
     first_two = " ".join(parts[:2])
     trailing = parts[2]
     if (
-        trailing.strip(" .'-").casefold() not in _DEFLECTION_PERSON_NAME_REJECT_TOKENS
-        or not _looks_like_deflection_person_name(first_two)
+        not _looks_like_deflection_person_name(first_two)
+        or _looks_like_deflection_role_phrase(parts[:2])
     ):
         return None
     return first_two, f" {trailing}"
+
+
+def _looks_like_deflection_role_phrase(tokens: Sequence[str]) -> bool:
+    return any(
+        token.strip(" .'-").casefold() in _DEFLECTION_ROLE_PHRASE_TOKENS
+        for token in tokens
+    )
+
+
+def _redact_deflection_standard_prefixed_contextual_identifier(
+    match: re.Match[str],
+) -> str:
+    identifier = match.group("identifier")
+    if _looks_like_deflection_technical_identifier(identifier):
+        return match.group(0)
+    return f"{match.group('prefix')}[redacted-identifier]"
 
 
 def _redact_deflection_contextual_opaque_identifier(match: re.Match[str]) -> str:
@@ -3536,6 +3637,19 @@ def _redact_deflection_contextual_opaque_identifier(match: re.Match[str]) -> str
     if not _looks_like_deflection_opaque_identifier(token, require_prefix=False):
         return match.group(0)
     return f"{match.group('prefix')}[redacted-identifier]"
+
+
+def _redact_deflection_labeled_identifier(match: re.Match[str]) -> str:
+    if _identifier_match_has_technical_standard_prefix(match):
+        return match.group(0)
+    return "[redacted-identifier]"
+
+
+def _identifier_match_has_technical_standard_prefix(match: re.Match[str]) -> bool:
+    prefix = match.string[max(0, match.start() - 16) : match.start()]
+    if not re.search(r"(?:ISO|HIPAA)[-_ ]?$", prefix, re.IGNORECASE):
+        return False
+    return bool(_DEFLECTION_STANDARD_NUMBER_LABEL_RE.fullmatch(match.group(0)))
 
 
 def _looks_like_deflection_person_name(value: str) -> bool:
@@ -3599,6 +3713,13 @@ def _has_deflection_source_link_pii(value: str) -> bool:
     if any(
         _deflection_person_name_match_is_pii(match)
         for match in _DEFLECTION_PERSON_NAME_RE.finditer(value)
+    ):
+        return True
+    if any(
+        not _looks_like_deflection_technical_identifier(match.group("identifier"))
+        for match in _DEFLECTION_STANDARD_PREFIXED_CONTEXTUAL_IDENTIFIER_RE.finditer(
+            value
+        )
     ):
         return True
     if any(
