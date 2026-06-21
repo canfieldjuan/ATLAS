@@ -1,6 +1,6 @@
 # Plan archive index
 
-1174 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1175 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -697,6 +697,7 @@
 - [PR-Deflection-Delivery-Reconciliation](archive/PR-Deflection-Delivery-Reconciliation.md) - lane: deflection/go-live | phase: Production hardening
 - [PR-Deflection-Delivery-Row-Claim](archive/PR-Deflection-Delivery-Row-Claim.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
 - [PR-Deflection-Dispute-Restore-Hardening](archive/PR-Deflection-Dispute-Restore-Hardening.md) - lane: go-live-deflection-cleanup | phase: Production hardening
+- [PR-Deflection-Email-Action-Summary](archive/PR-Deflection-Email-Action-Summary.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
 - [PR-Deflection-Embedding-Booster-Core](archive/PR-Deflection-Embedding-Booster-Core.md) - lane: deflection/clustering | phase: Vertical slice
 - [PR-Deflection-Embedding-Host-Adapter](archive/PR-Deflection-Embedding-Host-Adapter.md) - lane: deflection/clustering | phase: Vertical slice
 - [PR-Deflection-Evidence-Export-Download](archive/PR-Deflection-Evidence-Export-Download.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
