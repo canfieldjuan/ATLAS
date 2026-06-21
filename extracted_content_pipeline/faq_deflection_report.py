@@ -50,6 +50,13 @@ _ASSISTED_CONTACT_COST_LABEL = "$13.50"
 _ACTION_RESULT_PAGE_LIMIT = 3
 _ACTION_PDF_LIMIT = 10
 _ACTION_BACKLOG_LIMIT = 25
+_ACTION_STATUS_PRIORITY_WEIGHTS = MappingProxyType({
+    "Needs answer": 50,
+    "Already covered but still recurring": 45,
+    "Needs review": 35,
+    "Draft ready": 25,
+    "Low confidence": 0,
+})
 _SOURCE_EXAMPLE_LIMIT = 3
 _DEFLECTION_BOUNDARY_LEFT = r"(?<![A-Za-z0-9])"
 _DEFLECTION_BOUNDARY_RIGHT = r"(?![A-Za-z0-9])"
@@ -1981,7 +1988,7 @@ def _priority_fix_queue_data(items: Sequence[Mapping[str, Any]]) -> dict[str, An
 def _top_unresolved_repeats_data(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     unresolved = [
         item for item in _action_items(items)
-        if item["status"] in {"Needs answer", "Needs review", "Low confidence"}
+        if item["status"] in {"Needs answer", "Needs review"}
         and _int(item.get("ticket_count")) >= 2
     ]
     top_items = unresolved[:_ACTION_RESULT_PAGE_LIMIT]
@@ -2033,6 +2040,7 @@ def _action_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         rows,
         key=lambda row: (
+            -_int(row["priority_score"]),
             -float(row["estimated_support_cost"]),
             -_int(row["opportunity_score"]),
             _int(row["rank"]),
@@ -2051,6 +2059,8 @@ def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
         "fix_type": _action_fix_type(status),
         "csat_signal": _action_csat_signal(item),
         "confidence": _action_confidence(item),
+        "priority_score": _action_priority_score(item, status),
+        "priority_drivers": _action_priority_drivers(item, status),
         "recommended_title": _action_recommended_title(item),
         "recommended_action": _action_recommended_action(status),
         "representative_phrasing": _action_representative_phrasing(item),
@@ -2064,17 +2074,26 @@ def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _action_status(item: Mapping[str, Any]) -> str:
-    if _ticket_count(item) <= 0 or not _text(item.get("question")):
+    ticket_count = _ticket_count(item)
+    has_question = bool(_text(item.get("question")))
+    if ticket_count <= 0 or not has_question:
         return "Low confidence"
-    if _text(item.get("answer_evidence_status")) != _RESOLUTION_EVIDENCE_STATUS:
+    if ticket_count < 2 or _source_count(item) < 2:
+        return "Low confidence"
+    has_resolution_evidence = (
+        _text(item.get("answer_evidence_status")) == _RESOLUTION_EVIDENCE_STATUS
+    )
+    has_answer = bool(_text(item.get("answer")))
+    if not has_resolution_evidence:
         return "Needs answer"
     diagnostics = _item_outcome_diagnostics(item)
-    if (
+    has_pain_after_answer = (
         _int(diagnostics.get("reopened_ticket_count")) > 0
         or _int(diagnostics.get("negative_csat_ticket_count")) > 0
-    ):
+    )
+    if has_answer and has_pain_after_answer:
         return "Already covered but still recurring"
-    if _text(item.get("answer")):
+    if has_answer:
         return "Draft ready"
     return "Needs review"
 
@@ -2118,11 +2137,64 @@ def _action_csat_signal(item: Mapping[str, Any]) -> dict[str, Any]:
 
 def _action_confidence(item: Mapping[str, Any]) -> str:
     ticket_count = _ticket_count(item)
-    if ticket_count >= 5 and _source_count(item) >= 3:
+    source_count = _source_count(item)
+    if ticket_count < 2 or source_count < 2:
+        return "low"
+    if ticket_count >= 5 and source_count >= 3:
         return "high"
-    if ticket_count >= 2:
-        return "medium"
-    return "low"
+    return "medium"
+
+
+def _action_priority_score(item: Mapping[str, Any], status: str) -> int:
+    diagnostics = _item_outcome_diagnostics(item)
+    ticket_count = _ticket_count(item)
+    score = int(round(_support_cost(ticket_count)))
+    score += _int(item.get("opportunity_score"))
+    score += int(_ACTION_STATUS_PRIORITY_WEIGHTS.get(status, 0))
+    score += _int(diagnostics.get("negative_csat_ticket_count")) * 30
+    score += _int(diagnostics.get("reopened_ticket_count")) * 20
+    if ticket_count >= 5:
+        score += 15
+    elif ticket_count >= 2:
+        score += 5
+    average = diagnostics.get("csat_score_average")
+    present_count = _int(diagnostics.get("csat_present_count"))
+    if present_count >= 3 and average is not None:
+        try:
+            parsed_average = float(average)
+        except (TypeError, ValueError):
+            parsed_average = 0.0
+        if parsed_average < 3.0:
+            score += int(round((3.0 - parsed_average) * 10))
+    if _action_confidence(item) == "low":
+        score -= 25
+    return max(0, score)
+
+
+def _action_priority_drivers(item: Mapping[str, Any], status: str) -> list[str]:
+    diagnostics = _item_outcome_diagnostics(item)
+    drivers: list[str] = []
+    ticket_count = _ticket_count(item)
+    if ticket_count >= 5:
+        drivers.append("high_repeat_volume")
+    elif ticket_count >= 2:
+        drivers.append("repeat_volume")
+    drivers.append({
+        "Draft ready": "draft_ready",
+        "Needs answer": "missing_answer",
+        "Needs review": "review_resolution_evidence",
+        "Low confidence": "low_confidence",
+        "Already covered but still recurring": "already_covered_recurring",
+    }.get(status, "review_before_action"))
+    if _int(diagnostics.get("negative_csat_ticket_count")) > 0:
+        drivers.append("negative_csat")
+    if _int(diagnostics.get("reopened_ticket_count")) > 0:
+        drivers.append("reopened_after_answer")
+    if _action_confidence(item) == "low" and "low_confidence" not in drivers:
+        drivers.append("low_confidence")
+    if _support_cost(ticket_count) > 0:
+        drivers.append("benchmark_cost")
+    return drivers[:5]
 
 
 def _action_recommended_title(item: Mapping[str, Any]) -> str:

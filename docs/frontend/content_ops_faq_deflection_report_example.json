@@ -470,44 +470,15 @@
                 "status": "insufficient_data"
               },
               "estimated_support_cost": 27.0,
-              "fix_type": "publish_help_center_answer",
-              "opportunity_score": 2,
-              "owner_lane": "reporting friction",
-              "question": "How do I export attribution reports?",
-              "rank": 1,
-              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
-              "recommended_title": "How do I export attribution reports?",
-              "representative_phrasing": [
-                "How do I export attribution reports?",
-                "reporting friction"
-              ],
-              "status": "Draft ready",
-              "support_cost_formula": "ticket_count * assisted_contact_cost",
-              "support_cost_source": "default_assisted_contact_benchmark",
-              "ticket_count": 2,
-              "top_evidence": [
-                {
-                  "evidence_quote": "`ticket-export-1` - Export attribution: \"How do I export attribution reports?\"",
-                  "source_id": "ticket-export-1"
-                },
-                {
-                  "evidence_quote": "",
-                  "source_id": "ticket-export-2"
-                }
-              ]
-            },
-            {
-              "confidence": "medium",
-              "csat_signal": {
-                "csat_present_count": 0,
-                "negative_csat_ticket_count": 0,
-                "numeric_average": null,
-                "status": "insufficient_data"
-              },
-              "estimated_support_cost": 27.0,
               "fix_type": "create_missing_answer",
               "opportunity_score": 2,
               "owner_lane": "sso setup",
+              "priority_drivers": [
+                "repeat_volume",
+                "missing_answer",
+                "benchmark_cost"
+              ],
+              "priority_score": 84,
               "question": "How do I enable SSO for my team?",
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
@@ -528,6 +499,47 @@
                 {
                   "evidence_quote": "",
                   "source_id": "ticket-sso-2"
+                }
+              ]
+            },
+            {
+              "confidence": "medium",
+              "csat_signal": {
+                "csat_present_count": 0,
+                "negative_csat_ticket_count": 0,
+                "numeric_average": null,
+                "status": "insufficient_data"
+              },
+              "estimated_support_cost": 27.0,
+              "fix_type": "publish_help_center_answer",
+              "opportunity_score": 2,
+              "owner_lane": "reporting friction",
+              "priority_drivers": [
+                "repeat_volume",
+                "draft_ready",
+                "benchmark_cost"
+              ],
+              "priority_score": 59,
+              "question": "How do I export attribution reports?",
+              "rank": 1,
+              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+              "recommended_title": "How do I export attribution reports?",
+              "representative_phrasing": [
+                "How do I export attribution reports?",
+                "reporting friction"
+              ],
+              "status": "Draft ready",
+              "support_cost_formula": "ticket_count * assisted_contact_cost",
+              "support_cost_source": "default_assisted_contact_benchmark",
+              "ticket_count": 2,
+              "top_evidence": [
+                {
+                  "evidence_quote": "`ticket-export-1` - Export attribution: \"How do I export attribution reports?\"",
+                  "source_id": "ticket-export-1"
+                },
+                {
+                  "evidence_quote": "",
+                  "source_id": "ticket-export-2"
                 }
               ]
             }
@@ -579,6 +591,12 @@
               "fix_type": "create_missing_answer",
               "opportunity_score": 2,
               "owner_lane": "sso setup",
+              "priority_drivers": [
+                "repeat_volume",
+                "missing_answer",
+                "benchmark_cost"
+              ],
+              "priority_score": 84,
               "question": "How do I enable SSO for my team?",
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
@@ -641,6 +659,12 @@
               "fix_type": "publish_help_center_answer",
               "opportunity_score": 2,
               "owner_lane": "reporting friction",
+              "priority_drivers": [
+                "repeat_volume",
+                "draft_ready",
+                "benchmark_cost"
+              ],
+              "priority_score": 59,
               "question": "How do I export attribution reports?",
               "rank": 1,
               "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
@@ -714,44 +738,15 @@
                 "status": "insufficient_data"
               },
               "estimated_support_cost": 27.0,
-              "fix_type": "publish_help_center_answer",
-              "opportunity_score": 2,
-              "owner_lane": "reporting friction",
-              "question": "How do I export attribution reports?",
-              "rank": 1,
-              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
-              "recommended_title": "How do I export attribution reports?",
-              "representative_phrasing": [
-                "How do I export attribution reports?",
-                "reporting friction"
-              ],
-              "status": "Draft ready",
-              "support_cost_formula": "ticket_count * assisted_contact_cost",
-              "support_cost_source": "default_assisted_contact_benchmark",
-              "ticket_count": 2,
-              "top_evidence": [
-                {
-                  "evidence_quote": "`ticket-export-1` - Export attribution: \"How do I export attribution reports?\"",
-                  "source_id": "ticket-export-1"
-                },
-                {
-                  "evidence_quote": "",
-                  "source_id": "ticket-export-2"
-                }
-              ]
-            },
-            {
-              "confidence": "medium",
-              "csat_signal": {
-                "csat_present_count": 0,
-                "negative_csat_ticket_count": 0,
-                "numeric_average": null,
-                "status": "insufficient_data"
-              },
-              "estimated_support_cost": 27.0,
               "fix_type": "create_missing_answer",
               "opportunity_score": 2,
               "owner_lane": "sso setup",
+              "priority_drivers": [
+                "repeat_volume",
+                "missing_answer",
+                "benchmark_cost"
+              ],
+              "priority_score": 84,
               "question": "How do I enable SSO for my team?",
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
@@ -772,6 +767,47 @@
                 {
                   "evidence_quote": "",
                   "source_id": "ticket-sso-2"
+                }
+              ]
+            },
+            {
+              "confidence": "medium",
+              "csat_signal": {
+                "csat_present_count": 0,
+                "negative_csat_ticket_count": 0,
+                "numeric_average": null,
+                "status": "insufficient_data"
+              },
+              "estimated_support_cost": 27.0,
+              "fix_type": "publish_help_center_answer",
+              "opportunity_score": 2,
+              "owner_lane": "reporting friction",
+              "priority_drivers": [
+                "repeat_volume",
+                "draft_ready",
+                "benchmark_cost"
+              ],
+              "priority_score": 59,
+              "question": "How do I export attribution reports?",
+              "rank": 1,
+              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+              "recommended_title": "How do I export attribution reports?",
+              "representative_phrasing": [
+                "How do I export attribution reports?",
+                "reporting friction"
+              ],
+              "status": "Draft ready",
+              "support_cost_formula": "ticket_count * assisted_contact_cost",
+              "support_cost_source": "default_assisted_contact_benchmark",
+              "ticket_count": 2,
+              "top_evidence": [
+                {
+                  "evidence_quote": "`ticket-export-1` - Export attribution: \"How do I export attribution reports?\"",
+                  "source_id": "ticket-export-1"
+                },
+                {
+                  "evidence_quote": "",
+                  "source_id": "ticket-export-2"
                 }
               ]
             }
