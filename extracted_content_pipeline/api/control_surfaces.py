@@ -3547,6 +3547,8 @@ def _deflection_report_artifact_items(
 
 
 def _deflection_report_full_item(item: Mapping[str, Any]) -> dict[str, Any] | None:
+    # Keep this renderable-item shape aligned with atlas-portfolio
+    # `isRenderableItem` and `summarizeRenderableItem`.
     for field in _DEFLECTION_REPORT_SEARCH_TEXT_FIELDS:
         if not isinstance(item.get(field), str):
             return None
