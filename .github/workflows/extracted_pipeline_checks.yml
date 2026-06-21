@@ -330,6 +330,7 @@ jobs:
           mkdir -p artifacts/deflection-pii-recall
           python scripts/score_deflection_pii_recall.py \
             --output artifacts/deflection-pii-recall/deflection-pii-recall-advisory.json \
+            --markdown-output artifacts/deflection-pii-recall/deflection-pii-recall-advisory.md \
             --json
 
       - name: Upload deflection PII recall advisory artifact
@@ -337,5 +338,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deflection-pii-recall-advisory
-          path: artifacts/deflection-pii-recall/deflection-pii-recall-advisory.json
+          path: artifacts/deflection-pii-recall
           if-no-files-found: error

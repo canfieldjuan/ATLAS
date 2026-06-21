@@ -34,6 +34,10 @@ def test_extracted_checks_uploads_deflection_pii_recall_advisory_artifact() -> N
         "--output artifacts/deflection-pii-recall/deflection-pii-recall-advisory.json"
         in workflow
     )
+    assert (
+        "--markdown-output artifacts/deflection-pii-recall/deflection-pii-recall-advisory.md"
+        in workflow
+    )
     assert "if: ${{ !cancelled() }}" in write_step
     assert "Upload deflection PII recall advisory artifact" in workflow
     assert (
@@ -42,10 +46,7 @@ def test_extracted_checks_uploads_deflection_pii_recall_advisory_artifact() -> N
     )
     assert "if: ${{ !cancelled() }}" in upload_step
     assert "name: deflection-pii-recall-advisory" in workflow
-    assert (
-        "path: artifacts/deflection-pii-recall/deflection-pii-recall-advisory.json"
-        in workflow
-    )
+    assert "\n          path: artifacts/deflection-pii-recall\n" in workflow
     assert "if-no-files-found: error" in workflow
 
 
