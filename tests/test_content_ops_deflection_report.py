@@ -4183,6 +4183,45 @@ async def test_in_memory_list_reports_filters_tenant_paid_state_and_orders_newes
 
 
 @pytest.mark.asyncio
+async def test_in_memory_deflection_report_store_deletes_report_and_referencing_deltas() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    for account_id, request_id, question in (
+        ("acct-1", "current", "Delete me"),
+        ("acct-1", "baseline", "Baseline"),
+        ("acct-2", "current", "Keep me"),
+    ):
+        await store.save_report(
+            account_id=account_id,
+            request_id=request_id,
+            snapshot=_report_access_snapshot(question),
+            artifact={},
+        )
+    await store.save_deflection_delta(
+        account_id="acct-1",
+        current_request_id="current",
+        baseline_request_id="baseline",
+        delta={"summary": {"matched_item_count": 1}},
+    )
+
+    assert await store.delete_report(account_id="acct-1", request_id="current") is True
+
+    assert await store.get_artifact_record(
+        account_id="acct-1",
+        request_id="current",
+    ) is None
+    assert await store.get_artifact_record(
+        account_id="acct-2",
+        request_id="current",
+    ) is not None
+    assert await store.get_deflection_delta(
+        account_id="acct-1",
+        current_request_id="current",
+        baseline_request_id="baseline",
+    ) is None
+    assert await store.delete_report(account_id="acct-1", request_id="current") is False
+
+
+@pytest.mark.asyncio
 async def test_postgres_list_reports_uses_account_scope_optional_paid_filter_and_unbounded_limit() -> None:
     class _Pool:
         def __init__(self) -> None:
@@ -4224,6 +4263,33 @@ async def test_postgres_list_reports_uses_account_scope_optional_paid_filter_and
     assert pool.calls[2][1] == ("acct-1",)
     assert "ORDER BY created_at DESC" in pool.calls[2][0]
     assert "LIMIT $" not in pool.calls[2][0]
+
+
+@pytest.mark.asyncio
+async def test_postgres_delete_report_scopes_to_account_and_request_id() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
+            self.execute_result = "DELETE 1"
+
+        async def execute(self, query: str, *args: object) -> str:
+            self.execute_calls.append((query, args))
+            return self.execute_result
+
+    pool = _Pool()
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+
+    assert await store.delete_report(
+        account_id=" acct-1 ",
+        request_id=" request-delete ",
+    ) is True
+    query, args = pool.execute_calls[0]
+    assert args == ("acct-1", "request-delete")
+    assert "DELETE FROM content_ops_deflection_reports" in query
+    assert "WHERE account_id = $1 AND request_id = $2" in query
+
+    pool.execute_result = "DELETE 0"
+    assert await store.delete_report(account_id="acct-1", request_id="missing") is False
 
 
 @pytest.mark.asyncio

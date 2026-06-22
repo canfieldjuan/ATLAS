@@ -28,6 +28,13 @@ DEFAULT_CONTRACT_PATH = (
     "/api/v1/content-ops/deflection-reports/process-contract"
 )
 LOCAL_HOSTS = frozenset({"localhost", "0.0.0.0", "::1"})
+REQUIRED_ROUTE_SUFFIXES = {
+    "process_contract": "/process-contract",
+    "snapshot": "/{request_id}/snapshot",
+    "artifact": "/{request_id}/artifact",
+    "report_model": "/{request_id}/report-model",
+    "delete": "/{request_id}",
+}
 
 
 @dataclass(frozen=True)
@@ -115,7 +122,19 @@ def _fetch_json(url: str, *, token: str, timeout: float) -> HttpResult:
     return HttpResult(status=status, payload=dict(payload))
 
 
-def _validate_contract(payload: Any) -> list[str]:
+def _expected_routes(process_contract_path: str) -> dict[str, str]:
+    base = _clean(process_contract_path)
+    if base.endswith("/process-contract"):
+        base = base[: -len("/process-contract")]
+    else:
+        base = base.rstrip("/")
+    return {
+        key: f"{base}{suffix}"
+        for key, suffix in REQUIRED_ROUTE_SUFFIXES.items()
+    }
+
+
+def _validate_contract(payload: Any, *, process_contract_path: str) -> list[str]:
     if not isinstance(payload, Mapping):
         return ["process contract endpoint response must be a JSON object"]
     errors: list[str] = []
@@ -129,6 +148,13 @@ def _validate_contract(payload: Any) -> list[str]:
     contract = payload.get("contract")
     if not isinstance(contract, Mapping):
         return [*errors, "contract must be an object"]
+    routes = payload.get("routes")
+    if not isinstance(routes, Mapping):
+        errors.append("routes must be an object")
+    else:
+        for key, expected in _expected_routes(process_contract_path).items():
+            if _clean(routes.get(key)) != expected:
+                errors.append(f"routes.{key} must be {expected}")
     if (
         _clean(contract.get("report_model_schema_version"))
         != EXPECTED_REPORT_MODEL_SCHEMA_VERSION
@@ -170,7 +196,7 @@ def check_process_contract(args: argparse.Namespace) -> tuple[int, dict[str, Any
         payload = result.payload
         errors.extend(result.errors)
         if not result.errors:
-            errors.extend(_validate_contract(payload))
+            errors.extend(_validate_contract(payload, process_contract_path=args.path))
     output = {
         "schema_version": SCHEMA_VERSION,
         "ok": not errors,
@@ -189,6 +215,7 @@ def _safe_observed_contract(payload: Any) -> dict[str, Any]:
         return {}
     contract = payload.get("contract")
     required = contract.get("paid_artifact_requires") if isinstance(contract, Mapping) else {}
+    routes = payload.get("routes")
     return {
         "schema_version": _clean(payload.get("schema_version")),
         "service": _clean(payload.get("service")),
@@ -211,6 +238,7 @@ def _safe_observed_contract(payload: Any) -> dict[str, Any]:
             else ""
         ),
         "paid_artifact_requires": dict(required) if isinstance(required, Mapping) else {},
+        "routes": dict(routes) if isinstance(routes, Mapping) else {},
     }
 
 

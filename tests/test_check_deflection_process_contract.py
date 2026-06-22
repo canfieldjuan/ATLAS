@@ -53,9 +53,22 @@ def _contract(**overrides: Any) -> dict[str, Any]:
                 "evidence_export": "object",
             },
         },
+        "routes": _routes(),
     }
     payload.update(overrides)
     return payload
+
+
+def _routes(**overrides: str) -> dict[str, str]:
+    routes = {
+        "process_contract": "/api/v1/content-ops/deflection-reports/process-contract",
+        "snapshot": "/api/v1/content-ops/deflection-reports/{request_id}/snapshot",
+        "artifact": "/api/v1/content-ops/deflection-reports/{request_id}/artifact",
+        "report_model": "/api/v1/content-ops/deflection-reports/{request_id}/report-model",
+        "delete": "/api/v1/content-ops/deflection-reports/{request_id}",
+    }
+    routes.update(overrides)
+    return routes
 
 
 def _run(monkeypatch, body: Any, tmp_path: Path, *, status: int = 200):
@@ -96,6 +109,7 @@ def test_process_contract_checker_accepts_current_contract(monkeypatch, tmp_path
             "report_model": "object",
             "evidence_export": "object",
         },
+        "routes": _routes(),
     }
     assert seen["url"] == (
         "https://atlas.example.com/api/v1/content-ops/"
@@ -123,6 +137,43 @@ def test_process_contract_checker_fails_on_missing_route(monkeypatch, tmp_path):
     assert payload["ok"] is False
     assert payload["errors"] == [
         "process contract endpoint must return 200, got 404"
+    ]
+
+
+def test_process_contract_checker_fails_on_missing_delete_route(
+    monkeypatch,
+    tmp_path,
+):
+    routes = _routes()
+    del routes["delete"]
+    code, payload, _seen = _run(
+        monkeypatch,
+        _contract(routes=routes),
+        tmp_path,
+    )
+
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["errors"] == [
+        "routes.delete must be /api/v1/content-ops/deflection-reports/{request_id}"
+    ]
+    assert payload["observed"]["routes"] == routes
+
+
+def test_process_contract_checker_fails_on_stale_delete_route(
+    monkeypatch,
+    tmp_path,
+):
+    code, payload, _seen = _run(
+        monkeypatch,
+        _contract(routes=_routes(delete="/api/v1/content-ops/deflection-reports")),
+        tmp_path,
+    )
+
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["errors"] == [
+        "routes.delete must be /api/v1/content-ops/deflection-reports/{request_id}"
     ]
 
 
