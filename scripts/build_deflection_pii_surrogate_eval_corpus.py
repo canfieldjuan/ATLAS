@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from extracted_content_pipeline.deflection_pii_eval_corpus import (  # noqa: E402
     SCHEMA_VERSION,
+    format_labeled_source_intake_summary_markdown,
     summarize_labeled_source,
     build_surrogate_eval_corpus,
 )
@@ -33,13 +34,21 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     result = build_surrogate_eval_corpus(source) if args.output else None
     summary: dict[str, Any] | None = None
-    if args.summary_output:
+    if args.summary_output or args.summary_markdown_output:
         summary = summarize_labeled_source(source, build_result=result)
+    if args.summary_output:
         args.summary_output.parent.mkdir(parents=True, exist_ok=True)
         args.summary_output.write_text(
             json.dumps(summary, indent=2 if args.pretty else None, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+    if args.summary_markdown_output:
+        args.summary_markdown_output.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_markdown_output.write_text(
+            format_labeled_source_intake_summary_markdown(summary),
+            encoding="utf-8",
+        )
+    if summary is not None:
         if not summary["ok"]:
             _write_error({
                 "ok": False,
@@ -83,6 +92,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.summary_output and summary is not None:
         payload["summary_output"] = str(args.summary_output)
         payload["summary_schema_version"] = str(summary["schema_version"])
+    if args.summary_markdown_output and summary is not None:
+        payload["summary_markdown_output"] = str(args.summary_markdown_output)
+        payload["summary_schema_version"] = str(summary["schema_version"])
     print(json.dumps(payload, sort_keys=True))
     return 0
 
@@ -96,17 +108,40 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=Path,
         help="Sanitized labeled-source intake summary path.",
     )
+    parser.add_argument(
+        "--summary-markdown-output",
+        type=Path,
+        help="Sanitized Markdown intake summary path.",
+    )
     parser.add_argument("--pretty", action="store_true", help="Write pretty JSON.")
     args = parser.parse_args(argv)
-    if args.output is None and args.summary_output is None:
-        parser.error("at least one of --output or --summary-output is required")
-    if (
-        args.output is not None
-        and args.summary_output is not None
-        and args.output.expanduser().resolve() == args.summary_output.expanduser().resolve()
-    ):
-        parser.error("--output and --summary-output must be different paths")
+    outputs = (
+        ("--output", args.output),
+        ("--summary-output", args.summary_output),
+        ("--summary-markdown-output", args.summary_markdown_output),
+    )
+    if not any(path is not None for _, path in outputs):
+        parser.error(
+            "at least one of --output, --summary-output, or "
+            "--summary-markdown-output is required"
+        )
+    _reject_duplicate_output_paths(parser, outputs)
     return args
+
+
+def _reject_duplicate_output_paths(
+    parser: argparse.ArgumentParser,
+    outputs: tuple[tuple[str, Path | None], ...],
+) -> None:
+    seen: dict[Path, str] = {}
+    for flag, path in outputs:
+        if path is None:
+            continue
+        resolved = path.expanduser().resolve()
+        existing = seen.get(resolved)
+        if existing is not None:
+            parser.error(f"{existing} and {flag} must be different paths")
+        seen[resolved] = flag
 
 
 def _write_error(payload: dict[str, Any]) -> None:

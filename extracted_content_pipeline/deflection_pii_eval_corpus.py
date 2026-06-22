@@ -24,6 +24,15 @@ SAFE_MUST_SURVIVE_REASONS = frozenset({
     "security_reference",
     "tenant_source_id",
 })
+SAFE_INTAKE_ERROR_DETAIL_KEYS = (
+    "record_index",
+    "label_index",
+    "must_survive_index",
+    "origin_field",
+    "detector",
+    "expected",
+    "actual",
+)
 
 FIELD_KEYS = (
     "subject",
@@ -244,6 +253,83 @@ def summarize_labeled_source(
         },
         "errors": [],
     }
+
+
+def format_labeled_source_intake_summary_markdown(summary: Mapping[str, Any]) -> str:
+    """Return a human-readable Markdown view of a sanitized intake summary."""
+
+    ok = bool(summary.get("ok"))
+    lines = [
+        "# Deflection PII Source Intake Summary",
+        "",
+        "## Status",
+        "",
+        _markdown_table(
+            ("Field", "Value"),
+            (
+                ("Status", "ok" if ok else "blocked"),
+                ("Schema", _clean(summary.get("schema_version"))),
+                ("Source schema", _clean(summary.get("source_schema_version"))),
+                ("Artifact schema", _clean(summary.get("artifact_schema_version"))),
+                ("Raw source persisted", _markdown_bool(summary.get("raw_source_persisted"))),
+                ("Raw label spans persisted", _markdown_bool(summary.get("raw_label_spans_persisted"))),
+                (
+                    "Surrogate positions are recall labels",
+                    _markdown_bool(summary.get("surrogate_positions_are_recall_labels")),
+                ),
+            ),
+        ),
+        "",
+    ]
+    if ok:
+        lines.extend([
+            "## Coverage",
+            "",
+            _markdown_table(
+                ("Field", "Count"),
+                (
+                    ("Tickets", _markdown_count(summary.get("ticket_count"))),
+                    ("Labels", _markdown_count(summary.get("label_count"))),
+                    (
+                        "Cue-prefixed person names",
+                        _markdown_count(_mapping(summary.get("person_name")).get("cue_prefixed")),
+                    ),
+                    (
+                        "Cue-less person names",
+                        _markdown_count(_mapping(summary.get("person_name")).get("cue_less")),
+                    ),
+                    (
+                        "Must-survive records",
+                        _markdown_count(_mapping(summary.get("must_survive")).get("count")),
+                    ),
+                ),
+            ),
+            "",
+            "## Labels By Class",
+            "",
+            _markdown_counter_table(summary.get("labels_by_class")),
+            "",
+            "## Labels By Severity",
+            "",
+            _markdown_counter_table(summary.get("labels_by_severity")),
+            "",
+            "## Labels By Origin Field",
+            "",
+            _markdown_counter_table(summary.get("labels_by_origin_field")),
+            "",
+            "## Must-Survive Reasons",
+            "",
+            _markdown_counter_table(_mapping(summary.get("must_survive")).get("by_reason")),
+            "",
+        ])
+    else:
+        lines.extend([
+            "## Errors",
+            "",
+            _markdown_error_table(summary.get("errors")),
+            "",
+        ])
+    return "\n".join(lines).rstrip() + "\n"
 
 
 @dataclass(frozen=True)
@@ -640,6 +726,86 @@ def _intake_error_summary(
     }
 
 
+def _markdown_table(
+    headers: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+) -> str:
+    header = "| " + " | ".join(_markdown_cell(value) for value in headers) + " |"
+    separator = "| " + " | ".join("---" for _ in headers) + " |"
+    body = [
+        "| " + " | ".join(_markdown_cell(value) for value in row) + " |"
+        for row in rows
+    ]
+    return "\n".join((header, separator, *body))
+
+
+def _markdown_counter_table(value: Any) -> str:
+    counter = _mapping(value)
+    if not counter:
+        return "_None._"
+    rows = tuple((key, _markdown_count(counter[key])) for key in sorted(counter))
+    return _markdown_table(("Item", "Count"), rows)
+
+
+def _markdown_error_table(value: Any) -> str:
+    errors = tuple(error for error in _sequence(value) if isinstance(error, Mapping))
+    if not errors:
+        return "_None._"
+    return _markdown_table(
+        ("Code", "Location", "Details"),
+        tuple(
+            (
+                _clean(error.get("code")),
+                _error_location(error),
+                _error_details(error),
+            )
+            for error in errors
+        ),
+    )
+
+
+def _error_location(error: Mapping[str, Any]) -> str:
+    parts = []
+    for key in ("record_index", "label_index", "must_survive_index", "origin_field"):
+        value = error.get(key)
+        if isinstance(value, (int, str)) and value != "":
+            parts.append(f"{key}={value}")
+    return ", ".join(parts) if parts else "-"
+
+
+def _error_details(error: Mapping[str, Any]) -> str:
+    parts = []
+    for key in SAFE_INTAKE_ERROR_DETAIL_KEYS:
+        if key in {"record_index", "label_index", "must_survive_index", "origin_field"}:
+            continue
+        value = error.get(key)
+        if isinstance(value, (int, str)) and value not in ("", 0):
+            parts.append(f"{key}={value}")
+    return ", ".join(parts) if parts else "-"
+
+
+def _markdown_cell(value: Any) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _markdown_bool(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "unknown"
+
+
+def _markdown_count(value: Any) -> str:
+    if isinstance(value, bool):
+        return "0"
+    if isinstance(value, int):
+        return str(value)
+    return "0"
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
 def _safe_schema_version_summary(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         return "missing"
@@ -712,5 +878,6 @@ __all__ = [
     "SOURCE_INTAKE_SUMMARY_SCHEMA_VERSION",
     "SurrogateEvalCorpusBuildResult",
     "build_surrogate_eval_corpus",
+    "format_labeled_source_intake_summary_markdown",
     "summarize_labeled_source",
 ]
