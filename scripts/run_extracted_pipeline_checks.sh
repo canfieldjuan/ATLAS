@@ -50,6 +50,7 @@ pytest \
   tests/test_docs_no_raw_deflection_request_ids.py \
   tests/test_content_ops_deflection_pii_surrogate_eval_corpus.py \
   tests/test_score_deflection_pii_recall.py \
+  tests/test_content_ops_deflection_pii_review_bundle_candidate.py \
   tests/test_capture_zendesk_product_proof_corpus.py \
   tests/test_evaluate_zendesk_product_proof_corpus.py \
   tests/test_probe_deflection_signal_spike.py \
