@@ -1309,6 +1309,83 @@ def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
     ]
 
 
+def test_deflection_snapshot_projection_contract_is_registry_derived() -> None:
+    shape = deflection_report_model_contract_shape()
+    projection = shape["snapshot_projection"]
+    fields = {field["field"]: field for field in projection["fields"]}
+    encoded = json.dumps(projection, sort_keys=True)
+
+    assert projection["schema_version"] == DEFLECTION_REPORT_SCHEMA_VERSION
+    assert projection["top_level_fields"] == [
+        "summary",
+        "top_questions",
+        "locked_questions",
+        "top_blind_spots",
+        "teaser",
+    ]
+    assert list(fields) == projection["top_level_fields"]
+    assert fields["summary"]["source_section"] == "support_tax"
+    assert fields["summary"]["snapshot_safe_fields"] == list(
+        DEFLECTION_REPORT_SECTION_REGISTRY["support_tax"].snapshot_safe_fields
+    )
+    assert fields["top_questions"] == {
+        "field": "top_questions",
+        "source_section": "ranked_questions",
+        "snapshot_safe_fields": list(
+            DEFLECTION_REPORT_SECTION_REGISTRY[
+                "ranked_questions"
+            ].snapshot_safe_fields
+        ),
+        "projected_fields": [
+            "rank",
+            "question",
+            "ticket_count",
+            "weighted_frequency",
+            "customer_wording",
+        ],
+        "source_collection": "rows",
+        "limit": "top_n",
+    }
+    assert fields["top_blind_spots"] == {
+        "field": "top_blind_spots",
+        "source_section": "top_unresolved_repeats",
+        "snapshot_safe_fields": list(
+            DEFLECTION_REPORT_SECTION_REGISTRY[
+                "top_unresolved_repeats"
+            ].snapshot_safe_fields
+        ),
+        "projected_fields": ["rank", "question", "ticket_count"],
+        "source_collection": "items",
+        "limit": "top_unresolved_repeats.result_page_limit",
+    }
+    assert fields["teaser"]["source_section"] == "question_details"
+    assert fields["teaser"]["policy"] == "scoped_resolution_evidence_only"
+    assert fields["teaser"]["snapshot_safe_fields"] == list(
+        DEFLECTION_REPORT_SECTION_REGISTRY["question_details"].snapshot_safe_fields
+    )
+    assert fields["teaser"]["full_answer_fields"] == [
+        "rank",
+        "question",
+        "answer",
+        "steps",
+        "answer_evidence_status",
+        "resolution_evidence_scope",
+        "weighted_frequency",
+        "source_count",
+    ]
+    for forbidden in (
+        "source_ids",
+        "top_evidence",
+        "representative_phrasing",
+        "priority_score",
+        "repeat_key",
+        "cluster_id",
+        "identity_basis",
+        "identity_confidence",
+    ):
+        assert forbidden not in encoded
+
+
 def test_deflection_report_section_registry_drives_section_metadata() -> None:
     artifact = build_deflection_report_artifact(
         _structured_report_fixture_result(),

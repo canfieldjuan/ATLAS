@@ -303,6 +303,9 @@ def test_content_ops_faq_report_contract_links_example() -> None:
     assert "cross-run/monthly-delta matching" in doc
     assert "required_data: string[]" in doc
     assert "snapshot_safe_fields: string[]" in doc
+    assert "DeflectionSnapshotProjectionContract" in doc
+    assert "snapshot_projection" in doc
+    assert "top_unresolved_repeats.items" in doc
     assert "snapshot.teaser.full_answer" in doc
     assert "Skip unknown section IDs" in doc
     assert "Treat `complete_evidence` as export-only" in doc

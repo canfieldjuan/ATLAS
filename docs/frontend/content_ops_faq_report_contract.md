@@ -108,6 +108,30 @@ type DeflectionReportSection = {
   snapshot_safe_fields: string[];
   data: Record<string, unknown>;
 };
+
+type DeflectionSnapshotProjectionContract = {
+  schema_version: "deflection.v1";
+  top_level_fields: [
+    "summary",
+    "top_questions",
+    "locked_questions",
+    "top_blind_spots",
+    "teaser"
+  ];
+  fields: DeflectionSnapshotProjectionField[];
+};
+
+type DeflectionSnapshotProjectionField = {
+  field: string;
+  source_section: string;
+  source_collection?: "rows" | "items";
+  snapshot_safe_fields: string[];
+  projected_fields: string[];
+  full_answer_fields?: string[];
+  preview_fields?: string[];
+  policy?: "scoped_resolution_evidence_only";
+  limit?: string;
+};
 ```
 
 Renderer rules:
@@ -120,6 +144,11 @@ Renderer rules:
   must be safe to emit for every projected row in that section; paid answer
   bodies and steps are not snapshot-safe section fields. The only free answer
   body is the separately gated `snapshot.teaser.full_answer`.
+- Treat the backend `snapshot_projection` contract as the source map from free
+  Snapshot fields to paid report sections. In particular, `top_blind_spots` is
+  sourced from `top_unresolved_repeats.items` and may project only `rank`,
+  `question`, and `ticket_count`. Use this contract before changing frontend
+  snapshot parsers; do not infer the projection from demo fixtures.
 - Treat `complete_evidence` as export-only. It summarizes export size and should
   not be inlined into web/PDF surfaces.
 - Breaking shape changes bump `schema_version`; additive sections should keep
