@@ -831,6 +831,124 @@ async def test_deflection_report_search_returns_full_paid_uploaded_item() -> Non
 
 
 @pytest.mark.asyncio
+async def test_deflection_report_delta_returns_paid_allowlisted_payload() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-portfolio-submit",
+        request_id="baseline",
+        snapshot={"summary": {}},
+        artifact=_search_artifact(),
+    )
+    await store.save_report(
+        account_id="acct-portfolio-submit",
+        request_id="current",
+        snapshot={"summary": {}},
+        artifact=_search_artifact(),
+    )
+    assert await store.mark_paid(
+        account_id="acct-portfolio-submit",
+        request_id="baseline",
+    )
+    assert await store.mark_paid(
+        account_id="acct-portfolio-submit",
+        request_id="current",
+    )
+    await store.save_deflection_delta(
+        account_id="acct-portfolio-submit",
+        current_request_id="current",
+        baseline_request_id="baseline",
+        delta={
+            "schema_version": "deflection_delta.v1",
+            "raw_artifact": {"markdown": "# must not leak"},
+            "current": {"schema_version": "deflection.v1", "source_ids": ["ticket-1"]},
+            "baseline": {"schema_version": "deflection.v1"},
+            "summary": {"growing_count": 1, "support_cost_delta": 40.5},
+            "items": [
+                {
+                    "identity_key": "repeat_1",
+                    "question": "Question repeat_1",
+                    "source_ids": ["ticket-1"],
+                    "change_types": ["GROWING"],
+                }
+            ],
+        },
+    )
+    router = _router(store)
+
+    delta_route = _route(router, "/ops/deflection-reports/{request_id}/delta", "GET")
+    payload = await delta_route.endpoint(
+        request_id="current",
+        baseline_request_id=None,
+    )
+    encoded = json.dumps(payload, sort_keys=True)
+
+    assert payload["schema_version"] == "deflection_delta_read.v1"
+    assert payload["current_request_id"] == "current"
+    assert payload["baseline_request_id"] == "baseline"
+    assert payload["delta"]["summary"] == {
+        "support_cost_delta": 40.5,
+        "growing_count": 1,
+    }
+    assert payload["delta"]["items"] == [
+        {
+            "identity_key": "repeat_1",
+            "question": "Question repeat_1",
+            "change_types": ["GROWING"],
+        }
+    ]
+    assert "raw_artifact" not in encoded
+    assert "markdown" not in encoded
+    assert "source_ids" not in encoded
+    assert "ticket-1" not in encoded
+
+
+@pytest.mark.asyncio
+async def test_deflection_report_delta_blocks_after_source_report_relock() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-portfolio-submit",
+        request_id="baseline",
+        snapshot={"summary": {}},
+        artifact=_search_artifact(),
+    )
+    await store.save_report(
+        account_id="acct-portfolio-submit",
+        request_id="current",
+        snapshot={"summary": {}},
+        artifact=_search_artifact(),
+    )
+    assert await store.mark_paid(
+        account_id="acct-portfolio-submit",
+        request_id="baseline",
+    )
+    assert await store.mark_paid(
+        account_id="acct-portfolio-submit",
+        request_id="current",
+    )
+    await store.save_deflection_delta(
+        account_id="acct-portfolio-submit",
+        current_request_id="current",
+        baseline_request_id="baseline",
+        delta={"schema_version": "deflection_delta.v1"},
+    )
+    assert await store.mark_unpaid(
+        account_id="acct-portfolio-submit",
+        request_id="current",
+    )
+    router = _router(store)
+
+    delta_route = _route(router, "/ops/deflection-reports/{request_id}/delta", "GET")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await delta_route.endpoint(
+            request_id="current",
+            baseline_request_id="baseline",
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Current deflection report is locked."
+
+
+@pytest.mark.asyncio
 async def test_deflection_report_search_keeps_scope_and_paid_gate() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     await store.save_report(

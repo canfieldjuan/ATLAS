@@ -240,7 +240,7 @@ atlas_brain/
 | Calendar                | 8059 | 8     | `atlas_brain.mcp.calendar_server`     |
 | Invoicing               | 8060 | 18    | `atlas_brain.mcp.invoicing_server`    |
 | Invoicing Readonly      | 8065 | 8     | `atlas_brain.mcp.invoicing_readonly_server` |
-| Content Ops Deflection Readonly | 8067 | 2 | `atlas_brain.mcp.content_ops_deflection_readonly_server` |
+| Content Ops Deflection Readonly | 8067 | 3 | `atlas_brain.mcp.content_ops_deflection_readonly_server` |
 | Content Ops Marketer Verify | 8068 | 1 | `atlas_brain.mcp.content_ops_marketer_verify_server` |
 | Intelligence            | 8061 | 33    | `atlas_brain.mcp.intelligence_server` |
 | B2B Churn Intelligence  | 8062 | 83    | `atlas_brain.mcp.b2b_churn_server` (split across 17 modules in `mcp/b2b/`) |
@@ -609,7 +609,7 @@ startup instead of shell-sourcing `.env` manually. The launcher loads `.env` and
 token length, starts the read-only server in the foreground, and prints the
 discovery/e2e smoke commands. It masks bearer and approval tokens in output.
 
-### Content Ops Deflection Readonly MCP Server (2 tools)
+### Content Ops Deflection Readonly MCP Server (3 tools)
 ```bash
 # stdio mode
 python -m atlas_brain.mcp.content_ops_deflection_readonly_server
@@ -618,11 +618,12 @@ python -m atlas_brain.mcp.content_ops_deflection_readonly_server
 ATLAS_MCP_AUTH_TOKEN=<token> python -m atlas_brain.mcp.content_ops_deflection_readonly_server --sse
 ```
 
-Tools: `search`, `fetch`
+Tools: `search`, `fetch`, `fetch_delta`
 
 This local read-only surface returns unpaid-safe FAQ deflection report snapshots
-for one configured tenant binding. It deliberately omits generation, publishing,
-checkout, paid unlock mutation, full report markdown, answers, and evidence.
+and paid-gated persisted deltas for one configured tenant binding. It
+deliberately omits generation, publishing, checkout, paid unlock mutation, full
+report markdown, answers, and evidence.
 OAuth connector binding and public route smokes are deferred to the rollout
 slice.
 

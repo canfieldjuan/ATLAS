@@ -13,7 +13,7 @@ from extracted_content_pipeline.deflection_report_access import (
 )
 
 
-READONLY_TOOLS = {"search", "fetch"}
+READONLY_TOOLS = {"search", "fetch", "fetch_delta"}
 MUTATING_TOOLS = {
     "generate",
     "generate_blog_post",
@@ -54,6 +54,50 @@ def _snapshot(question: str, *, generated: int = 1) -> dict[str, Any]:
                 "evidence_quotes": ["ticket-1 says export is blocked"],
             }
         ],
+    }
+
+
+def _row(key: str, ticket_count: int = 2, cost: float = 27.0) -> dict[str, Any]:
+    return {
+        "repeat_key": key,
+        "cluster_id": key,
+        "identity_basis": "question_topic",
+        "identity_confidence": "high",
+        "question": f"Question {key}",
+        "status": "Needs answer",
+        "owner_lane": "help_center",
+        "fix_type": "create_missing_answer",
+        "ticket_count": ticket_count,
+        "estimated_support_cost": cost,
+        "csat_signal": {
+            "status": "insufficient_data",
+            "csat_present_count": 0,
+            "negative_csat_ticket_count": 0,
+            "numeric_average": None,
+        },
+    }
+
+
+def _model(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "deflection.v1",
+        "title": "Support Ticket Deflection Report",
+        "summary": {"source_window_days": 31},
+        "sections": [
+            {
+                "id": "backlog_table",
+                "title": "Backlog",
+                "data": {"items": [row]},
+            }
+        ],
+    }
+
+
+def _artifact(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "markdown": "# Raw paid report",
+        "evidence_export": {"evidence_rows": [{"source_id": "ticket-1"}]},
+        "report_model": _model(row),
     }
 
 
@@ -100,6 +144,27 @@ async def test_fetch_fails_closed_without_account_binding(
     )
 
     payload = await readonly.fetch(id="request-1")
+
+    assert payload["metadata"]["ok"] is False
+    assert payload["metadata"]["error"] == "account_binding_required"
+
+
+@pytest.mark.asyncio
+async def test_fetch_delta_fails_closed_without_account_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FailingStore:
+        async def get_artifact_record(self, **kwargs: Any) -> object:
+            raise AssertionError("store must not be called without account binding")
+
+    monkeypatch.setattr(readonly, "_store_override", _FailingStore())
+    monkeypatch.setattr(
+        readonly,
+        "_account_resolver_override",
+        readonly.StaticContentOpsDeflectionAccountResolver(""),
+    )
+
+    payload = await readonly.fetch_delta(id="current")
 
     assert payload["metadata"]["ok"] is False
     assert payload["metadata"]["error"] == "account_binding_required"
@@ -250,6 +315,54 @@ async def test_fetch_uses_bound_account_and_excludes_paid_artifact_fields(
     assert "faq_result" not in encoded
     assert "source_ids" not in encoded
     assert "evidence_quotes" not in encoded
+
+
+@pytest.mark.asyncio
+async def test_fetch_delta_returns_paid_allowlisted_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-1",
+        request_id="baseline",
+        snapshot=_snapshot("Baseline"),
+        artifact=_artifact(_row("repeat_1", ticket_count=2, cost=27.0)),
+    )
+    await store.save_report(
+        account_id="acct-1",
+        request_id="current",
+        snapshot=_snapshot("Current"),
+        artifact=_artifact(_row("repeat_1", ticket_count=5, cost=67.5)),
+    )
+    assert await store.mark_paid(account_id="acct-1", request_id="baseline")
+    assert await store.mark_paid(account_id="acct-1", request_id="current")
+    await store.save_deflection_delta(
+        account_id="acct-1",
+        current_request_id="current",
+        baseline_request_id="baseline",
+        delta={
+            "schema_version": "deflection_delta.v1",
+            "summary": {"growing_count": 1, "support_cost_delta": 40.5},
+            "items": [{"identity_key": "repeat_1"}],
+        },
+    )
+    monkeypatch.setattr(readonly, "_store_override", store)
+    monkeypatch.setattr(
+        readonly,
+        "_account_resolver_override",
+        readonly.StaticContentOpsDeflectionAccountResolver("acct-1"),
+    )
+
+    payload = await readonly.fetch_delta(id="current")
+    encoded = json.dumps(payload, sort_keys=True)
+
+    assert payload["metadata"]["ok"] is True
+    assert payload["metadata"]["delta_report"]["current_request_id"] == "current"
+    assert payload["metadata"]["delta_report"]["baseline_request_id"] == "baseline"
+    assert "Growing repeats: 1" in payload["text"]
+    assert "markdown" not in encoded
+    assert "evidence_export" not in encoded
+    assert "ticket-1" not in encoded
 
 
 def test_content_ops_deflection_readonly_http_requires_bearer_token(

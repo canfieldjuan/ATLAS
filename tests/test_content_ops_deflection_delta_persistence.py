@@ -4,9 +4,12 @@ from datetime import datetime, timezone
 import pytest
 
 from extracted_content_pipeline.deflection_report_access import (
+    DeflectionDeltaReadError,
     InMemoryDeflectionReportArtifactStore,
     PostgresDeflectionReportArtifactStore,
     compute_and_save_previous_deflection_delta,
+    deflection_delta_read_payload,
+    fetch_paid_deflection_delta,
 )
 
 
@@ -181,6 +184,99 @@ async def test_compute_and_save_previous_delta_persists_pair_payload() -> None:
     )
     assert stored is not None
     assert json.loads(json.dumps(stored.delta)) == stored.delta
+
+
+@pytest.mark.asyncio
+async def test_fetch_paid_delta_requires_paid_source_reports() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        request_id="baseline",
+        model=_model(_row("repeat_1", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="current",
+        model=_model(_row("repeat_1", ticket_count=5, cost=67.5)),
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    saved = await compute_and_save_previous_deflection_delta(
+        store,
+        account_id="acct-1",
+        current_request_id="current",
+    )
+    assert saved is not None
+
+    fetched = await fetch_paid_deflection_delta(
+        store,
+        account_id="acct-1",
+        current_request_id="current",
+    )
+    payload = deflection_delta_read_payload(fetched)
+    assert payload["schema_version"] == "deflection_delta_read.v1"
+    assert payload["current_request_id"] == "current"
+    assert payload["baseline_request_id"] == "baseline"
+    assert payload["delta"]["schema_version"] == "deflection_delta.v1"
+
+    assert await store.mark_unpaid(account_id="acct-1", request_id="baseline")
+    with pytest.raises(DeflectionDeltaReadError) as baseline_locked:
+        await fetch_paid_deflection_delta(
+            store,
+            account_id="acct-1",
+            current_request_id="current",
+            baseline_request_id="baseline",
+        )
+    assert baseline_locked.value.code == "baseline_report_locked"
+
+    assert await store.mark_paid(account_id="acct-1", request_id="baseline")
+    assert await store.mark_unpaid(account_id="acct-1", request_id="current")
+    with pytest.raises(DeflectionDeltaReadError) as current_locked:
+        await fetch_paid_deflection_delta(
+            store,
+            account_id="acct-1",
+            current_request_id="current",
+        )
+    assert current_locked.value.code == "current_report_locked"
+
+
+@pytest.mark.asyncio
+async def test_fetch_paid_delta_requires_stored_pair_for_bound_tenant() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        request_id="baseline",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="current",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-2",
+        request_id="baseline",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(DeflectionDeltaReadError) as missing_delta:
+        await fetch_paid_deflection_delta(
+            store,
+            account_id="acct-1",
+            current_request_id="current",
+            baseline_request_id="baseline",
+        )
+    assert missing_delta.value.code == "delta_not_found"
+
+    with pytest.raises(DeflectionDeltaReadError) as missing_baseline:
+        await fetch_paid_deflection_delta(
+            store,
+            account_id="acct-1",
+            current_request_id="current",
+            baseline_request_id="other-tenant-baseline",
+        )
+    assert missing_baseline.value.code == "baseline_report_not_found"
 
 
 @pytest.mark.asyncio

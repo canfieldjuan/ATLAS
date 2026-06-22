@@ -47,15 +47,19 @@ def test_known_server_header_lands_in_claims(auditor):
 
 def test_content_ops_deflection_readonly_header_is_known(auditor):
     text = textwrap.dedent("""\
-        ### Content Ops Deflection Readonly MCP Server (2 tools)
+        ### Content Ops Deflection Readonly MCP Server (3 tools)
 
-        Tools: `search`, `fetch`
+        Tools: `search`, `fetch`, `fetch_delta`
     """)
 
     claims, unknown = auditor.doc_claims(text)
 
     assert "Content Ops Deflection Readonly" in claims
-    assert claims["Content Ops Deflection Readonly"] == {"search", "fetch"}
+    assert claims["Content Ops Deflection Readonly"] == {
+        "search",
+        "fetch",
+        "fetch_delta",
+    }
     assert unknown == []
 
 

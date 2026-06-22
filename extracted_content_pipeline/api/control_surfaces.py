@@ -58,7 +58,12 @@ from ..content_ops_input_provider import (
     merge_content_ops_input_package,
 )
 from ..content_ops_cache_policy import normalize_content_ops_cache_policy
-from ..deflection_report_access import DeflectionReportArtifactStore
+from ..deflection_report_access import (
+    DeflectionDeltaReadError,
+    DeflectionReportArtifactStore,
+    deflection_delta_read_payload,
+    fetch_paid_deflection_delta,
+)
 from ..control_surfaces import (
     OUTPUT_CATALOG,
     PRESETS,
@@ -933,6 +938,30 @@ def create_content_ops_control_surface_router(
                 detail="Deflection report model is not available.",
             )
         return model
+
+    @router.get(
+        "/deflection-reports/{request_id}/delta",
+        dependencies=public_deflection_dependencies,
+    )
+    async def deflection_report_delta(
+        request_id: str = PathParam(..., min_length=1, max_length=200),
+        baseline_request_id: str | None = Query(default=None, max_length=200),
+    ) -> dict[str, Any]:
+        store = await _resolve_deflection_report_store(deflection_report_store_provider)
+        scope = await _resolve_scope(scope_provider)
+        try:
+            record = await fetch_paid_deflection_delta(
+                store,
+                account_id=_required_scope_account_id(scope),
+                current_request_id=request_id,
+                baseline_request_id=baseline_request_id,
+            )
+        except DeflectionDeltaReadError as exc:
+            status = 403 if exc.code.endswith("_locked") else 404
+            if exc.code == "invalid_report_pair":
+                status = 400
+            raise HTTPException(status_code=status, detail=exc.message) from exc
+        return deflection_delta_read_payload(record)
 
     @router.post(
         "/deflection-reports/{request_id}/search",

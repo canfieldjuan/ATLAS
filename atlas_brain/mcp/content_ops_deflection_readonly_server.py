@@ -19,9 +19,12 @@ from urllib.parse import quote
 from mcp.server.fastmcp import FastMCP
 
 from extracted_content_pipeline.deflection_report_access import (
+    DeflectionDeltaReadError,
     DeflectionReportArtifactStore,
     DeflectionReportListRecord,
     PostgresDeflectionReportArtifactStore,
+    deflection_delta_read_payload,
+    fetch_paid_deflection_delta,
 )
 from extracted_content_pipeline.faq_deflection_report import (
     DEFAULT_DEFLECTION_SNAPSHOT_TOP_N,
@@ -210,6 +213,50 @@ async def fetch(id: str) -> dict[str, Any]:
     }
 
 
+@mcp.tool(structured_output=True)
+async def fetch_delta(id: str, baseline_id: str = "") -> dict[str, Any]:
+    """Fetch one paid persisted deflection delta by current report ID."""
+    account_id = await _resolve_account_id()
+    if account_id is None:
+        return _failure_payload(
+            "account_binding_required",
+            "A single Content Ops account binding is required before report deltas can be fetched.",
+        )
+
+    request_id = _clean(id)
+    if not request_id:
+        return _failure_payload(
+            "request_id_required",
+            "fetch_delta requires a current deflection report request ID.",
+        )
+
+    try:
+        record = await fetch_paid_deflection_delta(
+            _get_store(),
+            account_id=account_id,
+            current_request_id=request_id,
+            baseline_request_id=_clean(baseline_id) or None,
+        )
+    except DeflectionDeltaReadError as exc:
+        return _failure_payload(exc.code, exc.message)
+
+    payload = deflection_delta_read_payload(record)
+    return {
+        "id": record.current_request_id,
+        "title": (
+            "Deflection delta: "
+            f"{record.current_request_id} vs {record.baseline_request_id}"
+        ),
+        "text": _delta_document_text(payload),
+        "url": _report_url(record.current_request_id),
+        "metadata": {
+            "ok": True,
+            "found": True,
+            "delta_report": payload,
+        },
+    }
+
+
 def _streamable_http_app():
     """Build the authenticated streamable HTTP app for read-only tools."""
     from .auth import BearerAuthMiddleware
@@ -378,6 +425,26 @@ def _document_text(
         "- Full report is available after unlock." if paid else "- Full report remains locked.",
     ])
     return "\n".join(lines)
+
+
+def _delta_document_text(payload: Mapping[str, Any]) -> str:
+    delta = payload.get("delta") if isinstance(payload.get("delta"), Mapping) else {}
+    summary = delta.get("summary") if isinstance(delta.get("summary"), Mapping) else {}
+    current = _clean(payload.get("current_request_id"))
+    baseline = _clean(payload.get("baseline_request_id"))
+    return "\n".join(
+        [
+            f"Deflection delta: {current} vs {baseline}",
+            "",
+            "Summary",
+            f"- New repeats: {_int(summary.get('new_count'))}",
+            f"- Resolved repeats: {_int(summary.get('resolved_count'))}",
+            f"- Growing repeats: {_int(summary.get('growing_count'))}",
+            f"- Shrinking repeats: {_int(summary.get('shrinking_count'))}",
+            f"- Still unresolved repeats: {_int(summary.get('still_unresolved_count'))}",
+            f"- Support cost delta: {summary.get('support_cost_delta') or 0}",
+        ]
+    )
 
 
 def _question_texts(snapshot: Mapping[str, Any]) -> list[str]:

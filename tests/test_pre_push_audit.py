@@ -173,7 +173,7 @@ python -m atlas_brain.mcp.invoicing_server --sse
 # SSE HTTP mode (port 8065)
 python -m atlas_brain.mcp.invoicing_readonly_server --sse
 {invoicing_readonly_tools}
-### Content Ops Deflection Readonly MCP Server (2 tools)
+### Content Ops Deflection Readonly MCP Server (3 tools)
 # SSE HTTP mode (port 8067)
 python -m atlas_brain.mcp.content_ops_deflection_readonly_server --sse
 {content_ops_deflection_readonly_tools}
@@ -204,7 +204,7 @@ python -m atlas_brain.mcp.memory_server --sse
         calendar_tools=_tool_list(8),
         invoicing_tools=_tool_list(18),
         invoicing_readonly_tools=_tool_list(8),
-        content_ops_deflection_readonly_tools=_tool_list(2),
+        content_ops_deflection_readonly_tools=_tool_list(3),
         content_ops_marketer_verify_tools=_tool_list(1),
         intelligence_tools=_tool_list(33),
         b2b_tools=_tool_list(83),
@@ -246,7 +246,7 @@ def _write_mcp_servers(mcp_dir: Path) -> None:
         "calendar_server.py": 8,
         "invoicing_server.py": 18,
         "invoicing_readonly_server.py": 8,
-        "content_ops_deflection_readonly_server.py": 2,
+        "content_ops_deflection_readonly_server.py": 3,
         "content_ops_marketer_verify_server.py": 1,
         "intelligence_server.py": 33,
         "scraper_server.py": 5,
