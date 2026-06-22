@@ -1,9 +1,10 @@
 """
 Read-only Content Ops FAQ deflection MCP server.
 
-This server exposes only ChatGPT-compatible search/fetch tools for free
-deflection report snapshots. It never accepts an account ID as a tool argument;
-every tool resolves the tenant binding before touching storage.
+This server exposes ChatGPT-compatible search/fetch tools for free deflection
+report snapshots plus a paid-gated persisted-delta fetch tool. It never accepts
+an account ID as a tool argument; every tool resolves the tenant binding before
+touching storage.
 """
 
 from __future__ import annotations

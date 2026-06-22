@@ -280,6 +280,37 @@ async def test_fetch_paid_delta_requires_stored_pair_for_bound_tenant() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_paid_delta_rejects_unsupported_delta_schema() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        request_id="baseline",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="current",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    await store.save_deflection_delta(
+        account_id="acct-1",
+        current_request_id="current",
+        baseline_request_id="baseline",
+        delta={"schema_version": "future_delta.v2", "items": [{"raw": "nope"}]},
+    )
+
+    with pytest.raises(DeflectionDeltaReadError) as exc:
+        await fetch_paid_deflection_delta(
+            store,
+            account_id="acct-1",
+            current_request_id="current",
+            baseline_request_id="baseline",
+        )
+
+    assert exc.value.code == "unsupported_delta_schema"
+
+
+@pytest.mark.asyncio
 async def test_compute_and_save_previous_delta_fails_closed_without_paid_models() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     await _save(
@@ -376,6 +407,11 @@ async def test_postgres_delta_methods_are_account_scoped_and_jsonb_encoded() -> 
         current_request_id="current",
         baseline_request_id="baseline",
     )
+    paid_stored = await store.get_paid_deflection_delta(
+        account_id="acct-1",
+        current_request_id="current",
+        baseline_request_id="baseline",
+    )
 
     assert selected is not None
     select_query, select_args = pool.fetchrow_calls[0]
@@ -391,3 +427,11 @@ async def test_postgres_delta_methods_are_account_scoped_and_jsonb_encoded() -> 
     assert json.loads(str(insert_args[3])) == {"schema_version": "deflection_delta.v1"}
     assert stored is not None
     assert stored.delta == {"schema_version": "deflection_delta.v1"}
+    assert paid_stored is not None
+    paid_query, paid_args = pool.fetchrow_calls[2]
+    assert paid_args == ("acct-1", "current", "baseline")
+    assert "FROM content_ops_deflection_deltas deltas" in paid_query
+    assert "JOIN content_ops_deflection_reports current_report" in paid_query
+    assert "JOIN content_ops_deflection_reports baseline_report" in paid_query
+    assert "current_report.paid = true" in paid_query
+    assert "baseline_report.paid = true" in paid_query

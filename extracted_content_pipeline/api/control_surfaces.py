@@ -958,8 +958,14 @@ def create_content_ops_control_surface_router(
             )
         except DeflectionDeltaReadError as exc:
             status = 403 if exc.code.endswith("_locked") else 404
-            if exc.code == "invalid_report_pair":
+            if exc.code in {
+                "account_id_required",
+                "current_request_id_required",
+                "invalid_report_pair",
+            }:
                 status = 400
+            if exc.code == "unsupported_delta_schema":
+                status = 409
             raise HTTPException(status_code=status, detail=exc.message) from exc
         return deflection_delta_read_payload(record)
 

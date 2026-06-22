@@ -15,9 +15,10 @@ payload. This PR fixes that root for read-only HTTP and MCP surfaces. Monthly
 automation, delivery email, and result-page rendering remain separate slices.
 
 Diff-size note: this exceeds the 400 LOC target because the smallest useful read
-surface needs the shared paid gate, HTTP route, MCP tool, allowlist projection,
-MCP inventory docs/fixtures, and source-report relock tests in one PR. Splitting
-the docs/tests from the tool would leave the new surface under-audited.
+surface needs the shared paid gate, atomic Postgres paid-pair read, HTTP route,
+MCP tool, allowlist projection, MCP inventory docs/fixtures, and source-report
+relock tests in one PR. Splitting the docs/tests from the tool would leave the
+new surface under-audited.
 
 ## Scope (this PR)
 
@@ -99,11 +100,13 @@ requires it to still be paid. If the caller omits a baseline, the helper uses
 current report's `created_at`.
 
 Only after both source reports pass that paid/tenant gate does the helper call
-`get_deflection_delta(...)` for the exact `(account_id, current_request_id,
-baseline_request_id)` pair. A small payload constructor then allowlists the
-pair IDs, timestamps, and known `deflection_delta.v1` top-level/item/CSAT fields.
-HTTP and MCP both call that shared path, so one contract controls both read
-surfaces.
+`get_paid_deflection_delta(...)` for the exact `(account_id,
+current_request_id, baseline_request_id)` pair. The Postgres implementation
+joins both source report rows with `paid = true` in the same query that returns
+the delta, so a relock/refund racing the read cannot return a stale paid delta.
+A small payload constructor then allowlists the pair IDs, timestamps, and known
+`deflection_delta.v1` top-level/item/CSAT fields. HTTP and MCP both call that
+shared path, so one contract controls both read surfaces.
 
 ## Intentional
 
@@ -131,6 +134,7 @@ Parked hardening: none.
 ## Verification
 
 - Focused read-surface pytest -- 33 passed.
+- Focused review-fix pytest -- 27 passed.
 - MCP tool-name docs audit -- passed.
 - MCP tool-count docs audit -- passed.
 - Python compile for touched Python files -- passed.
@@ -139,7 +143,7 @@ Parked hardening: none.
 - Extracted standalone audit -- Atlas runtime import findings: 0.
 - ASCII Python policy check -- passed.
 - Full extracted pipeline bundle -- reasoning core 295 passed; extracted
-  content 4882 passed, 15 skipped, 1 existing torch warning.
+  content 4885 passed, 15 skipped, 1 existing torch warning.
 - Pending before push: local PR review.
 
 ## Estimated diff size
@@ -147,13 +151,13 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `CLAUDE.md` | 11 |
-| `atlas_brain/mcp/content_ops_deflection_readonly_server.py` | 67 |
-| `extracted_content_pipeline/api/control_surfaces.py` | 31 |
-| `extracted_content_pipeline/deflection_report_access.py` | 210 |
-| `plans/PR-Deflection-Delta-Read-Surface.md` | 159 |
+| `atlas_brain/mcp/content_ops_deflection_readonly_server.py` | 74 |
+| `extracted_content_pipeline/api/control_surfaces.py` | 37 |
+| `extracted_content_pipeline/deflection_report_access.py` | 292 |
+| `plans/PR-Deflection-Delta-Read-Surface.md` | 163 |
 | `tests/test_audit_mcp_tool_names_match_docs.py` | 10 |
-| `tests/test_content_ops_deflection_delta_persistence.py` | 96 |
-| `tests/test_extracted_content_deflection_submit.py` | 118 |
+| `tests/test_content_ops_deflection_delta_persistence.py` | 140 |
+| `tests/test_extracted_content_deflection_submit.py` | 173 |
 | `tests/test_mcp_content_ops_deflection_readonly.py` | 115 |
 | `tests/test_pre_push_audit.py` | 6 |
-| **Total** | **823** |
+| **Total** | **1021** |

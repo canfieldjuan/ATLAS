@@ -949,6 +949,61 @@ async def test_deflection_report_delta_blocks_after_source_report_relock() -> No
 
 
 @pytest.mark.asyncio
+async def test_deflection_report_delta_rejects_blank_request_id() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    router = _router(store)
+
+    delta_route = _route(router, "/ops/deflection-reports/{request_id}/delta", "GET")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await delta_route.endpoint(request_id="  ", baseline_request_id=None)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Current deflection report request ID is required."
+
+
+@pytest.mark.asyncio
+async def test_deflection_report_delta_rejects_unsupported_delta_schema() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-portfolio-submit",
+        request_id="baseline",
+        snapshot={"summary": {}},
+        artifact=_search_artifact(),
+    )
+    await store.save_report(
+        account_id="acct-portfolio-submit",
+        request_id="current",
+        snapshot={"summary": {}},
+        artifact=_search_artifact(),
+    )
+    assert await store.mark_paid(
+        account_id="acct-portfolio-submit",
+        request_id="baseline",
+    )
+    assert await store.mark_paid(
+        account_id="acct-portfolio-submit",
+        request_id="current",
+    )
+    await store.save_deflection_delta(
+        account_id="acct-portfolio-submit",
+        current_request_id="current",
+        baseline_request_id="baseline",
+        delta={"schema_version": "future_delta.v2"},
+    )
+    router = _router(store)
+
+    delta_route = _route(router, "/ops/deflection-reports/{request_id}/delta", "GET")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await delta_route.endpoint(
+            request_id="current",
+            baseline_request_id="baseline",
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "Persisted deflection delta uses an unsupported schema."
+
+
+@pytest.mark.asyncio
 async def test_deflection_report_search_keeps_scope_and_paid_gate() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     await store.save_report(
