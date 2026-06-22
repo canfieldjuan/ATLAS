@@ -48,6 +48,7 @@ Affected surfaces:
 - `extracted_content_pipeline.faq_deflection_report`
 - `tests/test_content_ops_deflection_report.py`
 - `tests/test_deflection_snapshot_report_drift.py`
+- `tests/test_content_ops_faq_report_contract_docs.py`
 - `docs/frontend/content_ops_faq_report_contract.md`
 
 Risk areas:
@@ -60,11 +61,13 @@ Reviewer rules triggered: R1, R2, R3, R8, R10, R13, R14.
 
 ### Files touched
 
+- `docs/frontend/content_ops_faq_deflection_report_example.json`
 - `docs/frontend/content_ops_faq_deflection_snapshot_example.json`
 - `docs/frontend/content_ops_faq_report_contract.md`
 - `extracted_content_pipeline/faq_deflection_report.py`
 - `plans/PR-Deflection-Top-Blind-Spots-Snapshot.md`
 - `tests/test_content_ops_deflection_report.py`
+- `tests/test_content_ops_faq_report_contract_docs.py`
 - `tests/test_deflection_snapshot_report_drift.py`
 
 ## Mechanism
@@ -101,23 +104,28 @@ Parked hardening: none.
 ## Verification
 
 - Command: python -m pytest tests/test_content_ops_deflection_report.py tests/test_deflection_snapshot_report_drift.py -q -- 160 passed.
+- Command: python -m pytest tests/test_content_ops_faq_report_contract_docs.py::test_content_ops_faq_deflection_snapshot_example_matches_producer_shape -q -- 1 passed.
+- Command: python -m pytest tests/test_content_ops_faq_report_contract_docs.py -q -- 5 passed.
+- Command: python -m pytest tests/test_content_ops_deflection_report.py tests/test_deflection_snapshot_report_drift.py tests/test_content_ops_faq_report_contract_docs.py -q -- 165 passed.
 - Command: bash scripts/validate_extracted_content_pipeline.sh -- passed.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline -- passed.
 - Command: python scripts/audit_extracted_standalone.py --fail-on-debt -- passed.
 - Command: bash scripts/check_ascii_python.sh -- passed.
 - Command: bash extracted/_shared/scripts/sync_extracted.sh extracted_content_pipeline -- passed.
 - Command: python -m json.tool docs/frontend/content_ops_faq_deflection_snapshot_example.json >/dev/null && python -m py_compile extracted_content_pipeline/faq_deflection_report.py -- passed.
-- Pending before push: plan sync check.
+- Command: python scripts/sync_pr_plan.py plans/PR-Deflection-Top-Blind-Spots-Snapshot.md --check -- passed.
 - Pending before push: Atlas push wrapper local PR review.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
+| `docs/frontend/content_ops_faq_deflection_report_example.json` | 6 |
 | `docs/frontend/content_ops_faq_deflection_snapshot_example.json` | 7 |
 | `docs/frontend/content_ops_faq_report_contract.md` | 13 |
 | `extracted_content_pipeline/faq_deflection_report.py` | 50 |
-| `plans/PR-Deflection-Top-Blind-Spots-Snapshot.md` | 123 |
+| `plans/PR-Deflection-Top-Blind-Spots-Snapshot.md` | 131 |
 | `tests/test_content_ops_deflection_report.py` | 19 |
+| `tests/test_content_ops_faq_report_contract_docs.py` | 5 |
 | `tests/test_deflection_snapshot_report_drift.py` | 38 |
-| **Total** | **250** |
+| **Total** | **269** |
