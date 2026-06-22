@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from .deflection_delta import compute_deflection_delta
 from .faq_deflection_report import DEFLECTION_REPORT_SCHEMA_VERSION
 from .storage._jsonb_helpers import (
     decode_jsonb_field,
@@ -43,6 +44,18 @@ class DeflectionReportListRecord:
     snapshot: dict[str, Any]
     paid: bool
     delivery_email: str | None = None
+    created_at: Any = None
+    updated_at: Any = None
+
+
+@dataclass(frozen=True)
+class DeflectionDeltaAccessRecord:
+    """Persisted delta for one tenant/current/baseline report pair."""
+
+    account_id: str
+    current_request_id: str
+    baseline_request_id: str
+    delta: dict[str, Any]
     created_at: Any = None
     updated_at: Any = None
 
@@ -115,6 +128,33 @@ class DeflectionReportArtifactStore(Protocol):
     ) -> int:
         """Delete report rows older than the retention cutoff."""
 
+    async def select_previous_paid_report(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+    ) -> DeflectionReportAccessRecord | None:
+        """Return the newest paid report before the current paid report."""
+
+    async def save_deflection_delta(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+        delta: Mapping[str, Any],
+    ) -> None:
+        """Persist one computed deflection delta for a report pair."""
+
+    async def get_deflection_delta(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+    ) -> DeflectionDeltaAccessRecord | None:
+        """Return one persisted deflection delta for a report pair."""
+
 
 class InMemoryDeflectionReportArtifactStore:
     """Test store with the same tenant/request semantics as the Postgres store."""
@@ -122,6 +162,10 @@ class InMemoryDeflectionReportArtifactStore:
     def __init__(self) -> None:
         self._rows: dict[tuple[str, str], DeflectionReportAccessRecord] = {}
         self._created_at_by_key: dict[tuple[str, str], datetime] = {}
+        self._deltas: dict[
+            tuple[str, str, str],
+            DeflectionDeltaAccessRecord,
+        ] = {}
 
     async def save_report(
         self,
@@ -136,12 +180,13 @@ class InMemoryDeflectionReportArtifactStore:
             _required_text(account_id, "account_id"),
             _required_text(request_id, "request_id"),
         )
+        resolved_account, resolved_request = key
         existing = self._rows.get(key)
         self._created_at_by_key.setdefault(key, datetime.now(timezone.utc))
         cleaned_delivery_email = _clean(delivery_email)
         self._rows[key] = DeflectionReportAccessRecord(
-            account_id=key[0],
-            request_id=key[1],
+            account_id=resolved_account,
+            request_id=resolved_request,
             snapshot=dict(snapshot),
             artifact=dict(artifact),
             paid=bool(existing.paid) if existing else False,
@@ -289,6 +334,84 @@ class InMemoryDeflectionReportArtifactStore:
             delivery_email=row.delivery_email,
         )
         return True
+
+    async def select_previous_paid_report(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+    ) -> DeflectionReportAccessRecord | None:
+        resolved_account = _required_text(account_id, "account_id")
+        resolved_current = _required_text(current_request_id, "current_request_id")
+        current_key = (resolved_account, resolved_current)
+        current = self._rows.get(current_key)
+        if current is None or not current.paid:
+            return None
+        current_created_at = self._created_at_by_key.get(current_key)
+        if current_created_at is None:
+            return None
+        candidates = [
+            (created_at, row.request_id)
+            for (row_account, request_id), row in self._rows.items()
+            if row_account == resolved_account
+            and request_id != resolved_current
+            and row.paid
+            and (created_at := self._created_at_by_key.get((row_account, request_id)))
+            is not None
+            and created_at < current_created_at
+        ]
+        if not candidates:
+            return None
+        _selected_created_at, selected_request_id = max(candidates)
+        return await self.get_artifact_record(
+            account_id=resolved_account,
+            request_id=selected_request_id,
+        )
+
+    async def save_deflection_delta(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+        delta: Mapping[str, Any],
+    ) -> None:
+        key = _delta_key(account_id, current_request_id, baseline_request_id)
+        resolved_account, resolved_current, resolved_baseline = key
+        current_key = (resolved_account, resolved_current)
+        baseline_key = (resolved_account, resolved_baseline)
+        if current_key not in self._rows or baseline_key not in self._rows:
+            raise ValueError("current and baseline reports must exist")
+        now = datetime.now(timezone.utc)
+        existing = self._deltas.get(key)
+        self._deltas[key] = DeflectionDeltaAccessRecord(
+            account_id=resolved_account,
+            current_request_id=resolved_current,
+            baseline_request_id=resolved_baseline,
+            delta=dict(delta),
+            created_at=existing.created_at if existing else now,
+            updated_at=now,
+        )
+
+    async def get_deflection_delta(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+    ) -> DeflectionDeltaAccessRecord | None:
+        key = _delta_key(account_id, current_request_id, baseline_request_id)
+        row = self._deltas.get(key)
+        if row is None:
+            return None
+        return DeflectionDeltaAccessRecord(
+            account_id=row.account_id,
+            current_request_id=row.current_request_id,
+            baseline_request_id=row.baseline_request_id,
+            delta=dict(row.delta),
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
 
 
 @dataclass(frozen=True)
@@ -495,6 +618,101 @@ class PostgresDeflectionReportArtifactStore:
         )
         return parse_command_tag(result)
 
+    async def select_previous_paid_report(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+    ) -> DeflectionReportAccessRecord | None:
+        row = await self.pool.fetchrow(
+            """
+            WITH current_report AS (
+                SELECT created_at
+                FROM content_ops_deflection_reports
+                WHERE account_id = $1
+                  AND request_id = $2
+                  AND paid = true
+            )
+            SELECT reports.account_id,
+                   reports.request_id,
+                   reports.snapshot,
+                   reports.artifact,
+                   reports.paid,
+                   reports.payment_reference,
+                   reports.delivery_email
+            FROM content_ops_deflection_reports reports
+            JOIN current_report ON true
+            WHERE reports.account_id = $1
+              AND reports.request_id <> $2
+              AND reports.paid = true
+              AND reports.created_at < current_report.created_at
+            ORDER BY reports.created_at DESC
+            LIMIT 1
+            """,
+            _required_text(account_id, "account_id"),
+            _required_text(current_request_id, "current_request_id"),
+        )
+        return _record_from_row(row_to_dict(row)) if row is not None else None
+
+    async def save_deflection_delta(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+        delta: Mapping[str, Any],
+    ) -> None:
+        key = _delta_key(account_id, current_request_id, baseline_request_id)
+        resolved_account, resolved_current, resolved_baseline = key
+        await self.pool.execute(
+            """
+            INSERT INTO content_ops_deflection_deltas (
+                account_id,
+                current_request_id,
+                baseline_request_id,
+                delta,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4::jsonb, NOW())
+            ON CONFLICT (account_id, current_request_id, baseline_request_id)
+            DO UPDATE
+            SET delta = EXCLUDED.delta,
+                updated_at = NOW()
+            """,
+            resolved_account,
+            resolved_current,
+            resolved_baseline,
+            json_dump_jsonb(dict(delta)),
+        )
+
+    async def get_deflection_delta(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+    ) -> DeflectionDeltaAccessRecord | None:
+        key = _delta_key(account_id, current_request_id, baseline_request_id)
+        resolved_account, resolved_current, resolved_baseline = key
+        row = await self.pool.fetchrow(
+            """
+            SELECT account_id,
+                   current_request_id,
+                   baseline_request_id,
+                   delta,
+                   created_at,
+                   updated_at
+            FROM content_ops_deflection_deltas
+            WHERE account_id = $1
+              AND current_request_id = $2
+              AND baseline_request_id = $3
+            """,
+            resolved_account,
+            resolved_current,
+            resolved_baseline,
+        )
+        return _delta_record_from_row(row_to_dict(row)) if row is not None else None
+
 
 _STORED_ACTION_SECTION_LIMIT_DEFAULTS = {
     "priority_fix_queue": {
@@ -630,6 +848,18 @@ def _list_record_from_row(row: Mapping[str, Any]) -> DeflectionReportListRecord:
     )
 
 
+def _delta_record_from_row(row: Mapping[str, Any]) -> DeflectionDeltaAccessRecord:
+    delta = decode_jsonb_field(row.get("delta"), default={})
+    return DeflectionDeltaAccessRecord(
+        account_id=str(row.get("account_id") or ""),
+        current_request_id=str(row.get("current_request_id") or ""),
+        baseline_request_id=str(row.get("baseline_request_id") or ""),
+        delta=dict(delta) if isinstance(delta, Mapping) else {},
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
 def _bounded_limit(value: Any) -> int:
     try:
         parsed = int(value)
@@ -709,15 +939,68 @@ def _required_text(value: Any, field: str) -> str:
     return text
 
 
+def _delta_key(
+    account_id: Any,
+    current_request_id: Any,
+    baseline_request_id: Any,
+) -> tuple[str, str, str]:
+    account = _required_text(account_id, "account_id")
+    current = _required_text(current_request_id, "current_request_id")
+    baseline = _required_text(baseline_request_id, "baseline_request_id")
+    if current == baseline:
+        raise ValueError("current_request_id and baseline_request_id must differ")
+    return account, current, baseline
+
+
 def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+async def compute_and_save_previous_deflection_delta(
+    store: DeflectionReportArtifactStore,
+    *,
+    account_id: str,
+    current_request_id: str,
+) -> DeflectionDeltaAccessRecord | None:
+    """Compute and persist the previous-paid-report delta for one tenant."""
+
+    current = await store.get_artifact_record(
+        account_id=account_id,
+        request_id=current_request_id,
+    )
+    if current is None or not current.paid:
+        return None
+    baseline = await store.select_previous_paid_report(
+        account_id=account_id,
+        current_request_id=current_request_id,
+    )
+    if baseline is None:
+        return None
+    current_model = current.report_model()
+    baseline_model = baseline.report_model()
+    if current_model is None or baseline_model is None:
+        return None
+    delta = compute_deflection_delta(current_model, baseline_model)
+    await store.save_deflection_delta(
+        account_id=account_id,
+        current_request_id=current.request_id,
+        baseline_request_id=baseline.request_id,
+        delta=delta,
+    )
+    return await store.get_deflection_delta(
+        account_id=account_id,
+        current_request_id=current.request_id,
+        baseline_request_id=baseline.request_id,
+    )
+
+
 __all__ = [
+    "DeflectionDeltaAccessRecord",
     "DeflectionReportAccessRecord",
     "DeflectionReportListRecord",
     "DeflectionReportArtifactStore",
     "InMemoryDeflectionReportArtifactStore",
     "PostgresDeflectionReportArtifactStore",
+    "compute_and_save_previous_deflection_delta",
     "stored_deflection_report_model",
 ]

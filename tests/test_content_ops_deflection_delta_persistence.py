@@ -1,0 +1,297 @@
+import json
+from datetime import datetime, timezone
+
+import pytest
+
+from extracted_content_pipeline.deflection_report_access import (
+    InMemoryDeflectionReportArtifactStore,
+    PostgresDeflectionReportArtifactStore,
+    compute_and_save_previous_deflection_delta,
+)
+
+
+def _snapshot(label: str) -> dict[str, object]:
+    return {"summary": {"generated": 1}, "top_questions": [{"question": label}]}
+
+
+def _row(
+    key: str,
+    *,
+    status: str = "Needs answer",
+    ticket_count: int = 2,
+    cost: float = 27.0,
+) -> dict[str, object]:
+    return {
+        "repeat_key": key,
+        "cluster_id": key,
+        "identity_basis": "question_topic",
+        "identity_confidence": "high",
+        "question": f"Question {key}",
+        "status": status,
+        "owner_lane": "help_center",
+        "fix_type": "create_missing_answer",
+        "ticket_count": ticket_count,
+        "estimated_support_cost": cost,
+        "csat_signal": {
+            "status": "insufficient_data",
+            "csat_present_count": 0,
+            "negative_csat_ticket_count": 0,
+            "numeric_average": None,
+        },
+    }
+
+
+def _model(*rows: dict[str, object], start: str = "2026-05-01") -> dict[str, object]:
+    return {
+        "schema_version": "deflection.v1",
+        "title": "Support Ticket Deflection Report",
+        "summary": {
+            "source_date_start": start,
+            "source_date_end": "2026-05-31",
+            "source_window_days": 31,
+        },
+        "sections": [
+            {
+                "id": "backlog_table",
+                "title": "Backlog",
+                "priority": 90,
+                "surfaces": ["web"],
+                "default_limit": 25,
+                "required_data": ["items"],
+                "snapshot_safe_fields": [],
+                "data": {"items": list(rows)},
+            }
+        ],
+    }
+
+
+def _artifact(model: dict[str, object]) -> dict[str, object]:
+    return {"report_model": model}
+
+
+async def _save(
+    store: InMemoryDeflectionReportArtifactStore,
+    *,
+    account_id: str = "acct-1",
+    request_id: str,
+    model: dict[str, object] | None = None,
+    paid: bool = True,
+    created_at: datetime,
+) -> None:
+    await store.save_report(
+        account_id=account_id,
+        request_id=request_id,
+        snapshot=_snapshot(request_id),
+        artifact=_artifact(model or _model(_row(request_id))),
+    )
+    store._created_at_by_key[(account_id, request_id)] = created_at
+    if paid:
+        assert await store.mark_paid(account_id=account_id, request_id=request_id)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_select_previous_paid_report_is_scoped_paid_and_ordered() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        request_id="older",
+        created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="previous",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="unpaid-between",
+        paid=False,
+        created_at=datetime(2026, 5, 15, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="current",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="newer",
+        created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-2",
+        request_id="other-tenant",
+        created_at=datetime(2026, 5, 20, tzinfo=timezone.utc),
+    )
+
+    selected = await store.select_previous_paid_report(
+        account_id="acct-1",
+        current_request_id="current",
+    )
+
+    assert selected is not None
+    assert selected.request_id == "previous"
+    assert await store.select_previous_paid_report(
+        account_id="acct-1",
+        current_request_id="missing",
+    ) is None
+    assert await store.mark_unpaid(account_id="acct-1", request_id="current")
+    assert await store.select_previous_paid_report(
+        account_id="acct-1",
+        current_request_id="current",
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_compute_and_save_previous_delta_persists_pair_payload() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    baseline_model = _model(_row("repeat_1", ticket_count=2, cost=27.0))
+    current_model = _model(_row("repeat_1", ticket_count=5, cost=67.5))
+    await _save(
+        store,
+        request_id="baseline",
+        model=baseline_model,
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="current",
+        model=current_model,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    record = await compute_and_save_previous_deflection_delta(
+        store,
+        account_id="acct-1",
+        current_request_id="current",
+    )
+
+    assert record is not None
+    assert record.account_id == "acct-1"
+    assert record.current_request_id == "current"
+    assert record.baseline_request_id == "baseline"
+    assert record.delta["schema_version"] == "deflection_delta.v1"
+    assert record.delta["summary"]["matched_item_count"] == 1
+    assert record.delta["summary"]["growing_count"] == 1
+    stored = await store.get_deflection_delta(
+        account_id="acct-1",
+        current_request_id="current",
+        baseline_request_id="baseline",
+    )
+    assert stored is not None
+    assert json.loads(json.dumps(stored.delta)) == stored.delta
+
+
+@pytest.mark.asyncio
+async def test_compute_and_save_previous_delta_fails_closed_without_paid_models() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        request_id="current-only",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    assert await compute_and_save_previous_deflection_delta(
+        store,
+        account_id="acct-1",
+        current_request_id="current-only",
+    ) is None
+
+    await _save(
+        store,
+        request_id="baseline-invalid",
+        model={"schema_version": "legacy.v0"},
+        created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+    )
+    assert await compute_and_save_previous_deflection_delta(
+        store,
+        account_id="acct-1",
+        current_request_id="current-only",
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_deflection_delta_store_rejects_same_current_and_baseline() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+
+    with pytest.raises(ValueError, match="must differ"):
+        await store.save_deflection_delta(
+            account_id="acct-1",
+            current_request_id="same",
+            baseline_request_id="same",
+            delta={"schema_version": "deflection_delta.v1"},
+        )
+    with pytest.raises(ValueError, match="reports must exist"):
+        await store.save_deflection_delta(
+            account_id="acct-1",
+            current_request_id="current",
+            baseline_request_id="baseline",
+            delta={"schema_version": "deflection_delta.v1"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_postgres_delta_methods_are_account_scoped_and_jsonb_encoded() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.fetchrow_calls: list[tuple[str, tuple[object, ...]]] = []
+            self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
+            self.fetchrow_calls.append((query, args))
+            if "WITH current_report" in query:
+                return {
+                    "account_id": "acct-1",
+                    "request_id": "baseline",
+                    "snapshot": json.dumps(_snapshot("baseline")),
+                    "artifact": json.dumps(_artifact(_model(_row("repeat_1")))),
+                    "paid": True,
+                    "payment_reference": None,
+                    "delivery_email": None,
+                }
+            return {
+                "account_id": "acct-1",
+                "current_request_id": "current",
+                "baseline_request_id": "baseline",
+                "delta": json.dumps({"schema_version": "deflection_delta.v1"}),
+                "created_at": "2026-06-01T00:00:00Z",
+                "updated_at": "2026-06-01T00:00:00Z",
+            }
+
+        async def execute(self, query: str, *args: object) -> str:
+            self.execute_calls.append((query, args))
+            return "INSERT 0 1"
+
+    pool = _Pool()
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+
+    selected = await store.select_previous_paid_report(
+        account_id=" acct-1 ",
+        current_request_id=" current ",
+    )
+    await store.save_deflection_delta(
+        account_id="acct-1",
+        current_request_id="current",
+        baseline_request_id="baseline",
+        delta={"schema_version": "deflection_delta.v1"},
+    )
+    stored = await store.get_deflection_delta(
+        account_id="acct-1",
+        current_request_id="current",
+        baseline_request_id="baseline",
+    )
+
+    assert selected is not None
+    select_query, select_args = pool.fetchrow_calls[0]
+    assert select_args == ("acct-1", "current")
+    assert "WHERE account_id = $1" in select_query
+    assert "reports.account_id = $1" in select_query
+    assert "reports.paid = true" in select_query
+    assert "reports.created_at < current_report.created_at" in select_query
+    insert_query, insert_args = pool.execute_calls[0]
+    assert "INSERT INTO content_ops_deflection_deltas" in insert_query
+    assert "ON CONFLICT (account_id, current_request_id, baseline_request_id)" in insert_query
+    assert insert_args[:3] == ("acct-1", "current", "baseline")
+    assert json.loads(str(insert_args[3])) == {"schema_version": "deflection_delta.v1"}
+    assert stored is not None
+    assert stored.delta == {"schema_version": "deflection_delta.v1"}
