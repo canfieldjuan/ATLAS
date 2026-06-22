@@ -1,6 +1,6 @@
 # Plan archive index
 
-1185 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1186 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -749,6 +749,7 @@
 - [PR-Deflection-PII-Recall-Harness](archive/PR-Deflection-PII-Recall-Harness.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
 - [PR-Deflection-PII-Review-Bundle-Manifest](archive/PR-Deflection-PII-Review-Bundle-Manifest.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
 - [PR-Deflection-PII-Review-Bundle-Score](archive/PR-Deflection-PII-Review-Bundle-Score.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Review-Bundle-Version-Candidate](archive/PR-Deflection-PII-Review-Bundle-Version-Candidate.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
 - [PR-Deflection-PII-SSN-Card-Scrub](archive/PR-Deflection-PII-SSN-Card-Scrub.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
 - [PR-Deflection-PII-Source-Intake-Markdown](archive/PR-Deflection-PII-Source-Intake-Markdown.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
 - [PR-Deflection-PII-Source-Intake-Summary](archive/PR-Deflection-PII-Source-Intake-Summary.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
