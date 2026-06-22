@@ -1,14 +1,13 @@
 import json
 from pathlib import Path
+import runpy
+from types import SimpleNamespace
 
-from extracted_content_pipeline.faq_deflection_report import (
-    build_deflection_snapshot,
-    build_deflection_report_artifact,
-)
 from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_markdown
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SNAPSHOT_EXAMPLE_SCRIPT = ROOT / "scripts" / "generate_deflection_snapshot_example.py"
 DOC_PATH = ROOT / "docs/frontend/content_ops_faq_report_contract.md"
 EXAMPLE_PATH = ROOT / "docs/frontend/content_ops_faq_report_example.json"
 DEFLECTION_EXAMPLE_PATH = (
@@ -19,6 +18,11 @@ DEFLECTION_SNAPSHOT_EXAMPLE_PATH = (
 )
 DEFLECTION_CHECKOUT_CONTRACT_PATH = (
     ROOT / "docs/frontend/content_ops_faq_deflection_checkout_contract.md"
+)
+
+
+SNAPSHOT_EXAMPLE_CLI = SimpleNamespace(
+    **runpy.run_path(str(SNAPSHOT_EXAMPLE_SCRIPT))
 )
 
 
@@ -63,62 +67,6 @@ def _producer_report_shape() -> tuple[set[str], set[str]]:
 
     assert result.items
     return set(result.as_dict()), set(result.items[0])
-
-
-def _producer_deflection_report_payload() -> dict[str, object]:
-    result = build_ticket_faq_markdown(
-        [
-            {
-                "source_id": "ticket-export-1",
-                "source_type": "support_ticket",
-                "source_title": "Export attribution",
-                "text": "How do I export attribution reports?",
-                "created_at": "2026-05-01T12:00:00Z",
-                "resolution_text": (
-                    "Open Analytics, choose Attribution, then click Download report"
-                ),
-            },
-            {
-                "source_id": "ticket-export-2",
-                "source_type": "support_ticket",
-                "source_title": "Report download",
-                "text": "Where is the report download for attribution exports?",
-                "created_at": "2026-05-03",
-                "resolution_text": (
-                    "Open Analytics, choose Attribution, then click Download report"
-                ),
-            },
-            {
-                "source_id": "ticket-sso-1",
-                "source_type": "support_ticket",
-                "source_title": "SSO setup",
-                "text": "How do I enable SSO for my team?",
-                "created_at": "2026-05-10",
-            },
-            # #1460: reworded so both SSO tickets repeat the same question
-            # gist within the same topic; topic membership alone no longer
-            # merges questions.
-            {
-                "source_id": "ticket-sso-2",
-                "source_type": "support_ticket",
-                "source_title": "SSO setup",
-                "text": "Can we enable SSO for our team?",
-                "created_at": "2026-05-15",
-            },
-        ],
-        title="Support Ticket FAQ Source",
-        max_items=2,
-        max_evidence_per_item=1,
-        support_contact="https://example.com/support",
-        documentation_terms=("Download report", "Single sign-on setup"),
-        vocabulary_gap_rules=(
-            ("export", "Download report"),
-            ("SSO", "Single sign-on setup"),
-            ("report download", "Download report"),
-        ),
-    )
-
-    return build_deflection_report_artifact(result).as_dict()
 
 
 def test_content_ops_faq_report_example_matches_documented_core_shape() -> None:
@@ -169,7 +117,7 @@ def test_content_ops_faq_report_example_matches_documented_core_shape() -> None:
 
 def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     payload = json.loads(DEFLECTION_EXAMPLE_PATH.read_text(encoding="utf-8"))
-    producer_payload = _producer_deflection_report_payload()
+    producer_payload = SNAPSHOT_EXAMPLE_CLI.producer_deflection_report_payload()
     encoded = json.dumps(payload, sort_keys=True)
 
     assert set(payload) == set(producer_payload)
@@ -202,10 +150,7 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
 
 def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() -> None:
     payload = json.loads(DEFLECTION_SNAPSHOT_EXAMPLE_PATH.read_text(encoding="utf-8"))
-    producer_payload = build_deflection_snapshot(
-        _producer_deflection_report_payload(),
-        top_n=2,
-    ).as_dict()
+    producer_payload = SNAPSHOT_EXAMPLE_CLI.build_snapshot_example_payload()
     encoded = json.dumps(payload, sort_keys=True)
 
     assert payload == producer_payload
