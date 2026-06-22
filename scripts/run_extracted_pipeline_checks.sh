@@ -12,6 +12,7 @@ python scripts/smoke_extracted_pipeline_imports.py
 python scripts/smoke_extracted_pipeline_standalone.py
 python scripts/audit_extracted_standalone.py --fail-on-debt
 bash scripts/run_extracted_reasoning_core_checks.sh
+python scripts/generate_deflection_snapshot_example.py --check
 pytest \
   tests/test_extracted_campaign_analytics.py \
   tests/test_extracted_campaign_install_check.py \
@@ -46,6 +47,7 @@ pytest \
   tests/test_content_ops_faq_saas_demo_corpus.py \
   tests/test_content_ops_faq_deflection_live_upload_fixture.py \
   tests/test_content_ops_faq_report_contract_docs.py \
+  tests/test_content_ops_faq_deflection_snapshot_example_generator.py \
   tests/test_content_ops_deflection_source_proof_docs.py \
   tests/test_docs_no_raw_deflection_request_ids.py \
   tests/test_content_ops_deflection_pii_surrogate_eval_corpus.py \
