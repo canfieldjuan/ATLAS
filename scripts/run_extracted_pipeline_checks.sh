@@ -49,6 +49,7 @@ pytest \
   tests/test_content_ops_deflection_source_proof_docs.py \
   tests/test_docs_no_raw_deflection_request_ids.py \
   tests/test_content_ops_deflection_pii_surrogate_eval_corpus.py \
+  tests/test_check_deflection_pii_source_decision.py \
   tests/test_score_deflection_pii_recall.py \
   tests/test_content_ops_deflection_pii_review_bundle_candidate.py \
   tests/test_content_ops_deflection_pii_review_bundle_pipeline.py \
