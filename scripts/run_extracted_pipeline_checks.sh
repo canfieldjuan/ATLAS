@@ -55,6 +55,7 @@ pytest \
   tests/test_probe_deflection_signal_spike.py \
   tests/test_evaluate_csv_admission_threshold_evidence.py \
   tests/test_content_ops_deflection_report.py \
+  tests/test_content_ops_deflection_delta.py \
   tests/test_content_ops_deflection_resolution_live_proof.py \
   tests/test_extracted_content_deflection_submit.py \
   tests/test_prepare_content_ops_deflection_env.py \
