@@ -666,6 +666,188 @@ def test_cli_writes_markdown_summary_without_artifact_and_sanitizes_invalid_summ
     assert "missing.bad@example.com" not in rendered
 
 
+def test_cli_writes_review_bundle_with_artifact_and_summaries(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "source.json"
+    bundle_dir = tmp_path / "review-bundle"
+    source.write_text(json.dumps(_valid_source()), encoding="utf-8")
+
+    assert CLI.main([str(source), "--review-bundle-dir", str(bundle_dir), "--pretty"]) == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    artifact_output = bundle_dir / CLI.REVIEW_BUNDLE_ARTIFACT_NAME
+    summary_output = bundle_dir / CLI.REVIEW_BUNDLE_SUMMARY_NAME
+    markdown_output = bundle_dir / CLI.REVIEW_BUNDLE_MARKDOWN_NAME
+
+    assert payload["review_bundle_dir"] == str(bundle_dir)
+    assert payload["output"] == str(artifact_output)
+    assert payload["summary_output"] == str(summary_output)
+    assert payload["summary_markdown_output"] == str(markdown_output)
+    assert artifact_output.is_file()
+    assert summary_output.is_file()
+    assert markdown_output.is_file()
+    artifact = json.loads(artifact_output.read_text(encoding="utf-8"))
+    summary = json.loads(summary_output.read_text(encoding="utf-8"))
+    markdown = markdown_output.read_text(encoding="utf-8")
+    rendered = (
+        json.dumps(artifact, sort_keys=True)
+        + json.dumps(summary, sort_keys=True)
+        + markdown
+        + captured.out
+        + captured.err
+    )
+    assert artifact["summary"]["label_count"] == 9
+    assert summary["ok"] is True
+    assert "| Labels | 9 |" in markdown
+    for raw in (
+        "Alice Baker",
+        "alice.baker@example.com",
+        "202-555-0188",
+        "ORD-98765",
+        "99 Real Street",
+        "1977-06-05",
+        "111-22-3333",
+        "4242 4242 4242 4242",
+    ):
+        assert raw not in rendered
+
+
+def test_cli_review_bundle_sanitizes_invalid_source_without_artifact(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "bad-source.json"
+    bundle_dir = tmp_path / "review-bundle"
+    source.write_text(
+        json.dumps({
+            "schema_version": "deflection_pii_labeled_source.v1",
+            "records": [{
+                "fields": {"customer_message": "Email raw.bad@example.com"},
+                "labels": [{
+                    "span": "missing.bad@example.com",
+                    "class": "email",
+                    "origin_field": "customer_message",
+                }],
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    assert CLI.main([str(source), "--review-bundle-dir", str(bundle_dir), "--pretty"]) == 1
+    captured = capsys.readouterr()
+    artifact_output = bundle_dir / CLI.REVIEW_BUNDLE_ARTIFACT_NAME
+    summary_output = bundle_dir / CLI.REVIEW_BUNDLE_SUMMARY_NAME
+    markdown_output = bundle_dir / CLI.REVIEW_BUNDLE_MARKDOWN_NAME
+
+    assert not artifact_output.exists()
+    assert summary_output.is_file()
+    assert markdown_output.is_file()
+    summary = json.loads(summary_output.read_text(encoding="utf-8"))
+    markdown = markdown_output.read_text(encoding="utf-8")
+    rendered = json.dumps(summary, sort_keys=True) + markdown + captured.out + captured.err
+    assert summary["ok"] is False
+    assert "| Status | blocked |" in markdown
+    assert "label_span_not_found" in rendered
+    assert "record_index=1, label_index=1, origin_field=customer_message" in rendered
+    assert "raw.bad@example.com" not in rendered
+    assert "missing.bad@example.com" not in rendered
+
+
+def test_cli_review_bundle_removes_stale_artifact_on_invalid_rebuild(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "source.json"
+    bad_source = tmp_path / "bad-source.json"
+    bundle_dir = tmp_path / "review-bundle"
+    source.write_text(json.dumps(_valid_source()), encoding="utf-8")
+    bad_source.write_text(
+        json.dumps({
+            "schema_version": "alice@example.com",
+            "records": [{
+                "fields": {"customer_message": "Email raw.bad@example.com"},
+                "labels": [{
+                    "span": "missing.bad@example.com",
+                    "class": "email",
+                    "origin_field": "customer_message",
+                }],
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    assert CLI.main([str(source), "--review-bundle-dir", str(bundle_dir)]) == 0
+    artifact_output = bundle_dir / CLI.REVIEW_BUNDLE_ARTIFACT_NAME
+    assert artifact_output.is_file()
+    valid_artifact = json.loads(artifact_output.read_text(encoding="utf-8"))
+    assert valid_artifact["summary"]["label_count"] == 9
+    capsys.readouterr()
+
+    assert CLI.main([str(bad_source), "--review-bundle-dir", str(bundle_dir)]) == 1
+    captured = capsys.readouterr()
+    summary_output = bundle_dir / CLI.REVIEW_BUNDLE_SUMMARY_NAME
+    markdown_output = bundle_dir / CLI.REVIEW_BUNDLE_MARKDOWN_NAME
+
+    assert not artifact_output.exists()
+    assert summary_output.is_file()
+    assert markdown_output.is_file()
+    summary = json.loads(summary_output.read_text(encoding="utf-8"))
+    markdown = markdown_output.read_text(encoding="utf-8")
+    rendered = json.dumps(summary, sort_keys=True) + markdown + captured.out + captured.err
+    assert summary["ok"] is False
+    assert "source_schema_version_mismatch" in rendered
+    assert "| Status | blocked |" in markdown
+    assert "alice@example.com" not in rendered
+    assert "raw.bad@example.com" not in rendered
+    assert "missing.bad@example.com" not in rendered
+
+
+@pytest.mark.parametrize(
+    "output_flag",
+    ("--output", "--summary-output", "--summary-markdown-output"),
+)
+def test_cli_rejects_review_bundle_with_individual_outputs(
+    tmp_path: Path,
+    output_flag: str,
+) -> None:
+    source = tmp_path / "source.json"
+    bundle_dir = tmp_path / "review-bundle"
+    explicit_output = tmp_path / "explicit-output"
+    source.write_text(json.dumps(_valid_source()), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        CLI.main([
+            str(source),
+            "--review-bundle-dir",
+            str(bundle_dir),
+            output_flag,
+            str(explicit_output),
+        ])
+
+    assert exc.value.code == 2
+    assert not bundle_dir.exists()
+    assert not explicit_output.exists()
+
+
+def test_cli_rejects_review_bundle_file_path_without_raw_echo(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "source.json"
+    bundle_path = tmp_path / "review-bundle"
+    source.write_text(json.dumps(_valid_source()), encoding="utf-8")
+    bundle_path.write_text("not a directory", encoding="utf-8")
+
+    assert CLI.main([str(source), "--review-bundle-dir", str(bundle_path)]) == 1
+    captured = capsys.readouterr()
+    rendered = captured.out + captured.err
+    assert "review_bundle_dir_not_directory" in rendered
+    assert "Alice Baker" not in rendered
+    assert "alice.baker@example.com" not in rendered
+
+
 @pytest.mark.parametrize(
     ("first_flag", "second_flag"),
     (

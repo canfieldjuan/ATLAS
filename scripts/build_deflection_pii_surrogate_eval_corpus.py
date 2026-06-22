@@ -21,6 +21,10 @@ from extracted_content_pipeline.deflection_pii_eval_corpus import (  # noqa: E40
     build_surrogate_eval_corpus,
 )
 
+REVIEW_BUNDLE_ARTIFACT_NAME = "deflection-pii-surrogate-eval-corpus.json"
+REVIEW_BUNDLE_SUMMARY_NAME = "source-intake-summary.json"
+REVIEW_BUNDLE_MARKDOWN_NAME = "source-intake-summary.md"
+
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
@@ -32,19 +36,38 @@ def main(argv: list[str] | None = None) -> int:
             "message": str(exc.__class__.__name__),
         }]})
         return 1
-    result = build_surrogate_eval_corpus(source) if args.output else None
+    output_path = args.output
+    summary_output = args.summary_output
+    summary_markdown_output = args.summary_markdown_output
+    if args.review_bundle_dir is not None:
+        bundle_paths = _review_bundle_paths(args.review_bundle_dir)
+        if bundle_paths is None:
+            return 1
+        output_path = bundle_paths["artifact"]
+        summary_output = bundle_paths["summary"]
+        summary_markdown_output = bundle_paths["markdown"]
+
+    result = build_surrogate_eval_corpus(source) if output_path else None
     summary: dict[str, Any] | None = None
-    if args.summary_output or args.summary_markdown_output:
+    if summary_output or summary_markdown_output:
         summary = summarize_labeled_source(source, build_result=result)
-    if args.summary_output:
-        args.summary_output.parent.mkdir(parents=True, exist_ok=True)
-        args.summary_output.write_text(
+    if (
+        args.review_bundle_dir is not None
+        and summary is not None
+        and not summary["ok"]
+        and output_path is not None
+    ):
+        if not _remove_existing_review_bundle_artifact(output_path):
+            return 1
+    if summary_output:
+        summary_output.parent.mkdir(parents=True, exist_ok=True)
+        summary_output.write_text(
             json.dumps(summary, indent=2 if args.pretty else None, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-    if args.summary_markdown_output:
-        args.summary_markdown_output.parent.mkdir(parents=True, exist_ok=True)
-        args.summary_markdown_output.write_text(
+    if summary_markdown_output:
+        summary_markdown_output.parent.mkdir(parents=True, exist_ok=True)
+        summary_markdown_output.write_text(
             format_labeled_source_intake_summary_markdown(summary),
             encoding="utf-8",
         )
@@ -58,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     artifact: dict[str, Any] | None = None
-    if args.output:
+    if output_path:
         if result is None:
             result = build_surrogate_eval_corpus(source)
         if not result.ok:
@@ -77,24 +100,26 @@ def main(argv: list[str] | None = None) -> int:
             })
             return 1
         text = json.dumps(artifact, indent=2 if args.pretty else None, sort_keys=True)
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(text + "\n", encoding="utf-8")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(text + "\n", encoding="utf-8")
     payload = {
         "ok": True,
         "schema_version": SCHEMA_VERSION,
     }
     if artifact is not None:
         payload.update({
-            "output": str(args.output),
+            "output": str(output_path),
             "ticket_count": artifact["summary"]["ticket_count"],
             "label_count": artifact["summary"]["label_count"],
         })
-    if args.summary_output and summary is not None:
-        payload["summary_output"] = str(args.summary_output)
+    if summary_output and summary is not None:
+        payload["summary_output"] = str(summary_output)
         payload["summary_schema_version"] = str(summary["schema_version"])
-    if args.summary_markdown_output and summary is not None:
-        payload["summary_markdown_output"] = str(args.summary_markdown_output)
+    if summary_markdown_output and summary is not None:
+        payload["summary_markdown_output"] = str(summary_markdown_output)
         payload["summary_schema_version"] = str(summary["schema_version"])
+    if args.review_bundle_dir is not None:
+        payload["review_bundle_dir"] = str(args.review_bundle_dir)
     print(json.dumps(payload, sort_keys=True))
     return 0
 
@@ -113,6 +138,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=Path,
         help="Sanitized Markdown intake summary path.",
     )
+    parser.add_argument(
+        "--review-bundle-dir",
+        type=Path,
+        help=(
+            "Directory for a sanitized review bundle containing the source "
+            "intake JSON summary, Markdown summary, and surrogate artifact."
+        ),
+    )
     parser.add_argument("--pretty", action="store_true", help="Write pretty JSON.")
     args = parser.parse_args(argv)
     outputs = (
@@ -120,13 +153,50 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         ("--summary-output", args.summary_output),
         ("--summary-markdown-output", args.summary_markdown_output),
     )
-    if not any(path is not None for _, path in outputs):
+    if args.review_bundle_dir is not None and any(path is not None for _, path in outputs):
+        parser.error(
+            "--review-bundle-dir cannot be combined with --output, "
+            "--summary-output, or --summary-markdown-output"
+        )
+    if args.review_bundle_dir is None and not any(path is not None for _, path in outputs):
         parser.error(
             "at least one of --output, --summary-output, or "
-            "--summary-markdown-output is required"
+            "--summary-markdown-output is required unless --review-bundle-dir is set"
         )
     _reject_duplicate_output_paths(parser, outputs)
     return args
+
+
+def _review_bundle_paths(bundle_dir: Path) -> dict[str, Path] | None:
+    if bundle_dir.exists() and not bundle_dir.is_dir():
+        _write_error({
+            "ok": False,
+            "schema_version": SCHEMA_VERSION,
+            "errors": [{"code": "review_bundle_dir_not_directory"}],
+        })
+        return None
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "artifact": bundle_dir / REVIEW_BUNDLE_ARTIFACT_NAME,
+        "summary": bundle_dir / REVIEW_BUNDLE_SUMMARY_NAME,
+        "markdown": bundle_dir / REVIEW_BUNDLE_MARKDOWN_NAME,
+    }
+
+
+def _remove_existing_review_bundle_artifact(output_path: Path) -> bool:
+    try:
+        output_path.unlink(missing_ok=True)
+    except OSError as exc:
+        _write_error({
+            "ok": False,
+            "schema_version": SCHEMA_VERSION,
+            "errors": [{
+                "code": "review_bundle_artifact_unremovable",
+                "message": exc.__class__.__name__,
+            }],
+        })
+        return False
+    return True
 
 
 def _reject_duplicate_output_paths(
