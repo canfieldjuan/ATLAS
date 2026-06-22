@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "score_deflection_pii_recall.py"
+BUILD_SCRIPT = ROOT / "scripts" / "build_deflection_pii_surrogate_eval_corpus.py"
 TINY_FIXTURE = (
     ROOT
     / "docs/extraction/validation/fixtures/deflection_pii_surrogate_eval_tiny.json"
@@ -20,10 +21,131 @@ assert SPEC.loader is not None
 CLI = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = CLI
 SPEC.loader.exec_module(CLI)
+BUILD_SPEC = importlib.util.spec_from_file_location(
+    "build_deflection_pii_surrogate_eval_corpus_for_score_tests",
+    BUILD_SCRIPT,
+)
+assert BUILD_SPEC is not None
+assert BUILD_SPEC.loader is not None
+BUILD_CLI = importlib.util.module_from_spec(BUILD_SPEC)
+sys.modules[BUILD_SPEC.name] = BUILD_CLI
+BUILD_SPEC.loader.exec_module(BUILD_CLI)
 
 
 def _tiny_corpus() -> dict:
     return json.loads(TINY_FIXTURE.read_text(encoding="utf-8"))
+
+
+def test_review_bundle_corpus_filename_matches_builder_bundle_artifact() -> None:
+    assert CLI.REVIEW_BUNDLE_CORPUS_NAME == BUILD_CLI.REVIEW_BUNDLE_ARTIFACT_NAME
+
+
+def test_review_bundle_mode_writes_score_artifacts_without_span_echo(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / CLI.REVIEW_BUNDLE_CORPUS_NAME).write_text(
+        TINY_FIXTURE.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    assert CLI.main(["--review-bundle-dir", str(bundle_dir)]) == 0
+
+    score_path = bundle_dir / CLI.REVIEW_BUNDLE_SCORE_NAME
+    markdown_path = bundle_dir / CLI.REVIEW_BUNDLE_SCORE_MARKDOWN_NAME
+    summary = json.loads(score_path.read_text(encoding="utf-8"))
+    markdown = markdown_path.read_text(encoding="utf-8")
+    rendered = json.dumps(summary, sort_keys=True) + markdown
+
+    assert summary["status"] == "ok"
+    assert summary["schema_version"] == "deflection_pii_recall_score.v1"
+    assert summary["input"]["ticket_count"] == 3
+    assert "# Deflection PII Recall Advisory" in markdown
+    assert "deflection-pii-surrogate-eval-corpus.json" not in rendered
+    for raw in (
+        "Maya Chen",
+        "Jordan Lee",
+        "Taylor Brooks",
+        "Mary Jane Watson",
+        "Watson",
+    ):
+        assert raw not in rendered
+
+
+def test_review_bundle_mode_rejects_split_output_flags(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as exc:
+        CLI._parse_args([
+            "--review-bundle-dir",
+            str(tmp_path / "bundle"),
+            "--output",
+            str(tmp_path / "score.json"),
+        ])
+
+    assert exc.value.code == 2
+
+
+def test_review_bundle_mode_rejects_existing_file_path_without_echo(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle_path = tmp_path / "bundle-file"
+    bundle_path.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        CLI._parse_args(["--review-bundle-dir", str(bundle_path)])
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 2
+    assert "--review-bundle-dir must be a directory" in captured.err
+    assert str(bundle_path) not in captured.err
+
+
+def test_review_bundle_mode_missing_corpus_writes_sanitized_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+
+    assert CLI.main(["--review-bundle-dir", str(bundle_dir)]) == 1
+
+    captured = capsys.readouterr()
+    score_path = bundle_dir / CLI.REVIEW_BUNDLE_SCORE_NAME
+    markdown_path = bundle_dir / CLI.REVIEW_BUNDLE_SCORE_MARKDOWN_NAME
+    summary = json.loads(score_path.read_text(encoding="utf-8"))
+    markdown = markdown_path.read_text(encoding="utf-8")
+    rendered = json.dumps(summary, sort_keys=True) + markdown + captured.err
+
+    assert summary["status"] == "failed"
+    assert summary["blocking_error_codes"] == ["corpus_load_failed"]
+    assert "corpus_load_failed" in markdown
+    assert str(bundle_dir) not in rendered
+    assert "deflection-pii-surrogate-eval-corpus.json" not in rendered
+
+
+def test_review_bundle_mode_non_utf8_corpus_writes_sanitized_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / CLI.REVIEW_BUNDLE_CORPUS_NAME).write_bytes(b"\xff\xfe\x00")
+
+    assert CLI.main(["--review-bundle-dir", str(bundle_dir)]) == 1
+
+    captured = capsys.readouterr()
+    score_path = bundle_dir / CLI.REVIEW_BUNDLE_SCORE_NAME
+    markdown_path = bundle_dir / CLI.REVIEW_BUNDLE_SCORE_MARKDOWN_NAME
+    summary = json.loads(score_path.read_text(encoding="utf-8"))
+    markdown = markdown_path.read_text(encoding="utf-8")
+    rendered = json.dumps(summary, sort_keys=True) + markdown + captured.err
+
+    assert summary["status"] == "failed"
+    assert summary["blocking_error_codes"] == ["corpus_load_failed"]
+    assert "corpus_load_failed" in markdown
+    assert "UnicodeDecodeError" not in rendered
+    assert str(bundle_dir) not in rendered
+    assert "deflection-pii-surrogate-eval-corpus.json" not in rendered
 
 
 def test_tiny_fixture_scores_all_surfaces_without_echoing_spans() -> None:
