@@ -394,6 +394,7 @@ class DeflectionSnapshot:
     summary: dict[str, Any]
     top_questions: tuple[dict[str, Any], ...]
     locked_questions: tuple[dict[str, int], ...]
+    top_blind_spots: tuple[dict[str, int | str], ...]
     teaser: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
@@ -402,6 +403,9 @@ class DeflectionSnapshot:
             "top_questions": [dict(question) for question in self.top_questions],
             "locked_questions": [
                 dict(question) for question in self.locked_questions
+            ],
+            "top_blind_spots": [
+                dict(question) for question in self.top_blind_spots
             ],
             "teaser": {
                 "full_answer": (
@@ -597,6 +601,11 @@ _DEFLECTION_REPORT_SECTION_DEFINITIONS = (
             "result_page_limit",
             "pdf_limit",
             "support_cost_basis",
+        ),
+        snapshot_safe_fields=(
+            "items.rank",
+            "items.question",
+            "items.ticket_count",
         ),
     ),
     DeflectionReportSectionDefinition(
@@ -1731,6 +1740,7 @@ def build_deflection_snapshot(
         summary=snapshot_summary,
         top_questions=tuple(top_questions),
         locked_questions=locked_questions,
+        top_blind_spots=(),
         teaser=teaser,
     )
 
@@ -1744,6 +1754,7 @@ def _build_deflection_snapshot_from_report_model(
     sections = _snapshot_report_model_projection(report_model)
     support_tax = sections.get("support_tax", {})
     ranked_rows = _snapshot_rows(sections.get("ranked_questions"))
+    blind_spot_rows = _snapshot_items(sections.get("top_unresolved_repeats"))
     detail_rows = _report_model_section_rows(report_model, "question_details")
     snapshot_summary: dict[str, Any] = {
         "generated": _int(support_tax.get("generated_question_count")),
@@ -1782,10 +1793,20 @@ def _build_deflection_snapshot_from_report_model(
         for rank, row in enumerate(ranked_rows[top_n:], start=top_n + 1)
         if (_int(row.get("rank")) or rank) != teaser_full_rank
     )
+    top_blind_spots = tuple(
+        {
+            "rank": _int(row.get("rank")) or index,
+            "question": _text(row.get("question")),
+            "ticket_count": _int(row.get("ticket_count")),
+        }
+        for index, row in enumerate(blind_spot_rows[:top_n], start=1)
+        if _text(row.get("question"))
+    )
     return DeflectionSnapshot(
         summary=snapshot_summary,
         top_questions=tuple(top_questions),
         locked_questions=locked_questions,
+        top_blind_spots=top_blind_spots,
         teaser=teaser,
     )
 
@@ -1905,6 +1926,11 @@ def _snapshot_safe_section_data(
         for field in safe_fields
         if field.startswith("rows.")
     )
+    item_fields = tuple(
+        field.removeprefix("items.")
+        for field in safe_fields
+        if field.startswith("items.")
+    )
     out: dict[str, Any] = {
         field: _json_ready(data[field])
         for field in direct_fields
@@ -1925,6 +1951,21 @@ def _snapshot_safe_section_data(
                 for row in rows
                 if isinstance(row, Mapping)
             ]
+    if item_fields:
+        items = data.get("items")
+        if isinstance(items, Sequence) and not isinstance(
+            items,
+            (str, bytes, bytearray),
+        ):
+            out["items"] = [
+                {
+                    field: _json_ready(item[field])
+                    for field in item_fields
+                    if isinstance(item, Mapping) and field in item
+                }
+                for item in items
+                if isinstance(item, Mapping)
+            ]
     return out
 
 
@@ -1935,6 +1976,15 @@ def _snapshot_rows(section_data: Mapping[str, Any] | None) -> tuple[Mapping[str,
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
         return ()
     return tuple(row for row in rows if isinstance(row, Mapping))
+
+
+def _snapshot_items(section_data: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(section_data, Mapping):
+        return ()
+    items = section_data.get("items")
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
+        return ()
+    return tuple(item for item in items if isinstance(item, Mapping))
 
 
 def deflection_snapshot_content_opportunities(

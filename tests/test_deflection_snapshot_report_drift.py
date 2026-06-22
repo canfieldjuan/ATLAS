@@ -13,6 +13,8 @@ The boundary policy under test (see docs/frontend/content_ops_faq_report_contrac
   the report ranked rows, and weighted_frequency/customer_wording to the source
   FAQ items they project from (the report model does not re-expose those two);
 - locked_questions expose rank + ticket_count only (never question text);
+- top_blind_spots matches the report's unresolved repeated-question rows and
+  exposes only rank/question/ticket_count;
 - the single teaser full answer is a genuinely scoped resolution_evidence row;
 - no paid body/evidence field appears outside $.teaser.full_answer.
 """
@@ -150,6 +152,19 @@ def _rows_by_rank(section: Mapping[str, Any] | None) -> dict[int, Mapping[str, A
     return rows
 
 
+def _items_by_rank(section: Mapping[str, Any] | None) -> dict[int, Mapping[str, Any]]:
+    rows: dict[int, Mapping[str, Any]] = {}
+    if not isinstance(section, Mapping):
+        return rows
+    data = section.get("data")
+    if not isinstance(data, Mapping):
+        return rows
+    for item in data.get("items", ()):
+        if isinstance(item, Mapping) and isinstance(item.get("rank"), int):
+            rows[item["rank"]] = item
+    return rows
+
+
 @pytest.fixture()
 def artifact_snapshot() -> tuple[Any, dict[str, Any], dict[str, Any], dict[str, Any]]:
     artifact = build_deflection_report_artifact(_drift_fixture_result())
@@ -226,6 +241,18 @@ def test_snapshot_locked_questions_expose_rank_and_count_only(artifact_snapshot)
         assert locked["ticket_count"] == ranked[locked["rank"]]["ticket_count"]
 
 
+def test_snapshot_blind_spots_match_unresolved_repeats(artifact_snapshot) -> None:
+    _, snapshot, _, sections = artifact_snapshot
+    unresolved = _items_by_rank(sections.get("top_unresolved_repeats"))
+
+    assert snapshot["top_blind_spots"], "expected unresolved blind spots"
+    for blind_spot in snapshot["top_blind_spots"]:
+        assert set(blind_spot) == {"rank", "question", "ticket_count"}
+        row = unresolved[blind_spot["rank"]]
+        assert blind_spot["question"] == row["question"]
+        assert blind_spot["ticket_count"] == row["ticket_count"]
+
+
 def test_snapshot_teaser_full_answer_derives_from_scoped_report_detail(
     artifact_snapshot,
 ) -> None:
@@ -275,6 +302,17 @@ def test_drift_detector_flags_injected_top_question_leak(artifact_snapshot) -> N
     ]
     paths = SMOKE._forbidden_key_paths(leaked)
     assert "$.top_questions[0].source_ids" in paths
+
+
+def test_drift_detector_flags_injected_blind_spot_leak(artifact_snapshot) -> None:
+    _, snapshot, _, _ = artifact_snapshot
+    leaked = dict(snapshot)
+    leaked["top_blind_spots"] = [
+        {**dict(snapshot["top_blind_spots"][0]), "source_ids": ["ticket-sso-1"]},
+        *snapshot["top_blind_spots"][1:],
+    ]
+    paths = SMOKE._forbidden_key_paths(leaked)
+    assert "$.top_blind_spots[0].source_ids" in paths
 
 
 def test_drift_detector_flags_answer_leak_outside_teaser_full_answer(

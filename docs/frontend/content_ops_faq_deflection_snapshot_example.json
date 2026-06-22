@@ -43,5 +43,12 @@
       "ticket_count": 2,
       "weighted_frequency": 2
     }
+  ],
+  "top_blind_spots": [
+    {
+      "question": "How do I enable SSO for my team?",
+      "rank": 2,
+      "ticket_count": 2
+    }
   ]
 }
