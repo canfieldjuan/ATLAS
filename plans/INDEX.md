@@ -1,6 +1,6 @@
 # Plan archive index
 
-1188 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1189 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -813,6 +813,7 @@
 - [PR-Deflection-Signal-Spike](archive/PR-Deflection-Signal-Spike.md) - lane: content-ops/deflection-report-actionability | phase: Functional validation
 - [PR-Deflection-Snapshot-Counts](archive/PR-Deflection-Snapshot-Counts.md) - lane: content-ops/faq-deflection | phase: Functional validation
 - [PR-Deflection-Snapshot-Date-Window](archive/PR-Deflection-Snapshot-Date-Window.md) - lane: ai-content-ops/faq-support-ticket-deflection | phase: Production hardening
+- [PR-Deflection-Snapshot-Projection-Contract](archive/PR-Deflection-Snapshot-Projection-Contract.md) - lane: deflection/full-report-actionability | phase: Production hardening
 - [PR-Deflection-Snapshot-Report-Drift-Test](archive/PR-Deflection-Snapshot-Report-Drift-Test.md) - lane: content-ops/deflection-full-report-qa | phase: Production hardening
 - [PR-Deflection-Snapshot-Teaser](archive/PR-Deflection-Snapshot-Teaser.md) - lane: content-ops/faq-deflection | phase: Product polish
 - [PR-Deflection-Source-Proof-Framing](archive/PR-Deflection-Source-Proof-Framing.md) - lane: content-ops/deflection-full-volume | phase: Functional validation
