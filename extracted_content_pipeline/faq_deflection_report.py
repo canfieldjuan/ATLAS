@@ -729,6 +729,55 @@ _SNAPSHOT_REQUIRED_DETAIL_TEASER_FIELDS = frozenset({
     "answer",
     "steps",
 })
+DEFLECTION_SNAPSHOT_TOP_LEVEL_FIELDS = (
+    "summary",
+    "top_questions",
+    "locked_questions",
+    "top_blind_spots",
+    "teaser",
+)
+_SNAPSHOT_SUMMARY_FIELDS = (
+    "generated",
+    "drafted_answer_count",
+    "no_proven_answer_count",
+    "support_ticket_resolution_evidence_present",
+    "support_ticket_resolution_evidence_count",
+    "repeat_ticket_count",
+    "non_repeat_ticket_count",
+    "source_date_start",
+    "source_date_end",
+    "source_window_days",
+)
+_SNAPSHOT_TOP_QUESTION_FIELDS = (
+    "rank",
+    "question",
+    "ticket_count",
+    "weighted_frequency",
+    "customer_wording",
+)
+_SNAPSHOT_LOCKED_QUESTION_FIELDS = ("rank", "ticket_count")
+_SNAPSHOT_BLIND_SPOT_FIELDS = ("rank", "question", "ticket_count")
+_SNAPSHOT_TEASER_FIELDS = ("full_answer", "previews")
+_SNAPSHOT_TEASER_FULL_ANSWER_FIELDS = (
+    "rank",
+    "question",
+    "answer",
+    "steps",
+    "answer_evidence_status",
+    "resolution_evidence_scope",
+    "weighted_frequency",
+    "source_count",
+)
+_SNAPSHOT_TEASER_PREVIEW_FIELDS = (
+    "rank",
+    "question",
+    "answer_evidence_status",
+    "resolution_evidence_scope",
+    "weighted_frequency",
+    "step_count",
+    "source_count",
+    "body_withheld",
+)
 
 
 def deflection_report_model_contract_shape() -> dict[str, Any]:
@@ -738,6 +787,7 @@ def deflection_report_model_contract_shape() -> dict[str, Any]:
         "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
         "model_fields": list(DEFLECTION_REPORT_MODEL_FIELDS),
         "section_fields": list(DEFLECTION_REPORT_SECTION_FIELDS),
+        "snapshot_projection": _deflection_snapshot_projection_contract_shape(),
         "sections": [
             {
                 "id": definition.id,
@@ -751,6 +801,80 @@ def deflection_report_model_contract_shape() -> dict[str, Any]:
             for definition in _DEFLECTION_REPORT_SECTION_DEFINITIONS
         ],
     }
+
+
+def _deflection_snapshot_projection_contract_shape() -> dict[str, Any]:
+    """Return the backend-owned free Snapshot projection contract."""
+
+    return {
+        "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
+        "top_level_fields": list(DEFLECTION_SNAPSHOT_TOP_LEVEL_FIELDS),
+        "fields": [
+            _snapshot_projection_section_entry(
+                "summary",
+                source_section="support_tax",
+                projected_fields=_SNAPSHOT_SUMMARY_FIELDS,
+            ),
+            _snapshot_projection_section_entry(
+                "top_questions",
+                source_section="ranked_questions",
+                source_collection="rows",
+                projected_fields=_SNAPSHOT_TOP_QUESTION_FIELDS,
+                limit="top_n",
+            ),
+            _snapshot_projection_section_entry(
+                "locked_questions",
+                source_section="ranked_questions",
+                source_collection="rows",
+                projected_fields=_SNAPSHOT_LOCKED_QUESTION_FIELDS,
+                limit="remaining_after_top_n_and_teaser_full_answer",
+            ),
+            _snapshot_projection_section_entry(
+                "top_blind_spots",
+                source_section="top_unresolved_repeats",
+                source_collection="items",
+                projected_fields=_SNAPSHOT_BLIND_SPOT_FIELDS,
+                limit="top_unresolved_repeats.result_page_limit",
+            ),
+            {
+                "field": "teaser",
+                "source_section": "question_details",
+                "source_collection": "rows",
+                "policy": "scoped_resolution_evidence_only",
+                "snapshot_safe_fields": list(
+                    DEFLECTION_REPORT_SECTION_REGISTRY[
+                        "question_details"
+                    ].snapshot_safe_fields
+                ),
+                "projected_fields": list(_SNAPSHOT_TEASER_FIELDS),
+                "full_answer_fields": list(_SNAPSHOT_TEASER_FULL_ANSWER_FIELDS),
+                "preview_fields": list(_SNAPSHOT_TEASER_PREVIEW_FIELDS),
+                "limit": "teaser_preview_count_plus_optional_full_answer",
+            },
+        ],
+    }
+
+
+def _snapshot_projection_section_entry(
+    field: str,
+    *,
+    source_section: str,
+    projected_fields: Sequence[str],
+    source_collection: str | None = None,
+    limit: str | None = None,
+) -> dict[str, Any]:
+    definition = DEFLECTION_REPORT_SECTION_REGISTRY[source_section]
+    out: dict[str, Any] = {
+        "field": field,
+        "source_section": source_section,
+        "snapshot_safe_fields": list(definition.snapshot_safe_fields),
+        "projected_fields": list(projected_fields),
+    }
+    if source_collection is not None:
+        out["source_collection"] = source_collection
+    if limit is not None:
+        out["limit"] = limit
+    return out
 
 
 DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS: Mapping[str, Mapping[str, int]] = (
