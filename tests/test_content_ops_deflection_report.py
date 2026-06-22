@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
@@ -1384,6 +1385,64 @@ def test_deflection_snapshot_projection_contract_is_registry_derived() -> None:
         "identity_confidence",
     ):
         assert forbidden not in encoded
+
+
+def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:
+    fixture = _structured_report_fixture_result()
+    fixture = replace(
+        fixture,
+        source_count=fixture.source_count + 2,
+        ticket_source_count=fixture.ticket_source_count + 2,
+        items=fixture.items
+        + (
+            {
+                "question": "How do I resend an invoice receipt?",
+                "customer_wording": "resend invoice receipt",
+                "topic": "billing",
+                "weighted_frequency": 2,
+                "ticket_count": 2,
+                "opportunity_score": 8,
+                "answer": "Open Billing, choose Receipts, then resend the receipt.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "steps": ["Open Billing and select Resend receipt."],
+                "source_ids": ("ticket-receipt-1", "ticket-receipt-2"),
+                "source_date_span": {
+                    "start": "2026-05-16",
+                    "end": "2026-05-17",
+                    "missing_source_count": 0,
+                },
+            },
+        ),
+    )
+    artifact = build_deflection_report_artifact(fixture)
+    snapshot = build_deflection_snapshot(artifact, top_n=1).as_dict()
+    projection = deflection_report_model_contract_shape()["snapshot_projection"]
+    fields = {field["field"]: field for field in projection["fields"]}
+
+    assert snapshot["top_questions"]
+    assert snapshot["locked_questions"]
+    assert snapshot["top_blind_spots"]
+    assert snapshot["teaser"]["full_answer"] is not None
+    assert snapshot["teaser"]["previews"]
+
+    assert set(snapshot["summary"]) == set(fields["summary"]["projected_fields"])
+    assert set(snapshot["top_questions"][0]) == set(
+        fields["top_questions"]["projected_fields"]
+    )
+    assert set(snapshot["locked_questions"][0]) == set(
+        fields["locked_questions"]["projected_fields"]
+    )
+    assert set(snapshot["top_blind_spots"][0]) == set(
+        fields["top_blind_spots"]["projected_fields"]
+    )
+    assert set(snapshot["teaser"]) == set(fields["teaser"]["projected_fields"])
+    assert set(snapshot["teaser"]["full_answer"]) == set(
+        fields["teaser"]["full_answer_fields"]
+    )
+    assert set(snapshot["teaser"]["previews"][0]) == set(
+        fields["teaser"]["preview_fields"]
+    )
 
 
 def test_deflection_report_section_registry_drives_section_metadata() -> None:
