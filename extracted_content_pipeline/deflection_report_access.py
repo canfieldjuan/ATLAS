@@ -60,6 +60,17 @@ class DeflectionDeltaAccessRecord:
     updated_at: Any = None
 
 
+@dataclass(frozen=True)
+class DeflectionDeltaBatchSummary:
+    """Result of a tenant-scoped batch delta generation run."""
+
+    accounts_scanned: int
+    reports_scanned: int
+    deltas_saved: int
+    skipped_no_delta: int
+    failed: int = 0
+
+
 class DeflectionDeltaReadError(ValueError):
     """Raised when a persisted delta is unavailable to a paid read surface."""
 
@@ -99,6 +110,13 @@ class DeflectionReportArtifactStore(Protocol):
         paid: bool | None = None,
     ) -> tuple[DeflectionReportListRecord, ...]:
         """List free report snapshots for one tenant, newest first."""
+
+    async def list_paid_report_accounts(
+        self,
+        *,
+        limit: int | None = 100,
+    ) -> tuple[str, ...]:
+        """List tenants with paid reports, newest paid activity first."""
 
     async def get_artifact_record(
         self,
@@ -304,6 +322,29 @@ class InMemoryDeflectionReportArtifactStore:
                 )
             )
         return tuple(out)
+
+    async def list_paid_report_accounts(
+        self,
+        *,
+        limit: int | None = 100,
+    ) -> tuple[str, ...]:
+        newest_by_account: dict[str, datetime] = {}
+        fallback = datetime.min.replace(tzinfo=timezone.utc)
+        for key, row in self._rows.items():
+            account_id, _request_id = key
+            if not row.paid:
+                continue
+            created_at = self._created_at_by_key.get(key, fallback)
+            if created_at > newest_by_account.get(account_id, fallback):
+                newest_by_account[account_id] = created_at
+        ordered = sorted(
+            newest_by_account,
+            key=lambda account_id: newest_by_account[account_id],
+            reverse=True,
+        )
+        if limit is None:
+            return tuple(ordered)
+        return tuple(ordered[:_bounded_limit(limit)])
 
     async def get_artifact_record(
         self,
@@ -592,6 +633,33 @@ class PostgresDeflectionReportArtifactStore:
             *args,
         )
         return tuple(_list_record_from_row(row_to_dict(row)) for row in rows)
+
+    async def list_paid_report_accounts(
+        self,
+        *,
+        limit: int | None = 100,
+    ) -> tuple[str, ...]:
+        args: list[Any] = []
+        limit_clause = ""
+        if limit is not None:
+            args.append(_bounded_limit(limit))
+            limit_clause = "LIMIT $1"
+        rows = await self.pool.fetch(
+            f"""
+            SELECT account_id
+            FROM content_ops_deflection_reports
+            WHERE paid = true
+            GROUP BY account_id
+            ORDER BY MAX(created_at) DESC, account_id ASC
+            {limit_clause}
+            """,
+            *args,
+        )
+        return tuple(
+            account_id
+            for row in rows
+            if (account_id := _clean(row_to_dict(row).get("account_id")))
+        )
 
     async def get_artifact_record(
         self,
@@ -1201,6 +1269,51 @@ async def compute_and_save_previous_deflection_delta(
     )
 
 
+async def compute_and_save_recent_deflection_deltas(
+    store: DeflectionReportArtifactStore,
+    *,
+    account_limit: int | None = 100,
+    reports_per_account: int | None = 25,
+) -> DeflectionDeltaBatchSummary:
+    """Persist previous-paid-report deltas for recent paid reports."""
+
+    accounts = await store.list_paid_report_accounts(limit=account_limit)
+    reports_scanned = 0
+    deltas_saved = 0
+    skipped_no_delta = 0
+    failed = 0
+
+    for account_id in accounts:
+        reports = await store.list_reports(
+            account_id=account_id,
+            limit=reports_per_account,
+            paid=True,
+        )
+        for report in reports:
+            reports_scanned += 1
+            try:
+                record = await compute_and_save_previous_deflection_delta(
+                    store,
+                    account_id=account_id,
+                    current_request_id=report.request_id,
+                )
+            except Exception:
+                failed += 1
+                continue
+            if record is None:
+                skipped_no_delta += 1
+                continue
+            deltas_saved += 1
+
+    return DeflectionDeltaBatchSummary(
+        accounts_scanned=len(accounts),
+        reports_scanned=reports_scanned,
+        deltas_saved=deltas_saved,
+        skipped_no_delta=skipped_no_delta,
+        failed=failed,
+    )
+
+
 async def fetch_paid_deflection_delta(
     store: DeflectionReportArtifactStore,
     *,
@@ -1285,6 +1398,7 @@ async def fetch_paid_deflection_delta(
 
 __all__ = [
     "DeflectionDeltaAccessRecord",
+    "DeflectionDeltaBatchSummary",
     "DeflectionDeltaReadError",
     "DeflectionReportAccessRecord",
     "DeflectionReportListRecord",
@@ -1292,6 +1406,7 @@ __all__ = [
     "InMemoryDeflectionReportArtifactStore",
     "PostgresDeflectionReportArtifactStore",
     "compute_and_save_previous_deflection_delta",
+    "compute_and_save_recent_deflection_deltas",
     "deflection_delta_read_payload",
     "fetch_paid_deflection_delta",
     "stored_deflection_report_model",

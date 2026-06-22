@@ -4,10 +4,12 @@ from datetime import datetime, timezone
 import pytest
 
 from extracted_content_pipeline.deflection_report_access import (
+    DeflectionDeltaBatchSummary,
     DeflectionDeltaReadError,
     InMemoryDeflectionReportArtifactStore,
     PostgresDeflectionReportArtifactStore,
     compute_and_save_previous_deflection_delta,
+    compute_and_save_recent_deflection_deltas,
     deflection_delta_read_payload,
     fetch_paid_deflection_delta,
 )
@@ -184,6 +186,65 @@ async def test_compute_and_save_previous_delta_persists_pair_payload() -> None:
     )
     assert stored is not None
     assert json.loads(json.dumps(stored.delta)) == stored.delta
+
+
+@pytest.mark.asyncio
+async def test_recent_delta_batch_discovers_paid_accounts_and_stays_tenant_scoped() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-baseline",
+        model=_model(_row("repeat_1", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-current",
+        model=_model(_row("repeat_1", ticket_count=5, cost=67.5)),
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-2",
+        request_id="acct-2-current",
+        model=_model(_row("repeat_2", ticket_count=4, cost=54.0)),
+        created_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-3",
+        request_id="acct-3-unpaid",
+        paid=False,
+        created_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+
+    accounts = await store.list_paid_report_accounts(limit=10)
+    summary = await compute_and_save_recent_deflection_deltas(
+        store,
+        account_limit=10,
+        reports_per_account=10,
+    )
+
+    assert accounts == ("acct-2", "acct-1")
+    assert summary == DeflectionDeltaBatchSummary(
+        accounts_scanned=2,
+        reports_scanned=3,
+        deltas_saved=1,
+        skipped_no_delta=2,
+        failed=0,
+    )
+    assert await store.get_deflection_delta(
+        account_id="acct-1",
+        current_request_id="acct-1-current",
+        baseline_request_id="acct-1-baseline",
+    )
+    assert await store.get_deflection_delta(
+        account_id="acct-2",
+        current_request_id="acct-2-current",
+        baseline_request_id="acct-1-current",
+    ) is None
 
 
 @pytest.mark.asyncio
@@ -435,3 +496,27 @@ async def test_postgres_delta_methods_are_account_scoped_and_jsonb_encoded() -> 
     assert "JOIN content_ops_deflection_reports baseline_report" in paid_query
     assert "current_report.paid = true" in paid_query
     assert "baseline_report.paid = true" in paid_query
+
+
+@pytest.mark.asyncio
+async def test_postgres_paid_account_discovery_is_paid_scoped_ordered_and_bounded() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetch(self, query: str, *args: object) -> list[dict[str, object]]:
+            self.fetch_calls.append((query, args))
+            return [{"account_id": "acct-2"}, {"account_id": "acct-1"}]
+
+    pool = _Pool()
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+
+    accounts = await store.list_paid_report_accounts(limit=7)
+
+    assert accounts == ("acct-2", "acct-1")
+    query, args = pool.fetch_calls[0]
+    assert args == (7,)
+    assert "WHERE paid = true" in query
+    assert "GROUP BY account_id" in query
+    assert "ORDER BY MAX(created_at) DESC, account_id ASC" in query
+    assert "LIMIT $1" in query
