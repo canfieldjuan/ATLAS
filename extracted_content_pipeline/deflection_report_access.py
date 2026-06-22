@@ -60,6 +60,15 @@ class DeflectionDeltaAccessRecord:
     updated_at: Any = None
 
 
+class DeflectionDeltaReadError(ValueError):
+    """Raised when a persisted delta is unavailable to a paid read surface."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 class DeflectionReportArtifactStore(Protocol):
     """Host-owned persistence for snapshots, full artifacts, and paid flags."""
 
@@ -154,6 +163,68 @@ class DeflectionReportArtifactStore(Protocol):
         baseline_request_id: str,
     ) -> DeflectionDeltaAccessRecord | None:
         """Return one persisted deflection delta for a report pair."""
+
+    async def get_paid_deflection_delta(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+    ) -> DeflectionDeltaAccessRecord | None:
+        """Return one persisted delta only while both source reports are paid."""
+
+
+_DEFLECTION_DELTA_METADATA_FIELDS = (
+    "schema_version",
+    "title",
+    "source_date_start",
+    "source_date_end",
+    "source_window_days",
+)
+_DEFLECTION_DELTA_SUMMARY_FIELDS = (
+    "current_item_count",
+    "baseline_item_count",
+    "matched_item_count",
+    "support_cost_delta",
+    "new_count",
+    "resolved_count",
+    "resurfaced_count",
+    "growing_count",
+    "shrinking_count",
+    "still_unresolved_count",
+    "status_changed_count",
+    "cost_changed_count",
+    "csat_changed_count",
+    "low_confidence_identity_count",
+    "stable_count",
+)
+_DEFLECTION_DELTA_ITEM_FIELDS = (
+    "identity_key",
+    "repeat_key",
+    "cluster_id",
+    "identity_basis",
+    "identity_confidence",
+    "question",
+    "owner_lane",
+    "fix_type",
+    "current_status",
+    "baseline_status",
+    "current_ticket_count",
+    "baseline_ticket_count",
+    "ticket_count_delta",
+    "current_estimated_support_cost",
+    "baseline_estimated_support_cost",
+    "support_cost_delta",
+    "current_csat_signal",
+    "baseline_csat_signal",
+    "change_types",
+)
+_DEFLECTION_DELTA_CSAT_FIELDS = (
+    "status",
+    "csat_present_count",
+    "negative_csat_ticket_count",
+    "numeric_average",
+)
 
 
 class InMemoryDeflectionReportArtifactStore:
@@ -411,6 +482,25 @@ class InMemoryDeflectionReportArtifactStore:
             delta=dict(row.delta),
             created_at=row.created_at,
             updated_at=row.updated_at,
+        )
+
+    async def get_paid_deflection_delta(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+    ) -> DeflectionDeltaAccessRecord | None:
+        key = _delta_key(account_id, current_request_id, baseline_request_id)
+        resolved_account, resolved_current, resolved_baseline = key
+        current = self._rows.get((resolved_account, resolved_current))
+        baseline = self._rows.get((resolved_account, resolved_baseline))
+        if current is None or baseline is None or not current.paid or not baseline.paid:
+            return None
+        return await self.get_deflection_delta(
+            account_id=resolved_account,
+            current_request_id=resolved_current,
+            baseline_request_id=resolved_baseline,
         )
 
 
@@ -713,6 +803,42 @@ class PostgresDeflectionReportArtifactStore:
         )
         return _delta_record_from_row(row_to_dict(row)) if row is not None else None
 
+    async def get_paid_deflection_delta(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+    ) -> DeflectionDeltaAccessRecord | None:
+        key = _delta_key(account_id, current_request_id, baseline_request_id)
+        resolved_account, resolved_current, resolved_baseline = key
+        row = await self.pool.fetchrow(
+            """
+            SELECT deltas.account_id,
+                   deltas.current_request_id,
+                   deltas.baseline_request_id,
+                   deltas.delta,
+                   deltas.created_at,
+                   deltas.updated_at
+            FROM content_ops_deflection_deltas deltas
+            JOIN content_ops_deflection_reports current_report
+              ON current_report.account_id = deltas.account_id
+             AND current_report.request_id = deltas.current_request_id
+             AND current_report.paid = true
+            JOIN content_ops_deflection_reports baseline_report
+              ON baseline_report.account_id = deltas.account_id
+             AND baseline_report.request_id = deltas.baseline_request_id
+             AND baseline_report.paid = true
+            WHERE deltas.account_id = $1
+              AND deltas.current_request_id = $2
+              AND deltas.baseline_request_id = $3
+            """,
+            resolved_account,
+            resolved_current,
+            resolved_baseline,
+        )
+        return _delta_record_from_row(row_to_dict(row)) if row is not None else None
+
 
 _STORED_ACTION_SECTION_LIMIT_DEFAULTS = {
     "priority_fix_queue": {
@@ -860,6 +986,31 @@ def _delta_record_from_row(row: Mapping[str, Any]) -> DeflectionDeltaAccessRecor
     )
 
 
+def deflection_delta_read_payload(
+    record: DeflectionDeltaAccessRecord,
+) -> dict[str, Any]:
+    """Return the allowlisted customer-facing payload for a persisted delta."""
+
+    return {
+        "schema_version": "deflection_delta_read.v1",
+        "current_request_id": record.current_request_id,
+        "baseline_request_id": record.baseline_request_id,
+        "delta": _allowlisted_deflection_delta(record.delta),
+        "metadata": {
+            "created_at": _timestamp(record.created_at),
+            "updated_at": _timestamp(record.updated_at),
+        },
+    }
+
+
+def _require_supported_delta_schema(delta: Mapping[str, Any]) -> None:
+    if _clean(delta.get("schema_version")) != "deflection_delta.v1":
+        raise DeflectionDeltaReadError(
+            "unsupported_delta_schema",
+            "Persisted deflection delta uses an unsupported schema.",
+        )
+
+
 def _bounded_limit(value: Any) -> int:
     try:
         parsed = int(value)
@@ -956,6 +1107,62 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _timestamp(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _allowlisted_deflection_delta(delta: Mapping[str, Any]) -> dict[str, Any]:
+    _require_supported_delta_schema(delta)
+    return {
+        "schema_version": "deflection_delta.v1",
+        "current": _allowlisted_mapping(
+            delta.get("current"),
+            _DEFLECTION_DELTA_METADATA_FIELDS,
+        ),
+        "baseline": _allowlisted_mapping(
+            delta.get("baseline"),
+            _DEFLECTION_DELTA_METADATA_FIELDS,
+        ),
+        "summary": _allowlisted_mapping(
+            delta.get("summary"),
+            _DEFLECTION_DELTA_SUMMARY_FIELDS,
+        ),
+        "items": _allowlisted_delta_items(delta.get("items")),
+    }
+
+
+def _allowlisted_mapping(value: Any, fields: Sequence[str]) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {field: value.get(field) for field in fields if field in value}
+
+
+def _allowlisted_delta_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        projected = _allowlisted_mapping(item, _DEFLECTION_DELTA_ITEM_FIELDS)
+        if isinstance(projected.get("current_csat_signal"), Mapping):
+            projected["current_csat_signal"] = _allowlisted_mapping(
+                projected["current_csat_signal"],
+                _DEFLECTION_DELTA_CSAT_FIELDS,
+            )
+        if isinstance(projected.get("baseline_csat_signal"), Mapping):
+            projected["baseline_csat_signal"] = _allowlisted_mapping(
+                projected["baseline_csat_signal"],
+                _DEFLECTION_DELTA_CSAT_FIELDS,
+            )
+        out.append(projected)
+    return out
+
+
 async def compute_and_save_previous_deflection_delta(
     store: DeflectionReportArtifactStore,
     *,
@@ -994,13 +1201,98 @@ async def compute_and_save_previous_deflection_delta(
     )
 
 
+async def fetch_paid_deflection_delta(
+    store: DeflectionReportArtifactStore,
+    *,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str | None = None,
+) -> DeflectionDeltaAccessRecord:
+    """Fetch a stored delta only while both source reports remain paid."""
+
+    resolved_account = _clean(account_id)
+    if not resolved_account:
+        raise DeflectionDeltaReadError(
+            "account_id_required",
+            "Content Ops account ID is required.",
+        )
+    resolved_current = _clean(current_request_id)
+    if not resolved_current:
+        raise DeflectionDeltaReadError(
+            "current_request_id_required",
+            "Current deflection report request ID is required.",
+        )
+    current = await store.get_artifact_record(
+        account_id=resolved_account,
+        request_id=resolved_current,
+    )
+    if current is None:
+        raise DeflectionDeltaReadError(
+            "current_report_not_found",
+            "Current deflection report was not found.",
+        )
+    if not current.paid:
+        raise DeflectionDeltaReadError(
+            "current_report_locked",
+            "Current deflection report is locked.",
+        )
+
+    requested_baseline = _clean(baseline_request_id)
+    if requested_baseline:
+        if requested_baseline == resolved_current:
+            raise DeflectionDeltaReadError(
+                "invalid_report_pair",
+                "Current and baseline deflection reports must differ.",
+            )
+        baseline = await store.get_artifact_record(
+            account_id=resolved_account,
+            request_id=requested_baseline,
+        )
+        if baseline is None:
+            raise DeflectionDeltaReadError(
+                "baseline_report_not_found",
+                "Baseline deflection report was not found.",
+            )
+        if not baseline.paid:
+            raise DeflectionDeltaReadError(
+                "baseline_report_locked",
+                "Baseline deflection report is locked.",
+            )
+    else:
+        baseline = await store.select_previous_paid_report(
+            account_id=resolved_account,
+            current_request_id=resolved_current,
+        )
+        if baseline is None:
+            raise DeflectionDeltaReadError(
+                "baseline_report_not_found",
+                "No paid baseline deflection report is available.",
+            )
+
+    record = await store.get_paid_deflection_delta(
+        account_id=resolved_account,
+        current_request_id=current.request_id,
+        baseline_request_id=baseline.request_id,
+    )
+    if record is None:
+        raise DeflectionDeltaReadError(
+            "delta_not_found",
+            "Persisted deflection delta was not found for this report pair.",
+        )
+    _require_supported_delta_schema(record.delta)
+    return record
+
+
 __all__ = [
     "DeflectionDeltaAccessRecord",
+    "DeflectionDeltaReadError",
     "DeflectionReportAccessRecord",
     "DeflectionReportListRecord",
     "DeflectionReportArtifactStore",
     "InMemoryDeflectionReportArtifactStore",
     "PostgresDeflectionReportArtifactStore",
     "compute_and_save_previous_deflection_delta",
+    "deflection_delta_read_payload",
+    "fetch_paid_deflection_delta",
     "stored_deflection_report_model",
 ]
