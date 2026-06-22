@@ -48,6 +48,9 @@ DEFAULT_CORPUS = (
     ROOT
     / "docs/extraction/validation/fixtures/deflection_pii_surrogate_eval_tiny.json"
 )
+REVIEW_BUNDLE_CORPUS_NAME = "deflection-pii-surrogate-eval-corpus.json"
+REVIEW_BUNDLE_SCORE_NAME = "deflection-pii-recall-score.json"
+REVIEW_BUNDLE_SCORE_MARKDOWN_NAME = "deflection-pii-recall-score.md"
 SURFACES = ("free_snapshot", "free_teaser", "paid_artifact", "paid_pdf")
 FREE_SURFACES = frozenset({"free_snapshot", "free_teaser"})
 HIGH_SEVERITY_CLASSES = frozenset({
@@ -204,11 +207,34 @@ def score_corpus(corpus: Mapping[str, Any]) -> dict[str, Any]:
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
+    parser.add_argument("--corpus", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--markdown-output", type=Path)
+    parser.add_argument(
+        "--review-bundle-dir",
+        type=Path,
+        help=(
+            "Directory produced by build_deflection_pii_surrogate_eval_corpus.py "
+            "--review-bundle-dir. Writes predictable recall score JSON/Markdown "
+            "files in that directory."
+        ),
+    )
     parser.add_argument("--json", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.review_bundle_dir is not None:
+        if args.corpus is not None or args.output is not None or args.markdown_output is not None:
+            parser.error(
+                "--review-bundle-dir cannot be combined with --corpus, "
+                "--output, or --markdown-output"
+            )
+        if args.review_bundle_dir.exists() and not args.review_bundle_dir.is_dir():
+            parser.error("--review-bundle-dir must be a directory")
+        args.corpus = args.review_bundle_dir / REVIEW_BUNDLE_CORPUS_NAME
+        args.output = args.review_bundle_dir / REVIEW_BUNDLE_SCORE_NAME
+        args.markdown_output = args.review_bundle_dir / REVIEW_BUNDLE_SCORE_MARKDOWN_NAME
+    elif args.corpus is None:
+        args.corpus = DEFAULT_CORPUS
+    return args
 
 
 def _markdown_summary(summary: Mapping[str, Any]) -> str:
@@ -394,7 +420,7 @@ def _format_recall(value: Any) -> str:
 def _load_corpus(path: Path) -> tuple[Mapping[str, Any], list[dict[str, Any]]]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}, [_error("corpus_load_failed")]
     if not isinstance(raw, Mapping):
         return {}, [_error("corpus_not_object")]
