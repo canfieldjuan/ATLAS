@@ -768,13 +768,13 @@ def test_deflection_top_unresolved_repeats_keeps_pdf_limit_items() -> None:
         ),
     )
 
+    artifact = build_deflection_report_artifact(result).as_dict()
     sections = {
         section["id"]: section
-        for section in build_deflection_report_artifact(result).as_dict()[
-            "report_model"
-        ]["sections"]
+        for section in artifact["report_model"]["sections"]
     }
     unresolved = sections["top_unresolved_repeats"]["data"]
+    snapshot = build_deflection_snapshot(artifact, top_n=5).as_dict()
 
     assert unresolved["result_page_limit"] == 3
     assert unresolved["pdf_limit"] == 10
@@ -782,6 +782,18 @@ def test_deflection_top_unresolved_repeats_keeps_pdf_limit_items() -> None:
     assert len(unresolved["items"]) == 10
     assert unresolved["items"][0]["question"] == (
         "How do I resolve unresolved repeat 13?"
+    )
+    assert len(snapshot["top_blind_spots"]) == unresolved["result_page_limit"]
+    assert [
+        row["question"] for row in snapshot["top_blind_spots"]
+    ] == [
+        "How do I resolve unresolved repeat 13?",
+        "How do I resolve unresolved repeat 12?",
+        "How do I resolve unresolved repeat 11?",
+    ]
+    assert "How do I resolve unresolved repeat 10?" not in json.dumps(
+        snapshot["top_blind_spots"],
+        sort_keys=True,
     )
     assert "one-off" not in json.dumps(unresolved, sort_keys=True)
 

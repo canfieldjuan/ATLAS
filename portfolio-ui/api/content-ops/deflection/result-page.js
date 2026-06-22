@@ -125,6 +125,23 @@ function renderCustomerWordingCard(questions) {
           </div>`;
 }
 
+function renderBlindSpots(blindSpots) {
+  if (!blindSpots.length) return "";
+  return `<section class="blind-spots" data-atlas-deflection-blind-spots>
+            <h3>Unresolved blind spots</h3>
+            <div class="questions">
+              ${blindSpots
+                .map(
+                  (item) => `<article>
+                    <p class="rank">Rank ${escapeHtml(formatNumber(item.rank))} - ${escapeHtml(formatNumber(finiteCount(item.ticket_count)))} tickets unresolved</p>
+                    <h3>${escapeHtml(item.question)}</h3>
+                  </article>`,
+                )
+                .join("")}
+            </div>
+          </section>`;
+}
+
 function renderResolutionEvidenceDiagnostic(summary) {
   const present = summary.support_ticket_resolution_evidence_present === true;
   const count = finiteCount(summary.support_ticket_resolution_evidence_count);
@@ -176,6 +193,9 @@ function renderSnapshot(report) {
   const questions = Array.isArray(report.snapshot.top_questions)
     ? report.snapshot.top_questions
     : [];
+  const blindSpots = Array.isArray(report.snapshot.top_blind_spots)
+    ? report.snapshot.top_blind_spots.filter(isObjectRecord)
+    : [];
   return `<section class="snapshot" aria-labelledby="snapshot-title">
           <h2 id="snapshot-title">Free snapshot</h2>
           <div class="metrics">
@@ -200,6 +220,7 @@ function renderSnapshot(report) {
               )
               .join("")}
           </div>
+          ${renderBlindSpots(blindSpots)}
         </section>`;
 }
 

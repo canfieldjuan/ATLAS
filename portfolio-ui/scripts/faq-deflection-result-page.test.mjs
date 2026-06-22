@@ -145,7 +145,9 @@ await test("result page exposes validation markers and checkout metadata", () =>
   for (const source of [pageSource, resultPageSource]) {
     assert.match(source, /data-atlas-deflection-resolution-evidence/);
     assert.match(source, /data-atlas-deflection-repeat-volume/);
+    assert.match(source, /data-atlas-deflection-blind-spots/);
   }
+  assert.match(pageSource, /top_blind_spots/);
   assert.match(pageSource, /content_ops_deflection_report/);
   assert.match(html, /content_ops_deflection_report/);
   assert.match(html, /content-ops-abc123/);
@@ -302,6 +304,18 @@ await test("real snapshot page groups bounded customer wording examples", () => 
           support_ticket_resolution_evidence_count: 2,
         },
         top_questions: topQuestions,
+        top_blind_spots: [
+          {
+            rank: 1,
+            question: "Can I enable SSO?",
+            ticket_count: 4,
+          },
+          {
+            rank: 2,
+            question: "Where are invoice webhooks configured?",
+            ticket_count: 3,
+          },
+        ],
       },
       artifact_status: "locked",
     },
@@ -313,6 +327,11 @@ await test("real snapshot page groups bounded customer wording examples", () => 
   assert.match(html, /Question-level repeat volume/);
   assert.match(html, /Question-level repeat tickets/);
   assert.match(html, /12 question-level repeat tickets/);
+  assert.match(html, /data-atlas-deflection-blind-spots/);
+  assert.match(html, /Unresolved blind spots/);
+  assert.match(html, /Can I enable SSO\?/);
+  assert.match(html, /4 tickets unresolved/);
+  assert.match(html, /Where are invoice webhooks configured\?/);
   assert.doesNotMatch(html, /repeat-ticket hits/);
   assert.match(html, /substantial paid report preview/);
   assert.match(html, /data-resolution-evidence-present="true"/);
@@ -351,6 +370,7 @@ await test("real snapshot page groups bounded customer wording examples", () => 
           support_ticket_resolution_evidence_count: 0,
         },
         top_questions: [],
+        top_blind_spots: [],
       },
       artifact_status: "locked",
     },

@@ -1755,6 +1755,12 @@ def _build_deflection_snapshot_from_report_model(
     support_tax = sections.get("support_tax", {})
     ranked_rows = _snapshot_rows(sections.get("ranked_questions"))
     blind_spot_rows = _snapshot_items(sections.get("top_unresolved_repeats"))
+    unresolved_data = _report_model_section_data(report_model, "top_unresolved_repeats")
+    blind_spot_limit = (
+        _int(unresolved_data.get("result_page_limit") if unresolved_data else None)
+        or DEFLECTION_REPORT_SECTION_REGISTRY["top_unresolved_repeats"].default_limit
+        or top_n
+    )
     detail_rows = _report_model_section_rows(report_model, "question_details")
     snapshot_summary: dict[str, Any] = {
         "generated": _int(support_tax.get("generated_question_count")),
@@ -1799,7 +1805,7 @@ def _build_deflection_snapshot_from_report_model(
             "question": _text(row.get("question")),
             "ticket_count": _int(row.get("ticket_count")),
         }
-        for index, row in enumerate(blind_spot_rows[:top_n], start=1)
+        for index, row in enumerate(blind_spot_rows[:blind_spot_limit], start=1)
         if _text(row.get("question"))
     )
     return DeflectionSnapshot(
