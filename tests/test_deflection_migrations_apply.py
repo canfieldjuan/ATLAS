@@ -10,6 +10,7 @@ This check is scoped to the deflection chain, which has no such dependency:
 - 336 content_ops_deflection_paid_reconciliation  (#1462 money-path table)
 - 337 reconciliation NULL-session dedup (NOT NULL stripe_session_id)
 - 339 content_ops_deflection_reports retention index
+- 340 content_ops_deflection_deltas
 
 It applies those files in order to a fresh Postgres database and verifies the
 tables exist and the reconciliation table's idempotency constraint holds --
@@ -37,6 +38,7 @@ DEFLECTION_MIGRATION_CHAIN = (
 )
 NULL_SESSION_MIGRATION = "337_content_ops_deflection_reconciliation_null_session.sql"
 RETENTION_INDEX_MIGRATION = "339_content_ops_deflection_reports_retention_index.sql"
+DELTA_MIGRATION = "340_content_ops_deflection_deltas.sql"
 
 _TEST_ACCOUNT_ID = "acct-deflection-migration-apply-test"
 
@@ -71,6 +73,7 @@ async def _reset(conn) -> None:
     await conn.execute(
         "DROP TABLE IF EXISTS "
         "content_ops_deflection_paid_reconciliation, "
+        "content_ops_deflection_deltas, "
         "content_ops_deflection_report_deliveries, "
         "content_ops_deflection_reports CASCADE"
     )
@@ -91,6 +94,7 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             *DEFLECTION_MIGRATION_CHAIN,
             NULL_SESSION_MIGRATION,
             RETENTION_INDEX_MIGRATION,
+            DELTA_MIGRATION,
         )
 
         existing = {
@@ -104,6 +108,7 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             "content_ops_deflection_reports",
             "content_ops_deflection_report_deliveries",
             "content_ops_deflection_paid_reconciliation",
+            "content_ops_deflection_deltas",
         } <= existing
 
         recon_columns = {
@@ -140,6 +145,22 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             ")"
         )
         assert retention_index_exists is True
+
+        delta_columns = {
+            row["column_name"]
+            for row in await conn.fetch(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'content_ops_deflection_deltas'"
+            )
+        }
+        assert {
+            "account_id",
+            "current_request_id",
+            "baseline_request_id",
+            "delta",
+            "created_at",
+            "updated_at",
+        } <= delta_columns
 
         # Non-null dedup (ON CONFLICT DO NOTHING): a second event for the same
         # checkout must not create a duplicate ledger row.
@@ -187,6 +208,29 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             await conn.fetchval(
                 "SELECT count(*) FROM content_ops_deflection_paid_reconciliation "
                 "WHERE account_id = $1 AND request_id = 'req-empty'",
+                _TEST_ACCOUNT_ID,
+            )
+            == 1
+        )
+
+        await conn.execute(
+            "INSERT INTO content_ops_deflection_reports "
+            "(account_id, request_id, snapshot, artifact, paid) "
+            "VALUES ($1, 'baseline-delta', '{}'::jsonb, '{}'::jsonb, true), "
+            "($1, 'current-delta', '{}'::jsonb, '{}'::jsonb, true)",
+            _TEST_ACCOUNT_ID,
+        )
+        await conn.execute(
+            "INSERT INTO content_ops_deflection_deltas "
+            "(account_id, current_request_id, baseline_request_id, delta) "
+            "VALUES ($1, 'current-delta', 'baseline-delta', $2::jsonb)",
+            _TEST_ACCOUNT_ID,
+            '{"schema_version":"deflection_delta.v1"}',
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM content_ops_deflection_deltas "
+                "WHERE account_id = $1",
                 _TEST_ACCOUNT_ID,
             )
             == 1
@@ -249,7 +293,23 @@ async def test_deflection_337_collapses_pre_existing_null_session_duplicates() -
 async def _cleanup(conn) -> None:
     try:
         await conn.execute(
+            "DELETE FROM content_ops_deflection_deltas "
+            "WHERE account_id = $1",
+            _TEST_ACCOUNT_ID,
+        )
+    except Exception:
+        pass
+    try:
+        await conn.execute(
             "DELETE FROM content_ops_deflection_paid_reconciliation "
+            "WHERE account_id = $1",
+            _TEST_ACCOUNT_ID,
+        )
+    except Exception:
+        pass
+    try:
+        await conn.execute(
+            "DELETE FROM content_ops_deflection_reports "
             "WHERE account_id = $1",
             _TEST_ACCOUNT_ID,
         )
