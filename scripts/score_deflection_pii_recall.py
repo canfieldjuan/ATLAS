@@ -51,6 +51,13 @@ DEFAULT_CORPUS = (
 REVIEW_BUNDLE_CORPUS_NAME = "deflection-pii-surrogate-eval-corpus.json"
 REVIEW_BUNDLE_SCORE_NAME = "deflection-pii-recall-score.json"
 REVIEW_BUNDLE_SCORE_MARKDOWN_NAME = "deflection-pii-recall-score.md"
+REVIEW_BUNDLE_MANIFEST_NAME = "review-bundle-manifest.json"
+REVIEW_BUNDLE_MANIFEST_SCHEMA_VERSION = "deflection_pii_review_bundle_manifest.v1"
+REVIEW_BUNDLE_BUILD_FILE_KEYS = frozenset({
+    "source_intake_summary",
+    "source_intake_markdown",
+    "surrogate_eval_corpus",
+})
 SURFACES = ("free_snapshot", "free_teaser", "paid_artifact", "paid_pdf")
 FREE_SURFACES = frozenset({"free_snapshot", "free_teaser"})
 HIGH_SEVERITY_CLASSES = frozenset({
@@ -124,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
             _markdown_summary(summary),
             encoding="utf-8",
         )
+    if args.review_bundle_dir is not None:
+        if not _write_review_bundle_score_manifest(args.review_bundle_dir, summary):
+            return 1
     if args.json:
         print(json.dumps(summary, sort_keys=True))
     if summary["status"] != "ok":
@@ -425,6 +435,131 @@ def _load_corpus(path: Path) -> tuple[Mapping[str, Any], list[dict[str, Any]]]:
     if not isinstance(raw, Mapping):
         return {}, [_error("corpus_not_object")]
     return raw, []
+
+
+def _write_review_bundle_score_manifest(
+    bundle_dir: Path,
+    summary: Mapping[str, Any],
+) -> bool:
+    manifest_path = bundle_dir / REVIEW_BUNDLE_MANIFEST_NAME
+    manifest = _read_review_bundle_manifest(manifest_path)
+    files = manifest["files"]
+    status = _clean(summary.get("status"))
+    score_error_codes = _safe_error_codes(summary.get("blocking_error_codes"))
+    if "corpus_load_failed" in score_error_codes:
+        _clear_stale_corpus_manifest_entry(manifest)
+    files["recall_score"] = {
+        "path": REVIEW_BUNDLE_SCORE_NAME,
+        "present": True,
+        "schema_version": _clean(summary.get("schema_version")),
+        "status": status,
+        "blocking_error_codes": score_error_codes,
+    }
+    headline = summary.get("headline")
+    if isinstance(headline, Mapping):
+        files["recall_score"]["headline"] = {
+            "free_high_severity_gate_eligible_leak_count": int(
+                headline.get("free_high_severity_gate_eligible_leak_count", 0)
+            ),
+            "free_high_severity_leak_count": int(
+                headline.get("free_high_severity_leak_count", 0)
+            ),
+            "deferred_open_set_name_leak_count": int(
+                headline.get("deferred_open_set_name_leak_count", 0)
+            ),
+        }
+    files["recall_score_markdown"] = {
+        "path": REVIEW_BUNDLE_SCORE_MARKDOWN_NAME,
+        "present": True,
+    }
+    manifest["score_status"] = status
+    try:
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print(
+            json.dumps({
+                "ok": False,
+                "schema_version": SCORE_SCHEMA_VERSION,
+                "errors": [{
+                    "code": "review_bundle_manifest_unwritable",
+                    "message": exc.__class__.__name__,
+                }],
+            }, sort_keys=True),
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def _read_review_bundle_manifest(path: Path) -> dict[str, Any]:
+    raw: Any
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raw = {}
+    status = _clean(raw.get("status")) if isinstance(raw, Mapping) else ""
+    if status not in {"ok", "blocked"}:
+        status = "unknown"
+    raw_files = raw.get("files") if isinstance(raw, Mapping) else {}
+    files: dict[str, Any] = {}
+    if isinstance(raw_files, Mapping):
+        for key in sorted(REVIEW_BUNDLE_BUILD_FILE_KEYS):
+            entry = raw_files.get(key)
+            if isinstance(entry, Mapping):
+                files[key] = _safe_manifest_file_entry(entry)
+    manifest = {
+        "schema_version": REVIEW_BUNDLE_MANIFEST_SCHEMA_VERSION,
+        "status": status or "unknown",
+        "files": files,
+    }
+    if isinstance(raw, Mapping) and "blocking_error_codes" in raw:
+        manifest["blocking_error_codes"] = _safe_error_codes(raw.get("blocking_error_codes"))
+    return manifest
+
+
+def _safe_manifest_file_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    path = _clean(entry.get("path"))
+    if path:
+        safe["path"] = Path(path).name
+    for key in ("present", "ok"):
+        value = entry.get(key)
+        if isinstance(value, bool):
+            safe[key] = value
+    schema_version = _clean(entry.get("schema_version"))
+    if schema_version:
+        safe["schema_version"] = schema_version
+    for key in ("ticket_count", "label_count"):
+        value = entry.get(key)
+        if isinstance(value, int):
+            safe[key] = value
+    return safe
+
+
+def _clear_stale_corpus_manifest_entry(manifest: dict[str, Any]) -> None:
+    if manifest.get("status") == "ok":
+        manifest["status"] = "blocked"
+    files = manifest.get("files")
+    if not isinstance(files, dict):
+        return
+    entry = files.get("surrogate_eval_corpus")
+    if not isinstance(entry, dict):
+        return
+    entry["present"] = False
+    for key in ("schema_version", "ticket_count", "label_count"):
+        entry.pop(key, None)
+
+
+def _safe_error_codes(value: Any) -> list[str]:
+    codes: list[str] = []
+    for code in _sequence(value):
+        text = _clean(code)
+        if re.fullmatch(r"[a-z0-9_:-]{1,80}", text):
+            codes.append(text)
+    return codes
 
 
 def _corpus_errors(corpus: Mapping[str, Any]) -> list[dict[str, Any]]:

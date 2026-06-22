@@ -38,6 +38,11 @@ def _tiny_corpus() -> dict:
 
 def test_review_bundle_corpus_filename_matches_builder_bundle_artifact() -> None:
     assert CLI.REVIEW_BUNDLE_CORPUS_NAME == BUILD_CLI.REVIEW_BUNDLE_ARTIFACT_NAME
+    assert CLI.REVIEW_BUNDLE_MANIFEST_NAME == BUILD_CLI.REVIEW_BUNDLE_MANIFEST_NAME
+    assert (
+        CLI.REVIEW_BUNDLE_MANIFEST_SCHEMA_VERSION
+        == BUILD_CLI.REVIEW_BUNDLE_MANIFEST_SCHEMA_VERSION
+    )
 
 
 def test_review_bundle_mode_writes_score_artifacts_without_span_echo(
@@ -49,6 +54,29 @@ def test_review_bundle_mode_writes_score_artifacts_without_span_echo(
         TINY_FIXTURE.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    manifest_path = bundle_dir / CLI.REVIEW_BUNDLE_MANIFEST_NAME
+    manifest_path.write_text(
+        json.dumps({
+            "schema_version": CLI.REVIEW_BUNDLE_MANIFEST_SCHEMA_VERSION,
+            "status": "ok",
+            "files": {
+                "source_intake_summary": {
+                    "path": BUILD_CLI.REVIEW_BUNDLE_SUMMARY_NAME,
+                    "present": True,
+                    "ok": True,
+                    "schema_version": "deflection_pii_source_intake_summary.v1",
+                },
+                "surrogate_eval_corpus": {
+                    "path": CLI.REVIEW_BUNDLE_CORPUS_NAME,
+                    "present": True,
+                    "schema_version": "deflection_pii_eval_corpus.v1",
+                    "ticket_count": 3,
+                    "label_count": 11,
+                },
+            },
+        }),
+        encoding="utf-8",
+    )
 
     assert CLI.main(["--review-bundle-dir", str(bundle_dir)]) == 0
 
@@ -56,13 +84,34 @@ def test_review_bundle_mode_writes_score_artifacts_without_span_echo(
     markdown_path = bundle_dir / CLI.REVIEW_BUNDLE_SCORE_MARKDOWN_NAME
     summary = json.loads(score_path.read_text(encoding="utf-8"))
     markdown = markdown_path.read_text(encoding="utf-8")
-    rendered = json.dumps(summary, sort_keys=True) + markdown
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rendered = json.dumps(summary, sort_keys=True) + markdown + json.dumps(manifest, sort_keys=True)
 
     assert summary["status"] == "ok"
     assert summary["schema_version"] == "deflection_pii_recall_score.v1"
     assert summary["input"]["ticket_count"] == 3
+    assert manifest["schema_version"] == CLI.REVIEW_BUNDLE_MANIFEST_SCHEMA_VERSION
+    assert manifest["status"] == "ok"
+    assert manifest["score_status"] == "ok"
+    assert manifest["files"]["surrogate_eval_corpus"]["path"] == CLI.REVIEW_BUNDLE_CORPUS_NAME
+    assert manifest["files"]["recall_score"] == {
+        "blocking_error_codes": [],
+        "headline": {
+            "deferred_open_set_name_leak_count": 1,
+            "free_high_severity_gate_eligible_leak_count": 0,
+            "free_high_severity_leak_count": 1,
+        },
+        "path": CLI.REVIEW_BUNDLE_SCORE_NAME,
+        "present": True,
+        "schema_version": CLI.SCORE_SCHEMA_VERSION,
+        "status": "ok",
+    }
+    assert manifest["files"]["recall_score_markdown"] == {
+        "path": CLI.REVIEW_BUNDLE_SCORE_MARKDOWN_NAME,
+        "present": True,
+    }
     assert "# Deflection PII Recall Advisory" in markdown
-    assert "deflection-pii-surrogate-eval-corpus.json" not in rendered
+    assert str(bundle_dir) not in rendered
     for raw in (
         "Maya Chen",
         "Jordan Lee",
@@ -112,15 +161,127 @@ def test_review_bundle_mode_missing_corpus_writes_sanitized_error(
     captured = capsys.readouterr()
     score_path = bundle_dir / CLI.REVIEW_BUNDLE_SCORE_NAME
     markdown_path = bundle_dir / CLI.REVIEW_BUNDLE_SCORE_MARKDOWN_NAME
+    manifest_path = bundle_dir / CLI.REVIEW_BUNDLE_MANIFEST_NAME
     summary = json.loads(score_path.read_text(encoding="utf-8"))
     markdown = markdown_path.read_text(encoding="utf-8")
-    rendered = json.dumps(summary, sort_keys=True) + markdown + captured.err
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rendered = json.dumps(summary, sort_keys=True) + markdown + json.dumps(manifest, sort_keys=True) + captured.err
 
     assert summary["status"] == "failed"
     assert summary["blocking_error_codes"] == ["corpus_load_failed"]
+    assert manifest["status"] == "unknown"
+    assert manifest["score_status"] == "failed"
+    assert manifest["files"]["recall_score"]["blocking_error_codes"] == ["corpus_load_failed"]
+    assert manifest["files"]["recall_score_markdown"] == {
+        "path": CLI.REVIEW_BUNDLE_SCORE_MARKDOWN_NAME,
+        "present": True,
+    }
     assert "corpus_load_failed" in markdown
     assert str(bundle_dir) not in rendered
-    assert "deflection-pii-surrogate-eval-corpus.json" not in rendered
+    assert CLI.REVIEW_BUNDLE_CORPUS_NAME not in rendered
+
+
+def test_review_bundle_mode_preserves_blocked_build_errors_on_score_failure(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    manifest_path = bundle_dir / CLI.REVIEW_BUNDLE_MANIFEST_NAME
+    manifest_path.write_text(
+        json.dumps({
+            "schema_version": CLI.REVIEW_BUNDLE_MANIFEST_SCHEMA_VERSION,
+            "status": "blocked",
+            "blocking_error_codes": [
+                "label_span_not_found",
+                "alice.baker@example.com",
+            ],
+            "files": {
+                "source_intake_summary": {
+                    "path": BUILD_CLI.REVIEW_BUNDLE_SUMMARY_NAME,
+                    "present": True,
+                    "ok": False,
+                    "schema_version": "deflection_pii_source_intake_summary.v1",
+                },
+                "source_intake_markdown": {
+                    "path": BUILD_CLI.REVIEW_BUNDLE_MARKDOWN_NAME,
+                    "present": True,
+                },
+                "surrogate_eval_corpus": {
+                    "path": CLI.REVIEW_BUNDLE_CORPUS_NAME,
+                    "present": False,
+                },
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    assert CLI.main(["--review-bundle-dir", str(bundle_dir)]) == 1
+
+    captured = capsys.readouterr()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rendered = json.dumps(manifest, sort_keys=True) + captured.err
+
+    assert manifest["status"] == "blocked"
+    assert manifest["blocking_error_codes"] == ["label_span_not_found"]
+    assert manifest["files"]["surrogate_eval_corpus"] == {
+        "path": CLI.REVIEW_BUNDLE_CORPUS_NAME,
+        "present": False,
+    }
+    assert manifest["files"]["recall_score"]["blocking_error_codes"] == ["corpus_load_failed"]
+    assert "label_span_not_found" in rendered
+    assert "corpus_load_failed" in rendered
+    assert "alice.baker@example.com" not in rendered
+
+
+def test_review_bundle_mode_clears_stale_corpus_inventory_on_load_failure(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    manifest_path = bundle_dir / CLI.REVIEW_BUNDLE_MANIFEST_NAME
+    manifest_path.write_text(
+        json.dumps({
+            "schema_version": CLI.REVIEW_BUNDLE_MANIFEST_SCHEMA_VERSION,
+            "status": "ok",
+            "blocking_error_codes": [],
+            "files": {
+                "source_intake_summary": {
+                    "path": BUILD_CLI.REVIEW_BUNDLE_SUMMARY_NAME,
+                    "present": True,
+                    "ok": True,
+                    "schema_version": "deflection_pii_source_intake_summary.v1",
+                },
+                "surrogate_eval_corpus": {
+                    "path": CLI.REVIEW_BUNDLE_CORPUS_NAME,
+                    "present": True,
+                    "schema_version": "deflection_pii_eval_corpus.v1",
+                    "ticket_count": 3,
+                    "label_count": 11,
+                },
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    assert CLI.main(["--review-bundle-dir", str(bundle_dir)]) == 1
+
+    captured = capsys.readouterr()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rendered = json.dumps(manifest, sort_keys=True) + captured.err
+    corpus_entry = manifest["files"]["surrogate_eval_corpus"]
+
+    assert manifest["status"] == "blocked"
+    assert manifest["score_status"] == "failed"
+    assert corpus_entry == {
+        "path": CLI.REVIEW_BUNDLE_CORPUS_NAME,
+        "present": False,
+    }
+    assert manifest["files"]["recall_score"]["blocking_error_codes"] == ["corpus_load_failed"]
+    assert "ticket_count" not in corpus_entry
+    assert "label_count" not in corpus_entry
+    assert "corpus_load_failed" in rendered
 
 
 def test_review_bundle_mode_non_utf8_corpus_writes_sanitized_error(
