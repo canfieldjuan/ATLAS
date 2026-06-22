@@ -9,6 +9,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { SeoHead } from "@/components/seo/SeoHead";
+import type { DeflectionResultPageSnapshot } from "@/types/deflectionSnapshot";
 
 const SNAPSHOT_STORAGE_PREFIX = "atlas:deflection:snapshot:";
 const CHECKOUT_ENDPOINT = "/api/content-ops/deflection/checkout";
@@ -28,30 +29,8 @@ const FORBIDDEN_SNAPSHOT_KEYS = new Set([
   "term_mappings",
 ]);
 
-type DeflectionSnapshot = {
-  summary: {
-    generated: number;
-    repeat_ticket_count: number;
-    drafted_answer_count: number;
-    no_proven_answer_count: number;
-    support_ticket_resolution_evidence_present: boolean;
-    support_ticket_resolution_evidence_count: number;
-  };
-  top_questions: Array<{
-    rank: number;
-    question: string;
-    weighted_frequency: number;
-    customer_wording: string;
-  }>;
-  top_blind_spots: Array<{
-    rank: number;
-    question: string;
-    ticket_count: number;
-  }>;
-};
-
 type SnapshotState =
-  | { status: "available"; snapshot: DeflectionSnapshot }
+  | { status: "available"; snapshot: DeflectionResultPageSnapshot }
   | { status: "missing" }
   | { status: "invalid"; reason: string };
 
@@ -81,6 +60,31 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function nullableString(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "string") return undefined;
+  return value.trim() || null;
+}
+
+function nullableNumber(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  return finiteNumber(value) ?? undefined;
+}
+
+function optionalNullableString(
+  record: Record<string, unknown>,
+  key: string,
+): string | null | undefined {
+  return key in record ? nullableString(record[key]) : null;
+}
+
+function optionalNullableNumber(
+  record: Record<string, unknown>,
+  key: string,
+): number | null | undefined {
+  return key in record ? nullableNumber(record[key]) : null;
+}
+
 function parseSnapshot(value: unknown): SnapshotState {
   const leaked = [...collectForbiddenKeys(value)].sort();
   if (leaked.length > 0) {
@@ -106,13 +110,21 @@ function parseSnapshot(value: unknown): SnapshotState {
   const resolutionEvidenceCount = finiteNumber(
     value.summary.support_ticket_resolution_evidence_count,
   );
+  const nonRepeatTicketCount = finiteNumber(value.summary.non_repeat_ticket_count);
+  const sourceDateStart = optionalNullableString(value.summary, "source_date_start");
+  const sourceDateEnd = optionalNullableString(value.summary, "source_date_end");
+  const sourceWindowDays = optionalNullableNumber(value.summary, "source_window_days");
   if (
     generated === null ||
     repeatTicketCount === null ||
     draftedAnswerCount === null ||
     noProvenAnswerCount === null ||
     typeof resolutionEvidencePresent !== "boolean" ||
-    resolutionEvidenceCount === null
+    resolutionEvidenceCount === null ||
+    nonRepeatTicketCount === null ||
+    sourceDateStart === undefined ||
+    sourceDateEnd === undefined ||
+    sourceWindowDays === undefined
   ) {
     return {
       status: "invalid",
@@ -123,16 +135,24 @@ function parseSnapshot(value: unknown): SnapshotState {
   const topQuestions = value.top_questions.map((item) => {
     if (!isRecord(item)) return null;
     const rank = finiteNumber(item.rank);
+    const ticketCount = finiteNumber(item.ticket_count);
     const weightedFrequency = finiteNumber(item.weighted_frequency);
     const question = typeof item.question === "string" ? item.question.trim() : "";
     const customerWording =
       typeof item.customer_wording === "string" ? item.customer_wording.trim() : "";
-    if (rank === null || weightedFrequency === null || !question || !customerWording) {
+    if (
+      rank === null ||
+      ticketCount === null ||
+      weightedFrequency === null ||
+      !question ||
+      !customerWording
+    ) {
       return null;
     }
     return {
       rank,
       question,
+      ticket_count: ticketCount,
       weighted_frequency: weightedFrequency,
       customer_wording: customerWording,
     };
@@ -166,9 +186,13 @@ function parseSnapshot(value: unknown): SnapshotState {
         no_proven_answer_count: noProvenAnswerCount,
         support_ticket_resolution_evidence_present: resolutionEvidencePresent,
         support_ticket_resolution_evidence_count: resolutionEvidenceCount,
+        non_repeat_ticket_count: nonRepeatTicketCount,
+        source_date_start: sourceDateStart,
+        source_date_end: sourceDateEnd,
+        source_window_days: sourceWindowDays,
       },
-      top_questions: topQuestions as DeflectionSnapshot["top_questions"],
-      top_blind_spots: topBlindSpots as DeflectionSnapshot["top_blind_spots"],
+      top_questions: topQuestions as DeflectionResultPageSnapshot["top_questions"],
+      top_blind_spots: topBlindSpots as DeflectionResultPageSnapshot["top_blind_spots"],
     },
   };
 }

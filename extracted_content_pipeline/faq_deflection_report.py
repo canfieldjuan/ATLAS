@@ -748,6 +748,11 @@ _SNAPSHOT_SUMMARY_FIELDS = (
     "source_date_end",
     "source_window_days",
 )
+_SNAPSHOT_SUMMARY_OPTIONAL_FIELDS = (
+    "source_date_start",
+    "source_date_end",
+    "source_window_days",
+)
 _SNAPSHOT_TOP_QUESTION_FIELDS = (
     "rank",
     "question",
@@ -814,6 +819,7 @@ def _deflection_snapshot_projection_contract_shape() -> dict[str, Any]:
                 "summary",
                 source_section="support_tax",
                 projected_fields=_SNAPSHOT_SUMMARY_FIELDS,
+                optional_projected_fields=_SNAPSHOT_SUMMARY_OPTIONAL_FIELDS,
             ),
             _snapshot_projection_section_entry(
                 "top_questions",
@@ -860,6 +866,7 @@ def _snapshot_projection_section_entry(
     *,
     source_section: str,
     projected_fields: Sequence[str],
+    optional_projected_fields: Sequence[str] = (),
     source_collection: str | None = None,
     limit: str | None = None,
 ) -> dict[str, Any]:
@@ -870,6 +877,8 @@ def _snapshot_projection_section_entry(
         "snapshot_safe_fields": list(definition.snapshot_safe_fields),
         "projected_fields": list(projected_fields),
     }
+    if optional_projected_fields:
+        out["optional_projected_fields"] = list(optional_projected_fields)
     if source_collection is not None:
         out["source_collection"] = source_collection
     if limit is not None:

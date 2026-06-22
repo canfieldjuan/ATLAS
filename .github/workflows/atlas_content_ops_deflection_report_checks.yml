@@ -14,10 +14,13 @@ on:
       - "extracted_content_pipeline/ticket_faq_markdown.py"
       - "scripts/build_content_ops_deflection_report.py"
       - "scripts/check_deflection_full_report_pdf_export_artifacts.py"
+      - "scripts/generate_deflection_frontend_contract_types.py"
       - "scripts/purge_content_ops_deflection_reports.py"
       - "scripts/run_deflection_full_report_qa_live_runner.py"
+      - "portfolio-ui/src/types/deflectionSnapshot.ts"
       - "tests/test_content_ops_deflection_report.py"
       - "tests/test_deflection_snapshot_report_drift.py"
+      - "tests/test_generate_deflection_frontend_contract_types.py"
       - "tests/test_extracted_content_ops_live_execute_harness.py"
       - "tests/test_extracted_ticket_faq_markdown.py"
       - "tests/test_run_deflection_full_report_qa_live_runner.py"
@@ -34,10 +37,13 @@ on:
       - "extracted_content_pipeline/ticket_faq_markdown.py"
       - "scripts/build_content_ops_deflection_report.py"
       - "scripts/check_deflection_full_report_pdf_export_artifacts.py"
+      - "scripts/generate_deflection_frontend_contract_types.py"
       - "scripts/purge_content_ops_deflection_reports.py"
       - "scripts/run_deflection_full_report_qa_live_runner.py"
+      - "portfolio-ui/src/types/deflectionSnapshot.ts"
       - "tests/test_content_ops_deflection_report.py"
       - "tests/test_deflection_snapshot_report_drift.py"
+      - "tests/test_generate_deflection_frontend_contract_types.py"
       - "tests/test_extracted_content_ops_live_execute_harness.py"
       - "tests/test_extracted_ticket_faq_markdown.py"
       - "tests/test_run_deflection_full_report_qa_live_runner.py"
@@ -68,6 +74,7 @@ jobs:
             tests/test_extracted_ticket_faq_markdown.py::test_build_ticket_faq_markdown_skips_non_ticket_sources_and_validates_limits \
             tests/test_extracted_ticket_faq_markdown.py::test_build_ticket_faq_markdown_treats_zero_max_items_as_unlimited \
             tests/test_extracted_ticket_faq_markdown.py::test_build_ticket_faq_markdown_condenses_overflow_sources_instead_of_truncating \
+            tests/test_generate_deflection_frontend_contract_types.py \
             tests/test_extracted_content_ops_live_execute_harness.py::test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot_top_n \
             tests/test_content_ops_deflection_report.py::test_deflection_report_cli_ignores_legacy_max_items_cap \
             tests/test_content_ops_deflection_report.py::test_in_memory_report_retention_deletes_only_old_rows_with_limit \
@@ -84,3 +91,6 @@ jobs:
             tests/test_run_deflection_full_report_qa_live_runner.py \
             tests/test_smoke_content_ops_deflection_pdf_export_validators.py \
             -q
+
+      - name: Check generated frontend deflection contract types
+        run: python scripts/generate_deflection_frontend_contract_types.py --check
