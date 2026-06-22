@@ -41,8 +41,9 @@ Max files: 5
    fields.
 2. Emit sanitized JSON envelopes that report blocking error codes without
    echoing raw local paths, raw source IDs, raw ticket text, or raw labels.
-3. Fail closed on missing operator decisions, unsafe source-reference shapes,
-   invalid corpus-size/mix targets, and missing labeling-quality review.
+3. Fail closed on missing operator decisions, unexpected manifest fields,
+   unsafe source-reference shapes, invalid corpus-size/mix targets, unsupported
+   corpus metadata values, and missing labeling-quality review.
 4. Add CI-enrolled tests for the ok path, each detector branch, and sanitized
    failure output.
 5. Keep the real-source run and threshold/advisory-to-gating decisions deferred.
@@ -55,12 +56,19 @@ Max files: 5
         quality-review status.
   - [ ] Missing source, source supply, corpus mix, labeling owner/reviewer, or
         quality-review status fails with stable sanitized error codes.
+  - [ ] Unexpected top-level or nested manifest fields fail closed without
+        echoing field names or raw field values.
   - [ ] Source references that look like local paths, absolute paths, traversal,
-        email addresses, phone numbers, SSNs, payment cards, or long raw text
-        fail closed and are never echoed.
+        email addresses, phone numbers, SSNs, payment cards, DOB/date-like
+        values, or long raw text fail closed and are never echoed.
   - [ ] Corpus targets must be positive, internally consistent, and include the
         #1742 high-severity classes plus the cue-prefixed/cue-less person-name
         split.
+  - [ ] Corpus PII-class and person-name subtype lists accept only the
+        metadata allowlist and never echo unsupported raw-looking values.
+  - [ ] Labeling owner and reviewer are compared after case/punctuation
+        normalization so the same identity cannot pass as an independent
+        reviewer.
   - [ ] The command does not read raw ticket data and does not run the
         review-bundle pipeline.
   - [ ] The new test file is enrolled in extracted-pipeline CI.
@@ -103,11 +111,16 @@ The new CLI reads a small JSON object:
 }
 ```
 
-It validates only the decision metadata, not raw tickets. The source reference
-is intentionally constrained to a short opaque slug rather than a path, URL, or
-raw example. Failures print `{"ok": false, "errors": [{"code": "..."}]}` with
-stable codes; successes print a compact summary with counts and the reviewed
-decision fields that are safe to hand to the next operator step.
+It validates only the decision metadata, not raw tickets. The manifest is
+fail-closed at the object boundary: top-level and nested sections use
+allowlisted fields, corpus target lists use allowlisted metadata values, and
+unknown keys or values report counts without echoing the raw key/value text.
+The source reference is intentionally constrained to a short opaque slug rather
+than a path, URL, DOB/date-shaped value, or raw example. Labeling owner and
+reviewer are normalized before comparison. Failures print
+`{"ok": false, "errors": [{"code": "..."}]}` with stable codes; successes print
+a compact summary with counts and the reviewed decision fields that are safe to
+hand to the next operator step.
 
 ## Intentional
 
@@ -133,8 +146,8 @@ Parked hardening: none.
 
 ## Verification
 
-- python -m pytest tests/test_check_deflection_pii_source_decision.py -q -- 14 passed.
-- python -m pytest tests/test_check_deflection_pii_source_decision.py tests/test_content_ops_deflection_pii_review_bundle_pipeline.py -q -- 22 passed.
+- python -m pytest tests/test_check_deflection_pii_source_decision.py -q -- 21 passed.
+- python -m pytest tests/test_check_deflection_pii_source_decision.py tests/test_content_ops_deflection_pii_review_bundle_pipeline.py -q -- 29 passed.
 - python -m py_compile scripts/check_deflection_pii_source_decision.py tests/test_check_deflection_pii_source_decision.py -- passed.
 - python scripts/audit_extracted_pipeline_ci_enrollment.py -- OK: 192 matching tests are enrolled.
 - bash scripts/check_ascii_python.sh -- passed.
@@ -148,8 +161,8 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/extracted_pipeline_checks.yml` | 4 |
-| `plans/PR-Deflection-PII-Source-Decision-Preflight.md` | 155 |
-| `scripts/check_deflection_pii_source_decision.py` | 278 |
+| `plans/PR-Deflection-PII-Source-Decision-Preflight.md` | 168 |
+| `scripts/check_deflection_pii_source_decision.py` | 331 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_check_deflection_pii_source_decision.py` | 232 |
-| **Total** | **670** |
+| `tests/test_check_deflection_pii_source_decision.py` | 305 |
+| **Total** | **809** |

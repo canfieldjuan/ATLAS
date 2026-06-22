@@ -21,7 +21,17 @@ REQUIRED_HIGH_SEVERITY_CLASSES = frozenset({
     "phone",
     "ssn",
 })
+ALLOWED_PII_CLASS_TARGETS = REQUIRED_HIGH_SEVERITY_CLASSES | frozenset({"street_address"})
 REQUIRED_PERSON_NAME_SUBTYPES = frozenset({"cue_less", "cue_prefixed"})
+ALLOWED_TOP_LEVEL_FIELDS = frozenset({"schema_version", "source", "corpus", "labeling"})
+ALLOWED_SOURCE_FIELDS = frozenset({"kind", "supply", "reference"})
+ALLOWED_CORPUS_FIELDS = frozenset({
+    "minimum_ticket_count",
+    "person_name_subtypes",
+    "pii_class_targets",
+    "target_ticket_count",
+})
+ALLOWED_LABELING_FIELDS = frozenset({"owner", "quality_review", "reviewer"})
 ALLOWED_SOURCE_KINDS = frozenset({
     "intercom_export",
     "operator_curated_sample",
@@ -38,6 +48,11 @@ SAFE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,78}[A-Za-z0-9]$")
 EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")
 SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+DOB_DATE_RE = re.compile(
+    r"(?i)(?:^|[^A-Za-z0-9])(?:dob[-_.\s]*)?"
+    r"(?:19|20)\d{2}[-_.](?:0[1-9]|1[0-2])[-_.](?:0[1-9]|[12]\d|3[01])"
+    r"(?:$|[^A-Za-z0-9])"
+)
 DIGIT_RE = re.compile(r"\d")
 
 
@@ -74,6 +89,7 @@ def validate_source_decision(decision: Any) -> list[dict[str, Any]]:
         return [_error("decision_not_object")]
 
     errors: list[dict[str, Any]] = []
+    errors.extend(_unexpected_field_errors(decision, ALLOWED_TOP_LEVEL_FIELDS, "<root>"))
     if _clean(decision.get("schema_version")) != SCHEMA_VERSION:
         errors.append(_error("schema_version_mismatch", field="schema_version"))
 
@@ -82,10 +98,13 @@ def validate_source_decision(decision: Any) -> list[dict[str, Any]]:
     labeling = _object_field(decision, "labeling", errors)
 
     if source is not None:
+        errors.extend(_unexpected_field_errors(source, ALLOWED_SOURCE_FIELDS, "source"))
         errors.extend(_source_errors(source))
     if corpus is not None:
+        errors.extend(_unexpected_field_errors(corpus, ALLOWED_CORPUS_FIELDS, "corpus"))
         errors.extend(_corpus_errors(corpus))
     if labeling is not None:
+        errors.extend(_unexpected_field_errors(labeling, ALLOWED_LABELING_FIELDS, "labeling"))
         errors.extend(_labeling_errors(labeling))
     return errors
 
@@ -125,6 +144,15 @@ def _corpus_errors(corpus: Mapping[str, Any]) -> list[dict[str, Any]]:
     if class_targets is None:
         errors.append(_error("pii_class_targets_invalid", field="corpus.pii_class_targets"))
     else:
+        unsupported = class_targets - ALLOWED_PII_CLASS_TARGETS
+        if unsupported:
+            errors.append(
+                _error(
+                    "pii_class_targets_unsupported",
+                    field="corpus.pii_class_targets",
+                    count=len(unsupported),
+                )
+            )
         missing = sorted(REQUIRED_HIGH_SEVERITY_CLASSES - class_targets)
         if missing:
             errors.append(
@@ -139,6 +167,15 @@ def _corpus_errors(corpus: Mapping[str, Any]) -> list[dict[str, Any]]:
     if name_subtypes is None:
         errors.append(_error("person_name_subtypes_invalid", field="corpus.person_name_subtypes"))
     else:
+        unsupported = name_subtypes - REQUIRED_PERSON_NAME_SUBTYPES
+        if unsupported:
+            errors.append(
+                _error(
+                    "person_name_subtypes_unsupported",
+                    field="corpus.person_name_subtypes",
+                    count=len(unsupported),
+                )
+            )
         missing = sorted(REQUIRED_PERSON_NAME_SUBTYPES - name_subtypes)
         if missing:
             errors.append(
@@ -164,7 +201,7 @@ def _labeling_errors(labeling: Mapping[str, Any]) -> list[dict[str, Any]]:
         errors.append(_error("labeling_reviewer_missing", field="labeling.reviewer"))
     elif _unsafe_reference(reviewer):
         errors.append(_error("labeling_reviewer_unsafe", field="labeling.reviewer"))
-    if owner and reviewer and owner == reviewer:
+    if owner and reviewer and _identity_key(owner) == _identity_key(reviewer):
         errors.append(_error("labeling_reviewer_matches_owner", field="labeling.reviewer"))
     if quality_review != COMPLETED_QUALITY_REVIEW:
         errors.append(_error("quality_review_not_completed", field="labeling.quality_review"))
@@ -183,6 +220,17 @@ def _object_field(
     return value
 
 
+def _unexpected_field_errors(
+    value: Mapping[str, Any],
+    allowed_fields: frozenset[str],
+    scope: str,
+) -> list[dict[str, Any]]:
+    unexpected_count = sum(1 for field in value if field not in allowed_fields)
+    if not unexpected_count:
+        return []
+    return [_error("unexpected_field", field=scope, count=unexpected_count)]
+
+
 def _unsafe_reference(value: str) -> bool:
     if (
         len(value) > 80
@@ -193,6 +241,7 @@ def _unsafe_reference(value: str) -> bool:
         or EMAIL_RE.search(value)
         or PHONE_RE.search(value)
         or SSN_RE.search(value)
+        or DOB_DATE_RE.search(value)
         or _looks_like_card(value)
     ):
         return True
@@ -202,6 +251,10 @@ def _unsafe_reference(value: str) -> bool:
 def _looks_like_card(value: str) -> bool:
     digits = "".join(DIGIT_RE.findall(value))
     return len(digits) >= 13
+
+
+def _identity_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
 def _positive_int(value: Any) -> bool:
