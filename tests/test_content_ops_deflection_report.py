@@ -916,6 +916,105 @@ def test_deflection_action_evidence_quotes_match_source_ids() -> None:
     ]
 
 
+def test_deflection_action_identity_is_stable_when_rank_changes() -> None:
+    base = _structured_report_fixture_result()
+    reordered = TicketFAQMarkdownResult(
+        markdown=base.markdown,
+        source_count=base.source_count,
+        ticket_source_count=base.ticket_source_count,
+        output_checks=base.output_checks,
+        items=tuple(reversed(base.items)),
+    )
+
+    base_artifact = build_deflection_report_artifact(base)
+    reordered_artifact = build_deflection_report_artifact(reordered)
+    base_export = build_deflection_evidence_export(base_artifact)
+    reordered_export = build_deflection_evidence_export(reordered_artifact)
+
+    base_questions = {
+        question["question"]: question
+        for question in base_export["questions"]
+    }
+    reordered_questions = {
+        question["question"]: question
+        for question in reordered_export["questions"]
+    }
+
+    for question, base_row in base_questions.items():
+        reordered_row = reordered_questions[question]
+        assert reordered_row["repeat_key"] == base_row["repeat_key"]
+        assert reordered_row["cluster_id"] == base_row["cluster_id"]
+        assert reordered_row["identity_basis"] == "question_topic"
+        assert reordered_row["identity_confidence"] == "high"
+
+    assert (
+        base_questions["How do I export attribution reports?"]["question_id"]
+        != reordered_questions["How do I export attribution reports?"]["question_id"]
+    )
+
+    base_actions = {
+        item["question"]: item
+        for section in base_artifact.report_model.as_dict()["sections"]
+        if section["id"] == "backlog_table"
+        for item in section["data"]["items"]
+    }
+    reordered_actions = {
+        item["question"]: item
+        for section in reordered_artifact.report_model.as_dict()["sections"]
+        if section["id"] == "backlog_table"
+        for item in section["data"]["items"]
+    }
+    assert (
+        base_actions["How do I export attribution reports?"]["repeat_key"]
+        == reordered_actions["How do I export attribution reports?"]["repeat_key"]
+    )
+
+
+def test_deflection_action_identity_ignores_ticket_id_rollover() -> None:
+    base = _structured_report_fixture_result()
+    next_period_items: list[dict[str, object]] = []
+    for item in base.items:
+        updated = dict(item)
+        source_ids = item.get("source_ids")
+        source_count = len(source_ids) if isinstance(source_ids, tuple) else 0
+        updated["source_ids"] = tuple(
+            f"next-month-{index}"
+            for index in range(1, source_count + 1)
+        )
+        next_period_items.append(updated)
+    next_period = TicketFAQMarkdownResult(
+        markdown=base.markdown,
+        source_count=base.source_count,
+        ticket_source_count=base.ticket_source_count,
+        output_checks=base.output_checks,
+        items=tuple(next_period_items),
+    )
+
+    base_export = build_deflection_evidence_export(
+        build_deflection_report_artifact(base)
+    )
+    next_export = build_deflection_evidence_export(
+        build_deflection_report_artifact(next_period)
+    )
+
+    base_questions = {
+        question["question"]: question
+        for question in base_export["questions"]
+    }
+    next_questions = {
+        question["question"]: question
+        for question in next_export["questions"]
+    }
+
+    for question, base_row in base_questions.items():
+        next_row = next_questions[question]
+        assert next_row["repeat_key"] == base_row["repeat_key"]
+        assert next_row["cluster_id"] == base_row["cluster_id"]
+        assert next_row["identity_basis"] == "question_topic"
+        assert next_row["identity_confidence"] == "high"
+        assert next_row["source_ids"] != base_row["source_ids"]
+
+
 def test_deflection_snapshot_projection_is_allowlist_only() -> None:
     artifact = build_deflection_report_artifact(_structured_report_fixture_result())
     report_model = artifact.report_model.as_dict()
@@ -950,6 +1049,10 @@ def test_deflection_snapshot_projection_is_allowlist_only() -> None:
     assert "source_ids" not in encoded
     assert "ticket-export-1" not in encoded
     assert "priority_fix_queue" not in encoded
+    assert "repeat_key" not in encoded
+    assert "cluster_id" not in encoded
+    assert "identity_basis" not in encoded
+    assert "identity_confidence" not in encoded
     assert "hidden action detail" not in encoded
     assert "hidden unresolved action detail" not in encoded
     assert "hidden drafted action detail" not in encoded
@@ -1408,6 +1511,10 @@ def test_deflection_report_artifact_includes_complete_evidence_export() -> None:
     assert export["evidence_rows"][0] == {
         "row_id": "q001-e001",
         "question_id": "q001",
+        "repeat_key": "repeat_b110111100110011101111100111001111001111111111110",
+        "cluster_id": "repeat_b110111100110011101111100111001111001111111111110",
+        "identity_basis": "question_topic",
+        "identity_confidence": "high",
         "rank": 1,
         "question": "How do I export attribution reports?",
         "source_id": "ticket-1",

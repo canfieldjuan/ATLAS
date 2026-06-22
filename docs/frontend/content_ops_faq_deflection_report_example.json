@@ -4,10 +4,14 @@
       {
         "answer_evidence_status": "resolution_evidence",
         "answer_linkage": "publishable_answer",
+        "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
         "evidence_quote": "`ticket-export-1` - Export attribution: \"How do I export attribution reports?\"",
+        "identity_basis": "question_topic",
+        "identity_confidence": "high",
         "question": "How do I export attribution reports?",
         "question_id": "q001",
         "rank": 1,
+        "repeat_key": "repeat_b011111001111100011000011100110110000100100011010",
         "resolution_evidence_scope": "scoped",
         "row_id": "q001-e001",
         "source_field": "evidence_quote",
@@ -16,10 +20,14 @@
       {
         "answer_evidence_status": "resolution_evidence",
         "answer_linkage": "publishable_answer",
+        "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
         "evidence_quote": "",
+        "identity_basis": "question_topic",
+        "identity_confidence": "high",
         "question": "How do I export attribution reports?",
         "question_id": "q001",
         "rank": 1,
+        "repeat_key": "repeat_b011111001111100011000011100110110000100100011010",
         "resolution_evidence_scope": "scoped",
         "row_id": "q001-e002",
         "source_field": "source_id",
@@ -28,10 +36,14 @@
       {
         "answer_evidence_status": "draft_needs_review",
         "answer_linkage": "needs_review",
+        "cluster_id": "repeat_b101110011101100010011111101110101110111101100011",
         "evidence_quote": "`ticket-sso-1` - SSO setup: \"How do I enable SSO for my team?\"",
+        "identity_basis": "question_topic",
+        "identity_confidence": "high",
         "question": "How do I enable SSO for my team?",
         "question_id": "q002",
         "rank": 2,
+        "repeat_key": "repeat_b101110011101100010011111101110101110111101100011",
         "resolution_evidence_scope": "not_applicable",
         "row_id": "q002-e001",
         "source_field": "evidence_quote",
@@ -40,10 +52,14 @@
       {
         "answer_evidence_status": "draft_needs_review",
         "answer_linkage": "needs_review",
+        "cluster_id": "repeat_b101110011101100010011111101110101110111101100011",
         "evidence_quote": "",
+        "identity_basis": "question_topic",
+        "identity_confidence": "high",
         "question": "How do I enable SSO for my team?",
         "question_id": "q002",
         "rank": 2,
+        "repeat_key": "repeat_b101110011101100010011111101110101110111101100011",
         "resolution_evidence_scope": "not_applicable",
         "row_id": "q002-e002",
         "source_field": "source_id",
@@ -55,13 +71,17 @@
         "answer": "To resolve this, open Analytics, choose Attribution, then click Download report.",
         "answer_evidence_status": "resolution_evidence",
         "answer_linkage": "publishable_answer",
+        "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
         "customer_wording": "",
         "evidence_quote_count": 1,
+        "identity_basis": "question_topic",
+        "identity_confidence": "high",
         "opportunity_score": 2,
         "outcome_diagnostics": {},
         "question": "How do I export attribution reports?",
         "question_id": "q001",
         "rank": 1,
+        "repeat_key": "repeat_b011111001111100011000011100110110000100100011010",
         "resolution_evidence_scope": "scoped",
         "source_ids": [
           "ticket-export-1",
@@ -103,13 +123,17 @@
         "answer": "No verified resolution evidence was found in 2 ticket sources; keep this FAQ in review before answering: How do I enable SSO for my team?",
         "answer_evidence_status": "draft_needs_review",
         "answer_linkage": "needs_review",
+        "cluster_id": "repeat_b101110011101100010011111101110101110111101100011",
         "customer_wording": "",
         "evidence_quote_count": 1,
+        "identity_basis": "question_topic",
+        "identity_confidence": "high",
         "opportunity_score": 2,
         "outcome_diagnostics": {},
         "question": "How do I enable SSO for my team?",
         "question_id": "q002",
         "rank": 2,
+        "repeat_key": "repeat_b101110011101100010011111101110101110111101100011",
         "resolution_evidence_scope": "not_applicable",
         "source_ids": [
           "ticket-sso-1",
@@ -462,6 +486,7 @@
           "backlog_limit": 25,
           "items": [
             {
+              "cluster_id": "repeat_b101110011101100010011111101110101110111101100011",
               "confidence": "medium",
               "csat_signal": {
                 "csat_present_count": 0,
@@ -471,6 +496,8 @@
               },
               "estimated_support_cost": 27.0,
               "fix_type": "create_missing_answer",
+              "identity_basis": "question_topic",
+              "identity_confidence": "high",
               "opportunity_score": 2,
               "owner_lane": "sso setup",
               "priority_drivers": [
@@ -483,6 +510,7 @@
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
               "recommended_title": "How do I enable SSO for my team?",
+              "repeat_key": "repeat_b101110011101100010011111101110101110111101100011",
               "representative_phrasing": [
                 "How do I enable SSO for my team?",
                 "sso setup"
@@ -503,6 +531,7 @@
               ]
             },
             {
+              "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
               "confidence": "medium",
               "csat_signal": {
                 "csat_present_count": 0,
@@ -512,6 +541,8 @@
               },
               "estimated_support_cost": 27.0,
               "fix_type": "publish_help_center_answer",
+              "identity_basis": "question_topic",
+              "identity_confidence": "high",
               "opportunity_score": 2,
               "owner_lane": "reporting friction",
               "priority_drivers": [
@@ -524,6 +555,7 @@
               "rank": 1,
               "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
               "recommended_title": "How do I export attribution reports?",
+              "repeat_key": "repeat_b011111001111100011000011100110110000100100011010",
               "representative_phrasing": [
                 "How do I export attribution reports?",
                 "reporting friction"
@@ -580,6 +612,7 @@
         "data": {
           "items": [
             {
+              "cluster_id": "repeat_b101110011101100010011111101110101110111101100011",
               "confidence": "medium",
               "csat_signal": {
                 "csat_present_count": 0,
@@ -589,6 +622,8 @@
               },
               "estimated_support_cost": 27.0,
               "fix_type": "create_missing_answer",
+              "identity_basis": "question_topic",
+              "identity_confidence": "high",
               "opportunity_score": 2,
               "owner_lane": "sso setup",
               "priority_drivers": [
@@ -601,6 +636,7 @@
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
               "recommended_title": "How do I enable SSO for my team?",
+              "repeat_key": "repeat_b101110011101100010011111101110101110111101100011",
               "representative_phrasing": [
                 "How do I enable SSO for my team?",
                 "sso setup"
@@ -652,6 +688,7 @@
         "data": {
           "items": [
             {
+              "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
               "confidence": "medium",
               "csat_signal": {
                 "csat_present_count": 0,
@@ -661,6 +698,8 @@
               },
               "estimated_support_cost": 27.0,
               "fix_type": "publish_help_center_answer",
+              "identity_basis": "question_topic",
+              "identity_confidence": "high",
               "opportunity_score": 2,
               "owner_lane": "reporting friction",
               "priority_drivers": [
@@ -673,6 +712,7 @@
               "rank": 1,
               "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
               "recommended_title": "How do I export attribution reports?",
+              "repeat_key": "repeat_b011111001111100011000011100110110000100100011010",
               "representative_phrasing": [
                 "How do I export attribution reports?",
                 "reporting friction"
@@ -742,6 +782,7 @@
           "default_limit": 25,
           "items": [
             {
+              "cluster_id": "repeat_b101110011101100010011111101110101110111101100011",
               "confidence": "medium",
               "csat_signal": {
                 "csat_present_count": 0,
@@ -751,6 +792,8 @@
               },
               "estimated_support_cost": 27.0,
               "fix_type": "create_missing_answer",
+              "identity_basis": "question_topic",
+              "identity_confidence": "high",
               "opportunity_score": 2,
               "owner_lane": "sso setup",
               "priority_drivers": [
@@ -763,6 +806,7 @@
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
               "recommended_title": "How do I enable SSO for my team?",
+              "repeat_key": "repeat_b101110011101100010011111101110101110111101100011",
               "representative_phrasing": [
                 "How do I enable SSO for my team?",
                 "sso setup"
@@ -783,6 +827,7 @@
               ]
             },
             {
+              "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
               "confidence": "medium",
               "csat_signal": {
                 "csat_present_count": 0,
@@ -792,6 +837,8 @@
               },
               "estimated_support_cost": 27.0,
               "fix_type": "publish_help_center_answer",
+              "identity_basis": "question_topic",
+              "identity_confidence": "high",
               "opportunity_score": 2,
               "owner_lane": "reporting friction",
               "priority_drivers": [
@@ -804,6 +851,7 @@
               "rank": 1,
               "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
               "recommended_title": "How do I export attribution reports?",
+              "repeat_key": "repeat_b011111001111100011000011100110110000100100011010",
               "representative_phrasing": [
                 "How do I export attribution reports?",
                 "reporting friction"

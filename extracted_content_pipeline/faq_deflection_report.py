@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -2358,8 +2359,10 @@ def _action_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
     status = _action_status(item)
     ticket_count = _ticket_count(item)
+    identity = _action_identity(item)
     return {
         "rank": rank,
+        **identity,
         "question": _text(item.get("question")),
         "status": status,
         "owner_lane": _action_owner_lane(item),
@@ -2569,6 +2572,49 @@ def _action_status_counts(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
         status = _text(item.get("status")) or "Unknown"
         counts[status] = counts.get(status, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _action_identity(item: Mapping[str, Any]) -> dict[str, str]:
+    question = _identity_text(item.get("question"))
+    topic = _identity_text(item.get("topic"))
+    source_ids = tuple(
+        sorted(
+            _identity_text(source_id)
+            for source_id in _texts(item.get("source_ids"))
+        )
+    )
+    source_ids = tuple(source_id for source_id in source_ids if source_id)
+
+    if question and topic:
+        basis = "question_topic"
+        confidence = "high"
+        parts = ("question", question, "topic", topic)
+    elif question:
+        basis = "question_topic" if topic else "question"
+        confidence = "medium"
+        parts = ("question", question, "topic", topic)
+    elif source_ids:
+        basis = "source_ids"
+        confidence = "medium"
+        parts = ("sources", ",".join(source_ids))
+    else:
+        basis = "insufficient_identity"
+        confidence = "low"
+        parts = ("insufficient_identity",)
+
+    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).digest()
+    digest_bits = f"{int.from_bytes(digest[:6], 'big'):048b}"
+    repeat_key = f"repeat_b{digest_bits}"
+    return {
+        "repeat_key": repeat_key,
+        "cluster_id": repeat_key,
+        "identity_basis": basis,
+        "identity_confidence": confidence,
+    }
+
+
+def _identity_text(value: Any) -> str:
+    return " ".join(_text(value).casefold().split())
 
 
 def _question_detail_rows(
@@ -2970,8 +3016,10 @@ def _complete_evidence_detail(item: Mapping[str, Any]) -> list[str]:
 
 def _evidence_export_question(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
     source_ids = _texts(item.get("source_ids"))
+    identity = _action_identity(item)
     return {
         "question_id": _evidence_question_id(rank),
+        **identity,
         "rank": rank,
         "question": _text(item.get("question")),
         "customer_wording": _text(item.get("customer_wording")),
@@ -2997,6 +3045,7 @@ def _evidence_export_question(rank: int, item: Mapping[str, Any]) -> dict[str, A
 
 def _evidence_export_rows(rank: int, item: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
     question_id = _evidence_question_id(rank)
+    identity = _action_identity(item)
     source_ids = _texts(item.get("source_ids"))
     quotes = _texts(item.get("evidence_quotes"))
     rows: list[dict[str, Any]] = []
@@ -3009,6 +3058,7 @@ def _evidence_export_rows(rank: int, item: Mapping[str, Any]) -> tuple[dict[str,
         rows.append(
             _evidence_row(
                 question_id=question_id,
+                identity=identity,
                 rank=rank,
                 item=item,
                 row_index=source_index,
@@ -3024,6 +3074,7 @@ def _evidence_export_rows(rank: int, item: Mapping[str, Any]) -> tuple[dict[str,
         rows.append(
             _evidence_row(
                 question_id=question_id,
+                identity=identity,
                 rank=rank,
                 item=item,
                 row_index=len(rows) + 1,
@@ -3038,6 +3089,7 @@ def _evidence_export_rows(rank: int, item: Mapping[str, Any]) -> tuple[dict[str,
 def _evidence_row(
     *,
     question_id: str,
+    identity: Mapping[str, str],
     rank: int,
     item: Mapping[str, Any],
     row_index: int,
@@ -3048,6 +3100,10 @@ def _evidence_row(
     return {
         "row_id": f"{question_id}-e{row_index:03d}",
         "question_id": question_id,
+        "repeat_key": identity["repeat_key"],
+        "cluster_id": identity["cluster_id"],
+        "identity_basis": identity["identity_basis"],
+        "identity_confidence": identity["identity_confidence"],
         "rank": rank,
         "question": _text(item.get("question")),
         "source_id": source_id,
