@@ -11,6 +11,7 @@ from extracted_content_pipeline.deflection_pii_eval_corpus import (
     SCHEMA_VERSION,
     SOURCE_INTAKE_SUMMARY_SCHEMA_VERSION,
     build_surrogate_eval_corpus,
+    format_labeled_source_intake_summary_markdown,
     summarize_labeled_source,
 )
 
@@ -249,6 +250,46 @@ def test_labeled_source_intake_summary_buckets_unsafe_must_survive_reasons() -> 
         },
     }
     assert "alice@example.com" not in rendered
+
+
+def test_labeled_source_intake_markdown_reports_mix_without_raw_echo() -> None:
+    summary = summarize_labeled_source(_valid_source())
+
+    markdown = format_labeled_source_intake_summary_markdown(summary)
+
+    assert "# Deflection PII Source Intake Summary" in markdown
+    assert "| Status | ok |" in markdown
+    assert "| Tickets | 1 |" in markdown
+    assert "| Labels | 9 |" in markdown
+    assert "| person_name | 2 |" in markdown
+    assert "| high | 7 |" in markdown
+    assert "| customer_message | 4 |" in markdown
+    assert "| security_reference | 1 |" in markdown
+    for raw in (
+        "Alice Baker",
+        "alice.baker@example.com",
+        "202-555-0188",
+        "ORD-98765",
+        "99 Real Street",
+        "1977-06-05",
+        "111-22-3333",
+        "4242 4242 4242 4242",
+    ):
+        assert raw not in markdown
+
+
+def test_labeled_source_intake_markdown_sanitizes_invalid_source() -> None:
+    source = _valid_source()
+    source["schema_version"] = "alice@example.com"
+
+    summary = summarize_labeled_source(source)
+    markdown = format_labeled_source_intake_summary_markdown(summary)
+
+    assert "| Status | blocked |" in markdown
+    assert "source_schema_version_mismatch" in markdown
+    assert "actual=invalid" in markdown
+    assert "alice@example.com" not in markdown
+    assert "Alice Baker" not in markdown
 
 
 def test_must_survive_tokens_are_preserved_for_precision_scoring() -> None:
@@ -582,7 +623,62 @@ def test_cli_writes_summary_without_artifact_and_sanitizes_invalid_summary(
     assert "missing.bad@example.com" not in rendered
 
 
-def test_cli_rejects_colliding_summary_and_artifact_paths(tmp_path: Path) -> None:
+def test_cli_writes_markdown_summary_without_artifact_and_sanitizes_invalid_summary(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "source.json"
+    markdown_output = tmp_path / "summary.md"
+    artifact_output = tmp_path / "artifact.json"
+    source.write_text(json.dumps(_valid_source()), encoding="utf-8")
+
+    assert CLI.main([str(source), "--summary-markdown-output", str(markdown_output)]) == 0
+    assert markdown_output.is_file()
+    assert not artifact_output.exists()
+    markdown = markdown_output.read_text(encoding="utf-8")
+    assert "| Labels | 9 |" in markdown
+    assert "| payment_card | 1 |" in markdown
+    assert "Alice Baker" not in markdown
+
+    bad_source = tmp_path / "bad-source.json"
+    bad_source.write_text(
+        json.dumps({
+            "schema_version": "deflection_pii_labeled_source.v1",
+            "records": [{
+                "fields": {"customer_message": "Email raw.bad@example.com"},
+                "labels": [{
+                    "span": "missing.bad@example.com",
+                    "class": "email",
+                    "origin_field": "customer_message",
+                }],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    assert CLI.main([str(bad_source), "--summary-markdown-output", str(markdown_output)]) == 1
+    markdown = markdown_output.read_text(encoding="utf-8")
+    captured = capsys.readouterr()
+    rendered = markdown + captured.err
+    assert "| Status | blocked |" in rendered
+    assert "label_span_not_found" in rendered
+    assert "record_index=1, label_index=1, origin_field=customer_message" in rendered
+    assert "raw.bad@example.com" not in rendered
+    assert "missing.bad@example.com" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("first_flag", "second_flag"),
+    (
+        ("--summary-output", "--output"),
+        ("--summary-markdown-output", "--output"),
+        ("--summary-output", "--summary-markdown-output"),
+    ),
+)
+def test_cli_rejects_colliding_output_paths(
+    tmp_path: Path,
+    first_flag: str,
+    second_flag: str,
+) -> None:
     source = tmp_path / "source.json"
     shared_output = tmp_path / "pii-output.json"
     source.write_text(json.dumps(_valid_source()), encoding="utf-8")
@@ -590,9 +686,9 @@ def test_cli_rejects_colliding_summary_and_artifact_paths(tmp_path: Path) -> Non
     with pytest.raises(SystemExit) as exc:
         CLI.main([
             str(source),
-            "--summary-output",
+            first_flag,
             str(shared_output),
-            "--output",
+            second_flag,
             str(shared_output),
         ])
 
