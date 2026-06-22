@@ -90,7 +90,9 @@ The CLI gains `--summary-output`. Callers may pass only `--summary-output` for a
 pre-artifact intake check, or pass both `--summary-output` and `--output` to
 write the safe summary plus the surrogate eval artifact. The CLI rejects
 identical resolved summary/artifact paths and reuses the already-built surrogate
-result when both outputs are requested.
+result when both outputs are requested. The CI-fix pass also replaces optimizer-
+removable artifact `assert` guards with explicit error handling so the CLI
+remains safe under optimized Python and stays below the maturity-sweep ratchet.
 
 ## Intentional
 
@@ -135,6 +137,15 @@ Parked hardening: none.
   runtime import findings: 0.
 - `bash` `scripts/run_extracted_pipeline_checks.sh` -> reasoning core 295
   passed; extracted content 4841 passed / 15 skipped / 1 warning.
+- `python scripts/maturity_sweep.py scripts --tests-root tests --baseline
+  tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob
+  'scripts/**'` -> ratchet gate passed.
+- `python` `scripts/maturity_sweep_file_lane.py` over the 29 deflection files from
+  `find atlas_brain scripts extracted_content_pipeline -type f -name
+  '*deflection*.py'` with
+  `--tests-root tests --baseline tests/maturity_sweep/baseline_deflection_lane.json
+  --min-score 8` plus the workflow sensitive globs -> ratchet gate passed.
+- `python -m pytest tests/test_maturity_sweep.py --noconftest -q` -> 14 passed.
 - Pending before push: `bash` `scripts/push_pr.sh`.
 
 ## Estimated diff size
@@ -142,7 +153,7 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `extracted_content_pipeline/deflection_pii_eval_corpus.py` | 114 |
-| `plans/PR-Deflection-PII-Source-Intake-Summary.md` | 148 |
-| `scripts/build_deflection_pii_surrogate_eval_corpus.py` | 70 |
+| `plans/PR-Deflection-PII-Source-Intake-Summary.md` | 159 |
+| `scripts/build_deflection_pii_surrogate_eval_corpus.py` | 87 |
 | `tests/test_content_ops_deflection_pii_surrogate_eval_corpus.py` | 153 |
-| **Total** | **485** |
+| **Total** | **513** |

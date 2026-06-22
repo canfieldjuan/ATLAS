@@ -48,32 +48,37 @@ def main(argv: list[str] | None = None) -> int:
             })
             return 1
 
-    if result is None and args.output:
-        result = build_surrogate_eval_corpus(source)
-    if args.output and not result.ok:
-        _write_error({
-            "ok": False,
-            "schema_version": SCHEMA_VERSION,
-            "errors": list(result.errors),
-        })
-        return 1
+    artifact: dict[str, Any] | None = None
     if args.output:
-        assert result is not None
-        assert result.artifact is not None
-        text = json.dumps(result.artifact, indent=2 if args.pretty else None, sort_keys=True)
+        if result is None:
+            result = build_surrogate_eval_corpus(source)
+        if not result.ok:
+            _write_error({
+                "ok": False,
+                "schema_version": SCHEMA_VERSION,
+                "errors": list(result.errors),
+            })
+            return 1
+        artifact = result.artifact
+        if artifact is None:
+            _write_error({
+                "ok": False,
+                "schema_version": SCHEMA_VERSION,
+                "errors": [{"code": "surrogate_artifact_missing"}],
+            })
+            return 1
+        text = json.dumps(artifact, indent=2 if args.pretty else None, sort_keys=True)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(text + "\n", encoding="utf-8")
     payload = {
         "ok": True,
         "schema_version": SCHEMA_VERSION,
     }
-    if args.output:
-        assert result is not None
-        assert result.artifact is not None
+    if artifact is not None:
         payload.update({
             "output": str(args.output),
-            "ticket_count": result.artifact["summary"]["ticket_count"],
-            "label_count": result.artifact["summary"]["label_count"],
+            "ticket_count": artifact["summary"]["ticket_count"],
+            "label_count": artifact["summary"]["label_count"],
         })
     if args.summary_output and summary is not None:
         payload["summary_output"] = str(args.summary_output)
