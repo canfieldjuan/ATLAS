@@ -17,6 +17,13 @@ from typing import Any
 
 SCHEMA_VERSION = "deflection_pii_eval_corpus.v1"
 INPUT_SCHEMA_VERSION = "deflection_pii_labeled_source.v1"
+SOURCE_INTAKE_SUMMARY_SCHEMA_VERSION = "deflection_pii_labeled_source_intake_summary.v1"
+SAFE_MUST_SURVIVE_REASONS = frozenset({
+    "compliance_reference",
+    "must_survive",
+    "security_reference",
+    "tenant_source_id",
+})
 
 FIELD_KEYS = (
     "subject",
@@ -164,6 +171,79 @@ def build_surrogate_eval_corpus(source: Any) -> SurrogateEvalCorpusBuildResult:
         "tickets": tickets,
     }
     return SurrogateEvalCorpusBuildResult(artifact=artifact)
+
+
+def summarize_labeled_source(
+    source: Any,
+    *,
+    build_result: SurrogateEvalCorpusBuildResult | None = None,
+) -> dict[str, Any]:
+    """Return sanitized corpus-mix metadata for a labeled local source."""
+
+    if not isinstance(source, Mapping):
+        return _intake_error_summary("", (_error("source_invalid_shape"),))
+
+    source_schema_version = _clean(source.get("schema_version"))
+    if source_schema_version != INPUT_SCHEMA_VERSION:
+        return _intake_error_summary(
+            _safe_schema_version_summary(source.get("schema_version")),
+            (
+                _error(
+                    "source_schema_version_mismatch",
+                    expected=INPUT_SCHEMA_VERSION,
+                    actual=_safe_schema_version_summary(source.get("schema_version")),
+                ),
+            ),
+        )
+
+    result = build_result if build_result is not None else build_surrogate_eval_corpus(source)
+    if not result.ok:
+        return _intake_error_summary(source_schema_version, result.errors)
+
+    assert result.artifact is not None
+    artifact = result.artifact
+    tickets = tuple(
+        ticket
+        for ticket in _sequence(artifact.get("tickets"))
+        if isinstance(ticket, Mapping)
+    )
+    labels = tuple(
+        label
+        for ticket in tickets
+        for label in _sequence(ticket.get("labels"))
+        if isinstance(label, Mapping)
+    )
+    must_survive = tuple(
+        record
+        for ticket in tickets
+        for record in _sequence(ticket.get("must_survive"))
+        if isinstance(record, Mapping)
+    )
+    by_origin_field = Counter(_clean(label.get("origin_field")) for label in labels)
+    by_reason = Counter(_safe_must_survive_reason(record.get("reason")) for record in must_survive)
+    return {
+        "schema_version": SOURCE_INTAKE_SUMMARY_SCHEMA_VERSION,
+        "ok": True,
+        "source_schema_version": source_schema_version,
+        "artifact_schema_version": SCHEMA_VERSION,
+        "raw_source_persisted": False,
+        "raw_label_spans_persisted": False,
+        "surrogate_positions_are_recall_labels": True,
+        "ticket_count": len(tickets),
+        "label_count": len(labels),
+        "labels_by_class": dict(sorted(Counter(_clean(label.get("class")) for label in labels).items())),
+        "labels_by_severity": dict(sorted(Counter(_clean(label.get("severity")) for label in labels).items())),
+        "labels_by_origin_field": dict(sorted(by_origin_field.items())),
+        "person_name": {
+            "cue_less": sum(1 for label in labels if label.get("name_subtype") == "cue_less"),
+            "cue_prefixed": sum(1 for label in labels if label.get("name_subtype") == "cue_prefixed"),
+        },
+        "must_survive": {
+            "count": len(must_survive),
+            "by_reason": dict(sorted(by_reason.items())),
+        },
+        "errors": [],
+    }
 
 
 @dataclass(frozen=True)
@@ -544,6 +624,37 @@ def _summary(tickets: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _intake_error_summary(
+    source_schema_version: str,
+    errors: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "schema_version": SOURCE_INTAKE_SUMMARY_SCHEMA_VERSION,
+        "ok": False,
+        "source_schema_version": source_schema_version,
+        "artifact_schema_version": SCHEMA_VERSION,
+        "raw_source_persisted": False,
+        "raw_label_spans_persisted": False,
+        "surrogate_positions_are_recall_labels": True,
+        "errors": [dict(error) for error in errors],
+    }
+
+
+def _safe_schema_version_summary(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return "missing"
+    if value.strip() == INPUT_SCHEMA_VERSION:
+        return INPUT_SCHEMA_VERSION
+    return "invalid"
+
+
+def _safe_must_survive_reason(value: Any) -> str:
+    reason = _clean(value)
+    if reason in SAFE_MUST_SURVIVE_REASONS:
+        return reason
+    return "other"
+
+
 def _find_occurrence(text: str, span: str, occurrence: int) -> tuple[int, int] | None:
     start = -1
     for _ in range(max(1, occurrence)):
@@ -597,6 +708,9 @@ __all__ = [
     "PII_CLASSES",
     "SCHEMA_VERSION",
     "SEVERITY_BY_CLASS",
+    "SAFE_MUST_SURVIVE_REASONS",
+    "SOURCE_INTAKE_SUMMARY_SCHEMA_VERSION",
     "SurrogateEvalCorpusBuildResult",
     "build_surrogate_eval_corpus",
+    "summarize_labeled_source",
 ]
