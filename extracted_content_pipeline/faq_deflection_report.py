@@ -48,6 +48,7 @@ _UNCAPPED_REPORT_MAX_ITEMS = 0
 _ASSISTED_CONTACT_COST = 13.50
 _ASSISTED_CONTACT_COST_LABEL = "$13.50"
 _ACTION_RESULT_PAGE_LIMIT = 3
+_ACTION_EMAIL_LIMIT = 3
 _ACTION_PDF_LIMIT = 10
 _ACTION_BACKLOG_LIMIT = 25
 _ACTION_STATUS_PRIORITY_WEIGHTS = MappingProxyType({
@@ -744,6 +745,10 @@ def deflection_report_model_contract_shape() -> dict[str, Any]:
 
 DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS: Mapping[str, Mapping[str, int]] = (
     MappingProxyType({
+        "email": MappingProxyType({
+            "priority_fix_queue": _ACTION_EMAIL_LIMIT,
+            "drafted_resolutions": _ACTION_EMAIL_LIMIT,
+        }),
         "result_page": MappingProxyType({
             "ranked_questions": 25,
             "question_details": 10,
@@ -1025,6 +1030,7 @@ def build_deflection_full_report_qa_scorecard(
     _add_surface_observation_assertions(
         add,
         counts,
+        sections,
         surface_observations or {},
         surface_caps or DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS,
     )
@@ -1054,11 +1060,12 @@ def build_deflection_full_report_qa_deterministic_harness(
     if not isinstance(model, Mapping):
         model = {}
     caps = surface_caps or DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS
-    counts = _scorecard_counts(_scorecard_sections(model))
+    sections = _scorecard_sections(model)
+    counts = _scorecard_counts(sections)
     observations = (
         surface_observations
         if surface_observations is not None
-        else _full_report_qa_surface_observations(counts, caps)
+        else _full_report_qa_surface_observations(counts, caps, sections)
     )
     observations = observations if isinstance(observations, Mapping) else {}
 
@@ -1092,6 +1099,7 @@ def build_deflection_full_report_qa_deterministic_harness(
                 observation=observation,
                 surface_caps=caps,
                 counts=counts,
+                sections=sections,
             )
 
     result = dict(scorecard)
@@ -1118,6 +1126,26 @@ def build_deflection_full_report_qa_deterministic_harness(
     return result
 
 
+def deflection_report_email_action_rows(
+    report_model: DeflectionStructuredReport | Mapping[str, Any],
+    *,
+    cap: int = _ACTION_EMAIL_LIMIT,
+) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    """Return action rows selected for the compact delivery email."""
+
+    model = (
+        report_model.as_dict()
+        if isinstance(report_model, DeflectionStructuredReport)
+        else report_model
+    )
+    if not isinstance(model, Mapping):
+        model = {}
+    return _deflection_email_action_rows_from_sections(
+        _scorecard_sections(model),
+        cap=cap,
+    )
+
+
 def _add_full_report_qa_required_metric_assertions(
     assertions: list[dict[str, Any]],
     *,
@@ -1126,6 +1154,7 @@ def _add_full_report_qa_required_metric_assertions(
     observation: Mapping[str, Any],
     surface_caps: Mapping[str, Mapping[str, int]],
     counts: Mapping[str, Any],
+    sections: Mapping[str, Mapping[str, Any]],
 ) -> None:
     observed_counts = (
         observation.get("counts")
@@ -1177,6 +1206,7 @@ def _add_full_report_qa_required_metric_assertions(
 def _full_report_qa_surface_observations(
     counts: Mapping[str, Any],
     surface_caps: Mapping[str, Mapping[str, int]],
+    sections: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     observations: dict[str, dict[str, Any]] = {}
     for surface, keys in _FULL_REPORT_QA_SURFACE_COUNT_KEYS.items():
@@ -1186,9 +1216,12 @@ def _full_report_qa_surface_observations(
         caps = surface_caps.get(surface)
         if isinstance(caps, Mapping) and caps:
             observation["displayed_rows"] = {
-                section_id: min(
-                    _scorecard_section_total(section_id, counts),
-                    max(0, _int(cap)),
+                section_id: _scorecard_expected_displayed_rows(
+                    surface,
+                    section_id,
+                    counts,
+                    sections,
+                    cap,
                 )
                 for section_id, cap in sorted(caps.items())
             }
@@ -1379,9 +1412,128 @@ def _scorecard_section_total(section_id: str, counts: Mapping[str, Any]) -> int:
     }.get(section_id, 0)
 
 
+def _scorecard_expected_displayed_rows(
+    surface: str,
+    section_id: str,
+    counts: Mapping[str, Any],
+    sections: Mapping[str, Mapping[str, Any]],
+    cap: Any,
+) -> int:
+    cap_int = max(0, _int(cap))
+    if surface == "email" and section_id in {
+        "priority_fix_queue",
+        "drafted_resolutions",
+    }:
+        return len(
+            _deflection_email_action_rows_from_sections(
+                sections,
+                cap=cap_int,
+            ).get(section_id, ())
+        )
+    return min(_scorecard_section_total(section_id, counts), cap_int)
+
+
+def _deflection_email_action_rows_from_sections(
+    sections: Mapping[str, Mapping[str, Any]],
+    *,
+    cap: int,
+) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    if cap <= 0:
+        return {
+            "priority_fix_queue": (),
+            "drafted_resolutions": (),
+        }
+    drafted_rows = _deflection_email_action_items(
+        sections,
+        "drafted_resolutions",
+        cap=cap,
+    )
+    drafted_questions = {
+        _scorecard_strict_text(item.get("question")).casefold()
+        for item in drafted_rows
+    }
+    priority_rows = _deflection_email_action_items(
+        sections,
+        "priority_fix_queue",
+        cap=cap,
+        excluded_questions=drafted_questions,
+        excluded_statuses=frozenset({"draft ready"}),
+    )
+    return {
+        "priority_fix_queue": priority_rows,
+        "drafted_resolutions": drafted_rows,
+    }
+
+
+def _deflection_email_action_items(
+    sections: Mapping[str, Mapping[str, Any]],
+    section_id: str,
+    *,
+    cap: int,
+    excluded_questions: frozenset[str] | set[str] = frozenset(),
+    excluded_statuses: frozenset[str] | set[str] = frozenset(),
+) -> tuple[Mapping[str, Any], ...]:
+    section = sections.get(section_id)
+    if not isinstance(section, Mapping):
+        return ()
+    data = section.get("data")
+    if not isinstance(data, Mapping):
+        return ()
+    rows = data.get("items")
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+        return ()
+    limit = _deflection_email_action_limit(data, cap=cap)
+    if limit <= 0:
+        return ()
+
+    items: list[Mapping[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        question = _scorecard_strict_text(row.get("question"))
+        ticket_count = _scorecard_strict_int(row.get("ticket_count"))
+        if not question or ticket_count is None:
+            continue
+        status = _scorecard_strict_text(row.get("status")).casefold()
+        if question.casefold() in excluded_questions:
+            continue
+        if status in excluded_statuses:
+            continue
+        items.append(dict(row))
+        if len(items) >= limit:
+            break
+    return tuple(items)
+
+
+def _deflection_email_action_limit(data: Mapping[str, Any], *, cap: int) -> int:
+    limit = _scorecard_strict_int(data.get("result_page_limit"))
+    if limit is None:
+        return cap
+    if limit <= 0:
+        return 0
+    return min(limit, cap)
+
+
+def _scorecard_strict_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _scorecard_strict_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
 def _add_surface_observation_assertions(
     add: Any,
     counts: Mapping[str, Any],
+    sections: Mapping[str, Mapping[str, Any]],
     surface_observations: Mapping[str, Mapping[str, Any]],
     surface_caps: Mapping[str, Mapping[str, int]],
 ) -> None:
@@ -1460,7 +1612,13 @@ def _add_surface_observation_assertions(
                 if section_text in caps
                 else total
             )
-            expected = min(total, cap)
+            expected = _scorecard_expected_displayed_rows(
+                surface,
+                section_text,
+                counts,
+                sections,
+                cap,
+            )
             observed = _scorecard_observed_int(actual)
             add(
                 f"surface.{surface_id}.displayed_rows.{section_safe_id}",
@@ -3963,6 +4121,7 @@ __all__ = [
     "build_deflection_report_artifact",
     "build_deflection_full_report_qa_deterministic_harness",
     "build_deflection_full_report_qa_scorecard",
+    "deflection_report_email_action_rows",
     "deflection_report_summary",
     "deflection_report_model_contract_shape",
     "deflection_snapshot_content_opportunities",

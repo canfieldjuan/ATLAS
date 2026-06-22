@@ -17,6 +17,9 @@ from extracted_content_pipeline.campaign_ports import (
 from extracted_content_pipeline.deflection_report_access import (
     stored_deflection_report_model,
 )
+from extracted_content_pipeline.faq_deflection_report import (
+    deflection_report_email_action_rows,
+)
 from extracted_content_pipeline.storage._jsonb_helpers import decode_jsonb_field
 
 
@@ -71,6 +74,36 @@ class _DeliveryEmailSummary:
     ticket_source_count: int
     priority_fix_items: tuple[_DeliveryEmailActionItem, ...] = ()
     drafted_resolution_items: tuple[_DeliveryEmailActionItem, ...] = ()
+
+
+def deflection_delivery_email_surface_observation(
+    text_body: str | None,
+) -> dict[str, dict[str, int]]:
+    """Return sanitized scorecard observations from a rendered delivery email."""
+
+    return {"displayed_rows": _delivery_email_displayed_rows(text_body or "")}
+
+
+def _delivery_email_displayed_rows(text_body: str) -> dict[str, int]:
+    rows = {
+        "priority_fix_queue": 0,
+        "drafted_resolutions": 0,
+    }
+    active_section: str | None = None
+    for raw_line in text_body.splitlines():
+        line = raw_line.strip()
+        if line == "Next actions:":
+            active_section = "priority_fix_queue"
+            continue
+        if line == "Ready to publish:":
+            active_section = "drafted_resolutions"
+            continue
+        if not line:
+            active_section = None
+            continue
+        if active_section is not None and line.startswith("- "):
+            rows[active_section] += 1
+    return rows
 
 
 async def send_pending_deflection_report_deliveries(
@@ -400,22 +433,18 @@ def _delivery_email_summary(artifact: Any) -> _DeliveryEmailSummary | None:
             continue
         summary = _support_tax_email_summary(section)
         if summary is not None:
-            drafted_resolution_items = _section_action_items(
-                sections,
-                "drafted_resolutions",
+            selected_rows = deflection_report_email_action_rows(
+                model,
+                cap=EMAIL_ACTION_SECTION_LIMIT,
             )
-            drafted_questions = {
-                item.question.casefold() for item in drafted_resolution_items
-            }
             return replace(
                 summary,
-                priority_fix_items=_section_action_items(
-                    sections,
-                    "priority_fix_queue",
-                    excluded_questions=drafted_questions,
-                    excluded_statuses={"draft ready"},
+                priority_fix_items=_email_action_items(
+                    selected_rows.get("priority_fix_queue", ()),
                 ),
-                drafted_resolution_items=drafted_resolution_items,
+                drafted_resolution_items=_email_action_items(
+                    selected_rows.get("drafted_resolutions", ()),
+                ),
             )
     return None
 
@@ -465,52 +494,14 @@ def _support_tax_email_summary(
     )
 
 
-def _section_action_items(
-    sections: tuple[dict[str, Any], ...],
-    section_id: str,
-    *,
-    excluded_questions: set[str] | None = None,
-    excluded_statuses: set[str] | None = None,
+def _email_action_items(
+    rows: tuple[Mapping[str, Any], ...],
 ) -> tuple[_DeliveryEmailActionItem, ...]:
-    excluded_questions = excluded_questions or set()
-    excluded_statuses = excluded_statuses or set()
-    for section in sections:
-        if _clean(section.get("id")) != section_id:
-            continue
-        data = section.get("data")
-        if not isinstance(data, Mapping):
-            return ()
-        rows = data.get("items")
-        if not isinstance(rows, list):
-            return ()
-        limit = _email_action_limit(data)
-        if limit <= 0:
-            return ()
-        items: list[_DeliveryEmailActionItem] = []
-        for row in rows:
-            if not isinstance(row, Mapping):
-                continue
-            item = _email_action_item(row)
-            if item is None:
-                continue
-            if item.question.casefold() in excluded_questions:
-                continue
-            if item.status.casefold() in excluded_statuses:
-                continue
-            items.append(item)
-            if len(items) >= limit:
-                break
-        return tuple(items)
-    return ()
-
-
-def _email_action_limit(data: Mapping[str, Any]) -> int:
-    limit = _strict_int(data.get("result_page_limit"))
-    if limit is None:
-        return EMAIL_ACTION_SECTION_LIMIT
-    if limit <= 0:
-        return 0
-    return min(limit, EMAIL_ACTION_SECTION_LIMIT)
+    return tuple(
+        item
+        for row in rows
+        if (item := _email_action_item(row)) is not None
+    )
 
 
 def _email_action_item(row: Mapping[str, Any]) -> _DeliveryEmailActionItem | None:

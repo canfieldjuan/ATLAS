@@ -21,6 +21,7 @@ from extracted_content_pipeline.faq_deflection_report import (
     build_deflection_report_model,
     build_deflection_snapshot,
     build_deflection_report_artifact,
+    deflection_report_email_action_rows,
     deflection_report_model_contract_shape,
     deflection_snapshot_content_opportunities,
     render_deflection_report_model,
@@ -1557,14 +1558,32 @@ def test_deflection_full_report_qa_scorecard_checks_action_section_caps() -> Non
     model = json.loads(json.dumps(artifact.report_model.as_dict()))
     sections = {section["id"]: section for section in model["sections"]}
     priority_rows = sections["priority_fix_queue"]["data"]["items"]
+    selected_email_rows = deflection_report_email_action_rows(model)
+    expected_email_priority_rows = len(selected_email_rows["priority_fix_queue"])
+    expected_email_drafted_rows = len(selected_email_rows["drafted_resolutions"])
     expected_pdf_rows = min(len(priority_rows), 10)
 
     assert expected_pdf_rows > 0
+    assert expected_email_priority_rows > 0
+    assert expected_email_drafted_rows > 0
+    assert expected_email_priority_rows < min(len(priority_rows), 3)
+    assert [
+        row["question"] for row in selected_email_rows["priority_fix_queue"]
+    ] == ["Can I turn on SSO for all users?"]
+    assert [
+        row["question"] for row in selected_email_rows["drafted_resolutions"]
+    ] == ["How do I export attribution reports?"]
 
     scorecard = build_deflection_full_report_qa_scorecard(
         model,
         evidence_export=export,
         surface_observations={
+            "email": {
+                "displayed_rows": {
+                    "priority_fix_queue": expected_email_priority_rows,
+                    "drafted_resolutions": expected_email_drafted_rows,
+                },
+            },
             "pdf": {"displayed_rows": {"priority_fix_queue": expected_pdf_rows}},
         },
     )
@@ -1572,7 +1591,26 @@ def test_deflection_full_report_qa_scorecard_checks_action_section_caps() -> Non
         model,
         evidence_export=export,
         surface_observations={
-            "pdf": {"displayed_rows": {"priority_fix_queue": expected_pdf_rows - 1}},
+            "email": {
+                "displayed_rows": {
+                    "priority_fix_queue": expected_email_priority_rows - 1,
+                    "drafted_resolutions": expected_email_drafted_rows,
+                },
+            },
+            "pdf": {"displayed_rows": {"priority_fix_queue": expected_pdf_rows}},
+        },
+    )
+    raw_min_scorecard = build_deflection_full_report_qa_scorecard(
+        model,
+        evidence_export=export,
+        surface_observations={
+            "email": {
+                "displayed_rows": {
+                    "priority_fix_queue": min(len(priority_rows), 3),
+                    "drafted_resolutions": expected_email_drafted_rows,
+                },
+            },
+            "pdf": {"displayed_rows": {"priority_fix_queue": expected_pdf_rows}},
         },
     )
     harness = build_deflection_full_report_qa_deterministic_harness(
@@ -1587,13 +1625,81 @@ def test_deflection_full_report_qa_scorecard_checks_action_section_caps() -> Non
         for assertion in bad_scorecard["assertions"]
         if not assertion["ok"]
     }
-    assert "surface.pdf.displayed_rows.priority_fix_queue" in failed
+    assert "surface.email.displayed_rows.priority_fix_queue" in failed
+    raw_min_failed = {
+        assertion["id"]
+        for assertion in raw_min_scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert raw_min_scorecard["ok"] is False
+    assert "surface.email.displayed_rows.priority_fix_queue" in raw_min_failed
     assert harness["counts"]["priority_fix_queue_count"] == len(priority_rows)
+    email_priority_assertion = next(
+        assertion
+        for assertion in harness["assertions"]
+        if assertion["id"] == "surface.email.displayed_rows.priority_fix_queue"
+    )
+    assert email_priority_assertion["expected"] == expected_email_priority_rows
+    assert email_priority_assertion["actual"] == expected_email_priority_rows
     assert any(
         assertion["id"] == "harness.surface.pdf.displayed_rows.priority_fix_queue.present"
         and assertion["ok"] is True
         for assertion in harness["assertions"]
     )
+    assert any(
+        assertion["id"] == "harness.surface.email.displayed_rows.priority_fix_queue.present"
+        and assertion["ok"] is True
+        for assertion in harness["assertions"]
+    )
+    assert any(
+        assertion["id"] == "harness.surface.email.displayed_rows.drafted_resolutions.present"
+        and assertion["ok"] is True
+        for assertion in harness["assertions"]
+    )
+
+
+def test_deflection_full_report_qa_scorecard_mirrors_email_action_limits() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    export = build_deflection_evidence_export(artifact)
+    model = json.loads(json.dumps(artifact.report_model.as_dict()))
+    sections = {section["id"]: section for section in model["sections"]}
+    sections["priority_fix_queue"]["data"]["result_page_limit"] = 0
+    sections["drafted_resolutions"]["data"]["result_page_limit"] = 0
+
+    scorecard = build_deflection_full_report_qa_scorecard(
+        model,
+        evidence_export=export,
+        surface_observations={
+            "email": {
+                "displayed_rows": {
+                    "priority_fix_queue": 0,
+                    "drafted_resolutions": 0,
+                },
+            },
+        },
+    )
+    bad_scorecard = build_deflection_full_report_qa_scorecard(
+        model,
+        evidence_export=export,
+        surface_observations={
+            "email": {
+                "displayed_rows": {
+                    "priority_fix_queue": 1,
+                    "drafted_resolutions": 1,
+                },
+            },
+        },
+    )
+
+    assert scorecard["ok"] is True
+    assert bad_scorecard["ok"] is False
+    failed = {
+        assertion["id"]
+        for assertion in bad_scorecard["assertions"]
+        if not assertion["ok"]
+    }
+    assert "surface.email.displayed_rows.priority_fix_queue" in failed
+    assert "surface.email.displayed_rows.drafted_resolutions" in failed
 
 
 def test_deflection_full_report_qa_scorecard_requires_action_sections() -> None:
@@ -1666,6 +1772,10 @@ def test_deflection_full_report_qa_harness_defers_result_page_action_row_observe
                     "no_proven_answer_count": counts["no_proven_answer_count"],
                     "ticket_source_count": counts["ticket_source_count"],
                     "estimated_support_cost": counts["estimated_support_cost"],
+                },
+                "displayed_rows": {
+                    "priority_fix_queue": 1,
+                    "drafted_resolutions": min(len(drafted_rows), 3),
                 },
             },
             "pdf": {
@@ -1841,6 +1951,10 @@ def test_deflection_full_report_qa_deterministic_harness_composes_all_surfaces()
     assert "harness.surface.pdf.present" in assertion_ids
     assert "harness.surface.evidence_export.present" in assertion_ids
     assert "surface.email.count.repeat_ticket_count" in assertion_ids
+    assert "surface.email.displayed_rows.priority_fix_queue" in assertion_ids
+    assert "surface.email.displayed_rows.drafted_resolutions" in assertion_ids
+    assert "harness.surface.email.displayed_rows.priority_fix_queue.present" in assertion_ids
+    assert "harness.surface.email.displayed_rows.drafted_resolutions.present" in assertion_ids
     assert "surface.result_page.displayed_rows.seo_targets" in assertion_ids
     assert "surface.pdf.displayed_rows.ranked_questions" in assertion_ids
     assert "surface.evidence_export.count.evidence_row_count" in assertion_ids
@@ -1898,6 +2012,14 @@ def test_deflection_full_report_qa_deterministic_harness_requires_surface_metric
         if not assertion["ok"]
     }
     assert "harness.surface.email.count.generated_question_count.present" in failed
+    assert (
+        "harness.surface.email.displayed_rows.priority_fix_queue.present"
+        in failed
+    )
+    assert (
+        "harness.surface.email.displayed_rows.drafted_resolutions.present"
+        in failed
+    )
     assert "harness.surface.result_page.count.evidence_row_count.present" in failed
     assert (
         "harness.surface.result_page.displayed_rows.question_details.present"
