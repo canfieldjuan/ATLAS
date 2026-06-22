@@ -1,0 +1,70 @@
+name: Content Ops Deflection Report TTL Purge
+
+on:
+  schedule:
+    - cron: "23 8 * * *"
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: "Delete reports older than this many days."
+        required: false
+        default: "30"
+      limit:
+        description: "Maximum rows to delete in one run."
+        required: false
+        default: "1000"
+      dry_run:
+        description: "Count eligible rows without deleting them."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: content-ops-deflection-report-ttl-purge
+  cancel-in-progress: false
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install purge dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install asyncpg
+
+      - name: Purge expired deflection reports
+        env:
+          EXTRACTED_DATABASE_URL: ${{ secrets.EXTRACTED_DATABASE_URL }}
+          RETENTION_DAYS: ${{ inputs.retention_days }}
+          DELETE_LIMIT: ${{ inputs.limit }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          retention_days="${RETENTION_DAYS:-30}"
+          delete_limit="${DELETE_LIMIT:-1000}"
+          dry_run="${DRY_RUN:-false}"
+          args=(
+            --database-url-env EXTRACTED_DATABASE_URL
+            --retention-days "$retention_days"
+            --limit "$delete_limit"
+            --json
+          )
+          if [ "$dry_run" != "true" ]; then
+            args+=(--confirm-delete)
+          fi
+          python scripts/purge_content_ops_deflection_reports.py "${args[@]}"
