@@ -164,6 +164,10 @@ The action-oriented paid sections are a work queue, not a full ticket archive:
   `priority_drivers` enum labels. The score is based on repeat volume,
   benchmark support cost, answer evidence status, confidence, reopened-ticket
   signal, and CSAT signal; it is not produced by an LLM or cloud classifier.
+- Action rows also carry paid-only `repeat_key`, `cluster_id`,
+  `identity_basis`, and `identity_confidence` fields. Use those for
+  cross-run/monthly-delta matching; `rank` and evidence-export `question_id`
+  are display/run-local identifiers and can change when priority changes.
 - `top_unresolved_repeats` contains unresolved repeated questions only; one-off
   or low-confidence questions stay out of repeat accounting.
 - `drafted_resolutions` contains publishable or adaptable answer drafts.
@@ -187,6 +191,14 @@ type DeflectionEvidenceExport = {
   report_summary: FAQDeflectionReportSummary;
   questions: Array<{
     question_id: string;
+    repeat_key: string;
+    cluster_id: string;
+    identity_basis:
+  | "question_topic"
+  | "question"
+  | "source_ids"
+      | "insufficient_identity";
+    identity_confidence: "high" | "medium" | "low";
     rank: number;
     question: string;
     customer_wording: string;
@@ -207,6 +219,10 @@ type DeflectionEvidenceExport = {
   evidence_rows: Array<{
     row_id: string;
     question_id: string;
+    repeat_key: string;
+    cluster_id: string;
+    identity_basis: string;
+    identity_confidence: "high" | "medium" | "low";
     rank: number;
     question: string;
     source_id: string;

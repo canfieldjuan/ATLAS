@@ -291,6 +291,11 @@ def test_content_ops_faq_report_contract_links_example() -> None:
     assert '"drafted_resolutions"' in doc
     assert '"already_covered_still_recurring"' in doc
     assert '"backlog_table"' in doc
+    assert "repeat_key: string" in doc
+    assert "cluster_id: string" in doc
+    assert "identity_basis:" in doc
+    assert "identity_confidence:" in doc
+    assert "cross-run/monthly-delta matching" in doc
     assert "required_data: string[]" in doc
     assert "snapshot_safe_fields: string[]" in doc
     assert "snapshot.teaser.full_answer" in doc
