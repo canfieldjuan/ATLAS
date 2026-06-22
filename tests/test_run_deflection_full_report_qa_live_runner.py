@@ -211,6 +211,7 @@ def _process_contract(**contract_overrides: Any) -> dict[str, Any]:
             "snapshot": "/api/v1/content-ops/deflection-reports/{request_id}/snapshot",
             "artifact": "/api/v1/content-ops/deflection-reports/{request_id}/artifact",
             "report_model": "/api/v1/content-ops/deflection-reports/{request_id}/report-model",
+            "delete": "/api/v1/content-ops/deflection-reports/{request_id}",
         },
     }
 

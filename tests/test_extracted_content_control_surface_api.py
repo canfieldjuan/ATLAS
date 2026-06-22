@@ -370,6 +370,7 @@ async def test_deflection_process_contract_route_advertises_paid_artifact_contra
             "snapshot": "/ops/deflection-reports/{request_id}/snapshot",
             "artifact": "/ops/deflection-reports/{request_id}/artifact",
             "report_model": "/ops/deflection-reports/{request_id}/report-model",
+            "delete": "/ops/deflection-reports/{request_id}",
         },
     }
 
@@ -2916,6 +2917,42 @@ async def test_deflection_report_artifact_route_is_locked_until_marked_paid():
 
 
 @pytest.mark.asyncio
+async def test_deflection_report_delete_route_is_idempotent_and_scoped() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-gate",
+        request_id="request-delete",
+        snapshot={"summary": {"generated": 1}},
+        artifact={"markdown": "# Delete me"},
+    )
+    await store.save_report(
+        account_id="acct-other",
+        request_id="request-delete",
+        snapshot={"summary": {"generated": 2}},
+        artifact={"markdown": "# Keep me"},
+    )
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        scope_provider=lambda: {"account_id": "acct-gate", "user_id": "user-gate"},
+        deflection_report_store_provider=lambda: store,
+    )
+
+    delete_route = _route(router, "/ops/deflection-reports/{request_id}", "DELETE")
+
+    assert delete_route.status_code == 204
+    assert await delete_route.endpoint(request_id="request-delete") is None
+    assert await store.get_artifact_record(
+        account_id="acct-gate",
+        request_id="request-delete",
+    ) is None
+    assert await store.get_artifact_record(
+        account_id="acct-other",
+        request_id="request-delete",
+    ) is not None
+    assert await delete_route.endpoint(request_id="request-delete") is None
+
+
+@pytest.mark.asyncio
 async def test_deflection_checkout_authorization_returns_canonical_terms_only():
     store = InMemoryDeflectionReportArtifactStore()
     await store.save_report(
@@ -3100,6 +3137,11 @@ def test_deflection_report_routes_use_public_and_trusted_dependencies() -> None:
         "/ops/deflection-reports/{request_id}/snapshot",
         "GET",
     )
+    delete_route = _route(
+        router,
+        "/ops/deflection-reports/{request_id}",
+        "DELETE",
+    )
 
     assert "_tenant_user" in _dependency_names(paid_route)
     assert "_trusted_paid_release" in _dependency_names(paid_route)
@@ -3110,11 +3152,13 @@ def test_deflection_report_routes_use_public_and_trusted_dependencies() -> None:
         checkout_authorization_route
     )
     assert "_public_deflection_gate" in _dependency_names(snapshot_route)
+    assert "_public_deflection_gate" in _dependency_names(delete_route)
     assert "_trusted_paid_release" not in _dependency_names(artifact_route)
     assert "_trusted_paid_release" not in _dependency_names(
         checkout_authorization_route
     )
     assert "_trusted_paid_release" not in _dependency_names(snapshot_route)
+    assert "_trusted_paid_release" not in _dependency_names(delete_route)
 
 
 @pytest.mark.asyncio

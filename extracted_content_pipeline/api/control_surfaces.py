@@ -1046,6 +1046,22 @@ def create_content_ops_control_surface_router(
             raise HTTPException(status_code=404, detail="Deflection report not found.")
         return {"request_id": request_id, "paid": True}
 
+    @router.delete(
+        "/deflection-reports/{request_id}",
+        dependencies=public_deflection_dependencies,
+        status_code=204,
+    )
+    async def delete_deflection_report(
+        request_id: str = PathParam(..., min_length=1, max_length=200),
+    ) -> None:
+        store = await _resolve_deflection_report_store(deflection_report_store_provider)
+        scope = await _resolve_scope(scope_provider)
+        await store.delete_report(
+            account_id=_required_scope_account_id(scope),
+            request_id=request_id,
+        )
+        return None
+
     @router.post("/preview")
     async def preview_generation(
         payload: ContentOpsRequestModel = Body(...),
@@ -2991,6 +3007,7 @@ def _deflection_report_process_contract_payload(prefix: str) -> dict[str, Any]:
             "snapshot": f"{route_base}/{{request_id}}/snapshot",
             "artifact": f"{route_base}/{{request_id}}/artifact",
             "report_model": f"{route_base}/{{request_id}}/report-model",
+            "delete": f"{route_base}/{{request_id}}",
         },
     }
 

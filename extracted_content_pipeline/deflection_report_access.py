@@ -126,6 +126,14 @@ class DeflectionReportArtifactStore(Protocol):
     ) -> bool:
         """Relock a paid report. Returns False when no matching row exists."""
 
+    async def delete_report(
+        self,
+        *,
+        account_id: str,
+        request_id: str,
+    ) -> bool:
+        """Delete one tenant/request report row. Returns False when absent."""
+
     async def count_reports_older_than(self, *, cutoff: datetime) -> int:
         """Count report rows older than the retention cutoff."""
 
@@ -375,6 +383,7 @@ class InMemoryDeflectionReportArtifactStore:
         for key in keys:
             self._rows.pop(key, None)
             self._created_at_by_key.pop(key, None)
+            self._delete_referencing_deltas(key)
         return len(keys)
 
     async def mark_unpaid(
@@ -405,6 +414,32 @@ class InMemoryDeflectionReportArtifactStore:
             delivery_email=row.delivery_email,
         )
         return True
+
+    async def delete_report(
+        self,
+        *,
+        account_id: str,
+        request_id: str,
+    ) -> bool:
+        key = (
+            _required_text(account_id, "account_id"),
+            _required_text(request_id, "request_id"),
+        )
+        existed = key in self._rows
+        self._rows.pop(key, None)
+        self._created_at_by_key.pop(key, None)
+        self._delete_referencing_deltas(key)
+        return existed
+
+    def _delete_referencing_deltas(self, report_key: tuple[str, str]) -> None:
+        account_id, request_id = report_key
+        for delta_key in list(self._deltas):
+            delta_account, current_request_id, baseline_request_id = delta_key
+            if (
+                delta_account == account_id
+                and request_id in {current_request_id, baseline_request_id}
+            ):
+                self._deltas.pop(delta_key, None)
 
     async def select_previous_paid_report(
         self,
@@ -680,6 +715,22 @@ class PostgresDeflectionReportArtifactStore:
                 resolved_limit,
             )
         return _parse_command_count(result)
+
+    async def delete_report(
+        self,
+        *,
+        account_id: str,
+        request_id: str,
+    ) -> bool:
+        result = await self.pool.execute(
+            """
+            DELETE FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            _required_text(account_id, "account_id"),
+            _required_text(request_id, "request_id"),
+        )
+        return parse_command_tag(result)
 
     async def mark_unpaid(
         self,
