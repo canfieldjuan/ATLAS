@@ -768,13 +768,13 @@ def test_deflection_top_unresolved_repeats_keeps_pdf_limit_items() -> None:
         ),
     )
 
+    artifact = build_deflection_report_artifact(result).as_dict()
     sections = {
         section["id"]: section
-        for section in build_deflection_report_artifact(result).as_dict()[
-            "report_model"
-        ]["sections"]
+        for section in artifact["report_model"]["sections"]
     }
     unresolved = sections["top_unresolved_repeats"]["data"]
+    snapshot = build_deflection_snapshot(artifact, top_n=5).as_dict()
 
     assert unresolved["result_page_limit"] == 3
     assert unresolved["pdf_limit"] == 10
@@ -782,6 +782,18 @@ def test_deflection_top_unresolved_repeats_keeps_pdf_limit_items() -> None:
     assert len(unresolved["items"]) == 10
     assert unresolved["items"][0]["question"] == (
         "How do I resolve unresolved repeat 13?"
+    )
+    assert len(snapshot["top_blind_spots"]) == unresolved["result_page_limit"]
+    assert [
+        row["question"] for row in snapshot["top_blind_spots"]
+    ] == [
+        "How do I resolve unresolved repeat 13?",
+        "How do I resolve unresolved repeat 12?",
+        "How do I resolve unresolved repeat 11?",
+    ]
+    assert "How do I resolve unresolved repeat 10?" not in json.dumps(
+        snapshot["top_blind_spots"],
+        sort_keys=True,
     )
     assert "one-off" not in json.dumps(unresolved, sort_keys=True)
 
@@ -1065,6 +1077,13 @@ def test_deflection_snapshot_projection_is_allowlist_only() -> None:
         "weighted_frequency": 8,
         "customer_wording": "export attribution reports",
     }
+    assert snapshot["top_blind_spots"] == [
+        {
+            "rank": 2,
+            "question": "Can I turn on SSO for all users?",
+            "ticket_count": 3,
+        }
+    ]
 
 
 def test_deflection_snapshot_falls_back_when_legacy_model_lacks_row_fields() -> None:
@@ -1205,7 +1224,11 @@ def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
                 "pdf_limit",
                 "support_cost_basis",
             ],
-            [],
+            [
+                "items.rank",
+                "items.question",
+                "items.ticket_count",
+            ],
         ),
         (
             "drafted_resolutions",
@@ -2574,6 +2597,7 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
                 "ticket_count": 1,
             }
         ],
+        "top_blind_spots": [],
         "teaser": {"full_answer": None, "previews": []},
     }
     assert "Open Analytics" not in encoded
@@ -3172,7 +3196,10 @@ def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> 
         {"rank": 2, "ticket_count": 2},
         {"rank": 3, "ticket_count": 0},
     ]
-    assert "Can I enable SSO?" not in encoded
+    assert snapshot["top_blind_spots"] == [
+        {"rank": 2, "question": "Can I enable SSO?", "ticket_count": 2}
+    ]
+    assert "question" not in snapshot["locked_questions"][0]
     assert "Weighted score is not a ticket count" not in encoded
     assert "ticket-sso-1" not in encoded
 

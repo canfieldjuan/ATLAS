@@ -256,6 +256,7 @@ type DeflectionSnapshot = {
   };
   top_questions: DeflectionSnapshotQuestion[];
   locked_questions: DeflectionSnapshotLockedQuestion[];
+  top_blind_spots: DeflectionSnapshotBlindSpot[];
   teaser: DeflectionSnapshotTeaser;
 };
 
@@ -269,6 +270,12 @@ type DeflectionSnapshotQuestion = {
 
 type DeflectionSnapshotLockedQuestion = {
   rank: number;
+  ticket_count: number;
+};
+
+type DeflectionSnapshotBlindSpot = {
+  rank: number;
+  question: string;
   ticket_count: number;
 };
 
@@ -310,6 +317,8 @@ This shape intentionally excludes paid deliverable fields:
 - no vocabulary term mappings
 - no locked question text; `locked_questions` contains only rank and raw
   ticket count
+- no blind-spot paid action metadata; `top_blind_spots` contains only rank,
+  question, and raw ticket count from unresolved repeated questions
 
 The teaser is fail-closed: only scoped `resolution_evidence` FAQ items are
 eligible. Preview entries never include answer body text.
@@ -442,8 +451,8 @@ type TicketFAQSearchResponse = {
   Use `summary` for proof badges and `faq_result` for drill-down cards.
 - For unpaid deflection results, render only `DeflectionSnapshot.summary`,
   `DeflectionSnapshot.top_questions`, `DeflectionSnapshot.locked_questions`,
-  and `DeflectionSnapshot.teaser`. Do not infer answer text, evidence, or
-  source IDs from the snapshot.
+  `DeflectionSnapshot.top_blind_spots`, and `DeflectionSnapshot.teaser`. Do not
+  infer answer text, evidence, or source IDs from the snapshot.
 - Show `source_count`, `ticket_source_count`, and `output_checks` as proof badges.
 - Show `answer_evidence_status` near steps. `draft_needs_review` means the
   system found repeated customer wording but no uploaded resolution evidence, so

@@ -677,7 +677,11 @@
           "pdf_limit",
           "support_cost_basis"
         ],
-        "snapshot_safe_fields": [],
+        "snapshot_safe_fields": [
+          "items.rank",
+          "items.question",
+          "items.ticket_count"
+        ],
         "surfaces": [
           "web",
           "pdf"

@@ -43,6 +43,11 @@ type DeflectionSnapshot = {
     weighted_frequency: number;
     customer_wording: string;
   }>;
+  top_blind_spots: Array<{
+    rank: number;
+    question: string;
+    ticket_count: number;
+  }>;
 };
 
 type SnapshotState =
@@ -84,7 +89,12 @@ function parseSnapshot(value: unknown): SnapshotState {
       reason: `Snapshot included paid-report fields: ${leaked.join(", ")}`,
     };
   }
-  if (!isRecord(value) || !isRecord(value.summary) || !Array.isArray(value.top_questions)) {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.summary) ||
+    !Array.isArray(value.top_questions) ||
+    !Array.isArray(value.top_blind_spots)
+  ) {
     return { status: "invalid", reason: "Snapshot shape did not match the deflection contract." };
   }
 
@@ -131,6 +141,20 @@ function parseSnapshot(value: unknown): SnapshotState {
   if (topQuestions.some((item) => item === null)) {
     return { status: "invalid", reason: "Snapshot questions were incomplete." };
   }
+  const topBlindSpots = value.top_blind_spots.map((item) => {
+    if (!isRecord(item)) return null;
+    const rank = finiteNumber(item.rank);
+    const ticketCount = finiteNumber(item.ticket_count);
+    const question = typeof item.question === "string" ? item.question.trim() : "";
+    if (rank === null || ticketCount === null || !question) {
+      return null;
+    }
+    return { rank, question, ticket_count: ticketCount };
+  });
+
+  if (topBlindSpots.some((item) => item === null)) {
+    return { status: "invalid", reason: "Snapshot blind spots were incomplete." };
+  }
 
   return {
     status: "available",
@@ -144,6 +168,7 @@ function parseSnapshot(value: unknown): SnapshotState {
         support_ticket_resolution_evidence_count: resolutionEvidenceCount,
       },
       top_questions: topQuestions as DeflectionSnapshot["top_questions"],
+      top_blind_spots: topBlindSpots as DeflectionSnapshot["top_blind_spots"],
     },
   };
 }
@@ -435,6 +460,29 @@ export default function FaqDeflectionResult() {
                     </article>
                   ))}
                 </div>
+                {snapshotState.snapshot.top_blind_spots.length > 0 && (
+                  <>
+                    <h3 className="mt-8 text-lg font-semibold text-white">
+                      Unresolved blind spots
+                    </h3>
+                    <div
+                      className="mt-4 divide-y divide-surface-700/60 rounded-lg border border-surface-700/60 bg-surface-800/30"
+                      data-atlas-deflection-blind-spots
+                    >
+                      {snapshotState.snapshot.top_blind_spots.map((item) => (
+                        <article key={`${item.rank}-${item.question}`} className="p-5">
+                          <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.16em] text-amber-200">
+                            <span>Rank {item.rank}</span>
+                            <span>{formatCount(item.ticket_count)} tickets unresolved</span>
+                          </div>
+                          <h3 className="mt-3 text-lg font-semibold text-white">
+                            {item.question}
+                          </h3>
+                        </article>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
