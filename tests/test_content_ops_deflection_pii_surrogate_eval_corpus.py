@@ -680,27 +680,56 @@ def test_cli_writes_review_bundle_with_artifact_and_summaries(
     artifact_output = bundle_dir / CLI.REVIEW_BUNDLE_ARTIFACT_NAME
     summary_output = bundle_dir / CLI.REVIEW_BUNDLE_SUMMARY_NAME
     markdown_output = bundle_dir / CLI.REVIEW_BUNDLE_MARKDOWN_NAME
+    manifest_output = bundle_dir / CLI.REVIEW_BUNDLE_MANIFEST_NAME
 
     assert payload["review_bundle_dir"] == str(bundle_dir)
     assert payload["output"] == str(artifact_output)
     assert payload["summary_output"] == str(summary_output)
     assert payload["summary_markdown_output"] == str(markdown_output)
+    assert payload["review_bundle_manifest"] == str(manifest_output)
     assert artifact_output.is_file()
     assert summary_output.is_file()
     assert markdown_output.is_file()
+    assert manifest_output.is_file()
     artifact = json.loads(artifact_output.read_text(encoding="utf-8"))
     summary = json.loads(summary_output.read_text(encoding="utf-8"))
     markdown = markdown_output.read_text(encoding="utf-8")
+    manifest = json.loads(manifest_output.read_text(encoding="utf-8"))
     rendered = (
         json.dumps(artifact, sort_keys=True)
         + json.dumps(summary, sort_keys=True)
         + markdown
+        + json.dumps(manifest, sort_keys=True)
         + captured.out
         + captured.err
     )
     assert artifact["summary"]["label_count"] == 9
     assert summary["ok"] is True
     assert "| Labels | 9 |" in markdown
+    assert manifest == {
+        "blocking_error_codes": [],
+        "files": {
+            "source_intake_markdown": {
+                "path": CLI.REVIEW_BUNDLE_MARKDOWN_NAME,
+                "present": True,
+            },
+            "source_intake_summary": {
+                "ok": True,
+                "path": CLI.REVIEW_BUNDLE_SUMMARY_NAME,
+                "present": True,
+                "schema_version": summary["schema_version"],
+            },
+            "surrogate_eval_corpus": {
+                "label_count": 9,
+                "path": CLI.REVIEW_BUNDLE_ARTIFACT_NAME,
+                "present": True,
+                "schema_version": artifact["schema_version"],
+                "ticket_count": 1,
+            },
+        },
+        "schema_version": CLI.REVIEW_BUNDLE_MANIFEST_SCHEMA_VERSION,
+        "status": "ok",
+    }
     for raw in (
         "Alice Baker",
         "alice.baker@example.com",
@@ -740,19 +769,76 @@ def test_cli_review_bundle_sanitizes_invalid_source_without_artifact(
     artifact_output = bundle_dir / CLI.REVIEW_BUNDLE_ARTIFACT_NAME
     summary_output = bundle_dir / CLI.REVIEW_BUNDLE_SUMMARY_NAME
     markdown_output = bundle_dir / CLI.REVIEW_BUNDLE_MARKDOWN_NAME
+    manifest_output = bundle_dir / CLI.REVIEW_BUNDLE_MANIFEST_NAME
 
     assert not artifact_output.exists()
     assert summary_output.is_file()
     assert markdown_output.is_file()
+    assert manifest_output.is_file()
     summary = json.loads(summary_output.read_text(encoding="utf-8"))
     markdown = markdown_output.read_text(encoding="utf-8")
-    rendered = json.dumps(summary, sort_keys=True) + markdown + captured.out + captured.err
+    manifest = json.loads(manifest_output.read_text(encoding="utf-8"))
+    rendered = (
+        json.dumps(summary, sort_keys=True)
+        + markdown
+        + json.dumps(manifest, sort_keys=True)
+        + captured.out
+        + captured.err
+    )
     assert summary["ok"] is False
+    assert manifest["status"] == "blocked"
+    assert manifest["blocking_error_codes"] == ["label_span_not_found"]
+    assert manifest["files"]["surrogate_eval_corpus"] == {
+        "path": CLI.REVIEW_BUNDLE_ARTIFACT_NAME,
+        "present": False,
+    }
     assert "| Status | blocked |" in markdown
     assert "label_span_not_found" in rendered
     assert "record_index=1, label_index=1, origin_field=customer_message" in rendered
     assert "raw.bad@example.com" not in rendered
     assert "missing.bad@example.com" not in rendered
+
+
+def test_cli_review_bundle_unreadable_source_writes_blocked_manifest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "alice.baker@example.com.json"
+    bundle_dir = tmp_path / "review-bundle"
+    source.write_bytes(b"\xff\xfe\x00")
+
+    assert CLI.main([str(source), "--review-bundle-dir", str(bundle_dir), "--pretty"]) == 1
+    captured = capsys.readouterr()
+    artifact_output = bundle_dir / CLI.REVIEW_BUNDLE_ARTIFACT_NAME
+    summary_output = bundle_dir / CLI.REVIEW_BUNDLE_SUMMARY_NAME
+    markdown_output = bundle_dir / CLI.REVIEW_BUNDLE_MARKDOWN_NAME
+    manifest_output = bundle_dir / CLI.REVIEW_BUNDLE_MANIFEST_NAME
+
+    assert not artifact_output.exists()
+    assert not summary_output.exists()
+    assert not markdown_output.exists()
+    assert manifest_output.is_file()
+    manifest = json.loads(manifest_output.read_text(encoding="utf-8"))
+    rendered = json.dumps(manifest, sort_keys=True) + captured.out + captured.err
+
+    assert manifest["status"] == "blocked"
+    assert manifest["blocking_error_codes"] == ["input_json_unreadable"]
+    assert manifest["files"]["source_intake_summary"] == {
+        "ok": False,
+        "path": CLI.REVIEW_BUNDLE_SUMMARY_NAME,
+        "present": False,
+    }
+    assert manifest["files"]["source_intake_markdown"] == {
+        "path": CLI.REVIEW_BUNDLE_MARKDOWN_NAME,
+        "present": False,
+    }
+    assert manifest["files"]["surrogate_eval_corpus"] == {
+        "path": CLI.REVIEW_BUNDLE_ARTIFACT_NAME,
+        "present": False,
+    }
+    assert "input_json_unreadable" in rendered
+    assert "alice.baker@example.com" not in rendered
+    assert str(source) not in rendered
 
 
 def test_cli_review_bundle_removes_stale_artifact_on_invalid_rebuild(
