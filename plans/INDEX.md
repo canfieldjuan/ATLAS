@@ -1,6 +1,6 @@
 # Plan archive index
 
-1192 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1193 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -708,6 +708,7 @@
 - [PR-Deflection-Evidence-Export-Download](archive/PR-Deflection-Evidence-Export-Download.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Evidence-Scope-Gate](archive/PR-Deflection-Evidence-Scope-Gate.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Exact-Repeat-Join](archive/PR-Deflection-Exact-Repeat-Join.md) - lane: deflection/clustering | phase: Vertical slice
+- [PR-Deflection-Frontend-Contract-Types](archive/PR-Deflection-Frontend-Contract-Types.md) - lane: deflection/full-report-actionability | phase: Production hardening
 - [PR-Deflection-Full-Funnel-Paid-Delivery-Proof](archive/PR-Deflection-Full-Funnel-Paid-Delivery-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Full-Report-QA-Deterministic-Harness](archive/PR-Deflection-Full-Report-QA-Deterministic-Harness.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Full-Report-QA-Hosted-Smoke](archive/PR-Deflection-Full-Report-QA-Hosted-Smoke.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
