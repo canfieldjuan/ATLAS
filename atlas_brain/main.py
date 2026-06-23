@@ -16,9 +16,10 @@ import asyncio
 import logging
 import subprocess
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from .api import router as api_router
 from .config import settings
@@ -34,6 +35,28 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("atlas.main")
+
+_SECURITY_CONTACT_URL = "https://github.com/canfieldjuan/ATLAS/security/advisories/new"
+_SECURITY_POLICY_URL = "https://github.com/canfieldjuan/ATLAS/blob/main/SECURITY.md"
+_SECURITY_TXT_MAX_AGE_DAYS = 180
+
+
+def _security_txt_body(*, now: datetime | None = None) -> str:
+    resolved_now = now or datetime.now(timezone.utc)
+    if resolved_now.tzinfo is None or resolved_now.utcoffset() is None:
+        resolved_now = resolved_now.replace(tzinfo=timezone.utc)
+    expires = (
+        resolved_now.astimezone(timezone.utc)
+        + timedelta(days=_SECURITY_TXT_MAX_AGE_DAYS)
+    ).replace(microsecond=0)
+    expires_text = expires.isoformat().replace("+00:00", "Z")
+    lines = [
+        f"Contact: {_SECURITY_CONTACT_URL}",
+        f"Policy: {_SECURITY_POLICY_URL}",
+        "Preferred-Languages: en",
+        f"Expires: {expires_text}",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _asr_autostart_blocked_reason(device: str) -> str | None:
@@ -823,6 +846,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/.well-known/security.txt", include_in_schema=False)
+async def security_txt():
+    return PlainTextResponse(_security_txt_body(), media_type="text/plain")
+
+
 # Serve the web UI production build (atlas-ui/dist) as static files.
 # Root "/" uses content negotiation: browsers get the UI, API clients get
 # the Ollama health-check response. Static assets mounted at /.
@@ -837,7 +866,7 @@ if _ui_dist.is_dir():
     # Remove the Ollama root route and replace with content-negotiating version
     app.routes[:] = [r for r in app.routes if not (hasattr(r, 'path') and r.path == '/' and hasattr(r, 'methods') and 'GET' in (r.methods or set()))]
 
-    from starlette.responses import FileResponse, PlainTextResponse
+    from starlette.responses import FileResponse
     from fastapi import Request
 
     @app.get("/", include_in_schema=False)
