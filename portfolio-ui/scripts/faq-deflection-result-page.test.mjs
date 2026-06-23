@@ -528,6 +528,7 @@ await test("hosted result page loads report with configured account when URL omi
                 summary: {
                   generated: 1,
                   repeat_ticket_count: 1,
+                  non_repeat_ticket_count: 0,
                   drafted_answer_count: 0,
                   no_proven_answer_count: 1,
                   support_ticket_resolution_evidence_present: false,
@@ -537,10 +538,12 @@ await test("hosted result page loads report with configured account when URL omi
                   {
                     rank: 1,
                     question: "How do I export reports?",
+                    ticket_count: 1,
                     weighted_frequency: 3,
                     customer_wording: "export reports",
                   },
                 ],
+                top_blind_spots: [],
               }
             : { detail: "locked" },
         );

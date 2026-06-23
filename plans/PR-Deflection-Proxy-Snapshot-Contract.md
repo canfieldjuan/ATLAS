@@ -73,7 +73,9 @@ Slice phase: Production hardening
 - `portfolio-ui/api/content-ops/deflection/atlas-report.js`
 - `portfolio-ui/api/content-ops/deflection/snapshot-contract.js`
 - `portfolio-ui/scripts/faq-deflection-atlas-proxy.test.mjs`
+- `portfolio-ui/scripts/faq-deflection-result-page.test.mjs`
 - `scripts/generate_deflection_frontend_contract_types.py`
+- `tests/maturity_sweep/deflection_product_surface_manifest.json`
 - `tests/test_generate_deflection_frontend_contract_types.py`
 
 ## Mechanism
@@ -116,6 +118,12 @@ Parked hardening: none.
   - Passed: TypeScript and JS generated contract artifacts are current.
 - `npm --prefix portfolio-ui run test:deflection-atlas-proxy`
   - Passed: 25 proxy/result-page tests.
+- `npm --prefix portfolio-ui run test:deflection-result`
+  - Passed: 29 result-page/checkout tests.
+- `python` `scripts/check_deflection_product_surface_manifest.py`
+  - Passed: deflection product surface manifest ok, 35 files.
+- `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
+  - Passed: ratchet gate found no new brittleness above baseline.
 - `python scripts/sync_pr_plan.py plans/PR-Deflection-Proxy-Snapshot-Contract.md --check`
   - Passed.
 
@@ -124,10 +132,12 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_content_ops_deflection_report_checks.yml` | 2 |
-| `plans/PR-Deflection-Proxy-Snapshot-Contract.md` | 133 |
+| `plans/PR-Deflection-Proxy-Snapshot-Contract.md` | 143 |
 | `portfolio-ui/api/content-ops/deflection/atlas-report.js` | 182 |
 | `portfolio-ui/api/content-ops/deflection/snapshot-contract.js` | 16 |
 | `portfolio-ui/scripts/faq-deflection-atlas-proxy.test.mjs` | 61 |
-| `scripts/generate_deflection_frontend_contract_types.py` | 106 |
+| `portfolio-ui/scripts/faq-deflection-result-page.test.mjs` | 3 |
+| `scripts/generate_deflection_frontend_contract_types.py` | 108 |
+| `tests/maturity_sweep/deflection_product_surface_manifest.json` | 1 |
 | `tests/test_generate_deflection_frontend_contract_types.py` | 44 |
-| **Total** | **544** |
+| **Total** | **560** |
