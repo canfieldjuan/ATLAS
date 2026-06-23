@@ -53,5 +53,18 @@ Atlas aims to acknowledge new vulnerability reports within five business days,
 confirm scope and impact after triage, and provide status updates for accepted
 reports until remediation or documented acceptance.
 
-Specific remediation deadlines and CVE handling are tracked separately from this
-initial disclosure policy.
+Accepted vulnerabilities, CVEs, and GitHub Security Advisories use these maximum
+remediation targets from the date Atlas confirms impact:
+
+- Critical: fix, mitigate, or document acceptance within 7 calendar days.
+- High: fix, mitigate, or document acceptance within 30 calendar days.
+- Moderate: fix, mitigate, or document acceptance within 90 calendar days.
+- Low: triage into the normal security backlog with an owner and rationale.
+
+Dependabot PRs carry the `dependencies`, `security`, and
+`cve-remediation-sla` labels. Those labels mark dependency and CVE updates as
+covered by this policy and keep triage separate from general feature work.
+
+For vulnerabilities that span ATLAS and atlas-portfolio, use the stricter
+affected-surface severity and track the remediation window across both
+repositories.
