@@ -52,14 +52,14 @@ def _effective_is_admin(role: str | None, is_admin_flag: bool | None) -> bool:
 
 
 def _extract_token(request: Request) -> Optional[str]:
-    """Extract JWT from Authorization header, cookie, or query param."""
+    """Extract JWT from Authorization header or cookie."""
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
         return auth[7:]
     cookie = request.cookies.get("atlas_token")
     if cookie:
         return cookie
-    return request.query_params.get("token")
+    return None
 
 
 async def require_auth(request: Request) -> AuthUser:
