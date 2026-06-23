@@ -1,6 +1,6 @@
 # Plan archive index
 
-1197 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1198 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -1000,6 +1000,7 @@
 - [PR-Gitleaks-Baseline-Rotation-Escape-Hatch](archive/PR-Gitleaks-Baseline-Rotation-Escape-Hatch.md) - lane: security/workflow | phase: Production hardening
 - [PR-Graphiti-Python-3-14-Base-Image](archive/PR-Graphiti-Python-3-14-Base-Image.md) - lane: graphiti/runtime-image | phase: Production hardening
 - [PR-Hardening-Drain](archive/PR-Hardening-Drain.md) - lane: governance/hardening-drain | phase: Workflow/process
+- [PR-Incident-Response-Runbook](archive/PR-Incident-Response-Runbook.md) - lane: security/hardening-1656 | phase: Production hardening
 - [PR-Intel-UI-CI-Enrollment-Close-Hole](archive/PR-Intel-UI-CI-Enrollment-Close-Hole.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
 - [PR-Invoice-Email-Signature](archive/PR-Invoice-Email-Signature.md) - lane: invoicing/cover-email-signature | phase: Product polish
 - [PR-Invoicing-Approval-Blockers-Import-Cycles](archive/PR-Invoicing-Approval-Blockers-Import-Cycles.md) - lane: invoicing | phase: Production hardening
