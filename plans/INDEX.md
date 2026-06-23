@@ -1,6 +1,6 @@
 # Plan archive index
 
-1194 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1195 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -783,6 +783,7 @@
 - [PR-Deflection-Proof-Fixture-Request-ID-Redaction](archive/PR-Deflection-Proof-Fixture-Request-ID-Redaction.md) - lane: content-ops/deflection-report | phase: Production hardening
 - [PR-Deflection-Provider-Export-Fixtures](archive/PR-Deflection-Provider-Export-Fixtures.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Provider-Export-Intake-Guidance](archive/PR-Deflection-Provider-Export-Intake-Guidance.md) - lane: content-ops/deflection-parser/provider-ingestion | phase: Production hardening
+- [PR-Deflection-Proxy-Snapshot-Contract](archive/PR-Deflection-Proxy-Snapshot-Contract.md) - lane: deflection/full-report-actionability | phase: Production hardening
 - [PR-Deflection-Public-Endpoint-Rate-Limit](archive/PR-Deflection-Public-Endpoint-Rate-Limit.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Question-Evidence-Scoping](archive/PR-Deflection-Question-Evidence-Scoping.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Question-Label-Merge](archive/PR-Deflection-Question-Label-Merge.md) - lane: deflection/clustering | phase: Production hardening
