@@ -1,0 +1,39 @@
+name: Atlas Security Policy Docs Checks
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_security_policy_docs_checks.yml"
+      - "SECURITY.md"
+      - "atlas_brain/api/billing.py"
+      - "atlas_brain/content_ops_deflection_delivery.py"
+      - "docs/INCIDENT_RESPONSE.md"
+      - "tests/test_security_policy_docs.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_security_policy_docs_checks.yml"
+      - "SECURITY.md"
+      - "atlas_brain/api/billing.py"
+      - "atlas_brain/content_ops_deflection_delivery.py"
+      - "docs/INCIDENT_RESPONSE.md"
+      - "tests/test_security_policy_docs.py"
+
+jobs:
+  atlas-security-policy-docs-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Run security policy docs contract
+        run: python -m unittest tests.test_security_policy_docs
