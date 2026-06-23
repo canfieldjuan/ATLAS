@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -119,6 +120,9 @@ ReasoningContextProvider = Callable[
     [],
     Any | Awaitable[Any],
 ]
+
+_DEFLECTION_REPORT_RETENTION_DAYS = 30
+_DEFLECTION_CHECKOUT_OPEN_SESSION_GRACE = timedelta(hours=24)
 ReasoningStatusProvider = Callable[
     [],
     Mapping[str, Any] | None | Awaitable[Mapping[str, Any] | None],
@@ -1020,6 +1024,11 @@ def create_content_ops_control_surface_router(
             raise HTTPException(
                 status_code=409,
                 detail="Deflection report artifact is not available.",
+            )
+        if not _deflection_report_checkout_inside_retention_window(record.created_at):
+            raise HTTPException(
+                status_code=409,
+                detail="Deflection report checkout window expired.",
             )
         return {
             "request_id": request_id,
@@ -2524,6 +2533,38 @@ def _deflection_checkout_allowed_amounts(
             )
         amounts.append(amount_cents)
     return tuple(dict.fromkeys(amounts))
+
+
+def _deflection_report_checkout_inside_retention_window(
+    created_at: Any,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    resolved_created_at = _coerce_aware_datetime(created_at)
+    if resolved_created_at is None:
+        return False
+    checkout_deadline = (
+        resolved_created_at
+        + timedelta(days=_DEFLECTION_REPORT_RETENTION_DAYS)
+        - _DEFLECTION_CHECKOUT_OPEN_SESSION_GRACE
+    )
+    resolved_now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return resolved_now < checkout_deadline
+
+
+def _coerce_aware_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        resolved = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            resolved = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if resolved.tzinfo is None or resolved.utcoffset() is None:
+        return None
+    return resolved.astimezone(timezone.utc)
 
 
 def _with_deflection_submit_diagnostics(

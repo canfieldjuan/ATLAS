@@ -45,6 +45,16 @@ def test_ttl_purge_workflow_keeps_database_url_out_of_argv() -> None:
     assert re.search(r"--database-url(?!-env)\b", text) is None
 
 
+def test_ttl_purge_workflow_rejects_non_main_manual_refs_before_secret_use() -> None:
+    text = _workflow_text()
+    secret_index = text.index("EXTRACTED_DATABASE_URL: ${{ secrets.EXTRACTED_DATABASE_URL }}")
+
+    assert "if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'" in text
+    assert "ref: ${{ github.event.repository.default_branch }}" in text
+    assert text.index("if: github.event_name == 'schedule'") < secret_index
+    assert text.index("ref: ${{ github.event.repository.default_branch }}") < secret_index
+
+
 def test_ttl_purge_workflow_deletes_by_default_but_manual_dispatch_can_dry_run() -> None:
     text = _workflow_text()
 

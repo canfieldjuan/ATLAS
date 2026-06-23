@@ -28,6 +28,7 @@ class DeflectionReportAccessRecord:
     paid: bool
     payment_reference: str | None = None
     delivery_email: str | None = None
+    created_at: Any = None
 
     def report_model(self) -> dict[str, Any] | None:
         """Return the supported persisted structured report model, if present."""
@@ -272,6 +273,7 @@ class InMemoryDeflectionReportArtifactStore:
             payment_reference=existing.payment_reference if existing else None,
             delivery_email=cleaned_delivery_email
             or (existing.delivery_email if existing else None),
+            created_at=self._created_at_by_key.get(key),
         )
 
     async def get_snapshot(
@@ -330,6 +332,7 @@ class InMemoryDeflectionReportArtifactStore:
             paid=row.paid,
             payment_reference=row.payment_reference,
             delivery_email=row.delivery_email,
+            created_at=self._created_at_by_key.get((row.account_id, row.request_id)),
         )
 
     async def mark_paid(
@@ -351,6 +354,7 @@ class InMemoryDeflectionReportArtifactStore:
             paid=True,
             payment_reference=_clean(payment_reference) or row.payment_reference,
             delivery_email=row.delivery_email,
+            created_at=row.created_at,
         )
         return True
 
@@ -412,6 +416,7 @@ class InMemoryDeflectionReportArtifactStore:
             paid=False,
             payment_reference=row.payment_reference,
             delivery_email=row.delivery_email,
+            created_at=row.created_at,
         )
         return True
 
@@ -636,7 +641,7 @@ class PostgresDeflectionReportArtifactStore:
     ) -> DeflectionReportAccessRecord | None:
         row = await self.pool.fetchrow(
             """
-            SELECT account_id, request_id, snapshot, artifact, paid, payment_reference, delivery_email
+            SELECT account_id, request_id, snapshot, artifact, paid, payment_reference, delivery_email, created_at
             FROM content_ops_deflection_reports
             WHERE account_id = $1 AND request_id = $2
             """,
@@ -688,33 +693,40 @@ class PostgresDeflectionReportArtifactStore:
     ) -> int:
         resolved_cutoff = _required_cutoff(cutoff)
         resolved_limit = _optional_positive_limit(limit)
-        if resolved_limit is None:
-            result = await self.pool.execute(
-                """
-                DELETE FROM content_ops_deflection_reports
+        limit_clause = "" if resolved_limit is None else "LIMIT $2"
+        args: tuple[Any, ...] = (
+            (resolved_cutoff,)
+            if resolved_limit is None
+            else (resolved_cutoff, resolved_limit)
+        )
+        deleted = await self.pool.fetchval(
+            f"""
+            WITH doomed AS (
+                SELECT account_id, request_id
+                FROM content_ops_deflection_reports
                 WHERE created_at < $1
-                """,
-                resolved_cutoff,
-            )
-        else:
-            result = await self.pool.execute(
-                """
-                WITH doomed AS (
-                    SELECT account_id, request_id
-                    FROM content_ops_deflection_reports
-                    WHERE created_at < $1
-                    ORDER BY created_at ASC
-                    LIMIT $2
-                )
+                ORDER BY created_at ASC
+                {limit_clause}
+            ),
+            deleted_deliveries AS (
+                DELETE FROM content_ops_deflection_report_deliveries deliveries
+                USING doomed
+                WHERE deliveries.account_id = doomed.account_id
+                  AND deliveries.request_id = doomed.request_id
+                RETURNING 1
+            ),
+            deleted_reports AS (
                 DELETE FROM content_ops_deflection_reports reports
                 USING doomed
                 WHERE reports.account_id = doomed.account_id
                   AND reports.request_id = doomed.request_id
-                """,
-                resolved_cutoff,
-                resolved_limit,
+                RETURNING 1
             )
-        return _parse_command_count(result)
+            SELECT COUNT(*) FROM deleted_reports
+            """,
+            *args,
+        )
+        return int(deleted or 0)
 
     async def delete_report(
         self,
@@ -722,15 +734,33 @@ class PostgresDeflectionReportArtifactStore:
         account_id: str,
         request_id: str,
     ) -> bool:
-        result = await self.pool.execute(
+        deleted = await self.pool.fetchval(
             """
-            DELETE FROM content_ops_deflection_reports
-            WHERE account_id = $1 AND request_id = $2
+            WITH target AS (
+                SELECT account_id, request_id
+                FROM content_ops_deflection_reports
+                WHERE account_id = $1 AND request_id = $2
+            ),
+            deleted_deliveries AS (
+                DELETE FROM content_ops_deflection_report_deliveries deliveries
+                USING target
+                WHERE deliveries.account_id = target.account_id
+                  AND deliveries.request_id = target.request_id
+                RETURNING 1
+            ),
+            deleted_reports AS (
+                DELETE FROM content_ops_deflection_reports reports
+                USING target
+                WHERE reports.account_id = target.account_id
+                  AND reports.request_id = target.request_id
+                RETURNING 1
+            )
+            SELECT COUNT(*) FROM deleted_reports
             """,
             _required_text(account_id, "account_id"),
             _required_text(request_id, "request_id"),
         )
-        return parse_command_tag(result)
+        return int(deleted or 0) > 0
 
     async def mark_unpaid(
         self,
@@ -923,6 +953,7 @@ def _record_from_row(row: Mapping[str, Any]) -> DeflectionReportAccessRecord:
         paid=bool(row.get("paid")),
         payment_reference=_clean(row.get("payment_reference")),
         delivery_email=_clean(row.get("delivery_email")) or None,
+        created_at=row.get("created_at"),
     )
 
 

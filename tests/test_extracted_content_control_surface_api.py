@@ -3031,6 +3031,49 @@ async def test_deflection_checkout_authorization_fails_closed_for_report_state(
 
 
 @pytest.mark.asyncio
+async def test_deflection_checkout_authorization_rejects_reports_inside_retention_grace_window():
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-gate",
+        request_id="request-expiring",
+        snapshot={"summary": {"generated": 1}},
+        artifact={"markdown": "# Full"},
+    )
+    store._created_at_by_key[("acct-gate", "request-expiring")] = datetime(
+        2020,
+        1,
+        1,
+        tzinfo=timezone.utc,
+    )
+
+    route = _checkout_authorization_route(store)
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(request_id="request-expiring")
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "Deflection report checkout window expired."
+
+
+@pytest.mark.asyncio
+async def test_deflection_checkout_authorization_fails_closed_without_report_created_at():
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-gate",
+        request_id="request-unknown-age",
+        snapshot={"summary": {"generated": 1}},
+        artifact={"markdown": "# Full"},
+    )
+    store._created_at_by_key.pop(("acct-gate", "request-unknown-age"))
+
+    route = _checkout_authorization_route(store)
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(request_id="request-unknown-age")
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "Deflection report checkout window expired."
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("config_kwargs", "detail"),
     [

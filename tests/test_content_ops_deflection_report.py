@@ -4356,12 +4356,12 @@ async def test_postgres_list_reports_uses_account_scope_optional_paid_filter_and
 async def test_postgres_delete_report_scopes_to_account_and_request_id() -> None:
     class _Pool:
         def __init__(self) -> None:
-            self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
-            self.execute_result = "DELETE 1"
+            self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
+            self.fetchval_result = 1
 
-        async def execute(self, query: str, *args: object) -> str:
-            self.execute_calls.append((query, args))
-            return self.execute_result
+        async def fetchval(self, query: str, *args: object) -> int:
+            self.fetchval_calls.append((query, args))
+            return self.fetchval_result
 
     pool = _Pool()
     store = PostgresDeflectionReportArtifactStore(pool=pool)
@@ -4370,12 +4370,14 @@ async def test_postgres_delete_report_scopes_to_account_and_request_id() -> None
         account_id=" acct-1 ",
         request_id=" request-delete ",
     ) is True
-    query, args = pool.execute_calls[0]
+    query, args = pool.fetchval_calls[0]
     assert args == ("acct-1", "request-delete")
+    assert "WITH target AS" in query
+    assert "DELETE FROM content_ops_deflection_report_deliveries" in query
     assert "DELETE FROM content_ops_deflection_reports" in query
     assert "WHERE account_id = $1 AND request_id = $2" in query
 
-    pool.execute_result = "DELETE 0"
+    pool.fetchval_result = 0
     assert await store.delete_report(account_id="acct-1", request_id="missing") is False
 
 
@@ -4424,16 +4426,13 @@ async def test_postgres_report_retention_uses_cutoff_and_limited_delete() -> Non
     class _Pool:
         def __init__(self) -> None:
             self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
-            self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
-            self.execute_result = "DELETE 2"
+            self.delete_result = 2
 
         async def fetchval(self, query: str, *args: object) -> int:
             self.fetchval_calls.append((query, args))
-            return 3
-
-        async def execute(self, query: str, *args: object) -> str:
-            self.execute_calls.append((query, args))
-            return self.execute_result
+            if "SELECT COUNT(*)\n            FROM content_ops_deflection_reports" in query:
+                return 3
+            return self.delete_result
 
     pool = _Pool()
     store = PostgresDeflectionReportArtifactStore(pool=pool)
@@ -4443,13 +4442,15 @@ async def test_postgres_report_retention_uses_cutoff_and_limited_delete() -> Non
     assert pool.fetchval_calls[0][1] == (cutoff,)
     assert "created_at < $1" in pool.fetchval_calls[0][0]
     assert await store.delete_reports_older_than(cutoff=cutoff, limit=25) == 2
-    limited_query, limited_args = pool.execute_calls[0]
+    limited_query, limited_args = pool.fetchval_calls[1]
     assert limited_args == (cutoff, 25)
     assert "WITH doomed AS" in limited_query
+    assert "DELETE FROM content_ops_deflection_report_deliveries" in limited_query
+    assert "DELETE FROM content_ops_deflection_reports" in limited_query
     assert "LIMIT $2" in limited_query
-    pool.execute_result = "DELETE 4"
+    pool.delete_result = 4
     assert await store.delete_reports_older_than(cutoff=cutoff) == 4
-    unbounded_query, unbounded_args = pool.execute_calls[1]
+    unbounded_query, unbounded_args = pool.fetchval_calls[2]
     assert unbounded_args == (cutoff,)
     assert "DELETE FROM content_ops_deflection_reports" in unbounded_query
     assert "LIMIT" not in unbounded_query
@@ -4458,13 +4459,13 @@ async def test_postgres_report_retention_uses_cutoff_and_limited_delete() -> Non
 @pytest.mark.asyncio
 async def test_postgres_report_retention_fails_closed_on_unparseable_delete_count() -> None:
     class _Pool:
-        async def execute(self, _query: str, *_args: object) -> str:
-            return "DELETE unknown"
+        async def fetchval(self, _query: str, *_args: object) -> str:
+            return "unknown"
 
     store = PostgresDeflectionReportArtifactStore(pool=_Pool())
     cutoff = datetime(2026, 5, 1, tzinfo=timezone.utc)
 
-    with pytest.raises(ValueError, match="could not parse database command count"):
+    with pytest.raises(ValueError, match="invalid literal"):
         await store.delete_reports_older_than(cutoff=cutoff)
 
 
