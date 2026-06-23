@@ -109,6 +109,62 @@ type DeflectionReportSection = {
   data: Record<string, unknown>;
 };
 
+type DeflectionReportProjectionContract = {
+  schema_version: "deflection.v1";
+  model_fields: ["schema_version", "title", "summary", "sections"];
+  section_fields: [
+    "id",
+    "title",
+    "priority",
+    "surfaces",
+    "default_limit",
+    "required_data",
+    "snapshot_safe_fields",
+    "data"
+  ];
+  sections: DeflectionReportProjectionSection[];
+};
+
+type DeflectionReportProjectionSection = {
+  id: string;
+  title: string;
+  priority: number;
+  surfaces: string[];
+  default_limit: number | null;
+  required_data: string[];
+  snapshot_safe_fields: string[];
+  presence:
+    | { mode: "required" }
+    | { mode: "conditional"; condition: string };
+  projected_fields: string[];
+  optional_projected_fields?: string[];
+  hosted_consumer_safe_fields: string[];
+  collection?: {
+    field: "rows" | "items" | "phrases" | string;
+    item_type: "object" | "string" | string;
+    projected_fields?: string[];
+    hosted_consumer_safe_fields?: string[];
+    nested_object_fields?: DeflectionReportProjectionNestedField[];
+    nested_collection_fields?: DeflectionReportProjectionNestedCollection[];
+  };
+  nested_object_fields?: DeflectionReportProjectionNestedField[];
+  nested_collection_fields?: DeflectionReportProjectionNestedCollection[];
+  record_fields?: string[];
+};
+
+type DeflectionReportProjectionNestedField = {
+  field: string;
+  projected_fields: string[];
+  hosted_consumer_safe_fields: string[];
+};
+
+type DeflectionReportProjectionNestedCollection = {
+  field: string;
+  item_type: "object" | "string" | string;
+  projected_fields: string[];
+  hosted_consumer_safe_fields: string[];
+};
+
 type DeflectionSnapshotProjectionContract = {
   schema_version: "deflection.v1";
   top_level_fields: [
@@ -138,8 +194,23 @@ Renderer rules:
 
 - Sort sections by `priority`; do not rely on array position alone.
 - Skip unknown section IDs or unsupported `surfaces` values rather than failing.
-- Use `required_data` as the section's top-level data contract. A listed key is
-  expected to be present in `data`; nested shapes stay section-specific.
+- Use `report_projection` as the paid structured-report source for future
+  frontend type generation. `projected_fields` describes the full paid backend
+  model; `hosted_consumer_safe_fields` is the smaller allowlist for URL/token
+  hosted result-page payload construction.
+- Use `presence.mode` before treating a section as required. `source_file`
+  appears only when a source label exists, and `outcome_diagnostics` appears
+  only when diagnostics render.
+- Action section `items` include identity/delta and evidence fields in the full
+  paid projection, but hosted result pages must allowlist-construct their item
+  payload from `hosted_consumer_safe_fields` rather than validate-and-pass
+  through raw rows.
+- Treat nested arrays such as action-item `top_evidence` as
+  `nested_collection_fields`; apply their item allowlist per row, not as a
+  single nested object.
+- `source_file.source_label` is not hosted-consumer-safe because it can contain
+  a local/customer filename. Hosted pages should omit it unless a later slice
+  normalizes it to a safe display label.
 - Treat `snapshot_safe_fields` as the free Snapshot allowlist. A listed field
   must be safe to emit for every projected row in that section; paid answer
   bodies and steps are not snapshot-safe section fields. The only free answer
@@ -150,7 +221,7 @@ Renderer rules:
   `question`, and `ticket_count`. Use this contract before changing frontend
   snapshot parsers; do not infer the projection from demo fixtures.
 - Treat `complete_evidence` as export-only. It summarizes export size and should
-  not be inlined into web/PDF surfaces.
+  not be inlined into web/PDF surfaces or hosted result-page payloads.
 - Breaking shape changes bump `schema_version`; additive sections should keep
   `schema_version: "deflection.v1"` and remain skippable by older renderers.
 
