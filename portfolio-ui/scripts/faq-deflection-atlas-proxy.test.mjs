@@ -22,6 +22,7 @@ const SNAPSHOT = {
   summary: {
     generated: 3,
     repeat_ticket_count: 12,
+    non_repeat_ticket_count: 4,
     drafted_answer_count: 2,
     no_proven_answer_count: 1,
     support_ticket_resolution_evidence_present: true,
@@ -31,15 +32,34 @@ const SNAPSHOT = {
     {
       rank: 1,
       question: "How do I reset billing access?",
+      ticket_count: 12,
       weighted_frequency: 12,
       customer_wording: "billing reset access",
     },
   ],
+  top_blind_spots: [
+    {
+      rank: 1,
+      question: "Can I change invoice contacts?",
+      ticket_count: 3,
+    },
+  ],
+};
+
+const PROJECTED_SNAPSHOT = {
+  ...SNAPSHOT,
+  summary: {
+    ...SNAPSHOT.summary,
+    source_date_start: null,
+    source_date_end: null,
+    source_window_days: null,
+  },
 };
 
 const REQUIRED_SNAPSHOT_SUMMARY_FIELDS = [
   "generated",
   "repeat_ticket_count",
+  "non_repeat_ticket_count",
   "drafted_answer_count",
   "no_proven_answer_count",
   "support_ticket_resolution_evidence_present",
@@ -219,6 +239,7 @@ await test("proxy returns locked snapshot envelope without artifact payload", as
     answer_steps: ["paid step"],
     faq_markdown: "# paid",
     top_questions: [{ ...SNAPSHOT.top_questions[0], source_ids: ["ticket-1"] }],
+    top_blind_spots: [{ ...SNAPSHOT.top_blind_spots[0], source_ids: ["ticket-2"] }],
   };
   const { calls, fetchImpl } = mockFetch([
     response(leakySnapshot, 200),
@@ -232,7 +253,7 @@ await test("proxy returns locked snapshot envelope without artifact payload", as
   });
   assert.equal(result.ok, true);
   assert.equal(result.artifact_status, "locked");
-  assert.deepEqual(result.snapshot, SNAPSHOT);
+  assert.deepEqual(result.snapshot, PROJECTED_SNAPSHOT);
   assert.equal(JSON.stringify(result).includes("answer_steps"), false);
   assert.equal(JSON.stringify(result).includes("faq_markdown"), false);
   assert.equal(JSON.stringify(result).includes("source_ids"), false);
@@ -262,13 +283,47 @@ await test("snapshot projection only returns known safe fields", async () => {
     markdown: "# paid",
     answer_steps: ["paid step"],
     top_questions: [{ ...SNAPSHOT.top_questions[0], faq_markdown: "# paid" }],
+    top_blind_spots: [{ ...SNAPSHOT.top_blind_spots[0], source_ids: ["ticket-2"] }],
   });
   assert.equal(result.ok, true);
-  assert.deepEqual(result.snapshot, SNAPSHOT);
+  assert.deepEqual(result.snapshot, PROJECTED_SNAPSHOT);
   assert.equal(JSON.stringify(result).includes("markdown"), false);
   assert.equal(JSON.stringify(result).includes("answer_steps"), false);
-  assert.deepEqual(snapshotErrors({ summary: {}, top_questions: [] }), [
+  assert.equal(JSON.stringify(result).includes("source_ids"), false);
+  assert.deepEqual(snapshotErrors({ summary: {}, top_questions: [], top_blind_spots: [] }), [
     "snapshot.summary metrics must include finite counts and resolution evidence",
+  ]);
+});
+
+await test("snapshot projection accepts missing optional date window fields as null", async () => {
+  const result = projectSnapshot(SNAPSHOT);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.snapshot.summary, {
+    ...SNAPSHOT.summary,
+    source_date_start: null,
+    source_date_end: null,
+    source_window_days: null,
+  });
+});
+
+await test("snapshot projection rejects malformed optional date window fields", async () => {
+  const result = projectSnapshot({
+    ...SNAPSHOT,
+    summary: {
+      ...SNAPSHOT.summary,
+      source_date_start: 123,
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors, [
+    "snapshot.summary metrics must include finite counts and resolution evidence",
+  ]);
+});
+
+await test("snapshot projection requires top blind spots from the result-page contract", async () => {
+  const { top_blind_spots: _omitted, ...withoutBlindSpots } = SNAPSHOT;
+  assert.deepEqual(snapshotErrors(withoutBlindSpots), [
+    "snapshot.top_blind_spots must be an array",
   ]);
 });
 
