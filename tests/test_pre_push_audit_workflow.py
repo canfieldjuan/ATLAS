@@ -59,3 +59,9 @@ def test_pre_push_audit_workflow_enrolls_claude_workflow_security_tests() -> Non
     text = WORKFLOW.read_text(encoding="utf-8")
 
     assert "tests/test_claude_workflow_security.py" in text
+
+
+def test_pre_push_audit_workflow_enrolls_deflection_report_ttl_workflow_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tests/test_deflection_report_ttl_workflow.py" in text
