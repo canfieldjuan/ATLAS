@@ -10,6 +10,10 @@ from atlas_brain.auth.dependencies import (
     CONTENT_OPS_API_KEY_SCOPES,
     PLAN_ORDER,
     _effective_is_admin,
+    _extract_token,
+    optional_auth,
+    require_auth,
+    require_auth_or_api_key,
     require_b2b_plan,
     require_b2b_plan_or_api_key,
     require_plan,
@@ -17,8 +21,19 @@ from atlas_brain.auth.dependencies import (
 
 
 class _FakeRequest:
-    def __init__(self, token: str):
-        self.headers = {"authorization": f"Bearer {token}"}
+    def __init__(
+        self,
+        token: str | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        query_params: dict[str, str] | None = None,
+    ):
+        self.headers = headers if headers is not None else {}
+        if token is not None and headers is None:
+            self.headers = {"authorization": f"Bearer {token}"}
+        self.cookies = cookies or {}
+        self.query_params = query_params or {}
         self.client = SimpleNamespace(host="127.0.0.1")
 
 
@@ -61,6 +76,82 @@ def test_auth_user_keeps_platform_admin_separate_from_account_admin():
 
     assert user.is_admin is True
     assert user.is_platform_admin is False
+
+
+def test_extract_token_prefers_authorization_header_over_cookie_and_query():
+    request = _FakeRequest(
+        headers={"authorization": "Bearer header-token"},
+        cookies={"atlas_token": "cookie-token"},
+        query_params={"token": "query-token"},
+    )
+
+    assert _extract_token(request) == "header-token"
+
+
+def test_extract_token_accepts_atlas_token_cookie():
+    request = _FakeRequest(
+        cookies={"atlas_token": "cookie-token"},
+        query_params={"token": "query-token"},
+    )
+
+    assert _extract_token(request) == "cookie-token"
+
+
+def test_extract_token_rejects_query_token_only():
+    request = _FakeRequest(query_params={"token": "query-token"})
+
+    assert _extract_token(request) is None
+
+
+@pytest.mark.asyncio
+async def test_require_auth_rejects_query_token_only(monkeypatch):
+    import atlas_brain.auth.dependencies as dependencies_mod
+
+    monkeypatch.setattr(
+        dependencies_mod,
+        "settings",
+        SimpleNamespace(saas_auth=SimpleNamespace(enabled=True)),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await require_auth(_FakeRequest(query_params={"token": "query-token"}))
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Authentication required"
+
+
+@pytest.mark.asyncio
+async def test_optional_auth_ignores_query_token_only(monkeypatch):
+    import atlas_brain.auth.dependencies as dependencies_mod
+
+    monkeypatch.setattr(
+        dependencies_mod,
+        "settings",
+        SimpleNamespace(saas_auth=SimpleNamespace(enabled=True)),
+    )
+
+    user = await optional_auth(_FakeRequest(query_params={"token": "query-token"}))
+
+    assert user is None
+
+
+@pytest.mark.asyncio
+async def test_require_auth_or_api_key_rejects_query_api_key_only(monkeypatch):
+    import atlas_brain.auth.dependencies as dependencies_mod
+
+    monkeypatch.setattr(
+        dependencies_mod,
+        "settings",
+        SimpleNamespace(saas_auth=SimpleNamespace(enabled=True)),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await require_auth_or_api_key(
+            _FakeRequest(query_params={"token": "atls_live_abcdefghijklmnopqrstuvwxyz"})
+        )
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Authentication required"
 
 
 def test_require_plan_rejects_unknown_consumer_tier():
