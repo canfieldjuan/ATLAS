@@ -3055,7 +3055,10 @@ async def test_deflection_checkout_authorization_rejects_reports_inside_retentio
 
 
 @pytest.mark.asyncio
-async def test_deflection_checkout_authorization_fails_closed_without_report_created_at():
+@pytest.mark.parametrize("created_at", [None, "2026-05-01T12:00:00Z"])
+async def test_deflection_checkout_authorization_fails_closed_without_usable_report_age(
+    created_at: object,
+):
     store = InMemoryDeflectionReportArtifactStore()
     await store.save_report(
         account_id="acct-gate",
@@ -3063,7 +3066,11 @@ async def test_deflection_checkout_authorization_fails_closed_without_report_cre
         snapshot={"summary": {"generated": 1}},
         artifact={"markdown": "# Full"},
     )
-    store._created_at_by_key.pop(("acct-gate", "request-unknown-age"))
+    key = ("acct-gate", "request-unknown-age")
+    if created_at is None:
+        store._created_at_by_key.pop(key)
+    else:
+        store._created_at_by_key[key] = created_at
 
     route = _checkout_authorization_route(store)
     with pytest.raises(api_module.HTTPException) as exc:

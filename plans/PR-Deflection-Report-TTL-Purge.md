@@ -162,10 +162,10 @@ Parked hardening: none.
 
 - Command: python -m py_compile extracted_content_pipeline/deflection_report_access.py extracted_content_pipeline/api/control_surfaces.py tests/test_deflection_report_ttl_workflow.py tests/test_content_ops_deflection_report.py tests/test_extracted_content_control_surface_api.py
   -- passed.
-- Command: python -m pytest tests/test_deflection_report_ttl_workflow.py tests/test_content_ops_deflection_report.py::test_postgres_delete_report_scopes_to_account_and_request_id tests/test_content_ops_deflection_report.py::test_postgres_report_retention_uses_cutoff_and_limited_delete tests/test_content_ops_deflection_report.py::test_postgres_report_retention_fails_closed_on_unparseable_delete_count tests/test_content_ops_deflection_report.py::test_retention_runner_requires_confirm_delete_and_valid_bounds tests/test_extracted_content_control_surface_api.py::test_deflection_checkout_authorization_returns_canonical_terms_only tests/test_extracted_content_control_surface_api.py::test_deflection_checkout_authorization_rejects_reports_inside_retention_grace_window tests/test_extracted_content_control_surface_api.py::test_deflection_checkout_authorization_fails_closed_without_report_created_at -q
-  -- 13 passed.
+- Command: python -m pytest tests/test_deflection_report_ttl_workflow.py tests/test_content_ops_deflection_report.py::test_postgres_delete_report_scopes_to_account_and_request_id tests/test_content_ops_deflection_report.py::test_postgres_report_retention_uses_cutoff_and_limited_delete tests/test_content_ops_deflection_report.py::test_postgres_report_retention_fails_closed_on_unparseable_delete_count tests/test_content_ops_deflection_report.py::test_retention_runner_requires_confirm_delete_and_valid_bounds tests/test_extracted_content_control_surface_api.py::test_deflection_checkout_authorization_returns_canonical_terms_only tests/test_extracted_content_control_surface_api.py::test_deflection_checkout_authorization_rejects_reports_inside_retention_grace_window tests/test_extracted_content_control_surface_api.py::test_deflection_checkout_authorization_fails_closed_without_usable_report_age -q
+  -- 14 passed.
 - Command: python -m pytest tests/test_deflection_report_ttl_workflow.py tests/test_pre_push_audit_workflow.py tests/test_content_ops_deflection_report.py tests/test_extracted_content_control_surface_api.py -q
-  -- 314 passed, 1 skipped.
+  -- 315 passed, 1 skipped.
 - Command: bash scripts/validate_extracted_content_pipeline.sh
   -- passed.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
@@ -176,6 +176,8 @@ Parked hardening: none.
   -- passed.
 - Command: python scripts/audit_workflow_security_posture.py .github/workflows
   -- passed with existing repository-wide WARN findings only.
+- Command: python scripts/maturity_sweep.py extracted_content_pipeline --tests-root tests --baseline tests/maturity_sweep/baseline_extracted_content_pipeline.json --top 25
+  -- passed; ratchet gate reported no new brittleness above baseline.
 - Command: git diff --check -- passed.
 - Command: python scripts/sync_pr_plan.py plans/PR-Deflection-Report-TTL-Purge.md --check
   -- passed.
@@ -186,11 +188,11 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/content_ops_deflection_report_ttl_purge.yml` | 73 |
 | `.github/workflows/pre_push_audit.yml` | 2 |
-| `extracted_content_pipeline/api/control_surfaces.py` | 41 |
+| `extracted_content_pipeline/api/control_surfaces.py` | 34 |
 | `extracted_content_pipeline/deflection_report_access.py` | 83 |
-| `plans/PR-Deflection-Report-TTL-Purge.md` | 196 |
+| `plans/PR-Deflection-Report-TTL-Purge.md` | 198 |
 | `tests/test_content_ops_deflection_report.py` | 41 |
 | `tests/test_deflection_report_ttl_workflow.py` | 77 |
-| `tests/test_extracted_content_control_surface_api.py` | 43 |
+| `tests/test_extracted_content_control_surface_api.py` | 50 |
 | `tests/test_pre_push_audit_workflow.py` | 6 |
-| **Total** | **562** |
+| **Total** | **564** |

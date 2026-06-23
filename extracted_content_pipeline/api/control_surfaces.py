@@ -2553,18 +2553,11 @@ def _deflection_report_checkout_inside_retention_window(
 
 
 def _coerce_aware_datetime(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        resolved = value
-    elif isinstance(value, str) and value.strip():
-        try:
-            resolved = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    else:
+    if not isinstance(value, datetime):
         return None
-    if resolved.tzinfo is None or resolved.utcoffset() is None:
+    if value.tzinfo is None or value.utcoffset() is None:
         return None
-    return resolved.astimezone(timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _with_deflection_submit_diagnostics(

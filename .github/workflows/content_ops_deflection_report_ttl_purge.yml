@@ -52,13 +52,13 @@ jobs:
 
       - name: Purge expired deflection reports
         env:
-          EXTRACTED_DATABASE_URL: ${{ secrets.EXTRACTED_DATABASE_URL }}
+          EXTRACTED_DATABASE_URL: ${{ secrets.EXTRACTED_DATABASE_URL }} # exposed only after main/default-branch guards
           RETENTION_DAYS: ${{ inputs.retention_days }}
           DELETE_LIMIT: ${{ inputs.limit }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          retention_days="${RETENTION_DAYS:-30}"
+          retention_days="${RETENTION_DAYS:-30}" # checkout closes 24h before this cutoff
           delete_limit="${DELETE_LIMIT:-1000}"
           dry_run="${DRY_RUN:-false}"
           args=(
@@ -70,4 +70,4 @@ jobs:
           if [ "$dry_run" != "true" ]; then
             args+=(--confirm-delete)
           fi
-          python scripts/purge_content_ops_deflection_reports.py "${args[@]}"
+          python scripts/purge_content_ops_deflection_reports.py "${args[@]}" # store deletes companion delivery metadata first
