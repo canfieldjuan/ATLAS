@@ -1329,6 +1329,11 @@ def test_deflection_snapshot_projection_contract_is_registry_derived() -> None:
     assert fields["summary"]["snapshot_safe_fields"] == list(
         DEFLECTION_REPORT_SECTION_REGISTRY["support_tax"].snapshot_safe_fields
     )
+    assert fields["summary"]["optional_projected_fields"] == [
+        "source_date_start",
+        "source_date_end",
+        "source_window_days",
+    ]
     assert fields["top_questions"] == {
         "field": "top_questions",
         "source_section": "ranked_questions",
@@ -1419,6 +1424,7 @@ def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:
     snapshot = build_deflection_snapshot(artifact, top_n=1).as_dict()
     projection = deflection_report_model_contract_shape()["snapshot_projection"]
     fields = {field["field"]: field for field in projection["fields"]}
+    summary_optional = set(fields["summary"]["optional_projected_fields"])
 
     assert snapshot["top_questions"]
     assert snapshot["locked_questions"]
@@ -1443,6 +1449,28 @@ def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:
     assert set(snapshot["teaser"]["previews"][0]) == set(
         fields["teaser"]["preview_fields"]
     )
+
+    no_window_fixture = replace(
+        fixture,
+        items=tuple(
+            {
+                key: value
+                for key, value in item.items()
+                if key != "source_date_span"
+            }
+            for item in fixture.items
+        ),
+    )
+    no_window_snapshot = build_deflection_snapshot(
+        build_deflection_report_artifact(no_window_fixture),
+        top_n=1,
+    ).as_dict()
+    no_window_summary_fields = set(no_window_snapshot["summary"])
+
+    assert no_window_summary_fields == (
+        set(fields["summary"]["projected_fields"]) - summary_optional
+    )
+    assert summary_optional.isdisjoint(no_window_summary_fields)
 
 
 def test_deflection_report_section_registry_drives_section_metadata() -> None:
