@@ -1,6 +1,6 @@
 # Plan archive index
 
-1196 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1197 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -1130,6 +1130,7 @@
 - [PR-Reviewer-Rules-Contract](archive/PR-Reviewer-Rules-Contract.md) - lane: dev-workflow/review-contract | phase: Workflow/process
 - [PR-SEO-Foundation-Fixes](archive/PR-SEO-Foundation-Fixes.md)
 - [PR-SEO-Prerender](archive/PR-SEO-Prerender.md)
+- [PR-Security-Disclosure-Policy](archive/PR-Security-Disclosure-Policy.md) - lane: security/hardening-1656 | phase: Production hardening
 - [PR-Security-Guardrail-CI](archive/PR-Security-Guardrail-CI.md) - lane: security/workflow | phase: Production hardening
 - [PR-Semantic-Diff-Advisor-CI](archive/PR-Semantic-Diff-Advisor-CI.md) - lane: review-workflow | phase: workflow/process
 - [PR-Spark-Routing-Light-Enforcement](archive/PR-Spark-Routing-Light-Enforcement.md) - lane: workflow/process | phase: Workflow/process
