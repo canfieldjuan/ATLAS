@@ -42,6 +42,11 @@ Good-faith testing is welcome when it avoids harm:
 
 Reports that follow these guidelines are treated as authorized security research.
 
+## Incident Response
+
+Operational triage and response steps live in
+[docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md).
+
 ## Response Targets
 
 Atlas aims to acknowledge new vulnerability reports within five business days,
