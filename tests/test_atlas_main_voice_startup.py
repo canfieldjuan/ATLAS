@@ -1,12 +1,42 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import sys
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 from atlas_brain import main
+
+
+def test_security_txt_body_contains_required_fields():
+    body = main._security_txt_body(
+        now=datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc)
+    )
+
+    assert (
+        "Contact: https://github.com/canfieldjuan/ATLAS/security/advisories/new\n"
+        in body
+    )
+    assert "Policy: https://github.com/canfieldjuan/ATLAS/blob/main/SECURITY.md\n" in body
+    assert "Preferred-Languages: en\n" in body
+    assert "Expires: 2026-12-20T12:00:00Z\n" in body
+
+
+def test_security_txt_route_serves_plain_text_without_auth():
+    response = TestClient(main.app).get("/.well-known/security.txt")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert (
+        "Contact: https://github.com/canfieldjuan/ATLAS/security/advisories/new"
+        in response.text
+    )
+    assert "Policy: https://github.com/canfieldjuan/ATLAS/blob/main/SECURITY.md" in response.text
+    assert "Preferred-Languages: en" in response.text
+    assert "Expires:" in response.text
 
 
 def test_asr_autostart_allows_cpu_device():
