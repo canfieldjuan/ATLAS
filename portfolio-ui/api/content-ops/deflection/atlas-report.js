@@ -1,6 +1,14 @@
+import {
+  DEFLECTION_SNAPSHOT_SUMMARY_FIELDS,
+  DEFLECTION_SNAPSHOT_SUMMARY_OPTIONAL_FIELDS,
+  DEFLECTION_SNAPSHOT_TOP_BLIND_SPOT_FIELDS,
+  DEFLECTION_SNAPSHOT_TOP_QUESTION_FIELDS,
+} from "./snapshot-contract.js";
+
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{5,160}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEFAULT_ATLAS_TIMEOUT_MS = 5000;
+const INVALID_FIELD = Symbol("invalid-field");
 
 function clean(value) {
   if (Array.isArray(value)) return clean(value[0]);
@@ -85,72 +93,170 @@ function cleanString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function requiredNumber(value) {
+  const number = finiteNumber(value);
+  return number === null ? INVALID_FIELD : number;
+}
+
+function requiredString(value) {
+  const string = cleanString(value);
+  return string ? string : INVALID_FIELD;
+}
+
+function requiredBoolean(value) {
+  return typeof value === "boolean" ? value : INVALID_FIELD;
+}
+
+function optionalNullableString(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return INVALID_FIELD;
+  return value.trim() || null;
+}
+
+function optionalNullableNumber(value) {
+  if (value === undefined || value === null) return null;
+  const number = finiteNumber(value);
+  return number === null ? INVALID_FIELD : number;
+}
+
+const SUMMARY_FIELD_READERS = {
+  generated: requiredNumber,
+  drafted_answer_count: requiredNumber,
+  no_proven_answer_count: requiredNumber,
+  support_ticket_resolution_evidence_present: requiredBoolean,
+  support_ticket_resolution_evidence_count: requiredNumber,
+  repeat_ticket_count: requiredNumber,
+  non_repeat_ticket_count: requiredNumber,
+  source_date_start: optionalNullableString,
+  source_date_end: optionalNullableString,
+  source_window_days: optionalNullableNumber,
+};
+
+const QUESTION_FIELD_READERS = {
+  rank: requiredNumber,
+  question: requiredString,
+  ticket_count: requiredNumber,
+  weighted_frequency: requiredNumber,
+  customer_wording: requiredString,
+};
+
+const BLIND_SPOT_FIELD_READERS = {
+  rank: requiredNumber,
+  question: requiredString,
+  ticket_count: requiredNumber,
+};
+
+function projectFields(record, fields, readers, errorMessage, errors) {
+  const projected = {};
+  for (const field of fields) {
+    const reader = readers[field];
+    if (!reader) {
+      errors.push(`snapshot contract field has no runtime reader: ${field}`);
+      return null;
+    }
+    const value = reader(record[field]);
+    if (value === INVALID_FIELD) {
+      errors.push(errorMessage);
+      return null;
+    }
+    projected[field] = value;
+  }
+  return projected;
+}
+
+function assertContractReaders(fields, readers, errors, label) {
+  for (const field of fields) {
+    if (!readers[field]) {
+      errors.push(`snapshot ${label} contract field has no runtime reader: ${field}`);
+    }
+  }
+}
+
 function projectSnapshot(snapshot) {
   const errors = [];
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
     return { ok: false, errors: ["snapshot response must be an object"] };
   }
-  if (!snapshot.summary || typeof snapshot.summary !== "object") {
+  if (
+    !snapshot.summary ||
+    typeof snapshot.summary !== "object" ||
+    Array.isArray(snapshot.summary)
+  ) {
     errors.push("snapshot.summary must be an object");
   }
   if (!Array.isArray(snapshot.top_questions)) {
     errors.push("snapshot.top_questions must be an array");
   }
+  if (!Array.isArray(snapshot.top_blind_spots)) {
+    errors.push("snapshot.top_blind_spots must be an array");
+  }
   if (errors.length > 0) return { ok: false, errors };
 
-  const generated = finiteNumber(snapshot.summary.generated);
-  const repeatTicketCount = finiteNumber(snapshot.summary.repeat_ticket_count);
-  const draftedAnswerCount = finiteNumber(snapshot.summary.drafted_answer_count);
-  const noProvenAnswerCount = finiteNumber(snapshot.summary.no_proven_answer_count);
-  const resolutionEvidencePresent = snapshot.summary.support_ticket_resolution_evidence_present;
-  const resolutionEvidenceCount = finiteNumber(
-    snapshot.summary.support_ticket_resolution_evidence_count,
+  assertContractReaders(
+    DEFLECTION_SNAPSHOT_SUMMARY_FIELDS,
+    SUMMARY_FIELD_READERS,
+    errors,
+    "summary",
   );
-  if (
-    generated === null ||
-    repeatTicketCount === null ||
-    draftedAnswerCount === null ||
-    noProvenAnswerCount === null ||
-    typeof resolutionEvidencePresent !== "boolean" ||
-    resolutionEvidenceCount === null
-  ) {
-    errors.push("snapshot.summary metrics must include finite counts and resolution evidence");
-  }
+  assertContractReaders(
+    DEFLECTION_SNAPSHOT_TOP_QUESTION_FIELDS,
+    QUESTION_FIELD_READERS,
+    errors,
+    "top_questions",
+  );
+  assertContractReaders(
+    DEFLECTION_SNAPSHOT_TOP_BLIND_SPOT_FIELDS,
+    BLIND_SPOT_FIELD_READERS,
+    errors,
+    "top_blind_spots",
+  );
+  const optionalSummaryFields = new Set(DEFLECTION_SNAPSHOT_SUMMARY_OPTIONAL_FIELDS);
+  const summary = projectFields(
+    snapshot.summary,
+    DEFLECTION_SNAPSHOT_SUMMARY_FIELDS,
+    SUMMARY_FIELD_READERS,
+    "snapshot.summary metrics must include finite counts and resolution evidence",
+    errors,
+  );
 
   const topQuestions = snapshot.top_questions.map((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       errors.push("snapshot.top_questions entries must be objects");
       return null;
     }
-    const rank = finiteNumber(item.rank);
-    const weightedFrequency = finiteNumber(item.weighted_frequency);
-    const question = cleanString(item.question);
-    const customerWording = cleanString(item.customer_wording);
-    if (rank === null || weightedFrequency === null || !question || !customerWording) {
-      errors.push("snapshot.top_questions entries must include safe projected fields");
+    return projectFields(
+      item,
+      DEFLECTION_SNAPSHOT_TOP_QUESTION_FIELDS,
+      QUESTION_FIELD_READERS,
+      "snapshot.top_questions entries must include safe projected fields",
+      errors,
+    );
+  });
+  const topBlindSpots = snapshot.top_blind_spots.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      errors.push("snapshot.top_blind_spots entries must be objects");
       return null;
     }
-    return {
-      rank,
-      question,
-      weighted_frequency: weightedFrequency,
-      customer_wording: customerWording,
-    };
+    return projectFields(
+      item,
+      DEFLECTION_SNAPSHOT_TOP_BLIND_SPOT_FIELDS,
+      BLIND_SPOT_FIELD_READERS,
+      "snapshot.top_blind_spots entries must include safe projected fields",
+      errors,
+    );
   });
   if (errors.length > 0) return { ok: false, errors };
 
   return {
     ok: true,
     snapshot: {
-      summary: {
-        generated,
-        repeat_ticket_count: repeatTicketCount,
-        drafted_answer_count: draftedAnswerCount,
-        no_proven_answer_count: noProvenAnswerCount,
-        support_ticket_resolution_evidence_present: resolutionEvidencePresent,
-        support_ticket_resolution_evidence_count: resolutionEvidenceCount,
-      },
+      summary: Object.fromEntries(
+        Object.entries(summary).filter(
+          ([field, value]) => value !== null || optionalSummaryFields.has(field),
+        ),
+      ),
       top_questions: topQuestions,
+      top_blind_spots: topBlindSpots,
     },
   };
 }
