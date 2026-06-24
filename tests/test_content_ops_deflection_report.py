@@ -1392,6 +1392,168 @@ def test_deflection_snapshot_projection_contract_is_registry_derived() -> None:
         assert forbidden not in encoded
 
 
+def test_deflection_report_projection_contract_is_registry_derived() -> None:
+    shape = deflection_report_model_contract_shape()
+    projection = shape["report_projection"]
+    sections = {section["id"]: section for section in projection["sections"]}
+
+    assert projection["schema_version"] == DEFLECTION_REPORT_SCHEMA_VERSION
+    assert projection["model_fields"] == [
+        "schema_version",
+        "title",
+        "summary",
+        "sections",
+    ]
+    assert projection["section_fields"] == [
+        "id",
+        "title",
+        "priority",
+        "surfaces",
+        "default_limit",
+        "required_data",
+        "snapshot_safe_fields",
+        "data",
+    ]
+    assert list(sections) == list(DEFLECTION_REPORT_SECTION_REGISTRY)
+
+    for section_id, definition in DEFLECTION_REPORT_SECTION_REGISTRY.items():
+        section = sections[section_id]
+        assert section["title"] == definition.title
+        assert section["priority"] == definition.priority
+        assert section["surfaces"] == list(definition.surfaces)
+        assert section["default_limit"] == definition.default_limit
+        assert section["required_data"] == list(definition.required_data)
+        assert section["snapshot_safe_fields"] == list(definition.snapshot_safe_fields)
+        assert set(definition.required_data) <= set(section["projected_fields"])
+
+    support_tax = sections["support_tax"]
+    assert support_tax["optional_projected_fields"] == [
+        "annualized_support_cost",
+        "annualized_run_rate_support_cost",
+    ]
+    assert set(support_tax["required_data"]).isdisjoint(
+        support_tax["optional_projected_fields"]
+    )
+    assert set(support_tax["optional_projected_fields"]) <= set(
+        support_tax["projected_fields"]
+    )
+
+    source_file = sections["source_file"]
+    assert source_file["presence"] == {
+        "mode": "conditional",
+        "condition": "source_label_present",
+    }
+    assert source_file["hosted_consumer_safe_fields"] == []
+
+    outcome_diagnostics = sections["outcome_diagnostics"]
+    assert outcome_diagnostics["presence"] == {
+        "mode": "conditional",
+        "condition": "outcome_diagnostics_rendered",
+    }
+
+    assert sections["support_tax"]["presence"] == {"mode": "required"}
+    top_unresolved = sections["top_unresolved_repeats"]
+    assert top_unresolved["hosted_consumer_safe_fields"] == [
+        "items",
+        "top_item_count",
+        "support_cost_basis",
+    ]
+    support_cost_basis = {
+        entry["field"]: entry
+        for entry in top_unresolved["nested_object_fields"]
+    }["support_cost_basis"]
+    assert support_cost_basis["projected_fields"] == [
+        "status",
+        "assisted_contact_cost",
+        "formula",
+        "source",
+    ]
+    assert support_cost_basis["hosted_consumer_safe_fields"] == ["status"]
+
+
+def test_deflection_report_projection_separates_paid_and_hosted_action_fields() -> None:
+    projection = deflection_report_model_contract_shape()["report_projection"]
+    sections = {section["id"]: section for section in projection["sections"]}
+    action_section_ids = [
+        "priority_fix_queue",
+        "top_unresolved_repeats",
+        "drafted_resolutions",
+        "already_covered_still_recurring",
+        "backlog_table",
+    ]
+    paid_only_action_fields = {
+        "repeat_key",
+        "cluster_id",
+        "identity_basis",
+        "identity_confidence",
+        "fix_type",
+        "recommended_title",
+        "representative_phrasing",
+        "support_cost_formula",
+        "support_cost_source",
+        "opportunity_score",
+        "top_evidence",
+    }
+
+    for section_id in action_section_ids:
+        collection = sections[section_id]["collection"]
+        projected = set(collection["projected_fields"])
+        hosted_safe = set(collection["hosted_consumer_safe_fields"])
+        nested = {entry["field"]: entry for entry in collection["nested_object_fields"]}
+        nested_collections = {
+            entry["field"]: entry
+            for entry in collection["nested_collection_fields"]
+        }
+
+        assert collection["field"] == "items"
+        assert paid_only_action_fields <= projected
+        assert hosted_safe < projected
+        assert paid_only_action_fields.isdisjoint(hosted_safe)
+        assert nested["csat_signal"]["hosted_consumer_safe_fields"] == [
+            "status",
+            "csat_present_count",
+            "negative_csat_ticket_count",
+            "numeric_average",
+        ]
+        assert "top_evidence" not in nested
+        assert nested_collections["top_evidence"]["item_type"] == "object"
+        assert nested_collections["top_evidence"]["projected_fields"] == [
+            "source_id",
+            "evidence_quote",
+        ]
+        assert nested_collections["top_evidence"]["hosted_consumer_safe_fields"] == []
+
+    priority = sections["priority_fix_queue"]
+    assert priority["record_fields"] == ["status_counts"]
+
+
+def test_deflection_report_projection_marks_raw_question_evidence_export_only() -> None:
+    projection = deflection_report_model_contract_shape()["report_projection"]
+    sections = {section["id"]: section for section in projection["sections"]}
+    question_details = sections["question_details"]["collection"]
+    complete_evidence = sections["complete_evidence"]
+
+    assert question_details["field"] == "rows"
+    assert {
+        "source_ids",
+        "evidence_quotes",
+        "outcome_diagnostics",
+    } <= set(question_details["projected_fields"])
+    assert {
+        "source_ids",
+        "evidence_quotes",
+        "outcome_diagnostics",
+    }.isdisjoint(question_details["hosted_consumer_safe_fields"])
+    assert "source_count" in question_details["hosted_consumer_safe_fields"]
+    assert complete_evidence["projected_fields"] == [
+        "question_count",
+        "evidence_row_count",
+        "source_id_count",
+        "surfaces",
+    ]
+    assert complete_evidence["hosted_consumer_safe_fields"] == []
+
+
 def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:
     fixture = _structured_report_fixture_result()
     fixture = replace(

@@ -248,6 +248,13 @@ def test_content_ops_faq_report_contract_links_example() -> None:
     assert "cross-run/monthly-delta matching" in doc
     assert "required_data: string[]" in doc
     assert "snapshot_safe_fields: string[]" in doc
+    assert "DeflectionReportProjectionContract" in doc
+    assert "report_projection" in doc
+    assert "hosted_consumer_safe_fields" in doc
+    assert "presence.mode" in doc
+    assert "nested_collection_fields" in doc
+    assert "source_file.source_label" in doc
+    assert "validate-and-pass" in doc
     assert "DeflectionSnapshotProjectionContract" in doc
     assert "snapshot_projection" in doc
     assert "top_unresolved_repeats.items" in doc

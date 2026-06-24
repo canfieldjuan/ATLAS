@@ -783,6 +783,296 @@ _SNAPSHOT_TEASER_PREVIEW_FIELDS = (
     "source_count",
     "body_withheld",
 )
+_REPORT_SUPPORT_TAX_FIELDS = (
+    "repeat_ticket_count",
+    "non_repeat_ticket_count",
+    "generated_question_count",
+    "assisted_contact_cost",
+    "estimated_support_cost",
+    "source_date_window",
+    "drafted_answer_count",
+    "no_proven_answer_count",
+    "ticket_source_count",
+    "annualized_support_cost",
+    "annualized_run_rate_support_cost",
+)
+_REPORT_SUPPORT_TAX_OPTIONAL_FIELDS = (
+    "annualized_support_cost",
+    "annualized_run_rate_support_cost",
+)
+_REPORT_SOURCE_FILE_FIELDS = ("source_label",)
+_REPORT_SEO_TARGET_FIELDS = (
+    "phrases",
+    "total_phrase_count",
+    "displayed_phrase_count",
+    "omitted_phrase_count",
+    "limit",
+)
+_REPORT_RANKED_QUESTION_FIELDS = ("rows",)
+_REPORT_RANKED_QUESTION_ROW_FIELDS = (
+    "rank",
+    "question",
+    "ticket_count",
+    "weighted_frequency",
+    "customer_wording",
+    "estimated_support_cost",
+    "opportunity_score",
+    "answer_status",
+    "source_proof",
+)
+_REPORT_ACTION_ITEM_FIELDS = (
+    "rank",
+    "repeat_key",
+    "cluster_id",
+    "identity_basis",
+    "identity_confidence",
+    "question",
+    "status",
+    "owner_lane",
+    "fix_type",
+    "csat_signal",
+    "confidence",
+    "priority_score",
+    "priority_drivers",
+    "recommended_title",
+    "recommended_action",
+    "representative_phrasing",
+    "ticket_count",
+    "estimated_support_cost",
+    "support_cost_formula",
+    "support_cost_source",
+    "opportunity_score",
+    "top_evidence",
+)
+_REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
+    "rank",
+    "question",
+    "status",
+    "owner_lane",
+    "confidence",
+    "recommended_action",
+    "ticket_count",
+    "estimated_support_cost",
+    "priority_score",
+    "priority_drivers",
+    "csat_signal",
+)
+_REPORT_ACTION_CSAT_SIGNAL_FIELDS = (
+    "status",
+    "csat_present_count",
+    "negative_csat_ticket_count",
+    "numeric_average",
+)
+_REPORT_ACTION_TOP_EVIDENCE_FIELDS = ("source_id", "evidence_quote")
+_REPORT_ACTION_SUPPORT_COST_BASIS_FIELDS = (
+    "status",
+    "assisted_contact_cost",
+    "formula",
+    "source",
+)
+_REPORT_ACTION_SUPPORT_COST_BASIS_HOSTED_SAFE_FIELDS = ("status",)
+_REPORT_ACTION_ITEM_NESTED_FIELDS = (
+    MappingProxyType({
+        "field": "csat_signal",
+        "projected_fields": _REPORT_ACTION_CSAT_SIGNAL_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_ACTION_CSAT_SIGNAL_FIELDS,
+    }),
+)
+_REPORT_ACTION_ITEM_NESTED_COLLECTIONS = (
+    MappingProxyType({
+        "field": "top_evidence",
+        "item_type": "object",
+        "projected_fields": _REPORT_ACTION_TOP_EVIDENCE_FIELDS,
+        "hosted_consumer_safe_fields": (),
+    }),
+)
+_REPORT_ACTION_ITEM_COLLECTION = MappingProxyType({
+    "field": "items",
+    "item_type": "object",
+    "projected_fields": _REPORT_ACTION_ITEM_FIELDS,
+    "hosted_consumer_safe_fields": _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS,
+    "nested_object_fields": _REPORT_ACTION_ITEM_NESTED_FIELDS,
+    "nested_collection_fields": _REPORT_ACTION_ITEM_NESTED_COLLECTIONS,
+})
+_REPORT_ACTION_SUPPORT_COST_BASIS_NESTED_FIELD = MappingProxyType({
+    "field": "support_cost_basis",
+    "projected_fields": _REPORT_ACTION_SUPPORT_COST_BASIS_FIELDS,
+    "hosted_consumer_safe_fields": _REPORT_ACTION_SUPPORT_COST_BASIS_HOSTED_SAFE_FIELDS,
+})
+_REPORT_PRIORITY_FIX_QUEUE_FIELDS = (
+    "items",
+    "status_counts",
+    "result_page_limit",
+    "pdf_limit",
+    "backlog_limit",
+    "support_cost_basis",
+)
+_REPORT_TOP_UNRESOLVED_REPEATS_FIELDS = (
+    "items",
+    "top_item_count",
+    "result_page_limit",
+    "pdf_limit",
+    "support_cost_basis",
+)
+_REPORT_TOP_UNRESOLVED_REPEATS_HOSTED_SAFE_FIELDS = (
+    "items",
+    "top_item_count",
+    "support_cost_basis",
+)
+_REPORT_ACTION_TOP_ITEMS_FIELDS = (
+    "items",
+    "top_item_count",
+    "result_page_limit",
+    "pdf_limit",
+)
+_REPORT_ACTION_TOP_ITEMS_HOSTED_SAFE_FIELDS = ("items", "top_item_count")
+_REPORT_BACKLOG_FIELDS = ("items", "total_item_count", "default_limit")
+_REPORT_OUTCOME_DIAGNOSTIC_FIELDS = (
+    "outcome_diagnostic_ticket_count",
+    "outcome_risk_ticket_count",
+    "reopened_ticket_count",
+    "negative_csat_ticket_count",
+    "rows",
+)
+_REPORT_OUTCOME_DIAGNOSTIC_ROW_FIELDS = (
+    "question",
+    "status_mix",
+    "reopened_ticket_count",
+    "negative_csat_ticket_count",
+    "guidance",
+)
+_REPORT_QUESTION_DETAIL_FIELDS = ("rows",)
+_REPORT_QUESTION_DETAIL_ROW_FIELDS = (
+    "rank",
+    "question",
+    "customer_wording",
+    "topic",
+    "ticket_count",
+    "weighted_frequency",
+    "source_count",
+    "estimated_support_cost",
+    "answer_status",
+    "answer_evidence_status",
+    "resolution_evidence_scope",
+    "answer_linkage",
+    "answer",
+    "steps",
+    "term_mappings",
+    "source_ids",
+    "evidence_quotes",
+    "outcome_diagnostics",
+)
+_REPORT_QUESTION_DETAIL_ROW_HOSTED_SAFE_FIELDS = (
+    "rank",
+    "question",
+    "customer_wording",
+    "topic",
+    "ticket_count",
+    "weighted_frequency",
+    "source_count",
+    "estimated_support_cost",
+    "answer_status",
+    "answer_evidence_status",
+    "resolution_evidence_scope",
+    "answer_linkage",
+    "answer",
+    "steps",
+    "term_mappings",
+)
+_REPORT_COMPLETE_EVIDENCE_FIELDS = (
+    "question_count",
+    "evidence_row_count",
+    "source_id_count",
+    "surfaces",
+)
+_REPORT_SECTION_PROJECTION_METADATA: Mapping[str, Mapping[str, Any]] = MappingProxyType({
+    "support_tax": MappingProxyType({
+        "projected_fields": _REPORT_SUPPORT_TAX_FIELDS,
+        "optional_projected_fields": _REPORT_SUPPORT_TAX_OPTIONAL_FIELDS,
+    }),
+    "source_file": MappingProxyType({
+        "projected_fields": _REPORT_SOURCE_FILE_FIELDS,
+        "hosted_consumer_safe_fields": (),
+        "presence": MappingProxyType({
+            "mode": "conditional",
+            "condition": "source_label_present",
+        }),
+    }),
+    "seo_targets": MappingProxyType({
+        "projected_fields": _REPORT_SEO_TARGET_FIELDS,
+        "collection": MappingProxyType({
+            "field": "phrases",
+            "item_type": "string",
+        }),
+    }),
+    "ranked_questions": MappingProxyType({
+        "projected_fields": _REPORT_RANKED_QUESTION_FIELDS,
+        "collection": MappingProxyType({
+            "field": "rows",
+            "item_type": "object",
+            "projected_fields": _REPORT_RANKED_QUESTION_ROW_FIELDS,
+            "hosted_consumer_safe_fields": _REPORT_RANKED_QUESTION_ROW_FIELDS,
+        }),
+    }),
+    "priority_fix_queue": MappingProxyType({
+        "projected_fields": _REPORT_PRIORITY_FIX_QUEUE_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_PRIORITY_FIX_QUEUE_FIELDS,
+        "collection": _REPORT_ACTION_ITEM_COLLECTION,
+        "nested_object_fields": (_REPORT_ACTION_SUPPORT_COST_BASIS_NESTED_FIELD,),
+        "record_fields": ("status_counts",),
+    }),
+    "top_unresolved_repeats": MappingProxyType({
+        "projected_fields": _REPORT_TOP_UNRESOLVED_REPEATS_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_TOP_UNRESOLVED_REPEATS_HOSTED_SAFE_FIELDS,
+        "collection": _REPORT_ACTION_ITEM_COLLECTION,
+        "nested_object_fields": (_REPORT_ACTION_SUPPORT_COST_BASIS_NESTED_FIELD,),
+    }),
+    "drafted_resolutions": MappingProxyType({
+        "projected_fields": _REPORT_ACTION_TOP_ITEMS_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_ACTION_TOP_ITEMS_HOSTED_SAFE_FIELDS,
+        "collection": _REPORT_ACTION_ITEM_COLLECTION,
+    }),
+    "already_covered_still_recurring": MappingProxyType({
+        "projected_fields": _REPORT_ACTION_TOP_ITEMS_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_ACTION_TOP_ITEMS_HOSTED_SAFE_FIELDS,
+        "collection": _REPORT_ACTION_ITEM_COLLECTION,
+    }),
+    "backlog_table": MappingProxyType({
+        "projected_fields": _REPORT_BACKLOG_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_BACKLOG_FIELDS,
+        "collection": _REPORT_ACTION_ITEM_COLLECTION,
+    }),
+    "outcome_diagnostics": MappingProxyType({
+        "projected_fields": _REPORT_OUTCOME_DIAGNOSTIC_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_OUTCOME_DIAGNOSTIC_FIELDS,
+        "presence": MappingProxyType({
+            "mode": "conditional",
+            "condition": "outcome_diagnostics_rendered",
+        }),
+        "collection": MappingProxyType({
+            "field": "rows",
+            "item_type": "object",
+            "projected_fields": _REPORT_OUTCOME_DIAGNOSTIC_ROW_FIELDS,
+            "hosted_consumer_safe_fields": _REPORT_OUTCOME_DIAGNOSTIC_ROW_FIELDS,
+        }),
+    }),
+    "question_details": MappingProxyType({
+        "projected_fields": _REPORT_QUESTION_DETAIL_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_QUESTION_DETAIL_FIELDS,
+        "collection": MappingProxyType({
+            "field": "rows",
+            "item_type": "object",
+            "projected_fields": _REPORT_QUESTION_DETAIL_ROW_FIELDS,
+            "hosted_consumer_safe_fields": (
+                _REPORT_QUESTION_DETAIL_ROW_HOSTED_SAFE_FIELDS
+            ),
+        }),
+    }),
+    "complete_evidence": MappingProxyType({
+        "projected_fields": _REPORT_COMPLETE_EVIDENCE_FIELDS,
+        "hosted_consumer_safe_fields": (),
+    }),
+})
 
 
 def deflection_report_model_contract_shape() -> dict[str, Any]:
@@ -793,6 +1083,7 @@ def deflection_report_model_contract_shape() -> dict[str, Any]:
         "model_fields": list(DEFLECTION_REPORT_MODEL_FIELDS),
         "section_fields": list(DEFLECTION_REPORT_SECTION_FIELDS),
         "snapshot_projection": _deflection_snapshot_projection_contract_shape(),
+        "report_projection": _deflection_report_projection_contract_shape(),
         "sections": [
             {
                 "id": definition.id,
@@ -806,6 +1097,171 @@ def deflection_report_model_contract_shape() -> dict[str, Any]:
             for definition in _DEFLECTION_REPORT_SECTION_DEFINITIONS
         ],
     }
+
+
+def _deflection_report_projection_contract_shape() -> dict[str, Any]:
+    """Return the backend-owned paid report projection contract."""
+
+    return {
+        "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
+        "model_fields": list(DEFLECTION_REPORT_MODEL_FIELDS),
+        "section_fields": list(DEFLECTION_REPORT_SECTION_FIELDS),
+        "sections": [
+            _report_projection_section_entry(definition)
+            for definition in _DEFLECTION_REPORT_SECTION_DEFINITIONS
+        ],
+    }
+
+
+def _report_projection_section_entry(
+    definition: DeflectionReportSectionDefinition,
+) -> dict[str, Any]:
+    metadata = _REPORT_SECTION_PROJECTION_METADATA.get(definition.id)
+    if metadata is None:
+        raise ValueError(f"report projection missing section: {definition.id}")
+    projected_fields = _field_tuple(metadata, "projected_fields")
+    out: dict[str, Any] = {
+        "id": definition.id,
+        "title": definition.title,
+        "priority": definition.priority,
+        "surfaces": list(definition.surfaces),
+        "default_limit": definition.default_limit,
+        "required_data": list(definition.required_data),
+        "snapshot_safe_fields": list(definition.snapshot_safe_fields),
+        "presence": _presence_entry(metadata),
+        "projected_fields": list(projected_fields),
+        "hosted_consumer_safe_fields": list(
+            _field_tuple(
+                metadata,
+                "hosted_consumer_safe_fields",
+                default=projected_fields,
+            )
+        ),
+    }
+    optional_fields = _field_tuple(metadata, "optional_projected_fields")
+    if optional_fields:
+        out["optional_projected_fields"] = list(optional_fields)
+    if "collection" in metadata:
+        collection = metadata["collection"]
+        if isinstance(collection, Mapping):
+            out["collection"] = _report_projection_collection_entry(collection)
+    nested_fields = _nested_field_entries(metadata)
+    if nested_fields:
+        out["nested_object_fields"] = nested_fields
+    nested_collections = _nested_collection_entries(metadata)
+    if nested_collections:
+        out["nested_collection_fields"] = nested_collections
+    record_fields = _field_tuple(metadata, "record_fields")
+    if record_fields:
+        out["record_fields"] = list(record_fields)
+    return out
+
+
+def _report_projection_collection_entry(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    field = _text(metadata.get("field"))
+    item_type = _text(metadata.get("item_type")) or "object"
+    if not field:
+        raise ValueError("report projection collection missing field")
+    out: dict[str, Any] = {
+        "field": field,
+        "item_type": item_type,
+    }
+    projected_fields = _field_tuple(metadata, "projected_fields")
+    if projected_fields:
+        out["projected_fields"] = list(projected_fields)
+        out["hosted_consumer_safe_fields"] = list(
+            _field_tuple(
+                metadata,
+                "hosted_consumer_safe_fields",
+                default=projected_fields,
+            )
+        )
+    nested_fields = _nested_field_entries(metadata)
+    if nested_fields:
+        out["nested_object_fields"] = nested_fields
+    nested_collections = _nested_collection_entries(metadata)
+    if nested_collections:
+        out["nested_collection_fields"] = nested_collections
+    return out
+
+
+def _presence_entry(metadata: Mapping[str, Any]) -> dict[str, str]:
+    presence = metadata.get("presence")
+    if presence is None:
+        return {"mode": "required"}
+    if not isinstance(presence, Mapping):
+        raise ValueError("report projection presence must be a mapping")
+    mode = _text(presence.get("mode"))
+    if mode not in {"required", "conditional"}:
+        raise ValueError("report projection presence mode must be required or conditional")
+    out = {"mode": mode}
+    condition = _text(presence.get("condition"))
+    if condition:
+        out["condition"] = condition
+    if mode == "conditional" and not condition:
+        raise ValueError("conditional report projection presence needs a condition")
+    return out
+
+
+def _nested_field_entries(metadata: Mapping[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for raw_entry in metadata.get("nested_object_fields") or ():
+        if not isinstance(raw_entry, Mapping):
+            raise ValueError("report projection nested field entry must be a mapping")
+        field = _text(raw_entry.get("field"))
+        if not field:
+            raise ValueError("report projection nested field missing field")
+        projected_fields = _field_tuple(raw_entry, "projected_fields")
+        entries.append({
+            "field": field,
+            "projected_fields": list(projected_fields),
+            "hosted_consumer_safe_fields": list(
+                _field_tuple(
+                    raw_entry,
+                    "hosted_consumer_safe_fields",
+                    default=projected_fields,
+                )
+            ),
+        })
+    return entries
+
+
+def _nested_collection_entries(metadata: Mapping[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for raw_entry in metadata.get("nested_collection_fields") or ():
+        if not isinstance(raw_entry, Mapping):
+            raise ValueError("report projection nested collection entry must be a mapping")
+        field = _text(raw_entry.get("field"))
+        if not field:
+            raise ValueError("report projection nested collection missing field")
+        projected_fields = _field_tuple(raw_entry, "projected_fields")
+        entries.append({
+            "field": field,
+            "item_type": _text(raw_entry.get("item_type")) or "object",
+            "projected_fields": list(projected_fields),
+            "hosted_consumer_safe_fields": list(
+                _field_tuple(
+                    raw_entry,
+                    "hosted_consumer_safe_fields",
+                    default=projected_fields,
+                )
+            ),
+        })
+    return entries
+
+
+def _field_tuple(
+    metadata: Mapping[str, Any],
+    key: str,
+    *,
+    default: Sequence[str] = (),
+) -> tuple[str, ...]:
+    value = metadata.get(key, default)
+    if value is None:
+        return ()
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"report projection {key} must be a string sequence")
+    return tuple(_text(item) for item in value if _text(item))
 
 
 def _deflection_snapshot_projection_contract_shape() -> dict[str, Any]:
