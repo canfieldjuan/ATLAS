@@ -2,36 +2,14 @@ import { clean, loadDeflectionReport, proxyErrorPublicPayload } from "./atlas-re
 import * as reportModelContract from "./report-model-contract.js";
 
 const DEFLECTION_REPORT_SECTION_ID_SET = new Set(reportModelContract.DEFLECTION_REPORT_SECTION_IDS);
-const HOSTED_SAFE_RECORD_FIELDS = new Set([
-  "reason_counts",
-  "source_date_window",
-  "status_counts",
-  "status_mix",
-]);
-const HOSTED_SAFE_OBJECT_ARRAY_FIELDS = Object.freeze({
-  term_mappings: Object.freeze([
-    "customer_term",
-    "documentation_term",
-    "suggestion",
-    "source_id_count",
-  ]),
-});
 
 function isObjectRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value);
 }
 
-function fieldConstToken(field) {
-  return String(field).toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-}
-
-function sectionConstPrefix(sectionId) {
-  return `DEFLECTION_REPORT_${fieldConstToken(sectionId)}`;
-}
-
-function generatedFields(name) {
-  const fields = reportModelContract[name];
-  return Array.isArray(fields) ? fields : [];
+function hostedFieldShapes(ownerPath) {
+  const shapes = reportModelContract.DEFLECTION_REPORT_HOSTED_FIELD_SHAPES?.[ownerPath];
+  return isObjectRecord(shapes) ? shapes : {};
 }
 
 function cloneScalar(value) {
@@ -68,51 +46,34 @@ function cloneScalarRecord(value) {
   return cloned;
 }
 
-function projectKnownObjectArray(field, value) {
-  const fields = HOSTED_SAFE_OBJECT_ARRAY_FIELDS[field];
-  if (!fields || !Array.isArray(value)) return undefined;
-  return value
-    .filter(isObjectRecord)
-    .map((item) => projectHostedFields(item, fields, `${fieldConstToken(field)}_ITEM`));
-}
-
-function projectHostedFields(record, fields, prefix) {
+function projectHostedFields(record, ownerPath) {
   if (!isObjectRecord(record)) return {};
   const projected = {};
-  for (const field of fields) {
+  for (const [field, shape] of Object.entries(hostedFieldShapes(ownerPath))) {
     if (!Object.prototype.hasOwnProperty.call(record, field)) continue;
     const value = record[field];
-    const nestedPrefix = `${prefix}_${fieldConstToken(field)}`;
-    const nestedFields = generatedFields(`${nestedPrefix}_HOSTED_CONSUMER_SAFE_FIELDS`);
-    if (nestedFields.length > 0) {
+    const nestedPath = `${ownerPath}.${field}`;
+    if (shape === "object") {
+      if (value === null) {
+        projected[field] = null;
+      } else if (isObjectRecord(value)) {
+        projected[field] = projectHostedFields(value, nestedPath);
+      }
+    } else if (shape === "object_array") {
       if (Array.isArray(value)) {
         projected[field] = value
           .filter(isObjectRecord)
-          .map((item) => projectHostedFields(item, nestedFields, nestedPrefix));
-      } else if (isObjectRecord(value)) {
-        projected[field] = projectHostedFields(value, nestedFields, nestedPrefix);
+          .map((item) => projectHostedFields(item, nestedPath));
       }
-      continue;
-    }
-
-    const scalar = cloneScalar(value);
-    if (scalar !== undefined) {
-      projected[field] = scalar;
-      continue;
-    }
-    const scalarArray = cloneScalarArray(value);
-    if (scalarArray !== undefined) {
-      projected[field] = scalarArray;
-      continue;
-    }
-    if (HOSTED_SAFE_RECORD_FIELDS.has(field)) {
-      const scalarRecord = cloneScalarRecord(value);
-      if (scalarRecord !== undefined) projected[field] = scalarRecord;
-      continue;
-    }
-    const objectArray = projectKnownObjectArray(field, value);
-    if (objectArray !== undefined) {
-      projected[field] = objectArray;
+    } else if (shape === "record") {
+      const recordValue = cloneScalarRecord(value);
+      if (recordValue !== undefined) projected[field] = recordValue;
+    } else if (shape === "scalar_array") {
+      const scalarArray = cloneScalarArray(value);
+      if (scalarArray !== undefined) projected[field] = scalarArray;
+    } else if (shape === "scalar") {
+      const scalar = cloneScalar(value);
+      if (scalar !== undefined) projected[field] = scalar;
     }
   }
   return projected;
@@ -125,8 +86,6 @@ function publicHostedReportModel(model) {
     if (!isObjectRecord(section)) continue;
     const sectionId = clean(section.id);
     if (!DEFLECTION_REPORT_SECTION_ID_SET.has(sectionId)) continue;
-    const prefix = sectionConstPrefix(sectionId);
-    const hostedFields = generatedFields(`${prefix}_HOSTED_CONSUMER_SAFE_FIELDS`);
     sections.push({
       id: sectionId,
       title: clean(section.title),
@@ -139,7 +98,7 @@ function publicHostedReportModel(model) {
         : null,
       required_data: cloneScalarArray(section.required_data) || [],
       snapshot_safe_fields: cloneScalarArray(section.snapshot_safe_fields) || [],
-      data: projectHostedFields(section.data, hostedFields, prefix),
+      data: projectHostedFields(section.data, sectionId),
     });
   }
   return {

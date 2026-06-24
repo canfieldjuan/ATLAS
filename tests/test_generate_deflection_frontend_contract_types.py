@@ -1,3 +1,4 @@
+import copy
 import json
 import runpy
 from pathlib import Path
@@ -77,7 +78,8 @@ def test_deflection_report_model_types_include_backend_projection_fields() -> No
     assert "top_evidence: DeflectionReportPriorityFixQueueTopEvidence[];" in rendered
     assert "suppression_reason: string;" in rendered
     assert "suppression_reason_label: string;" in rendered
-    assert "term_mappings: DeflectionReportTermMapping[];" in rendered
+    assert "source_date_window: DeflectionReportSupportTaxSourceDateWindow | null;" in rendered
+    assert "term_mappings: DeflectionReportQuestionDetailsTermMappings[];" in rendered
     assert "outcome_diagnostics: DeflectionReportQuestionOutcomeDiagnostics | null;" in rendered
     assert "source_file?: DeflectionReportSourceFileData;" in rendered
     assert "outcome_diagnostics?: DeflectionReportOutcomeDiagnosticsData;" in rendered
@@ -107,6 +109,24 @@ def test_deflection_report_model_types_publish_hosted_safe_allowlists() -> None:
         "[]"
     ) in rendered
     assert "hosted_consumer_safe_fields: string[];" not in rendered
+
+
+def test_deflection_report_model_types_publish_hosted_field_shapes() -> None:
+    rendered = MOD["render_report_model_types"]()
+
+    assert "export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = {" in rendered
+    assert '"support_tax": {' in rendered
+    assert '"source_date_window": "object",' in rendered
+    assert '"support_tax.source_date_window": {' in rendered
+    assert '"source_window_days": "scalar",' in rendered
+    assert '"question_details.rows": {' in rendered
+    assert '"term_mappings": "object_array",' in rendered
+    assert '"question_details.rows.term_mappings": {' in rendered
+    assert '"source_id_count": "scalar",' in rendered
+    assert '"outcome_diagnostics.rows": {' in rendered
+    assert '"status_mix": "scalar",' in rendered
+    assert '"suppressed_repeat_review_queue": {' in rendered
+    assert '"reason_counts": "record",' in rendered
 
 
 def test_deflection_report_model_api_contract_includes_backend_projection_fields() -> None:
@@ -163,6 +183,58 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
         "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "
         "Object.freeze([])"
     ) in rendered
+
+
+def test_deflection_report_model_api_contract_publishes_hosted_field_shapes() -> None:
+    rendered = MOD["render_report_model_api_contract"]()
+
+    assert "export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = Object.freeze({" in rendered
+    assert '"support_tax": Object.freeze({' in rendered
+    assert '"source_date_window": "object",' in rendered
+    assert '"support_tax.source_date_window": Object.freeze({' in rendered
+    assert '"question_details.rows": Object.freeze({' in rendered
+    assert '"term_mappings": "object_array",' in rendered
+    assert '"outcome_diagnostics.rows": Object.freeze({' in rendered
+    assert '"status_mix": "scalar",' in rendered
+    assert '"suppressed_repeat_review_queue": Object.freeze({' in rendered
+    assert '"reason_counts": "record",' in rendered
+
+
+def test_deflection_report_hosted_shape_map_rejects_non_scalar_without_metadata() -> None:
+    base = MOD["deflection_report_model_contract_shape"]()
+    cases = [
+        ("support_tax", None, "nested_object_fields", "source_date_window"),
+        ("question_details", "rows", "nested_collection_fields", "term_mappings"),
+        ("priority_fix_queue", None, "record_fields", "status_counts"),
+    ]
+
+    for section_id, collection_field, metadata_key, field in cases:
+        contract = copy.deepcopy(base)
+        sections = {
+            section["id"]: section
+            for section in contract["report_projection"]["sections"]
+        }
+        owner = sections[section_id]
+        if collection_field:
+            owner = owner["collection"]
+            assert owner["field"] == collection_field
+
+        if metadata_key == "record_fields":
+            owner[metadata_key] = [
+                record_field for record_field in owner[metadata_key] if record_field != field
+            ]
+        else:
+            owner[metadata_key] = [
+                entry for entry in owner[metadata_key] if entry["field"] != field
+            ]
+
+        try:
+            MOD["render_report_model_api_contract"](contract)
+        except ValueError as exc:
+            assert field in str(exc)
+            assert "non-scalar type" in str(exc)
+        else:
+            raise AssertionError(f"{field} should require hosted shape metadata")
 
 
 def test_generated_deflection_api_contracts_are_enrolled_in_product_surface_manifest() -> None:
@@ -433,3 +505,25 @@ def test_deflection_report_model_types_reject_unknown_hosted_safe_nested_field()
         assert "raw_unprojected_hosted_field" in str(exc)
     else:
         raise AssertionError("hosted-safe nested fields must also be projected")
+
+
+def test_deflection_report_model_types_reject_hosted_non_scalar_without_shape_metadata() -> None:
+    contract = MOD["deflection_report_model_contract_shape"]()
+    section = {
+        entry["id"]: entry
+        for entry in contract["report_projection"]["sections"]
+    }["support_tax"]
+    section["nested_object_fields"] = [
+        entry
+        for entry in section["nested_object_fields"]
+        if entry["field"] != "source_date_window"
+    ]
+
+    try:
+        MOD["render_report_model_types"](contract)
+    except ValueError as exc:
+        message = str(exc)
+        assert "source_date_window" in message
+        assert "no record/nested shape metadata" in message
+    else:
+        raise AssertionError("hosted-safe non-scalar report fields need shape metadata")
