@@ -16,8 +16,9 @@ def _paid_funnel_settings(
     stripe_secret_key: str = "sk_test_paid_deflection",
     stripe_webhook_secret: str = "whsec_test_paid_deflection",
     stripe_content_ops_deflection_report_amount_cents: int = 150000,
-    stripe_content_ops_deflection_report_price_id: str = "",
+    stripe_content_ops_deflection_report_price_id: str = "price_paid_deflection",
     stripe_content_ops_deflection_report_allowed_amount_cents: str = "",
+    stripe_content_ops_deflection_report_currency: str = "usd",
     alerts_enabled: bool = True,
     ntfy_enabled: bool = True,
     ntfy_url: str = "https://ntfy.example",
@@ -35,6 +36,9 @@ def _paid_funnel_settings(
             ),
             stripe_content_ops_deflection_report_allowed_amount_cents=(
                 stripe_content_ops_deflection_report_allowed_amount_cents
+            ),
+            stripe_content_ops_deflection_report_currency=(
+                stripe_content_ops_deflection_report_currency
             ),
         ),
         alerts=SimpleNamespace(
@@ -74,22 +78,32 @@ def test_security_txt_route_serves_plain_text_without_auth():
     assert "Expires:" in response.text
 
 
-def test_paid_funnel_alert_preflight_skips_when_stripe_secret_missing():
-    config = _paid_funnel_settings(stripe_secret_key="")
+def test_paid_funnel_alert_preflight_skips_unrelated_stripe_without_deflection_price():
+    config = _paid_funnel_settings(
+        stripe_secret_key="sk_test_subscription_billing",
+        stripe_webhook_secret="whsec_test_subscription_billing",
+        stripe_content_ops_deflection_report_price_id="",
+        ntfy_enabled=False,
+    )
 
     assert main._paid_funnel_stripe_deflection_configured(config) is False
     assert main._paid_funnel_alert_channel_errors(config) == []
 
 
-def test_paid_funnel_alert_preflight_skips_when_deflection_price_disabled():
-    config = _paid_funnel_settings(
-        stripe_content_ops_deflection_report_amount_cents=0,
-        stripe_content_ops_deflection_report_price_id="",
-        stripe_content_ops_deflection_report_allowed_amount_cents="",
-        ntfy_enabled=False,
-        ntfy_url="",
-        ntfy_topic="",
-    )
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"stripe_content_ops_deflection_report_amount_cents": 0},
+        {"stripe_content_ops_deflection_report_currency": "us"},
+        {"stripe_content_ops_deflection_report_currency": "us1"},
+        {"stripe_content_ops_deflection_report_allowed_amount_cents": "9900"},
+        {"stripe_content_ops_deflection_report_allowed_amount_cents": "150000,bad"},
+    ],
+)
+def test_paid_funnel_alert_preflight_skips_when_checkout_terms_reject_charge(
+    overrides,
+):
+    config = _paid_funnel_settings(ntfy_enabled=False, **overrides)
 
     assert main._paid_funnel_stripe_deflection_configured(config) is False
     assert main._paid_funnel_alert_channel_errors(config) == []
@@ -97,6 +111,21 @@ def test_paid_funnel_alert_preflight_skips_when_deflection_price_disabled():
 
 def test_paid_funnel_alert_preflight_requires_ntfy_when_log_only():
     config = _paid_funnel_settings(ntfy_enabled=False)
+
+    errors = main._paid_funnel_alert_channel_errors(config)
+
+    assert main._paid_funnel_stripe_deflection_configured(config) is True
+    assert errors == [
+        "ATLAS_ALERTS_NTFY_ENABLED must be true when Stripe paid "
+        "deflection reports are configured"
+    ]
+
+
+def test_paid_funnel_alert_preflight_does_not_require_atlas_webhook_secret():
+    config = _paid_funnel_settings(
+        stripe_webhook_secret="",
+        ntfy_enabled=False,
+    )
 
     errors = main._paid_funnel_alert_channel_errors(config)
 
@@ -118,7 +147,7 @@ def test_paid_funnel_alert_preflight_rejects_alerts_disabled():
     ]
 
 
-def test_paid_funnel_alert_preflight_rejects_malformed_ntfy_channel():
+def test_paid_funnel_alert_preflight_rejects_missing_ntfy_channel():
     config = _paid_funnel_settings(ntfy_url=" ", ntfy_topic="")
 
     errors = main._paid_funnel_alert_channel_errors(config)
@@ -131,11 +160,19 @@ def test_paid_funnel_alert_preflight_rejects_malformed_ntfy_channel():
     ]
 
 
+def test_paid_funnel_alert_preflight_rejects_non_absolute_ntfy_url():
+    config = _paid_funnel_settings(ntfy_url="localhost:8090")
+
+    errors = main._paid_funnel_alert_channel_errors(config)
+
+    assert errors == [
+        "ATLAS_ALERTS_NTFY_URL must be an absolute HTTP(S) URL when "
+        "Stripe paid deflection reports are configured"
+    ]
+
+
 def test_paid_funnel_alert_preflight_allows_configured_ntfy_channel():
-    config = _paid_funnel_settings(
-        stripe_content_ops_deflection_report_amount_cents=0,
-        stripe_content_ops_deflection_report_price_id="price_paid_deflection",
-    )
+    config = _paid_funnel_settings(ntfy_url="https://ntfy.example")
 
     assert main._paid_funnel_stripe_deflection_configured(config) is True
     assert main._paid_funnel_alert_channel_errors(config) == []
@@ -143,7 +180,7 @@ def test_paid_funnel_alert_preflight_allows_configured_ntfy_channel():
 
 
 def test_paid_funnel_alert_preflight_raises_specific_startup_error():
-    config = _paid_funnel_settings(ntfy_enabled=False, ntfy_url="")
+    config = _paid_funnel_settings(ntfy_enabled=False, ntfy_url="localhost:8090")
 
     with pytest.raises(
         RuntimeError,

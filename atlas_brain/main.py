@@ -17,6 +17,7 @@ import logging
 import subprocess
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -52,26 +53,64 @@ def _setting_positive_int(config: object, name: str) -> int:
         return 0
 
 
+def _paid_funnel_allowed_checkout_amounts(
+    config: object,
+    default_amount_cents: int,
+) -> tuple[int, ...]:
+    configured = _setting_text(
+        config,
+        "stripe_content_ops_deflection_report_allowed_amount_cents",
+    )
+    if not configured:
+        return (default_amount_cents,) if default_amount_cents > 0 else ()
+
+    amounts: list[int] = []
+    for raw_part in configured.split(","):
+        part = raw_part.strip()
+        if not part:
+            return ()
+        try:
+            amount_cents = int(part)
+        except ValueError:
+            return ()
+        if amount_cents <= 0:
+            return ()
+        amounts.append(amount_cents)
+    return tuple(dict.fromkeys(amounts))
+
+
 def _paid_funnel_stripe_deflection_configured(app_settings: object = settings) -> bool:
-    """Return whether Stripe can take money for paid deflection reports."""
+    """Return whether paid deflection checkout terms are configured."""
     saas_auth = getattr(app_settings, "saas_auth", None)
     if saas_auth is None:
         return False
-    if not _setting_text(saas_auth, "stripe_secret_key"):
+    if not _setting_text(saas_auth, "stripe_content_ops_deflection_report_price_id"):
         return False
-    if not _setting_text(saas_auth, "stripe_webhook_secret"):
-        return False
-    if _setting_text(saas_auth, "stripe_content_ops_deflection_report_price_id"):
-        return True
-    if _setting_text(
-        saas_auth,
-        "stripe_content_ops_deflection_report_allowed_amount_cents",
-    ):
-        return True
-    return _setting_positive_int(
+
+    amount_cents = _setting_positive_int(
         saas_auth,
         "stripe_content_ops_deflection_report_amount_cents",
-    ) > 0
+    )
+    if amount_cents <= 0:
+        return False
+
+    currency = _setting_text(
+        saas_auth,
+        "stripe_content_ops_deflection_report_currency",
+    ).lower()
+    if len(currency) != 3 or not currency.isalpha():
+        return False
+
+    allowed_amounts = _paid_funnel_allowed_checkout_amounts(
+        saas_auth,
+        amount_cents,
+    )
+    return amount_cents in allowed_amounts
+
+
+def _is_absolute_http_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def _paid_funnel_alert_channel_errors(app_settings: object = settings) -> list[str]:
@@ -94,10 +133,16 @@ def _paid_funnel_alert_channel_errors(app_settings: object = settings) -> list[s
             "ATLAS_ALERTS_NTFY_ENABLED must be true when Stripe paid "
             "deflection reports are configured"
         )
-    if not _setting_text(alerts, "ntfy_url"):
+    ntfy_url = _setting_text(alerts, "ntfy_url")
+    if not ntfy_url:
         errors.append(
             "ATLAS_ALERTS_NTFY_URL must be set when Stripe paid deflection "
             "reports are configured"
+        )
+    elif not _is_absolute_http_url(ntfy_url):
+        errors.append(
+            "ATLAS_ALERTS_NTFY_URL must be an absolute HTTP(S) URL when "
+            "Stripe paid deflection reports are configured"
         )
     if not _setting_text(alerts, "ntfy_topic"):
         errors.append(

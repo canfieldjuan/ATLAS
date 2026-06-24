@@ -9,21 +9,22 @@ but the application startup contract still admits a live-shaped Stripe
 deflection setup whose only guaranteed callback is `log_alert_callback`.
 
 Root cause: the paid-funnel incident emitter and alert rule became routable,
-but the orchestrating startup layer never checked the cross-config relationship
-between "Stripe can take money for deflection reports" and "a non-log alert
-delivery channel is configured." This PR fixes the root for the current ntfy
-delivery surface by adding that startup preflight and tests; it does not change
-the already-routed incident emit sites.
+but startup never checked the checkout-terms relationship: "deflection price
+plus accepted amount/currency can expose checkout" and "a non-log alert channel
+is configured." Review caught that reconstructing the predicate from adjacent
+Stripe secret/webhook/default-amount settings was a symptom fix, so this PR now
+mirrors the checkout terms predicate directly.
 
 ## Scope (this PR)
 
 Ownership lane: security/paid-funnel-alert-channel
 Slice phase: Production hardening
+Max files: 5
 
-1. Add a startup preflight that treats a configured Stripe deflection-report
-   funnel as requiring centralized alerts plus ntfy delivery settings.
-2. Prove the preflight fails closed for log-only, alerts-disabled, and malformed
-   ntfy channel configs, and admits a configured ntfy channel.
+1. Add a startup preflight that treats deflection checkout price plus accepted
+   amount/currency as requiring centralized alerts plus ntfy delivery settings.
+2. Prove fail-closed/pass cases for log-only, alerts-disabled, malformed ntfy,
+   configured ntfy, unrelated Stripe with no price, and price without webhook.
 3. Archive the merged #1820 plan doc as required teardown housekeeping; direct
    root-main housekeeping was not safe because the root checkout is another
    session's deflection branch.
@@ -31,12 +32,15 @@ Slice phase: Production hardening
 ### Review Contract
 
 - Acceptance criteria:
-  - [ ] A paid deflection funnel with Stripe secret + webhook secret + positive
-        checkout price config cannot pass startup preflight with log-only
+  - [ ] Deflection price plus accepted amount/currency cannot pass with log-only
         callbacks.
+  - [ ] Unrelated Stripe deployments without a deflection checkout price are
+        not blocked by the default non-zero amount.
+  - [ ] Deflection price still triggers when Atlas's Stripe webhook secret is
+        omitted.
   - [ ] Disabling centralized alerts is not treated as a safe fallback for the
         paid funnel.
-  - [ ] Enabling ntfy with a non-empty URL and topic satisfies the preflight.
+  - [ ] Ntfy with absolute HTTP(S) URL/topic passes; non-absolute URLs fail.
   - [ ] Repos/scripts that import config still can do so; enforcement is tied
         to application startup, not module import.
   - [ ] The existing incident emit/routing behavior remains untouched.
@@ -57,12 +61,10 @@ Slice phase: Production hardening
 
 ## Mechanism
 
-`main.py` gets small pure helpers that derive whether the paid deflection
-funnel is live-shaped from the existing `settings.saas_auth` fields:
-Stripe secret, webhook secret, and explicit or default positive checkout amount
-configuration. When that predicate is true, early startup requires
-`settings.alerts.enabled`, `settings.alerts.ntfy_enabled`, a non-empty ntfy URL,
-and a non-empty ntfy topic before the alert manager initializes.
+`main.py` derives paid-funnel liveness from the same checkout terms the
+deflection route enforces: non-empty price, positive amount, accepted amount,
+and three-letter alphabetic currency. When true, early startup requires enabled
+alerts, enabled ntfy, an absolute HTTP(S) ntfy URL, and a non-empty topic.
 
 The preflight runs at application startup rather than Pydantic settings import.
 That preserves script/config importability but makes a real service lifecycle
@@ -78,6 +80,9 @@ sink available.
   alert-sink slice already proved they reach `AlertManager`.
 - The preflight proves configuration shape, not network reachability to an ntfy
   server. A live transport probe would be a broader operational-health slice.
+- The preflight does not require Atlas's Stripe webhook secret because the
+  portfolio checkout can create the paid session after Atlas returns checkout
+  terms; webhook delivery is a separate payment-confirmation failure surface.
 - Local review's cross-layer caller hint for `lifespan` points at same-named
   FastAPI lifespan functions in other packages, not call sites of
   `atlas_brain.main.lifespan`.
@@ -93,7 +98,7 @@ Parked hardening: none.
 
 ## Verification
 
-- Focused startup preflight tests: `13 passed, 1 warning in 2.58s`.
+- Focused startup preflight tests: `19 passed, 1 warning in 2.50s`.
 - Python compile check for touched runtime/test modules: passed.
 - Whitespace diff check: passed.
 - Pending before push: local review via `scripts/push_pr.sh`.
@@ -102,9 +107,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/main.py` | 76 |
+| `atlas_brain/main.py` | 121 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Security-Paid-Funnel-Alert-Channel.md` | 110 |
+| `plans/PR-Security-Paid-Funnel-Alert-Channel.md` | 115 |
 | `plans/archive/PR-Security-Labels-As-Code.md` | 0 |
-| `tests/test_atlas_main_voice_startup.py` | 116 |
-| **Total** | **305** |
+| `tests/test_atlas_main_voice_startup.py` | 153 |
+| **Total** | **392** |
