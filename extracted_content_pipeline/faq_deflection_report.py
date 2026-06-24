@@ -813,6 +813,11 @@ _REPORT_SUPPORT_TAX_OPTIONAL_FIELDS = (
     "annualized_support_cost",
     "annualized_run_rate_support_cost",
 )
+_REPORT_SOURCE_DATE_WINDOW_FIELDS = (
+    "source_date_start",
+    "source_date_end",
+    "source_window_days",
+)
 _REPORT_SOURCE_FILE_FIELDS = ("source_label",)
 _REPORT_SEO_TARGET_FIELDS = (
     "phrases",
@@ -1020,6 +1025,12 @@ _REPORT_QUESTION_DETAIL_ROW_HOSTED_SAFE_FIELDS = (
     "steps",
     "term_mappings",
 )
+_REPORT_TERM_MAPPING_FIELDS = (
+    "customer_term",
+    "documentation_term",
+    "suggestion",
+    "source_id_count",
+)
 _REPORT_COMPLETE_EVIDENCE_FIELDS = (
     "question_count",
     "evidence_row_count",
@@ -1030,6 +1041,13 @@ _REPORT_SECTION_PROJECTION_METADATA: Mapping[str, Mapping[str, Any]] = MappingPr
     "support_tax": MappingProxyType({
         "projected_fields": _REPORT_SUPPORT_TAX_FIELDS,
         "optional_projected_fields": _REPORT_SUPPORT_TAX_OPTIONAL_FIELDS,
+        "nested_object_fields": (
+            MappingProxyType({
+                "field": "source_date_window",
+                "projected_fields": _REPORT_SOURCE_DATE_WINDOW_FIELDS,
+                "hosted_consumer_safe_fields": _REPORT_SOURCE_DATE_WINDOW_FIELDS,
+            }),
+        ),
     }),
     "source_file": MappingProxyType({
         "projected_fields": _REPORT_SOURCE_FILE_FIELDS,
@@ -1112,6 +1130,14 @@ _REPORT_SECTION_PROJECTION_METADATA: Mapping[str, Mapping[str, Any]] = MappingPr
             "projected_fields": _REPORT_QUESTION_DETAIL_ROW_FIELDS,
             "hosted_consumer_safe_fields": (
                 _REPORT_QUESTION_DETAIL_ROW_HOSTED_SAFE_FIELDS
+            ),
+            "nested_collection_fields": (
+                MappingProxyType({
+                    "field": "term_mappings",
+                    "item_type": "object",
+                    "projected_fields": _REPORT_TERM_MAPPING_FIELDS,
+                    "hosted_consumer_safe_fields": _REPORT_TERM_MAPPING_FIELDS,
+                }),
             ),
         }),
     }),
@@ -1229,6 +1255,9 @@ def _report_projection_collection_entry(metadata: Mapping[str, Any]) -> dict[str
     nested_collections = _nested_collection_entries(metadata)
     if nested_collections:
         out["nested_collection_fields"] = nested_collections
+    record_fields = _field_tuple(metadata, "record_fields")
+    if record_fields:
+        out["record_fields"] = list(record_fields)
     return out
 
 
@@ -1259,7 +1288,7 @@ def _nested_field_entries(metadata: Mapping[str, Any]) -> list[dict[str, Any]]:
         if not field:
             raise ValueError("report projection nested field missing field")
         projected_fields = _field_tuple(raw_entry, "projected_fields")
-        entries.append({
+        entry = {
             "field": field,
             "projected_fields": list(projected_fields),
             "hosted_consumer_safe_fields": list(
@@ -1269,7 +1298,11 @@ def _nested_field_entries(metadata: Mapping[str, Any]) -> list[dict[str, Any]]:
                     default=projected_fields,
                 )
             ),
-        })
+        }
+        record_fields = _field_tuple(raw_entry, "record_fields")
+        if record_fields:
+            entry["record_fields"] = list(record_fields)
+        entries.append(entry)
     return entries
 
 
@@ -1282,7 +1315,7 @@ def _nested_collection_entries(metadata: Mapping[str, Any]) -> list[dict[str, An
         if not field:
             raise ValueError("report projection nested collection missing field")
         projected_fields = _field_tuple(raw_entry, "projected_fields")
-        entries.append({
+        entry = {
             "field": field,
             "item_type": _text(raw_entry.get("item_type")) or "object",
             "projected_fields": list(projected_fields),
@@ -1293,7 +1326,11 @@ def _nested_collection_entries(metadata: Mapping[str, Any]) -> list[dict[str, An
                     default=projected_fields,
                 )
             ),
-        })
+        }
+        record_fields = _field_tuple(raw_entry, "record_fields")
+        if record_fields:
+            entry["record_fields"] = list(record_fields)
+        entries.append(entry)
     return entries
 
 

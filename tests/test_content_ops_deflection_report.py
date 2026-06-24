@@ -163,6 +163,17 @@ def _structured_report_fixture_result() -> TicketFAQMarkdownResult:
 
 def _report_projection_runtime_fixture_result() -> TicketFAQMarkdownResult:
     base = _structured_report_fixture_result()
+    sso_item = {
+        **base.items[1],
+        "term_mappings": (
+            {
+                "customer_term": "SSO for all",
+                "documentation_term": "single sign-on rollout",
+                "suggestion": "Mirror SSO rollout wording in setup docs.",
+                "source_id_count": 3,
+            },
+        ),
+    }
     recurring_item = {
         "question": "How do I fix a stale dashboard?",
         "customer_wording": "dashboard is stale again",
@@ -179,7 +190,20 @@ def _report_projection_runtime_fixture_result() -> TicketFAQMarkdownResult:
             "ticket-dashboard-3",
             "ticket-dashboard-4",
         ),
+        "source_date_span": {
+            "start": "2026-05-16",
+            "end": "2026-05-19",
+            "missing_source_count": 0,
+        },
         "evidence_quotes": ("`ticket-dashboard-1` - Dashboard stale again",),
+        "term_mappings": (
+            {
+                "customer_term": "stale dashboard",
+                "documentation_term": "dashboard cache refresh",
+                "suggestion": "Use stale dashboard wording in the troubleshooting guide.",
+                "source_id_count": 4,
+            },
+        ),
         "outcome_diagnostics": {
             "csat_present_count": 4,
             "csat_score_average": 2.0,
@@ -200,12 +224,25 @@ def _report_projection_runtime_fixture_result() -> TicketFAQMarkdownResult:
         "answer_evidence_status": "draft_needs_review",
         "source_count": 1,
         "source_ids": ("ticket-sparse-only",),
+        "source_date_span": {
+            "start": "2026-05-20",
+            "end": "2026-05-20",
+            "missing_source_count": 0,
+        },
+        "term_mappings": (
+            {
+                "customer_term": "contacts duplicated",
+                "documentation_term": "deduplicate imported contacts",
+                "suggestion": "Add duplicate-import wording to the import docs.",
+                "source_id_count": 1,
+            },
+        ),
     }
     return replace(
         base,
         source_count=base.source_count + 5,
         ticket_source_count=base.ticket_source_count + 5,
-        items=base.items + (recurring_item, sparse_item),
+        items=(base.items[0], sso_item, recurring_item, sparse_item),
     )
 
 
@@ -1736,6 +1773,19 @@ def test_deflection_report_projection_contract_is_registry_derived() -> None:
     assert set(support_tax["optional_projected_fields"]) <= set(
         support_tax["projected_fields"]
     )
+    support_tax_nested = {
+        entry["field"]: entry for entry in support_tax["nested_object_fields"]
+    }
+    assert support_tax_nested["source_date_window"]["projected_fields"] == [
+        "source_date_start",
+        "source_date_end",
+        "source_window_days",
+    ]
+    assert support_tax_nested["source_date_window"]["hosted_consumer_safe_fields"] == [
+        "source_date_start",
+        "source_date_end",
+        "source_window_days",
+    ]
 
     source_file = sections["source_file"]
     assert source_file["presence"] == {
@@ -1749,6 +1799,9 @@ def test_deflection_report_projection_contract_is_registry_derived() -> None:
         "mode": "conditional",
         "condition": "outcome_diagnostics_rendered",
     }
+    outcome_rows = outcome_diagnostics["collection"]
+    assert "status_mix" in outcome_rows["projected_fields"]
+    assert "status_mix" in outcome_rows["hosted_consumer_safe_fields"]
 
     assert sections["support_tax"]["presence"] == {"mode": "required"}
     top_unresolved = sections["top_unresolved_repeats"]
@@ -1859,6 +1912,23 @@ def test_deflection_report_projection_marks_raw_question_evidence_export_only() 
         "outcome_diagnostics",
     }.isdisjoint(question_details["hosted_consumer_safe_fields"])
     assert "source_count" in question_details["hosted_consumer_safe_fields"]
+    term_mapping_contract = {
+        entry["field"]: entry
+        for entry in question_details["nested_collection_fields"]
+    }["term_mappings"]
+    assert term_mapping_contract["item_type"] == "object"
+    assert term_mapping_contract["projected_fields"] == [
+        "customer_term",
+        "documentation_term",
+        "suggestion",
+        "source_id_count",
+    ]
+    assert term_mapping_contract["hosted_consumer_safe_fields"] == [
+        "customer_term",
+        "documentation_term",
+        "suggestion",
+        "source_id_count",
+    ]
     assert complete_evidence["projected_fields"] == [
         "question_count",
         "evidence_row_count",

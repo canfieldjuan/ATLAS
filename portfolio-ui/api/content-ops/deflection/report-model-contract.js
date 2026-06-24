@@ -23,6 +23,8 @@ export const DEFLECTION_REPORT_SUPPORT_TAX_SNAPSHOT_SAFE_FIELDS = Object.freeze(
 
 export const DEFLECTION_REPORT_SUPPORT_TAX_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["repeat_ticket_count", "non_repeat_ticket_count", "generated_question_count", "assisted_contact_cost", "estimated_support_cost", "source_date_window", "drafted_answer_count", "no_proven_answer_count", "ticket_source_count", "annualized_support_cost", "annualized_run_rate_support_cost"]);
 
+export const DEFLECTION_REPORT_SUPPORT_TAX_SOURCE_DATE_WINDOW_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["source_date_start", "source_date_end", "source_window_days"]);
+
 export const DEFLECTION_REPORT_SOURCE_FILE_FIELDS = Object.freeze(["source_label"]);
 
 export const DEFLECTION_REPORT_SOURCE_FILE_REQUIRED_DATA = Object.freeze(["source_label"]);
@@ -173,6 +175,8 @@ export const DEFLECTION_REPORT_QUESTION_DETAILS_HOSTED_CONSUMER_SAFE_FIELDS = Ob
 
 export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["rank", "question", "customer_wording", "topic", "ticket_count", "weighted_frequency", "source_count", "estimated_support_cost", "answer_status", "answer_evidence_status", "resolution_evidence_scope", "answer_linkage", "answer", "steps", "term_mappings"]);
 
+export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_TERM_MAPPINGS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["customer_term", "documentation_term", "suggestion", "source_id_count"]);
+
 export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_FIELDS = Object.freeze(["rank", "question", "customer_wording", "topic", "ticket_count", "weighted_frequency", "source_count", "estimated_support_cost", "answer_status", "answer_evidence_status", "resolution_evidence_scope", "answer_linkage", "answer", "steps", "term_mappings", "source_ids", "evidence_quotes", "outcome_diagnostics"]);
 
 export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_FIELDS = Object.freeze(["question_count", "evidence_row_count", "source_id_count", "surfaces"]);
@@ -182,3 +186,240 @@ export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_REQUIRED_DATA = Object.freeze([
 export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_SNAPSHOT_SAFE_FIELDS = Object.freeze([]);
 
 export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze([]);
+
+export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = Object.freeze({
+  "already_covered_still_recurring": Object.freeze({
+    "items": "object_array",
+    "top_item_count": "scalar",
+  }),
+  "already_covered_still_recurring.items": Object.freeze({
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+  }),
+  "already_covered_still_recurring.items.csat_signal": Object.freeze({
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  }),
+  "backlog_table": Object.freeze({
+    "items": "object_array",
+    "total_item_count": "scalar",
+    "default_limit": "scalar",
+  }),
+  "backlog_table.items": Object.freeze({
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+  }),
+  "backlog_table.items.csat_signal": Object.freeze({
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  }),
+  "drafted_resolutions": Object.freeze({
+    "items": "object_array",
+    "top_item_count": "scalar",
+  }),
+  "drafted_resolutions.items": Object.freeze({
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+  }),
+  "drafted_resolutions.items.csat_signal": Object.freeze({
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  }),
+  "outcome_diagnostics": Object.freeze({
+    "outcome_diagnostic_ticket_count": "scalar",
+    "outcome_risk_ticket_count": "scalar",
+    "reopened_ticket_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "rows": "object_array",
+  }),
+  "outcome_diagnostics.rows": Object.freeze({
+    "question": "scalar",
+    "status_mix": "scalar",
+    "reopened_ticket_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "guidance": "scalar",
+  }),
+  "priority_fix_queue": Object.freeze({
+    "items": "object_array",
+    "status_counts": "record",
+    "result_page_limit": "scalar",
+    "pdf_limit": "scalar",
+    "backlog_limit": "scalar",
+    "support_cost_basis": "object",
+  }),
+  "priority_fix_queue.items": Object.freeze({
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+  }),
+  "priority_fix_queue.items.csat_signal": Object.freeze({
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  }),
+  "priority_fix_queue.support_cost_basis": Object.freeze({
+    "status": "scalar",
+  }),
+  "question_details": Object.freeze({
+    "rows": "object_array",
+  }),
+  "question_details.rows": Object.freeze({
+    "rank": "scalar",
+    "question": "scalar",
+    "customer_wording": "scalar",
+    "topic": "scalar",
+    "ticket_count": "scalar",
+    "weighted_frequency": "scalar",
+    "source_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "answer_status": "scalar",
+    "answer_evidence_status": "scalar",
+    "resolution_evidence_scope": "scalar",
+    "answer_linkage": "scalar",
+    "answer": "scalar",
+    "steps": "scalar_array",
+    "term_mappings": "object_array",
+  }),
+  "question_details.rows.term_mappings": Object.freeze({
+    "customer_term": "scalar",
+    "documentation_term": "scalar",
+    "suggestion": "scalar",
+    "source_id_count": "scalar",
+  }),
+  "ranked_questions": Object.freeze({
+    "rows": "object_array",
+  }),
+  "ranked_questions.rows": Object.freeze({
+    "rank": "scalar",
+    "question": "scalar",
+    "ticket_count": "scalar",
+    "weighted_frequency": "scalar",
+    "customer_wording": "scalar",
+    "estimated_support_cost": "scalar",
+    "opportunity_score": "scalar",
+    "answer_status": "scalar",
+    "source_proof": "scalar",
+  }),
+  "seo_targets": Object.freeze({
+    "phrases": "scalar_array",
+    "total_phrase_count": "scalar",
+    "displayed_phrase_count": "scalar",
+    "omitted_phrase_count": "scalar",
+    "limit": "scalar",
+  }),
+  "support_tax": Object.freeze({
+    "repeat_ticket_count": "scalar",
+    "non_repeat_ticket_count": "scalar",
+    "generated_question_count": "scalar",
+    "assisted_contact_cost": "scalar",
+    "estimated_support_cost": "scalar",
+    "source_date_window": "object",
+    "drafted_answer_count": "scalar",
+    "no_proven_answer_count": "scalar",
+    "ticket_source_count": "scalar",
+    "annualized_support_cost": "scalar",
+    "annualized_run_rate_support_cost": "scalar",
+  }),
+  "support_tax.source_date_window": Object.freeze({
+    "source_date_start": "scalar",
+    "source_date_end": "scalar",
+    "source_window_days": "scalar",
+  }),
+  "suppressed_repeat_review_queue": Object.freeze({
+    "items": "object_array",
+    "total_item_count": "scalar",
+    "default_limit": "scalar",
+    "reason_counts": "record",
+  }),
+  "suppressed_repeat_review_queue.items": Object.freeze({
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+    "review_key": "scalar",
+    "suppression_reason": "scalar",
+    "suppression_reason_label": "scalar",
+  }),
+  "suppressed_repeat_review_queue.items.csat_signal": Object.freeze({
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  }),
+  "top_unresolved_repeats": Object.freeze({
+    "items": "object_array",
+    "top_item_count": "scalar",
+    "support_cost_basis": "object",
+  }),
+  "top_unresolved_repeats.items": Object.freeze({
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+  }),
+  "top_unresolved_repeats.items.csat_signal": Object.freeze({
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  }),
+  "top_unresolved_repeats.support_cost_basis": Object.freeze({
+    "status": "scalar",
+  }),
+});

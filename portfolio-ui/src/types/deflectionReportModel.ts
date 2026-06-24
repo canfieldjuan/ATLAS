@@ -23,6 +23,8 @@ export const DEFLECTION_REPORT_SUPPORT_TAX_SNAPSHOT_SAFE_FIELDS = ["repeat_ticke
 
 export const DEFLECTION_REPORT_SUPPORT_TAX_HOSTED_CONSUMER_SAFE_FIELDS = ["repeat_ticket_count", "non_repeat_ticket_count", "generated_question_count", "assisted_contact_cost", "estimated_support_cost", "source_date_window", "drafted_answer_count", "no_proven_answer_count", "ticket_source_count", "annualized_support_cost", "annualized_run_rate_support_cost"] as const;
 
+export const DEFLECTION_REPORT_SUPPORT_TAX_SOURCE_DATE_WINDOW_HOSTED_CONSUMER_SAFE_FIELDS = ["source_date_start", "source_date_end", "source_window_days"] as const;
+
 export const DEFLECTION_REPORT_SOURCE_FILE_FIELDS = ["source_label"] as const;
 
 export const DEFLECTION_REPORT_SOURCE_FILE_REQUIRED_DATA = ["source_label"] as const;
@@ -173,6 +175,8 @@ export const DEFLECTION_REPORT_QUESTION_DETAILS_HOSTED_CONSUMER_SAFE_FIELDS = ["
 
 export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "customer_wording", "topic", "ticket_count", "weighted_frequency", "source_count", "estimated_support_cost", "answer_status", "answer_evidence_status", "resolution_evidence_scope", "answer_linkage", "answer", "steps", "term_mappings"] as const;
 
+export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_TERM_MAPPINGS_HOSTED_CONSUMER_SAFE_FIELDS = ["customer_term", "documentation_term", "suggestion", "source_id_count"] as const;
+
 export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_FIELDS = ["rank", "question", "customer_wording", "topic", "ticket_count", "weighted_frequency", "source_count", "estimated_support_cost", "answer_status", "answer_evidence_status", "resolution_evidence_scope", "answer_linkage", "answer", "steps", "term_mappings", "source_ids", "evidence_quotes", "outcome_diagnostics"] as const;
 
 export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_FIELDS = ["question_count", "evidence_row_count", "source_id_count", "surfaces"] as const;
@@ -182,6 +186,243 @@ export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_REQUIRED_DATA = ["question_coun
 export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_SNAPSHOT_SAFE_FIELDS = [] as const;
 
 export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
+
+export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = {
+  "already_covered_still_recurring": {
+    "items": "object_array",
+    "top_item_count": "scalar",
+  },
+  "already_covered_still_recurring.items": {
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+  },
+  "already_covered_still_recurring.items.csat_signal": {
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  },
+  "backlog_table": {
+    "items": "object_array",
+    "total_item_count": "scalar",
+    "default_limit": "scalar",
+  },
+  "backlog_table.items": {
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+  },
+  "backlog_table.items.csat_signal": {
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  },
+  "drafted_resolutions": {
+    "items": "object_array",
+    "top_item_count": "scalar",
+  },
+  "drafted_resolutions.items": {
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+  },
+  "drafted_resolutions.items.csat_signal": {
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  },
+  "outcome_diagnostics": {
+    "outcome_diagnostic_ticket_count": "scalar",
+    "outcome_risk_ticket_count": "scalar",
+    "reopened_ticket_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "rows": "object_array",
+  },
+  "outcome_diagnostics.rows": {
+    "question": "scalar",
+    "status_mix": "scalar",
+    "reopened_ticket_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "guidance": "scalar",
+  },
+  "priority_fix_queue": {
+    "items": "object_array",
+    "status_counts": "record",
+    "result_page_limit": "scalar",
+    "pdf_limit": "scalar",
+    "backlog_limit": "scalar",
+    "support_cost_basis": "object",
+  },
+  "priority_fix_queue.items": {
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+  },
+  "priority_fix_queue.items.csat_signal": {
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  },
+  "priority_fix_queue.support_cost_basis": {
+    "status": "scalar",
+  },
+  "question_details": {
+    "rows": "object_array",
+  },
+  "question_details.rows": {
+    "rank": "scalar",
+    "question": "scalar",
+    "customer_wording": "scalar",
+    "topic": "scalar",
+    "ticket_count": "scalar",
+    "weighted_frequency": "scalar",
+    "source_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "answer_status": "scalar",
+    "answer_evidence_status": "scalar",
+    "resolution_evidence_scope": "scalar",
+    "answer_linkage": "scalar",
+    "answer": "scalar",
+    "steps": "scalar_array",
+    "term_mappings": "object_array",
+  },
+  "question_details.rows.term_mappings": {
+    "customer_term": "scalar",
+    "documentation_term": "scalar",
+    "suggestion": "scalar",
+    "source_id_count": "scalar",
+  },
+  "ranked_questions": {
+    "rows": "object_array",
+  },
+  "ranked_questions.rows": {
+    "rank": "scalar",
+    "question": "scalar",
+    "ticket_count": "scalar",
+    "weighted_frequency": "scalar",
+    "customer_wording": "scalar",
+    "estimated_support_cost": "scalar",
+    "opportunity_score": "scalar",
+    "answer_status": "scalar",
+    "source_proof": "scalar",
+  },
+  "seo_targets": {
+    "phrases": "scalar_array",
+    "total_phrase_count": "scalar",
+    "displayed_phrase_count": "scalar",
+    "omitted_phrase_count": "scalar",
+    "limit": "scalar",
+  },
+  "support_tax": {
+    "repeat_ticket_count": "scalar",
+    "non_repeat_ticket_count": "scalar",
+    "generated_question_count": "scalar",
+    "assisted_contact_cost": "scalar",
+    "estimated_support_cost": "scalar",
+    "source_date_window": "object",
+    "drafted_answer_count": "scalar",
+    "no_proven_answer_count": "scalar",
+    "ticket_source_count": "scalar",
+    "annualized_support_cost": "scalar",
+    "annualized_run_rate_support_cost": "scalar",
+  },
+  "support_tax.source_date_window": {
+    "source_date_start": "scalar",
+    "source_date_end": "scalar",
+    "source_window_days": "scalar",
+  },
+  "suppressed_repeat_review_queue": {
+    "items": "object_array",
+    "total_item_count": "scalar",
+    "default_limit": "scalar",
+    "reason_counts": "record",
+  },
+  "suppressed_repeat_review_queue.items": {
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+    "review_key": "scalar",
+    "suppression_reason": "scalar",
+    "suppression_reason_label": "scalar",
+  },
+  "suppressed_repeat_review_queue.items.csat_signal": {
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  },
+  "top_unresolved_repeats": {
+    "items": "object_array",
+    "top_item_count": "scalar",
+    "support_cost_basis": "object",
+  },
+  "top_unresolved_repeats.items": {
+    "rank": "scalar",
+    "question": "scalar",
+    "status": "scalar",
+    "owner_lane": "scalar",
+    "confidence": "scalar",
+    "recommended_action": "scalar",
+    "ticket_count": "scalar",
+    "estimated_support_cost": "scalar",
+    "priority_score": "scalar",
+    "priority_drivers": "scalar_array",
+    "csat_signal": "object",
+  },
+  "top_unresolved_repeats.items.csat_signal": {
+    "status": "scalar",
+    "csat_present_count": "scalar",
+    "negative_csat_ticket_count": "scalar",
+    "numeric_average": "scalar",
+  },
+  "top_unresolved_repeats.support_cost_basis": {
+    "status": "scalar",
+  },
+} as const;
 
 export type DeflectionReportSourceDateWindow = {
   source_date_start: string | null;
@@ -206,13 +447,19 @@ export type DeflectionReportQuestionOutcomeDiagnostics = {
   csat_score_average?: number | null;
 };
 
+export type DeflectionReportSupportTaxSourceDateWindow = {
+  source_date_start: string | null;
+  source_date_end: string | null;
+  source_window_days: number | null;
+};
+
 export type DeflectionReportSupportTaxData = {
   repeat_ticket_count: number;
   non_repeat_ticket_count: number;
   generated_question_count: number;
   assisted_contact_cost: number;
   estimated_support_cost: number;
-  source_date_window: DeflectionReportSourceDateWindow | null;
+  source_date_window: DeflectionReportSupportTaxSourceDateWindow | null;
   drafted_answer_count: number;
   no_proven_answer_count: number;
   ticket_source_count: number;
@@ -585,7 +832,7 @@ export type DeflectionReportBacklogTableSection = {
 
 export type DeflectionReportOutcomeDiagnosticsRow = {
   question: string;
-  status_mix: Record<string, number>;
+  status_mix: string;
   reopened_ticket_count: number;
   negative_csat_ticket_count: number;
   guidance: string;
@@ -668,6 +915,13 @@ export type DeflectionReportSuppressedRepeatReviewQueueSection = {
   data: DeflectionReportSuppressedRepeatReviewQueueData;
 };
 
+export type DeflectionReportQuestionDetailsTermMappings = {
+  customer_term: string;
+  documentation_term: string;
+  suggestion: string;
+  source_id_count: number;
+};
+
 export type DeflectionReportQuestionDetailsRow = {
   rank: number;
   question: string;
@@ -683,7 +937,7 @@ export type DeflectionReportQuestionDetailsRow = {
   answer_linkage: string;
   answer: string;
   steps: string[];
-  term_mappings: DeflectionReportTermMapping[];
+  term_mappings: DeflectionReportQuestionDetailsTermMappings[];
   source_ids: string[];
   evidence_quotes: string[];
   outcome_diagnostics: DeflectionReportQuestionOutcomeDiagnostics | null;

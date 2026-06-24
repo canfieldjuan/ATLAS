@@ -36,10 +36,12 @@ TYPE_BY_FIELD = {
     "body_withheld": "boolean",
     "cluster_id": "string",
     "confidence": "string",
+    "customer_term": "string",
     "customer_wording": "string",
     "csat_present_count": "number",
     "default_limit": "number",
     "displayed_phrase_count": "number",
+    "documentation_term": "string",
     "drafted_answer_count": "number",
     "estimated_support_cost": "number",
     "evidence_row_count": "number",
@@ -78,6 +80,7 @@ TYPE_BY_FIELD = {
     "repeat_ticket_count": "number",
     "repeat_key": "string",
     "representative_phrasing": "string",
+    "reason_counts": "Record<string, number>",
     "review_key": "string",
     "resolution_evidence_scope": "string",
     "result_page_limit": "number",
@@ -93,7 +96,8 @@ TYPE_BY_FIELD = {
     "source_proof": "string",
     "source_window_days": "number | null",
     "status": "string",
-    "status_mix": "Record<string, number>",
+    "status_counts": "Record<string, number>",
+    "status_mix": "string",
     "step_count": "number",
     "steps": "string[]",
     "suppression_reason": "string",
@@ -102,6 +106,7 @@ TYPE_BY_FIELD = {
     "support_cost_source": "string",
     "support_ticket_resolution_evidence_count": "number",
     "support_ticket_resolution_evidence_present": "boolean",
+    "suggestion": "string",
     "surfaces": "string[]",
     "term_mappings": "DeflectionReportTermMapping[]",
     "ticket_count": "number",
@@ -443,17 +448,7 @@ def _report_projection_metadata(contract: Mapping[str, Any] | None = None) -> di
 
         projected_fields = _projected_fields(section)
         optional_fields = _optional_projected_fields(section)
-        record_fields = section.get("record_fields", [])
-        if not isinstance(record_fields, list) or not all(
-            isinstance(field, str) for field in record_fields
-        ):
-            raise ValueError(f"report_projection section {section_id!r} has invalid record_fields")
-        unknown_records = [field for field in record_fields if field not in projected_fields]
-        if unknown_records:
-            raise ValueError(
-                f"record fields are not projected for {section_id!r}: "
-                + ", ".join(unknown_records)
-            )
+        record_fields = _record_fields(section, section_id, projected_fields)
 
         structural_fields: list[str] = []
         collection = section.get("collection")
@@ -490,6 +485,11 @@ def _report_projection_metadata(contract: Mapping[str, Any] | None = None) -> di
                 )
             if item_type == "object":
                 item_fields = _projected_fields(collection)
+                collection_record_fields = _record_fields(
+                    collection,
+                    f"{section_id}.{collection_field}",
+                    item_fields,
+                )
                 collection_structural_fields: list[str] = []
                 for nested in collection.get("nested_object_fields", []):
                     if isinstance(nested, Mapping) and isinstance(nested.get("field"), str):
@@ -501,7 +501,7 @@ def _report_projection_metadata(contract: Mapping[str, Any] | None = None) -> di
                     section_id,
                     item_fields,
                     [],
-                    [],
+                    collection_record_fields,
                     collection_structural_fields,
                 )
                 _hosted_consumer_safe_fields(
@@ -543,6 +543,24 @@ def _validate_report_fields(
         _field_type(field)
 
 
+def _record_fields(
+    owner: Mapping[str, Any],
+    owner_id: str,
+    projected_fields: Sequence[str],
+) -> list[str]:
+    fields = owner.get("record_fields", [])
+    if not isinstance(fields, list) or not all(isinstance(field, str) for field in fields):
+        raise ValueError(f"report_projection {owner_id!r} has invalid record_fields")
+    projected = set(projected_fields)
+    unknown_records = [field for field in fields if field not in projected]
+    if unknown_records:
+        raise ValueError(
+            f"record fields are not projected for {owner_id!r}: "
+            + ", ".join(unknown_records)
+        )
+    return list(fields)
+
+
 def _validate_nested_fields(
     section_id: str,
     owner: Mapping[str, Any],
@@ -561,12 +579,122 @@ def _validate_nested_fields(
                     f"report_projection section {section_id!r} nested field must be projected"
                 )
             nested_fields = _projected_fields(entry)
-            _validate_report_fields(section_id, nested_fields, [], [])
+            record_fields = _record_fields(
+                entry,
+                f"{section_id}.{field}",
+                nested_fields,
+            )
+            _validate_report_fields(section_id, nested_fields, [], record_fields)
             _hosted_consumer_safe_fields(entry, f"{section_id}.{field}")
 
 
 def _field_const_token(field: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", field.upper()).strip("_")
+
+
+def _scalar_hosted_shape(field: str) -> str:
+    field_type = _field_type(field)
+    if field_type in {"string", "number", "boolean", "string | null", "number | null"}:
+        return "scalar"
+    if field_type == "string[]":
+        return "scalar_array"
+    raise ValueError(
+        f"hosted-safe field {field!r} has non-scalar type {field_type!r} "
+        "but no record/nested shape metadata"
+    )
+
+
+def _hosted_shape_paths(section: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    section_id = str(section["id"])
+    paths: dict[str, dict[str, str]] = {}
+
+    def add_owner(owner: Mapping[str, Any], owner_path: str, owner_label: str) -> None:
+        hosted_fields = _hosted_consumer_safe_fields(owner, owner_label)
+        if not hosted_fields:
+            return
+
+        record_fields = set(str(field) for field in owner.get("record_fields", []))
+        nested_objects = {
+            str(entry["field"]): entry
+            for entry in owner.get("nested_object_fields", [])
+            if isinstance(entry, Mapping) and isinstance(entry.get("field"), str)
+        }
+        nested_collections = {
+            str(entry["field"]): entry
+            for entry in owner.get("nested_collection_fields", [])
+            if isinstance(entry, Mapping) and isinstance(entry.get("field"), str)
+        }
+        collection = owner.get("collection")
+        collection_field = (
+            str(collection["field"])
+            if isinstance(collection, Mapping) and isinstance(collection.get("field"), str)
+            else None
+        )
+
+        field_shapes: dict[str, str] = {}
+        for field in hosted_fields:
+            if field in record_fields:
+                field_shapes[field] = "record"
+            elif field in nested_objects:
+                field_shapes[field] = "object"
+            elif field in nested_collections:
+                nested = nested_collections[field]
+                field_shapes[field] = (
+                    "object_array" if nested.get("item_type", "object") == "object" else "scalar_array"
+                )
+            elif field == collection_field and isinstance(collection, Mapping):
+                field_shapes[field] = (
+                    "object_array" if collection.get("item_type", "object") == "object" else "scalar_array"
+                )
+            else:
+                field_shapes[field] = _scalar_hosted_shape(field)
+        paths[owner_path] = field_shapes
+
+        for field, nested in nested_objects.items():
+            if field in hosted_fields:
+                add_owner(nested, f"{owner_path}.{field}", f"{owner_label}.{field}")
+        for field, nested in nested_collections.items():
+            if field in hosted_fields and nested.get("item_type", "object") == "object":
+                add_owner(nested, f"{owner_path}.{field}", f"{owner_label}.{field}")
+        if (
+            collection_field
+            and collection_field in hosted_fields
+            and isinstance(collection, Mapping)
+            and collection.get("item_type", "object") == "object"
+        ):
+            add_owner(
+                collection,
+                f"{owner_path}.{collection_field}",
+                f"{owner_label}.{collection_field}",
+            )
+
+    add_owner(section, section_id, section_id)
+    return paths
+
+
+def _render_report_hosted_shape_map(
+    name: str,
+    sections: Sequence[Mapping[str, Any]],
+    *,
+    typescript: bool,
+) -> list[str]:
+    shape_paths: dict[str, dict[str, str]] = {}
+    for section in sections:
+        shape_paths.update(_hosted_shape_paths(section))
+
+    opener = "{" if typescript else "Object.freeze({"
+    lines = [f"export const {name} = {opener}"]
+    for owner_path in sorted(shape_paths):
+        owner_opener = "{" if typescript else "Object.freeze({"
+        lines.append(f'  "{owner_path}": {owner_opener}')
+        for field, shape in shape_paths[owner_path].items():
+            lines.append(f'    "{field}": "{shape}",')
+        owner_suffix = "}," if typescript else "}),"
+        lines.append(f"  {owner_suffix}")
+    suffix = " as const;" if typescript else ";"
+    closer = "}" if typescript else "})"
+    lines.append(f"{closer}{suffix}")
+    return lines
 
 
 def _render_report_hosted_safe_constants(
@@ -684,11 +812,23 @@ def _render_report_nested_types(section: Mapping[str, Any]) -> list[str]:
     def add_nested(owner: Mapping[str, Any]) -> None:
         for nested in owner.get("nested_object_fields", []):
             nested_type = _nested_type_name(section_id, str(nested["field"]))
-            generated.extend(_object_type_with_overrides(nested_type, _projected_fields(nested)))
+            generated.extend(
+                _object_type_with_overrides(
+                    nested_type,
+                    _projected_fields(nested),
+                    type_overrides=_record_type_overrides(nested),
+                )
+            )
             generated.append("")
         for nested in owner.get("nested_collection_fields", []):
             nested_type = _nested_type_name(section_id, str(nested["field"]))
-            generated.extend(_object_type_with_overrides(nested_type, _projected_fields(nested)))
+            generated.extend(
+                _object_type_with_overrides(
+                    nested_type,
+                    _projected_fields(nested),
+                    type_overrides=_record_type_overrides(nested),
+                )
+            )
             generated.append("")
 
     add_nested(section)
@@ -696,7 +836,7 @@ def _render_report_nested_types(section: Mapping[str, Any]) -> list[str]:
     if isinstance(collection, Mapping):
         add_nested(collection)
         if collection.get("item_type") == "object":
-            collection_overrides: dict[str, str] = {}
+            collection_overrides: dict[str, str] = _record_type_overrides(collection)
             for nested in collection.get("nested_object_fields", []):
                 field = str(nested["field"])
                 collection_overrides[field] = _nested_type_name(section_id, field)
@@ -715,6 +855,16 @@ def _render_report_nested_types(section: Mapping[str, Any]) -> list[str]:
     return generated
 
 
+def _record_type_overrides(owner: Mapping[str, Any]) -> dict[str, str]:
+    return {str(field): "Record<string, number>" for field in owner.get("record_fields", [])}
+
+
+def _nested_override_type(section_id: str, field: str) -> str:
+    nested_type = _nested_type_name(section_id, field)
+    field_type = TYPE_BY_FIELD.get(field, "")
+    return f"{nested_type} | null" if "| null" in field_type else nested_type
+
+
 def _report_section_type_overrides(section: Mapping[str, Any]) -> dict[str, str]:
     section_id = str(section["id"])
     overrides: dict[str, str] = {}
@@ -722,7 +872,7 @@ def _report_section_type_overrides(section: Mapping[str, Any]) -> dict[str, str]
         overrides[str(field)] = "Record<string, number>"
     for nested in section.get("nested_object_fields", []):
         field = str(nested["field"])
-        overrides[field] = _nested_type_name(section_id, field)
+        overrides[field] = _nested_override_type(section_id, field)
     collection = section.get("collection")
     if isinstance(collection, Mapping):
         field = str(collection["field"])
@@ -794,6 +944,15 @@ def render_report_model_types(contract: Mapping[str, Any] | None = None) -> str:
                 )
             )
             generated.append("")
+
+    generated.extend(
+        _render_report_hosted_shape_map(
+            "DEFLECTION_REPORT_HOSTED_FIELD_SHAPES",
+            sections,
+            typescript=True,
+        )
+    )
+    generated.append("")
 
     generated.extend(_render_report_support_types())
     generated.append("")
@@ -923,6 +1082,15 @@ def render_report_model_api_contract(contract: Mapping[str, Any] | None = None) 
                 )
             )
             generated.append("")
+
+    generated.extend(
+        _render_report_hosted_shape_map(
+            "DEFLECTION_REPORT_HOSTED_FIELD_SHAPES",
+            sections,
+            typescript=False,
+        )
+    )
+    generated.append("")
 
     return "\n".join(generated)
 
