@@ -21,11 +21,15 @@ export const DEFLECTION_REPORT_SUPPORT_TAX_REQUIRED_DATA = ["repeat_ticket_count
 
 export const DEFLECTION_REPORT_SUPPORT_TAX_SNAPSHOT_SAFE_FIELDS = ["repeat_ticket_count", "non_repeat_ticket_count", "generated_question_count", "drafted_answer_count", "no_proven_answer_count", "ticket_source_count", "source_date_window"] as const;
 
+export const DEFLECTION_REPORT_SUPPORT_TAX_HOSTED_CONSUMER_SAFE_FIELDS = ["repeat_ticket_count", "non_repeat_ticket_count", "generated_question_count", "assisted_contact_cost", "estimated_support_cost", "source_date_window", "drafted_answer_count", "no_proven_answer_count", "ticket_source_count", "annualized_support_cost", "annualized_run_rate_support_cost"] as const;
+
 export const DEFLECTION_REPORT_SOURCE_FILE_FIELDS = ["source_label"] as const;
 
 export const DEFLECTION_REPORT_SOURCE_FILE_REQUIRED_DATA = ["source_label"] as const;
 
 export const DEFLECTION_REPORT_SOURCE_FILE_SNAPSHOT_SAFE_FIELDS = [] as const;
+
+export const DEFLECTION_REPORT_SOURCE_FILE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
 export const DEFLECTION_REPORT_SEO_TARGETS_FIELDS = ["phrases", "total_phrase_count", "displayed_phrase_count", "omitted_phrase_count", "limit"] as const;
 
@@ -33,11 +37,17 @@ export const DEFLECTION_REPORT_SEO_TARGETS_REQUIRED_DATA = ["phrases", "total_ph
 
 export const DEFLECTION_REPORT_SEO_TARGETS_SNAPSHOT_SAFE_FIELDS = [] as const;
 
+export const DEFLECTION_REPORT_SEO_TARGETS_HOSTED_CONSUMER_SAFE_FIELDS = ["phrases", "total_phrase_count", "displayed_phrase_count", "omitted_phrase_count", "limit"] as const;
+
 export const DEFLECTION_REPORT_RANKED_QUESTIONS_FIELDS = ["rows"] as const;
 
 export const DEFLECTION_REPORT_RANKED_QUESTIONS_REQUIRED_DATA = ["rows"] as const;
 
 export const DEFLECTION_REPORT_RANKED_QUESTIONS_SNAPSHOT_SAFE_FIELDS = ["rows.rank", "rows.question", "rows.ticket_count", "rows.weighted_frequency", "rows.customer_wording"] as const;
+
+export const DEFLECTION_REPORT_RANKED_QUESTIONS_HOSTED_CONSUMER_SAFE_FIELDS = ["rows"] as const;
+
+export const DEFLECTION_REPORT_RANKED_QUESTIONS_ROWS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "ticket_count", "weighted_frequency", "customer_wording", "estimated_support_cost", "opportunity_score", "answer_status", "source_proof"] as const;
 
 export const DEFLECTION_REPORT_RANKED_QUESTIONS_ROWS_FIELDS = ["rank", "question", "ticket_count", "weighted_frequency", "customer_wording", "estimated_support_cost", "opportunity_score", "answer_status", "source_proof"] as const;
 
@@ -47,6 +57,16 @@ export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_REQUIRED_DATA = ["items", "sta
 
 export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_SNAPSHOT_SAFE_FIELDS = [] as const;
 
+export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_HOSTED_CONSUMER_SAFE_FIELDS = ["items", "status_counts", "result_page_limit", "pdf_limit", "backlog_limit", "support_cost_basis"] as const;
+
+export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_SUPPORT_COST_BASIS_HOSTED_CONSUMER_SAFE_FIELDS = ["status"] as const;
+
+export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "status", "owner_lane", "confidence", "recommended_action", "ticket_count", "estimated_support_cost", "priority_score", "priority_drivers", "csat_signal"] as const;
+
+export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
+
+export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
+
 export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_FIELDS = ["rank", "repeat_key", "cluster_id", "identity_basis", "identity_confidence", "question", "status", "owner_lane", "fix_type", "csat_signal", "confidence", "priority_score", "priority_drivers", "recommended_title", "recommended_action", "representative_phrasing", "ticket_count", "estimated_support_cost", "support_cost_formula", "support_cost_source", "opportunity_score", "top_evidence"] as const;
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_FIELDS = ["items", "top_item_count", "result_page_limit", "pdf_limit", "support_cost_basis"] as const;
@@ -54,6 +74,16 @@ export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_FIELDS = ["items", "top_it
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_REQUIRED_DATA = ["items", "top_item_count", "result_page_limit", "pdf_limit", "support_cost_basis"] as const;
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_SNAPSHOT_SAFE_FIELDS = ["items.rank", "items.question", "items.ticket_count"] as const;
+
+export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_HOSTED_CONSUMER_SAFE_FIELDS = ["items", "top_item_count", "support_cost_basis"] as const;
+
+export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_SUPPORT_COST_BASIS_HOSTED_CONSUMER_SAFE_FIELDS = ["status"] as const;
+
+export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "status", "owner_lane", "confidence", "recommended_action", "ticket_count", "estimated_support_cost", "priority_score", "priority_drivers", "csat_signal"] as const;
+
+export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
+
+export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_FIELDS = ["rank", "repeat_key", "cluster_id", "identity_basis", "identity_confidence", "question", "status", "owner_lane", "fix_type", "csat_signal", "confidence", "priority_score", "priority_drivers", "recommended_title", "recommended_action", "representative_phrasing", "ticket_count", "estimated_support_cost", "support_cost_formula", "support_cost_source", "opportunity_score", "top_evidence"] as const;
 
@@ -63,6 +93,14 @@ export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_REQUIRED_DATA = ["items", "to
 
 export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_SNAPSHOT_SAFE_FIELDS = [] as const;
 
+export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_HOSTED_CONSUMER_SAFE_FIELDS = ["items", "top_item_count"] as const;
+
+export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "status", "owner_lane", "confidence", "recommended_action", "ticket_count", "estimated_support_cost", "priority_score", "priority_drivers", "csat_signal"] as const;
+
+export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
+
+export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
+
 export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_FIELDS = ["rank", "repeat_key", "cluster_id", "identity_basis", "identity_confidence", "question", "status", "owner_lane", "fix_type", "csat_signal", "confidence", "priority_score", "priority_drivers", "recommended_title", "recommended_action", "representative_phrasing", "ticket_count", "estimated_support_cost", "support_cost_formula", "support_cost_source", "opportunity_score", "top_evidence"] as const;
 
 export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_FIELDS = ["items", "top_item_count", "result_page_limit", "pdf_limit"] as const;
@@ -70,6 +108,14 @@ export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_FIELDS = ["items"
 export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_REQUIRED_DATA = ["items", "top_item_count", "result_page_limit", "pdf_limit"] as const;
 
 export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_SNAPSHOT_SAFE_FIELDS = [] as const;
+
+export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_HOSTED_CONSUMER_SAFE_FIELDS = ["items", "top_item_count"] as const;
+
+export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "status", "owner_lane", "confidence", "recommended_action", "ticket_count", "estimated_support_cost", "priority_score", "priority_drivers", "csat_signal"] as const;
+
+export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
+
+export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
 export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_FIELDS = ["rank", "repeat_key", "cluster_id", "identity_basis", "identity_confidence", "question", "status", "owner_lane", "fix_type", "csat_signal", "confidence", "priority_score", "priority_drivers", "recommended_title", "recommended_action", "representative_phrasing", "ticket_count", "estimated_support_cost", "support_cost_formula", "support_cost_source", "opportunity_score", "top_evidence"] as const;
 
@@ -79,6 +125,14 @@ export const DEFLECTION_REPORT_BACKLOG_TABLE_REQUIRED_DATA = ["items", "total_it
 
 export const DEFLECTION_REPORT_BACKLOG_TABLE_SNAPSHOT_SAFE_FIELDS = [] as const;
 
+export const DEFLECTION_REPORT_BACKLOG_TABLE_HOSTED_CONSUMER_SAFE_FIELDS = ["items", "total_item_count", "default_limit"] as const;
+
+export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "status", "owner_lane", "confidence", "recommended_action", "ticket_count", "estimated_support_cost", "priority_score", "priority_drivers", "csat_signal"] as const;
+
+export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
+
+export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
+
 export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_FIELDS = ["rank", "repeat_key", "cluster_id", "identity_basis", "identity_confidence", "question", "status", "owner_lane", "fix_type", "csat_signal", "confidence", "priority_score", "priority_drivers", "recommended_title", "recommended_action", "representative_phrasing", "ticket_count", "estimated_support_cost", "support_cost_formula", "support_cost_source", "opportunity_score", "top_evidence"] as const;
 
 export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_FIELDS = ["outcome_diagnostic_ticket_count", "outcome_risk_ticket_count", "reopened_ticket_count", "negative_csat_ticket_count", "rows"] as const;
@@ -86,6 +140,10 @@ export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_FIELDS = ["outcome_diagnostic
 export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_REQUIRED_DATA = ["outcome_diagnostic_ticket_count", "outcome_risk_ticket_count", "reopened_ticket_count", "negative_csat_ticket_count", "rows"] as const;
 
 export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_SNAPSHOT_SAFE_FIELDS = [] as const;
+
+export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_HOSTED_CONSUMER_SAFE_FIELDS = ["outcome_diagnostic_ticket_count", "outcome_risk_ticket_count", "reopened_ticket_count", "negative_csat_ticket_count", "rows"] as const;
+
+export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_ROWS_HOSTED_CONSUMER_SAFE_FIELDS = ["question", "status_mix", "reopened_ticket_count", "negative_csat_ticket_count", "guidance"] as const;
 
 export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_ROWS_FIELDS = ["question", "status_mix", "reopened_ticket_count", "negative_csat_ticket_count", "guidance"] as const;
 
@@ -95,6 +153,10 @@ export const DEFLECTION_REPORT_QUESTION_DETAILS_REQUIRED_DATA = ["rows"] as cons
 
 export const DEFLECTION_REPORT_QUESTION_DETAILS_SNAPSHOT_SAFE_FIELDS = ["rows.rank", "rows.question", "rows.answer_evidence_status", "rows.resolution_evidence_scope", "rows.weighted_frequency", "rows.source_count"] as const;
 
+export const DEFLECTION_REPORT_QUESTION_DETAILS_HOSTED_CONSUMER_SAFE_FIELDS = ["rows"] as const;
+
+export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "customer_wording", "topic", "ticket_count", "weighted_frequency", "source_count", "estimated_support_cost", "answer_status", "answer_evidence_status", "resolution_evidence_scope", "answer_linkage", "answer", "steps", "term_mappings"] as const;
+
 export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_FIELDS = ["rank", "question", "customer_wording", "topic", "ticket_count", "weighted_frequency", "source_count", "estimated_support_cost", "answer_status", "answer_evidence_status", "resolution_evidence_scope", "answer_linkage", "answer", "steps", "term_mappings", "source_ids", "evidence_quotes", "outcome_diagnostics"] as const;
 
 export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_FIELDS = ["question_count", "evidence_row_count", "source_id_count", "surfaces"] as const;
@@ -102,6 +164,8 @@ export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_FIELDS = ["question_count", "ev
 export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_REQUIRED_DATA = ["question_count", "evidence_row_count", "source_id_count", "surfaces"] as const;
 
 export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_SNAPSHOT_SAFE_FIELDS = [] as const;
+
+export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
 export type DeflectionReportSourceDateWindow = {
   source_date_start: string | null;

@@ -188,6 +188,22 @@ def _optional_projected_fields(entry: Mapping[str, Any]) -> list[str]:
     return fields
 
 
+def _hosted_consumer_safe_fields(entry: Mapping[str, Any], owner: str) -> list[str]:
+    fields = entry.get("hosted_consumer_safe_fields")
+    if not isinstance(fields, list) or not all(isinstance(field, str) for field in fields):
+        raise ValueError(
+            f"report_projection {owner} has invalid hosted_consumer_safe_fields"
+        )
+    projected = set(_projected_fields(entry))
+    unknown = [field for field in fields if field not in projected]
+    if unknown:
+        raise ValueError(
+            f"hosted consumer safe fields are not projected for {owner}: "
+            + ", ".join(unknown)
+        )
+    return fields
+
+
 def _render_field_tuple(name: str, fields: Sequence[str]) -> list[str]:
     quoted = ", ".join(f'"{field}"' for field in fields)
     return [f"export const {name} = [{quoted}] as const;"]
@@ -454,6 +470,7 @@ def _report_projection_metadata(contract: Mapping[str, Any] | None = None) -> di
             record_fields,
             structural_fields,
         )
+        _hosted_consumer_safe_fields(section, section_id)
 
         if collection is not None:
             if not isinstance(collection, Mapping):
@@ -483,6 +500,10 @@ def _report_projection_metadata(contract: Mapping[str, Any] | None = None) -> di
                     [],
                     [],
                     collection_structural_fields,
+                )
+                _hosted_consumer_safe_fields(
+                    collection,
+                    f"{section_id}.{collection_field}",
                 )
                 _validate_nested_fields(section_id, collection, item_fields)
 
@@ -538,6 +559,71 @@ def _validate_nested_fields(
                 )
             nested_fields = _projected_fields(entry)
             _validate_report_fields(section_id, nested_fields, [], [])
+            _hosted_consumer_safe_fields(entry, f"{section_id}.{field}")
+
+
+def _field_const_token(field: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", field.upper()).strip("_")
+
+
+def _render_report_hosted_safe_constants(
+    section: Mapping[str, Any],
+    render_fields,
+) -> list[str]:
+    section_id = str(section["id"])
+    const_prefix = f"DEFLECTION_REPORT_{section_id.upper()}"
+    generated: list[str] = []
+
+    generated.extend(
+        render_fields(
+            f"{const_prefix}_HOSTED_CONSUMER_SAFE_FIELDS",
+            _hosted_consumer_safe_fields(section, section_id),
+        )
+    )
+    generated.append("")
+
+    def add_nested_constants(
+        owner: Mapping[str, Any],
+        owner_prefix: str,
+    ) -> None:
+        for nested in owner.get("nested_object_fields", []):
+            field = str(nested["field"])
+            generated.extend(
+                render_fields(
+                    f"{owner_prefix}_{_field_const_token(field)}_HOSTED_CONSUMER_SAFE_FIELDS",
+                    _hosted_consumer_safe_fields(nested, f"{section_id}.{field}"),
+                )
+            )
+            generated.append("")
+        for nested in owner.get("nested_collection_fields", []):
+            field = str(nested["field"])
+            generated.extend(
+                render_fields(
+                    f"{owner_prefix}_{_field_const_token(field)}_HOSTED_CONSUMER_SAFE_FIELDS",
+                    _hosted_consumer_safe_fields(nested, f"{section_id}.{field}"),
+                )
+            )
+            generated.append("")
+
+    add_nested_constants(section, const_prefix)
+
+    collection = section.get("collection")
+    if isinstance(collection, Mapping) and collection.get("item_type") == "object":
+        collection_field = str(collection["field"])
+        collection_prefix = f"{const_prefix}_{_field_const_token(collection_field)}"
+        generated.extend(
+            render_fields(
+                f"{collection_prefix}_HOSTED_CONSUMER_SAFE_FIELDS",
+                _hosted_consumer_safe_fields(
+                    collection,
+                    f"{section_id}.{collection_field}",
+                ),
+            )
+        )
+        generated.append("")
+        add_nested_constants(collection, collection_prefix)
+
+    return generated
 
 
 def _object_type_with_overrides(
@@ -694,6 +780,7 @@ def render_report_model_types(contract: Mapping[str, Any] | None = None) -> str:
             _render_field_tuple(f"{const_prefix}_SNAPSHOT_SAFE_FIELDS", section["snapshot_safe_fields"])
         )
         generated.append("")
+        generated.extend(_render_report_hosted_safe_constants(section, _render_field_tuple))
 
         collection = section.get("collection")
         if isinstance(collection, Mapping) and collection.get("item_type") == "object":
@@ -823,6 +910,7 @@ def render_report_model_api_contract(contract: Mapping[str, Any] | None = None) 
             _render_field_array(f"{const_prefix}_SNAPSHOT_SAFE_FIELDS", section["snapshot_safe_fields"])
         )
         generated.append("")
+        generated.extend(_render_report_hosted_safe_constants(section, _render_field_array))
         collection = section.get("collection")
         if isinstance(collection, Mapping) and collection.get("item_type") == "object":
             generated.extend(

@@ -83,6 +83,30 @@ def test_deflection_report_model_types_include_backend_projection_fields() -> No
     assert "any" not in rendered
 
 
+def test_deflection_report_model_types_publish_hosted_safe_allowlists() -> None:
+    rendered = MOD["render_report_model_types"]()
+
+    assert (
+        'DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_HOSTED_CONSUMER_SAFE_FIELDS = '
+        '["items", "top_item_count", "support_cost_basis"]'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
+        '["rank", "question", "status", "owner_lane", "confidence", '
+        '"recommended_action", "ticket_count", "estimated_support_cost", '
+        '"priority_score", "priority_drivers", "csat_signal"]'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = '
+        '["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]'
+    ) in rendered
+    assert (
+        "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "
+        "[]"
+    ) in rendered
+    assert "hosted_consumer_safe_fields: string[];" not in rendered
+
+
 def test_deflection_report_model_api_contract_includes_backend_projection_fields() -> None:
     rendered = MOD["render_report_model_api_contract"]()
 
@@ -107,6 +131,30 @@ def test_deflection_report_model_api_contract_includes_backend_projection_fields
     assert '"source_ids"' in rendered
     assert '"evidence_quotes"' in rendered
     assert "as const" not in rendered
+
+
+def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists() -> None:
+    rendered = MOD["render_report_model_api_contract"]()
+
+    assert (
+        'DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_HOSTED_CONSUMER_SAFE_FIELDS = '
+        'Object.freeze(["items", "top_item_count", "support_cost_basis"])'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
+        'Object.freeze(["rank", "question", "status", "owner_lane", "confidence", '
+        '"recommended_action", "ticket_count", "estimated_support_cost", '
+        '"priority_score", "priority_drivers", "csat_signal"])'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = '
+        'Object.freeze(["status", "csat_present_count", "negative_csat_ticket_count", '
+        '"numeric_average"])'
+    ) in rendered
+    assert (
+        "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "
+        "Object.freeze([])"
+    ) in rendered
 
 
 def test_generated_deflection_api_contracts_are_enrolled_in_product_surface_manifest() -> None:
@@ -317,3 +365,63 @@ def test_deflection_report_model_types_reject_unknown_optional_field() -> None:
         assert "not_actually_projected" in str(exc)
     else:
         raise AssertionError("optional report fields must also be projected")
+
+
+def test_deflection_report_model_types_reject_unknown_hosted_safe_section_field() -> None:
+    contract = MOD["deflection_report_model_contract_shape"]()
+    section = contract["report_projection"]["sections"][0]
+    section["hosted_consumer_safe_fields"] = [
+        *section["hosted_consumer_safe_fields"],
+        "raw_unprojected_hosted_field",
+    ]
+
+    try:
+        MOD["render_report_model_types"](contract)
+    except ValueError as exc:
+        assert "raw_unprojected_hosted_field" in str(exc)
+    else:
+        raise AssertionError("hosted-safe section fields must also be projected")
+
+
+def test_deflection_report_model_types_reject_unknown_hosted_safe_collection_field() -> None:
+    contract = MOD["deflection_report_model_contract_shape"]()
+    sections = {
+        section["id"]: section
+        for section in contract["report_projection"]["sections"]
+    }
+    collection = sections["priority_fix_queue"]["collection"]
+    collection["hosted_consumer_safe_fields"] = [
+        *collection["hosted_consumer_safe_fields"],
+        "raw_unprojected_hosted_field",
+    ]
+
+    try:
+        MOD["render_report_model_types"](contract)
+    except ValueError as exc:
+        assert "raw_unprojected_hosted_field" in str(exc)
+    else:
+        raise AssertionError("hosted-safe collection fields must also be projected")
+
+
+def test_deflection_report_model_types_reject_unknown_hosted_safe_nested_field() -> None:
+    contract = MOD["deflection_report_model_contract_shape"]()
+    sections = {
+        section["id"]: section
+        for section in contract["report_projection"]["sections"]
+    }
+    collection = sections["priority_fix_queue"]["collection"]
+    nested = {
+        entry["field"]: entry
+        for entry in collection["nested_object_fields"]
+    }["csat_signal"]
+    nested["hosted_consumer_safe_fields"] = [
+        *nested["hosted_consumer_safe_fields"],
+        "raw_unprojected_hosted_field",
+    ]
+
+    try:
+        MOD["render_report_model_types"](contract)
+    except ValueError as exc:
+        assert "raw_unprojected_hosted_field" in str(exc)
+    else:
+        raise AssertionError("hosted-safe nested fields must also be projected")
