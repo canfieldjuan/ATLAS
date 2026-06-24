@@ -1,6 +1,6 @@
 # Plan archive index
 
-1207 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1208 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -798,6 +798,7 @@
 - [PR-Deflection-Report-Delete-Endpoint](archive/PR-Deflection-Report-Delete-Endpoint.md) - lane: security/hardening-1656 | phase: Production hardening
 - [PR-Deflection-Report-Frontend-Artifact](archive/PR-Deflection-Report-Frontend-Artifact.md) - lane: deflection/report-contract-1805 | phase: Production hardening
 - [PR-Deflection-Report-Hosted-Safe-Artifact](archive/PR-Deflection-Report-Hosted-Safe-Artifact.md) - lane: deflection/report-contract-1805 | phase: Production hardening
+- [PR-Deflection-Report-Hosted-Safe-Proxy](archive/PR-Deflection-Report-Hosted-Safe-Proxy.md) - lane: deflection/report-contract-1805 | phase: Production hardening
 - [PR-Deflection-Report-Model-API](archive/PR-Deflection-Report-Model-API.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Report-Model-Persistence](archive/PR-Deflection-Report-Model-Persistence.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Report-Paid-Consumer](archive/PR-Deflection-Report-Paid-Consumer.md) - lane: deflection/report-contract-1805 | phase: Production hardening
