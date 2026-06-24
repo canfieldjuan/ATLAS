@@ -109,6 +109,15 @@ def _report_model() -> dict[str, object]:
                     "surfaces": ["export"],
                 },
             },
+            {
+                "id": "suppressed_repeat_review_queue",
+                "data": {
+                    "items": [],
+                    "total_item_count": 0,
+                    "default_limit": 25,
+                    "reason_counts": {},
+                },
+            },
             *[
                 {
                     "id": section_id,

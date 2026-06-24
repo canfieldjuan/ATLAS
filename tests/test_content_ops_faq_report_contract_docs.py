@@ -243,7 +243,7 @@ def test_content_ops_faq_report_contract_links_example() -> None:
     assert '"backlog_table"' in doc
     assert '"suppressed_repeat_review_queue"' in doc
     assert "suppression_reason" in doc
-    assert "low_confidence_cluster" in doc
+    assert "insufficient_source_support" in doc
     assert "published help center" in doc
     assert "repeat_key: string" in doc
     assert "cluster_id: string" in doc

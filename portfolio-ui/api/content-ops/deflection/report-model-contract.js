@@ -9,7 +9,7 @@ export const DEFLECTION_REPORT_MODEL_FIELDS = Object.freeze(["schema_version", "
 
 export const DEFLECTION_REPORT_SECTION_FIELDS = Object.freeze(["id", "title", "priority", "surfaces", "default_limit", "required_data", "snapshot_safe_fields", "data"]);
 
-export const DEFLECTION_REPORT_SECTION_IDS = Object.freeze(["support_tax", "source_file", "seo_targets", "ranked_questions", "priority_fix_queue", "top_unresolved_repeats", "drafted_resolutions", "already_covered_still_recurring", "backlog_table", "outcome_diagnostics", "question_details", "complete_evidence"]);
+export const DEFLECTION_REPORT_SECTION_IDS = Object.freeze(["support_tax", "source_file", "seo_targets", "ranked_questions", "priority_fix_queue", "top_unresolved_repeats", "drafted_resolutions", "already_covered_still_recurring", "backlog_table", "outcome_diagnostics", "suppressed_repeat_review_queue", "question_details", "complete_evidence"]);
 
 export const DEFLECTION_REPORT_CONDITIONAL_SECTION_IDS = Object.freeze(["source_file", "outcome_diagnostics"]);
 
@@ -146,6 +146,22 @@ export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_HOSTED_CONSUMER_SAFE_FIELDS =
 export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_ROWS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["question", "status_mix", "reopened_ticket_count", "negative_csat_ticket_count", "guidance"]);
 
 export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_ROWS_FIELDS = Object.freeze(["question", "status_mix", "reopened_ticket_count", "negative_csat_ticket_count", "guidance"]);
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_FIELDS = Object.freeze(["items", "total_item_count", "default_limit", "reason_counts"]);
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_REQUIRED_DATA = Object.freeze(["items", "total_item_count", "default_limit", "reason_counts"]);
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_SNAPSHOT_SAFE_FIELDS = Object.freeze([]);
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["items", "total_item_count", "default_limit", "reason_counts"]);
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["rank", "question", "status", "owner_lane", "confidence", "recommended_action", "ticket_count", "estimated_support_cost", "priority_score", "priority_drivers", "csat_signal", "suppression_reason", "suppression_reason_label"]);
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]);
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze([]);
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_FIELDS = Object.freeze(["rank", "repeat_key", "cluster_id", "identity_basis", "identity_confidence", "question", "status", "owner_lane", "fix_type", "csat_signal", "confidence", "priority_score", "priority_drivers", "recommended_title", "recommended_action", "representative_phrasing", "ticket_count", "estimated_support_cost", "support_cost_formula", "support_cost_source", "opportunity_score", "top_evidence", "suppression_reason", "suppression_reason_label"]);
 
 export const DEFLECTION_REPORT_QUESTION_DETAILS_FIELDS = Object.freeze(["rows"]);
 

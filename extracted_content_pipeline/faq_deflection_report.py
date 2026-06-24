@@ -1398,7 +1398,6 @@ DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS: Mapping[str, Mapping[str, int]] = (
             "question_details": 10,
             "seo_targets": 20,
             "outcome_diagnostics": 25,
-            "suppressed_repeat_review_queue": _ACTION_BACKLOG_LIMIT,
         }),
         "pdf": MappingProxyType({
             "ranked_questions": 25,
@@ -3085,7 +3084,7 @@ def _suppression_reason(item: Mapping[str, Any]) -> str:
         return "too_low_volume"
     if _source_count(item) < 2:
         return "insufficient_source_support"
-    return "low_confidence_cluster"
+    raise ValueError("low-confidence item has no supported suppression reason")
 
 
 def _suppression_reason_label(reason: str) -> str:
@@ -3095,16 +3094,13 @@ def _suppression_reason_label(reason: str) -> str:
         "insufficient_source_support": (
             "Fewer than two source tickets support this cluster."
         ),
-        "low_confidence_cluster": (
-            "The cluster needs manual review before it becomes an action item."
-        ),
     }.get(reason, "Review this cluster before assigning an action.")
 
 
 def _suppression_reason_counts(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for item in items:
-        reason = _text(item.get("suppression_reason")) or "low_confidence_cluster"
+        reason = _text(item.get("suppression_reason")) or "insufficient_source_support"
         counts[reason] = counts.get(reason, 0) + 1
     return dict(sorted(counts.items()))
 
