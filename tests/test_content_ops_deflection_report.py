@@ -860,6 +860,7 @@ def test_deflection_suppressed_repeat_review_queue_explains_hidden_rows() -> Non
         item["suppression_reason"]: item
         for item in queue["items"]
     }
+    review_keys = {item["review_key"] for item in queue["items"]}
 
     assert unresolved_questions == {"How do I configure SCIM groups?"}
     assert queue["total_item_count"] == 3
@@ -869,6 +870,8 @@ def test_deflection_suppressed_repeat_review_queue_explains_hidden_rows() -> Non
         "too_low_volume": 1,
     }
     assert set(by_reason) == set(queue["reason_counts"])
+    assert len(review_keys) == 3
+    assert all(key.startswith("review_") and len(key) == 31 for key in review_keys)
     assert by_reason["missing_question"]["question"] == ""
     assert by_reason["missing_question"]["status"] == "Low confidence"
     assert "No normalized customer question" in by_reason[
@@ -1165,6 +1168,110 @@ def test_deflection_action_identity_is_stable_when_rank_changes() -> None:
         base_actions["How do I export attribution reports?"]["repeat_key"]
         == reordered_actions["How do I export attribution reports?"]["repeat_key"]
     )
+
+
+def test_deflection_suppressed_review_key_is_stable_when_rank_changes() -> None:
+    base = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=6,
+        ticket_source_count=6,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "Can I rename one workspace?",
+                "customer_wording": "rename one workspace",
+                "topic": "workspace",
+                "weighted_frequency": 1,
+                "ticket_count": 1,
+                "opportunity_score": 20,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-one-off",),
+            },
+            {
+                "question": "Why did my imported contacts duplicate?",
+                "customer_wording": "contacts imported twice",
+                "topic": "imports",
+                "weighted_frequency": 5,
+                "ticket_count": 4,
+                "opportunity_score": 20,
+                "answer_evidence_status": "draft_needs_review",
+                "source_count": 1,
+                "source_ids": ("ticket-sparse-only",),
+            },
+        ),
+    )
+    reordered = TicketFAQMarkdownResult(
+        markdown=base.markdown,
+        source_count=base.source_count,
+        ticket_source_count=base.ticket_source_count,
+        output_checks=base.output_checks,
+        items=tuple(reversed(base.items)),
+    )
+
+    def review_keys_by_question(result: TicketFAQMarkdownResult) -> dict[str, str]:
+        sections = {
+            section["id"]: section
+            for section in build_deflection_report_artifact(result).report_model.as_dict()[
+                "sections"
+            ]
+        }
+        return {
+            item["question"]: item["review_key"]
+            for item in sections["suppressed_repeat_review_queue"]["data"]["items"]
+        }
+
+    assert review_keys_by_question(base) == review_keys_by_question(reordered)
+
+
+def test_deflection_suppressed_review_key_disambiguates_identityless_rows() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=4,
+        ticket_source_count=4,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 30,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (),
+            },
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 25,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (),
+            },
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).report_model.as_dict()[
+            "sections"
+        ]
+    }
+    items = sections["suppressed_repeat_review_queue"]["data"]["items"]
+    review_keys = [item["review_key"] for item in items]
+
+    assert len(items) == 2
+    assert [item["identity_basis"] for item in items] == [
+        "insufficient_identity",
+        "insufficient_identity",
+    ]
+    assert [item["suppression_reason"] for item in items] == [
+        "missing_question",
+        "missing_question",
+    ]
+    assert len(set(review_keys)) == len(review_keys)
 
 
 def test_deflection_action_identity_ignores_ticket_id_rollover() -> None:
@@ -1723,10 +1830,12 @@ def test_deflection_report_projection_separates_paid_and_hosted_action_fields() 
     suppressed_collection = suppressed["collection"]
     assert suppressed["record_fields"] == ["reason_counts"]
     assert {
+        "review_key",
         "suppression_reason",
         "suppression_reason_label",
     } <= set(suppressed_collection["projected_fields"])
     assert {
+        "review_key",
         "suppression_reason",
         "suppression_reason_label",
     } <= set(suppressed_collection["hosted_consumer_safe_fields"])
@@ -5036,6 +5145,78 @@ def test_stored_deflection_report_model_backfills_legacy_action_limits() -> None
             assert key in section["required_data"]
             assert key not in section_by_id[section_id]["data"]
             assert key not in section_by_id[section_id]["required_data"]
+
+
+def test_stored_deflection_report_model_backfills_legacy_suppressed_review_keys() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=4,
+        ticket_source_count=4,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 30,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (),
+            },
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 25,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (),
+            },
+            {
+                "question": "Can I rename one workspace?",
+                "customer_wording": "rename one workspace",
+                "topic": "workspace",
+                "weighted_frequency": 1,
+                "ticket_count": 1,
+                "opportunity_score": 20,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-one-off",),
+            },
+        ),
+    )
+    artifact = build_deflection_report_artifact(result).as_dict()
+    legacy_artifact = json.loads(json.dumps(artifact))
+    expected_keys_by_rank: dict[int, str] = {}
+    legacy_section = next(
+        section
+        for section in legacy_artifact["report_model"]["sections"]
+        if section["id"] == "suppressed_repeat_review_queue"
+    )
+    original_section = next(
+        section
+        for section in artifact["report_model"]["sections"]
+        if section["id"] == "suppressed_repeat_review_queue"
+    )
+    for item in original_section["data"]["items"]:
+        expected_keys_by_rank[item["rank"]] = item["review_key"]
+    for item in legacy_section["data"]["items"]:
+        item.pop("review_key", None)
+
+    payload = stored_deflection_report_model(legacy_artifact)
+    assert payload is not None
+    section = next(
+        section
+        for section in payload["sections"]
+        if section["id"] == "suppressed_repeat_review_queue"
+    )
+    items = section["data"]["items"]
+    review_keys = [item["review_key"] for item in items]
+
+    assert review_keys == [expected_keys_by_rank[item["rank"]] for item in items]
+    assert len(set(review_keys)) == len(review_keys)
+    assert "review_key" not in legacy_section["data"]["items"][0]
 
 
 @pytest.mark.asyncio

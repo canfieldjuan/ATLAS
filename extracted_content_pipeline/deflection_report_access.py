@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 from typing import Any, Protocol
 
 from .deflection_delta import compute_deflection_delta
@@ -1008,6 +1009,7 @@ def _stored_report_model_section(value: Any) -> dict[str, Any] | None:
         required_data,
         data,
     )
+    data = _normalize_stored_suppressed_review_keys(section_id, data)
     if any(key not in data for key in required_data):
         return None
     return {
@@ -1041,6 +1043,57 @@ def _normalize_stored_action_section_limits(
         if key not in normalized_required:
             normalized_required.append(key)
     return normalized_required, normalized_data
+
+
+def _normalize_stored_suppressed_review_keys(
+    section_id: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    if section_id != "suppressed_repeat_review_queue":
+        return data
+    raw_items = data.get("items")
+    if not _is_sequence(raw_items):
+        return data
+
+    normalized_items: list[Any] = []
+    changed = False
+    for index, item in enumerate(raw_items, start=1):
+        if not isinstance(item, Mapping):
+            normalized_items.append(item)
+            continue
+        row = dict(item)
+        if not _clean(row.get("review_key")):
+            row["review_key"] = _stored_suppressed_repeat_review_key(row, index)
+            changed = True
+        normalized_items.append(row)
+
+    if not changed:
+        return data
+    normalized_data = dict(data)
+    normalized_data["items"] = normalized_items
+    return normalized_data
+
+
+def _stored_suppressed_repeat_review_key(
+    row: Mapping[str, Any],
+    index: int,
+) -> str:
+    identity = (
+        _clean(row.get("repeat_key"))
+        or _clean(row.get("cluster_id"))
+        or _identity_text(row.get("question"))
+    )
+    reason = _clean(row.get("suppression_reason")) or "insufficient_source_support"
+    parts = ["suppressed_repeat_review_queue", identity, reason]
+    if _clean(row.get("identity_basis")) == "insufficient_identity":
+        rank = _parse_int(row.get("rank")) or index
+        parts.append(f"row_{rank}")
+    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+    return f"review_{digest[:24]}"
+
+
+def _identity_text(value: Any) -> str:
+    return " ".join(_clean(value).casefold().split())
 
 
 def _list_record_from_row(row: Mapping[str, Any]) -> DeflectionReportListRecord:
