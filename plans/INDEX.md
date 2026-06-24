@@ -1138,6 +1138,7 @@
 - [PR-Security-CVE-Remediation-SLA](archive/PR-Security-CVE-Remediation-SLA.md) - lane: security/cve-remediation-sla | phase: Production hardening
 - [PR-Security-Disclosure-Policy](archive/PR-Security-Disclosure-Policy.md) - lane: security/hardening-1656 | phase: Production hardening
 - [PR-Security-Guardrail-CI](archive/PR-Security-Guardrail-CI.md) - lane: security/workflow | phase: Production hardening
+- [PR-Security-Labels-As-Code](archive/PR-Security-Labels-As-Code.md) - lane: security/labels-as-code | phase: Workflow/process
 - [PR-Semantic-Diff-Advisor-CI](archive/PR-Semantic-Diff-Advisor-CI.md) - lane: review-workflow | phase: workflow/process
 - [PR-Spark-Routing-Light-Enforcement](archive/PR-Spark-Routing-Light-Enforcement.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Spark-Subagent-Routing-Docs](archive/PR-Spark-Subagent-Routing-Docs.md) - lane: workflow/process | phase: Workflow/process
