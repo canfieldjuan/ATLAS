@@ -11,6 +11,41 @@ from fastapi.testclient import TestClient
 from atlas_brain import main
 
 
+def _paid_funnel_settings(
+    *,
+    stripe_secret_key: str = "sk_test_paid_deflection",
+    stripe_webhook_secret: str = "whsec_test_paid_deflection",
+    stripe_content_ops_deflection_report_amount_cents: int = 150000,
+    stripe_content_ops_deflection_report_price_id: str = "",
+    stripe_content_ops_deflection_report_allowed_amount_cents: str = "",
+    alerts_enabled: bool = True,
+    ntfy_enabled: bool = True,
+    ntfy_url: str = "https://ntfy.example",
+    ntfy_topic: str = "atlas-paid-funnel",
+):
+    return SimpleNamespace(
+        saas_auth=SimpleNamespace(
+            stripe_secret_key=stripe_secret_key,
+            stripe_webhook_secret=stripe_webhook_secret,
+            stripe_content_ops_deflection_report_amount_cents=(
+                stripe_content_ops_deflection_report_amount_cents
+            ),
+            stripe_content_ops_deflection_report_price_id=(
+                stripe_content_ops_deflection_report_price_id
+            ),
+            stripe_content_ops_deflection_report_allowed_amount_cents=(
+                stripe_content_ops_deflection_report_allowed_amount_cents
+            ),
+        ),
+        alerts=SimpleNamespace(
+            enabled=alerts_enabled,
+            ntfy_enabled=ntfy_enabled,
+            ntfy_url=ntfy_url,
+            ntfy_topic=ntfy_topic,
+        ),
+    )
+
+
 def test_security_txt_body_contains_required_fields():
     body = main._security_txt_body(
         now=datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc)
@@ -37,6 +72,87 @@ def test_security_txt_route_serves_plain_text_without_auth():
     assert "Policy: https://github.com/canfieldjuan/ATLAS/blob/main/SECURITY.md" in response.text
     assert "Preferred-Languages: en" in response.text
     assert "Expires:" in response.text
+
+
+def test_paid_funnel_alert_preflight_skips_when_stripe_secret_missing():
+    config = _paid_funnel_settings(stripe_secret_key="")
+
+    assert main._paid_funnel_stripe_deflection_configured(config) is False
+    assert main._paid_funnel_alert_channel_errors(config) == []
+
+
+def test_paid_funnel_alert_preflight_skips_when_deflection_price_disabled():
+    config = _paid_funnel_settings(
+        stripe_content_ops_deflection_report_amount_cents=0,
+        stripe_content_ops_deflection_report_price_id="",
+        stripe_content_ops_deflection_report_allowed_amount_cents="",
+        ntfy_enabled=False,
+        ntfy_url="",
+        ntfy_topic="",
+    )
+
+    assert main._paid_funnel_stripe_deflection_configured(config) is False
+    assert main._paid_funnel_alert_channel_errors(config) == []
+
+
+def test_paid_funnel_alert_preflight_requires_ntfy_when_log_only():
+    config = _paid_funnel_settings(ntfy_enabled=False)
+
+    errors = main._paid_funnel_alert_channel_errors(config)
+
+    assert main._paid_funnel_stripe_deflection_configured(config) is True
+    assert errors == [
+        "ATLAS_ALERTS_NTFY_ENABLED must be true when Stripe paid "
+        "deflection reports are configured"
+    ]
+
+
+def test_paid_funnel_alert_preflight_rejects_alerts_disabled():
+    config = _paid_funnel_settings(alerts_enabled=False)
+
+    errors = main._paid_funnel_alert_channel_errors(config)
+
+    assert errors == [
+        "ATLAS_ALERTS_ENABLED must be true when Stripe paid deflection "
+        "reports are configured"
+    ]
+
+
+def test_paid_funnel_alert_preflight_rejects_malformed_ntfy_channel():
+    config = _paid_funnel_settings(ntfy_url=" ", ntfy_topic="")
+
+    errors = main._paid_funnel_alert_channel_errors(config)
+
+    assert errors == [
+        "ATLAS_ALERTS_NTFY_URL must be set when Stripe paid deflection "
+        "reports are configured",
+        "ATLAS_ALERTS_NTFY_TOPIC must be set when Stripe paid deflection "
+        "reports are configured",
+    ]
+
+
+def test_paid_funnel_alert_preflight_allows_configured_ntfy_channel():
+    config = _paid_funnel_settings(
+        stripe_content_ops_deflection_report_amount_cents=0,
+        stripe_content_ops_deflection_report_price_id="price_paid_deflection",
+    )
+
+    assert main._paid_funnel_stripe_deflection_configured(config) is True
+    assert main._paid_funnel_alert_channel_errors(config) == []
+    main._enforce_paid_funnel_alert_channel(config)
+
+
+def test_paid_funnel_alert_preflight_raises_specific_startup_error():
+    config = _paid_funnel_settings(ntfy_enabled=False, ntfy_url="")
+
+    with pytest.raises(
+        RuntimeError,
+        match="requires a configured ntfy alert channel",
+    ) as exc:
+        main._enforce_paid_funnel_alert_channel(config)
+
+    assert "ATLAS_ALERTS_NTFY_ENABLED" in str(exc.value)
+    assert "ATLAS_ALERTS_NTFY_URL" in str(exc.value)
 
 
 def test_asr_autostart_allows_cpu_device():

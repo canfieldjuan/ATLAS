@@ -41,6 +41,81 @@ _SECURITY_POLICY_URL = "https://github.com/canfieldjuan/ATLAS/blob/main/SECURITY
 _SECURITY_TXT_MAX_AGE_DAYS = 180
 
 
+def _setting_text(config: object, name: str) -> str:
+    return str(getattr(config, name, "") or "").strip()
+
+
+def _setting_positive_int(config: object, name: str) -> int:
+    try:
+        return int(getattr(config, name, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _paid_funnel_stripe_deflection_configured(app_settings: object = settings) -> bool:
+    """Return whether Stripe can take money for paid deflection reports."""
+    saas_auth = getattr(app_settings, "saas_auth", None)
+    if saas_auth is None:
+        return False
+    if not _setting_text(saas_auth, "stripe_secret_key"):
+        return False
+    if not _setting_text(saas_auth, "stripe_webhook_secret"):
+        return False
+    if _setting_text(saas_auth, "stripe_content_ops_deflection_report_price_id"):
+        return True
+    if _setting_text(
+        saas_auth,
+        "stripe_content_ops_deflection_report_allowed_amount_cents",
+    ):
+        return True
+    return _setting_positive_int(
+        saas_auth,
+        "stripe_content_ops_deflection_report_amount_cents",
+    ) > 0
+
+
+def _paid_funnel_alert_channel_errors(app_settings: object = settings) -> list[str]:
+    """Return startup blockers for paid deflection alert delivery config."""
+    if not _paid_funnel_stripe_deflection_configured(app_settings):
+        return []
+
+    alerts = getattr(app_settings, "alerts", None)
+    if alerts is None:
+        return ["settings.alerts is missing"]
+
+    errors: list[str] = []
+    if not bool(getattr(alerts, "enabled", False)):
+        errors.append(
+            "ATLAS_ALERTS_ENABLED must be true when Stripe paid deflection "
+            "reports are configured"
+        )
+    if not bool(getattr(alerts, "ntfy_enabled", False)):
+        errors.append(
+            "ATLAS_ALERTS_NTFY_ENABLED must be true when Stripe paid "
+            "deflection reports are configured"
+        )
+    if not _setting_text(alerts, "ntfy_url"):
+        errors.append(
+            "ATLAS_ALERTS_NTFY_URL must be set when Stripe paid deflection "
+            "reports are configured"
+        )
+    if not _setting_text(alerts, "ntfy_topic"):
+        errors.append(
+            "ATLAS_ALERTS_NTFY_TOPIC must be set when Stripe paid deflection "
+            "reports are configured"
+        )
+    return errors
+
+
+def _enforce_paid_funnel_alert_channel(app_settings: object = settings) -> None:
+    errors = _paid_funnel_alert_channel_errors(app_settings)
+    if errors:
+        raise RuntimeError(
+            "Paid deflection funnel requires a configured ntfy alert channel: "
+            + "; ".join(errors)
+        )
+
+
 def _security_txt_body(*, now: datetime | None = None) -> str:
     resolved_now = now or datetime.now(timezone.utc)
     if resolved_now.tzinfo is None or resolved_now.utcoffset() is None:
@@ -168,6 +243,7 @@ async def lifespan(app: FastAPI):
     """
     # --- Startup ---
     logger.info("Atlas Brain starting up...")
+    _enforce_paid_funnel_alert_channel(settings)
 
     # Initialize database connection pool
     if db_settings.enabled:
