@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import evidenceExportHandler from "../api/content-ops/deflection/evidence-export.js";
-import reportHandler, { publicReportPayload } from "../api/content-ops/deflection/report.js";
+import reportHandler, {
+  publicHostedReportModel,
+  publicReportPayload,
+} from "../api/content-ops/deflection/report.js";
+import * as reportModelContract from "../api/content-ops/deflection/report-model-contract.js";
 import {
   atlasPath,
   fetchAtlasJson,
@@ -203,6 +207,249 @@ function withEnv(nextEnv, fn) {
         }
       }
     });
+}
+
+const HOSTED_SAFE_SCALAR_FIELDS = new Set([
+  "annualized_run_rate_support_cost",
+  "annualized_support_cost",
+  "answer",
+  "answer_evidence_status",
+  "answer_linkage",
+  "answer_status",
+  "assisted_contact_cost",
+  "backlog_limit",
+  "confidence",
+  "csat_present_count",
+  "customer_wording",
+  "default_limit",
+  "displayed_phrase_count",
+  "drafted_answer_count",
+  "estimated_support_cost",
+  "generated_question_count",
+  "guidance",
+  "limit",
+  "negative_csat_ticket_count",
+  "no_proven_answer_count",
+  "non_repeat_ticket_count",
+  "numeric_average",
+  "omitted_phrase_count",
+  "opportunity_score",
+  "outcome_diagnostic_ticket_count",
+  "outcome_risk_ticket_count",
+  "owner_lane",
+  "pdf_limit",
+  "priority_score",
+  "question",
+  "rank",
+  "recommended_action",
+  "reopened_ticket_count",
+  "repeat_ticket_count",
+  "resolution_evidence_scope",
+  "result_page_limit",
+  "source_count",
+  "source_proof",
+  "status",
+  "suppression_reason",
+  "suppression_reason_label",
+  "ticket_count",
+  "ticket_source_count",
+  "top_item_count",
+  "topic",
+  "total_item_count",
+  "total_phrase_count",
+  "weighted_frequency",
+]);
+
+const HOSTED_SAFE_SCALAR_ARRAY_FIELDS = new Set(["phrases", "priority_drivers", "steps"]);
+const HOSTED_SAFE_RECORD_FIELDS = new Set([
+  "reason_counts",
+  "source_date_window",
+  "status_counts",
+  "status_mix",
+]);
+const HOSTED_SAFE_OBJECT_ARRAY_FIELDS = Object.freeze({
+  term_mappings: Object.freeze([
+    "customer_term",
+    "documentation_term",
+    "suggestion",
+    "source_id_count",
+  ]),
+});
+const HOSTED_SAFE_OBJECT_CONTAINERS = new Set(["csat_signal", "support_cost_basis"]);
+const HOSTED_SAFE_ARRAY_CONTAINERS = new Set(["items", "rows"]);
+const HOSTED_SAFE_PRIVATE_MARKER = "hosted-safe-private-marker";
+
+function fieldConstToken(field) {
+  return String(field).toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function sectionConstPrefix(sectionId) {
+  return `DEFLECTION_REPORT_${fieldConstToken(sectionId)}`;
+}
+
+function generatedFields(name) {
+  const fields = reportModelContract[name];
+  return Array.isArray(fields) ? fields : [];
+}
+
+function scalarHostedValue(field, variant) {
+  if (
+    field === "rank" ||
+    field === "limit" ||
+    field.endsWith("_count") ||
+    field.endsWith("_cost") ||
+    field.endsWith("_frequency") ||
+    field.endsWith("_limit") ||
+    field.endsWith("_score") ||
+    field === "numeric_average"
+  ) {
+    return 7 + variant;
+  }
+  return `${field} value ${variant}`;
+}
+
+function hostedLeafValue(field, variant) {
+  if (HOSTED_SAFE_SCALAR_FIELDS.has(field)) return scalarHostedValue(field, variant);
+  if (HOSTED_SAFE_SCALAR_ARRAY_FIELDS.has(field)) {
+    return [`${field} value ${variant}`, `${field} follow-up ${variant}`];
+  }
+  if (field === "source_date_window") {
+    return {
+      source_date_start: "2026-06-01",
+      source_date_end: "2026-06-30",
+      source_window_days: 30 + variant,
+    };
+  }
+  if (HOSTED_SAFE_RECORD_FIELDS.has(field)) {
+    return { solved: 3 + variant, reopened: 1 + variant };
+  }
+  if (HOSTED_SAFE_OBJECT_ARRAY_FIELDS[field]) {
+    return [
+      {
+        customer_term: `billing reset ${variant}`,
+        documentation_term: `billing access reset ${variant}`,
+        suggestion: `Use customer wording in the help-center title ${variant}.`,
+        source_id_count: 2 + variant,
+        source_ids: [HOSTED_SAFE_PRIVATE_MARKER],
+      },
+      {
+        customer_term: `refund receipt ${variant}`,
+        documentation_term: `refund confirmation ${variant}`,
+        suggestion: `Mirror receipt language in the billing article ${variant}.`,
+        source_id_count: 4 + variant,
+        source_ids: [HOSTED_SAFE_PRIVATE_MARKER],
+      },
+    ];
+  }
+  return { unclassified_hosted_safe_shape: field };
+}
+
+function buildHostedRecord(fields, prefix, variant = 1) {
+  const record = {};
+  for (const field of fields) {
+    const nestedPrefix = `${prefix}_${fieldConstToken(field)}`;
+    const nestedFields = generatedFields(`${nestedPrefix}_HOSTED_CONSUMER_SAFE_FIELDS`);
+    if (nestedFields.length > 0) {
+      if (HOSTED_SAFE_ARRAY_CONTAINERS.has(field)) {
+        record[field] = [
+          buildHostedRecord(nestedFields, nestedPrefix, 1),
+          buildHostedRecord(nestedFields, nestedPrefix, 2),
+        ];
+      } else if (HOSTED_SAFE_OBJECT_CONTAINERS.has(field)) {
+        record[field] = buildHostedRecord(nestedFields, nestedPrefix, variant);
+      } else {
+        record[field] = { unclassified_hosted_safe_container: field };
+      }
+      continue;
+    }
+    record[field] = hostedLeafValue(field, variant);
+  }
+  return record;
+}
+
+function buildCompleteHostedReportModelFixture() {
+  return {
+    schema_version: reportModelContract.DEFLECTION_REPORT_MODEL_SCHEMA_VERSION,
+    title: "Complete hosted-safe paid report",
+    summary: {
+      generated: 99,
+      source_ids: [HOSTED_SAFE_PRIVATE_MARKER],
+      private_note: HOSTED_SAFE_PRIVATE_MARKER,
+    },
+    sections: reportModelContract.DEFLECTION_REPORT_SECTION_IDS.map((sectionId, index) => {
+      const prefix = sectionConstPrefix(sectionId);
+      return {
+        id: sectionId,
+        title: `${sectionId} section`,
+        priority: index + 1,
+        surfaces: ["result_page", "email_summary"],
+        default_limit: 5 + index,
+        required_data: ["fixture"],
+        snapshot_safe_fields: [],
+        data: buildHostedRecord(
+          generatedFields(`${prefix}_HOSTED_CONSUMER_SAFE_FIELDS`),
+          prefix,
+        ),
+      };
+    }),
+  };
+}
+
+function assertObjectArrayFieldSurvives(projectedValue, expectedValue, fields, path) {
+  assert.equal(Array.isArray(projectedValue), true, `${path} must stay an array`);
+  assert.equal(projectedValue.length, expectedValue.length, `${path} length`);
+  for (const [index, expectedItem] of expectedValue.entries()) {
+    const projectedItem = projectedValue[index];
+    for (const field of fields) {
+      assert.deepEqual(projectedItem[field], expectedItem[field], `${path}.${index}.${field}`);
+    }
+    assert.equal("source_ids" in projectedItem, false, `${path}.${index}.source_ids must stay private`);
+  }
+}
+
+function assertHostedFieldsSurvive(projected, expected, fields, prefix, path) {
+  for (const field of fields) {
+    const nestedPrefix = `${prefix}_${fieldConstToken(field)}`;
+    const nestedFields = generatedFields(`${nestedPrefix}_HOSTED_CONSUMER_SAFE_FIELDS`);
+    assert.equal(Object.prototype.hasOwnProperty.call(projected, field), true, `${path}.${field}`);
+
+    if (nestedFields.length > 0) {
+      if (HOSTED_SAFE_ARRAY_CONTAINERS.has(field)) {
+        assert.equal(Array.isArray(projected[field]), true, `${path}.${field} must stay an array`);
+        assert.equal(projected[field].length, expected[field].length, `${path}.${field} length`);
+        for (const [index, expectedItem] of expected[field].entries()) {
+          assertHostedFieldsSurvive(
+            projected[field][index],
+            expectedItem,
+            nestedFields,
+            nestedPrefix,
+            `${path}.${field}.${index}`,
+          );
+        }
+      } else {
+        assertHostedFieldsSurvive(
+          projected[field],
+          expected[field],
+          nestedFields,
+          nestedPrefix,
+          `${path}.${field}`,
+        );
+      }
+      continue;
+    }
+
+    if (HOSTED_SAFE_OBJECT_ARRAY_FIELDS[field]) {
+      assertObjectArrayFieldSurvives(
+        projected[field],
+        expected[field],
+        HOSTED_SAFE_OBJECT_ARRAY_FIELDS[field],
+        `${path}.${field}`,
+      );
+      continue;
+    }
+
+    assert.deepEqual(projected[field], expected[field], `${path}.${field}`);
+  }
 }
 
 await test("proxy rejects account mismatch before calling ATLAS", async () => {
@@ -431,6 +678,38 @@ await test("public report API returns sanitized locked envelope and never the to
     assert.equal(payload.artifact_status, "locked");
     assert.equal(JSON.stringify(payload).includes(ENV.ATLAS_B2B_JWT), false);
   });
+});
+
+await test("public hosted report projection preserves every generated hosted-safe field", () => {
+  const reportModel = buildCompleteHostedReportModelFixture();
+  const projected = publicHostedReportModel(reportModel);
+
+  assert.equal(projected.schema_version, reportModel.schema_version);
+  assert.equal(projected.title, reportModel.title);
+  assert.deepEqual(projected.summary, {});
+  assert.equal(projected.sections.length, reportModel.sections.length);
+
+  const projectedById = new Map(projected.sections.map((section) => [section.id, section]));
+  for (const expectedSection of reportModel.sections) {
+    const projectedSection = projectedById.get(expectedSection.id);
+    assert.ok(projectedSection, `${expectedSection.id} section`);
+    assert.equal(projectedSection.title, expectedSection.title);
+    assert.equal(projectedSection.priority, expectedSection.priority);
+    assert.equal(projectedSection.default_limit, expectedSection.default_limit);
+    assert.deepEqual(projectedSection.surfaces, expectedSection.surfaces);
+    assert.deepEqual(projectedSection.required_data, expectedSection.required_data);
+    assert.deepEqual(projectedSection.snapshot_safe_fields, expectedSection.snapshot_safe_fields);
+    const prefix = sectionConstPrefix(expectedSection.id);
+    assertHostedFieldsSurvive(
+      projectedSection.data,
+      expectedSection.data,
+      generatedFields(`${prefix}_HOSTED_CONSUMER_SAFE_FIELDS`),
+      prefix,
+      expectedSection.id,
+    );
+  }
+
+  assert.equal(JSON.stringify(projected).includes(HOSTED_SAFE_PRIVATE_MARKER), false);
 });
 
 await test("public report API returns only hosted-safe paid report model after unlock", async () => {
