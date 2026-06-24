@@ -1,5 +1,11 @@
 import { loadDeflectionReport } from "./atlas-report.js";
 import { CHECKOUT_SOURCE, resultPath } from "./checkout.js";
+import {
+  DEFLECTION_REPORT_COMPLETE_EVIDENCE_FIELDS,
+  DEFLECTION_REPORT_SECTION_IDS,
+  DEFLECTION_REPORT_SEO_TARGETS_FIELDS,
+  DEFLECTION_REPORT_SUPPORT_TAX_FIELDS,
+} from "./report-model-contract.js";
 
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{5,160}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -15,6 +21,48 @@ const RESULT_PAGE_QA_SURFACE_CAPS = Object.freeze({
   question_details: PAID_DETAIL_LIMIT * 2,
   seo_targets: PAID_PHRASE_LIMIT,
 });
+const DEFLECTION_REPORT_SECTION_ID_SET = new Set(DEFLECTION_REPORT_SECTION_IDS);
+const REQUIRED_REPORT_MODEL_SECTION_IDS = Object.freeze([
+  "support_tax",
+  "ranked_questions",
+  "question_details",
+  "seo_targets",
+  "complete_evidence",
+]);
+const REQUIRED_SUPPORT_TAX_FIELDS = Object.freeze([
+  "repeat_ticket_count",
+  "generated_question_count",
+  "drafted_answer_count",
+  "no_proven_answer_count",
+  "ticket_source_count",
+  "estimated_support_cost",
+]);
+const REQUIRED_COMPLETE_EVIDENCE_FIELDS = Object.freeze([
+  "source_id_count",
+  "evidence_row_count",
+]);
+const REQUIRED_SEO_TARGETS_FIELDS = Object.freeze(["total_phrase_count"]);
+
+function assertGeneratedMembers(label, generated, required) {
+  const generatedSet = new Set(generated);
+  const missing = required.filter((field) => !generatedSet.has(field));
+  if (missing.length > 0) {
+    throw new Error(`${label} contract missing generated member(s): ${missing.join(", ")}`);
+  }
+}
+
+assertGeneratedMembers(
+  "report model section",
+  DEFLECTION_REPORT_SECTION_IDS,
+  REQUIRED_REPORT_MODEL_SECTION_IDS,
+);
+assertGeneratedMembers("support_tax", DEFLECTION_REPORT_SUPPORT_TAX_FIELDS, REQUIRED_SUPPORT_TAX_FIELDS);
+assertGeneratedMembers(
+  "complete_evidence",
+  DEFLECTION_REPORT_COMPLETE_EVIDENCE_FIELDS,
+  REQUIRED_COMPLETE_EVIDENCE_FIELDS,
+);
+assertGeneratedMembers("seo_targets", DEFLECTION_REPORT_SEO_TARGETS_FIELDS, REQUIRED_SEO_TARGETS_FIELDS);
 
 function clean(value) {
   if (Array.isArray(value)) return clean(value[0]);
@@ -85,6 +133,9 @@ function isObjectRecord(value) {
 }
 
 function reportModelSectionData(report, sectionId) {
+  if (!DEFLECTION_REPORT_SECTION_ID_SET.has(sectionId)) {
+    throw new Error(`unknown report-model section requested: ${sectionId}`);
+  }
   const model = isObjectRecord(report?.artifact?.report_model)
     ? report.artifact.report_model
     : null;

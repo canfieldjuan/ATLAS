@@ -1,9 +1,13 @@
+import json
 import runpy
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "generate_deflection_frontend_contract_types.py"
+DEFLECTION_PRODUCT_SURFACE_MANIFEST = (
+    ROOT / "tests" / "maturity_sweep" / "deflection_product_surface_manifest.json"
+)
 
 
 MOD = runpy.run_path(str(SCRIPT))
@@ -79,13 +83,52 @@ def test_deflection_report_model_types_include_backend_projection_fields() -> No
     assert "any" not in rendered
 
 
+def test_deflection_report_model_api_contract_includes_backend_projection_fields() -> None:
+    rendered = MOD["render_report_model_api_contract"]()
+
+    assert 'DEFLECTION_REPORT_MODEL_SCHEMA_VERSION = "deflection.v1"' in rendered
+    assert (
+        'DEFLECTION_REPORT_SECTION_IDS = Object.freeze(["support_tax", "source_file", '
+        '"seo_targets", "ranked_questions", "priority_fix_queue"'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_CONDITIONAL_SECTION_IDS = Object.freeze(["source_file", '
+        '"outcome_diagnostics"])'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_FIELDS = Object.freeze(["rank", '
+        '"repeat_key", "cluster_id"'
+    ) in rendered
+    assert '"top_evidence"' in rendered
+    assert (
+        'DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_FIELDS = Object.freeze(["rank", '
+        '"question", "customer_wording"'
+    ) in rendered
+    assert '"source_ids"' in rendered
+    assert '"evidence_quotes"' in rendered
+    assert "as const" not in rendered
+
+
+def test_generated_deflection_api_contracts_are_enrolled_in_product_surface_manifest() -> None:
+    manifest = json.loads(DEFLECTION_PRODUCT_SURFACE_MANIFEST.read_text(encoding="utf-8"))
+    manifest_files = set(manifest["files"])
+
+    assert str(MOD["DEFAULT_API_OUTPUT"].relative_to(ROOT)) in manifest_files
+    assert str(MOD["DEFAULT_REPORT_MODEL_API_OUTPUT"].relative_to(ROOT)) in manifest_files
+
+
 def test_deflection_frontend_contract_types_check_rejects_stale_output(tmp_path) -> None:
     output = tmp_path / "deflectionSnapshot.ts"
     api_output = tmp_path / "snapshot-contract.js"
     report_model_output = tmp_path / "deflectionReportModel.ts"
+    report_model_api_output = tmp_path / "report-model-contract.js"
     output.write_text("// stale\n", encoding="utf-8")
     api_output.write_text(MOD["render_api_contract"](), encoding="utf-8")
     report_model_output.write_text(MOD["render_report_model_types"](), encoding="utf-8")
+    report_model_api_output.write_text(
+        MOD["render_report_model_api_contract"](),
+        encoding="utf-8",
+    )
 
     assert (
         MOD["main"](
@@ -96,6 +139,8 @@ def test_deflection_frontend_contract_types_check_rejects_stale_output(tmp_path)
                 str(api_output),
                 "--report-model-output",
                 str(report_model_output),
+                "--report-model-api-output",
+                str(report_model_api_output),
                 "--check",
             ]
         )
@@ -107,9 +152,14 @@ def test_deflection_api_contract_metadata_check_rejects_stale_output(tmp_path) -
     output = tmp_path / "deflectionSnapshot.ts"
     api_output = tmp_path / "snapshot-contract.js"
     report_model_output = tmp_path / "deflectionReportModel.ts"
+    report_model_api_output = tmp_path / "report-model-contract.js"
     output.write_text(MOD["render_types"](), encoding="utf-8")
     api_output.write_text("// stale\n", encoding="utf-8")
     report_model_output.write_text(MOD["render_report_model_types"](), encoding="utf-8")
+    report_model_api_output.write_text(
+        MOD["render_report_model_api_contract"](),
+        encoding="utf-8",
+    )
 
     assert (
         MOD["main"](
@@ -120,6 +170,8 @@ def test_deflection_api_contract_metadata_check_rejects_stale_output(tmp_path) -
                 str(api_output),
                 "--report-model-output",
                 str(report_model_output),
+                "--report-model-api-output",
+                str(report_model_api_output),
                 "--check",
             ]
         )
@@ -131,9 +183,14 @@ def test_deflection_report_model_types_check_rejects_stale_output(tmp_path) -> N
     output = tmp_path / "deflectionSnapshot.ts"
     api_output = tmp_path / "snapshot-contract.js"
     report_model_output = tmp_path / "deflectionReportModel.ts"
+    report_model_api_output = tmp_path / "report-model-contract.js"
     output.write_text(MOD["render_types"](), encoding="utf-8")
     api_output.write_text(MOD["render_api_contract"](), encoding="utf-8")
     report_model_output.write_text("// stale\n", encoding="utf-8")
+    report_model_api_output.write_text(
+        MOD["render_report_model_api_contract"](),
+        encoding="utf-8",
+    )
 
     assert (
         MOD["main"](
@@ -144,6 +201,36 @@ def test_deflection_report_model_types_check_rejects_stale_output(tmp_path) -> N
                 str(api_output),
                 "--report-model-output",
                 str(report_model_output),
+                "--report-model-api-output",
+                str(report_model_api_output),
+                "--check",
+            ]
+        )
+        == 1
+    )
+
+
+def test_deflection_report_model_api_contract_check_rejects_stale_output(tmp_path) -> None:
+    output = tmp_path / "deflectionSnapshot.ts"
+    api_output = tmp_path / "snapshot-contract.js"
+    report_model_output = tmp_path / "deflectionReportModel.ts"
+    report_model_api_output = tmp_path / "report-model-contract.js"
+    output.write_text(MOD["render_types"](), encoding="utf-8")
+    api_output.write_text(MOD["render_api_contract"](), encoding="utf-8")
+    report_model_output.write_text(MOD["render_report_model_types"](), encoding="utf-8")
+    report_model_api_output.write_text("// stale\n", encoding="utf-8")
+
+    assert (
+        MOD["main"](
+            [
+                "--output",
+                str(output),
+                "--api-output",
+                str(api_output),
+                "--report-model-output",
+                str(report_model_output),
+                "--report-model-api-output",
+                str(report_model_api_output),
                 "--check",
             ]
         )
@@ -155,6 +242,7 @@ def test_deflection_frontend_contract_types_check_accepts_generated_output(tmp_p
     output = tmp_path / "deflectionSnapshot.ts"
     api_output = tmp_path / "snapshot-contract.js"
     report_model_output = tmp_path / "deflectionReportModel.ts"
+    report_model_api_output = tmp_path / "report-model-contract.js"
 
     common_args = [
         "--output",
@@ -163,6 +251,8 @@ def test_deflection_frontend_contract_types_check_accepts_generated_output(tmp_p
         str(api_output),
         "--report-model-output",
         str(report_model_output),
+        "--report-model-api-output",
+        str(report_model_api_output),
     ]
 
     assert MOD["main"](common_args) == 0

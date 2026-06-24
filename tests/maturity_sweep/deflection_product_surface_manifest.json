@@ -36,6 +36,7 @@
     "portfolio-ui/api/content-ops/deflection/evidence-export.js",
     "portfolio-ui/api/content-ops/deflection/inspect.js",
     "portfolio-ui/api/content-ops/deflection/report.js",
+    "portfolio-ui/api/content-ops/deflection/report-model-contract.js",
     "portfolio-ui/api/content-ops/deflection/result-page.js",
     "portfolio-ui/api/content-ops/deflection/snapshot-contract.js",
     "portfolio-ui/api/content-ops/deflection/submit.js",
