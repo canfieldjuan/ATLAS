@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from .api import router as api_router
 from .config import settings
+from .logging_config import configure_logging
 from .services import llm_registry
 from .storage import db_settings
 from .storage.database import init_database, close_database, get_db_pool
@@ -31,10 +32,7 @@ from .storage.database import init_database, close_database, get_db_pool
 # Voice pipeline managed by voice.launcher module
 
 # Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.log_level),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+configure_logging(level=settings.log_level, log_format=settings.log_format)
 logger = logging.getLogger("atlas.main")
 
 _SECURITY_CONTACT_URL = "https://github.com/canfieldjuan/ATLAS/security/advisories/new"
@@ -305,7 +303,7 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Database migration check failed: %s", e)
         except Exception as e:
-            logger.error("Failed to initialize database: %s", e)
+            logger.error("Failed to initialize database: %s", e, exc_info=True)
             # Continue without database - service can still function
             # but conversation persistence will be unavailable
 
@@ -409,7 +407,7 @@ async def lifespan(app: FastAPI):
             llm_registry.activate(backend, **kwargs)
             logger.info("LLM loaded successfully")
         except Exception as e:
-            logger.error("Failed to load default LLM: %s", e)
+            logger.error("Failed to load default LLM: %s", e, exc_info=True)
 
     # Model swap startup check: if model_swap is enabled and it is currently daytime
     # (7 AM - midnight), ensure the night model is not occupying VRAM.
@@ -487,7 +485,7 @@ async def lifespan(app: FastAPI):
             await event_consumer.start()
             logger.info("Reasoning event consumer started")
         except Exception as e:
-            logger.error("Reasoning subsystem failed to start (non-fatal): %s", e)
+            logger.error("Reasoning subsystem failed to start (non-fatal): %s", e, exc_info=True)
             event_bus = None
             event_consumer = None
 
@@ -506,7 +504,7 @@ async def lifespan(app: FastAPI):
         device_ids = register_test_devices()
         logger.info("Registered test devices: %s", device_ids)
     except Exception as e:
-        logger.error("Failed to register test devices: %s", e)
+        logger.error("Failed to register test devices: %s", e, exc_info=True)
 
     # Initialize Home Assistant backend if enabled
     try:
@@ -515,7 +513,7 @@ async def lifespan(app: FastAPI):
         if ha_devices:
             logger.info("Registered Home Assistant devices: %s", ha_devices)
     except Exception as e:
-        logger.error("Failed to initialize Home Assistant: %s", e)
+        logger.error("Failed to initialize Home Assistant: %s", e, exc_info=True)
 
     # Initialize device discovery service
     if settings.discovery.enabled:
@@ -545,7 +543,7 @@ async def lifespan(app: FastAPI):
                 await service.start_periodic_scan()
 
         except Exception as e:
-            logger.error("Failed to initialize discovery service: %s", e)
+            logger.error("Failed to initialize discovery service: %s", e, exc_info=True)
 
     # Initialize centralized alert system
     alert_manager = None
@@ -571,7 +569,7 @@ async def lifespan(app: FastAPI):
 
             logger.info("Centralized alerts enabled with %d rules", len(alert_manager.list_rules()))
         except Exception as e:
-            logger.error("Failed to initialize alert system: %s", e)
+            logger.error("Failed to initialize alert system: %s", e, exc_info=True)
 
     # Initialize reminder service
     reminder_service = None
@@ -592,7 +590,7 @@ async def lifespan(app: FastAPI):
             reminder_service.set_alert_callback(reminder_alert_callback)
             logger.info("Reminder service initialized with %d pending", reminder_service.pending_count)
         except Exception as e:
-            logger.error("Failed to initialize reminder service: %s", e)
+            logger.error("Failed to initialize reminder service: %s", e, exc_info=True)
 
     # Initialize autonomous scheduler
     autonomous_scheduler = None
@@ -605,7 +603,7 @@ async def lifespan(app: FastAPI):
                 autonomous_scheduler.scheduled_count,
             )
         except Exception as e:
-            logger.error("Failed to initialize autonomous scheduler: %s", e)
+            logger.error("Failed to initialize autonomous scheduler: %s", e, exc_info=True)
 
 
     # Start vision event subscriber if MQTT is enabled
@@ -621,7 +619,7 @@ async def lifespan(app: FastAPI):
                 logger.warning("Failed to start vision subscriber")
                 vision_subscriber = None
         except Exception as e:
-            logger.error("Failed to initialize vision subscriber: %s", e)
+            logger.error("Failed to initialize vision subscriber: %s", e, exc_info=True)
             vision_subscriber = None
 
     # NOTE: Presence service moved to atlas_vision
@@ -642,7 +640,7 @@ async def lifespan(app: FastAPI):
             else:
                 logger.warning("Communications service failed to initialize")
     except Exception as e:
-        logger.error("Failed to initialize communications service: %s", e)
+        logger.error("Failed to initialize communications service: %s", e, exc_info=True)
 
     # Verify calendar credentials on startup
     if settings.tools.calendar_enabled:
@@ -653,7 +651,7 @@ async def lifespan(app: FastAPI):
             else:
                 logger.warning("Calendar running in degraded mode -- credentials invalid")
         except Exception as e:
-            logger.error("Calendar startup check failed: %s", e)
+            logger.error("Calendar startup check failed: %s", e, exc_info=True)
 
     # Start MCP client (connects to CRM, Email, Calendar, Twilio servers)
     mcp_provider = None
@@ -663,7 +661,7 @@ async def lifespan(app: FastAPI):
             mcp_provider = MCPToolProvider()
             await mcp_provider.start()
         except Exception as e:
-            logger.error("Failed to start MCP client: %s", e)
+            logger.error("Failed to start MCP client: %s", e, exc_info=True)
 
     # Warm vendor registry cache for B2B vendor name resolution
     try:
@@ -690,7 +688,7 @@ async def lifespan(app: FastAPI):
         except ImportError as e:
             logger.warning("Voice pipeline not available: %s", e)
         except Exception as e:
-            logger.error("Failed to start voice pipeline: %s", e)
+            logger.error("Failed to start voice pipeline: %s", e, exc_info=True)
 
     # NOTE: Webcam and RTSP detection moved to atlas_vision service
     # Detection events are received via MQTT subscriber (vision/subscriber.py)
@@ -706,7 +704,7 @@ async def lifespan(app: FastAPI):
             enabled=settings.ftl_tracing.enabled,
         )
     except Exception as e:
-        logger.error("Failed to initialize FTL tracing: %s", e)
+        logger.error("Failed to initialize FTL tracing: %s", e, exc_info=True)
 
     logger.info("Atlas Brain startup complete")
 
@@ -717,7 +715,7 @@ async def lifespan(app: FastAPI):
         register_broadcast_fn(_broadcast)
         logger.info("System event broadcaster wired to WebSocket")
     except Exception as e:
-        logger.error("Failed to register system event broadcaster: %s", e)
+        logger.error("Failed to register system event broadcaster: %s", e, exc_info=True)
 
     # Register alert -> UI system feed callback
     if alert_manager is not None:
@@ -730,7 +728,7 @@ async def lifespan(app: FastAPI):
             alert_manager.register_callback(_alert_ui_callback)
             logger.debug("Alert UI feed callback registered")
         except Exception as e:
-            logger.error("Failed to register alert UI callback: %s", e)
+            logger.error("Failed to register alert UI callback: %s", e, exc_info=True)
 
     yield  # Application runs here
 
@@ -745,7 +743,7 @@ async def lifespan(app: FastAPI):
             await vision_subscriber.stop()
             logger.info("Vision subscriber stopped")
         except Exception as e:
-            logger.error("Error stopping vision subscriber: %s", e)
+            logger.error("Error stopping vision subscriber: %s", e, exc_info=True)
 
     # Stop voice pipeline
     if settings.voice.enabled:
@@ -754,7 +752,7 @@ async def lifespan(app: FastAPI):
             stop_voice_pipeline()
             logger.info("Voice pipeline stopped")
         except Exception as e:
-            logger.error("Error stopping voice pipeline: %s", e)
+            logger.error("Error stopping voice pipeline: %s", e, exc_info=True)
 
     # Stop ASR server subprocess
     if asr_process and asr_process.poll() is None:
@@ -774,7 +772,7 @@ async def lifespan(app: FastAPI):
             await shutdown_discovery()
             logger.info("Discovery service shutdown complete")
         except Exception as e:
-            logger.error("Error shutting down discovery service: %s", e)
+            logger.error("Error shutting down discovery service: %s", e, exc_info=True)
 
     # Shutdown reasoning event consumer + bus
     if event_consumer:
@@ -782,13 +780,13 @@ async def lifespan(app: FastAPI):
             await event_consumer.stop()
             logger.info("Reasoning event consumer stopped")
         except Exception as e:
-            logger.error("Error stopping reasoning event consumer: %s", e)
+            logger.error("Error stopping reasoning event consumer: %s", e, exc_info=True)
     if event_bus:
         try:
             await event_bus.stop()
             logger.info("Reasoning event bus stopped")
         except Exception as e:
-            logger.error("Error stopping reasoning event bus: %s", e)
+            logger.error("Error stopping reasoning event bus: %s", e, exc_info=True)
 
     # Shutdown autonomous scheduler
     if autonomous_scheduler:
@@ -797,14 +795,14 @@ async def lifespan(app: FastAPI):
             await shutdown_autonomous()
             logger.info("Autonomous scheduler shutdown complete")
         except Exception as e:
-            logger.error("Error shutting down autonomous scheduler: %s", e)
+            logger.error("Error shutting down autonomous scheduler: %s", e, exc_info=True)
 
     # Shutdown MCP client
     if mcp_provider:
         try:
             await mcp_provider.shutdown()
         except Exception as e:
-            logger.error("Error shutting down MCP client: %s", e)
+            logger.error("Error shutting down MCP client: %s", e, exc_info=True)
 
     # Shutdown reminder service
     if reminder_service:
@@ -813,14 +811,14 @@ async def lifespan(app: FastAPI):
             await shutdown_reminder_service()
             logger.info("Reminder service shutdown complete")
         except Exception as e:
-            logger.error("Error shutting down reminder service: %s", e)
+            logger.error("Error shutting down reminder service: %s", e, exc_info=True)
 
     # Disconnect Home Assistant backend
     try:
         from .capabilities.homeassistant import shutdown_homeassistant
         await shutdown_homeassistant()
     except Exception as e:
-        logger.error("Error shutting down Home Assistant: %s", e)
+        logger.error("Error shutting down Home Assistant: %s", e, exc_info=True)
 
     # Shutdown communications service
     if comms_service:
@@ -829,14 +827,14 @@ async def lifespan(app: FastAPI):
             await shutdown_comms_service()
             logger.info("Communications service shutdown complete")
         except Exception as e:
-            logger.error("Error shutting down communications: %s", e)
+            logger.error("Error shutting down communications: %s", e, exc_info=True)
 
     # Shutdown stealth browser (Playwright)
     try:
         from .services.scraping.browser import shutdown_stealth_browser
         await shutdown_stealth_browser()
     except Exception as e:
-        logger.error("Error shutting down stealth browser: %s", e)
+        logger.error("Error shutting down stealth browser: %s", e, exc_info=True)
 
     # Close calendar provider httpx client
     try:
@@ -844,7 +842,7 @@ async def lifespan(app: FastAPI):
         if _cal_provider is not None and hasattr(_cal_provider, 'aclose'):
             await _cal_provider.aclose()
     except Exception as e:
-        logger.error("Error closing calendar provider: %s", e)
+        logger.error("Error closing calendar provider: %s", e, exc_info=True)
 
     # Close database connection pool
     if db_settings.enabled:
@@ -852,7 +850,7 @@ async def lifespan(app: FastAPI):
             await close_database()
             logger.info("Database connection pool closed")
         except Exception as e:
-            logger.error("Error closing database: %s", e)
+            logger.error("Error closing database: %s", e, exc_info=True)
 
     # Unload triage LLM singleton (Anthropic Haiku)
     from .services.llm_router import shutdown_triage_llm
