@@ -96,6 +96,7 @@ type DeflectionReportSection = {
     | "drafted_resolutions"
     | "already_covered_still_recurring"
     | "backlog_table"
+    | "suppressed_repeat_review_queue"
     | "outcome_diagnostics"
     | "question_details"
     | "complete_evidence"
@@ -275,6 +276,12 @@ The action-oriented paid sections are a work queue, not a full ticket archive:
   signals suggest discoverability or answer-quality work.
 - `backlog_table` is the broader bounded paid backlog; complete source evidence
   remains in `evidence_export`.
+- `suppressed_repeat_review_queue` is the paid audit queue for low-confidence
+  rows that stayed out of repeat accounting. Each item carries
+  `suppression_reason` and `suppression_reason_label`; supported reason codes
+  are `missing_question`, `too_low_volume`, `insufficient_source_support`, and
+  `low_confidence_cluster`. This queue is ticket-derived only and does not mean
+  the question is already answered in a published help center.
 
 The paid artifact also includes a complete evidence export:
 
