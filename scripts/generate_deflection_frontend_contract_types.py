@@ -78,6 +78,7 @@ TYPE_BY_FIELD = {
     "repeat_ticket_count": "number",
     "repeat_key": "string",
     "representative_phrasing": "string",
+    "review_key": "string",
     "resolution_evidence_scope": "string",
     "result_page_limit": "number",
     "source": "string",
