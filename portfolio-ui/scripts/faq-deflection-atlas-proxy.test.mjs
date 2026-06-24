@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import evidenceExportHandler from "../api/content-ops/deflection/evidence-export.js";
-import reportHandler from "../api/content-ops/deflection/report.js";
+import reportHandler, { publicReportPayload } from "../api/content-ops/deflection/report.js";
 import {
   atlasPath,
   fetchAtlasJson,
@@ -431,6 +431,185 @@ await test("public report API returns sanitized locked envelope and never the to
     assert.equal(payload.artifact_status, "locked");
     assert.equal(JSON.stringify(payload).includes(ENV.ATLAS_B2B_JWT), false);
   });
+});
+
+await test("public report API returns only hosted-safe paid report model after unlock", async () => {
+  const paidArtifact = {
+    markdown: "# raw markdown must not reach browser JSON",
+    faq_result: {
+      items: [
+        {
+          question: "Raw item question",
+          representative_phrasing: "private representative phrase",
+          recommended_title: "private title",
+          top_evidence: [
+            {
+              source_id: "zendesk:raw-source",
+              evidence_quote: "private raw evidence",
+            },
+          ],
+        },
+      ],
+    },
+    evidence_export: EVIDENCE_EXPORT,
+    report_model: {
+      schema_version: "deflection.v1",
+      title: "Paid deflection report",
+      summary: {
+        generated: 1,
+        raw_internal_note: { source_ids: ["ticket-hidden"] },
+      },
+      sections: [
+        {
+          id: "question_details",
+          title: "Question details",
+          priority: 10,
+          surfaces: ["result_page"],
+          default_limit: 5,
+          required_data: ["rows"],
+          snapshot_safe_fields: [],
+          data: {
+            rows: [
+              {
+                rank: 1,
+                question: "How do I reset billing access?",
+                customer_wording: "billing reset access",
+                topic: "Billing",
+                ticket_count: 12,
+                weighted_frequency: 12,
+                source_count: 2,
+                estimated_support_cost: 162,
+                answer_status: "resolution_evidence",
+                answer_evidence_status: "resolution_evidence",
+                resolution_evidence_scope: "uploaded_ticket_reply",
+                answer_linkage: "publishable_answer",
+                answer: "Open Billing > Users.",
+                steps: ["Open Billing.", "Choose Users."],
+                term_mappings: [
+                  {
+                    customer_term: "billing reset",
+                    source_ids: ["term-source-hidden"],
+                  },
+                ],
+                source_ids: ["ticket-hidden"],
+                evidence_quotes: ["private quote"],
+                outcome_diagnostics: { source_ids: ["diagnostic-hidden"] },
+              },
+            ],
+          },
+        },
+        {
+          id: "priority_fix_queue",
+          title: "Priority fix queue",
+          priority: 20,
+          surfaces: ["result_page"],
+          default_limit: 3,
+          required_data: ["items"],
+          snapshot_safe_fields: [],
+          data: {
+            items: [
+              {
+                rank: 1,
+                question: "How do I reset billing access?",
+                status: "Needs answer",
+                owner_lane: "docs",
+                confidence: "high",
+                recommended_action: "Draft help article",
+                ticket_count: 12,
+                estimated_support_cost: 162,
+                priority_score: 91,
+                priority_drivers: ["repeat volume"],
+                csat_signal: {
+                  status: "negative",
+                  csat_present_count: 3,
+                  negative_csat_ticket_count: 2,
+                  numeric_average: 2.5,
+                  source_ids: ["csat-hidden"],
+                },
+                repeat_key: "repeat-hidden",
+                cluster_id: "cluster-hidden",
+                representative_phrasing: "private representative phrase",
+                recommended_title: "private title",
+                top_evidence: [
+                  {
+                    source_id: "zendesk:raw-source",
+                    evidence_quote: "private raw evidence",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    },
+  };
+  const previousFetch = globalThis.fetch;
+  const { fetchImpl } = mockFetch([response(SNAPSHOT, 200), response(paidArtifact, 200)]);
+  globalThis.fetch = fetchImpl;
+  await withEnv(ENV, async () => {
+    const req = {
+      method: "GET",
+      headers: { host: "portfolio.example.com", "x-forwarded-proto": "https" },
+      query: { request_id: REQUEST_ID },
+      url: `/api/content-ops/deflection/report?request_id=${REQUEST_ID}`,
+    };
+    const res = mockResponse();
+    try {
+      await reportHandler(req, res);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+    assert.equal(res.statusCode, 200);
+    const payload = JSON.parse(res.body);
+    assert.equal(payload.artifact_status, "unlocked");
+    assert.equal(payload.artifact.report_model.title, "Paid deflection report");
+    const encoded = JSON.stringify(payload);
+    assert.match(encoded, /Open Billing > Users/);
+    assert.match(encoded, /Choose Users/);
+    for (const forbidden of [
+      "raw markdown must not reach browser JSON",
+      "faq_result",
+      "evidence_export",
+      "source_ids",
+      "evidence_quotes",
+      "outcome_diagnostics",
+      "representative_phrasing",
+      "recommended_title",
+      "top_evidence",
+      "zendesk:raw-source",
+      "private raw evidence",
+      "private representative phrase",
+      "term-source-hidden",
+      ENV.ATLAS_B2B_JWT,
+      ACCOUNT_ID,
+    ]) {
+      assert.equal(encoded.includes(forbidden), false, forbidden);
+    }
+  });
+});
+
+await test("public payload keeps paid answers gated behind unlocked status", async () => {
+  const locked = publicReportPayload({
+    ok: true,
+    request_id: REQUEST_ID,
+    snapshot: PROJECTED_SNAPSHOT,
+    artifact_status: "locked",
+    artifact: {
+      report_model: {
+        sections: [
+          {
+            id: "question_details",
+            data: { rows: [{ answer: "Hidden paid answer", steps: ["Hidden paid step"] }] },
+          },
+        ],
+      },
+    },
+  });
+
+  assert.equal(locked.artifact_status, "locked");
+  assert.equal("artifact" in locked, false);
+  assert.equal(JSON.stringify(locked).includes("Hidden paid answer"), false);
+  assert.equal(JSON.stringify(locked).includes("Hidden paid step"), false);
 });
 
 await test("evidence export API downloads only unlocked v1 export", async () => {
