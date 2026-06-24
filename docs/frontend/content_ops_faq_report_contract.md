@@ -279,9 +279,9 @@ The action-oriented paid sections are a work queue, not a full ticket archive:
 - `suppressed_repeat_review_queue` is the paid audit queue for low-confidence
   rows that stayed out of repeat accounting. Each item carries
   `suppression_reason` and `suppression_reason_label`; supported reason codes
-  are `missing_question`, `too_low_volume`, `insufficient_source_support`, and
-  `low_confidence_cluster`. This queue is ticket-derived only and does not mean
-  the question is already answered in a published help center.
+  are `missing_question`, `too_low_volume`, and
+  `insufficient_source_support`. This queue is ticket-derived only and does not
+  mean the question is already answered in a published help center.
 
 The paid artifact also includes a complete evidence export:
 

@@ -92,6 +92,15 @@ def _report_model() -> dict[str, object]:
                 },
             },
             {
+                "id": "suppressed_repeat_review_queue",
+                "data": {
+                    "items": [],
+                    "total_item_count": 0,
+                    "default_limit": 25,
+                    "reason_counts": {},
+                },
+            },
+            {
                 "id": "question_details",
                 "data": {"rows": [{"rank": 1}, {"rank": 2}]},
             },

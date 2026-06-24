@@ -21,9 +21,10 @@ but the paid structured report has no dedicated section that preserves the
 suppression reason for buyer/operator review.
 
 The synced diff is over the 400-LOC soft cap because the slice updates the
-backend contract, the producer-backed frontend example, the plan doc, and direct
-runtime/projection regression tests together. Splitting those would create a
-contract/docs drift window for the exact behavior this PR is meant to prove.
+backend contract, producer-backed frontend example, generated frontend
+contracts, smoke fixtures, the plan doc, and direct runtime/projection
+regression tests together. Splitting those would create a contract/docs drift
+window for the exact behavior this PR is meant to prove.
 
 ## Scope (this PR)
 
@@ -47,7 +48,7 @@ Slice phase: Functional validation
   - [ ] Each suppressed queue row carries a deterministic
         `suppression_reason` and human-readable `suppression_reason_label`.
   - [ ] Reason codes cover `missing_question`, `too_low_volume`,
-        `insufficient_source_support`, and `low_confidence_cluster`.
+        and `insufficient_source_support`.
   - [ ] `already_covered_still_recurring` rows are not suppressed or hidden.
   - [ ] The Snapshot projection remains unchanged and does not expose this
         paid audit queue.
@@ -63,8 +64,14 @@ Slice phase: Functional validation
 - `docs/frontend/content_ops_faq_report_contract.md`
 - `extracted_content_pipeline/faq_deflection_report.py`
 - `plans/PR-Deflection-Suppressed-Repeat-Review-Queue.md`
+- `portfolio-ui/api/content-ops/deflection/report-model-contract.js`
+- `portfolio-ui/src/types/deflectionReportModel.ts`
+- `scripts/generate_deflection_frontend_contract_types.py`
 - `tests/test_content_ops_deflection_report.py`
 - `tests/test_content_ops_faq_report_contract_docs.py`
+- `tests/test_generate_deflection_frontend_contract_types.py`
+- `tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py`
+- `tests/test_smoke_content_ops_deflection_pdf_export_validators.py`
 
 ## Mechanism
 
@@ -85,7 +92,8 @@ Reason derivation is deterministic and ticket-only:
 - no normalized question text -> `missing_question`;
 - fewer than two tickets -> `too_low_volume`;
 - fewer than two supporting sources -> `insufficient_source_support`;
-- any remaining low-confidence row -> `low_confidence_cluster`.
+An unexpected low-confidence row that does not match those predicates raises
+rather than silently emitting an unsupported reason code.
 
 The section is paid-only (`web` + `export`) and intentionally absent from the
 free Snapshot projection. No help-center corpus is consulted, so the slice does
@@ -99,6 +107,9 @@ not claim or implement `already_deflected`.
 - No portfolio renderer in this PR. This slice makes ATLAS emit and document the
   contract first; portfolio can render the new section from the backend-owned
   model in the child follow-up.
+- No result-page display cap for the suppressed review queue yet. Adding that
+  cap would make the hosted QA harness require a renderer that this slice
+  deliberately defers.
 - No PDF surface claim yet. The queue is exposed for paid web/export consumers;
   PDF renderer wiring can follow once the product decides how prominent this
   audit queue should be in a shareable PDF.
@@ -120,6 +131,8 @@ Parked hardening: none.
 - `pytest` for the selected contract-doc behaviors in `tests/test_content_ops_faq_report_contract_docs.py` - 2 passed, 3 deselected.
 - `python` `scripts/generate_deflection_snapshot_example.py` `--check` - current.
 - `pytest` for `tests/test_content_ops_deflection_report.py` and `tests/test_content_ops_faq_report_contract_docs.py` - 169 passed.
+- `python` `scripts/generate_deflection_frontend_contract_types.py` `--check` - current for all four frontend contract outputs.
+- `pytest` for `tests/test_generate_deflection_frontend_contract_types.py`, `tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py`, and `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` - 40 passed.
 - `bash` `scripts/validate_extracted_content_pipeline.sh` - passed.
 - `python` `extracted/_shared/scripts/forbid_atlas_reasoning_imports.py` `extracted_content_pipeline` - clean.
 - `python` `scripts/audit_extracted_standalone.py` `--fail-on-debt` - 0 findings.
@@ -133,8 +146,14 @@ Parked hardening: none.
 |---|---:|
 | `docs/frontend/content_ops_faq_deflection_report_example.json` | 23 |
 | `docs/frontend/content_ops_faq_report_contract.md` | 7 |
-| `extracted_content_pipeline/faq_deflection_report.py` | 124 |
-| `plans/PR-Deflection-Suppressed-Repeat-Review-Queue.md` | 140 |
+| `extracted_content_pipeline/faq_deflection_report.py` | 120 |
+| `plans/PR-Deflection-Suppressed-Repeat-Review-Queue.md` | 159 |
+| `portfolio-ui/api/content-ops/deflection/report-model-contract.js` | 18 |
+| `portfolio-ui/src/types/deflectionReportModel.ts` | 77 |
+| `scripts/generate_deflection_frontend_contract_types.py` | 2 |
 | `tests/test_content_ops_deflection_report.py` | 161 |
 | `tests/test_content_ops_faq_report_contract_docs.py` | 4 |
-| **Total** | **459** |
+| `tests/test_generate_deflection_frontend_contract_types.py` | 8 |
+| `tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py` | 9 |
+| `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` | 9 |
+| **Total** | **597** |
