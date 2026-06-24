@@ -54,7 +54,7 @@ Slice phase: Functional validation
         paid audit queue.
   - [ ] Contract docs and example JSON match the producer output.
 - Affected surfaces: extracted content pipeline report model, frontend contract
-  docs/example, report model tests, hosted smoke fixture.
+  docs/example, report model tests, hosted smoke fixtures.
 - Risk areas: backcompat, data truthfulness, frontend contract drift.
 - Reviewer rules triggered: R1, R2, R5, R10, R14.
 
@@ -71,6 +71,7 @@ Slice phase: Functional validation
 - `tests/test_content_ops_deflection_report.py`
 - `tests/test_content_ops_faq_report_contract_docs.py`
 - `tests/test_generate_deflection_frontend_contract_types.py`
+- `tests/test_run_deflection_full_report_qa_live_runner.py`
 - `tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py`
 - `tests/test_smoke_content_ops_deflection_pdf_export_validators.py`
 
@@ -135,6 +136,7 @@ Parked hardening: none.
 - `python` `scripts/generate_deflection_frontend_contract_types.py` `--check` - current for all four frontend contract outputs.
 - `pytest` for `tests/test_generate_deflection_frontend_contract_types.py`, `tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py`, and `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` - 40 passed.
 - `npm` `run` `test:deflection-full-report-qa-hosted-smoke` from `portfolio-ui` - passed.
+- `python -m pytest` for the `atlas_content_ops_deflection_report_checks.yml` test selection - 81 passed.
 - `bash` `scripts/validate_extracted_content_pipeline.sh` - passed.
 - `python` `extracted/_shared/scripts/forbid_atlas_reasoning_imports.py` `extracted_content_pipeline` - clean.
 - `python` `scripts/audit_extracted_standalone.py` `--fail-on-debt` - 0 findings.
@@ -157,6 +159,7 @@ Parked hardening: none.
 | `tests/test_content_ops_deflection_report.py` | 161 |
 | `tests/test_content_ops_faq_report_contract_docs.py` | 4 |
 | `tests/test_generate_deflection_frontend_contract_types.py` | 8 |
+| `tests/test_run_deflection_full_report_qa_live_runner.py` | 10 |
 | `tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py` | 9 |
 | `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` | 9 |
-| **Total** | **607** |
+| **Total** | **617** |
