@@ -136,7 +136,7 @@ Parked hardening: none.
 - `python` `scripts/generate_deflection_frontend_contract_types.py` `--check` - current for all four frontend contract outputs.
 - `pytest` for `tests/test_generate_deflection_frontend_contract_types.py`, `tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py`, and `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` - 40 passed.
 - `npm` `run` `test:deflection-full-report-qa-hosted-smoke` from `portfolio-ui` - passed.
-- `python -m pytest` for the `atlas_content_ops_deflection_report_checks.yml` test selection - 81 passed.
+- `python -m pytest` for the deflection-report workflow test selection - 81 passed.
 - `bash` `scripts/validate_extracted_content_pipeline.sh` - passed.
 - `python` `extracted/_shared/scripts/forbid_atlas_reasoning_imports.py` `extracted_content_pipeline` - clean.
 - `python` `scripts/audit_extracted_standalone.py` `--fail-on-debt` - 0 findings.
