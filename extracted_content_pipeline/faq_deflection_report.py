@@ -877,11 +877,13 @@ _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
 )
 _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_FIELDS = (
     *_REPORT_ACTION_ITEM_FIELDS,
+    "review_key",
     "suppression_reason",
     "suppression_reason_label",
 )
 _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_HOSTED_SAFE_FIELDS = (
     *_REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS,
+    "review_key",
     "suppression_reason",
     "suppression_reason_label",
 )
@@ -3095,6 +3097,15 @@ def _suppressed_repeat_review_queue_data(
         reason = _suppression_reason(item)
         review_items.append({
             **action_item,
+            "review_key": _suppressed_repeat_review_key(
+                action_item,
+                reason,
+                row_discriminator=(
+                    f"row_{rank}"
+                    if action_item["identity_basis"] == "insufficient_identity"
+                    else ""
+                ),
+            ),
             "suppression_reason": reason,
             "suppression_reason_label": _suppression_reason_label(reason),
         })
@@ -3122,6 +3133,26 @@ def _suppression_reason(item: Mapping[str, Any]) -> str:
     if _source_count(item) < 2:
         return "insufficient_source_support"
     raise ValueError("low-confidence item has no supported suppression reason")
+
+
+def _suppressed_repeat_review_key(
+    action_item: Mapping[str, Any],
+    reason: str,
+    *,
+    row_discriminator: str = "",
+) -> str:
+    identity = (
+        _text(action_item.get("repeat_key"))
+        or _text(action_item.get("cluster_id"))
+        or _identity_text(action_item.get("question"))
+    )
+    parts = ["suppressed_repeat_review_queue", identity, reason]
+    if row_discriminator:
+        parts.append(row_discriminator)
+    digest = hashlib.sha256(
+        "\x1f".join(parts).encode("utf-8")
+    ).hexdigest()
+    return f"review_{digest[:24]}"
 
 
 def _suppression_reason_label(reason: str) -> str:

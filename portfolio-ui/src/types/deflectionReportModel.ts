@@ -157,13 +157,13 @@ export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_SNAPSHOT_SAFE_FIEL
 
 export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_HOSTED_CONSUMER_SAFE_FIELDS = ["items", "total_item_count", "default_limit", "reason_counts"] as const;
 
-export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "status", "owner_lane", "confidence", "recommended_action", "ticket_count", "estimated_support_cost", "priority_score", "priority_drivers", "csat_signal", "suppression_reason", "suppression_reason_label"] as const;
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "status", "owner_lane", "confidence", "recommended_action", "ticket_count", "estimated_support_cost", "priority_score", "priority_drivers", "csat_signal", "review_key", "suppression_reason", "suppression_reason_label"] as const;
 
 export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
 
 export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
-export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_FIELDS = ["rank", "repeat_key", "cluster_id", "identity_basis", "identity_confidence", "question", "status", "owner_lane", "fix_type", "csat_signal", "confidence", "priority_score", "priority_drivers", "recommended_title", "recommended_action", "representative_phrasing", "ticket_count", "estimated_support_cost", "support_cost_formula", "support_cost_source", "opportunity_score", "top_evidence", "suppression_reason", "suppression_reason_label"] as const;
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_FIELDS = ["rank", "repeat_key", "cluster_id", "identity_basis", "identity_confidence", "question", "status", "owner_lane", "fix_type", "csat_signal", "confidence", "priority_score", "priority_drivers", "recommended_title", "recommended_action", "representative_phrasing", "ticket_count", "estimated_support_cost", "support_cost_formula", "support_cost_source", "opportunity_score", "top_evidence", "review_key", "suppression_reason", "suppression_reason_label"] as const;
 
 export const DEFLECTION_REPORT_QUESTION_DETAILS_FIELDS = ["rows"] as const;
 
@@ -385,6 +385,7 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = {
     "priority_score": "scalar",
     "priority_drivers": "scalar_array",
     "csat_signal": "object",
+    "review_key": "scalar",
     "suppression_reason": "scalar",
     "suppression_reason_label": "scalar",
   },
@@ -891,6 +892,7 @@ export type DeflectionReportSuppressedRepeatReviewQueueItem = {
   support_cost_source: string;
   opportunity_score: number;
   top_evidence: DeflectionReportSuppressedRepeatReviewQueueTopEvidence[];
+  review_key: string;
   suppression_reason: string;
   suppression_reason_label: string;
 };

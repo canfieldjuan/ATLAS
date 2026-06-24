@@ -136,7 +136,7 @@ Parked hardening: none.
 - Passed: generator check command, python scripts/generate_deflection_frontend_contract_types.py --check.
 - Passed: Python compile check for scripts/generate_deflection_frontend_contract_types.py.
 - Passed: generator pytest command for tests/test_generate_deflection_frontend_contract_types.py - 23 tests.
-- Passed: deflection report pytest command for tests/test_content_ops_deflection_report.py - 164 tests.
+- Passed: deflection report pytest command for tests/test_content_ops_deflection_report.py - 167 tests.
 - Passed: portfolio-ui deflection proxy test script - 29 tests.
 - Passed: extracted_content_pipeline manifest validation script.
 - Passed: extracted_content_pipeline Atlas reasoning import audit.
@@ -151,11 +151,11 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/faq_deflection_report.py` | 45 |
 | `plans/PR-Deflection-Report-Hosted-Shape-Metadata.md` | 161 |
-| `portfolio-ui/api/content-ops/deflection/report-model-contract.js` | 240 |
+| `portfolio-ui/api/content-ops/deflection/report-model-contract.js` | 241 |
 | `portfolio-ui/api/content-ops/deflection/report.js` | 89 |
-| `portfolio-ui/scripts/faq-deflection-atlas-proxy.test.mjs` | 273 |
-| `portfolio-ui/src/types/deflectionReportModel.ts` | 259 |
+| `portfolio-ui/scripts/faq-deflection-atlas-proxy.test.mjs` | 274 |
+| `portfolio-ui/src/types/deflectionReportModel.ts` | 260 |
 | `scripts/generate_deflection_frontend_contract_types.py` | 204 |
 | `tests/test_content_ops_deflection_report.py` | 72 |
 | `tests/test_generate_deflection_frontend_contract_types.py` | 96 |
-| **Total** | **1439** |
+| **Total** | **1442** |
