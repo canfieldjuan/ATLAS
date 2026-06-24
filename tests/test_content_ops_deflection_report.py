@@ -1223,6 +1223,57 @@ def test_deflection_suppressed_review_key_is_stable_when_rank_changes() -> None:
     assert review_keys_by_question(base) == review_keys_by_question(reordered)
 
 
+def test_deflection_suppressed_review_key_disambiguates_identityless_rows() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=4,
+        ticket_source_count=4,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 30,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (),
+            },
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 25,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (),
+            },
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).report_model.as_dict()[
+            "sections"
+        ]
+    }
+    items = sections["suppressed_repeat_review_queue"]["data"]["items"]
+    review_keys = [item["review_key"] for item in items]
+
+    assert len(items) == 2
+    assert [item["identity_basis"] for item in items] == [
+        "insufficient_identity",
+        "insufficient_identity",
+    ]
+    assert [item["suppression_reason"] for item in items] == [
+        "missing_question",
+        "missing_question",
+    ]
+    assert len(set(review_keys)) == len(review_keys)
+
+
 def test_deflection_action_identity_ignores_ticket_id_rollover() -> None:
     base = _structured_report_fixture_result()
     next_period_items: list[dict[str, object]] = []
@@ -5094,6 +5145,78 @@ def test_stored_deflection_report_model_backfills_legacy_action_limits() -> None
             assert key in section["required_data"]
             assert key not in section_by_id[section_id]["data"]
             assert key not in section_by_id[section_id]["required_data"]
+
+
+def test_stored_deflection_report_model_backfills_legacy_suppressed_review_keys() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=4,
+        ticket_source_count=4,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 30,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (),
+            },
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 25,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (),
+            },
+            {
+                "question": "Can I rename one workspace?",
+                "customer_wording": "rename one workspace",
+                "topic": "workspace",
+                "weighted_frequency": 1,
+                "ticket_count": 1,
+                "opportunity_score": 20,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-one-off",),
+            },
+        ),
+    )
+    artifact = build_deflection_report_artifact(result).as_dict()
+    legacy_artifact = json.loads(json.dumps(artifact))
+    expected_keys_by_rank: dict[int, str] = {}
+    legacy_section = next(
+        section
+        for section in legacy_artifact["report_model"]["sections"]
+        if section["id"] == "suppressed_repeat_review_queue"
+    )
+    original_section = next(
+        section
+        for section in artifact["report_model"]["sections"]
+        if section["id"] == "suppressed_repeat_review_queue"
+    )
+    for item in original_section["data"]["items"]:
+        expected_keys_by_rank[item["rank"]] = item["review_key"]
+    for item in legacy_section["data"]["items"]:
+        item.pop("review_key", None)
+
+    payload = stored_deflection_report_model(legacy_artifact)
+    assert payload is not None
+    section = next(
+        section
+        for section in payload["sections"]
+        if section["id"] == "suppressed_repeat_review_queue"
+    )
+    items = section["data"]["items"]
+    review_keys = [item["review_key"] for item in items]
+
+    assert review_keys == [expected_keys_by_rank[item["rank"]] for item in items]
+    assert len(set(review_keys)) == len(review_keys)
+    assert "review_key" not in legacy_section["data"]["items"][0]
 
 
 @pytest.mark.asyncio

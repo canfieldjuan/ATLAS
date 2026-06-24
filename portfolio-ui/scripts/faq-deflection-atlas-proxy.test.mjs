@@ -244,6 +244,7 @@ const HOSTED_SAFE_SCALAR_FIELDS = new Set([
   "recommended_action",
   "reopened_ticket_count",
   "repeat_ticket_count",
+  "review_key",
   "resolution_evidence_scope",
   "result_page_limit",
   "source_count",
