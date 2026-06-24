@@ -3,8 +3,6 @@ name: Security Guardrails
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   push:
     branches:
       - main
@@ -18,36 +16,6 @@ permissions:
   pull-requests: read
 
 jobs:
-  gitleaks-baseline-guard:
-    name: Gitleaks baseline growth guard
-    if: github.event_name == 'pull_request_target'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Checkout trusted base
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.base.sha }}
-
-      - name: Enforce baseline rotation policy
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin \
-            "${BASE_REF}:refs/remotes/origin/${BASE_REF}" \
-            "pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}"
-          python scripts/check_gitleaks_baseline_rotation.py \
-            --base-ref "origin/${BASE_REF}" \
-            --head-ref "refs/remotes/origin/pr-${PR_NUMBER}" \
-            --labels-json "${PR_LABELS_JSON}"
-
   secrets-pr:
     name: Gitleaks PR secret scan
     if: github.event_name == 'pull_request'

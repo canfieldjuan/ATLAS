@@ -15,7 +15,7 @@ import yaml
 
 WORKFLOW_GLOBS = ("*.yml", "*.yaml")
 PINNED_REF_RE = re.compile(r"^[0-9a-f]{40}$")
-ALLOWED_PULL_REQUEST_TARGET_JOB = ("security_guardrails.yml", "gitleaks-baseline-guard")
+ALLOWED_PULL_REQUEST_TARGET_JOB = ("gitleaks_baseline_growth_guard.yml", "gitleaks-baseline-guard")
 ALLOWED_ID_TOKEN_JOB = ("claude.yml", "claude")
 CLAUDE_OWNER_GATE = "github.actor == github.repository_owner"
 

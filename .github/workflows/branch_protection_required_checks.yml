@@ -1,0 +1,53 @@
+name: Branch Protection Required Checks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 10 * * 1"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/branch_protection_required_checks.yml"
+      - ".github/workflows/gitleaks_baseline_growth_guard.yml"
+      - ".github/workflows/security_guardrails.yml"
+      - "docs/SECURITY_GUARDRAILS.md"
+      - "scripts/check_required_status_checks.py"
+      - "tests/test_security_guardrails_workflow.py"
+
+permissions:
+  contents: read
+
+jobs:
+  required-status-checks:
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      BRANCH_PROTECTION_READ_TOKEN: ${{ secrets.ATLAS_BRANCH_PROTECTION_READ_TOKEN }}
+    steps:
+      - name: Skip when branch-protection read token is not configured
+        if: env.BRANCH_PROTECTION_READ_TOKEN == ''
+        run: |
+          echo "::notice::ATLAS_BRANCH_PROTECTION_READ_TOKEN is not configured; skipping live branch-protection audit."
+
+      - name: Checkout
+        if: env.BRANCH_PROTECTION_READ_TOKEN != ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Fetch main branch required status checks
+        if: env.BRANCH_PROTECTION_READ_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ env.BRANCH_PROTECTION_READ_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api \
+            "repos/${REPOSITORY}/branches/main/protection/required_status_checks" \
+            > /tmp/required-status-checks.json
+
+      - name: Verify required security checks
+        if: env.BRANCH_PROTECTION_READ_TOKEN != ''
+        run: |
+          python scripts/check_required_status_checks.py \
+            --payload-file /tmp/required-status-checks.json
