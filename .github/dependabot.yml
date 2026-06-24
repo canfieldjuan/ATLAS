@@ -10,6 +10,7 @@ updates:
     labels:
       - dependencies
       - security
+      - cve-remediation-sla
 
   - package-ecosystem: "npm"
     directories:
@@ -27,6 +28,7 @@ updates:
     labels:
       - dependencies
       - security
+      - cve-remediation-sla
     groups:
       npm-security-and-patches:
         patterns:
@@ -51,6 +53,7 @@ updates:
     labels:
       - dependencies
       - security
+      - cve-remediation-sla
     groups:
       python-security-and-patches:
         patterns:
@@ -73,6 +76,7 @@ updates:
     labels:
       - dependencies
       - security
+      - cve-remediation-sla
 
   - package-ecosystem: "docker-compose"
     directories:
@@ -86,3 +90,4 @@ updates:
     labels:
       - dependencies
       - security
+      - cve-remediation-sla
