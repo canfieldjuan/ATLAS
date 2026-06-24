@@ -76,6 +76,25 @@ def _checkout_authorization_route(
     )
 
 
+def _standard_pricing_terms_route(
+    *,
+    config_kwargs: dict[str, object] | None = None,
+):
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            **(config_kwargs or {"deflection_checkout_price_id": "price_report"}),
+        ),
+        scope_provider=lambda: {"account_id": "acct-gate", "user_id": "user-gate"},
+    )
+    return _route(
+        router,
+        "/ops/deflection-reports/pricing/standard",
+        "GET",
+    )
+
+
 class _UploadFile:
     def __init__(self, filename: str, content: bytes):
         self.filename = filename
@@ -2953,6 +2972,81 @@ async def test_deflection_report_delete_route_is_idempotent_and_scoped() -> None
 
 
 @pytest.mark.asyncio
+async def test_deflection_standard_pricing_terms_returns_public_contract_only():
+    route = _standard_pricing_terms_route(
+        config_kwargs={
+            "deflection_checkout_amount_cents": 150000,
+            "deflection_checkout_allowed_amount_cents": "149000,150000",
+            "deflection_checkout_currency": "USD",
+            "deflection_checkout_price_id": " price_deflection_report ",
+        },
+    )
+
+    payload = await route.endpoint()
+
+    assert payload == {
+        "variant": "standard",
+        "status": "configured",
+        "amount_cents": 150000,
+        "currency": "usd",
+    }
+    assert "price_id" not in payload
+    assert "price_deflection_report" not in str(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config_kwargs", "detail"),
+    [
+        (
+            {"deflection_checkout_price_id": ""},
+            "Deflection checkout price is not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_amount_cents": 0,
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout amount is not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_currency": "usdollar",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout currency is not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_amount_cents": 150000,
+                "deflection_checkout_allowed_amount_cents": "149000",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout amount is not accepted by the payment gate.",
+        ),
+        (
+            {
+                "deflection_checkout_allowed_amount_cents": "not-cents",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout allowed amounts are not configured.",
+        ),
+    ],
+)
+async def test_deflection_standard_pricing_terms_fails_closed_when_config_invalid(
+    config_kwargs: dict[str, object],
+    detail: str,
+) -> None:
+    route = _standard_pricing_terms_route(config_kwargs=config_kwargs)
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint()
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
 async def test_deflection_checkout_authorization_returns_canonical_terms_only():
     store = InMemoryDeflectionReportArtifactStore()
     await store.save_report(
@@ -3172,6 +3266,11 @@ def test_deflection_report_routes_use_public_and_trusted_dependencies() -> None:
 
     paid_route = _route(router, "/ops/deflection-reports/{request_id}/paid", "POST")
     submit_route = _route(router, "/ops/deflection-reports/submit", "POST")
+    standard_pricing_terms_route = _route(
+        router,
+        "/ops/deflection-reports/pricing/standard",
+        "GET",
+    )
     artifact_route = _route(
         router,
         "/ops/deflection-reports/{request_id}/artifact",
@@ -3197,12 +3296,18 @@ def test_deflection_report_routes_use_public_and_trusted_dependencies() -> None:
     assert "_trusted_paid_release" in _dependency_names(paid_route)
     assert "_public_deflection_gate" not in _dependency_names(paid_route)
     assert "_public_deflection_gate" in _dependency_names(submit_route)
+    assert "_public_deflection_gate" in _dependency_names(
+        standard_pricing_terms_route
+    )
     assert "_public_deflection_gate" in _dependency_names(artifact_route)
     assert "_public_deflection_gate" in _dependency_names(
         checkout_authorization_route
     )
     assert "_public_deflection_gate" in _dependency_names(snapshot_route)
     assert "_public_deflection_gate" in _dependency_names(delete_route)
+    assert "_trusted_paid_release" not in _dependency_names(
+        standard_pricing_terms_route
+    )
     assert "_trusted_paid_release" not in _dependency_names(artifact_route)
     assert "_trusted_paid_release" not in _dependency_names(
         checkout_authorization_route

@@ -883,6 +883,13 @@ def create_content_ops_control_surface_router(
         return _deflection_report_process_contract_payload(resolved_config.prefix)
 
     @router.get(
+        "/deflection-reports/pricing/standard",
+        dependencies=public_deflection_dependencies,
+    )
+    async def deflection_report_standard_pricing_terms() -> dict[str, Any]:
+        return _deflection_standard_pricing_terms(resolved_config)
+
+    @router.get(
         "/deflection-reports/{request_id}/snapshot",
         dependencies=public_deflection_dependencies,
     )
@@ -2501,6 +2508,18 @@ def _deflection_checkout_terms(
         "amount_cents": amount_cents,
         "currency": currency,
         "price_id": price_id,
+    }
+
+
+def _deflection_standard_pricing_terms(
+    config: ContentOpsControlSurfaceApiConfig,
+) -> dict[str, Any]:
+    checkout = _deflection_checkout_terms(config)
+    return {
+        "variant": "standard",
+        "status": "configured",
+        "amount_cents": checkout["amount_cents"],
+        "currency": checkout["currency"],
     }
 
 
