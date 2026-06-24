@@ -190,11 +190,22 @@ def _report_projection_runtime_fixture_result() -> TicketFAQMarkdownResult:
             "ticket_status_summary": {"reopened": 1, "resolved": 3},
         },
     }
+    sparse_item = {
+        "question": "Why did my imported contacts duplicate?",
+        "customer_wording": "contacts imported twice",
+        "topic": "imports",
+        "weighted_frequency": 5,
+        "ticket_count": 3,
+        "opportunity_score": 20,
+        "answer_evidence_status": "draft_needs_review",
+        "source_count": 1,
+        "source_ids": ("ticket-sparse-only",),
+    }
     return replace(
         base,
-        source_count=base.source_count + 4,
-        ticket_source_count=base.ticket_source_count + 4,
-        items=base.items + (recurring_item,),
+        source_count=base.source_count + 5,
+        ticket_source_count=base.ticket_source_count + 5,
+        items=base.items + (recurring_item, sparse_item),
     )
 
 
@@ -350,6 +361,7 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         "already_covered_still_recurring",
         "backlog_table",
         "outcome_diagnostics",
+        "suppressed_repeat_review_queue",
         "question_details",
         "complete_evidence",
     ]
@@ -363,6 +375,7 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         38,
         39,
         40,
+        41,
         50,
         90,
     ]
@@ -491,6 +504,14 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
             ),
         }
     ]
+
+    suppressed = section_by_id["suppressed_repeat_review_queue"]["data"]
+    assert suppressed == {
+        "items": [],
+        "total_item_count": 0,
+        "default_limit": 25,
+        "reason_counts": {},
+    }
 
     details = section_by_id["question_details"]["data"]["rows"]
     assert details[0]["answer_linkage"] == "publishable_answer"
@@ -746,6 +767,117 @@ def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:
     assert "How do I review warehouse sync failures?" in unresolved_questions
     assert "Why did my imported contacts duplicate?" not in unresolved_questions
     assert "Can I rename one workspace?" not in unresolved_questions
+
+    suppressed = sections["suppressed_repeat_review_queue"]["data"]
+    suppressed_by_question = {
+        item["question"]: item
+        for item in suppressed["items"]
+    }
+    assert suppressed["total_item_count"] == 2
+    assert suppressed["default_limit"] == 25
+    assert suppressed["reason_counts"] == {
+        "insufficient_source_support": 1,
+        "too_low_volume": 1,
+    }
+    assert suppressed_by_question[
+        "Why did my imported contacts duplicate?"
+    ]["suppression_reason"] == "insufficient_source_support"
+    assert suppressed_by_question[
+        "Can I rename one workspace?"
+    ]["suppression_reason"] == "too_low_volume"
+
+
+def test_deflection_suppressed_repeat_review_queue_explains_hidden_rows() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=10,
+        ticket_source_count=10,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "unknown",
+                "weighted_frequency": 8,
+                "ticket_count": 3,
+                "opportunity_score": 30,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (
+                    "ticket-missing-question-1",
+                    "ticket-missing-question-2",
+                ),
+            },
+            {
+                "question": "Can I rename one workspace?",
+                "customer_wording": "rename one workspace",
+                "topic": "workspace",
+                "weighted_frequency": 1,
+                "ticket_count": 1,
+                "opportunity_score": 20,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-one-off",),
+            },
+            {
+                "question": "Why did my imported contacts duplicate?",
+                "customer_wording": "contacts imported twice",
+                "topic": "imports",
+                "weighted_frequency": 5,
+                "ticket_count": 4,
+                "opportunity_score": 20,
+                "answer_evidence_status": "draft_needs_review",
+                "source_count": 1,
+                "source_ids": ("ticket-sparse-only",),
+            },
+            {
+                "question": "How do I configure SCIM groups?",
+                "customer_wording": "scim group setup",
+                "topic": "identity",
+                "weighted_frequency": 7,
+                "ticket_count": 3,
+                "opportunity_score": 18,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (
+                    "ticket-scim-1",
+                    "ticket-scim-2",
+                    "ticket-scim-3",
+                ),
+            },
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).as_dict()[
+            "report_model"
+        ]["sections"]
+    }
+    unresolved_questions = {
+        item["question"]
+        for item in sections["top_unresolved_repeats"]["data"]["items"]
+    }
+    queue = sections["suppressed_repeat_review_queue"]["data"]
+    by_reason = {
+        item["suppression_reason"]: item
+        for item in queue["items"]
+    }
+
+    assert unresolved_questions == {"How do I configure SCIM groups?"}
+    assert queue["total_item_count"] == 3
+    assert queue["reason_counts"] == {
+        "insufficient_source_support": 1,
+        "missing_question": 1,
+        "too_low_volume": 1,
+    }
+    assert set(by_reason) == set(queue["reason_counts"])
+    assert by_reason["missing_question"]["question"] == ""
+    assert by_reason["missing_question"]["status"] == "Low confidence"
+    assert "No normalized customer question" in by_reason[
+        "missing_question"
+    ]["suppression_reason_label"]
+    assert by_reason["too_low_volume"]["question"] == "Can I rename one workspace?"
+    assert by_reason["insufficient_source_support"]["question"] == (
+        "Why did my imported contacts duplicate?"
+    )
 
 
 def test_deflection_priority_fix_queue_keeps_pdf_limit_items() -> None:
@@ -1332,6 +1464,14 @@ def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
             [],
         ),
         (
+            "suppressed_repeat_review_queue",
+            41,
+            ["web", "export"],
+            25,
+            ["items", "total_item_count", "default_limit", "reason_counts"],
+            [],
+        ),
+        (
             "question_details",
             50,
             ["web", "pdf", "markdown"],
@@ -1532,6 +1672,7 @@ def test_deflection_report_projection_separates_paid_and_hosted_action_fields() 
         "drafted_resolutions",
         "already_covered_still_recurring",
         "backlog_table",
+        "suppressed_repeat_review_queue",
     ]
     paid_only_action_fields = {
         "repeat_key",
@@ -1577,6 +1718,18 @@ def test_deflection_report_projection_separates_paid_and_hosted_action_fields() 
 
     priority = sections["priority_fix_queue"]
     assert priority["record_fields"] == ["status_counts"]
+
+    suppressed = sections["suppressed_repeat_review_queue"]
+    suppressed_collection = suppressed["collection"]
+    assert suppressed["record_fields"] == ["reason_counts"]
+    assert {
+        "suppression_reason",
+        "suppression_reason_label",
+    } <= set(suppressed_collection["projected_fields"])
+    assert {
+        "suppression_reason",
+        "suppression_reason_label",
+    } <= set(suppressed_collection["hosted_consumer_safe_fields"])
 
 
 def test_deflection_report_projection_marks_raw_question_evidence_export_only() -> None:
@@ -1997,7 +2150,7 @@ def test_deflection_report_projection_checker_fails_on_envelope_drift() -> None:
         "debug_payload"
     ) in errors
     assert f"duplicate section emitted: {first_section['id']}" in errors
-    assert "report_model.sections[13] is not an object" in errors
+    assert "report_model.sections[14] is not an object" in errors
 
 
 def test_deflection_report_projection_checker_fails_on_record_field_drift() -> None:

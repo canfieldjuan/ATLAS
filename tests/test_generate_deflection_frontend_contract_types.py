@@ -75,6 +75,8 @@ def test_deflection_report_model_types_include_backend_projection_fields() -> No
     assert "support_cost_basis: DeflectionReportPriorityFixQueueSupportCostBasis;" in rendered
     assert "csat_signal: DeflectionReportPriorityFixQueueCsatSignal;" in rendered
     assert "top_evidence: DeflectionReportPriorityFixQueueTopEvidence[];" in rendered
+    assert "suppression_reason: string;" in rendered
+    assert "suppression_reason_label: string;" in rendered
     assert "term_mappings: DeflectionReportTermMapping[];" in rendered
     assert "outcome_diagnostics: DeflectionReportQuestionOutcomeDiagnostics | null;" in rendered
     assert "source_file?: DeflectionReportSourceFileData;" in rendered
@@ -123,6 +125,12 @@ def test_deflection_report_model_api_contract_includes_backend_projection_fields
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_FIELDS = Object.freeze(["rank", '
         '"repeat_key", "cluster_id"'
     ) in rendered
+    assert (
+        'DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_FIELDS = '
+        'Object.freeze(["rank", "repeat_key", "cluster_id"'
+    ) in rendered
+    assert '"suppression_reason"' in rendered
+    assert '"suppression_reason_label"' in rendered
     assert '"top_evidence"' in rendered
     assert (
         'DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_FIELDS = Object.freeze(["rank", '

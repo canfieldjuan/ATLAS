@@ -896,6 +896,29 @@
       },
       {
         "data": {
+          "default_limit": 25,
+          "items": [],
+          "reason_counts": {},
+          "total_item_count": 0
+        },
+        "default_limit": 25,
+        "id": "suppressed_repeat_review_queue",
+        "priority": 41,
+        "required_data": [
+          "items",
+          "total_item_count",
+          "default_limit",
+          "reason_counts"
+        ],
+        "snapshot_safe_fields": [],
+        "surfaces": [
+          "web",
+          "export"
+        ],
+        "title": "Suppressed Repeat Review Queue"
+      },
+      {
+        "data": {
           "rows": [
             {
               "answer": "To resolve this, open Analytics, choose Attribution, then click Download report.",

@@ -9,7 +9,7 @@ export const DEFLECTION_REPORT_MODEL_FIELDS = ["schema_version", "title", "summa
 
 export const DEFLECTION_REPORT_SECTION_FIELDS = ["id", "title", "priority", "surfaces", "default_limit", "required_data", "snapshot_safe_fields", "data"] as const;
 
-export const DEFLECTION_REPORT_SECTION_IDS = ["support_tax", "source_file", "seo_targets", "ranked_questions", "priority_fix_queue", "top_unresolved_repeats", "drafted_resolutions", "already_covered_still_recurring", "backlog_table", "outcome_diagnostics", "question_details", "complete_evidence"] as const;
+export const DEFLECTION_REPORT_SECTION_IDS = ["support_tax", "source_file", "seo_targets", "ranked_questions", "priority_fix_queue", "top_unresolved_repeats", "drafted_resolutions", "already_covered_still_recurring", "backlog_table", "outcome_diagnostics", "suppressed_repeat_review_queue", "question_details", "complete_evidence"] as const;
 
 export const DEFLECTION_REPORT_CONDITIONAL_SECTION_IDS = ["source_file", "outcome_diagnostics"] as const;
 
@@ -146,6 +146,22 @@ export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_HOSTED_CONSUMER_SAFE_FIELDS =
 export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_ROWS_HOSTED_CONSUMER_SAFE_FIELDS = ["question", "status_mix", "reopened_ticket_count", "negative_csat_ticket_count", "guidance"] as const;
 
 export const DEFLECTION_REPORT_OUTCOME_DIAGNOSTICS_ROWS_FIELDS = ["question", "status_mix", "reopened_ticket_count", "negative_csat_ticket_count", "guidance"] as const;
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_FIELDS = ["items", "total_item_count", "default_limit", "reason_counts"] as const;
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_REQUIRED_DATA = ["items", "total_item_count", "default_limit", "reason_counts"] as const;
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_SNAPSHOT_SAFE_FIELDS = [] as const;
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_HOSTED_CONSUMER_SAFE_FIELDS = ["items", "total_item_count", "default_limit", "reason_counts"] as const;
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "status", "owner_lane", "confidence", "recommended_action", "ticket_count", "estimated_support_cost", "priority_score", "priority_drivers", "csat_signal", "suppression_reason", "suppression_reason_label"] as const;
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
+
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_FIELDS = ["rank", "repeat_key", "cluster_id", "identity_basis", "identity_confidence", "question", "status", "owner_lane", "fix_type", "csat_signal", "confidence", "priority_score", "priority_drivers", "recommended_title", "recommended_action", "representative_phrasing", "ticket_count", "estimated_support_cost", "support_cost_formula", "support_cost_source", "opportunity_score", "top_evidence", "suppression_reason", "suppression_reason_label"] as const;
 
 export const DEFLECTION_REPORT_QUESTION_DETAILS_FIELDS = ["rows"] as const;
 
@@ -594,6 +610,63 @@ export type DeflectionReportOutcomeDiagnosticsSection = {
   data: DeflectionReportOutcomeDiagnosticsData;
 };
 
+export type DeflectionReportSuppressedRepeatReviewQueueCsatSignal = {
+  status: string;
+  csat_present_count: number;
+  negative_csat_ticket_count: number;
+  numeric_average: number | null;
+};
+
+export type DeflectionReportSuppressedRepeatReviewQueueTopEvidence = {
+  source_id: string;
+  evidence_quote: string;
+};
+
+export type DeflectionReportSuppressedRepeatReviewQueueItem = {
+  rank: number;
+  repeat_key: string;
+  cluster_id: string;
+  identity_basis: string;
+  identity_confidence: string;
+  question: string;
+  status: string;
+  owner_lane: string;
+  fix_type: string;
+  csat_signal: DeflectionReportSuppressedRepeatReviewQueueCsatSignal;
+  confidence: string;
+  priority_score: number;
+  priority_drivers: string[];
+  recommended_title: string;
+  recommended_action: string;
+  representative_phrasing: string;
+  ticket_count: number;
+  estimated_support_cost: number;
+  support_cost_formula: string;
+  support_cost_source: string;
+  opportunity_score: number;
+  top_evidence: DeflectionReportSuppressedRepeatReviewQueueTopEvidence[];
+  suppression_reason: string;
+  suppression_reason_label: string;
+};
+
+export type DeflectionReportSuppressedRepeatReviewQueueData = {
+  items: DeflectionReportSuppressedRepeatReviewQueueItem[];
+  total_item_count: number;
+  default_limit: number;
+  reason_counts: Record<string, number>;
+};
+
+export type DeflectionReportSuppressedRepeatReviewQueueSection = {
+  id: "suppressed_repeat_review_queue";
+  title: string;
+  priority: number;
+  surfaces: string[];
+  default_limit: number | null;
+  required_data: string[];
+  snapshot_safe_fields: string[];
+  data: DeflectionReportSuppressedRepeatReviewQueueData;
+};
+
 export type DeflectionReportQuestionDetailsRow = {
   rank: number;
   question: string;
@@ -659,6 +732,7 @@ export type DeflectionReportSectionDataById = {
   already_covered_still_recurring: DeflectionReportAlreadyCoveredStillRecurringData;
   backlog_table: DeflectionReportBacklogTableData;
   outcome_diagnostics?: DeflectionReportOutcomeDiagnosticsData;
+  suppressed_repeat_review_queue: DeflectionReportSuppressedRepeatReviewQueueData;
   question_details: DeflectionReportQuestionDetailsData;
   complete_evidence: DeflectionReportCompleteEvidenceData;
 };
@@ -674,6 +748,7 @@ export type DeflectionReportSection =
   | DeflectionReportAlreadyCoveredStillRecurringSection
   | DeflectionReportBacklogTableSection
   | DeflectionReportOutcomeDiagnosticsSection
+  | DeflectionReportSuppressedRepeatReviewQueueSection
   | DeflectionReportQuestionDetailsSection
   | DeflectionReportCompleteEvidenceSection;
 

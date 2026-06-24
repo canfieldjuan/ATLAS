@@ -95,6 +95,8 @@ TYPE_BY_FIELD = {
     "status_mix": "Record<string, number>",
     "step_count": "number",
     "steps": "string[]",
+    "suppression_reason": "string",
+    "suppression_reason_label": "string",
     "support_cost_formula": "string",
     "support_cost_source": "string",
     "support_ticket_resolution_evidence_count": "number",
