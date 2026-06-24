@@ -661,6 +661,19 @@ _DEFLECTION_REPORT_SECTION_DEFINITIONS = (
         ),
     ),
     DeflectionReportSectionDefinition(
+        id="suppressed_repeat_review_queue",
+        title="Suppressed Repeat Review Queue",
+        priority=41,
+        surfaces=("web", "export"),
+        default_limit=25,
+        required_data=(
+            "items",
+            "total_item_count",
+            "default_limit",
+            "reason_counts",
+        ),
+    ),
+    DeflectionReportSectionDefinition(
         id="question_details",
         title="Question Details and Evidence",
         priority=50,
@@ -857,6 +870,16 @@ _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
     "priority_drivers",
     "csat_signal",
 )
+_REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_FIELDS = (
+    *_REPORT_ACTION_ITEM_FIELDS,
+    "suppression_reason",
+    "suppression_reason_label",
+)
+_REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_HOSTED_SAFE_FIELDS = (
+    *_REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS,
+    "suppression_reason",
+    "suppression_reason_label",
+)
 _REPORT_ACTION_CSAT_SIGNAL_FIELDS = (
     "status",
     "csat_present_count",
@@ -894,6 +917,16 @@ _REPORT_ACTION_ITEM_COLLECTION = MappingProxyType({
     "nested_object_fields": _REPORT_ACTION_ITEM_NESTED_FIELDS,
     "nested_collection_fields": _REPORT_ACTION_ITEM_NESTED_COLLECTIONS,
 })
+_REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_COLLECTION = MappingProxyType({
+    "field": "items",
+    "item_type": "object",
+    "projected_fields": _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_FIELDS,
+    "hosted_consumer_safe_fields": (
+        _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_HOSTED_SAFE_FIELDS
+    ),
+    "nested_object_fields": _REPORT_ACTION_ITEM_NESTED_FIELDS,
+    "nested_collection_fields": _REPORT_ACTION_ITEM_NESTED_COLLECTIONS,
+})
 _REPORT_ACTION_SUPPORT_COST_BASIS_NESTED_FIELD = MappingProxyType({
     "field": "support_cost_basis",
     "projected_fields": _REPORT_ACTION_SUPPORT_COST_BASIS_FIELDS,
@@ -927,6 +960,12 @@ _REPORT_ACTION_TOP_ITEMS_FIELDS = (
 )
 _REPORT_ACTION_TOP_ITEMS_HOSTED_SAFE_FIELDS = ("items", "top_item_count")
 _REPORT_BACKLOG_FIELDS = ("items", "total_item_count", "default_limit")
+_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_FIELDS = (
+    "items",
+    "total_item_count",
+    "default_limit",
+    "reason_counts",
+)
 _REPORT_OUTCOME_DIAGNOSTIC_FIELDS = (
     "outcome_diagnostic_ticket_count",
     "outcome_risk_ticket_count",
@@ -1041,6 +1080,12 @@ _REPORT_SECTION_PROJECTION_METADATA: Mapping[str, Mapping[str, Any]] = MappingPr
         "projected_fields": _REPORT_BACKLOG_FIELDS,
         "hosted_consumer_safe_fields": _REPORT_BACKLOG_FIELDS,
         "collection": _REPORT_ACTION_ITEM_COLLECTION,
+    }),
+    "suppressed_repeat_review_queue": MappingProxyType({
+        "projected_fields": _REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_FIELDS,
+        "collection": _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_COLLECTION,
+        "record_fields": ("reason_counts",),
     }),
     "outcome_diagnostics": MappingProxyType({
         "projected_fields": _REPORT_OUTCOME_DIAGNOSTIC_FIELDS,
@@ -1353,6 +1398,7 @@ DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS: Mapping[str, Mapping[str, int]] = (
             "question_details": 10,
             "seo_targets": 20,
             "outcome_diagnostics": 25,
+            "suppressed_repeat_review_queue": _ACTION_BACKLOG_LIMIT,
         }),
         "pdf": MappingProxyType({
             "ranked_questions": 25,
@@ -1437,6 +1483,7 @@ _SCORECARD_COUNT_KEYS = frozenset({
     "top_unresolved_repeats_count",
     "drafted_resolutions_count",
     "already_covered_still_recurring_count",
+    "suppressed_repeat_review_queue_count",
 })
 _SCORECARD_SURFACE_KEYS = frozenset({
     "email",
@@ -1455,6 +1502,7 @@ _FULL_REPORT_QA_REQUIRED_MODEL_SECTION_IDS = (
     "top_unresolved_repeats",
     "drafted_resolutions",
     "already_covered_still_recurring",
+    "suppressed_repeat_review_queue",
     "question_details",
     "complete_evidence",
 )
@@ -1891,6 +1939,10 @@ def _scorecard_counts(sections: Mapping[str, Mapping[str, Any]]) -> dict[str, An
         sections,
         "already_covered_still_recurring",
     )
+    suppressed_repeat_review = _scorecard_section_data(
+        sections,
+        "suppressed_repeat_review_queue",
+    )
     return {
         "repeat_ticket_count": _int(support_tax.get("repeat_ticket_count")),
         "generated_question_count": _int(
@@ -1918,6 +1970,9 @@ def _scorecard_counts(sections: Mapping[str, Mapping[str, Any]]) -> dict[str, An
         "drafted_resolutions_count": _scorecard_items_count(drafted_resolutions),
         "already_covered_still_recurring_count": _scorecard_items_count(
             already_covered_recurring,
+        ),
+        "suppressed_repeat_review_queue_count": _scorecard_items_count(
+            suppressed_repeat_review,
         ),
     }
 
@@ -2007,6 +2062,9 @@ def _scorecard_section_total(section_id: str, counts: Mapping[str, Any]) -> int:
         "drafted_resolutions": _int(counts.get("drafted_resolutions_count")),
         "already_covered_still_recurring": _int(
             counts.get("already_covered_still_recurring_count")
+        ),
+        "suppressed_repeat_review_queue": _int(
+            counts.get("suppressed_repeat_review_queue_count")
         ),
     }.get(section_id, 0)
 
@@ -2737,6 +2795,11 @@ def build_deflection_report_model(
             data=_backlog_table_data(items),
             markdown_lines=[],
         ),
+        _report_section(
+            section_id="suppressed_repeat_review_queue",
+            data=_suppressed_repeat_review_queue_data(items),
+            markdown_lines=[],
+        ),
     ])
     diagnostics_lines = _outcome_diagnostics_section(items, resolved_summary)
     if diagnostics_lines:
@@ -2983,6 +3046,67 @@ def _backlog_table_data(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "total_item_count": len(action_items),
         "default_limit": _ACTION_BACKLOG_LIMIT,
     }
+
+
+def _suppressed_repeat_review_queue_data(
+    items: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    review_items: list[dict[str, Any]] = []
+    for rank, item in enumerate(items, start=1):
+        action_item = _action_item(rank, item)
+        if action_item["status"] != "Low confidence":
+            continue
+        reason = _suppression_reason(item)
+        review_items.append({
+            **action_item,
+            "suppression_reason": reason,
+            "suppression_reason_label": _suppression_reason_label(reason),
+        })
+    review_items = sorted(
+        review_items,
+        key=lambda row: (
+            -float(row["estimated_support_cost"]),
+            -_int(row["opportunity_score"]),
+            _int(row["rank"]),
+        ),
+    )
+    return {
+        "items": review_items[:_ACTION_BACKLOG_LIMIT],
+        "total_item_count": len(review_items),
+        "default_limit": _ACTION_BACKLOG_LIMIT,
+        "reason_counts": _suppression_reason_counts(review_items),
+    }
+
+
+def _suppression_reason(item: Mapping[str, Any]) -> str:
+    if not _text(item.get("question")):
+        return "missing_question"
+    if _ticket_count(item) < 2:
+        return "too_low_volume"
+    if _source_count(item) < 2:
+        return "insufficient_source_support"
+    return "low_confidence_cluster"
+
+
+def _suppression_reason_label(reason: str) -> str:
+    return {
+        "missing_question": "No normalized customer question could be extracted.",
+        "too_low_volume": "Fewer than two repeat tickets support this cluster.",
+        "insufficient_source_support": (
+            "Fewer than two source tickets support this cluster."
+        ),
+        "low_confidence_cluster": (
+            "The cluster needs manual review before it becomes an action item."
+        ),
+    }.get(reason, "Review this cluster before assigning an action.")
+
+
+def _suppression_reason_counts(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        reason = _text(item.get("suppression_reason")) or "low_confidence_cluster"
+        counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _action_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

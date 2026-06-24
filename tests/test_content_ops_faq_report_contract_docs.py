@@ -241,6 +241,10 @@ def test_content_ops_faq_report_contract_links_example() -> None:
     assert '"drafted_resolutions"' in doc
     assert '"already_covered_still_recurring"' in doc
     assert '"backlog_table"' in doc
+    assert '"suppressed_repeat_review_queue"' in doc
+    assert "suppression_reason" in doc
+    assert "low_confidence_cluster" in doc
+    assert "published help center" in doc
     assert "repeat_key: string" in doc
     assert "cluster_id: string" in doc
     assert "identity_basis:" in doc
