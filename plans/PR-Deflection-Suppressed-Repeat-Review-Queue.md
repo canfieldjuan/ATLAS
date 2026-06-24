@@ -54,7 +54,7 @@ Slice phase: Functional validation
         paid audit queue.
   - [ ] Contract docs and example JSON match the producer output.
 - Affected surfaces: extracted content pipeline report model, frontend contract
-  docs/example, report model tests.
+  docs/example, report model tests, hosted smoke fixture.
 - Risk areas: backcompat, data truthfulness, frontend contract drift.
 - Reviewer rules triggered: R1, R2, R5, R10, R14.
 
@@ -65,6 +65,7 @@ Slice phase: Functional validation
 - `extracted_content_pipeline/faq_deflection_report.py`
 - `plans/PR-Deflection-Suppressed-Repeat-Review-Queue.md`
 - `portfolio-ui/api/content-ops/deflection/report-model-contract.js`
+- `portfolio-ui/scripts/faq-deflection-full-report-qa-hosted-smoke.test.mjs`
 - `portfolio-ui/src/types/deflectionReportModel.ts`
 - `scripts/generate_deflection_frontend_contract_types.py`
 - `tests/test_content_ops_deflection_report.py`
@@ -133,6 +134,7 @@ Parked hardening: none.
 - `pytest` for `tests/test_content_ops_deflection_report.py` and `tests/test_content_ops_faq_report_contract_docs.py` - 169 passed.
 - `python` `scripts/generate_deflection_frontend_contract_types.py` `--check` - current for all four frontend contract outputs.
 - `pytest` for `tests/test_generate_deflection_frontend_contract_types.py`, `tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py`, and `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` - 40 passed.
+- `npm` `run` `test:deflection-full-report-qa-hosted-smoke` from `portfolio-ui` - passed.
 - `bash` `scripts/validate_extracted_content_pipeline.sh` - passed.
 - `python` `extracted/_shared/scripts/forbid_atlas_reasoning_imports.py` `extracted_content_pipeline` - clean.
 - `python` `scripts/audit_extracted_standalone.py` `--fail-on-debt` - 0 findings.
@@ -149,6 +151,7 @@ Parked hardening: none.
 | `extracted_content_pipeline/faq_deflection_report.py` | 120 |
 | `plans/PR-Deflection-Suppressed-Repeat-Review-Queue.md` | 159 |
 | `portfolio-ui/api/content-ops/deflection/report-model-contract.js` | 18 |
+| `portfolio-ui/scripts/faq-deflection-full-report-qa-hosted-smoke.test.mjs` | 10 |
 | `portfolio-ui/src/types/deflectionReportModel.ts` | 77 |
 | `scripts/generate_deflection_frontend_contract_types.py` | 2 |
 | `tests/test_content_ops_deflection_report.py` | 161 |
@@ -156,4 +159,4 @@ Parked hardening: none.
 | `tests/test_generate_deflection_frontend_contract_types.py` | 8 |
 | `tests/test_smoke_content_ops_deflection_hosted_qa_scorecard.py` | 9 |
 | `tests/test_smoke_content_ops_deflection_pdf_export_validators.py` | 9 |
-| **Total** | **597** |
+| **Total** | **607** |
