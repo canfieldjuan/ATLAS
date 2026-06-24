@@ -7,22 +7,32 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_security_policy_docs_checks.yml"
+      - ".github/workflows/repo_labels.yml"
       - ".github/dependabot.yml"
+      - ".github/labels.json"
       - "SECURITY.md"
       - "atlas_brain/api/billing.py"
       - "atlas_brain/content_ops_deflection_delivery.py"
       - "docs/INCIDENT_RESPONSE.md"
+      - "docs/SECURITY_GUARDRAILS.md"
+      - "scripts/check_gitleaks_baseline_rotation.py"
+      - "scripts/sync_github_labels.py"
       - "tests/test_security_policy_docs.py"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/atlas_security_policy_docs_checks.yml"
+      - ".github/workflows/repo_labels.yml"
       - ".github/dependabot.yml"
+      - ".github/labels.json"
       - "SECURITY.md"
       - "atlas_brain/api/billing.py"
       - "atlas_brain/content_ops_deflection_delivery.py"
       - "docs/INCIDENT_RESPONSE.md"
+      - "docs/SECURITY_GUARDRAILS.md"
+      - "scripts/check_gitleaks_baseline_rotation.py"
+      - "scripts/sync_github_labels.py"
       - "tests/test_security_policy_docs.py"
 
 jobs:

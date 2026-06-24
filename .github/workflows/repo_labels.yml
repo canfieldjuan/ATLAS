@@ -1,0 +1,40 @@
+name: Repo Labels
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/labels.json"
+      - ".github/workflows/repo_labels.yml"
+      - "scripts/sync_github_labels.py"
+  workflow_dispatch:
+  schedule:
+    - cron: "37 10 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  sync-repo-labels:
+    name: Sync repository labels
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Apply label manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/sync_github_labels.py --manifest .github/labels.json --apply
