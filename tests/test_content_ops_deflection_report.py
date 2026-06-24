@@ -161,6 +161,58 @@ def _structured_report_fixture_result() -> TicketFAQMarkdownResult:
     )
 
 
+def _report_projection_runtime_fixture_result() -> TicketFAQMarkdownResult:
+    base = _structured_report_fixture_result()
+    recurring_item = {
+        "question": "How do I fix a stale dashboard?",
+        "customer_wording": "dashboard is stale again",
+        "topic": "analytics",
+        "weighted_frequency": 8,
+        "ticket_count": 4,
+        "opportunity_score": 19,
+        "answer": "Refresh the dashboard cache from Analytics settings.",
+        "answer_evidence_status": "resolution_evidence",
+        "resolution_evidence_scope": "scoped",
+        "source_ids": (
+            "ticket-dashboard-1",
+            "ticket-dashboard-2",
+            "ticket-dashboard-3",
+            "ticket-dashboard-4",
+        ),
+        "evidence_quotes": ("`ticket-dashboard-1` - Dashboard stale again",),
+        "outcome_diagnostics": {
+            "csat_present_count": 4,
+            "csat_score_average": 2.0,
+            "diagnostic_ticket_count": 4,
+            "negative_csat_ticket_count": 2,
+            "outcome_risk_ticket_count": 2,
+            "reopened_ticket_count": 1,
+            "ticket_status_summary": {"reopened": 1, "resolved": 3},
+        },
+    }
+    return replace(
+        base,
+        source_count=base.source_count + 4,
+        ticket_source_count=base.ticket_source_count + 4,
+        items=base.items + (recurring_item,),
+    )
+
+
+def _report_projection_no_conditionals_fixture_result() -> TicketFAQMarkdownResult:
+    base = _structured_report_fixture_result()
+    return replace(
+        base,
+        items=tuple(
+            {
+                key: value
+                for key, value in item.items()
+                if key != "outcome_diagnostics"
+            }
+            for item in base.items
+        ),
+    )
+
+
 _STRUCTURED_REPORT_GOLDEN_MARKDOWN = """# Support Ticket Deflection Report
 
 ## Support Tax Confirmation
@@ -1552,6 +1604,315 @@ def test_deflection_report_projection_marks_raw_question_evidence_export_only() 
         "surfaces",
     ]
     assert complete_evidence["hosted_consumer_safe_fields"] == []
+
+
+def _report_projection_drift_errors(
+    report_model: Mapping[str, object],
+    *,
+    expected_present: set[str] | None = None,
+    expected_absent: set[str] | None = None,
+) -> list[str]:
+    projection = deflection_report_model_contract_shape()["report_projection"]
+    contract_sections = {
+        str(section["id"]): section
+        for section in projection["sections"]
+        if isinstance(section, Mapping)
+    }
+    raw_sections = report_model.get("sections")
+    if not isinstance(raw_sections, list):
+        return ["report_model.sections is not a list"]
+    actual_sections = {
+        str(section.get("id")): section
+        for section in raw_sections
+        if isinstance(section, Mapping)
+    }
+    errors: list[str] = []
+    expected_present = expected_present or set()
+    expected_absent = expected_absent or set()
+
+    for section_id in sorted(set(actual_sections) - set(contract_sections)):
+        errors.append(f"unknown section emitted: {section_id}")
+    for section_id, contract in contract_sections.items():
+        presence = contract.get("presence")
+        mode = (
+            str(presence.get("mode"))
+            if isinstance(presence, Mapping)
+            else "required"
+        )
+        is_present = section_id in actual_sections
+        if section_id in expected_absent and is_present:
+            errors.append(f"section {section_id} should be absent")
+        if (mode == "required" or section_id in expected_present) and not is_present:
+            errors.append(f"section {section_id} missing")
+        if not is_present:
+            continue
+
+        section = actual_sections[section_id]
+        data = section.get("data")
+        if not isinstance(data, Mapping):
+            errors.append(f"section {section_id} data is not an object")
+            continue
+        errors.extend(_report_projection_data_errors(section_id, data, contract))
+    return errors
+
+
+def _report_projection_data_errors(
+    section_id: str,
+    data: Mapping[str, object],
+    contract: Mapping[str, object],
+) -> list[str]:
+    expected = set(_string_list(contract.get("projected_fields")))
+    optional = set(_string_list(contract.get("optional_projected_fields")))
+    actual = set(data)
+    errors = _field_set_errors(
+        f"section {section_id} data",
+        actual,
+        expected,
+        optional=optional,
+    )
+    collection = contract.get("collection")
+    if isinstance(collection, Mapping):
+        errors.extend(
+            _report_projection_collection_errors(
+                f"section {section_id}",
+                data,
+                collection,
+            )
+        )
+    errors.extend(
+        _report_projection_nested_object_errors(
+            f"section {section_id} data",
+            data,
+            contract.get("nested_object_fields"),
+        )
+    )
+    return errors
+
+
+def _report_projection_collection_errors(
+    label: str,
+    container: Mapping[str, object],
+    contract: Mapping[str, object],
+) -> list[str]:
+    field = str(contract.get("field"))
+    item_type = str(contract.get("item_type") or "object")
+    value = container.get(field)
+    if not isinstance(value, list):
+        return [f"{label}.{field} is not a list"]
+    errors: list[str] = []
+    if item_type == "string":
+        for index, item in enumerate(value):
+            if not isinstance(item, str):
+                errors.append(f"{label}.{field}[{index}] is not a string")
+        return errors
+
+    expected = set(_string_list(contract.get("projected_fields")))
+    for index, item in enumerate(value):
+        item_label = f"{label}.{field}[{index}]"
+        if not isinstance(item, Mapping):
+            errors.append(f"{item_label} is not an object")
+            continue
+        errors.extend(_field_set_errors(item_label, set(item), expected))
+        errors.extend(
+            _report_projection_nested_object_errors(
+                item_label,
+                item,
+                contract.get("nested_object_fields"),
+            )
+        )
+        errors.extend(
+            _report_projection_nested_collection_errors(
+                item_label,
+                item,
+                contract.get("nested_collection_fields"),
+            )
+        )
+    return errors
+
+
+def _report_projection_nested_object_errors(
+    label: str,
+    container: Mapping[str, object],
+    entries: object,
+) -> list[str]:
+    errors: list[str] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, Mapping):
+            continue
+        field = str(entry.get("field"))
+        value = container.get(field)
+        if not isinstance(value, Mapping):
+            errors.append(f"{label}.{field} is not an object")
+            continue
+        errors.extend(
+            _field_set_errors(
+                f"{label}.{field}",
+                set(value),
+                set(_string_list(entry.get("projected_fields"))),
+            )
+        )
+    return errors
+
+
+def _report_projection_nested_collection_errors(
+    label: str,
+    container: Mapping[str, object],
+    entries: object,
+) -> list[str]:
+    errors: list[str] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, Mapping):
+            continue
+        field = str(entry.get("field"))
+        value = container.get(field)
+        if not isinstance(value, list):
+            errors.append(f"{label}.{field} is not a list")
+            continue
+        expected = set(_string_list(entry.get("projected_fields")))
+        for index, item in enumerate(value):
+            item_label = f"{label}.{field}[{index}]"
+            if not isinstance(item, Mapping):
+                errors.append(f"{item_label} is not an object")
+                continue
+            errors.extend(_field_set_errors(item_label, set(item), expected))
+    return errors
+
+
+def _field_set_errors(
+    label: str,
+    actual: set[str],
+    expected: set[str],
+    *,
+    optional: set[str] | None = None,
+) -> list[str]:
+    optional = optional or set()
+    missing = sorted((expected - optional) - actual)
+    extra = sorted(actual - expected)
+    errors: list[str] = []
+    if missing:
+        errors.append(f"{label} missing fields: {', '.join(missing)}")
+    if extra:
+        errors.append(f"{label} has unexpected fields: {', '.join(extra)}")
+    return errors
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def test_deflection_report_projection_fields_match_runtime_output() -> None:
+    artifact = build_deflection_report_artifact(
+        _report_projection_runtime_fixture_result(),
+        source_label="zendesk-trial-export.json",
+    ).as_dict()
+
+    errors = _report_projection_drift_errors(
+        artifact["report_model"],
+        expected_present={"source_file", "outcome_diagnostics"},
+    )
+
+    assert errors == []
+
+
+def test_deflection_report_projection_conditional_sections_match_runtime_output() -> None:
+    artifact = build_deflection_report_artifact(
+        _report_projection_no_conditionals_fixture_result()
+    ).as_dict()
+
+    errors = _report_projection_drift_errors(
+        artifact["report_model"],
+        expected_absent={"source_file", "outcome_diagnostics"},
+    )
+
+    assert errors == []
+
+
+def test_deflection_report_projection_checker_fails_on_field_drift() -> None:
+    artifact = build_deflection_report_artifact(
+        _report_projection_runtime_fixture_result(),
+        source_label="zendesk-trial-export.json",
+    ).as_dict()
+    sections = {
+        section["id"]: section
+        for section in artifact["report_model"]["sections"]
+    }
+    sections["priority_fix_queue"]["data"]["items"][0].pop("top_evidence")
+    sections["question_details"]["data"]["rows"][0]["surprise_raw_payload"] = {
+        "ticket": "raw"
+    }
+
+    errors = _report_projection_drift_errors(
+        artifact["report_model"],
+        expected_present={"source_file", "outcome_diagnostics"},
+    )
+
+    assert (
+        "section priority_fix_queue.items[0] missing fields: top_evidence"
+        in errors
+    )
+    assert (
+        "section question_details.rows[0] has unexpected fields: "
+        "surprise_raw_payload"
+    ) in errors
+
+
+def test_deflection_report_projection_checker_fails_on_nested_drift() -> None:
+    artifact = build_deflection_report_artifact(
+        _report_projection_runtime_fixture_result(),
+        source_label="zendesk-trial-export.json",
+    ).as_dict()
+    sections = {
+        section["id"]: section
+        for section in artifact["report_model"]["sections"]
+    }
+    item = sections["priority_fix_queue"]["data"]["items"][0]
+    item["csat_signal"].pop("numeric_average")
+    item["top_evidence"][0]["raw_ticket_body"] = "do not project"
+
+    errors = _report_projection_drift_errors(
+        artifact["report_model"],
+        expected_present={"source_file", "outcome_diagnostics"},
+    )
+
+    assert (
+        "section priority_fix_queue.items[0].csat_signal missing fields: "
+        "numeric_average"
+    ) in errors
+    assert (
+        "section priority_fix_queue.items[0].top_evidence[0] has unexpected "
+        "fields: raw_ticket_body"
+    ) in errors
+
+
+def test_deflection_report_projection_checker_fails_on_presence_drift() -> None:
+    artifact = build_deflection_report_artifact(
+        _report_projection_no_conditionals_fixture_result()
+    ).as_dict()
+    artifact["report_model"]["sections"].append({
+        "id": "outcome_diagnostics",
+        "title": "Outcome Diagnostics",
+        "priority": 90,
+        "surfaces": ["web", "pdf", "markdown"],
+        "default_limit": None,
+        "required_data": [],
+        "snapshot_safe_fields": [],
+        "data": {
+            "outcome_diagnostic_ticket_count": 0,
+            "outcome_risk_ticket_count": 0,
+            "reopened_ticket_count": 0,
+            "negative_csat_ticket_count": 0,
+            "rows": [],
+        },
+    })
+
+    errors = _report_projection_drift_errors(
+        artifact["report_model"],
+        expected_absent={"source_file", "outcome_diagnostics"},
+    )
+
+    assert "section outcome_diagnostics should be absent" in errors
 
 
 def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:
