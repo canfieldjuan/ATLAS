@@ -20,6 +20,15 @@ the checked-out PR head. A lightweight PR guard also rejects changes to that
 baseline, so a future PR cannot add a secret and hide it by growing the
 baseline.
 
+For local prevention before CI, Atlas also ships a pre-commit hook config at
+`.pre-commit-config.yaml`. Install `pre-commit` 3.2 or newer and the
+`gitleaks` CLI locally, then run `pre-commit install` once in the checkout. The
+hook runs
+`gitleaks protect --staged --redact --verbose`, so staged secret-shaped changes
+are blocked before a commit is created and hook output does not print raw secret
+values. This complements the PR-time Gitleaks scan; it does not replace CI and
+does not rotate historical credentials.
+
 Legitimate baseline rotations are allowed only through a narrow controlled
 path: rotate or revoke the exposed provider credential first, add the
 `security-rotation` PR label, and keep the diff limited to
@@ -40,6 +49,10 @@ backlogs are triaged and ratcheted.
   uses `docs/security/gitleaks-baseline.json` to suppress the known historical
   findings from the first trusted-main adoption scan while still failing on new
   leaks.
+- Local staged secret scan: with `pre-commit` 3.2 or newer,
+  `pre-commit install` enables the repo's local Gitleaks hook, which runs
+  `gitleaks protect --staged --redact --verbose` before each commit when
+  installed.
 - Python SCA: pip-audit runs in advisory mode against deterministic tracked
   requirements files: `requirements.txt`, `requirements.asr.txt`,
   `atlas_edge/requirements.txt`, both `atlas_video-processing/**/requirements.txt`
