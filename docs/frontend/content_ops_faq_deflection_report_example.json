@@ -505,7 +505,7 @@
                 "missing_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 84,
+              "priority_score": 96,
               "question": "How do I enable SSO for my team?",
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
@@ -550,7 +550,7 @@
                 "draft_ready",
                 "benchmark_cost"
               ],
-              "priority_score": 59,
+              "priority_score": 93,
               "question": "How do I export attribution reports?",
               "rank": 1,
               "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
@@ -631,7 +631,7 @@
                 "missing_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 84,
+              "priority_score": 96,
               "question": "How do I enable SSO for my team?",
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
@@ -711,7 +711,7 @@
                 "draft_ready",
                 "benchmark_cost"
               ],
-              "priority_score": 59,
+              "priority_score": 93,
               "question": "How do I export attribution reports?",
               "rank": 1,
               "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
@@ -805,7 +805,7 @@
                 "missing_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 84,
+              "priority_score": 96,
               "question": "How do I enable SSO for my team?",
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
@@ -850,7 +850,7 @@
                 "draft_ready",
                 "benchmark_cost"
               ],
-              "priority_score": 59,
+              "priority_score": 93,
               "question": "How do I export attribution reports?",
               "rank": 1,
               "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",

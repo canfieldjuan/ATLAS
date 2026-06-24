@@ -52,11 +52,13 @@ _ACTION_RESULT_PAGE_LIMIT = 3
 _ACTION_EMAIL_LIMIT = 3
 _ACTION_PDF_LIMIT = 10
 _ACTION_BACKLOG_LIMIT = 25
+_ACTION_SUPPORT_COST_SCORE_MULTIPLIER = 3
+_ACTION_OPPORTUNITY_SCORE_CAP = 50
 _ACTION_STATUS_PRIORITY_WEIGHTS = MappingProxyType({
-    "Needs answer": 50,
-    "Already covered but still recurring": 45,
-    "Needs review": 35,
-    "Draft ready": 25,
+    "Needs answer": 8,
+    "Already covered but still recurring": 7,
+    "Needs review": 6,
+    "Draft ready": 5,
     "Low confidence": 0,
 })
 _SOURCE_EXAMPLE_LIMIT = 3
@@ -3291,8 +3293,8 @@ def _action_confidence(item: Mapping[str, Any]) -> str:
 def _action_priority_score(item: Mapping[str, Any], status: str) -> int:
     diagnostics = _item_outcome_diagnostics(item)
     ticket_count = _ticket_count(item)
-    score = int(round(_support_cost(ticket_count)))
-    score += _int(item.get("opportunity_score"))
+    score = int(round(_support_cost(ticket_count) * _ACTION_SUPPORT_COST_SCORE_MULTIPLIER))
+    score += min(_int(item.get("opportunity_score")), _ACTION_OPPORTUNITY_SCORE_CAP)
     score += int(_ACTION_STATUS_PRIORITY_WEIGHTS.get(status, 0))
     score += _int(diagnostics.get("negative_csat_ticket_count")) * 30
     score += _int(diagnostics.get("reopened_ticket_count")) * 20

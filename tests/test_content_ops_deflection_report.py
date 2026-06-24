@@ -781,8 +781,8 @@ def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:
     assert sparse["confidence"] == "low"
     assert sparse["priority_drivers"].count("low_confidence") == 1
     sparse_score_without_low_penalty = (
-        int(round(sparse["estimated_support_cost"]))
-        + sparse["opportunity_score"]
+        int(round(sparse["estimated_support_cost"] * 3))
+        + min(sparse["opportunity_score"], 50)
         + 5
     )
     assert sparse["priority_score"] == sparse_score_without_low_penalty - 25
@@ -822,6 +822,91 @@ def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:
     assert suppressed_by_question[
         "Can I rename one workspace?"
     ]["suppression_reason"] == "too_low_volume"
+
+
+def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=16,
+        ticket_source_count=16,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "Why does the nightly sync fail for enterprise workspaces?",
+                "customer_wording": "nightly sync keeps failing",
+                "topic": "integrations",
+                "weighted_frequency": 8,
+                "ticket_count": 8,
+                "opportunity_score": 4,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": tuple(f"ticket-sync-{index}" for index in range(8)),
+            },
+            {
+                "question": "How do I export a quarterly billing report?",
+                "customer_wording": "quarterly billing export",
+                "topic": "billing",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 150,
+                "answer": "Open Billing, choose Reports, then export the quarter.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "source_ids": tuple(f"ticket-billing-{index}" for index in range(3)),
+            },
+            {
+                "question": "How do I find the workspace invite article?",
+                "customer_wording": "invite article still confusing",
+                "topic": "workspace",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 145,
+                "answer": "Open Workspace settings and choose Invitations.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "outcome_diagnostics": {
+                    "reopened_ticket_count": 1,
+                    "ticket_status_summary": {"reopened": 1, "resolved": 2},
+                },
+                "source_ids": tuple(f"ticket-workspace-{index}" for index in range(3)),
+            },
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).as_dict()[
+            "report_model"
+        ]["sections"]
+    }
+    priority_items = sections["priority_fix_queue"]["data"]["items"]
+    by_question = {item["question"]: item for item in priority_items}
+    unresolved = by_question[
+        "Why does the nightly sync fail for enterprise workspaces?"
+    ]
+
+    assert priority_items[0]["question"] == (
+        "Why does the nightly sync fail for enterprise workspaces?"
+    )
+    assert unresolved["estimated_support_cost"] == 108.0
+    assert unresolved["status"] == "Needs answer"
+    assert unresolved["fix_type"] == "create_missing_answer"
+    assert "missing_answer" in unresolved["priority_drivers"]
+    assert "answer" not in unresolved
+    assert by_question[
+        "How do I export a quarterly billing report?"
+    ]["status"] == "Draft ready"
+    assert by_question[
+        "How do I find the workspace invite article?"
+    ]["status"] == "Already covered but still recurring"
+    assert sections["top_unresolved_repeats"]["data"]["items"][0]["question"] == (
+        "Why does the nightly sync fail for enterprise workspaces?"
+    )
+    assert sections["drafted_resolutions"]["data"]["items"][0]["question"] == (
+        "How do I export a quarterly billing report?"
+    )
+    assert sections["already_covered_still_recurring"]["data"]["items"][0][
+        "question"
+    ] == "How do I find the workspace invite article?"
 
 
 def test_deflection_suppressed_repeat_review_queue_explains_hidden_rows() -> None:
