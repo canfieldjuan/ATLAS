@@ -4,6 +4,8 @@ from pathlib import Path
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "security_guardrails.yml"
+PRE_COMMIT_CONFIG = Path(__file__).resolve().parents[1] / ".pre-commit-config.yaml"
+SECURITY_GUARDRAILS_DOC = Path(__file__).resolve().parents[1] / "docs" / "SECURITY_GUARDRAILS.md"
 
 
 def _workflow_text() -> str:
@@ -38,3 +40,25 @@ def test_heavy_scans_do_not_run_on_pull_request_target() -> None:
     text = _workflow_text()
 
     assert "if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'" in text
+
+
+def test_gitleaks_pre_commit_scans_staged_changes_without_echoing_secrets() -> None:
+    text = PRE_COMMIT_CONFIG.read_text(encoding="utf-8")
+
+    assert 'minimum_pre_commit_version: "3.2.0"' in text
+    assert "repo: local" in text
+    assert "id: gitleaks-protect" in text
+    assert "entry: gitleaks protect --staged --redact --verbose" in text
+    assert "language: system" in text
+    assert "pass_filenames: false" in text
+    assert "stages: [pre-commit]" in text
+
+
+def test_security_guardrails_docs_explain_gitleaks_pre_commit_install() -> None:
+    text = SECURITY_GUARDRAILS_DOC.read_text(encoding="utf-8")
+
+    assert ".pre-commit-config.yaml" in text
+    assert "`pre-commit` 3.2 or newer" in text
+    assert "pre-commit install" in text
+    assert "gitleaks protect --staged --redact --verbose" in text
+    assert "does not rotate historical credentials" in text
