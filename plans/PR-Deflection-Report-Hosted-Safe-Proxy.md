@@ -15,9 +15,10 @@ from the generated report-model contract. This fixes the root at that boundary:
 locked/free responses stay snapshot-only, and unlocked responses expose only a
 hosted-safe report model constructed from generated allowlists.
 
-Diff-size note: this is just over the 400 LOC soft cap because the boundary
-test needs a representative unlocked report model with nested safe and raw
-fields. The production change is limited to the public JSON proxy.
+Diff-size note: this is over the 400 LOC soft cap because the privacy-boundary
+fix needs representative unlocked report fixtures for summary leaks, records,
+object arrays, nested safe fields, and raw-field rejection. The production
+change is still limited to the public JSON proxy.
 
 ## Scope (this PR)
 
@@ -32,6 +33,8 @@ Slice phase: Production hardening
 3. Add tests proving locked/free JSON has no `answer`/`steps`, while unlocked
    JSON can include paid web-render `answer`/`steps` but strips export-only raw
    fields.
+4. Fix-loop scope: Max files: 3. The Codex P1/P2 follow-up is limited to the
+   public proxy, its focused test, and this plan.
 
 ### Review Contract
 
@@ -65,8 +68,11 @@ field constants when unlocked.
 
 The projection is recursive for object fields and object-array fields when a
 matching nested generated allowlist exists. Fields without a generated
-allowlist are copied only as scalar or scalar-array values; object payloads
-without explicit nested allowlists are omitted.
+allowlist are copied only as scalar or scalar-array values, except for the
+contract-owned hosted-safe record and object-array fields that have explicit
+field readers (`status_counts`, `status_mix`, and `term_mappings`). The report
+model summary has no generated hosted-safe allowlist yet, so the public payload
+emits an empty summary instead of self-allowlisting backend keys.
 
 ## Intentional
 
@@ -75,6 +81,8 @@ without explicit nested allowlists are omitted.
   server side; this PR constrains only the browser-facing JSON API boundary.
 - `answer` and `steps` remain allowed only in unlocked hosted-safe report-model
   rows. The locked/free path still returns no artifact and no paid answer body.
+- Summary fields are omitted from the public hosted report model until ATLAS
+  publishes a generated summary allowlist. This is fail-closed on purpose.
 
 ## Deferred
 
@@ -86,14 +94,14 @@ Parked hardening: none.
 ## Verification
 
 - Portfolio proxy test: package `portfolio-ui`, script
-  `test:deflection-atlas-proxy` -- 27 tests passed.
+  `test:deflection-atlas-proxy` -- 27 tests passed after the Codex P1/P2 fixes.
 - Local PR review bundle -- passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Deflection-Report-Hosted-Safe-Proxy.md` | 99 |
-| `portfolio-ui/api/content-ops/deflection/report.js` | 127 |
-| `portfolio-ui/scripts/faq-deflection-atlas-proxy.test.mjs` | 181 |
-| **Total** | **407** |
+| `plans/PR-Deflection-Report-Hosted-Safe-Proxy.md` | 107 |
+| `portfolio-ui/api/content-ops/deflection/report.js` | 165 |
+| `portfolio-ui/scripts/faq-deflection-atlas-proxy.test.mjs` | 219 |
+| **Total** | **491** |

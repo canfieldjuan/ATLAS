@@ -2,6 +2,15 @@ import { clean, loadDeflectionReport, proxyErrorPublicPayload } from "./atlas-re
 import * as reportModelContract from "./report-model-contract.js";
 
 const DEFLECTION_REPORT_SECTION_ID_SET = new Set(reportModelContract.DEFLECTION_REPORT_SECTION_IDS);
+const HOSTED_SAFE_RECORD_FIELDS = new Set(["status_counts", "status_mix"]);
+const HOSTED_SAFE_OBJECT_ARRAY_FIELDS = Object.freeze({
+  term_mappings: Object.freeze([
+    "customer_term",
+    "documentation_term",
+    "suggestion",
+    "source_id_count",
+  ]),
+});
 
 function isObjectRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value);
@@ -43,6 +52,25 @@ function cloneScalarArray(value) {
   return cloned;
 }
 
+function cloneScalarRecord(value) {
+  if (!isObjectRecord(value)) return undefined;
+  const cloned = {};
+  for (const [key, item] of Object.entries(value)) {
+    const scalar = cloneScalar(item);
+    if (scalar === undefined) return undefined;
+    cloned[key] = scalar;
+  }
+  return cloned;
+}
+
+function projectKnownObjectArray(field, value) {
+  const fields = HOSTED_SAFE_OBJECT_ARRAY_FIELDS[field];
+  if (!fields || !Array.isArray(value)) return undefined;
+  return value
+    .filter(isObjectRecord)
+    .map((item) => projectHostedFields(item, fields, `${fieldConstToken(field)}_ITEM`));
+}
+
 function projectHostedFields(record, fields, prefix) {
   if (!isObjectRecord(record)) return {};
   const projected = {};
@@ -70,6 +98,16 @@ function projectHostedFields(record, fields, prefix) {
     const scalarArray = cloneScalarArray(value);
     if (scalarArray !== undefined) {
       projected[field] = scalarArray;
+      continue;
+    }
+    if (HOSTED_SAFE_RECORD_FIELDS.has(field)) {
+      const scalarRecord = cloneScalarRecord(value);
+      if (scalarRecord !== undefined) projected[field] = scalarRecord;
+      continue;
+    }
+    const objectArray = projectKnownObjectArray(field, value);
+    if (objectArray !== undefined) {
+      projected[field] = objectArray;
     }
   }
   return projected;
@@ -102,7 +140,7 @@ function publicHostedReportModel(model) {
   return {
     schema_version: clean(model.schema_version),
     title: clean(model.title),
-    summary: projectHostedFields(model.summary, Object.keys(model.summary || {}), "DEFLECTION_REPORT_SUMMARY"),
+    summary: {},
     sections,
   };
 }

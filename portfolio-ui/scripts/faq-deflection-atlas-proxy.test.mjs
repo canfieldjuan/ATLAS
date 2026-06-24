@@ -457,6 +457,8 @@ await test("public report API returns only hosted-safe paid report model after u
       title: "Paid deflection report",
       summary: {
         generated: 1,
+        source_ids: ["summary-ticket-hidden"],
+        private_scalar_note: "private summary note",
         raw_internal_note: { source_ids: ["ticket-hidden"] },
       },
       sections: [
@@ -488,6 +490,9 @@ await test("public report API returns only hosted-safe paid report model after u
                 term_mappings: [
                   {
                     customer_term: "billing reset",
+                    documentation_term: "billing access reset",
+                    suggestion: "Use customer wording in the help-center title.",
+                    source_id_count: 1,
                     source_ids: ["term-source-hidden"],
                   },
                 ],
@@ -507,6 +512,9 @@ await test("public report API returns only hosted-safe paid report model after u
           required_data: ["items"],
           snapshot_safe_fields: [],
           data: {
+            status_counts: {
+              "Needs answer": 1,
+            },
             items: [
               {
                 rank: 1,
@@ -540,6 +548,29 @@ await test("public report API returns only hosted-safe paid report model after u
             ],
           },
         },
+        {
+          id: "outcome_diagnostics",
+          title: "Outcome diagnostics",
+          priority: 30,
+          surfaces: ["result_page"],
+          default_limit: 3,
+          required_data: ["rows"],
+          snapshot_safe_fields: [],
+          data: {
+            rows: [
+              {
+                question: "How do I reset billing access?",
+                status_mix: {
+                  reopened: 2,
+                  solved: 3,
+                },
+                reopened_ticket_count: 2,
+                negative_csat_ticket_count: 1,
+                guidance: "Review billing reset workflow.",
+              },
+            ],
+          },
+        },
       ],
     },
   };
@@ -563,22 +594,29 @@ await test("public report API returns only hosted-safe paid report model after u
     const payload = JSON.parse(res.body);
     assert.equal(payload.artifact_status, "unlocked");
     assert.equal(payload.artifact.report_model.title, "Paid deflection report");
+    assert.deepEqual(payload.artifact.report_model.summary, {});
     const encoded = JSON.stringify(payload);
     assert.match(encoded, /Open Billing > Users/);
     assert.match(encoded, /Choose Users/);
+    assert.match(encoded, /billing access reset/);
+    assert.match(encoded, /Use customer wording in the help-center title/);
+    assert.match(encoded, /"status_counts":\{"Needs answer":1\}/);
+    assert.match(encoded, /"status_mix":\{"reopened":2,"solved":3\}/);
     for (const forbidden of [
       "raw markdown must not reach browser JSON",
       "faq_result",
       "evidence_export",
       "source_ids",
       "evidence_quotes",
-      "outcome_diagnostics",
       "representative_phrasing",
       "recommended_title",
       "top_evidence",
       "zendesk:raw-source",
       "private raw evidence",
       "private representative phrase",
+      "diagnostic-hidden",
+      "summary-ticket-hidden",
+      "private summary note",
       "term-source-hidden",
       ENV.ATLAS_B2B_JWT,
       ACCOUNT_ID,
