@@ -1611,22 +1611,44 @@ def _report_projection_drift_errors(
     *,
     expected_present: set[str] | None = None,
     expected_absent: set[str] | None = None,
+    require_non_empty_collections: bool = True,
 ) -> list[str]:
     projection = deflection_report_model_contract_shape()["report_projection"]
+    errors = _field_set_errors(
+        "report_model",
+        set(report_model),
+        set(_string_list(projection.get("model_fields"))),
+    )
     contract_sections = {
         str(section["id"]): section
         for section in projection["sections"]
         if isinstance(section, Mapping)
     }
+    section_fields = set(_string_list(projection.get("section_fields")))
     raw_sections = report_model.get("sections")
     if not isinstance(raw_sections, list):
-        return ["report_model.sections is not a list"]
-    actual_sections = {
-        str(section.get("id")): section
-        for section in raw_sections
-        if isinstance(section, Mapping)
-    }
-    errors: list[str] = []
+        errors.append("report_model.sections is not a list")
+        return errors
+    actual_sections: dict[str, Mapping[str, object]] = {}
+    for index, section in enumerate(raw_sections):
+        if not isinstance(section, Mapping):
+            errors.append(f"report_model.sections[{index}] is not an object")
+            continue
+        section_id = section.get("id")
+        if not isinstance(section_id, str) or not section_id:
+            errors.append(f"report_model.sections[{index}] missing string id")
+            continue
+        if section_id in actual_sections:
+            errors.append(f"duplicate section emitted: {section_id}")
+            continue
+        actual_sections[section_id] = section
+        errors.extend(
+            _field_set_errors(
+                f"section {section_id} envelope",
+                set(section),
+                section_fields,
+            )
+        )
     expected_present = expected_present or set()
     expected_absent = expected_absent or set()
 
@@ -1652,7 +1674,14 @@ def _report_projection_drift_errors(
         if not isinstance(data, Mapping):
             errors.append(f"section {section_id} data is not an object")
             continue
-        errors.extend(_report_projection_data_errors(section_id, data, contract))
+        errors.extend(
+            _report_projection_data_errors(
+                section_id,
+                data,
+                contract,
+                require_non_empty_collections=require_non_empty_collections,
+            )
+        )
     return errors
 
 
@@ -1660,6 +1689,8 @@ def _report_projection_data_errors(
     section_id: str,
     data: Mapping[str, object],
     contract: Mapping[str, object],
+    *,
+    require_non_empty_collections: bool,
 ) -> list[str]:
     expected = set(_string_list(contract.get("projected_fields")))
     optional = set(_string_list(contract.get("optional_projected_fields")))
@@ -1677,6 +1708,7 @@ def _report_projection_data_errors(
                 f"section {section_id}",
                 data,
                 collection,
+                require_non_empty=require_non_empty_collections,
             )
         )
     errors.extend(
@@ -1686,6 +1718,7 @@ def _report_projection_data_errors(
             contract.get("nested_object_fields"),
         )
     )
+    errors.extend(_report_projection_record_field_errors(section_id, data, contract))
     return errors
 
 
@@ -1693,6 +1726,8 @@ def _report_projection_collection_errors(
     label: str,
     container: Mapping[str, object],
     contract: Mapping[str, object],
+    *,
+    require_non_empty: bool,
 ) -> list[str]:
     field = str(contract.get("field"))
     item_type = str(contract.get("item_type") or "object")
@@ -1700,6 +1735,8 @@ def _report_projection_collection_errors(
     if not isinstance(value, list):
         return [f"{label}.{field} is not a list"]
     errors: list[str] = []
+    if require_non_empty and not value:
+        errors.append(f"{label}.{field} is empty")
     if item_type == "string":
         for index, item in enumerate(value):
             if not isinstance(item, str):
@@ -1725,6 +1762,7 @@ def _report_projection_collection_errors(
                 item_label,
                 item,
                 contract.get("nested_collection_fields"),
+                require_non_empty=require_non_empty,
             )
         )
     return errors
@@ -1758,6 +1796,8 @@ def _report_projection_nested_collection_errors(
     label: str,
     container: Mapping[str, object],
     entries: object,
+    *,
+    require_non_empty: bool,
 ) -> list[str]:
     errors: list[str] = []
     for entry in entries if isinstance(entries, list) else []:
@@ -1768,6 +1808,8 @@ def _report_projection_nested_collection_errors(
         if not isinstance(value, list):
             errors.append(f"{label}.{field} is not a list")
             continue
+        if require_non_empty and not value:
+            errors.append(f"{label}.{field} is empty")
         expected = set(_string_list(entry.get("projected_fields")))
         for index, item in enumerate(value):
             item_label = f"{label}.{field}[{index}]"
@@ -1775,6 +1817,19 @@ def _report_projection_nested_collection_errors(
                 errors.append(f"{item_label} is not an object")
                 continue
             errors.extend(_field_set_errors(item_label, set(item), expected))
+    return errors
+
+
+def _report_projection_record_field_errors(
+    section_id: str,
+    data: Mapping[str, object],
+    contract: Mapping[str, object],
+) -> list[str]:
+    errors: list[str] = []
+    for field in _string_list(contract.get("record_fields")):
+        value = data.get(field)
+        if not isinstance(value, Mapping):
+            errors.append(f"section {section_id} data.{field} is not an object")
     return errors
 
 
@@ -1824,6 +1879,7 @@ def test_deflection_report_projection_conditional_sections_match_runtime_output(
     errors = _report_projection_drift_errors(
         artifact["report_model"],
         expected_absent={"source_file", "outcome_diagnostics"},
+        require_non_empty_collections=False,
     )
 
     assert errors == []
@@ -1913,6 +1969,78 @@ def test_deflection_report_projection_checker_fails_on_presence_drift() -> None:
     )
 
     assert "section outcome_diagnostics should be absent" in errors
+
+
+def test_deflection_report_projection_checker_fails_on_envelope_drift() -> None:
+    artifact = build_deflection_report_artifact(
+        _report_projection_runtime_fixture_result(),
+        source_label="zendesk-trial-export.json",
+    ).as_dict()
+    report_model = artifact["report_model"]
+    report_model.pop("title")
+    report_model["debug_payload"] = {"raw": "do not project"}
+    sections = report_model["sections"]
+    first_section = sections[0]
+    first_section["debug_payload"] = {"raw": "do not project"}
+    sections.append(dict(first_section))
+    sections.append("not-a-section")
+
+    errors = _report_projection_drift_errors(
+        report_model,
+        expected_present={"source_file", "outcome_diagnostics"},
+    )
+
+    assert "report_model missing fields: title" in errors
+    assert "report_model has unexpected fields: debug_payload" in errors
+    assert (
+        f"section {first_section['id']} envelope has unexpected fields: "
+        "debug_payload"
+    ) in errors
+    assert f"duplicate section emitted: {first_section['id']}" in errors
+    assert "report_model.sections[13] is not an object" in errors
+
+
+def test_deflection_report_projection_checker_fails_on_record_field_drift() -> None:
+    artifact = build_deflection_report_artifact(
+        _report_projection_runtime_fixture_result(),
+        source_label="zendesk-trial-export.json",
+    ).as_dict()
+    sections = {
+        section["id"]: section
+        for section in artifact["report_model"]["sections"]
+    }
+    sections["priority_fix_queue"]["data"]["status_counts"] = [
+        "Draft ready",
+        "Needs answer",
+    ]
+
+    errors = _report_projection_drift_errors(
+        artifact["report_model"],
+        expected_present={"source_file", "outcome_diagnostics"},
+    )
+
+    assert "section priority_fix_queue data.status_counts is not an object" in errors
+
+
+def test_deflection_report_projection_checker_fails_on_empty_collections() -> None:
+    artifact = build_deflection_report_artifact(
+        _report_projection_runtime_fixture_result(),
+        source_label="zendesk-trial-export.json",
+    ).as_dict()
+    sections = {
+        section["id"]: section
+        for section in artifact["report_model"]["sections"]
+    }
+    sections["ranked_questions"]["data"]["rows"] = []
+    sections["priority_fix_queue"]["data"]["items"][0]["top_evidence"] = []
+
+    errors = _report_projection_drift_errors(
+        artifact["report_model"],
+        expected_present={"source_file", "outcome_diagnostics"},
+    )
+
+    assert "section ranked_questions.rows is empty" in errors
+    assert "section priority_fix_queue.items[0].top_evidence is empty" in errors
 
 
 def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:

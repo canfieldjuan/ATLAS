@@ -42,8 +42,9 @@ Slice phase: Production hardening
    `outcome_diagnostics` is absent, and a fixture with both signals proves they
    are present with the declared fields.
 4. Add negative drift probes that mutate a real report model to prove missing
-   required fields, unexpected extra fields, and wrong conditional presence are
-   detected by the parity checker.
+   required fields, unexpected extra fields, wrong conditional presence,
+   envelope drift, record-field drift, and empty collections are detected by
+   the parity checker.
 
 ### Review Contract
 - Acceptance criteria:
@@ -52,10 +53,12 @@ Slice phase: Production hardening
         mirror.
   - [ ] Required section presence and conditional section absence/presence are
         both verified with real artifacts.
-  - [ ] Top-level section data, collection row/item fields, nested object
-        fields, and nested collection item fields are all covered.
+  - [ ] Top-level report envelopes, section envelopes, section data,
+        collection row/item fields, nested object fields, nested collection item
+        fields, and record fields are all covered.
   - [ ] At least one negative fixture proves each checker branch fails closed
-        for missing fields, extra fields, and presence drift.
+        for missing fields, extra fields, presence drift, duplicate/malformed
+        sections, record-field type drift, and empty collections.
   - [ ] No frontend codegen or portfolio consumer changes are included.
 - Affected surfaces: paid deflection report model contract tests; extracted
   content pipeline contract metadata if a real mismatch is found.
@@ -79,8 +82,10 @@ that:
 3. walk emitted sections by `id`;
 4. compare actual `data` key sets to declared projected fields, with optional
    fields allowed to be absent;
-5. recursively compare declared collection item fields, nested object fields,
-   nested collection item fields, and record-field mappings; and
+5. compare report and section envelope fields, duplicate/malformed sections,
+   declared collection item fields, nested object fields, nested collection
+   item fields, record-field mappings, and non-empty coverage for the rich
+   parity fixture; and
 6. return human-readable drift messages so negative tests can assert the
    failure mode.
 
@@ -111,10 +116,10 @@ Parked hardening: none.
 
 ## Verification
 
-- python -m pytest tests/test_content_ops_deflection_report.py::test_deflection_report_projection_fields_match_runtime_output tests/test_content_ops_deflection_report.py::test_deflection_report_projection_conditional_sections_match_runtime_output tests/test_content_ops_deflection_report.py::test_deflection_report_projection_checker_fails_on_field_drift tests/test_content_ops_deflection_report.py::test_deflection_report_projection_checker_fails_on_nested_drift tests/test_content_ops_deflection_report.py::test_deflection_report_projection_checker_fails_on_presence_drift -q
-  - 5 passed.
+- python -m pytest tests/test_content_ops_deflection_report.py -k projection -q
+  - 14 passed.
 - python -m pytest tests/test_content_ops_deflection_report.py -q
-  - 160 passed.
+  - 163 passed.
 - python -m py_compile extracted_content_pipeline/faq_deflection_report.py tests/test_content_ops_deflection_report.py
   - Passed.
 - git diff --check
@@ -133,6 +138,6 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Deflection-Report-Runtime-Contract.md` | 138 |
-| `tests/test_content_ops_deflection_report.py` | 361 |
-| **Total** | **499** |
+| `plans/PR-Deflection-Report-Runtime-Contract.md` | 143 |
+| `tests/test_content_ops_deflection_report.py` | 489 |
+| **Total** | **632** |
