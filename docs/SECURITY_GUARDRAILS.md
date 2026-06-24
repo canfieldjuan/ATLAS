@@ -65,6 +65,13 @@ SHA and pin the Gitleaks container image by digest. The rest of the repository's
 older workflow actions are intentionally left to a follow-up fleet-wide pinning
 and OIDC review so this slice stays focused on the new guardrails.
 
+Security-critical GitHub labels used by Dependabot SLA tracking and controlled
+Gitleaks baseline rotations are code-owned in `.github/labels.json`. The
+`Repo Labels` workflow reconciles that manifest through
+`scripts/sync_github_labels.py` on trusted `main` updates and manual dispatch,
+so deleting one of those labels becomes manifest drift instead of silent policy
+loss.
+
 Workflow supply-chain posture is checked by
 `scripts/audit_workflow_security_posture.py`. It fails unapproved
 `pull_request_target` jobs and unapproved `id-token: write` / `write-all`

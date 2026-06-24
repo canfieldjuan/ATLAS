@@ -1,0 +1,22 @@
+[
+  {
+    "name": "dependencies",
+    "color": "0366d6",
+    "description": "Dependency updates and dependency-maintenance work"
+  },
+  {
+    "name": "security",
+    "color": "b60205",
+    "description": "Security-relevant dependency or vulnerability work"
+  },
+  {
+    "name": "cve-remediation-sla",
+    "color": "5319e7",
+    "description": "Dependabot/CVE remediation governed by SECURITY.md SLA"
+  },
+  {
+    "name": "security-rotation",
+    "color": "d93f0b",
+    "description": "Controlled credential or security-baseline rotation"
+  }
+]
