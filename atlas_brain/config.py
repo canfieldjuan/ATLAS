@@ -5695,6 +5695,10 @@ class Settings(BaseSettings):
     # General
     debug: bool = Field(default=False, description="Enable debug mode")
     log_level: str = Field(default="INFO", description="Logging level")
+    log_format: str = Field(
+        default="text",
+        description="Logging format: text or json",
+    )
     log_dir: Path = Field(default=Path("logs"), description="Log directory")
     models_dir: Path = Field(default=Path("models"), description="Models cache directory")
 

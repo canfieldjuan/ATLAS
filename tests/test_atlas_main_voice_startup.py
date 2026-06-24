@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from datetime import datetime, timezone
 import sys
 from types import SimpleNamespace
@@ -9,6 +11,202 @@ import pytest
 from fastapi.testclient import TestClient
 
 from atlas_brain import main
+from atlas_brain.logging_config import (
+    AtlasJsonFormatter,
+    TEXT_LOG_FORMAT,
+    build_log_formatter,
+    configure_logging,
+)
+
+
+def test_build_log_formatter_keeps_text_default():
+    formatter = build_log_formatter("text")
+
+    assert isinstance(formatter, logging.Formatter)
+    assert formatter._style._fmt == TEXT_LOG_FORMAT
+
+
+def test_build_log_formatter_rejects_unknown_format():
+    with pytest.raises(ValueError, match="ATLAS_LOG_FORMAT"):
+        build_log_formatter("xml")
+
+
+def test_json_log_formatter_emits_stable_fields_and_extra():
+    record = logging.LogRecord(
+        name="atlas.tests",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=42,
+        msg="hello %s",
+        args=("world",),
+        exc_info=None,
+        func="test_func",
+    )
+    record.account_id = "acct-123"
+    record.not_json = object()
+
+    payload = json.loads(AtlasJsonFormatter().format(record))
+
+    assert payload["timestamp"].endswith("Z")
+    assert payload["level"] == "INFO"
+    assert payload["logger"] == "atlas.tests"
+    assert payload["message"] == "hello world"
+    assert payload["module"] == "test_atlas_main_voice_startup"
+    assert payload["function"] == "test_func"
+    assert payload["line"] == 42
+    assert payload["extra"]["account_id"] == "acct-123"
+    assert isinstance(payload["extra"]["not_json"], str)
+
+
+def test_json_log_formatter_namespaces_reserved_extra_fields():
+    record = logging.LogRecord(
+        name="atlas.tests",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=45,
+        msg="canonical message",
+        args=(),
+        exc_info=None,
+        func="test_func",
+    )
+    record.level = "business-level"
+    record.logger = "business-logger"
+    record.timestamp = "yesterday"
+
+    payload = json.loads(AtlasJsonFormatter().format(record))
+
+    assert payload["level"] == "ERROR"
+    assert payload["logger"] == "atlas.tests"
+    assert payload["timestamp"] != "yesterday"
+    assert payload["extra"]["level"] == "business-level"
+    assert payload["extra"]["logger"] == "business-logger"
+    assert payload["extra"]["timestamp"] == "yesterday"
+
+
+def test_json_log_formatter_emits_strict_json_for_non_finite_numbers():
+    record = logging.LogRecord(
+        name="atlas.tests",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=52,
+        msg="metric",
+        args=(),
+        exc_info=None,
+        func="test_func",
+    )
+    record.positive_infinity = float("inf")
+    record.not_a_number = float("nan")
+
+    line = AtlasJsonFormatter().format(record)
+    payload = json.loads(line)
+
+    assert "Infinity" not in line
+    assert "NaN" not in line
+    assert payload["extra"]["positive_infinity"] == "inf"
+    assert payload["extra"]["not_a_number"] == "nan"
+
+
+def test_json_log_formatter_normalizes_nested_mixed_key_dicts():
+    record = logging.LogRecord(
+        name="atlas.tests",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=61,
+        msg="nested",
+        args=(),
+        exc_info=None,
+        func="test_func",
+    )
+    record.details = {"b": "two", 1: "one", "nested": {2: "two"}}
+
+    payload = json.loads(AtlasJsonFormatter().format(record))
+
+    assert payload["extra"]["details"]["1"] == "one"
+    assert payload["extra"]["details"]["b"] == "two"
+    assert payload["extra"]["details"]["nested"]["2"] == "two"
+
+
+def test_json_log_formatter_includes_exception_details():
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        exc_info = sys.exc_info()
+
+    record = logging.LogRecord(
+        name="atlas.tests",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=51,
+        msg="failed",
+        args=(),
+        exc_info=exc_info,
+        func="test_func",
+    )
+
+    payload = json.loads(AtlasJsonFormatter().format(record))
+
+    assert payload["exception"]["type"] == "RuntimeError"
+    assert payload["exception"]["message"] == "boom"
+    assert "RuntimeError: boom" in payload["exception"]["traceback"]
+
+
+def test_json_log_formatter_includes_cached_exception_text():
+    record = logging.LogRecord(
+        name="atlas.tests",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=57,
+        msg="failed from cached text",
+        args=(),
+        exc_info=None,
+        func="test_func",
+    )
+    record.exc_text = "Traceback (most recent call last):\nValueError: cached boom"
+
+    payload = json.loads(AtlasJsonFormatter().format(record))
+
+    assert payload["exception"]["type"] == "unknown"
+    assert payload["exception"]["message"] == "ValueError: cached boom"
+    assert "ValueError: cached boom" in payload["exception"]["traceback"]
+
+
+def test_configure_logging_installs_json_formatter_on_root_and_uvicorn_handlers():
+    root_logger = logging.getLogger()
+    old_handlers = list(root_logger.handlers)
+    old_level = root_logger.level
+    uvicorn_logger = logging.getLogger("uvicorn.access")
+    uvicorn_error_logger = logging.getLogger("uvicorn.error")
+    old_uvicorn_handlers = list(uvicorn_logger.handlers)
+    old_uvicorn_level = uvicorn_logger.level
+    old_uvicorn_propagate = uvicorn_logger.propagate
+    old_uvicorn_error_handlers = list(uvicorn_error_logger.handlers)
+    old_uvicorn_error_level = uvicorn_error_logger.level
+    old_uvicorn_error_propagate = uvicorn_error_logger.propagate
+    root_handler = logging.StreamHandler()
+    uvicorn_handler = logging.StreamHandler()
+    uvicorn_error_handler = logging.StreamHandler()
+
+    try:
+        root_logger.handlers[:] = [root_handler]
+        uvicorn_logger.handlers[:] = [uvicorn_handler]
+        uvicorn_logger.propagate = False
+        uvicorn_error_logger.handlers[:] = [uvicorn_error_handler]
+        uvicorn_error_logger.propagate = False
+        configure_logging(level="WARNING", log_format="json")
+
+        assert root_logger.level == logging.WARNING
+        assert isinstance(root_handler.formatter, AtlasJsonFormatter)
+        assert isinstance(uvicorn_handler.formatter, AtlasJsonFormatter)
+        assert isinstance(uvicorn_error_handler.formatter, AtlasJsonFormatter)
+    finally:
+        root_logger.handlers[:] = old_handlers
+        root_logger.setLevel(old_level)
+        uvicorn_logger.handlers[:] = old_uvicorn_handlers
+        uvicorn_logger.setLevel(old_uvicorn_level)
+        uvicorn_logger.propagate = old_uvicorn_propagate
+        uvicorn_error_logger.handlers[:] = old_uvicorn_error_handlers
+        uvicorn_error_logger.setLevel(old_uvicorn_error_level)
+        uvicorn_error_logger.propagate = old_uvicorn_error_propagate
 
 
 def _paid_funnel_settings(
