@@ -2,7 +2,12 @@ import { clean, loadDeflectionReport, proxyErrorPublicPayload } from "./atlas-re
 import * as reportModelContract from "./report-model-contract.js";
 
 const DEFLECTION_REPORT_SECTION_ID_SET = new Set(reportModelContract.DEFLECTION_REPORT_SECTION_IDS);
-const HOSTED_SAFE_RECORD_FIELDS = new Set(["status_counts", "status_mix"]);
+const HOSTED_SAFE_RECORD_FIELDS = new Set([
+  "reason_counts",
+  "source_date_window",
+  "status_counts",
+  "status_mix",
+]);
 const HOSTED_SAFE_OBJECT_ARRAY_FIELDS = Object.freeze({
   term_mappings: Object.freeze([
     "customer_term",
