@@ -1141,6 +1141,7 @@
 - [PR-SEO-Prerender](archive/PR-SEO-Prerender.md)
 - [PR-Security-CVE-Remediation-SLA](archive/PR-Security-CVE-Remediation-SLA.md) - lane: security/cve-remediation-sla | phase: Production hardening
 - [PR-Security-Disclosure-Policy](archive/PR-Security-Disclosure-Policy.md) - lane: security/hardening-1656 | phase: Production hardening
+- [PR-Security-Gitleaks-Precommit](archive/PR-Security-Gitleaks-Precommit.md) - lane: security/gitleaks-precommit | phase: Workflow/process
 - [PR-Security-Guardrail-CI](archive/PR-Security-Guardrail-CI.md) - lane: security/workflow | phase: Production hardening
 - [PR-Security-Labels-As-Code](archive/PR-Security-Labels-As-Code.md) - lane: security/labels-as-code | phase: Workflow/process
 - [PR-Security-Paid-Funnel-Alert-Channel](archive/PR-Security-Paid-Funnel-Alert-Channel.md) - lane: security/paid-funnel-alert-channel | phase: Production hardening

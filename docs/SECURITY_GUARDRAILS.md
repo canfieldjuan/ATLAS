@@ -35,14 +35,26 @@ path: rotate or revoke the exposed provider credential first, add the
 `docs/security/gitleaks-baseline.json`, `docs/SECURITY_GUARDRAILS.md`,
 `HARDENING.md`, and the slice plan under `plans/PR-*.md`. The label alone is
 not enough; product-code or workflow changes in the same PR still fail the
-baseline guard. The baseline guard runs from trusted base-branch workflow code
-on `pull_request_target`, fetches the PR head only as git data, parses labels
-from GitHub's JSON event payload, and rejects candidate baselines that drop
+baseline guard. The baseline guard has its own `pull_request_target`-only
+workflow so the required `Gitleaks baseline growth guard` context cannot be
+satisfied by a skipped `pull_request` job. It runs from trusted base-branch
+workflow code, fetches the PR head only as git data, parses labels from
+GitHub's JSON event payload, and rejects candidate baselines that drop
 trusted-base fingerprints.
 
 Current blocking posture: new unbaselined secrets block PRs; Semgrep, Trivy,
 Checkov, pip-audit, and OSV are advisory/report-only until their adoption
 backlogs are triaged and ratcheted.
+
+Branch protection for `main` requires `live-reconciliation`,
+`Gitleaks PR secret scan`, and `Gitleaks baseline growth guard`. The
+`Branch Protection Required Checks` workflow audits that live repository
+setting on a weekly/manual cadence and on trusted `main` updates touching the
+branch-protection checker, the security workflows, or security guardrail docs
+when `ATLAS_BRANCH_PROTECTION_READ_TOKEN` is configured with GitHub
+Administration read permission. The audit requires those contexts to be pinned
+to the GitHub Actions app source in branch protection, not only present as
+legacy bare context names.
 
 - Full-history secret scan: Gitleaks checks out the complete branch history
   (`fetch-depth: 0`) so leaked keys in old commits are in scope. The workflow
