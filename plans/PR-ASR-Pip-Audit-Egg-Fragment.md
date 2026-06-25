@@ -20,8 +20,9 @@ reference that pip-audit can resolve. The install result is byte-for-byte the
 same package at the same commit, so this is behavior-neutral and unblocks the
 audit that `PR-ASR-Requirements-Audit-Pin` intended to enable.
 
-This is the prerequisite for ratchet slice R2 in `plans/PR-Security-Scanner-Ratchet.md`.
-It deliberately does not flip pip-audit from advisory to blocking; that waits
+This is the prerequisite for ratchet slice R2, tracked in the Security Scanner
+Ratchet plan (PR #1837; its plan doc lands on `main` when that PR merges). It
+deliberately does not flip pip-audit from advisory to blocking; that waits
 until the now-running audit's findings are measured and triaged.
 
 ## Scope (this PR)
@@ -102,9 +103,9 @@ blocking is deferred to ratchet slice R2.
 
 ## Deferred
 
-- Ratchet slice R2 (`plans/PR-Security-Scanner-Ratchet.md`): measure the ASR
-  pip-audit findings, triage/upgrade/pin or add justified ignores, then drop
-  `continue-on-error` to make the ASR SCA blocking.
+- Ratchet slice R2 (tracked in PR #1837): measure the ASR pip-audit findings,
+  triage/upgrade/pin or add justified ignores, then drop `continue-on-error` to
+  make the ASR SCA blocking.
 
 Parked hardening: none.
 
@@ -126,6 +127,6 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-ASR-Pip-Audit-Egg-Fragment.md` | 131 |
+| `plans/PR-ASR-Pip-Audit-Egg-Fragment.md` | 132 |
 | `requirements.asr.txt` | 2 |
-| **Total** | **133** |
+| **Total** | **134** |
