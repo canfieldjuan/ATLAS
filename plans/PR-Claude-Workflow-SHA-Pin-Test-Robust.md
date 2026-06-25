@@ -43,6 +43,9 @@ Acceptance criteria:
   (claude-code-action pinned to its post-#1818 SHA).
 - A mutable ref (`@v1`, `@main`) or a missing required action still fails the
   test.
+- A pinned SHA left only in a comment/example, or a look-alike fork such as
+  `some-fork/actions/checkout`, does not satisfy the check (it is anchored to
+  real `uses:` steps and matches the exact `owner/repo`).
 - `test_claude_oidc_job_is_owner_gated` is unchanged.
 
 Affected surfaces:
@@ -70,12 +73,15 @@ Triggered reviewer rules:
 
 ## Mechanism
 
-The rewritten test iterates a `PINNED_ACTIONS` tuple and, for each, searches
-`.github/workflows/claude.yml` for `<action>@<ref>` and asserts the captured
-ref matches `re.fullmatch(r"[0-9a-f]{40}", ref)`. A 40-char hex SHA (old or new)
-passes; a tag (`@v1`), branch (`@main`), or absent action fails. This preserves
-the original dual intent (the actions are used AND immutably pinned) without
-coupling the test to a value Dependabot rotates.
+The rewritten test extracts the action ref from each real `uses:` step
+(`_USES_RE`, anchored to `uses:` line starts so a pinned SHA left in a comment
+or example cannot satisfy the check), then for each required action matches the
+exact `owner/repo` (so a look-alike such as `some-fork/actions/checkout` cannot
+stand in for `actions/checkout`) and asserts every matching `uses:` ref is
+pinned to a 40-char hex SHA (`_SHA_RE`). A 40-char SHA (old or new) passes; a
+tag (`@v1`), branch (`@main`), look-alike fork, or absent action fails. This
+preserves the original dual intent (the actions are used AND immutably pinned)
+without coupling the test to a value Dependabot rotates.
 
 ## Intentional
 
@@ -109,6 +115,6 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Claude-Workflow-SHA-Pin-Test-Robust.md` | 114 |
-| `tests/test_claude_workflow_security.py` | 16 |
-| **Total** | **130** |
+| `plans/PR-Claude-Workflow-SHA-Pin-Test-Robust.md` | 120 |
+| `tests/test_claude_workflow_security.py` | 34 |
+| **Total** | **154** |
