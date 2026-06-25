@@ -827,8 +827,8 @@ def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:
 def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",
-        source_count=16,
-        ticket_source_count=16,
+        source_count=26,
+        ticket_source_count=26,
         output_checks={"condensed": True},
         items=(
             {
@@ -840,6 +840,37 @@ def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
                 "opportunity_score": 4,
                 "answer_evidence_status": "draft_needs_review",
                 "source_ids": tuple(f"ticket-sync-{index}" for index in range(8)),
+            },
+            {
+                "question": "How do I reduce repeated invoice export tickets?",
+                "customer_wording": "invoice export tickets keep repeating",
+                "topic": "billing",
+                "weighted_frequency": 7,
+                "ticket_count": 7,
+                "opportunity_score": 0,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": tuple(
+                    f"ticket-invoice-repeat-{index}" for index in range(7)
+                ),
+            },
+            {
+                "question": "How do I reopen an attribution export case?",
+                "customer_wording": "attribution export answer still fails",
+                "topic": "exports",
+                "weighted_frequency": 5,
+                "ticket_count": 5,
+                "opportunity_score": 50,
+                "answer": "Open Attribution, select the export, and rerun the report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "outcome_diagnostics": {
+                    "negative_csat_ticket_count": 2,
+                    "reopened_ticket_count": 2,
+                    "ticket_status_summary": {"reopened": 2, "resolved": 3},
+                },
+                "source_ids": tuple(
+                    f"ticket-attribution-risk-{index}" for index in range(5)
+                ),
             },
             {
                 "question": "How do I export a quarterly billing report?",
@@ -883,6 +914,12 @@ def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
     unresolved = by_question[
         "Why does the nightly sync fail for enterprise workspaces?"
     ]
+    lower_cost_dissatisfied = by_question[
+        "How do I reopen an attribution export case?"
+    ]
+    higher_cost_clean = by_question[
+        "How do I reduce repeated invoice export tickets?"
+    ]
 
     assert priority_items[0]["question"] == (
         "Why does the nightly sync fail for enterprise workspaces?"
@@ -892,6 +929,14 @@ def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
     assert unresolved["fix_type"] == "create_missing_answer"
     assert "missing_answer" in unresolved["priority_drivers"]
     assert "answer" not in unresolved
+    assert higher_cost_clean["estimated_support_cost"] == 94.5
+    assert lower_cost_dissatisfied["estimated_support_cost"] == 67.5
+    assert higher_cost_clean["priority_score"] == 307
+    assert lower_cost_dissatisfied["priority_score"] == 304
+    assert (
+        higher_cost_clean["priority_score"]
+        > lower_cost_dissatisfied["priority_score"]
+    )
     assert by_question[
         "How do I export a quarterly billing report?"
     ]["status"] == "Draft ready"
