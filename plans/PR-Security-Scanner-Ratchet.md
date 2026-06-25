@@ -92,7 +92,7 @@ only because it is soft:
 - Semgrep SAST: runs without `--error`, upload-only (`:223-238`)
 - Trivy config: `exit-code: "0"`, HIGH/CRITICAL only (`:258`)
 - Checkov: `soft_fail: true` (`:291`)
-- OSV: reusable `osv-scanner-reusable.yml`, no soft-fail -> fails on findings.
+- OSV: reusable `google/osv-scanner-action`, no soft-fail -> fails on findings.
 
 The nightly no-baseline `Security Full Sweep` is RED by design (its own
 tripwire): pip-audit (SCA), Semgrep (whole-tree), and Gitleaks (full-history)
@@ -149,10 +149,10 @@ remove `continue-on-error`. Target files: `requirements.asr.txt`,
 **R3 -- OSV to gate-ready.**
 OSV is already hard (no soft-fail) and already the sole red job on push, so the
 backlog is real and measurable in code-scanning. Burn down the flagged
-vulnerabilities (upgrade/pin) or add an `osv-scanner.toml` ignore list with
-justification and review-by dates. Once green it already blocks push; for PR
-gating add a diff-aware OSV job (path b). Target files:
-`.github/workflows/security_guardrails.yml`, `osv-scanner.toml` (new),
+vulnerabilities (upgrade/pin) or add an OSV ignore config (osv-scanner.toml)
+with justification and review-by dates. Once green it already blocks push; for
+PR gating add a diff-aware OSV job (path b). Target files:
+`.github/workflows/security_guardrails.yml`, a new OSV ignore config, and
 `docs/SECURITY_GUARDRAILS.md`.
 
 **R4 -- Semgrep diff-gated blocking.**
@@ -199,8 +199,8 @@ Parked hardening: none.
 
 ## Verification
 
-- Plan sync check: `python scripts/sync_pr_plan.py --check plans/PR-Security-Scanner-Ratchet.md` -- passes.
-- ASCII-only Python gate is unaffected (no `.py` changed); `bash scripts/check_ascii_python.sh` -- passes.
+- Plan sync check: `scripts/sync_pr_plan.py --check` on this plan doc -- passes.
+- ASCII-only Python gate is unaffected (no Python files changed); `scripts/check_ascii_python.sh` -- passes.
 - Whitespace diff check: `git diff --check` -- passes.
 - No code or workflow change, so no unit/integration tests apply to this PR;
   the R1-R5 slices carry their own verification.
