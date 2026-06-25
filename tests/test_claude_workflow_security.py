@@ -17,4 +17,4 @@ def test_claude_actions_are_sha_pinned() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
     assert "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3" in text
-    assert "anthropics/claude-code-action@9dd8b95a392eb34b6f5fb56cf5a64cb735912d4b # v1" in text
+    assert "anthropics/claude-code-action@80b31826338489861333dc17217865dfe8085cdc # v1" in text
