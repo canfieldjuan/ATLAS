@@ -951,7 +951,7 @@ def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
     )
     assert sections["already_covered_still_recurring"]["data"]["items"][0][
         "question"
-    ] == "How do I find the workspace invite article?"
+    ] == "How do I reopen an attribution export case?"
 
 
 def test_deflection_suppressed_repeat_review_queue_explains_hidden_rows() -> None:
