@@ -162,7 +162,7 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/extracted_pipeline_checks.yml` | 4 |
 | `plans/PR-Deflection-PII-Source-Decision-Preflight.md` | 168 |
-| `scripts/check_deflection_pii_source_decision.py` | 331 |
+| `scripts/check_deflection_pii_source_decision.py` | 344 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_check_deflection_pii_source_decision.py` | 305 |
-| **Total** | **809** |
+| `tests/test_check_deflection_pii_source_decision.py` | 312 |
+| **Total** | **829** |

@@ -133,6 +133,13 @@ def test_missing_handoff_sections_fail_with_stable_codes(
         "1977-06-05",
         "DOB-1977-06-05",
         "source_1977_06_05",
+        "06-05-1977",
+        "06.05.1977",
+        "05-06-1977",
+        "19770605",
+        "123456789",
+        "SSN123456789",
+        "555-1234",
         "customer Alice Baker asked for a refund and gave DOB 1977-06-05",
     ],
 )

@@ -46,14 +46,26 @@ COMPLETED_QUALITY_REVIEW = "completed"
 
 SAFE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,78}[A-Za-z0-9]$")
 EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
-PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")
+# Phone: the area code is optional, so 7-digit local numbers (NNN-NNNN) are
+# rejected as well as full 10-digit NANP numbers.
+PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}\b")
 SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+# Dates in year-first (YYYY-MM-DD) or year-last (MM-DD-YYYY / DD-MM-YYYY) order
+# with -, _, or . separators. Packed separator-less dates (YYYYMMDD) are caught
+# by LONG_DIGIT_RUN_RE below rather than enumerated here.
+_DATE_SEP = r"[-_.]"
+_YEAR = r"(?:19|20)\d{2}"
+_MONTH_DAY = r"(?:0[1-9]|[12]\d|3[01])"
 DOB_DATE_RE = re.compile(
-    r"(?i)(?:^|[^A-Za-z0-9])(?:dob[-_.\s]*)?"
-    r"(?:19|20)\d{2}[-_.](?:0[1-9]|1[0-2])[-_.](?:0[1-9]|[12]\d|3[01])"
-    r"(?:$|[^A-Za-z0-9])"
+    rf"(?i)(?:^|[^A-Za-z0-9])(?:dob[-_.\s]*)?(?:"
+    rf"{_YEAR}{_DATE_SEP}{_MONTH_DAY}{_DATE_SEP}{_MONTH_DAY}"
+    rf"|{_MONTH_DAY}{_DATE_SEP}{_MONTH_DAY}{_DATE_SEP}{_YEAR}"
+    rf")(?:$|[^A-Za-z0-9])"
 )
 DIGIT_RE = re.compile(r"\d")
+# 8+ consecutive digits: packed dates (YYYYMMDD), bare SSNs, and packed
+# phone/account identifiers that no separated pattern above would catch.
+LONG_DIGIT_RUN_RE = re.compile(r"\d{8,}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -242,6 +254,7 @@ def _unsafe_reference(value: str) -> bool:
         or PHONE_RE.search(value)
         or SSN_RE.search(value)
         or DOB_DATE_RE.search(value)
+        or LONG_DIGIT_RUN_RE.search(value)
         or _looks_like_card(value)
     ):
         return True
