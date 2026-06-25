@@ -15,7 +15,7 @@ switch. Each scanner has (a) an unmeasured-or-unburned finding backlog that
 would turn every PR (or `main`) permanently red the moment it blocks, and (b) a
 structural gating gap -- every advisory scanner is gated
 `if: github.event_name != 'pull_request' && != 'pull_request_target'`
-(`security_guardrails.yml` lines 158, 192, 205, 242, 271), so it runs only on
+(`.github/workflows/security_guardrails.yml` lines 126, 160, 173, 210, 239), so it runs only on
 push-to-`main` and the weekly schedule and produces no pull-request check
 context. A scanner that never runs on a PR cannot be added to branch protection
 as a required PR check the way #1827 added the Gitleaks contexts.
@@ -88,10 +88,10 @@ Triggered reviewer rules:
 job is **OSV** (`OSV dependency scan / osv-scan`); every other job is green
 only because it is soft:
 
-- pip-audit: `continue-on-error: true` (`security_guardrails.yml:187`)
-- Semgrep SAST: runs without `--error`, upload-only (`:223-238`)
-- Trivy config: `exit-code: "0"`, HIGH/CRITICAL only (`:258`)
-- Checkov: `soft_fail: true` (`:291`)
+- pip-audit: `continue-on-error: true` (`security_guardrails.yml:155`)
+- Semgrep SAST: runs without `--error`, upload-only (`:193`)
+- Trivy config: `exit-code: "0"`, HIGH/CRITICAL only (`:226`)
+- Checkov: `soft_fail: true` (`:259`)
 - OSV: reusable `google/osv-scanner-action`, no soft-fail -> fails on findings.
 
 The nightly no-baseline `Security Full Sweep` is RED by design (its own
