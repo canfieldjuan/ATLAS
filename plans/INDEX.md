@@ -1,8 +1,7 @@
 # Plan archive index
 
-1210 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1212 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
-- [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
 - [PR-Affiliate-Partner-Drift-Check](archive/PR-Affiliate-Partner-Drift-Check.md)
@@ -15,6 +14,7 @@
 - [PR-Agents-Session-PR-Map](archive/PR-Agents-Session-PR-Map.md) - lane: repo-workflow/session-discipline | phase: Workflow/process
 - [PR-Archive-On-Merge-Ritual](archive/PR-Archive-On-Merge-Ritual.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Archive-Remaining-Merged-Plans](archive/PR-Archive-Remaining-Merged-Plans.md) - lane: dev-workflow/plan-archive-housekeeping | phase: Workflow/process
+- [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Atlas-Brain-Test-CI-Enrollment-Audit](archive/PR-Atlas-Brain-Test-CI-Enrollment-Audit.md) - lane: content-ops/faq-deflection | phase: Workflow/process
 - [PR-Atlas-Churn-UI-ESLint-10](archive/PR-Atlas-Churn-UI-ESLint-10.md) - lane: frontend/tooling | phase: Production hardening
 - [PR-Atlas-Local-PR-Body-Preflight](archive/PR-Atlas-Local-PR-Body-Preflight.md) - lane: atlas-workflow | phase: Workflow/process.
@@ -36,13 +36,13 @@
 - [PR-Audit-Install-Local-Review-Hook](archive/PR-Audit-Install-Local-Review-Hook.md)
 - [PR-Audit-Local-Review-Dirty-Guard](archive/PR-Audit-Local-Review-Dirty-Guard.md)
 - [PR-Audit-Local-Review-Runner](archive/PR-Audit-Local-Review-Runner.md)
+- [PR-Audit-ManifestDrivenSmokes-1](archive/PR-Audit-ManifestDrivenSmokes-1.md)
+- [PR-Audit-ManifestDrivenSmokes-2](archive/PR-Audit-ManifestDrivenSmokes-2.md)
 - [PR-Audit-MCP-Port-Assignments](archive/PR-Audit-MCP-Port-Assignments.md)
 - [PR-Audit-MCP-Tool-Names](archive/PR-Audit-MCP-Tool-Names.md)
 - [PR-Audit-MINOR-Batch-1](archive/PR-Audit-MINOR-Batch-1.md)
 - [PR-Audit-MINOR-Batch-2](archive/PR-Audit-MINOR-Batch-2.md)
 - [PR-Audit-MINOR-Batch-3](archive/PR-Audit-MINOR-Batch-3.md)
-- [PR-Audit-ManifestDrivenSmokes-1](archive/PR-Audit-ManifestDrivenSmokes-1.md)
-- [PR-Audit-ManifestDrivenSmokes-2](archive/PR-Audit-ManifestDrivenSmokes-2.md)
 - [PR-Audit-PipelineStandaloneSmoke-1](archive/PR-Audit-PipelineStandaloneSmoke-1.md)
 - [PR-Audit-Plan-Code-Consistency](archive/PR-Audit-Plan-Code-Consistency.md)
 - [PR-Audit-Plan-Diff-Size](archive/PR-Audit-Plan-Diff-Size.md)
@@ -72,8 +72,8 @@
 - [PR-Blog-Draft-Slug-Fallback](archive/PR-Blog-Draft-Slug-Fallback.md) - lane: `content-ops/blog-live-smoke`
 - [PR-Blog-Drop-Slashdot](archive/PR-Blog-Drop-Slashdot.md) - lane: `content-ops/blog-drop-slashdot`
 - [PR-Blog-Excluded-Source-Followup](archive/PR-Blog-Excluded-Source-Followup.md) - lane: `content-ops/blog-excluded-source-followup`
-- [PR-Blog-Fix-AWS-Orphan-LeadIn](archive/PR-Blog-Fix-AWS-Orphan-LeadIn.md) - lane: `content-ops/blog-fix-aws-orphan-leadin`
 - [PR-Blog-Fix-Asana-Orphan-LeadIn](archive/PR-Blog-Fix-Asana-Orphan-LeadIn.md) - lane: `content-ops/blog-fix-asana-orphan-leadin`
+- [PR-Blog-Fix-AWS-Orphan-LeadIn](archive/PR-Blog-Fix-AWS-Orphan-LeadIn.md) - lane: `content-ops/blog-fix-aws-orphan-leadin`
 - [PR-Blog-Fix-Count-Vs-List](archive/PR-Blog-Fix-Count-Vs-List.md) - lane: `content-ops/blog-fix-count-vs-list`
 - [PR-Blog-Fix-Form-Prompt-Quotes](archive/PR-Blog-Fix-Form-Prompt-Quotes.md)
 - [PR-Blog-Fix-Markdown-Lists](archive/PR-Blog-Fix-Markdown-Lists.md)
@@ -83,19 +83,19 @@
 - [PR-Blog-Fix-Salesforce-Orphan-LeadIn](archive/PR-Blog-Fix-Salesforce-Orphan-LeadIn.md) - lane: `content-ops/blog-fix-salesforce-orphan-leadin`
 - [PR-Blog-Fix-Stale-Review-Counts](archive/PR-Blog-Fix-Stale-Review-Counts.md) - lane: `content-ops/blog-fix-stale-review-counts`
 - [PR-Blog-Fix-Undeclared-Hubspot-Clickup](archive/PR-Blog-Fix-Undeclared-Hubspot-Clickup.md) - lane: `content-ops/blog-fix-undeclared-hubspot-clickup`
+- [PR-Blog-Generated-Sitemap-Prerender](archive/PR-Blog-Generated-Sitemap-Prerender.md) - lane: content-ops/blog-generated-sitemap-prerender | phase: Production hardening
+- [PR-Blog-Generator-D1-D9](archive/PR-Blog-Generator-D1-D9.md) - lane: content-ops/blog-generator-d1-d9
+- [PR-Blog-Generator-Orphan-Quote-Ref](archive/PR-Blog-Generator-Orphan-Quote-Ref.md)
 - [PR-Blog-GEO-Citable-Readiness-Alignment](archive/PR-Blog-GEO-Citable-Readiness-Alignment.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
 - [PR-Blog-GEO-Citable-Repair-Contract](archive/PR-Blog-GEO-Citable-Repair-Contract.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
 - [PR-Blog-GEO-Contract-Definition](archive/PR-Blog-GEO-Contract-Definition.md)
 - [PR-Blog-GEO-Entity-Prompt-Alignment](archive/PR-Blog-GEO-Entity-Prompt-Alignment.md) - lane: content-ops/blog-geo-prompt-alignment
-- [PR-Blog-GEO-Publish-CI](archive/PR-Blog-GEO-Publish-CI.md)
 - [PR-Blog-GEO-Publish-Check](archive/PR-Blog-GEO-Publish-Check.md)
+- [PR-Blog-GEO-Publish-CI](archive/PR-Blog-GEO-Publish-CI.md)
 - [PR-Blog-GEO-Quality-Gate](archive/PR-Blog-GEO-Quality-Gate.md)
 - [PR-Blog-GEO-Readiness-Summary](archive/PR-Blog-GEO-Readiness-Summary.md)
 - [PR-Blog-GEO-Repair-Loop](archive/PR-Blog-GEO-Repair-Loop.md)
 - [PR-Blog-GEO-Visible-Article-HTML](archive/PR-Blog-GEO-Visible-Article-HTML.md)
-- [PR-Blog-Generated-Sitemap-Prerender](archive/PR-Blog-Generated-Sitemap-Prerender.md) - lane: content-ops/blog-generated-sitemap-prerender | phase: Production hardening
-- [PR-Blog-Generator-D1-D9](archive/PR-Blog-Generator-D1-D9.md) - lane: content-ops/blog-generator-d1-d9
-- [PR-Blog-Generator-Orphan-Quote-Ref](archive/PR-Blog-Generator-Orphan-Quote-Ref.md)
 - [PR-Blog-Harden-Orphan-Disclaimer-Patterns](archive/PR-Blog-Harden-Orphan-Disclaimer-Patterns.md)
 - [PR-Blog-Headlines-Deep-Dives](archive/PR-Blog-Headlines-Deep-Dives.md) - lane: `content-ops/blog-headlines-deep-dives`
 - [PR-Blog-Headlines-Landscapes](archive/PR-Blog-Headlines-Landscapes.md) - lane: `content-ops/blog-headlines-landscapes`
@@ -123,11 +123,11 @@
 - [PR-Blog-SEO-GEO-Audit-Refresh](archive/PR-Blog-SEO-GEO-Audit-Refresh.md)
 - [PR-Blog-SEO-Infrastructure](archive/PR-Blog-SEO-Infrastructure.md)
 - [PR-Blog-SEO-Keyword-Sample-Wins](archive/PR-Blog-SEO-Keyword-Sample-Wins.md) - lane: `content-ops/blog-seo-keyword-sample-wins`
-- [PR-Blog-SEO-Keywords-CRM](archive/PR-Blog-SEO-Keywords-CRM.md) - lane: `content-ops/blog-seo-keywords-crm`
 - [PR-Blog-SEO-Keywords-Communication](archive/PR-Blog-SEO-Keywords-Communication.md) - lane: `content-ops/blog-seo-keywords-communication`
+- [PR-Blog-SEO-Keywords-CRM](archive/PR-Blog-SEO-Keywords-CRM.md) - lane: `content-ops/blog-seo-keywords-crm`
 - [PR-Blog-SEO-Keywords-Ecommerce](archive/PR-Blog-SEO-Keywords-Ecommerce.md) - lane: `content-ops/blog-seo-keywords-ecommerce`
-- [PR-Blog-SEO-Keywords-HR-HCM](archive/PR-Blog-SEO-Keywords-HR-HCM.md) - lane: `content-ops/blog-seo-keywords-hr-hcm`
 - [PR-Blog-SEO-Keywords-Helpdesk](archive/PR-Blog-SEO-Keywords-Helpdesk.md) - lane: `content-ops/blog-seo-keywords-helpdesk`
+- [PR-Blog-SEO-Keywords-HR-HCM](archive/PR-Blog-SEO-Keywords-HR-HCM.md) - lane: `content-ops/blog-seo-keywords-hr-hcm`
 - [PR-Blog-SEO-Keywords-Marketing-Automation](archive/PR-Blog-SEO-Keywords-Marketing-Automation.md) - lane: `content-ops/blog-seo-keywords-marketing-automation`
 - [PR-Blog-SEO-Keywords-Project-Management](archive/PR-Blog-SEO-Keywords-Project-Management.md) - lane: `content-ops/blog-seo-keywords-project-management`
 - [PR-Blog-SEO-Keywords-Technical](archive/PR-Blog-SEO-Keywords-Technical.md) - lane: `content-ops/blog-seo-keywords-technical`
@@ -154,14 +154,14 @@
 - [PR-Clear-Stale-LLM-Usage-Hardening](archive/PR-Clear-Stale-LLM-Usage-Hardening.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
 - [PR-Content-Assets-Review-Row-Ids](archive/PR-Content-Assets-Review-Row-Ids.md)
 - [PR-Content-Marketing-Brand-Voice-Checks](archive/PR-Content-Marketing-Brand-Voice-Checks.md) - lane: content-marketing/brand-voice-checks | phase: Robust testing
-- [PR-Content-Ops-API-Adapter](archive/PR-Content-Ops-API-Adapter.md)
-- [PR-Content-Ops-API-Key-Auth](archive/PR-Content-Ops-API-Key-Auth.md) - lane: content-ops/faq-deflection | phase: Production hardening
 - [PR-Content-Ops-Ad-Copy-Generated-Assets](archive/PR-Content-Ops-Ad-Copy-Generated-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Ad-Copy-Package-Handoff](archive/PR-Content-Ops-Ad-Copy-Package-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Ad-Copy-Review-Assets](archive/PR-Content-Ops-Ad-Copy-Review-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Adapter-Contract-Example](archive/PR-Content-Ops-Adapter-Contract-Example.md) - lane: content-ops/review-contract | phase: Product polish
 - [PR-Content-Ops-Admin-Cost-Labels](archive/PR-Content-Ops-Admin-Cost-Labels.md) - lane: content-ops/cost-surfacing | phase: Product polish
 - [PR-Content-Ops-Adversarial-Verify-Wiring](archive/PR-Content-Ops-Adversarial-Verify-Wiring.md) - lane: content-ops/review-contract | phase: Vertical slice
+- [PR-Content-Ops-API-Adapter](archive/PR-Content-Ops-API-Adapter.md)
+- [PR-Content-Ops-API-Key-Auth](archive/PR-Content-Ops-API-Key-Auth.md) - lane: content-ops/faq-deflection | phase: Production hardening
 - [PR-Content-Ops-Asset-Bulk-Review](archive/PR-Content-Ops-Asset-Bulk-Review.md)
 - [PR-Content-Ops-Asset-Export-CLI](archive/PR-Content-Ops-Asset-Export-CLI.md)
 - [PR-Content-Ops-Asset-Preview](archive/PR-Content-Ops-Asset-Preview.md)
@@ -194,12 +194,6 @@
 - [PR-Content-Ops-Brand-Voice-Profile](archive/PR-Content-Ops-Brand-Voice-Profile.md) - lane: content-ops/brand-voice-profile | phase: Vertical slice
 - [PR-Content-Ops-Brand-Voice-Scrape-Onboarding](archive/PR-Content-Ops-Brand-Voice-Scrape-Onboarding.md) - lane: content-ops/brand-voice/scrape-onboarding | phase: Vertical slice
 - [PR-Content-Ops-Brand-Voice-Settings-Page](archive/PR-Content-Ops-Brand-Voice-Settings-Page.md) - lane: content-ops/brand-voice/settings-page | phase: Product polish
-- [PR-Content-Ops-CFPB-FAQ-Live-Smoke](archive/PR-Content-Ops-CFPB-FAQ-Live-Smoke.md)
-- [PR-Content-Ops-CFPB-Live-Fetch-Compat](archive/PR-Content-Ops-CFPB-Live-Fetch-Compat.md)
-- [PR-Content-Ops-CFPB-Live-Provider-Smoke](archive/PR-Content-Ops-CFPB-Live-Provider-Smoke.md)
-- [PR-Content-Ops-CFPB-Source](archive/PR-Content-Ops-CFPB-Source.md)
-- [PR-Content-Ops-CRM-Source-Rows](archive/PR-Content-Ops-CRM-Source-Rows.md)
-- [PR-Content-Ops-CSV-Export-Formula-Hardening](archive/PR-Content-Ops-CSV-Export-Formula-Hardening.md) - lane: content-ops/marketer-reviews-as-input-hardening | phase: Production hardening
 - [PR-Content-Ops-Cache-Default-Runbook](archive/PR-Content-Ops-Cache-Default-Runbook.md) - lane: content-ops/cost-surfacing | phase: Product polish
 - [PR-Content-Ops-Cache-Diagnostics-Summary](archive/PR-Content-Ops-Cache-Diagnostics-Summary.md) - lane: content-ops/cost-surfacing | phase: Production hardening
 - [PR-Content-Ops-Cache-Diagnostics-UI](archive/PR-Content-Ops-Cache-Diagnostics-UI.md) - lane: content-ops/cost-surfacing | phase: Product polish
@@ -222,6 +216,10 @@
 - [PR-Content-Ops-Card-PNG-Export](archive/PR-Content-Ops-Card-PNG-Export.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
 - [PR-Content-Ops-Card-Visual-Export-UI](archive/PR-Content-Ops-Card-Visual-Export-UI.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
 - [PR-Content-Ops-Card-Visual-Export](archive/PR-Content-Ops-Card-Visual-Export.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
+- [PR-Content-Ops-CFPB-FAQ-Live-Smoke](archive/PR-Content-Ops-CFPB-FAQ-Live-Smoke.md)
+- [PR-Content-Ops-CFPB-Live-Fetch-Compat](archive/PR-Content-Ops-CFPB-Live-Fetch-Compat.md)
+- [PR-Content-Ops-CFPB-Live-Provider-Smoke](archive/PR-Content-Ops-CFPB-Live-Provider-Smoke.md)
+- [PR-Content-Ops-CFPB-Source](archive/PR-Content-Ops-CFPB-Source.md)
 - [PR-Content-Ops-Claim-Evidence-Artifact-CLI](archive/PR-Content-Ops-Claim-Evidence-Artifact-CLI.md) - lane: content-ops/review-contract | phase: Functional validation
 - [PR-Content-Ops-Claim-Evidence-Artifact-Parser](archive/PR-Content-Ops-Claim-Evidence-Artifact-Parser.md) - lane: content-ops/review-contract | phase: Functional validation
 - [PR-Content-Ops-Claim-Evidence-Artifact-Writer](archive/PR-Content-Ops-Claim-Evidence-Artifact-Writer.md) - lane: content-ops/review-contract | phase: Functional validation
@@ -248,6 +246,8 @@
 - [PR-Content-Ops-Content-PR](archive/PR-Content-Ops-Content-PR.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Contract-Tests](archive/PR-Content-Ops-Contract-Tests.md)
 - [PR-Content-Ops-Corroboration-Surfacing](archive/PR-Content-Ops-Corroboration-Surfacing.md) - lane: content-ops/review-contract | phase: Functional validation
+- [PR-Content-Ops-CRM-Source-Rows](archive/PR-Content-Ops-CRM-Source-Rows.md)
+- [PR-Content-Ops-CSV-Export-Formula-Hardening](archive/PR-Content-Ops-CSV-Export-Formula-Hardening.md) - lane: content-ops/marketer-reviews-as-input-hardening | phase: Production hardening
 - [PR-Content-Ops-DB-Reasoning-Hardening](archive/PR-Content-Ops-DB-Reasoning-Hardening.md)
 - [PR-Content-Ops-DB-Reasoning-Smoke](archive/PR-Content-Ops-DB-Reasoning-Smoke.md)
 - [PR-Content-Ops-DB-Reasoning-Sweeper](archive/PR-Content-Ops-DB-Reasoning-Sweeper.md)
@@ -274,10 +274,10 @@
 - [PR-Content-Ops-FAQ-Article-Closeout](archive/PR-Content-Ops-FAQ-Article-Closeout.md)
 - [PR-Content-Ops-FAQ-Article-Renderer](archive/PR-Content-Ops-FAQ-Article-Renderer.md)
 - [PR-Content-Ops-FAQ-Asset-Review-UI](archive/PR-Content-Ops-FAQ-Asset-Review-UI.md)
+- [PR-Content-Ops-FAQ-Catalog-Driven-Inputs](archive/PR-Content-Ops-FAQ-Catalog-Driven-Inputs.md) - lane: content-ops/faq-generator-ui-controls
 - [PR-Content-Ops-FAQ-CFPB-Archive-Profile](archive/PR-Content-Ops-FAQ-CFPB-Archive-Profile.md)
 - [PR-Content-Ops-FAQ-CFPB-Closeout](archive/PR-Content-Ops-FAQ-CFPB-Closeout.md)
 - [PR-Content-Ops-FAQ-CFPB-Report-Intent](archive/PR-Content-Ops-FAQ-CFPB-Report-Intent.md)
-- [PR-Content-Ops-FAQ-Catalog-Driven-Inputs](archive/PR-Content-Ops-FAQ-Catalog-Driven-Inputs.md) - lane: content-ops/faq-generator-ui-controls
 - [PR-Content-Ops-FAQ-Closeout](archive/PR-Content-Ops-FAQ-Closeout.md)
 - [PR-Content-Ops-FAQ-Complaint-Narrative-Questions](archive/PR-Content-Ops-FAQ-Complaint-Narrative-Questions.md)
 - [PR-Content-Ops-FAQ-Complaint-Source-Policy](archive/PR-Content-Ops-FAQ-Complaint-Source-Policy.md)
@@ -285,8 +285,8 @@
 - [PR-Content-Ops-FAQ-Custom-Intent-Rules-CLI](archive/PR-Content-Ops-FAQ-Custom-Intent-Rules-CLI.md) - lane: content-ops/faq-generator
 - [PR-Content-Ops-FAQ-Custom-Vocabulary-Rules](archive/PR-Content-Ops-FAQ-Custom-Vocabulary-Rules.md) - lane: content-ops/faq-generator
 - [PR-Content-Ops-FAQ-Customer-Wording](archive/PR-Content-Ops-FAQ-Customer-Wording.md)
-- [PR-Content-Ops-FAQ-DB-Blank-Fallback](archive/PR-Content-Ops-FAQ-DB-Blank-Fallback.md) - lane: content-ops/faq-search | phase: Functional validation
 - [PR-Content-Ops-FAQ-Date-Window](archive/PR-Content-Ops-FAQ-Date-Window.md)
+- [PR-Content-Ops-FAQ-DB-Blank-Fallback](archive/PR-Content-Ops-FAQ-DB-Blank-Fallback.md) - lane: content-ops/faq-search | phase: Functional validation
 - [PR-Content-Ops-FAQ-Deflection-Host-Mount](archive/PR-Content-Ops-FAQ-Deflection-Host-Mount.md) - lane: content-ops/faq-search | phase: Vertical slice.
 - [PR-Content-Ops-FAQ-Deflection-Search-Route](archive/PR-Content-Ops-FAQ-Deflection-Search-Route.md) - lane: content-ops/faq-search | phase: Vertical slice.
 - [PR-Content-Ops-FAQ-Detail-Concurrency-Latency-Budget](archive/PR-Content-Ops-FAQ-Detail-Concurrency-Latency-Budget.md) - lane: content-ops/faq-search | phase: Robust testing
@@ -468,9 +468,9 @@
 - [PR-Content-Ops-Image-Provider-Unsplash](archive/PR-Content-Ops-Image-Provider-Unsplash.md) - lane: content-ops/image-provider | phase: Vertical slice
 - [PR-Content-Ops-Image-Provider](archive/PR-Content-Ops-Image-Provider.md) - lane: content-ops/image-provider | phase: Workflow/process
 - [PR-Content-Ops-Import-Admission-Provider](archive/PR-Content-Ops-Import-Admission-Provider.md) - lane: content-ops/backend-file-ingestion-validation
-- [PR-Content-Ops-Ingestion-CSV-File-Load-UI](archive/PR-Content-Ops-Ingestion-CSV-File-Load-UI.md)
 - [PR-Content-Ops-Ingestion-Closeout](archive/PR-Content-Ops-Ingestion-Closeout.md)
 - [PR-Content-Ops-Ingestion-Contract-File-Routes](archive/PR-Content-Ops-Ingestion-Contract-File-Routes.md) - lane: content-ops/ingestion-contract-docs
+- [PR-Content-Ops-Ingestion-CSV-File-Load-UI](archive/PR-Content-Ops-Ingestion-CSV-File-Load-UI.md)
 - [PR-Content-Ops-Ingestion-Default-Fields-UI](archive/PR-Content-Ops-Ingestion-Default-Fields-UI.md)
 - [PR-Content-Ops-Ingestion-Diagnostics](archive/PR-Content-Ops-Ingestion-Diagnostics.md)
 - [PR-Content-Ops-Ingestion-File-Load-UI](archive/PR-Content-Ops-Ingestion-File-Load-UI.md)
@@ -488,8 +488,6 @@
 - [PR-Content-Ops-Input-Provider-Diagnostics-UI](archive/PR-Content-Ops-Input-Provider-Diagnostics-UI.md) - lane: content-ops/support-ticket-input-provider | phase: Product polish
 - [PR-Content-Ops-Input-Provider-Docs-Closeout](archive/PR-Content-Ops-Input-Provider-Docs-Closeout.md) - lane: content-ops/input-provider-ticket-package | phase: Product polish
 - [PR-Content-Ops-Intervention-Reasoning-Provider](archive/PR-Content-Ops-Intervention-Reasoning-Provider.md)
-- [PR-Content-Ops-LLM-Skills-Infra-1](archive/PR-Content-Ops-LLM-Skills-Infra-1.md)
-- [PR-Content-Ops-LLM-Usage-Tracing](archive/PR-Content-Ops-LLM-Usage-Tracing.md) - lane: content-ops/cost-surfacing | phase: Production hardening
 - [PR-Content-Ops-Landing-Page-Export](archive/PR-Content-Ops-Landing-Page-Export.md)
 - [PR-Content-Ops-Live-Adapter-Smoke](archive/PR-Content-Ops-Live-Adapter-Smoke.md) - lane: content-ops/marketer-reviews-as-input-live-smoke-gate | phase: Functional validation
 - [PR-Content-Ops-Live-Execute-Harness](archive/PR-Content-Ops-Live-Execute-Harness.md)
@@ -497,6 +495,15 @@
 - [PR-Content-Ops-Live-Persistence-Smoke](archive/PR-Content-Ops-Live-Persistence-Smoke.md)
 - [PR-Content-Ops-Live-Provider-Smoke-Closeout](archive/PR-Content-Ops-Live-Provider-Smoke-Closeout.md)
 - [PR-Content-Ops-Live-Smoke-Model-Route](archive/PR-Content-Ops-Live-Smoke-Model-Route.md) - lane: content-ops/marketer-reviews-as-input | phase: Workflow/process
+- [PR-Content-Ops-LLM-Skills-Infra-1](archive/PR-Content-Ops-LLM-Skills-Infra-1.md)
+- [PR-Content-Ops-LLM-Usage-Tracing](archive/PR-Content-Ops-LLM-Usage-Tracing.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Marketer-Ad-Copy-Output](archive/PR-Content-Ops-Marketer-Ad-Copy-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Marketer-Evidence-Preset](archive/PR-Content-Ops-Marketer-Evidence-Preset.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
+- [PR-Content-Ops-Marketer-Quote-Card-Output](archive/PR-Content-Ops-Marketer-Quote-Card-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Marketer-Social-Post-Output](archive/PR-Content-Ops-Marketer-Social-Post-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Marketer-Stat-Card-Output](archive/PR-Content-Ops-Marketer-Stat-Card-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Marketer-Verify-MCP-Shell](archive/PR-Content-Ops-Marketer-Verify-MCP-Shell.md) - lane: content-ops/review-contract | phase: Vertical slice
+- [PR-Content-Ops-Marketing-Claim-Audit](archive/PR-Content-Ops-Marketing-Claim-Audit.md) - lane: content-ops/product-positioning | phase: Workflow/process.
 - [PR-Content-Ops-MCP-ChatGPT-Adapter-Help-Text](archive/PR-Content-Ops-MCP-ChatGPT-Adapter-Help-Text.md) - lane: content-ops/review-contract | phase: Production hardening
 - [PR-Content-Ops-MCP-ChatGPT-Adapter-OAuth-Rollout](archive/PR-Content-Ops-MCP-ChatGPT-Adapter-OAuth-Rollout.md) - lane: content-ops/review-contract | phase: Production hardening
 - [PR-Content-Ops-MCP-ChatGPT-Adapter-Port-Env](archive/PR-Content-Ops-MCP-ChatGPT-Adapter-Port-Env.md) - lane: content-ops/review-contract | phase: Production hardening
@@ -514,13 +521,6 @@
 - [PR-Content-Ops-MCP-OAuth-Launcher](archive/PR-Content-Ops-MCP-OAuth-Launcher.md) - lane: content-ops/review-contract | phase: Production hardening
 - [PR-Content-Ops-MCP-OAuth-Transport](archive/PR-Content-Ops-MCP-OAuth-Transport.md) - lane: content-ops/review-contract | phase: Production hardening
 - [PR-Content-Ops-MCP-Token-Tenant-Binding](archive/PR-Content-Ops-MCP-Token-Tenant-Binding.md) - lane: content-ops/review-contract | phase: Production hardening
-- [PR-Content-Ops-Marketer-Ad-Copy-Output](archive/PR-Content-Ops-Marketer-Ad-Copy-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
-- [PR-Content-Ops-Marketer-Evidence-Preset](archive/PR-Content-Ops-Marketer-Evidence-Preset.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
-- [PR-Content-Ops-Marketer-Quote-Card-Output](archive/PR-Content-Ops-Marketer-Quote-Card-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
-- [PR-Content-Ops-Marketer-Social-Post-Output](archive/PR-Content-Ops-Marketer-Social-Post-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
-- [PR-Content-Ops-Marketer-Stat-Card-Output](archive/PR-Content-Ops-Marketer-Stat-Card-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
-- [PR-Content-Ops-Marketer-Verify-MCP-Shell](archive/PR-Content-Ops-Marketer-Verify-MCP-Shell.md) - lane: content-ops/review-contract | phase: Vertical slice
-- [PR-Content-Ops-Marketing-Claim-Audit](archive/PR-Content-Ops-Marketing-Claim-Audit.md) - lane: content-ops/product-positioning | phase: Workflow/process.
 - [PR-Content-Ops-Migration-Dry-Run-Skip-Summary](archive/PR-Content-Ops-Migration-Dry-Run-Skip-Summary.md) - lane: content-ops/faq-generator-io-tests
 - [PR-Content-Ops-Output-Variations-Blog-Only](archive/PR-Content-Ops-Output-Variations-Blog-Only.md) - lane: content-ops/output-variations/blog-only | phase: Vertical slice
 - [PR-Content-Ops-Output-Variations-Landing-Page](archive/PR-Content-Ops-Output-Variations-Landing-Page.md) - lane: content-ops/output-variations/landing-page | phase: Vertical slice
@@ -675,20 +675,20 @@
 - [PR-Deflection-Blob-Upload-Tempfile](archive/PR-Deflection-Blob-Upload-Tempfile.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-CFPB-Embedding-Baseline](archive/PR-Deflection-CFPB-Embedding-Baseline.md) - lane: deflection/clustering | phase: Vertical slice
 - [PR-Deflection-CFPB-Mxbai-Live-Artifact](archive/PR-Deflection-CFPB-Mxbai-Live-Artifact.md) - lane: deflection/clustering | phase: Functional validation
+- [PR-Deflection-Checkout-Authorization](archive/PR-Deflection-Checkout-Authorization.md) - lane: deflection/go-live | phase: Production hardening
+- [PR-Deflection-Checkout-Concurrency-Guard](archive/PR-Deflection-Checkout-Concurrency-Guard.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
+- [PR-Deflection-Complete-Evidence-Export](archive/PR-Deflection-Complete-Evidence-Export.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-CSV-Admission-Diagnostics](archive/PR-Deflection-CSV-Admission-Diagnostics.md) - lane: content-ops/deflection-parser-admission | phase: Production hardening
 - [PR-Deflection-CSV-Admission-Observed-Evidence](archive/PR-Deflection-CSV-Admission-Observed-Evidence.md) - lane: content-ops/deflection-parser-admission | phase: Vertical slice
 - [PR-Deflection-CSV-Admission-Policy](archive/PR-Deflection-CSV-Admission-Policy.md) - lane: content-ops/deflection-parser-admission | phase: Production hardening
 - [PR-Deflection-CSV-Admission-Threshold-Evidence](archive/PR-Deflection-CSV-Admission-Threshold-Evidence.md) - lane: content-ops/deflection-parser-admission | phase: Functional validation
+- [PR-Deflection-Csv-Encoding-Admission](archive/PR-Deflection-Csv-Encoding-Admission.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-CSV-Ingestion-Hardening](archive/PR-Deflection-CSV-Ingestion-Hardening.md) - lane: deflection/go-live | phase: Production hardening
+- [PR-Deflection-Csv-Legacy-Fallback-Warning](archive/PR-Deflection-Csv-Legacy-Fallback-Warning.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-CSV-Parser-API-Widening](archive/PR-Deflection-CSV-Parser-API-Widening.md) - lane: content-ops/deflection-report | phase: Production hardening
 - [PR-Deflection-CSV-Parser-Error-UX](archive/PR-Deflection-CSV-Parser-Error-UX.md) - lane: content-ops/deflection-report | phase: Production hardening
 - [PR-Deflection-CSV-Parser-Memory-Hardening](archive/PR-Deflection-CSV-Parser-Memory-Hardening.md) - lane: content-ops/deflection-report | phase: Production hardening
 - [PR-Deflection-CSV-Partial-Coverage-Warning](archive/PR-Deflection-CSV-Partial-Coverage-Warning.md) - lane: content-ops/deflection-parser-admission | phase: Production hardening
-- [PR-Deflection-Checkout-Authorization](archive/PR-Deflection-Checkout-Authorization.md) - lane: deflection/go-live | phase: Production hardening
-- [PR-Deflection-Checkout-Concurrency-Guard](archive/PR-Deflection-Checkout-Concurrency-Guard.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
-- [PR-Deflection-Complete-Evidence-Export](archive/PR-Deflection-Complete-Evidence-Export.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
-- [PR-Deflection-Csv-Encoding-Admission](archive/PR-Deflection-Csv-Encoding-Admission.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
-- [PR-Deflection-Csv-Legacy-Fallback-Warning](archive/PR-Deflection-Csv-Legacy-Fallback-Warning.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Curated-PDF-TOC](archive/PR-Deflection-Curated-PDF-TOC.md) - lane: content-ops/deflection-launch-readiness | phase: Product polish
 - [PR-Deflection-Customer-Wording-PII-Headings](archive/PR-Deflection-Customer-Wording-PII-Headings.md) - lane: deflection/clustering | phase: Production hardening
 - [PR-Deflection-Delimiter-Vote-Reject](archive/PR-Deflection-Delimiter-Vote-Reject.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
@@ -698,6 +698,7 @@
 - [PR-Deflection-Delivery-Reconciliation](archive/PR-Deflection-Delivery-Reconciliation.md) - lane: deflection/go-live | phase: Production hardening
 - [PR-Deflection-Delivery-Row-Claim](archive/PR-Deflection-Delivery-Row-Claim.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
 - [PR-Deflection-Delta-Core](archive/PR-Deflection-Delta-Core.md) - lane: issue-1316/deflection-delta-core | phase: Vertical slice
+- [PR-Deflection-Delta-Monthly-Automation](archive/PR-Deflection-Delta-Monthly-Automation.md) - lane: issue-1316/deflection-delta-monthly-automation | phase: Vertical slice
 - [PR-Deflection-Delta-Persistence](archive/PR-Deflection-Delta-Persistence.md) - lane: issue-1316/deflection-delta-persistence | phase: Vertical slice
 - [PR-Deflection-Delta-Read-Surface](archive/PR-Deflection-Delta-Read-Surface.md) - lane: issue-1316/deflection-delta-read-surface | phase: Vertical slice
 - [PR-Deflection-Dispute-Restore-Hardening](archive/PR-Deflection-Dispute-Restore-Hardening.md) - lane: go-live-deflection-cleanup | phase: Production hardening
@@ -725,11 +726,11 @@
 - [PR-Deflection-Full-Volume-Live-Proof](archive/PR-Deflection-Full-Volume-Live-Proof.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
 - [PR-Deflection-Full-Volume-Smoke-Gates](archive/PR-Deflection-Full-Volume-Smoke-Gates.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
 - [PR-Deflection-Full-Volume-Submit-Limit](archive/PR-Deflection-Full-Volume-Submit-Limit.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
+- [PR-Deflection-Help-Center-Prose](archive/PR-Deflection-Help-Center-Prose.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
+- [PR-Deflection-Html-Strip-Before-Clustering](archive/PR-Deflection-Html-Strip-Before-Clustering.md) - lane: go-live-deflection-cleanup | phase: Production hardening
 - [PR-Deflection-HTTP-Error-Body-Redaction](archive/PR-Deflection-HTTP-Error-Body-Redaction.md) - lane: content-ops/report-delivery-live-funnel | phase: Production hardening
 - [PR-Deflection-HTTP-Error-Source-ID-Values](archive/PR-Deflection-HTTP-Error-Source-ID-Values.md) - lane: content-ops/report-delivery-live-funnel | phase: Production hardening
 - [PR-Deflection-HTTP-Helper-Consolidation](archive/PR-Deflection-HTTP-Helper-Consolidation.md) - lane: content-ops/report-delivery-live-funnel | phase: Production hardening
-- [PR-Deflection-Help-Center-Prose](archive/PR-Deflection-Help-Center-Prose.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
-- [PR-Deflection-Html-Strip-Before-Clustering](archive/PR-Deflection-Html-Strip-Before-Clustering.md) - lane: go-live-deflection-cleanup | phase: Production hardening
 - [PR-Deflection-Inline-Html-Strip-Before-Clustering](archive/PR-Deflection-Inline-Html-Strip-Before-Clustering.md) - lane: deflection/clustering-html-normalization | phase: Production hardening
 - [PR-Deflection-Inspect-Preview-Gate](archive/PR-Deflection-Inspect-Preview-Gate.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Live-Artifact-Model-Export-Contract](archive/PR-Deflection-Live-Artifact-Model-Export-Contract.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
@@ -737,27 +738,6 @@
 - [PR-Deflection-Local-NER-Scrub](archive/PR-Deflection-Local-NER-Scrub.md) - lane: content-ops/deflection-privacy | phase: Production hardening
 - [PR-Deflection-Mxbai-Merge-Spotcheck](archive/PR-Deflection-Mxbai-Merge-Spotcheck.md) - lane: deflection/clustering | phase: Functional validation
 - [PR-Deflection-Outcome-Risk-Diagnostics](archive/PR-Deflection-Outcome-Risk-Diagnostics.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
-- [PR-Deflection-PDF-Action-Queue-Contract](archive/PR-Deflection-PDF-Action-Queue-Contract.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
-- [PR-Deflection-PDF-Action-Sections](archive/PR-Deflection-PDF-Action-Sections.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
-- [PR-Deflection-PDF-Clickable-Navigation](archive/PR-Deflection-PDF-Clickable-Navigation.md) - lane: content-ops/deflection-report-shape | phase: Product polish
-- [PR-Deflection-PII-Cued-Name-ISO-Precision](archive/PR-Deflection-PII-Cued-Name-ISO-Precision.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-DOB-Scrub](archive/PR-Deflection-PII-DOB-Scrub.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Headline-Gate-Split](archive/PR-Deflection-PII-Headline-Gate-Split.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Markdown-Advisory-Summary](archive/PR-Deflection-PII-Markdown-Advisory-Summary.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Partial-Name-Recall](archive/PR-Deflection-PII-Partial-Name-Recall.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Partial-Name-Token-Scrub](archive/PR-Deflection-PII-Partial-Name-Token-Scrub.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Recall-Advisory-Artifact](archive/PR-Deflection-PII-Recall-Advisory-Artifact.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Recall-Harness](archive/PR-Deflection-PII-Recall-Harness.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Review-Bundle-Manifest](archive/PR-Deflection-PII-Review-Bundle-Manifest.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Review-Bundle-Pipeline](archive/PR-Deflection-PII-Review-Bundle-Pipeline.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Review-Bundle-Score](archive/PR-Deflection-PII-Review-Bundle-Score.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Review-Bundle-Version-Candidate](archive/PR-Deflection-PII-Review-Bundle-Version-Candidate.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-SSN-Card-Scrub](archive/PR-Deflection-PII-SSN-Card-Scrub.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Source-Intake-Markdown](archive/PR-Deflection-PII-Source-Intake-Markdown.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Source-Intake-Summary](archive/PR-Deflection-PII-Source-Intake-Summary.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Source-Review-Bundle](archive/PR-Deflection-PII-Source-Review-Bundle.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
-- [PR-Deflection-PII-Surrogate-Eval-Schema](archive/PR-Deflection-PII-Surrogate-Eval-Schema.md) - lane: deflection/pii-recall-precision-testing | phase: Functional validation
-- [PR-Deflection-PII-Two-Letter-Name-Recall](archive/PR-Deflection-PII-Two-Letter-Name-Recall.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
 - [PR-Deflection-Paid-Delivery-Queue](archive/PR-Deflection-Paid-Delivery-Queue.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
 - [PR-Deflection-Paid-Delivery-Script](archive/PR-Deflection-Paid-Delivery-Script.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
 - [PR-Deflection-Paid-Delivery-Worker](archive/PR-Deflection-Paid-Delivery-Worker.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
@@ -776,6 +756,27 @@
 - [PR-Deflection-Parser-JSONL-Line-Diagnostics](archive/PR-Deflection-Parser-JSONL-Line-Diagnostics.md) - lane: content-ops/deflection-parser-testing | phase: Production hardening
 - [PR-Deflection-Parser-Lane-Closeout](archive/PR-Deflection-Parser-Lane-Closeout.md) - lane: content-ops/deflection-parser-testing | phase: Workflow/process
 - [PR-Deflection-Parser-Observed-Text-Aliases](archive/PR-Deflection-Parser-Observed-Text-Aliases.md) - lane: content-ops/deflection-parser-testing | phase: Production hardening
+- [PR-Deflection-PDF-Action-Queue-Contract](archive/PR-Deflection-PDF-Action-Queue-Contract.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
+- [PR-Deflection-PDF-Action-Sections](archive/PR-Deflection-PDF-Action-Sections.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
+- [PR-Deflection-PDF-Clickable-Navigation](archive/PR-Deflection-PDF-Clickable-Navigation.md) - lane: content-ops/deflection-report-shape | phase: Product polish
+- [PR-Deflection-PII-Cued-Name-ISO-Precision](archive/PR-Deflection-PII-Cued-Name-ISO-Precision.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-DOB-Scrub](archive/PR-Deflection-PII-DOB-Scrub.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Headline-Gate-Split](archive/PR-Deflection-PII-Headline-Gate-Split.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Markdown-Advisory-Summary](archive/PR-Deflection-PII-Markdown-Advisory-Summary.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Partial-Name-Recall](archive/PR-Deflection-PII-Partial-Name-Recall.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Partial-Name-Token-Scrub](archive/PR-Deflection-PII-Partial-Name-Token-Scrub.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Recall-Advisory-Artifact](archive/PR-Deflection-PII-Recall-Advisory-Artifact.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Recall-Harness](archive/PR-Deflection-PII-Recall-Harness.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Review-Bundle-Manifest](archive/PR-Deflection-PII-Review-Bundle-Manifest.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Review-Bundle-Pipeline](archive/PR-Deflection-PII-Review-Bundle-Pipeline.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Review-Bundle-Score](archive/PR-Deflection-PII-Review-Bundle-Score.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Review-Bundle-Version-Candidate](archive/PR-Deflection-PII-Review-Bundle-Version-Candidate.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Source-Intake-Markdown](archive/PR-Deflection-PII-Source-Intake-Markdown.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Source-Intake-Summary](archive/PR-Deflection-PII-Source-Intake-Summary.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Source-Review-Bundle](archive/PR-Deflection-PII-Source-Review-Bundle.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-SSN-Card-Scrub](archive/PR-Deflection-PII-SSN-Card-Scrub.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
+- [PR-Deflection-PII-Surrogate-Eval-Schema](archive/PR-Deflection-PII-Surrogate-Eval-Schema.md) - lane: deflection/pii-recall-precision-testing | phase: Functional validation
+- [PR-Deflection-PII-Two-Letter-Name-Recall](archive/PR-Deflection-PII-Two-Letter-Name-Recall.md) - lane: deflection/pii-recall-precision-testing | phase: Vertical slice
 - [PR-Deflection-Portfolio-Paid-Result-Live-Proof](archive/PR-Deflection-Portfolio-Paid-Result-Live-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Priority-Status-Scoring](archive/PR-Deflection-Priority-Status-Scoring.md) - lane: content-ops/deflection-report-actionability | phase: Functional validation
 - [PR-Deflection-Process-Contract-Live-Runner-Preflight](archive/PR-Deflection-Process-Contract-Live-Runner-Preflight.md) - lane: content-ops/deflection-full-report-qa | phase: Production hardening
@@ -861,8 +862,8 @@
 - [PR-Describe-Control-Surfaces-Cache](archive/PR-Describe-Control-Surfaces-Cache.md)
 - [PR-Dev-Workflow-Helpers-Docs](archive/PR-Dev-Workflow-Helpers-Docs.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
 - [PR-Dev-Workflow-Open-PR-Stdin-Wrapper](archive/PR-Dev-Workflow-Open-PR-Stdin-Wrapper.md) - lane: dev-workflow/pr-friction | phase: Workflow/process
-- [PR-Dev-Workflow-PR-Prep](archive/PR-Dev-Workflow-PR-Prep.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
 - [PR-Dev-Workflow-Plan-Scaffold](archive/PR-Dev-Workflow-Plan-Scaffold.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
+- [PR-Dev-Workflow-PR-Prep](archive/PR-Dev-Workflow-PR-Prep.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
 - [PR-Docs-Preserve-Product-Audit-Notes](archive/PR-Docs-Preserve-Product-Audit-Notes.md) - lane: docs/product-history-preservation | phase: Workflow/process
 - [PR-ESLint-10-Web-Batch](archive/PR-ESLint-10-Web-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-Evaluator-Pattern-Precision-Contract](archive/PR-Evaluator-Pattern-Precision-Contract.md) - lane: workflow/process | phase: Workflow/process
@@ -1028,8 +1029,6 @@
 - [PR-Invoicing-Readonly-OAuth-E2E-Smoke](archive/PR-Invoicing-Readonly-OAuth-E2E-Smoke.md)
 - [PR-Invoicing-Readonly-OAuth-Operator-Launcher](archive/PR-Invoicing-Readonly-OAuth-Operator-Launcher.md)
 - [PR-Invoicing-Readonly-Ops-Hardening](archive/PR-Invoicing-Readonly-Ops-Hardening.md)
-- [PR-LLM-Registry-Service-Export](archive/PR-LLM-Registry-Service-Export.md)
-- [PR-LLM-Usage-Schema-Cache-Telemetry](archive/PR-LLM-Usage-Schema-Cache-Telemetry.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
 - [PR-Landing-Page-AEO-GEO-Section-Readiness](archive/PR-Landing-Page-AEO-GEO-Section-Readiness.md)
 - [PR-Landing-Page-AEO-GEO-Section-Source](archive/PR-Landing-Page-AEO-GEO-Section-Source.md)
 - [PR-Landing-Page-Draft-Edit-API](archive/PR-Landing-Page-Draft-Edit-API.md) - lane: content-ops/landing-page-draft-edit-api
@@ -1062,15 +1061,15 @@
 - [PR-Landing-Page-Repair-Lock-Skip-Warning](archive/PR-Landing-Page-Repair-Lock-Skip-Warning.md) - lane: content-ops/landing-page-repair-lock-skip-warning
 - [PR-Landing-Page-Repair-Lock-Warning-Context](archive/PR-Landing-Page-Repair-Lock-Warning-Context.md) - lane: content-ops/landing-page-repair-lock-warning-context
 - [PR-Landing-Page-Repair-UI-Polish](archive/PR-Landing-Page-Repair-UI-Polish.md) - lane: content-ops/landing-page-repair-ui-polish
-- [PR-Landing-Page-SEO-AEO-GEO-Contract](archive/PR-Landing-Page-SEO-AEO-GEO-Contract.md)
-- [PR-Landing-Page-SEO-GEO-AEO-Input-Contract](archive/PR-Landing-Page-SEO-GEO-AEO-Input-Contract.md) - lane: content-ops/landing-page-input-contract
-- [PR-Landing-Page-SEO-GEO-Audit-Refresh](archive/PR-Landing-Page-SEO-GEO-Audit-Refresh.md) - lane: content-ops/landing-page-seo-geo-audit-refresh
-- [PR-Landing-Page-SEO-GEO-Backlog-Closeout](archive/PR-Landing-Page-SEO-GEO-Backlog-Closeout.md) - lane: content-ops/landing-page-seo-geo-backlog-closeout
 - [PR-Landing-Page-Saved-Draft-Repair-API](archive/PR-Landing-Page-Saved-Draft-Repair-API.md) - lane: content-ops/landing-page-saved-draft-repair-api
 - [PR-Landing-Page-Saved-Draft-Repair-Service](archive/PR-Landing-Page-Saved-Draft-Repair-Service.md) - lane: content-ops/landing-page-saved-draft-repair-service
 - [PR-Landing-Page-Saved-Draft-Repair-UI](archive/PR-Landing-Page-Saved-Draft-Repair-UI.md) - lane: content-ops/landing-page-saved-draft-repair-ui
 - [PR-Landing-Page-Section-Kind-Contract](archive/PR-Landing-Page-Section-Kind-Contract.md) - lane: content-ops/landing-page-section-kind-contract
 - [PR-Landing-Page-Section-Metadata-Quality-Gate](archive/PR-Landing-Page-Section-Metadata-Quality-Gate.md) - lane: content-ops/landing-page-section-metadata-quality-gate
+- [PR-Landing-Page-SEO-AEO-GEO-Contract](archive/PR-Landing-Page-SEO-AEO-GEO-Contract.md)
+- [PR-Landing-Page-SEO-GEO-AEO-Input-Contract](archive/PR-Landing-Page-SEO-GEO-AEO-Input-Contract.md) - lane: content-ops/landing-page-input-contract
+- [PR-Landing-Page-SEO-GEO-Audit-Refresh](archive/PR-Landing-Page-SEO-GEO-Audit-Refresh.md) - lane: content-ops/landing-page-seo-geo-audit-refresh
+- [PR-Landing-Page-SEO-GEO-Backlog-Closeout](archive/PR-Landing-Page-SEO-GEO-Backlog-Closeout.md) - lane: content-ops/landing-page-seo-geo-backlog-closeout
 - [PR-Landing-Page-Static-Sitemap-Bridge](archive/PR-Landing-Page-Static-Sitemap-Bridge.md) - lane: content-ops/landing-page-static-sitemap-bridge
 - [PR-Landing-Page-Structured-Data-Export](archive/PR-Landing-Page-Structured-Data-Export.md) - lane: content-ops/landing-page-structured-data-export
 - [PR-Landing-Page-Structured-Data-Preview-UI](archive/PR-Landing-Page-Structured-Data-Preview-UI.md) - lane: content-ops/landing-page-structured-data-preview-ui
@@ -1079,9 +1078,9 @@
 - [PR-Landing-Repair-Attempt-Contract](archive/PR-Landing-Repair-Attempt-Contract.md)
 - [PR-Live-Provider-Circular-Import](archive/PR-Live-Provider-Circular-Import.md)
 - [PR-Live-Smoke-Saved-Draft-Export](archive/PR-Live-Smoke-Saved-Draft-Export.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-LLM-Registry-Service-Export](archive/PR-LLM-Registry-Service-Export.md)
+- [PR-LLM-Usage-Schema-Cache-Telemetry](archive/PR-LLM-Usage-Schema-Cache-Telemetry.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
 - [PR-Lucide-React-Major-Batch](archive/PR-Lucide-React-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
-- [PR-MCP-ChatGPT-OAuth-Rollout-Runbook](archive/PR-MCP-ChatGPT-OAuth-Rollout-Runbook.md)
-- [PR-MCP-Connector-Session-Handoff](archive/PR-MCP-Connector-Session-Handoff.md)
 - [PR-Marketer-Reviews-As-Input](archive/PR-Marketer-Reviews-As-Input.md) - lane: content-ops/marketer-reviews-as-input | phase: Workflow/process
 - [PR-Maturity-Sweep-Advisory-CI](archive/PR-Maturity-Sweep-Advisory-CI.md) - lane: review-workflow | phase: workflow/process
 - [PR-Maturity-Sweep-Atlas-Brain-B2a](archive/PR-Maturity-Sweep-Atlas-Brain-B2a.md) - lane: ci/maturity-sweep | phase: Production hardening
@@ -1097,6 +1096,8 @@
 - [PR-Maturity-Sweep-Phase-C4-Scripts](archive/PR-Maturity-Sweep-Phase-C4-Scripts.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Report-Validation-Tighten](archive/PR-Maturity-Sweep-Report-Validation-Tighten.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Robust-Gate](archive/PR-Maturity-Sweep-Robust-Gate.md) - lane: ci/maturity-sweep | phase: Production hardening (CI enforcement)
+- [PR-MCP-ChatGPT-OAuth-Rollout-Runbook](archive/PR-MCP-ChatGPT-OAuth-Rollout-Runbook.md)
+- [PR-MCP-Connector-Session-Handoff](archive/PR-MCP-Connector-Session-Handoff.md)
 - [PR-Mobile-NPM-Security-Patches](archive/PR-Mobile-NPM-Security-Patches.md) - lane: security/dependencies | phase: Production hardening
 - [PR-Npm-Package-CI-Enrollment](archive/PR-Npm-Package-CI-Enrollment.md) - lane: security/dependencies | phase: Workflow/process
 - [PR-Npm-Security-Patch-Batch](archive/PR-Npm-Security-Patch-Batch.md) - lane: security/dependencies | phase: Production hardening
@@ -1137,8 +1138,6 @@
 - [PR-Reviewer-Reconciliation-Audit](archive/PR-Reviewer-Reconciliation-Audit.md) - lane: dev-workflow/review-contract | phase: Workflow/process
 - [PR-Reviewer-Reconciliation-Live-CI](archive/PR-Reviewer-Reconciliation-Live-CI.md) - lane: review-workflow/reconciliation-live-ci | phase: Workflow/process
 - [PR-Reviewer-Rules-Contract](archive/PR-Reviewer-Rules-Contract.md) - lane: dev-workflow/review-contract | phase: Workflow/process
-- [PR-SEO-Foundation-Fixes](archive/PR-SEO-Foundation-Fixes.md)
-- [PR-SEO-Prerender](archive/PR-SEO-Prerender.md)
 - [PR-Security-CVE-Remediation-SLA](archive/PR-Security-CVE-Remediation-SLA.md) - lane: security/cve-remediation-sla | phase: Production hardening
 - [PR-Security-Disclosure-Policy](archive/PR-Security-Disclosure-Policy.md) - lane: security/hardening-1656 | phase: Production hardening
 - [PR-Security-Gitleaks-Precommit](archive/PR-Security-Gitleaks-Precommit.md) - lane: security/gitleaks-precommit | phase: Workflow/process
@@ -1147,6 +1146,8 @@
 - [PR-Security-Paid-Funnel-Alert-Channel](archive/PR-Security-Paid-Funnel-Alert-Channel.md) - lane: security/paid-funnel-alert-channel | phase: Production hardening
 - [PR-Security-Structured-JSON-Logging](archive/PR-Security-Structured-JSON-Logging.md) - lane: security/structured-json-logging | phase: Production hardening
 - [PR-Semantic-Diff-Advisor-CI](archive/PR-Semantic-Diff-Advisor-CI.md) - lane: review-workflow | phase: workflow/process
+- [PR-SEO-Foundation-Fixes](archive/PR-SEO-Foundation-Fixes.md)
+- [PR-SEO-Prerender](archive/PR-SEO-Prerender.md)
 - [PR-Spark-Routing-Light-Enforcement](archive/PR-Spark-Routing-Light-Enforcement.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Spark-Subagent-Routing-Docs](archive/PR-Spark-Subagent-Routing-Docs.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Stale-Base-Push-Guard](archive/PR-Stale-Base-Push-Guard.md) - lane: workflow/process | phase: Workflow/process
@@ -1157,8 +1158,8 @@
 - [PR-Support-Ticket-Blog-Descriptive-Contract](archive/PR-Support-Ticket-Blog-Descriptive-Contract.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
 - [PR-Support-Ticket-Blog-Descriptive-Prompt-Contract](archive/PR-Support-Ticket-Blog-Descriptive-Prompt-Contract.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
 - [PR-Support-Ticket-Blog-False-Green-Outcome-Claims](archive/PR-Support-Ticket-Blog-False-Green-Outcome-Claims.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
-- [PR-Support-Ticket-Blog-GEO-Clarity-Repair](archive/PR-Support-Ticket-Blog-GEO-Clarity-Repair.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
 - [PR-Support-Ticket-Blog-Generated-Content-Gate](archive/PR-Support-Ticket-Blog-Generated-Content-Gate.md) - lane: content-ops/support-ticket-input-provider | phase: Vertical slice
+- [PR-Support-Ticket-Blog-GEO-Clarity-Repair](archive/PR-Support-Ticket-Blog-GEO-Clarity-Repair.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
 - [PR-Support-Ticket-Blog-Large-Context-Acceptance](archive/PR-Support-Ticket-Blog-Large-Context-Acceptance.md) - lane: content-ops/support-ticket-provider-blog-polish | phase: Robust testing
 - [PR-Support-Ticket-Blog-Large-Upload-Policy-Validation](archive/PR-Support-Ticket-Blog-Large-Upload-Policy-Validation.md) - lane: content-ops/support-ticket-provider-blog-polish | phase: Functional validation
 - [PR-Support-Ticket-Blog-Observed-Shell-Live-Retry](archive/PR-Support-Ticket-Blog-Observed-Shell-Live-Retry.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
@@ -1166,8 +1167,8 @@
 - [PR-Support-Ticket-Blog-Observed-Shell](archive/PR-Support-Ticket-Blog-Observed-Shell.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
 - [PR-Support-Ticket-Blog-Small-Upload-Live-Validation](archive/PR-Support-Ticket-Blog-Small-Upload-Live-Validation.md) - lane: content-ops/support-ticket-provider-blog-polish | phase: Functional validation
 - [PR-Support-Ticket-Blog-Small-Upload-Trim](archive/PR-Support-Ticket-Blog-Small-Upload-Trim.md) - lane: content-ops/support-ticket-provider-blog-polish | phase: Product polish
-- [PR-Support-Ticket-CSV-Shape-Coverage](archive/PR-Support-Ticket-CSV-Shape-Coverage.md) - lane: content-ops/support-ticket-input-provider | phase: Robust testing
 - [PR-Support-Ticket-Context-Contract](archive/PR-Support-Ticket-Context-Contract.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
+- [PR-Support-Ticket-CSV-Shape-Coverage](archive/PR-Support-Ticket-CSV-Shape-Coverage.md) - lane: content-ops/support-ticket-input-provider | phase: Robust testing
 - [PR-Support-Ticket-Date-Outcome-Evidence-Contract](archive/PR-Support-Ticket-Date-Outcome-Evidence-Contract.md) - lane: content-ops/support-ticket-date-outcome-evidence | phase: Production hardening
 - [PR-Support-Ticket-Descriptive-Blog-Contract](archive/PR-Support-Ticket-Descriptive-Blog-Contract.md) - lane: content-ops/support-ticket-provider-descriptive-blog-contract | phase: Functional validation
 - [PR-Support-Ticket-Descriptive-Blog-Live-Validation](archive/PR-Support-Ticket-Descriptive-Blog-Live-Validation.md) - lane: content-ops/support-ticket-provider-descriptive-blog-live-validation | phase: Functional validation

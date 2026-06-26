@@ -184,6 +184,41 @@ async def test_in_memory_paid_account_discovery_orders_by_paid_activity() -> Non
 
 
 @pytest.mark.asyncio
+async def test_in_memory_paid_report_listing_orders_by_paid_activity_window() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        request_id="old-report-recent-pay",
+        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 10, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="new-report-old-pay",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="newest-report-oldest-pay",
+        created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    paid_rows = await store.list_reports(account_id="acct-1", limit=2, paid=True)
+    all_rows = await store.list_reports(account_id="acct-1", limit=2)
+
+    assert [row.request_id for row in paid_rows] == [
+        "old-report-recent-pay",
+        "new-report-old-pay",
+    ]
+    assert [row.request_id for row in all_rows] == [
+        "newest-report-oldest-pay",
+        "new-report-old-pay",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_compute_and_save_previous_delta_persists_pair_payload() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     baseline_model = _model(_row("repeat_1", ticket_count=2, cost=27.0))
@@ -232,6 +267,7 @@ async def test_recent_delta_batch_discovers_paid_accounts_and_stays_tenant_scope
         request_id="acct-1-baseline",
         model=_model(_row("repeat_1", ticket_count=2, cost=27.0)),
         created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
     )
     await _save(
         store,
@@ -239,6 +275,7 @@ async def test_recent_delta_batch_discovers_paid_accounts_and_stays_tenant_scope
         request_id="acct-1-current",
         model=_model(_row("repeat_1", ticket_count=5, cost=67.5)),
         created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
     )
     await _save(
         store,
@@ -246,6 +283,7 @@ async def test_recent_delta_batch_discovers_paid_accounts_and_stays_tenant_scope
         request_id="acct-2-current",
         model=_model(_row("repeat_2", ticket_count=4, cost=54.0)),
         created_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
     )
     await _save(
         store,
@@ -601,3 +639,61 @@ async def test_postgres_paid_account_discovery_is_paid_scoped_ordered_and_bounde
         in query
     )
     assert "LIMIT $1" in query
+
+
+@pytest.mark.asyncio
+async def test_postgres_paid_report_listing_orders_by_paid_activity() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetch(self, query: str, *args: object) -> list[dict[str, object]]:
+            self.fetch_calls.append((query, args))
+            return [
+                {
+                    "account_id": "acct-1",
+                    "request_id": "old-report-recent-pay",
+                    "snapshot": json.dumps(_snapshot("old-report-recent-pay")),
+                    "paid": True,
+                    "delivery_email": None,
+                    "created_at": "2026-03-01T00:00:00Z",
+                    "updated_at": "2026-06-10T00:00:00Z",
+                },
+            ]
+
+    pool = _Pool()
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+
+    reports = await store.list_reports(account_id=" acct-1 ", limit=2, paid=True)
+
+    assert [row.request_id for row in reports] == ["old-report-recent-pay"]
+    query, args = pool.fetch_calls[0]
+    assert args == ("acct-1", True, 2)
+    assert "AND paid = $2" in query
+    assert (
+        "ORDER BY COALESCE(paid_at, updated_at, created_at) DESC, request_id ASC"
+        in query
+    )
+    assert "ORDER BY created_at DESC" not in query
+
+
+@pytest.mark.asyncio
+async def test_postgres_unpaid_report_listing_keeps_created_ordering() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetch(self, query: str, *args: object) -> list[dict[str, object]]:
+            self.fetch_calls.append((query, args))
+            return []
+
+    pool = _Pool()
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+
+    reports = await store.list_reports(account_id="acct-1", limit=3, paid=False)
+
+    assert reports == ()
+    query, args = pool.fetch_calls[0]
+    assert args == ("acct-1", False, 3)
+    assert "AND paid = $2" in query
+    assert "ORDER BY created_at DESC, request_id ASC" in query
