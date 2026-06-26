@@ -75,6 +75,9 @@ class DeflectionDeltaBatchSummary:
     deltas_saved: int
     skipped_no_delta: int
     failed: int = 0
+    account_limit_reached: bool = False
+    reports_per_account_limit_reached: bool = False
+    report_limit_reached_accounts: tuple[str, ...] = ()
 
 
 class DeflectionDeltaReadError(ValueError):
@@ -1447,18 +1450,30 @@ async def compute_and_save_recent_deflection_deltas(
 ) -> DeflectionDeltaBatchSummary:
     """Persist previous-paid-report deltas for recent paid reports."""
 
-    accounts = await store.list_paid_report_accounts(limit=account_limit)
+    resolved_account_limit = (
+        None if account_limit is None else _bounded_limit(account_limit)
+    )
+    resolved_reports_per_account = (
+        None if reports_per_account is None else _bounded_limit(reports_per_account)
+    )
+    accounts = await store.list_paid_report_accounts(limit=resolved_account_limit)
     reports_scanned = 0
     deltas_saved = 0
     skipped_no_delta = 0
     failed = 0
+    report_limit_reached_accounts: list[str] = []
 
     for account_id in accounts:
         reports = await store.list_reports(
             account_id=account_id,
-            limit=reports_per_account,
+            limit=resolved_reports_per_account,
             paid=True,
         )
+        if (
+            resolved_reports_per_account is not None
+            and len(reports) >= resolved_reports_per_account
+        ):
+            report_limit_reached_accounts.append(account_id)
         for report in reports:
             reports_scanned += 1
             try:
@@ -1487,6 +1502,10 @@ async def compute_and_save_recent_deflection_deltas(
         deltas_saved=deltas_saved,
         skipped_no_delta=skipped_no_delta,
         failed=failed,
+        account_limit_reached=resolved_account_limit is not None
+        and len(accounts) >= resolved_account_limit,
+        reports_per_account_limit_reached=bool(report_limit_reached_accounts),
+        report_limit_reached_accounts=tuple(report_limit_reached_accounts),
     )
 
 

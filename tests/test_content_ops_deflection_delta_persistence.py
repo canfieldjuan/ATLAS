@@ -321,6 +321,50 @@ async def test_recent_delta_batch_discovers_paid_accounts_and_stays_tenant_scope
 
 
 @pytest.mark.asyncio
+async def test_recent_delta_batch_marks_saturated_account_and_report_windows() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-baseline",
+        model=_model(_row("repeat_1", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 9, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-current",
+        model=_model(_row("repeat_1", ticket_count=5, cost=67.5)),
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 10, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-2",
+        request_id="acct-2-current",
+        model=_model(_row("repeat_2", ticket_count=4, cost=54.0)),
+        created_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    summary = await compute_and_save_recent_deflection_deltas(
+        store,
+        account_limit=1,
+        reports_per_account=2,
+    )
+
+    assert summary.accounts_scanned == 1
+    assert summary.reports_scanned == 2
+    assert summary.deltas_saved == 1
+    assert summary.skipped_no_delta == 1
+    assert summary.failed == 0
+    assert summary.account_limit_reached is True
+    assert summary.reports_per_account_limit_reached is True
+    assert summary.report_limit_reached_accounts == ("acct-1",)
+
+
+@pytest.mark.asyncio
 async def test_recent_delta_batch_logs_per_report_failures(caplog) -> None:
     class _FailingStore:
         async def list_paid_report_accounts(self, *, limit: int | None = 100) -> tuple[str, ...]:

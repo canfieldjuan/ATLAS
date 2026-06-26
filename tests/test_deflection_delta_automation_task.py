@@ -159,6 +159,9 @@ async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
         "deltas_saved": 1,
         "skipped_no_delta": 2,
         "failed": 0,
+        "account_limit_reached": False,
+        "reports_per_account_limit_reached": False,
+        "report_limit_reached_accounts": [],
     }
 
 
@@ -190,6 +193,51 @@ async def test_run_reports_degraded_when_some_reports_fail(
         "deltas_saved": 1,
         "skipped_no_delta": 1,
         "failed": 1,
+        "account_limit_reached": False,
+        "reports_per_account_limit_reached": False,
+        "report_limit_reached_accounts": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_reports_scan_window_saturation_without_failing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    pool = SimpleNamespace(is_initialized=True)
+
+    async def _compute(
+        _store: Any,
+        *,
+        account_limit: int,
+        reports_per_account: int,
+    ) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=1,
+            reports_scanned=2,
+            deltas_saved=1,
+            skipped_no_delta=1,
+            failed=0,
+            account_limit_reached=True,
+            reports_per_account_limit_reached=True,
+            report_limit_reached_accounts=("acct-1",),
+        )
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert result == {
+        "_skip_synthesis": "Deflection delta automation scan window saturated",
+        "accounts_scanned": 1,
+        "reports_scanned": 2,
+        "deltas_saved": 1,
+        "skipped_no_delta": 1,
+        "failed": 0,
+        "account_limit_reached": True,
+        "reports_per_account_limit_reached": True,
+        "report_limit_reached_accounts": ["acct-1"],
     }
 
 
