@@ -108,8 +108,7 @@ Parked hardening: none.
 - `python -m pytest tests/test_deflection_delta_automation_task.py -q` -- 10
   passed after installing the repo-declared `apscheduler` dependency into the
   bundled Python runtime.
-- `python -m py_compile extracted_content_pipeline/deflection_report_access.py`
-  -- passed.
+- Python byte-compile check for the deflection report access module -- passed.
 - `python scripts/archive_plans.py index` -- passed.
 - `python scripts/sync_pr_plan.py plans/PR-Deflection-Delta-Paid-Report-Ordering.md --check`
   -- passed.
@@ -123,7 +122,7 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/deflection_report_access.py` | 33 |
 | `plans/INDEX.md` | 141 |
-| `plans/PR-Deflection-Delta-Paid-Report-Ordering.md` | 129 |
+| `plans/PR-Deflection-Delta-Paid-Report-Ordering.md` | 128 |
 | `plans/archive/PR-Deflection-Delta-Monthly-Automation.md` | 0 |
 | `tests/test_content_ops_deflection_delta_persistence.py` | 96 |
-| **Total** | **399** |
+| **Total** | **398** |
