@@ -490,17 +490,39 @@
             {
               "cluster_id": "repeat_b101110011101100010011111101110101110111101100011",
               "confidence": "medium",
+              "cost_confidence": "benchmark_index_metadata_only",
+              "cost_period": "batch_upload",
               "csat_signal": {
                 "csat_present_count": 0,
                 "negative_csat_ticket_count": 0,
                 "numeric_average": null,
                 "status": "insufficient_data"
               },
+              "customer_vocabulary": [
+                "How do I enable SSO for my team?",
+                "sso setup"
+              ],
               "estimated_support_cost": 27.0,
               "evidence_tier": "csv_index_metadata_only",
               "fix_type": "create_missing_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
+              "jira_template": {
+                "cost_confidence": "benchmark_index_metadata_only",
+                "cost_period": "batch_upload",
+                "customer_vocabulary": [
+                  "How do I enable SSO for my team?",
+                  "sso setup"
+                ],
+                "estimated_support_cost": 27.0,
+                "evidence_tier": "csv_index_metadata_only",
+                "owner_lane": "Auth / Product UX",
+                "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV index metadata only.",
+                "question": "How do I enable SSO for my team?",
+                "recommended_action": "Write and approve the missing answer for this repeated customer question.",
+                "recommended_title": "How do I enable SSO for my team?",
+                "ticket_count": 2
+              },
               "opportunity_score": 2,
               "owner_lane": "Auth / Product UX",
               "priority_drivers": [
@@ -509,6 +531,7 @@
                 "benchmark_cost"
               ],
               "priority_score": 84,
+              "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV index metadata only.",
               "question": "How do I enable SSO for my team?",
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
@@ -545,17 +568,39 @@
             {
               "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
               "confidence": "medium",
+              "cost_confidence": "benchmark_with_resolution_evidence",
+              "cost_period": "batch_upload",
               "csat_signal": {
                 "csat_present_count": 0,
                 "negative_csat_ticket_count": 0,
                 "numeric_average": null,
                 "status": "insufficient_data"
               },
+              "customer_vocabulary": [
+                "How do I export attribution reports?",
+                "reporting friction"
+              ],
               "estimated_support_cost": 27.0,
               "evidence_tier": "csv_full_thread_resolution_evidence",
               "fix_type": "publish_help_center_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
+              "jira_template": {
+                "cost_confidence": "benchmark_with_resolution_evidence",
+                "cost_period": "batch_upload",
+                "customer_vocabulary": [
+                  "How do I export attribution reports?",
+                  "reporting friction"
+                ],
+                "estimated_support_cost": 27.0,
+                "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_lane": "Reporting",
+                "product_gap_summary": "Repeated support friction routes to Reporting. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV full-thread resolution evidence.",
+                "question": "How do I export attribution reports?",
+                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+                "recommended_title": "How do I export attribution reports?",
+                "ticket_count": 2
+              },
               "opportunity_score": 2,
               "owner_lane": "Reporting",
               "priority_drivers": [
@@ -564,6 +609,7 @@
                 "benchmark_cost"
               ],
               "priority_score": 59,
+              "product_gap_summary": "Repeated support friction routes to Reporting. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV full-thread resolution evidence.",
               "question": "How do I export attribution reports?",
               "rank": 1,
               "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
@@ -636,17 +682,39 @@
             {
               "cluster_id": "repeat_b101110011101100010011111101110101110111101100011",
               "confidence": "medium",
+              "cost_confidence": "benchmark_index_metadata_only",
+              "cost_period": "batch_upload",
               "csat_signal": {
                 "csat_present_count": 0,
                 "negative_csat_ticket_count": 0,
                 "numeric_average": null,
                 "status": "insufficient_data"
               },
+              "customer_vocabulary": [
+                "How do I enable SSO for my team?",
+                "sso setup"
+              ],
               "estimated_support_cost": 27.0,
               "evidence_tier": "csv_index_metadata_only",
               "fix_type": "create_missing_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
+              "jira_template": {
+                "cost_confidence": "benchmark_index_metadata_only",
+                "cost_period": "batch_upload",
+                "customer_vocabulary": [
+                  "How do I enable SSO for my team?",
+                  "sso setup"
+                ],
+                "estimated_support_cost": 27.0,
+                "evidence_tier": "csv_index_metadata_only",
+                "owner_lane": "Auth / Product UX",
+                "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV index metadata only.",
+                "question": "How do I enable SSO for my team?",
+                "recommended_action": "Write and approve the missing answer for this repeated customer question.",
+                "recommended_title": "How do I enable SSO for my team?",
+                "ticket_count": 2
+              },
               "opportunity_score": 2,
               "owner_lane": "Auth / Product UX",
               "priority_drivers": [
@@ -655,6 +723,7 @@
                 "benchmark_cost"
               ],
               "priority_score": 84,
+              "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV index metadata only.",
               "question": "How do I enable SSO for my team?",
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
@@ -726,17 +795,39 @@
             {
               "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
               "confidence": "medium",
+              "cost_confidence": "benchmark_with_resolution_evidence",
+              "cost_period": "batch_upload",
               "csat_signal": {
                 "csat_present_count": 0,
                 "negative_csat_ticket_count": 0,
                 "numeric_average": null,
                 "status": "insufficient_data"
               },
+              "customer_vocabulary": [
+                "How do I export attribution reports?",
+                "reporting friction"
+              ],
               "estimated_support_cost": 27.0,
               "evidence_tier": "csv_full_thread_resolution_evidence",
               "fix_type": "publish_help_center_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
+              "jira_template": {
+                "cost_confidence": "benchmark_with_resolution_evidence",
+                "cost_period": "batch_upload",
+                "customer_vocabulary": [
+                  "How do I export attribution reports?",
+                  "reporting friction"
+                ],
+                "estimated_support_cost": 27.0,
+                "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_lane": "Reporting",
+                "product_gap_summary": "Repeated support friction routes to Reporting. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV full-thread resolution evidence.",
+                "question": "How do I export attribution reports?",
+                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+                "recommended_title": "How do I export attribution reports?",
+                "ticket_count": 2
+              },
               "opportunity_score": 2,
               "owner_lane": "Reporting",
               "priority_drivers": [
@@ -745,6 +836,7 @@
                 "benchmark_cost"
               ],
               "priority_score": 59,
+              "product_gap_summary": "Repeated support friction routes to Reporting. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV full-thread resolution evidence.",
               "question": "How do I export attribution reports?",
               "rank": 1,
               "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
@@ -830,17 +922,39 @@
             {
               "cluster_id": "repeat_b101110011101100010011111101110101110111101100011",
               "confidence": "medium",
+              "cost_confidence": "benchmark_index_metadata_only",
+              "cost_period": "batch_upload",
               "csat_signal": {
                 "csat_present_count": 0,
                 "negative_csat_ticket_count": 0,
                 "numeric_average": null,
                 "status": "insufficient_data"
               },
+              "customer_vocabulary": [
+                "How do I enable SSO for my team?",
+                "sso setup"
+              ],
               "estimated_support_cost": 27.0,
               "evidence_tier": "csv_index_metadata_only",
               "fix_type": "create_missing_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
+              "jira_template": {
+                "cost_confidence": "benchmark_index_metadata_only",
+                "cost_period": "batch_upload",
+                "customer_vocabulary": [
+                  "How do I enable SSO for my team?",
+                  "sso setup"
+                ],
+                "estimated_support_cost": 27.0,
+                "evidence_tier": "csv_index_metadata_only",
+                "owner_lane": "Auth / Product UX",
+                "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV index metadata only.",
+                "question": "How do I enable SSO for my team?",
+                "recommended_action": "Write and approve the missing answer for this repeated customer question.",
+                "recommended_title": "How do I enable SSO for my team?",
+                "ticket_count": 2
+              },
               "opportunity_score": 2,
               "owner_lane": "Auth / Product UX",
               "priority_drivers": [
@@ -849,6 +963,7 @@
                 "benchmark_cost"
               ],
               "priority_score": 84,
+              "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV index metadata only.",
               "question": "How do I enable SSO for my team?",
               "rank": 2,
               "recommended_action": "Write and approve the missing answer for this repeated customer question.",
@@ -885,17 +1000,39 @@
             {
               "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
               "confidence": "medium",
+              "cost_confidence": "benchmark_with_resolution_evidence",
+              "cost_period": "batch_upload",
               "csat_signal": {
                 "csat_present_count": 0,
                 "negative_csat_ticket_count": 0,
                 "numeric_average": null,
                 "status": "insufficient_data"
               },
+              "customer_vocabulary": [
+                "How do I export attribution reports?",
+                "reporting friction"
+              ],
               "estimated_support_cost": 27.0,
               "evidence_tier": "csv_full_thread_resolution_evidence",
               "fix_type": "publish_help_center_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
+              "jira_template": {
+                "cost_confidence": "benchmark_with_resolution_evidence",
+                "cost_period": "batch_upload",
+                "customer_vocabulary": [
+                  "How do I export attribution reports?",
+                  "reporting friction"
+                ],
+                "estimated_support_cost": 27.0,
+                "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_lane": "Reporting",
+                "product_gap_summary": "Repeated support friction routes to Reporting. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV full-thread resolution evidence.",
+                "question": "How do I export attribution reports?",
+                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+                "recommended_title": "How do I export attribution reports?",
+                "ticket_count": 2
+              },
               "opportunity_score": 2,
               "owner_lane": "Reporting",
               "priority_drivers": [
@@ -904,6 +1041,7 @@
                 "benchmark_cost"
               ],
               "priority_score": 59,
+              "product_gap_summary": "Repeated support friction routes to Reporting. 2 support tickets in this upload; estimated assisted-contact cost is $27 based on CSV full-thread resolution evidence.",
               "question": "How do I export attribution reports?",
               "rank": 1,
               "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",

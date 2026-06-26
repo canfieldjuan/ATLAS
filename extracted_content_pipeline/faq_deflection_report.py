@@ -849,6 +849,11 @@ _REPORT_ACTION_ITEM_FIELDS = (
     "owner_lane",
     "evidence_tier",
     "routing_signals",
+    "product_gap_summary",
+    "customer_vocabulary",
+    "cost_period",
+    "cost_confidence",
+    "jira_template",
     "fix_type",
     "csat_signal",
     "confidence",
@@ -871,6 +876,11 @@ _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
     "owner_lane",
     "evidence_tier",
     "routing_signals",
+    "product_gap_summary",
+    "customer_vocabulary",
+    "cost_period",
+    "cost_confidence",
+    "jira_template",
     "confidence",
     "recommended_action",
     "ticket_count",
@@ -878,6 +888,15 @@ _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
     "priority_score",
     "priority_drivers",
     "csat_signal",
+)
+_REPORT_ACTION_CONTEXT_OPTIONAL_FIELDS = (
+    "evidence_tier",
+    "routing_signals",
+    "product_gap_summary",
+    "customer_vocabulary",
+    "cost_period",
+    "cost_confidence",
+    "jira_template",
 )
 _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_FIELDS = (
     *_REPORT_ACTION_ITEM_FIELDS,
@@ -917,6 +936,19 @@ _REPORT_ACTION_ROUTING_HOSTED_FIELDS = (
     "product_area",
     "custom_product_area",
 )
+_REPORT_ACTION_JIRA_TEMPLATE_FIELDS = (
+    "recommended_title",
+    "question",
+    "owner_lane",
+    "product_gap_summary",
+    "ticket_count",
+    "estimated_support_cost",
+    "cost_period",
+    "cost_confidence",
+    "evidence_tier",
+    "customer_vocabulary",
+    "recommended_action",
+)
 _REPORT_ACTION_TOP_EVIDENCE_FIELDS = ("source_id", "evidence_quote")
 _REPORT_ACTION_SUPPORT_COST_BASIS_FIELDS = (
     "status",
@@ -936,6 +968,11 @@ _REPORT_ACTION_ITEM_NESTED_FIELDS = (
         "projected_fields": _REPORT_ACTION_ROUTING_SIGNAL_FIELDS,
         "hosted_consumer_safe_fields": _REPORT_ACTION_ROUTING_HOSTED_FIELDS,
     }),
+    MappingProxyType({
+        "field": "jira_template",
+        "projected_fields": _REPORT_ACTION_JIRA_TEMPLATE_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_ACTION_JIRA_TEMPLATE_FIELDS,
+    }),
 )
 _REPORT_ACTION_ITEM_NESTED_COLLECTIONS = (
     MappingProxyType({
@@ -949,7 +986,7 @@ _REPORT_ACTION_ITEM_COLLECTION = MappingProxyType({
     "field": "items",
     "item_type": "object",
     "projected_fields": _REPORT_ACTION_ITEM_FIELDS,
-    "optional_projected_fields": ("evidence_tier", "routing_signals"),
+    "optional_projected_fields": _REPORT_ACTION_CONTEXT_OPTIONAL_FIELDS,
     "hosted_consumer_safe_fields": _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS,
     "nested_object_fields": _REPORT_ACTION_ITEM_NESTED_FIELDS,
     "nested_collection_fields": _REPORT_ACTION_ITEM_NESTED_COLLECTIONS,
@@ -958,6 +995,7 @@ _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_COLLECTION = MappingProxyType({
     "field": "items",
     "item_type": "object",
     "projected_fields": _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_FIELDS,
+    "optional_projected_fields": _REPORT_ACTION_CONTEXT_OPTIONAL_FIELDS,
     "hosted_consumer_safe_fields": (
         _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_HOSTED_SAFE_FIELDS
     ),
@@ -3229,24 +3267,56 @@ def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
     ticket_count = _ticket_count(item)
     identity = _action_identity(item)
     routing_signals = _action_routing_signals(item)
+    owner_lane = _action_owner_lane(item, routing_signals=routing_signals)
+    evidence_tier = _action_evidence_tier(item)
+    estimated_support_cost = _support_cost(ticket_count)
+    recommended_title = _action_recommended_title(item)
+    recommended_action = _action_recommended_action(status)
+    customer_vocabulary = _action_customer_vocabulary(item)
+    product_gap_summary = _action_product_gap_summary(
+        item,
+        owner_lane=owner_lane,
+        evidence_tier=evidence_tier,
+        ticket_count=ticket_count,
+        estimated_support_cost=estimated_support_cost,
+    )
+    cost_period = _action_cost_period(item)
+    cost_confidence = _action_cost_confidence(item, evidence_tier=evidence_tier)
     return {
         "rank": rank,
         **identity,
         "question": _text(item.get("question")),
         "status": status,
-        "owner_lane": _action_owner_lane(item, routing_signals=routing_signals),
-        "evidence_tier": _action_evidence_tier(item),
+        "owner_lane": owner_lane,
+        "evidence_tier": evidence_tier,
         "routing_signals": routing_signals,
+        "product_gap_summary": product_gap_summary,
+        "customer_vocabulary": customer_vocabulary,
+        "cost_period": cost_period,
+        "cost_confidence": cost_confidence,
+        "jira_template": _action_jira_template(
+            item,
+            owner_lane=owner_lane,
+            product_gap_summary=product_gap_summary,
+            ticket_count=ticket_count,
+            estimated_support_cost=estimated_support_cost,
+            cost_period=cost_period,
+            cost_confidence=cost_confidence,
+            evidence_tier=evidence_tier,
+            customer_vocabulary=customer_vocabulary,
+            recommended_title=recommended_title,
+            recommended_action=recommended_action,
+        ),
         "fix_type": _action_fix_type(status),
         "csat_signal": _action_csat_signal(item),
         "confidence": _action_confidence(item),
         "priority_score": _action_priority_score(item, status),
         "priority_drivers": _action_priority_drivers(item, status),
-        "recommended_title": _action_recommended_title(item),
-        "recommended_action": _action_recommended_action(status),
+        "recommended_title": recommended_title,
+        "recommended_action": recommended_action,
         "representative_phrasing": _action_representative_phrasing(item),
         "ticket_count": ticket_count,
-        "estimated_support_cost": _support_cost(ticket_count),
+        "estimated_support_cost": estimated_support_cost,
         "support_cost_formula": "ticket_count * assisted_contact_cost",
         "support_cost_source": "default_assisted_contact_benchmark",
         "opportunity_score": _int(item.get("opportunity_score")),
@@ -3493,6 +3563,88 @@ def _action_representative_phrasing(item: Mapping[str, Any]) -> list[str]:
         if text and text not in phrases:
             phrases.append(text)
     return phrases[:3]
+
+
+def _action_customer_vocabulary(item: Mapping[str, Any]) -> list[str]:
+    return _action_representative_phrasing(item)[:3]
+
+
+def _action_product_gap_summary(
+    item: Mapping[str, Any],
+    *,
+    owner_lane: str,
+    evidence_tier: str,
+    ticket_count: int,
+    estimated_support_cost: float,
+) -> str:
+    if ticket_count < 2:
+        return ""
+    owner = owner_lane or "the right product/support owner"
+    cost = _format_money(estimated_support_cost)
+    evidence = _action_evidence_tier_label(evidence_tier)
+    return (
+        f"Repeated support friction routes to {owner}. "
+        f"{ticket_count} support tickets in this upload; estimated "
+        f"assisted-contact cost is {cost} based on {evidence}."
+    )
+
+
+def _action_cost_period(item: Mapping[str, Any]) -> str:
+    if _text(item.get("cost_period")):
+        return _text(item.get("cost_period"))
+    return "batch_upload"
+
+
+def _action_cost_confidence(
+    item: Mapping[str, Any],
+    *,
+    evidence_tier: str,
+) -> str:
+    explicit = _text(item.get("cost_confidence"))
+    if explicit:
+        return explicit
+    if evidence_tier == "csv_full_thread_resolution_evidence":
+        return "benchmark_with_resolution_evidence"
+    if evidence_tier == "csv_customer_text":
+        return "benchmark_with_customer_text"
+    return "benchmark_index_metadata_only"
+
+
+def _action_evidence_tier_label(value: str) -> str:
+    return {
+        "csv_customer_text": "CSV customer text",
+        "csv_index_metadata_only": "CSV index metadata only",
+        "csv_full_thread_resolution_evidence": "CSV full-thread resolution evidence",
+    }.get(value, value.replace("_", " ") or "unknown evidence")
+
+
+def _action_jira_template(
+    item: Mapping[str, Any],
+    *,
+    owner_lane: str,
+    product_gap_summary: str,
+    ticket_count: int,
+    estimated_support_cost: float,
+    cost_period: str,
+    cost_confidence: str,
+    evidence_tier: str,
+    customer_vocabulary: Sequence[str],
+    recommended_title: str,
+    recommended_action: str,
+) -> dict[str, Any]:
+    return {
+        "recommended_title": recommended_title or _text(item.get("question")),
+        "question": _text(item.get("question")),
+        "owner_lane": owner_lane,
+        "product_gap_summary": product_gap_summary,
+        "ticket_count": ticket_count,
+        "estimated_support_cost": estimated_support_cost,
+        "cost_period": cost_period,
+        "cost_confidence": cost_confidence,
+        "evidence_tier": evidence_tier,
+        "customer_vocabulary": list(customer_vocabulary[:3]),
+        "recommended_action": recommended_action,
+    }
 
 
 def _action_top_evidence(item: Mapping[str, Any]) -> list[dict[str, Any]]:

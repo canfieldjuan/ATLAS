@@ -326,6 +326,36 @@ function evidenceTierLabel(value) {
   return tier ? tier.replace(/_/g, " ") : "Unknown";
 }
 
+function costPeriodLabel(value) {
+  const period = clean(value);
+  if (period === "batch_upload") return "this upload";
+  return period ? period.replace(/_/g, " ") : "";
+}
+
+function costConfidenceLabel(value) {
+  const confidence = clean(value);
+  if (confidence === "benchmark_with_resolution_evidence") return "benchmark cost with resolution evidence";
+  if (confidence === "benchmark_with_customer_text") return "benchmark cost with customer text";
+  if (confidence === "benchmark_index_metadata_only") return "benchmark cost from index metadata";
+  return confidence ? confidence.replace(/_/g, " ") : "";
+}
+
+function cleanTextList(value, limit = 3) {
+  const values = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  const out = [];
+  for (const item of values) {
+    const text = clean(item);
+    if (!text) continue;
+    const key = text.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 function paidActionItems(report, sectionIds) {
   const rows = [];
   const seen = new Set();
@@ -487,12 +517,31 @@ function renderPaidGapCards(items, evidenceExportHref = "") {
               ? `<div class="paid-card-grid">
                   ${rows.map((item) => {
                     const evidenceTier = clean(item.evidence_tier);
+                    const vocabulary = cleanTextList(item.customer_vocabulary);
+                    const costBasis = [
+                      costPeriodLabel(item.cost_period),
+                      costConfidenceLabel(item.cost_confidence),
+                    ].filter(Boolean).join(" / ");
+                    const jiraTemplate = isObjectRecord(item.jira_template) ? item.jira_template : {};
+                    const jiraSummary = clean(jiraTemplate.product_gap_summary) || clean(item.product_gap_summary);
+                    const jiraAction = clean(jiraTemplate.recommended_action) || clean(item.recommended_action);
                     return `<article class="paid-card">
                     <p class="rank">${escapeHtml(formatNumber(itemTicketCount(item)))} tickets</p>
                     <h4>${escapeHtml(item.question || item.customer_wording || "Untitled question")}</h4>
+                    ${item.product_gap_summary ? `<p>${escapeHtml(item.product_gap_summary)}</p>` : ""}
                     <p>Owner: ${escapeHtml(item.owner_lane || "Unknown")}</p>
                     <p>Estimated handling: ${escapeHtml(formatMoney(firstParsedCount(item.estimated_support_cost)))}</p>
+                    ${costBasis ? `<p>Cost basis: ${escapeHtml(costBasis)}</p>` : ""}
                     ${evidenceTier ? `<p>Evidence: ${escapeHtml(evidenceTierLabel(evidenceTier))}</p>` : ""}
+                    ${vocabulary.length > 0
+                      ? `<p>Customer vocabulary: ${vocabulary.map(escapeHtml).join(", ")}</p>`
+                      : ""}
+                    ${jiraSummary || jiraAction
+                      ? `<details><summary>Jira handoff</summary>
+                          ${jiraSummary ? `<p>${escapeHtml(jiraSummary)}</p>` : ""}
+                          ${jiraAction ? `<p>${escapeHtml(jiraAction)}</p>` : ""}
+                        </details>`
+                      : ""}
                     <p>This is routeable product friction, not exact UI root-cause proof.</p>
                     ${evidenceExportHref
                       ? `<p><a href="${escapeHtml(evidenceExportHref)}" download>Download evidence JSON</a></p>`
