@@ -356,6 +356,27 @@ function cleanTextList(value, limit = 3) {
   return out;
 }
 
+function jiraHandoffText(item, jiraTemplate, { costBasis = "", evidenceTier = "", vocabulary = [] } = {}) {
+  const issue = clean(item.question) || clean(item.customer_wording);
+  const ownerLane = clean(jiraTemplate.owner_lane) || clean(item.owner_lane);
+  const summary = clean(jiraTemplate.product_gap_summary) || clean(item.product_gap_summary);
+  const nextAction = clean(jiraTemplate.recommended_action) || clean(item.recommended_action);
+  const ticketCount = itemTicketCount(item);
+  const estimatedCost = firstParsedCount(item.estimated_support_cost);
+  const lines = [
+    issue ? `Issue: ${issue}` : "",
+    ownerLane ? `Owner lane: ${ownerLane}` : "",
+    ticketCount > 0 ? `Impact: ${formatNumber(ticketCount)} repeat tickets` : "",
+    estimatedCost > 0 ? `Estimated handling cost: ${formatMoney(estimatedCost)}` : "",
+    costBasis ? `Cost basis: ${costBasis}` : "",
+    evidenceTier ? `Evidence tier: ${evidenceTierLabel(evidenceTier)}` : "",
+    vocabulary.length > 0 ? `Customer vocabulary: ${vocabulary.join(", ")}` : "",
+    summary ? `Summary: ${summary}` : "",
+    nextAction ? `Next action: ${nextAction}` : "",
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
 function paidActionItems(report, sectionIds) {
   const rows = [];
   const seen = new Set();
@@ -525,6 +546,11 @@ function renderPaidGapCards(items, evidenceExportHref = "") {
                     const jiraTemplate = isObjectRecord(item.jira_template) ? item.jira_template : {};
                     const jiraSummary = clean(jiraTemplate.product_gap_summary) || clean(item.product_gap_summary);
                     const jiraAction = clean(jiraTemplate.recommended_action) || clean(item.recommended_action);
+                    const jiraHandoff = jiraHandoffText(item, jiraTemplate, {
+                      costBasis,
+                      evidenceTier,
+                      vocabulary,
+                    });
                     return `<article class="paid-card">
                     <p class="rank">${escapeHtml(formatNumber(itemTicketCount(item)))} tickets</p>
                     <h4>${escapeHtml(item.question || item.customer_wording || "Untitled question")}</h4>
@@ -541,6 +567,13 @@ function renderPaidGapCards(items, evidenceExportHref = "") {
                           ${jiraSummary ? `<p>${escapeHtml(jiraSummary)}</p>` : ""}
                           ${jiraAction ? `<p>${escapeHtml(jiraAction)}</p>` : ""}
                         </details>`
+                      : ""}
+                    ${jiraHandoff
+                      ? `<div class="jira-copy">
+                          <label>Copy-ready Jira handoff</label>
+                          <textarea readonly rows="9" data-atlas-deflection-jira-handoff>${escapeHtml(jiraHandoff)}</textarea>
+                          <button type="button" class="jira-copy-button" data-atlas-deflection-jira-copy>Copy Jira handoff</button>
+                        </div>`
                       : ""}
                     <p>This is routeable product friction, not exact UI root-cause proof.</p>
                     ${evidenceExportHref
@@ -712,6 +745,29 @@ function renderArtifactRetryScript({ requestId, shouldRetry }) {
   </script>`;
 }
 
+function renderJiraCopyScript({ enabled }) {
+  if (!enabled) return "";
+
+  return `\n  <script data-atlas-deflection-jira-copy-script>
+    document.querySelectorAll("[data-atlas-deflection-jira-copy]").forEach((copyButton) => {
+      copyButton.addEventListener("click", async () => {
+        const handoff = copyButton
+          .closest(".jira-copy")
+          ?.querySelector("[data-atlas-deflection-jira-handoff]");
+        if (!handoff) return;
+        try {
+          await navigator.clipboard.writeText(handoff.value);
+          copyButton.textContent = "Copied";
+        } catch {
+          handoff.focus();
+          handoff.select();
+          copyButton.textContent = "Select and copy";
+        }
+      });
+    });
+  </script>`;
+}
+
 function renderResultPage({ requestId, accountId, checkoutStatus = "", report = null }) {
   const safeRequestId = escapeHtml(requestId);
   const safeCheckoutStatus = escapeHtml(checkoutStatus);
@@ -814,6 +870,10 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     .paid-card { padding: 14px; }
     .paid-card h4 { margin: 6px 0 8px; font-size: 16px; }
     .paid-card p:not(.rank) { margin: 0; color: rgba(226, 232, 240, .75); line-height: 1.55; }
+    .jira-copy { display: grid; gap: 8px; margin-top: 12px; }
+    .jira-copy label { color: rgba(226, 232, 240, .66); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    .jira-copy textarea { width: 100%; box-sizing: border-box; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; background: rgba(15, 23, 42, .68); color: #f8fafc; padding: 10px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.45; resize: vertical; }
+    .jira-copy-button { width: auto; justify-self: start; padding: 9px 12px; font-size: 12px; }
     .paid-phrase-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
     .paid-phrase-list li { padding: 9px 11px; line-height: 1.45; }
     .notice { margin-top: 20px; border-radius: 8px; padding: 14px 16px; color: #fde68a; background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .28); }
@@ -887,6 +947,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     }
   </script>
   ${renderArtifactRetryScript({ requestId, shouldRetry: shouldRetryArtifact })}
+  ${renderJiraCopyScript({ enabled: isUnlocked })}
 </body>
 </html>`;
 }
