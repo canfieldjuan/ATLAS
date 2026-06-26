@@ -52,12 +52,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 int(cfg.reports_per_account),
             ),
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Deflection delta automation failed")
-        return {
-            "_skip_synthesis": "Deflection delta automation failed",
-            "error": str(exc)[:500],
-        }
+        raise
 
     payload = {
         "accounts_scanned": summary.accounts_scanned,
