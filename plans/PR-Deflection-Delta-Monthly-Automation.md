@@ -36,6 +36,8 @@ Slice phase: Vertical slice
 5. Review follow-up: let real batch exceptions fail the scheduled task, rank
    paid account discovery by paid activity instead of report creation time, and
    enroll the automation task tests in PR CI.
+6. Review follow-up: surface partial per-report failures as a degraded task
+   result and fail the task when every scanned report failed.
 
 ### Review Contract
 
@@ -88,7 +90,9 @@ Reviewer rules triggered: R1, R6, R8, R10, R11, R12, R14.
   The task exits before touching DB when disabled, exits safely when the DB pool
   is not initialized, and otherwise constructs the Postgres store and delegates
   to the batch helper. Real batch exceptions are logged and re-raised so the
-  scheduler records a failed run instead of a false success.
+  scheduler records a failed run instead of a false success. Per-report
+  exceptions are logged with account/request context; partial failures return a
+  degraded result, and all-report failures raise.
 - Seed and register `content_ops_deflection_delta_automation` as an opt-in
   monthly cron task, with cron/account/report limits resolved from typed
   `settings.deflection_delta`.
@@ -117,6 +121,9 @@ Reviewer rules triggered: R1, R6, R8, R10, R11, R12, R14.
 - The D0 stable identity foundation called out in #1316 remains the gate before
   any customer-facing delta delivery. This slice only keeps persisted pair
   deltas warm through the existing access boundary.
+- Before live cron enablement, add pagination or cap-saturation alerting for
+  `account_limit` and `reports_per_account` so monthly coverage cannot silently
+  skip least-recently-paid tenants or older reports.
 
 Parked hardening: none.
 
@@ -143,10 +150,10 @@ Parked hardening: none.
 | `atlas_brain/autonomous/scheduler.py` | 17 |
 | `atlas_brain/autonomous/tasks/__init__.py` | 1 |
 | `.github/workflows/atlas_content_ops_deflection_report_checks.yml` | 11 |
-| `atlas_brain/autonomous/tasks/content_ops_deflection_delta_automation.py` | 71 |
+| `atlas_brain/autonomous/tasks/content_ops_deflection_delta_automation.py` | 74 |
 | `atlas_brain/config.py` | 14 |
-| `extracted_content_pipeline/deflection_report_access.py` | 119 |
-| `plans/PR-Deflection-Delta-Monthly-Automation.md` | 152 |
-| `tests/test_content_ops_deflection_delta_persistence.py` | 122 |
-| `tests/test_deflection_delta_automation_task.py` | 216 |
-| **Total** | **723** |
+| `extracted_content_pipeline/deflection_report_access.py` | 127 |
+| `plans/PR-Deflection-Delta-Monthly-Automation.md` | 164 |
+| `tests/test_content_ops_deflection_delta_persistence.py` | 163 |
+| `tests/test_deflection_delta_automation_task.py` | 264 |
+| **Total** | **835** |
