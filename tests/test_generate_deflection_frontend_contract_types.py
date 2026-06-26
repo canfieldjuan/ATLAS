@@ -97,7 +97,8 @@ def test_deflection_report_model_types_publish_hosted_safe_allowlists() -> None:
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        '["rank", "question", "status", "owner_lane", "confidence", '
+        '["rank", "question", "status", "owner_lane", "evidence_tier", '
+        '"routing_signals", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal"]'
     ) in rendered
@@ -173,7 +174,8 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        'Object.freeze(["rank", "question", "status", "owner_lane", "confidence", '
+        'Object.freeze(["rank", "question", "status", "owner_lane", "evidence_tier", '
+        '"routing_signals", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal"])'
     ) in rendered
@@ -188,7 +190,8 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
     ) in rendered
     assert (
         'DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        'Object.freeze(["rank", "question", "status", "owner_lane", "confidence", '
+        'Object.freeze(["rank", "question", "status", "owner_lane", "evidence_tier", '
+        '"routing_signals", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal", "review_key", '
         '"suppression_reason", "suppression_reason_label"])'
@@ -251,8 +254,11 @@ def test_generated_deflection_api_contracts_are_enrolled_in_product_surface_mani
     manifest = json.loads(DEFLECTION_PRODUCT_SURFACE_MANIFEST.read_text(encoding="utf-8"))
     manifest_files = set(manifest["files"])
 
-    assert str(MOD["DEFAULT_API_OUTPUT"].relative_to(ROOT)) in manifest_files
-    assert str(MOD["DEFAULT_REPORT_MODEL_API_OUTPUT"].relative_to(ROOT)) in manifest_files
+    assert MOD["DEFAULT_API_OUTPUT"].relative_to(ROOT).as_posix() in manifest_files
+    assert (
+        MOD["DEFAULT_REPORT_MODEL_API_OUTPUT"].relative_to(ROOT).as_posix()
+        in manifest_files
+    )
 
 
 def test_deflection_frontend_contract_types_check_rejects_stale_output(tmp_path) -> None:

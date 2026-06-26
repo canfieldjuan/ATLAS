@@ -847,6 +847,8 @@ _REPORT_ACTION_ITEM_FIELDS = (
     "question",
     "status",
     "owner_lane",
+    "evidence_tier",
+    "routing_signals",
     "fix_type",
     "csat_signal",
     "confidence",
@@ -867,6 +869,8 @@ _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
     "question",
     "status",
     "owner_lane",
+    "evidence_tier",
+    "routing_signals",
     "confidence",
     "recommended_action",
     "ticket_count",
@@ -893,6 +897,15 @@ _REPORT_ACTION_CSAT_SIGNAL_FIELDS = (
     "negative_csat_ticket_count",
     "numeric_average",
 )
+_REPORT_ACTION_ROUTING_SIGNAL_FIELDS = (
+    "group",
+    "assignee",
+    "tags",
+    "brand",
+    "organization",
+    "product_area",
+    "custom_product_area",
+)
 _REPORT_ACTION_TOP_EVIDENCE_FIELDS = ("source_id", "evidence_quote")
 _REPORT_ACTION_SUPPORT_COST_BASIS_FIELDS = (
     "status",
@@ -906,6 +919,11 @@ _REPORT_ACTION_ITEM_NESTED_FIELDS = (
         "field": "csat_signal",
         "projected_fields": _REPORT_ACTION_CSAT_SIGNAL_FIELDS,
         "hosted_consumer_safe_fields": _REPORT_ACTION_CSAT_SIGNAL_FIELDS,
+    }),
+    MappingProxyType({
+        "field": "routing_signals",
+        "projected_fields": _REPORT_ACTION_ROUTING_SIGNAL_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_ACTION_ROUTING_SIGNAL_FIELDS,
     }),
 )
 _REPORT_ACTION_ITEM_NESTED_COLLECTIONS = (
@@ -3193,12 +3211,15 @@ def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
     status = _action_status(item)
     ticket_count = _ticket_count(item)
     identity = _action_identity(item)
+    routing_signals = _action_routing_signals(item)
     return {
         "rank": rank,
         **identity,
         "question": _text(item.get("question")),
         "status": status,
-        "owner_lane": _action_owner_lane(item),
+        "owner_lane": _action_owner_lane(item, routing_signals=routing_signals),
+        "evidence_tier": _action_evidence_tier(item),
+        "routing_signals": routing_signals,
         "fix_type": _action_fix_type(status),
         "csat_signal": _action_csat_signal(item),
         "confidence": _action_confidence(item),
@@ -3241,9 +3262,76 @@ def _action_status(item: Mapping[str, Any]) -> str:
     return "Needs review"
 
 
-def _action_owner_lane(item: Mapping[str, Any]) -> str:
+_OWNER_LANE_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("login", "auth", "sso", "mfa", "password"), "Auth / Product UX"),
+    (("invoice", "billing", "receipt", "payment"), "Billing"),
+    (("export", "report", "download", "csv"), "Reporting"),
+    (("invite", "role", "permission", "admin"), "Admin / Access"),
+)
+
+
+def _action_owner_lane(
+    item: Mapping[str, Any],
+    *,
+    routing_signals: Mapping[str, Any] | None = None,
+) -> str:
+    mapped = _owner_lane_from_text(_routing_signals_text(routing_signals or {}))
+    if mapped:
+        return mapped
+    mapped = _owner_lane_from_text(" ".join((
+        _text(item.get("topic")),
+        _text(item.get("question")),
+        _text(item.get("customer_wording")),
+    )))
+    if mapped:
+        return mapped
     topic = _text(item.get("topic"))
-    return topic or "Unknown"
+    return _owner_lane_title(topic) if topic else "Unknown"
+
+
+def _action_routing_signals(item: Mapping[str, Any]) -> dict[str, list[str]]:
+    raw = item.get("routing_signals")
+    if not isinstance(raw, Mapping):
+        raw = {}
+    signals: dict[str, list[str]] = {
+        key: [] for key in _REPORT_ACTION_ROUTING_SIGNAL_FIELDS
+    }
+    for key in _REPORT_ACTION_ROUTING_SIGNAL_FIELDS:
+        values = _texts(raw.get(key))
+        if values:
+            signals[key] = values[:8]
+    return signals
+
+
+def _routing_signals_text(routing_signals: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    for key in _REPORT_ACTION_ROUTING_SIGNAL_FIELDS:
+        parts.extend(_texts(routing_signals.get(key)))
+    return " ".join(parts)
+
+
+def _owner_lane_from_text(value: str) -> str:
+    haystack = value.casefold()
+    if not haystack:
+        return ""
+    for needles, lane in _OWNER_LANE_RULES:
+        if any(needle in haystack for needle in needles):
+            return lane
+    return ""
+
+
+def _owner_lane_title(value: str) -> str:
+    text = re.sub(r"[_/-]+", " ", value).strip()
+    return text.title() if text else "Unknown"
+
+
+def _action_evidence_tier(item: Mapping[str, Any]) -> str:
+    tier = _text(item.get("evidence_tier"))
+    if tier:
+        return tier
+    if _text(item.get("answer_evidence_status")) == _RESOLUTION_EVIDENCE_STATUS:
+        return "csv_full_thread_resolution_evidence"
+    return "csv_customer_text"
 
 
 def _action_fix_type(status: str) -> str:

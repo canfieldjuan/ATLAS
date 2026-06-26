@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 import math
@@ -257,6 +257,16 @@ _SOURCE_WEIGHT_KEYS = (
     # aggregate fields so round-tripped FAQ output does not mask search_count.
     "frequency",
 )
+_ROUTING_SIGNAL_KEYS = (
+    "group",
+    "assignee",
+    "tags",
+    "brand",
+    "organization",
+    "product_area",
+    "custom_product_area",
+)
+_ROUTING_SIGNAL_VALUE_LIMIT = 8
 _RESOLUTION_TEXT_KEYS = (
     "resolution_text",
     "resolved_text",
@@ -813,6 +823,18 @@ def build_ticket_faq_markdown(
                 "csat": _first_present(evidence, opportunity, key="csat"),
                 "csat_score": _first_present(evidence, opportunity, key="csat_score"),
                 "csat_raw": _first_available(evidence, opportunity, keys=_OUTCOME_CSAT_KEYS),
+                "group": _first_present(evidence, opportunity, key="group"),
+                "assignee": _first_present(evidence, opportunity, key="assignee"),
+                "tags": _first_present(evidence, opportunity, key="tags"),
+                "brand": _first_present(evidence, opportunity, key="brand"),
+                "organization": _first_present(evidence, opportunity, key="organization"),
+                "product_area": _first_present(evidence, opportunity, key="product_area"),
+                "custom_product_area": _first_present(
+                    evidence, opportunity, key="custom_product_area"
+                ),
+                "support_ticket_evidence_tier": _first_present(
+                    evidence, opportunity, key="support_ticket_evidence_tier"
+                ),
             })
 
     # #1460: topic-degraded groups (scope "topic:*") measure bucket
@@ -1370,6 +1392,7 @@ def _item(
     evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
     opportunity = _opportunity_score(topic, rows)
     term_mappings = _term_mappings(rows, documentation_terms, vocabulary_gap_rules)
+    routing_signals = _routing_signals(rows)
     item = {
         "topic": topic,
         "question": question,
@@ -1389,6 +1412,10 @@ def _item(
         "summary": summary,
         "steps": steps,
         "answer_evidence_status": answer_evidence_status,
+        "evidence_tier": _item_evidence_tier(
+            rows,
+            answer_evidence_status=answer_evidence_status,
+        ),
         "resolution_evidence_scope": resolution_evidence_scope,
         "resolution_source_count": _resolution_source_count(resolution_rows),
         "when_to_contact_support": escalation,
@@ -1402,6 +1429,8 @@ def _item(
         "displayed_evidence_count": len(display_rows),
         "ticket_count": len(source_ids),
     }
+    if routing_signals:
+        item["routing_signals"] = routing_signals
     outcome_diagnostics = _outcome_diagnostics(rows)
     if outcome_diagnostics:
         item["outcome_diagnostics"] = outcome_diagnostics
@@ -1409,6 +1438,63 @@ def _item(
     if source_date_span is not None:
         item["source_date_span"] = source_date_span
     return item
+
+
+def _routing_signals(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
+    signals: dict[str, list[str]] = {}
+    for key in _ROUTING_SIGNAL_KEYS:
+        values = _routing_signal_values(row.get(key) for row in rows)
+        if values:
+            signals[key] = list(values)
+    return signals
+
+
+def _routing_signal_values(values: Iterable[Any]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        for text in _routing_value_tokens(value):
+            folded = text.casefold()
+            if folded in seen:
+                continue
+            seen.add(folded)
+            result.append(text)
+            if len(result) >= _ROUTING_SIGNAL_VALUE_LIMIT:
+                return tuple(result)
+    return tuple(result)
+
+
+def _routing_value_tokens(value: Any) -> tuple[str, ...]:
+    if value in (None, "", [], {}):
+        return ()
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(
+            token
+            for item in value
+            for token in _routing_value_tokens(item)
+        )
+    text = support_ticket_plain_text(value)
+    if not text:
+        return ()
+    return tuple(
+        part.strip()
+        for part in re.split(r"[;,|]", text)
+        if part.strip()
+    ) or (text,)
+
+
+def _item_evidence_tier(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    answer_evidence_status: str,
+) -> str:
+    if answer_evidence_status == "resolution_evidence":
+        return "csv_full_thread_resolution_evidence"
+    for row in rows:
+        tier = _clean(row.get("support_ticket_evidence_tier"))
+        if tier:
+            return tier
+    return "csv_customer_text" if rows else "csv_index_metadata_only"
 
 
 def _source_date_span(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:

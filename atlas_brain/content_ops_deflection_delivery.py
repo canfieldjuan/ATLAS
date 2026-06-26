@@ -60,6 +60,8 @@ class _DeliveryEmailActionItem:
     question: str
     ticket_count: int
     estimated_support_cost: float | None
+    owner_lane: str
+    evidence_tier: str
     status: str
     recommended_action: str
 
@@ -514,6 +516,8 @@ def _email_action_item(row: Mapping[str, Any]) -> _DeliveryEmailActionItem | Non
         question=question,
         ticket_count=ticket_count,
         estimated_support_cost=estimated_support_cost,
+        owner_lane=_strict_text(row.get("owner_lane")) or "",
+        evidence_tier=_strict_text(row.get("evidence_tier")) or "",
         status=_strict_text(row.get("status")) or "",
         recommended_action=_strict_text(row.get("recommended_action")) or "",
     )
@@ -560,11 +564,23 @@ def _text_action_item(item: _DeliveryEmailActionItem, *, include_action: bool) -
     ]
     if item.estimated_support_cost is not None:
         parts.append(f"{_email_money(item.estimated_support_cost)} estimated handling")
+    if item.owner_lane:
+        parts.append(f"Owner: {item.owner_lane}")
+    if item.evidence_tier:
+        parts.append(f"Evidence: {_evidence_tier_label(item.evidence_tier)}")
     if item.status:
         parts.append(item.status)
     if include_action and item.recommended_action:
         parts.append(item.recommended_action)
     return " - ".join(parts)
+
+
+def _evidence_tier_label(value: str) -> str:
+    return {
+        "csv_customer_text": "CSV customer text",
+        "csv_index_metadata_only": "CSV index metadata only",
+        "csv_full_thread_resolution_evidence": "CSV full-thread resolution evidence",
+    }.get(value, value.replace("_", " "))
 
 
 def _strict_int(value: Any) -> int | None:

@@ -494,7 +494,7 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         "Needs answer",
     ]
     assert priority_queue["data"]["items"][0]["fix_type"] == "publish_help_center_answer"
-    assert priority_queue["data"]["items"][0]["owner_lane"] == "exports"
+    assert priority_queue["data"]["items"][0]["owner_lane"] == "Reporting"
     assert priority_queue["data"]["items"][0]["estimated_support_cost"] == 67.5
     assert priority_queue["data"]["items"][0]["csat_signal"] == {
         "status": "insufficient_data",
@@ -628,7 +628,7 @@ def test_deflection_action_sections_classify_recurring_covered_answers() -> None
     assert recurring["items"][0]["fix_type"] == (
         "improve_discoverability_or_answer_quality"
     )
-    assert recurring["items"][0]["owner_lane"] == "analytics"
+    assert recurring["items"][0]["owner_lane"] == "Analytics"
     assert recurring["items"][0]["csat_signal"] == {
         "status": "present",
         "csat_present_count": 4,
@@ -638,6 +638,44 @@ def test_deflection_action_sections_classify_recurring_covered_answers() -> None
     assert "negative_csat" in recurring["items"][0]["priority_drivers"]
     assert "reopened_after_answer" in recurring["items"][0]["priority_drivers"]
     assert priority["status_counts"] == {"Already covered but still recurring": 1}
+
+
+def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
+    rows = [
+        {
+            "Ticket ID": f"zd-login-{index}",
+            "Subject": "Where is the login button?",
+            "Requester Comment": "Where is the login button?",
+            "Created At": f"2026-05-0{index}T09:00:00Z",
+            "Group": "Authentication Support",
+            "Tags": "login;mfa",
+        }
+        for index in range(1, 5)
+    ]
+    rows.append({
+        "Ticket ID": "zd-export-1",
+        "Subject": "Where is the CSV export?",
+        "Requester Comment": "Where is the CSV export?",
+        "Created At": "2026-05-05T09:00:00Z",
+        "Group": "Reporting",
+        "Tags": "export",
+    })
+    package = build_support_ticket_input_package(rows)
+    faq_result = build_ticket_faq_markdown(package.inputs["source_material"], max_items=4)
+
+    model = build_deflection_report_model(faq_result).as_dict()
+    sections = {section["id"]: section for section in model["sections"]}
+    priority_item = sections["priority_fix_queue"]["data"]["items"][0]
+
+    assert priority_item["question"] == "Where is the login button?"
+    assert priority_item["owner_lane"] == "Auth / Product UX"
+    assert priority_item["ticket_count"] == 4
+    assert priority_item["estimated_support_cost"] == 54.0
+    assert priority_item["evidence_tier"] == "csv_customer_text"
+    assert priority_item["routing_signals"]["group"] == ["Authentication Support"]
+    assert priority_item["routing_signals"]["tags"] == ["login", "mfa"]
+    assert "Account Settings" not in priority_item["recommended_action"]
+    assert "buried" not in priority_item["recommended_action"].lower()
 
 
 def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:

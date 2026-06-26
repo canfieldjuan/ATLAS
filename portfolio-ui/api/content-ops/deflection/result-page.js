@@ -318,6 +318,14 @@ function hasResolutionEvidence(item) {
   return clean(item.answer_evidence_status) === RESOLUTION_EVIDENCE_STATUS;
 }
 
+function evidenceTierLabel(value) {
+  const tier = clean(value);
+  if (tier === "csv_customer_text") return "CSV customer text";
+  if (tier === "csv_index_metadata_only") return "CSV index metadata only";
+  if (tier === "csv_full_thread_resolution_evidence") return "CSV full-thread resolution evidence";
+  return tier ? tier.replace(/_/g, " ") : "CSV customer text";
+}
+
 function paidSummary(report, items) {
   const summary = isObjectRecord(report.artifact.summary) ? report.artifact.summary : {};
   const repeatTickets = finiteCount(summary.repeat_ticket_count);
@@ -444,16 +452,22 @@ function renderPaidAnswerCards(items) {
           </section>`;
 }
 
-function renderPaidGapCards(items) {
+function renderPaidGapCards(items, evidenceExportHref = "") {
   const rows = items.filter((item) => !hasResolutionEvidence(item)).slice(0, PAID_DETAIL_LIMIT);
   return `<section id="paid-gap-list" class="paid-report-block">
-            <h3>No-proven-answer gaps</h3>
+            <h3>Product Gap cards</h3>
             ${rows.length > 0
               ? `<div class="paid-card-grid">
                   ${rows.map((item) => `<article class="paid-card">
                     <p class="rank">${escapeHtml(formatNumber(itemTicketCount(item)))} tickets</p>
                     <h4>${escapeHtml(item.question || item.customer_wording || "Untitled question")}</h4>
-                    <p>Needs uploaded resolution evidence before ATLAS can mark this as publishable help-center copy.</p>
+                    <p>Owner: ${escapeHtml(item.owner_lane || "Unknown")}</p>
+                    <p>Estimated handling: ${escapeHtml(formatMoney(firstParsedCount(item.estimated_support_cost)))}</p>
+                    <p>Evidence: ${escapeHtml(evidenceTierLabel(item.evidence_tier))}</p>
+                    <p>This is routeable product friction, not exact UI root-cause proof.</p>
+                    ${evidenceExportHref
+                      ? `<p><a href="${escapeHtml(evidenceExportHref)}" download>Download evidence JSON</a></p>`
+                      : ""}
                   </article>`).join("")}
                 </div>`
               : `<p class="muted">No unresolved answer gaps were present in this unlocked report.</p>`}
@@ -572,7 +586,7 @@ function renderPaidArtifact(report, requestId = "") {
           ${renderPaidReadiness(summary, evidenceExportHref)}
           ${renderPaidQuestionTable(items)}
           ${renderPaidAnswerCards(items)}
-          ${renderPaidGapCards(items)}
+          ${renderPaidGapCards(items, evidenceExportHref)}
           ${renderPaidPhrases(items)}
         </section>`;
 }
