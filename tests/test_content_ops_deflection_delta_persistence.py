@@ -360,8 +360,91 @@ async def test_recent_delta_batch_marks_saturated_account_and_report_windows() -
     assert summary.skipped_no_delta == 1
     assert summary.failed == 0
     assert summary.account_limit_reached is True
+    assert summary.account_limit_overflow is True
     assert summary.reports_per_account_limit_reached is True
+    assert summary.reports_per_account_limit_overflow is False
     assert summary.report_limit_reached_accounts == ("acct-1",)
+    assert summary.report_limit_overflow_accounts == ()
+
+
+@pytest.mark.asyncio
+async def test_recent_delta_batch_keeps_exact_fill_saturation_out_of_overflow() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-baseline",
+        model=_model(_row("repeat_1", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 9, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-current",
+        model=_model(_row("repeat_1", ticket_count=5, cost=67.5)),
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 10, tzinfo=timezone.utc),
+    )
+
+    summary = await compute_and_save_recent_deflection_deltas(
+        store,
+        account_limit=1,
+        reports_per_account=2,
+    )
+
+    assert summary.accounts_scanned == 1
+    assert summary.reports_scanned == 2
+    assert summary.account_limit_reached is True
+    assert summary.account_limit_overflow is False
+    assert summary.reports_per_account_limit_reached is True
+    assert summary.reports_per_account_limit_overflow is False
+    assert summary.report_limit_reached_accounts == ("acct-1",)
+    assert summary.report_limit_overflow_accounts == ()
+
+
+@pytest.mark.asyncio
+async def test_recent_delta_batch_marks_report_window_overflow() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-oldest",
+        model=_model(_row("repeat_1", ticket_count=1, cost=13.5)),
+        created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 8, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-middle",
+        model=_model(_row("repeat_1", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 9, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-newest",
+        model=_model(_row("repeat_1", ticket_count=5, cost=67.5)),
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 10, tzinfo=timezone.utc),
+    )
+
+    summary = await compute_and_save_recent_deflection_deltas(
+        store,
+        account_limit=10,
+        reports_per_account=2,
+    )
+
+    assert summary.accounts_scanned == 1
+    assert summary.reports_scanned == 2
+    assert summary.account_limit_reached is False
+    assert summary.account_limit_overflow is False
+    assert summary.reports_per_account_limit_reached is True
+    assert summary.reports_per_account_limit_overflow is True
+    assert summary.report_limit_reached_accounts == ("acct-1",)
+    assert summary.report_limit_overflow_accounts == ("acct-1",)
 
 
 @pytest.mark.asyncio
@@ -683,6 +766,35 @@ async def test_postgres_paid_account_discovery_is_paid_scoped_ordered_and_bounde
         in query
     )
     assert "LIMIT $1" in query
+
+
+@pytest.mark.asyncio
+async def test_postgres_paid_count_probes_are_paid_scoped() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.fetchrow_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetchrow(self, query: str, *args: object) -> dict[str, object]:
+            self.fetchrow_calls.append((query, args))
+            return {"count": 3}
+
+    pool = _Pool()
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+
+    account_count = await store.count_paid_report_accounts()
+    report_count = await store.count_paid_reports(account_id=" acct-1 ")
+
+    assert account_count == 3
+    assert report_count == 3
+    account_query, account_args = pool.fetchrow_calls[0]
+    assert account_args == ()
+    assert "COUNT(DISTINCT account_id)" in account_query
+    assert "WHERE paid = true" in account_query
+    report_query, report_args = pool.fetchrow_calls[1]
+    assert report_args == ("acct-1",)
+    assert "COUNT(*)" in report_query
+    assert "WHERE account_id = $1" in report_query
+    assert "AND paid = true" in report_query
 
 
 @pytest.mark.asyncio

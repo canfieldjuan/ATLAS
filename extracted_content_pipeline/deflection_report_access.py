@@ -76,8 +76,11 @@ class DeflectionDeltaBatchSummary:
     skipped_no_delta: int
     failed: int = 0
     account_limit_reached: bool = False
+    account_limit_overflow: bool = False
     reports_per_account_limit_reached: bool = False
+    reports_per_account_limit_overflow: bool = False
     report_limit_reached_accounts: tuple[str, ...] = ()
+    report_limit_overflow_accounts: tuple[str, ...] = ()
 
 
 class DeflectionDeltaReadError(ValueError):
@@ -126,6 +129,16 @@ class DeflectionReportArtifactStore(Protocol):
         limit: int | None = 100,
     ) -> tuple[str, ...]:
         """List tenants with paid reports, newest paid activity first."""
+
+    async def count_paid_report_accounts(self) -> int:
+        """Count tenants that have at least one paid report."""
+
+    async def count_paid_reports(
+        self,
+        *,
+        account_id: str,
+    ) -> int:
+        """Count paid reports for one tenant."""
 
     async def get_artifact_record(
         self,
@@ -387,6 +400,27 @@ class InMemoryDeflectionReportArtifactStore:
         if limit is None:
             return tuple(ordered)
         return tuple(ordered[:_bounded_limit(limit)])
+
+    async def count_paid_report_accounts(self) -> int:
+        return len(
+            {
+                account_id
+                for (account_id, _request_id), row in self._rows.items()
+                if row.paid
+            }
+        )
+
+    async def count_paid_reports(
+        self,
+        *,
+        account_id: str,
+    ) -> int:
+        resolved_account = _required_text(account_id, "account_id")
+        return sum(
+            1
+            for (row_account, _request_id), row in self._rows.items()
+            if row_account == resolved_account and row.paid
+        )
 
     async def get_artifact_record(
         self,
@@ -739,6 +773,32 @@ class PostgresDeflectionReportArtifactStore:
             for row in rows
             if (account_id := _clean(row_to_dict(row).get("account_id")))
         )
+
+    async def count_paid_report_accounts(self) -> int:
+        row = await self.pool.fetchrow(
+            """
+            SELECT COUNT(DISTINCT account_id) AS count
+            FROM content_ops_deflection_reports
+            WHERE paid = true
+            """
+        )
+        return _row_count(row)
+
+    async def count_paid_reports(
+        self,
+        *,
+        account_id: str,
+    ) -> int:
+        row = await self.pool.fetchrow(
+            """
+            SELECT COUNT(*) AS count
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1
+              AND paid = true
+            """,
+            _required_text(account_id, "account_id"),
+        )
+        return _row_count(row)
 
     async def get_artifact_record(
         self,
@@ -1348,6 +1408,15 @@ def _parse_command_count(result: Any) -> int:
     return int(count_text)
 
 
+def _row_count(row: Any) -> int:
+    if row is None:
+        return 0
+    parsed = _required_int(row_to_dict(row).get("count"))
+    if parsed is None or parsed < 0:
+        return 0
+    return parsed
+
+
 def _optional_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
@@ -1512,11 +1581,20 @@ async def compute_and_save_recent_deflection_deltas(
         None if reports_per_account is None else _bounded_limit(reports_per_account)
     )
     accounts = await store.list_paid_report_accounts(limit=resolved_account_limit)
+    account_limit_reached = (
+        resolved_account_limit is not None and len(accounts) >= resolved_account_limit
+    )
+    account_limit_overflow = False
+    if account_limit_reached:
+        account_limit_overflow = (
+            await store.count_paid_report_accounts()
+        ) > resolved_account_limit
     reports_scanned = 0
     deltas_saved = 0
     skipped_no_delta = 0
     failed = 0
     report_limit_reached_accounts: list[str] = []
+    report_limit_overflow_accounts: list[str] = []
 
     for account_id in accounts:
         reports = await store.list_reports(
@@ -1524,11 +1602,16 @@ async def compute_and_save_recent_deflection_deltas(
             limit=resolved_reports_per_account,
             paid=True,
         )
-        if (
+        report_limit_reached = (
             resolved_reports_per_account is not None
             and len(reports) >= resolved_reports_per_account
-        ):
+        )
+        if report_limit_reached:
             report_limit_reached_accounts.append(account_id)
+            if (
+                await store.count_paid_reports(account_id=account_id)
+            ) > resolved_reports_per_account:
+                report_limit_overflow_accounts.append(account_id)
         for report in reports:
             reports_scanned += 1
             try:
@@ -1557,10 +1640,12 @@ async def compute_and_save_recent_deflection_deltas(
         deltas_saved=deltas_saved,
         skipped_no_delta=skipped_no_delta,
         failed=failed,
-        account_limit_reached=resolved_account_limit is not None
-        and len(accounts) >= resolved_account_limit,
+        account_limit_reached=account_limit_reached,
+        account_limit_overflow=account_limit_overflow,
         reports_per_account_limit_reached=bool(report_limit_reached_accounts),
+        reports_per_account_limit_overflow=bool(report_limit_overflow_accounts),
         report_limit_reached_accounts=tuple(report_limit_reached_accounts),
+        report_limit_overflow_accounts=tuple(report_limit_overflow_accounts),
     )
 
 
