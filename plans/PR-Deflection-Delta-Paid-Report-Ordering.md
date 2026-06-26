@@ -23,7 +23,7 @@ not available in this connector/runtime.
 ## Scope (this PR)
 
 Ownership lane: issue-1316/deflection-delta-paid-report-ordering
-Slice phase: Hardening slice
+Slice phase: Production hardening
 
 1. Order paid report listing by paid activity in the in-memory and Postgres
    deflection report artifact stores.
