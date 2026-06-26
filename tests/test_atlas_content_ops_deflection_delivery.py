@@ -183,6 +183,8 @@ def _delivery_report_model_artifact(
                                 "question": "How do I export attribution reports?",
                                 "ticket_count": 9,
                                 "estimated_support_cost": 121.5,
+                                "owner_lane": "Reporting",
+                                "evidence_tier": "csv_customer_text",
                                 "status": "Needs answer",
                                 "recommended_action": "Create a help-center answer",
                                 "representative_phrasing": [
@@ -350,6 +352,8 @@ async def test_delivery_worker_renders_model_backed_email_summary(
     assert "How do I export attribution reports?" in request.html_body
     assert "9 repeat tickets" in request.html_body
     assert "$122 estimated handling" in request.html_body
+    assert "Owner: Reporting" in request.html_body
+    assert "Evidence: CSV customer text" in request.html_body
     assert "Create a help-center answer" in request.html_body
     assert "How do I update invoice contacts?" in request.html_body
     assert "How do I invite an auditor?" not in request.html_body
@@ -374,6 +378,8 @@ async def test_delivery_worker_renders_model_backed_email_summary(
     assert "$16,659 estimated assisted-contact handling" in request.text_body
     assert "Next actions" in request.text_body
     assert "How do I export attribution reports?" in request.text_body
+    assert "Owner: Reporting" in request.text_body
+    assert "Evidence: CSV customer text" in request.text_body
     assert "How do I update invoice contacts?" in request.text_body
     assert "How do I invite an auditor?" not in request.text_body
     assert "Ready to publish" in request.text_body

@@ -847,6 +847,8 @@ _REPORT_ACTION_ITEM_FIELDS = (
     "question",
     "status",
     "owner_lane",
+    "evidence_tier",
+    "routing_signals",
     "fix_type",
     "csat_signal",
     "confidence",
@@ -867,6 +869,8 @@ _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
     "question",
     "status",
     "owner_lane",
+    "evidence_tier",
+    "routing_signals",
     "confidence",
     "recommended_action",
     "ticket_count",
@@ -893,6 +897,26 @@ _REPORT_ACTION_CSAT_SIGNAL_FIELDS = (
     "negative_csat_ticket_count",
     "numeric_average",
 )
+_REPORT_ACTION_ROUTING_SIGNAL_FIELDS = (
+    "group",
+    "assignee",
+    "tags",
+    "brand",
+    "organization",
+    "product_area",
+    "custom_product_area",
+)
+_REPORT_ACTION_ROUTING_INFERENCE_FIELDS = (
+    "group",
+    "tags",
+    "product_area",
+    "custom_product_area",
+)
+_REPORT_ACTION_ROUTING_HOSTED_FIELDS = (
+    "tags",
+    "product_area",
+    "custom_product_area",
+)
 _REPORT_ACTION_TOP_EVIDENCE_FIELDS = ("source_id", "evidence_quote")
 _REPORT_ACTION_SUPPORT_COST_BASIS_FIELDS = (
     "status",
@@ -907,6 +931,11 @@ _REPORT_ACTION_ITEM_NESTED_FIELDS = (
         "projected_fields": _REPORT_ACTION_CSAT_SIGNAL_FIELDS,
         "hosted_consumer_safe_fields": _REPORT_ACTION_CSAT_SIGNAL_FIELDS,
     }),
+    MappingProxyType({
+        "field": "routing_signals",
+        "projected_fields": _REPORT_ACTION_ROUTING_SIGNAL_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_ACTION_ROUTING_HOSTED_FIELDS,
+    }),
 )
 _REPORT_ACTION_ITEM_NESTED_COLLECTIONS = (
     MappingProxyType({
@@ -920,6 +949,7 @@ _REPORT_ACTION_ITEM_COLLECTION = MappingProxyType({
     "field": "items",
     "item_type": "object",
     "projected_fields": _REPORT_ACTION_ITEM_FIELDS,
+    "optional_projected_fields": ("evidence_tier", "routing_signals"),
     "hosted_consumer_safe_fields": _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS,
     "nested_object_fields": _REPORT_ACTION_ITEM_NESTED_FIELDS,
     "nested_collection_fields": _REPORT_ACTION_ITEM_NESTED_COLLECTIONS,
@@ -999,6 +1029,7 @@ _REPORT_QUESTION_DETAIL_ROW_FIELDS = (
     "estimated_support_cost",
     "answer_status",
     "answer_evidence_status",
+    "evidence_tier",
     "resolution_evidence_scope",
     "answer_linkage",
     "answer",
@@ -1019,6 +1050,7 @@ _REPORT_QUESTION_DETAIL_ROW_HOSTED_SAFE_FIELDS = (
     "estimated_support_cost",
     "answer_status",
     "answer_evidence_status",
+    "evidence_tier",
     "resolution_evidence_scope",
     "answer_linkage",
     "answer",
@@ -1249,6 +1281,9 @@ def _report_projection_collection_entry(metadata: Mapping[str, Any]) -> dict[str
                 default=projected_fields,
             )
         )
+        optional_fields = _field_tuple(metadata, "optional_projected_fields")
+        if optional_fields:
+            out["optional_projected_fields"] = list(optional_fields)
     nested_fields = _nested_field_entries(metadata)
     if nested_fields:
         out["nested_object_fields"] = nested_fields
@@ -3193,12 +3228,15 @@ def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
     status = _action_status(item)
     ticket_count = _ticket_count(item)
     identity = _action_identity(item)
+    routing_signals = _action_routing_signals(item)
     return {
         "rank": rank,
         **identity,
         "question": _text(item.get("question")),
         "status": status,
-        "owner_lane": _action_owner_lane(item),
+        "owner_lane": _action_owner_lane(item, routing_signals=routing_signals),
+        "evidence_tier": _action_evidence_tier(item),
+        "routing_signals": routing_signals,
         "fix_type": _action_fix_type(status),
         "csat_signal": _action_csat_signal(item),
         "confidence": _action_confidence(item),
@@ -3241,9 +3279,97 @@ def _action_status(item: Mapping[str, Any]) -> str:
     return "Needs review"
 
 
-def _action_owner_lane(item: Mapping[str, Any]) -> str:
+_OWNER_LANE_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("login", "auth", "sso", "mfa", "password"), "Auth / Product UX"),
+    (("invoice", "billing", "receipt", "payment"), "Billing"),
+    (("export", "report", "download", "csv"), "Reporting"),
+    (("invite", "role", "permission", "admin"), "Admin / Access"),
+)
+
+
+def _action_owner_lane(
+    item: Mapping[str, Any],
+    *,
+    routing_signals: Mapping[str, Any] | None = None,
+) -> str:
+    mapped = _owner_lane_from_text(" ".join((
+        _text(item.get("topic")),
+        _text(item.get("question")),
+        _text(item.get("customer_wording")),
+    )))
+    if mapped:
+        return mapped
+    mapped = _owner_lane_from_text(_routing_signals_text(routing_signals or {}))
+    if mapped:
+        return mapped
     topic = _text(item.get("topic"))
-    return topic or "Unknown"
+    return _owner_lane_title(topic) if topic else "Unknown"
+
+
+def _action_routing_signals(item: Mapping[str, Any]) -> dict[str, list[str]]:
+    raw = item.get("routing_signals")
+    if not isinstance(raw, Mapping):
+        raw = {}
+    signals: dict[str, list[str]] = {
+        key: [] for key in _REPORT_ACTION_ROUTING_SIGNAL_FIELDS
+    }
+    for key in _REPORT_ACTION_ROUTING_SIGNAL_FIELDS:
+        values = _routing_signal_texts(raw.get(key))
+        if values:
+            signals[key] = values[:8]
+    return signals
+
+
+def _routing_signal_texts(value: Any) -> list[str]:
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, Mapping):
+        return []
+    if isinstance(value, str):
+        values: Sequence[Any] = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        values = value
+    else:
+        values = (value,)
+    out: list[str] = []
+    for item in values:
+        if isinstance(item, Mapping):
+            continue
+        text = _text(item)
+        if text:
+            out.append(text)
+    return out
+
+
+def _routing_signals_text(routing_signals: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    for key in _REPORT_ACTION_ROUTING_INFERENCE_FIELDS:
+        parts.extend(_routing_signal_texts(routing_signals.get(key)))
+    return " ".join(parts)
+
+
+def _owner_lane_from_text(value: str) -> str:
+    tokens = set(re.findall(r"[a-z0-9]+", value.casefold()))
+    if not tokens:
+        return ""
+    for needles, lane in _OWNER_LANE_RULES:
+        if any(needle in tokens for needle in needles):
+            return lane
+    return ""
+
+
+def _owner_lane_title(value: str) -> str:
+    text = re.sub(r"[_/-]+", " ", value).strip()
+    return text.title() if text else "Unknown"
+
+
+def _action_evidence_tier(item: Mapping[str, Any]) -> str:
+    tier = _text(item.get("evidence_tier"))
+    if tier:
+        return tier
+    if _text(item.get("answer_evidence_status")) == _RESOLUTION_EVIDENCE_STATUS:
+        return "csv_full_thread_resolution_evidence"
+    return "csv_index_metadata_only"
 
 
 def _action_fix_type(status: str) -> str:
@@ -3468,6 +3594,7 @@ def _question_detail_rows(
             "estimated_support_cost": _support_cost(_ticket_count(item)),
             "answer_status": _status_label(item),
             "answer_evidence_status": _text(item.get("answer_evidence_status")),
+            "evidence_tier": _action_evidence_tier(item),
             "resolution_evidence_scope": _text(item.get("resolution_evidence_scope")),
             "answer_linkage": _evidence_answer_linkage(item),
             "answer": _text(item.get("answer")),

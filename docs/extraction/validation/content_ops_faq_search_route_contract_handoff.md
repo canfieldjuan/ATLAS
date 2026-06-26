@@ -95,7 +95,7 @@ returns the persisted FAQ draft:
 Each detail `items[]` entry carries the full generated FAQ shape:
 
 - strings: `topic`, `question`, `question_source`, `summary`, `answer`,
-  `answer_evidence_status`, `resolution_evidence_scope`,
+  `answer_evidence_status`, `evidence_tier`, `resolution_evidence_scope`,
   `when_to_contact_support`
 - integers: `frequency`, `weighted_frequency`, `ticket_count`,
   `opportunity_score`, `failure_risk_score`, `resolution_source_count`,

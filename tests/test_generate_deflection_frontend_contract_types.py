@@ -82,6 +82,8 @@ def test_deflection_report_model_types_include_backend_projection_fields() -> No
     assert "source_date_window: DeflectionReportSupportTaxSourceDateWindow | null;" in rendered
     assert "term_mappings: DeflectionReportQuestionDetailsTermMappings[];" in rendered
     assert "outcome_diagnostics: DeflectionReportQuestionOutcomeDiagnostics | null;" in rendered
+    assert "evidence_tier?: string;" in rendered
+    assert "routing_signals?: DeflectionReportPriorityFixQueueRoutingSignals;" in rendered
     assert "source_file?: DeflectionReportSourceFileData;" in rendered
     assert "outcome_diagnostics?: DeflectionReportOutcomeDiagnosticsData;" in rendered
     assert "export type DeflectionStructuredReport" in rendered
@@ -97,13 +99,18 @@ def test_deflection_report_model_types_publish_hosted_safe_allowlists() -> None:
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        '["rank", "question", "status", "owner_lane", "confidence", '
+        '["rank", "question", "status", "owner_lane", "evidence_tier", '
+        '"routing_signals", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal"]'
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = '
         '["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = '
+        '["tags", "product_area", "custom_product_area"]'
     ) in rendered
     assert (
         "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "
@@ -173,7 +180,8 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        'Object.freeze(["rank", "question", "status", "owner_lane", "confidence", '
+        'Object.freeze(["rank", "question", "status", "owner_lane", "evidence_tier", '
+        '"routing_signals", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal"])'
     ) in rendered
@@ -183,12 +191,17 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
         '"numeric_average"])'
     ) in rendered
     assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = '
+        'Object.freeze(["tags", "product_area", "custom_product_area"])'
+    ) in rendered
+    assert (
         "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "
         "Object.freeze([])"
     ) in rendered
     assert (
         'DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        'Object.freeze(["rank", "question", "status", "owner_lane", "confidence", '
+        'Object.freeze(["rank", "question", "status", "owner_lane", "evidence_tier", '
+        '"routing_signals", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal", "review_key", '
         '"suppression_reason", "suppression_reason_label"])'
@@ -251,8 +264,11 @@ def test_generated_deflection_api_contracts_are_enrolled_in_product_surface_mani
     manifest = json.loads(DEFLECTION_PRODUCT_SURFACE_MANIFEST.read_text(encoding="utf-8"))
     manifest_files = set(manifest["files"])
 
-    assert str(MOD["DEFAULT_API_OUTPUT"].relative_to(ROOT)) in manifest_files
-    assert str(MOD["DEFAULT_REPORT_MODEL_API_OUTPUT"].relative_to(ROOT)) in manifest_files
+    assert MOD["DEFAULT_API_OUTPUT"].relative_to(ROOT).as_posix() in manifest_files
+    assert (
+        MOD["DEFAULT_REPORT_MODEL_API_OUTPUT"].relative_to(ROOT).as_posix()
+        in manifest_files
+    )
 
 
 def test_deflection_frontend_contract_types_check_rejects_stale_output(tmp_path) -> None:

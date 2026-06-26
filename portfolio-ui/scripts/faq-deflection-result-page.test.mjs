@@ -227,7 +227,8 @@ await test("paid result page source renders dashboard sections instead of raw ma
     "deflection_evidence.v1",
     "Top ranked questions",
     "Publishable answers",
-    "No-proven-answer gaps",
+    "Product Gap cards",
+    "routeable product friction",
     "Top customer wording and SEO phrases",
   ]) {
     assert.match(resultPageSource, new RegExp(marker));
@@ -321,6 +322,92 @@ await test("paid dashboard uses canonical repeat-ticket count for support tax", 
   assert.match(html, /Can I rename a workspace\?/);
 });
 
+await test("unlocked paid result page renders CSV owner-lane gap card fields", () => {
+  const html = renderResultPage({
+    requestId: "content-ops-owner-lane",
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    report: {
+      ok: true,
+      snapshot: {
+        summary: {
+          generated: 1,
+          repeat_ticket_count: 65,
+          drafted_answer_count: 0,
+          no_proven_answer_count: 1,
+          support_ticket_resolution_evidence_present: false,
+          support_ticket_resolution_evidence_count: 0,
+        },
+        top_questions: [],
+      },
+      artifact_status: "unlocked",
+      artifact: {
+        summary: {
+          generated: 1,
+          repeat_ticket_count: 65,
+        },
+        evidence_export: {
+          schema_version: "deflection_evidence.v1",
+          rows: [],
+          summary: {
+            evidence_row_count: 0,
+            source_id_count: 65,
+          },
+        },
+        report_model: {
+          schema_version: "deflection.v1",
+          sections: [
+            {
+              id: "priority_fix_queue",
+              data: {
+                items: [
+                  {
+                    question: "Where is the login button?",
+                    ticket_count: 65,
+                    estimated_support_cost: 877.5,
+                    owner_lane: "Auth / Product UX",
+                    evidence_tier: "csv_customer_text",
+                    status: "Needs answer",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        faq_result: {
+          items: [
+            {
+              question: "Where is the login button?",
+              ticket_count: 65,
+              answer_evidence_status: "needs_review",
+              top_evidence: [
+                {
+                  source_id: "zendesk:10422",
+                  evidence_quote: "raw source quote should stay out of cards",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert.match(html, /Product Gap cards/);
+  assert.match(html, /Where is the login button\?/);
+  assert.match(html, /65 tickets/);
+  assert.match(html, /Owner: Auth \/ Product UX/);
+  assert.match(html, /Estimated handling: \$878/);
+  assert.match(html, /Evidence: CSV customer text/);
+  assert.match(html, /routeable product friction, not exact UI root-cause proof/);
+  assert.match(html, /Download evidence JSON/);
+  assert.match(
+    html,
+    /\/api\/content-ops\/deflection\/evidence-export\?request_id=content-ops-owner-lane/,
+  );
+  assert.doesNotMatch(html, /zendesk:10422/);
+  assert.doesNotMatch(html, /raw source quote should stay out of cards/);
+});
+
 await test("locked result page does not render paid report-model fields", () => {
   const html = renderResultPage({
     requestId: "content-ops-locked-model",
@@ -354,6 +441,8 @@ await test("locked result page does not render paid report-model fields", () => 
                     steps: ["Hidden paid step"],
                     source_ids: ["zendesk:secret-source"],
                     evidence_quotes: ["customer private evidence quote"],
+                    owner_lane: "Auth / Product UX",
+                    evidence_tier: "csv_customer_text",
                   },
                 ],
               },
@@ -364,6 +453,10 @@ await test("locked result page does not render paid report-model fields", () => 
           items: [
             {
               question: "Hidden paid item question",
+              ticket_count: 65,
+              estimated_support_cost: 877.5,
+              owner_lane: "Auth / Product UX",
+              evidence_tier: "csv_customer_text",
               top_evidence: [
                 {
                   source_id: "zendesk:top-evidence-source",
@@ -386,6 +479,10 @@ await test("locked result page does not render paid report-model fields", () => 
     "zendesk:secret-source",
     "customer private evidence quote",
     "Hidden paid item question",
+    "65 tickets",
+    "Owner: Auth / Product UX",
+    "Estimated handling: $878",
+    "Evidence: CSV customer text",
     "zendesk:top-evidence-source",
     "private top evidence quote",
   ]) {

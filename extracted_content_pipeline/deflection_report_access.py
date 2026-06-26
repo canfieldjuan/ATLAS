@@ -1044,6 +1044,19 @@ _STORED_ACTION_SECTION_LIMIT_DEFAULTS = {
         "pdf_limit": 10,
     },
 }
+_STORED_ACTION_OWNER_METADATA_SECTIONS = frozenset({
+    "priority_fix_queue",
+    "top_unresolved_repeats",
+    "drafted_resolutions",
+    "already_covered_still_recurring",
+    "backlog_table",
+    "suppressed_repeat_review_queue",
+})
+_STORED_ACTION_ROUTING_LABEL_FIELDS = (
+    "tags",
+    "product_area",
+    "custom_product_area",
+)
 
 
 def _record_from_row(row: Mapping[str, Any]) -> DeflectionReportAccessRecord:
@@ -1112,6 +1125,7 @@ def _stored_report_model_section(value: Any) -> dict[str, Any] | None:
         required_data,
         data,
     )
+    data = _normalize_stored_action_owner_metadata(section_id, data)
     data = _normalize_stored_suppressed_review_keys(section_id, data)
     if any(key not in data for key in required_data):
         return None
@@ -1146,6 +1160,47 @@ def _normalize_stored_action_section_limits(
         if key not in normalized_required:
             normalized_required.append(key)
     return normalized_required, normalized_data
+
+
+def _normalize_stored_action_owner_metadata(
+    section_id: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    if section_id not in _STORED_ACTION_OWNER_METADATA_SECTIONS:
+        return data
+    raw_items = data.get("items")
+    if not _is_sequence(raw_items):
+        return data
+
+    normalized_items: list[Any] = []
+    changed = False
+    for item in raw_items:
+        if not isinstance(item, Mapping):
+            normalized_items.append(item)
+            continue
+        row = dict(item)
+        if not _clean(row.get("evidence_tier")):
+            row["evidence_tier"] = "csv_index_metadata_only"
+            changed = True
+        routing_signals = _stored_action_routing_labels(row.get("routing_signals"))
+        if row.get("routing_signals") != routing_signals:
+            row["routing_signals"] = routing_signals
+            changed = True
+        normalized_items.append(row)
+
+    if not changed:
+        return data
+    normalized_data = dict(data)
+    normalized_data["items"] = normalized_items
+    return normalized_data
+
+
+def _stored_action_routing_labels(value: Any) -> dict[str, list[str]]:
+    raw = value if isinstance(value, Mapping) else {}
+    return {
+        field: _text_list(raw.get(field))[:8]
+        for field in _STORED_ACTION_ROUTING_LABEL_FIELDS
+    }
 
 
 def _normalize_stored_suppressed_review_keys(
