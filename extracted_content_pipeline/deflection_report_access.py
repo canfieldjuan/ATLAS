@@ -251,6 +251,7 @@ class InMemoryDeflectionReportArtifactStore:
     def __init__(self) -> None:
         self._rows: dict[tuple[str, str], DeflectionReportAccessRecord] = {}
         self._created_at_by_key: dict[tuple[str, str], datetime] = {}
+        self._paid_at_by_key: dict[tuple[str, str], datetime] = {}
         self._deltas: dict[
             tuple[str, str, str],
             DeflectionDeltaAccessRecord,
@@ -334,14 +335,15 @@ class InMemoryDeflectionReportArtifactStore:
             account_id, _request_id = key
             if not row.paid:
                 continue
-            created_at = self._created_at_by_key.get(key, fallback)
-            if created_at > newest_by_account.get(account_id, fallback):
-                newest_by_account[account_id] = created_at
-        ordered = sorted(
-            newest_by_account,
-            key=lambda account_id: newest_by_account[account_id],
-            reverse=True,
-        )
+            paid_activity_at = self._paid_at_by_key.get(
+                key,
+                self._created_at_by_key.get(key, fallback),
+            )
+            if paid_activity_at > newest_by_account.get(account_id, fallback):
+                newest_by_account[account_id] = paid_activity_at
+        ordered_items = sorted(newest_by_account.items(), key=lambda item: item[0])
+        ordered_items.sort(key=lambda item: item[1], reverse=True)
+        ordered = [account_id for account_id, _activity_at in ordered_items]
         if limit is None:
             return tuple(ordered)
         return tuple(ordered[:_bounded_limit(limit)])
@@ -385,6 +387,7 @@ class InMemoryDeflectionReportArtifactStore:
             payment_reference=_clean(payment_reference) or row.payment_reference,
             delivery_email=row.delivery_email,
         )
+        self._paid_at_by_key.setdefault(key, datetime.now(timezone.utc))
         return True
 
     async def count_reports_older_than(self, *, cutoff: datetime) -> int:
@@ -445,6 +448,7 @@ class InMemoryDeflectionReportArtifactStore:
             payment_reference=row.payment_reference,
             delivery_email=row.delivery_email,
         )
+        self._paid_at_by_key.pop(key, None)
         return True
 
     async def select_previous_paid_report(
@@ -650,7 +654,7 @@ class PostgresDeflectionReportArtifactStore:
             FROM content_ops_deflection_reports
             WHERE paid = true
             GROUP BY account_id
-            ORDER BY MAX(created_at) DESC, account_id ASC
+            ORDER BY MAX(COALESCE(paid_at, updated_at, created_at)) DESC, account_id ASC
             {limit_clause}
             """,
             *args,
