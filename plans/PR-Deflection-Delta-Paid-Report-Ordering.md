@@ -83,6 +83,10 @@ Reviewer rules triggered: R1, R8, R10, R14.
 - This does not add pagination or cap-saturation alerting. It closes the
   newly-paid older-report miss under the current bounded scan, while broader
   cap coverage remains a live-cron prerequisite.
+- The readonly MCP search surface also uses `list_reports(..., paid=True)`, so
+  explicit paid-only search results now use paid-activity ordering. That is an
+  intentional, benign parity change; default search ordering with `paid=None`
+  remains created-date ordered.
 - This does not alter baseline selection, delta identity, delivery copy, or
   subscription entitlement logic.
 
@@ -119,7 +123,7 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/deflection_report_access.py` | 33 |
 | `plans/INDEX.md` | 141 |
-| `plans/PR-Deflection-Delta-Paid-Report-Ordering.md` | 125 |
+| `plans/PR-Deflection-Delta-Paid-Report-Ordering.md` | 129 |
 | `plans/archive/PR-Deflection-Delta-Monthly-Automation.md` | 0 |
 | `tests/test_content_ops_deflection_delta_persistence.py` | 96 |
-| **Total** | **395** |
+| **Total** | **399** |
