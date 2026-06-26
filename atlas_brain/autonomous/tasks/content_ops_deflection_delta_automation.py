@@ -62,6 +62,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "deltas_saved": summary.deltas_saved,
         "skipped_no_delta": summary.skipped_no_delta,
         "failed": summary.failed,
+        "account_limit_reached": summary.account_limit_reached,
+        "reports_per_account_limit_reached": (
+            summary.reports_per_account_limit_reached
+        ),
+        "report_limit_reached_accounts": list(summary.report_limit_reached_accounts),
     }
     if summary.reports_scanned == 0:
         return {
@@ -72,4 +77,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         raise RuntimeError("Deflection delta automation failed for all scanned reports")
     if summary.failed:
         return {"_skip_synthesis": "Deflection delta automation degraded", **payload}
+    if summary.account_limit_reached or summary.reports_per_account_limit_reached:
+        return {
+            "_skip_synthesis": "Deflection delta automation scan window saturated",
+            **payload,
+        }
     return {"_skip_synthesis": "Deflection delta automation complete", **payload}
