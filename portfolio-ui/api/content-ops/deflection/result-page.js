@@ -19,6 +19,8 @@ const EVIDENCE_EXPORT_SCHEMA_VERSION = "deflection_evidence.v1";
 const RESULT_PAGE_QA_SURFACE_CAPS = Object.freeze({
   ranked_questions: PAID_QUESTION_LIMIT,
   question_details: PAID_DETAIL_LIMIT * 2,
+  product_gap_cards: PAID_DETAIL_LIMIT,
+  jira_handoffs: PAID_DETAIL_LIMIT,
   seo_targets: PAID_PHRASE_LIMIT,
 });
 const DEFLECTION_REPORT_SECTION_ID_SET = new Set(DEFLECTION_REPORT_SECTION_IDS);
@@ -598,7 +600,7 @@ function renderPaidPhrases(items) {
           </section>`;
 }
 
-function resultPageQaObservation(report) {
+function resultPageQaObservation(report, gapItems = null) {
   const items = paidArtifactItems(report);
   if (!items.length) return null;
 
@@ -614,7 +616,27 @@ function resultPageQaObservation(report) {
   const summary = paidSummary(report, items);
   const publishable = items.filter(hasResolutionEvidence);
   const needsProof = items.filter((item) => !hasResolutionEvidence(item));
+  const productGapItems = Array.isArray(gapItems)
+    ? gapItems
+    : paidGapCardItems(report, items);
   const phrases = paidCustomerPhrases(items);
+  const productGapCards = productGapItems
+    .filter((item) => !hasResolutionEvidence(item))
+    .slice(0, PAID_DETAIL_LIMIT);
+  const jiraHandoffCards = productGapCards.filter((item) => {
+    const evidenceTier = clean(item.evidence_tier);
+    const vocabulary = cleanTextList(item.customer_vocabulary);
+    const costBasis = [
+      costPeriodLabel(item.cost_period),
+      costConfidenceLabel(item.cost_confidence),
+    ].filter(Boolean).join(" / ");
+    const jiraTemplate = isObjectRecord(item.jira_template) ? item.jira_template : {};
+    return Boolean(jiraHandoffText(item, jiraTemplate, {
+      costBasis,
+      evidenceTier,
+      vocabulary,
+    }));
+  });
 
   return {
     counts: {
@@ -653,6 +675,8 @@ function resultPageQaObservation(report) {
         completeEvidence.source_id_count,
         exportSummary.source_id_count,
       ),
+      product_gap_card_count: productGapCards.length,
+      jira_handoff_count: jiraHandoffCards.length,
     },
     displayed_rows: {
       ranked_questions: Math.min(items.length, RESULT_PAGE_QA_SURFACE_CAPS.ranked_questions),
@@ -660,6 +684,8 @@ function resultPageQaObservation(report) {
         rowCount(questionDetails) || publishable.length + needsProof.length,
         RESULT_PAGE_QA_SURFACE_CAPS.question_details,
       ),
+      product_gap_cards: productGapCards.length,
+      jira_handoffs: jiraHandoffCards.length,
       seo_targets: Math.min(
         firstParsedCount(seoTargets.total_phrase_count, phrases.length),
         RESULT_PAGE_QA_SURFACE_CAPS.seo_targets,
@@ -674,7 +700,7 @@ function renderPaidArtifact(report, requestId = "") {
   const gapItems = paidGapCardItems(report, items);
   const summary = paidSummary(report, items);
   const evidenceExportHref = paidEvidenceExportHref(report, requestId);
-  const qaObservation = resultPageQaObservation(report);
+  const qaObservation = resultPageQaObservation(report, gapItems);
   const qaObservationAttr = qaObservation
     ? ` data-atlas-deflection-qa-observation="${escapeHtml(JSON.stringify(qaObservation))}"`
     : "";

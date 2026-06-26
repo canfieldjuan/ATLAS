@@ -1508,6 +1508,8 @@ DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS: Mapping[str, Mapping[str, int]] = (
         "result_page": MappingProxyType({
             "ranked_questions": 25,
             "question_details": 10,
+            "product_gap_cards": _ACTION_RESULT_PAGE_LIMIT,
+            "jira_handoffs": _ACTION_RESULT_PAGE_LIMIT,
             "seo_targets": 20,
             "outcome_diagnostics": 25,
         }),
@@ -1541,6 +1543,8 @@ _FULL_REPORT_QA_SURFACE_COUNT_KEYS: Mapping[str, tuple[str, ...]] = (
             "estimated_support_cost",
             "evidence_row_count",
             "source_id_count",
+            "product_gap_card_count",
+            "jira_handoff_count",
         ),
         "pdf": (
             "repeat_ticket_count",
@@ -1595,6 +1599,13 @@ _SCORECARD_COUNT_KEYS = frozenset({
     "drafted_resolutions_count",
     "already_covered_still_recurring_count",
     "suppressed_repeat_review_queue_count",
+    "product_gap_card_count",
+    "jira_handoff_count",
+})
+_SCORECARD_DISPLAY_ROW_KEYS = frozenset({
+    *DEFLECTION_REPORT_SECTION_REGISTRY,
+    "product_gap_cards",
+    "jira_handoffs",
 })
 _SCORECARD_SURFACE_KEYS = frozenset({
     "email",
@@ -1945,7 +1956,7 @@ def _add_full_report_qa_required_metric_assertions(
     for section_index, section_id in enumerate(sorted(caps), start=1):
         section_safe_id = _scorecard_id_segment(
             section_id,
-            allowed=frozenset(DEFLECTION_REPORT_SECTION_REGISTRY),
+            allowed=_SCORECARD_DISPLAY_ROW_KEYS,
             fallback=f"section_{section_index}",
         )
         if _scorecard_section_total(str(section_id), counts) == 0:
@@ -2076,6 +2087,8 @@ def _scorecard_counts(sections: Mapping[str, Mapping[str, Any]]) -> dict[str, An
         "seo_omitted_phrase_count": _int(seo_targets.get("omitted_phrase_count")),
         "outcome_diagnostic_row_count": _scorecard_rows_count(diagnostics),
         "question_detail_count": _scorecard_rows_count(question_details),
+        "product_gap_card_count": _int(support_tax.get("no_proven_answer_count")),
+        "jira_handoff_count": _int(support_tax.get("no_proven_answer_count")),
         "priority_fix_queue_count": _scorecard_items_count(priority_fix_queue),
         "top_unresolved_repeats_count": _scorecard_items_count(unresolved_repeats),
         "drafted_resolutions_count": _scorecard_items_count(drafted_resolutions),
@@ -2168,6 +2181,8 @@ def _scorecard_section_total(section_id: str, counts: Mapping[str, Any]) -> int:
         "outcome_diagnostics": _int(counts.get("outcome_diagnostic_row_count")),
         "question_details": _int(counts.get("question_detail_count")),
         "complete_evidence": _int(counts.get("evidence_row_count")),
+        "product_gap_cards": _int(counts.get("product_gap_card_count")),
+        "jira_handoffs": _int(counts.get("jira_handoff_count")),
         "priority_fix_queue": _int(counts.get("priority_fix_queue_count")),
         "top_unresolved_repeats": _int(counts.get("top_unresolved_repeats_count")),
         "drafted_resolutions": _int(counts.get("drafted_resolutions_count")),
@@ -2371,7 +2386,7 @@ def _add_surface_observation_assertions(
             section_text = str(section_id)
             section_safe_id = _scorecard_id_segment(
                 section_text,
-                allowed=frozenset(DEFLECTION_REPORT_SECTION_REGISTRY),
+                allowed=_SCORECARD_DISPLAY_ROW_KEYS,
                 fallback=f"section_{section_index}",
             )
             total = _scorecard_section_total(section_text, counts)
