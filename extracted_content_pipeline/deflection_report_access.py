@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +16,9 @@ from .storage._jsonb_helpers import (
     parse_command_tag,
     row_to_dict,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1302,6 +1306,12 @@ async def compute_and_save_recent_deflection_deltas(
                     current_request_id=report.request_id,
                 )
             except Exception:
+                logger.warning(
+                    "Deflection delta generation failed for account=%s report=%s",
+                    account_id,
+                    report.request_id,
+                    exc_info=True,
+                )
                 failed += 1
                 continue
             if record is None:
