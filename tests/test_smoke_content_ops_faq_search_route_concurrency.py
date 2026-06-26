@@ -104,6 +104,7 @@ def _valid_detail_payload(faq_id="11111111-1111-1111-1111-111111111111"):
             "answer": "Customers mention mortgage payment disputes.",
             "steps": ["Review the statement.", "Contact support with records."],
             "action_items": ["Review the statement.", "Contact support with records."],
+            "evidence_tier": "csv_customer_text",
             "answer_evidence_status": "draft_needs_review",
             "resolution_evidence_scope": "not_applicable",
             "resolution_source_count": 0,

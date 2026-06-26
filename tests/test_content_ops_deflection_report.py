@@ -552,6 +552,7 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
 
     details = section_by_id["question_details"]["data"]["rows"]
     assert details[0]["answer_linkage"] == "publishable_answer"
+    assert details[0]["evidence_tier"] == "csv_full_thread_resolution_evidence"
     assert details[0]["source_ids"] == [
         "ticket-export-1",
         "ticket-export-2",
@@ -560,6 +561,7 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         "ticket-export-5",
     ]
     assert details[1]["answer_linkage"] == "needs_review"
+    assert details[1]["evidence_tier"] == "csv_index_metadata_only"
     assert details[1]["evidence_quotes"] == ["`ticket-sso-1` - SSO setup"]
 
     complete_evidence = section_by_id["complete_evidence"]
@@ -1986,6 +1988,7 @@ def test_deflection_report_projection_marks_raw_question_evidence_export_only() 
         "outcome_diagnostics",
     }.isdisjoint(question_details["hosted_consumer_safe_fields"])
     assert "source_count" in question_details["hosted_consumer_safe_fields"]
+    assert "evidence_tier" in question_details["hosted_consumer_safe_fields"]
     term_mapping_contract = {
         entry["field"]: entry
         for entry in question_details["nested_collection_fields"]

@@ -2201,7 +2201,7 @@ await test("portfolio submit endpoint only accepts POST JSON blob requests", asy
 });
 
 await test("upload shell test is enrolled in package scripts", () => {
-  assert.equal(packageJson.dependencies["@vercel/blob"], "^2.4.0");
+  assert.equal(packageJson.dependencies["@vercel/blob"], "^2.4.1");
   assert.equal(
     packageJson.scripts["test:deflection-upload-shell"],
     "node scripts/faq-deflection-upload-shell.test.mjs",

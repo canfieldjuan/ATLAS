@@ -185,11 +185,11 @@ export const DEFLECTION_REPORT_QUESTION_DETAILS_SNAPSHOT_SAFE_FIELDS = ["rows.ra
 
 export const DEFLECTION_REPORT_QUESTION_DETAILS_HOSTED_CONSUMER_SAFE_FIELDS = ["rows"] as const;
 
-export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "customer_wording", "topic", "ticket_count", "weighted_frequency", "source_count", "estimated_support_cost", "answer_status", "answer_evidence_status", "resolution_evidence_scope", "answer_linkage", "answer", "steps", "term_mappings"] as const;
+export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_HOSTED_CONSUMER_SAFE_FIELDS = ["rank", "question", "customer_wording", "topic", "ticket_count", "weighted_frequency", "source_count", "estimated_support_cost", "answer_status", "answer_evidence_status", "evidence_tier", "resolution_evidence_scope", "answer_linkage", "answer", "steps", "term_mappings"] as const;
 
 export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_TERM_MAPPINGS_HOSTED_CONSUMER_SAFE_FIELDS = ["customer_term", "documentation_term", "suggestion", "source_id_count"] as const;
 
-export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_FIELDS = ["rank", "question", "customer_wording", "topic", "ticket_count", "weighted_frequency", "source_count", "estimated_support_cost", "answer_status", "answer_evidence_status", "resolution_evidence_scope", "answer_linkage", "answer", "steps", "term_mappings", "source_ids", "evidence_quotes", "outcome_diagnostics"] as const;
+export const DEFLECTION_REPORT_QUESTION_DETAILS_ROWS_FIELDS = ["rank", "question", "customer_wording", "topic", "ticket_count", "weighted_frequency", "source_count", "estimated_support_cost", "answer_status", "answer_evidence_status", "evidence_tier", "resolution_evidence_scope", "answer_linkage", "answer", "steps", "term_mappings", "source_ids", "evidence_quotes", "outcome_diagnostics"] as const;
 
 export const DEFLECTION_REPORT_COMPLETE_EVIDENCE_FIELDS = ["question_count", "evidence_row_count", "source_id_count", "surfaces"] as const;
 
@@ -356,6 +356,7 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = {
     "estimated_support_cost": "scalar",
     "answer_status": "scalar",
     "answer_evidence_status": "scalar",
+    "evidence_tier": "scalar",
     "resolution_evidence_scope": "scalar",
     "answer_linkage": "scalar",
     "answer": "scalar",
@@ -1059,6 +1060,7 @@ export type DeflectionReportQuestionDetailsRow = {
   estimated_support_cost: number;
   answer_status: string;
   answer_evidence_status: string;
+  evidence_tier: string;
   resolution_evidence_scope: string;
   answer_linkage: string;
   answer: string;

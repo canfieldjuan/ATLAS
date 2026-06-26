@@ -208,6 +208,7 @@
         "evidence_quotes": [
           "`ticket-export-1` - Export attribution: \"How do I export attribution reports?\""
         ],
+        "evidence_tier": "csv_full_thread_resolution_evidence",
         "failure_risk_score": 0,
         "failure_risk_signals": [],
         "frequency": 2,
@@ -283,6 +284,7 @@
         "evidence_quotes": [
           "`ticket-sso-1` - SSO setup: \"How do I enable SSO for my team?\""
         ],
+        "evidence_tier": "csv_index_metadata_only",
         "failure_risk_score": 0,
         "failure_risk_signals": [],
         "frequency": 2,
@@ -495,11 +497,12 @@
                 "status": "insufficient_data"
               },
               "estimated_support_cost": 27.0,
+              "evidence_tier": "csv_index_metadata_only",
               "fix_type": "create_missing_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
               "opportunity_score": 2,
-              "owner_lane": "sso setup",
+              "owner_lane": "Auth / Product UX",
               "priority_drivers": [
                 "repeat_volume",
                 "missing_answer",
@@ -515,6 +518,15 @@
                 "How do I enable SSO for my team?",
                 "sso setup"
               ],
+              "routing_signals": {
+                "assignee": [],
+                "brand": [],
+                "custom_product_area": [],
+                "group": [],
+                "organization": [],
+                "product_area": [],
+                "tags": []
+              },
               "status": "Needs answer",
               "support_cost_formula": "ticket_count * assisted_contact_cost",
               "support_cost_source": "default_assisted_contact_benchmark",
@@ -540,11 +552,12 @@
                 "status": "insufficient_data"
               },
               "estimated_support_cost": 27.0,
+              "evidence_tier": "csv_full_thread_resolution_evidence",
               "fix_type": "publish_help_center_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
               "opportunity_score": 2,
-              "owner_lane": "reporting friction",
+              "owner_lane": "Reporting",
               "priority_drivers": [
                 "repeat_volume",
                 "draft_ready",
@@ -560,6 +573,15 @@
                 "How do I export attribution reports?",
                 "reporting friction"
               ],
+              "routing_signals": {
+                "assignee": [],
+                "brand": [],
+                "custom_product_area": [],
+                "group": [],
+                "organization": [],
+                "product_area": [],
+                "tags": []
+              },
               "status": "Draft ready",
               "support_cost_formula": "ticket_count * assisted_contact_cost",
               "support_cost_source": "default_assisted_contact_benchmark",
@@ -621,11 +643,12 @@
                 "status": "insufficient_data"
               },
               "estimated_support_cost": 27.0,
+              "evidence_tier": "csv_index_metadata_only",
               "fix_type": "create_missing_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
               "opportunity_score": 2,
-              "owner_lane": "sso setup",
+              "owner_lane": "Auth / Product UX",
               "priority_drivers": [
                 "repeat_volume",
                 "missing_answer",
@@ -641,6 +664,15 @@
                 "How do I enable SSO for my team?",
                 "sso setup"
               ],
+              "routing_signals": {
+                "assignee": [],
+                "brand": [],
+                "custom_product_area": [],
+                "group": [],
+                "organization": [],
+                "product_area": [],
+                "tags": []
+              },
               "status": "Needs answer",
               "support_cost_formula": "ticket_count * assisted_contact_cost",
               "support_cost_source": "default_assisted_contact_benchmark",
@@ -701,11 +733,12 @@
                 "status": "insufficient_data"
               },
               "estimated_support_cost": 27.0,
+              "evidence_tier": "csv_full_thread_resolution_evidence",
               "fix_type": "publish_help_center_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
               "opportunity_score": 2,
-              "owner_lane": "reporting friction",
+              "owner_lane": "Reporting",
               "priority_drivers": [
                 "repeat_volume",
                 "draft_ready",
@@ -721,6 +754,15 @@
                 "How do I export attribution reports?",
                 "reporting friction"
               ],
+              "routing_signals": {
+                "assignee": [],
+                "brand": [],
+                "custom_product_area": [],
+                "group": [],
+                "organization": [],
+                "product_area": [],
+                "tags": []
+              },
               "status": "Draft ready",
               "support_cost_formula": "ticket_count * assisted_contact_cost",
               "support_cost_source": "default_assisted_contact_benchmark",
@@ -795,11 +837,12 @@
                 "status": "insufficient_data"
               },
               "estimated_support_cost": 27.0,
+              "evidence_tier": "csv_index_metadata_only",
               "fix_type": "create_missing_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
               "opportunity_score": 2,
-              "owner_lane": "sso setup",
+              "owner_lane": "Auth / Product UX",
               "priority_drivers": [
                 "repeat_volume",
                 "missing_answer",
@@ -815,6 +858,15 @@
                 "How do I enable SSO for my team?",
                 "sso setup"
               ],
+              "routing_signals": {
+                "assignee": [],
+                "brand": [],
+                "custom_product_area": [],
+                "group": [],
+                "organization": [],
+                "product_area": [],
+                "tags": []
+              },
               "status": "Needs answer",
               "support_cost_formula": "ticket_count * assisted_contact_cost",
               "support_cost_source": "default_assisted_contact_benchmark",
@@ -840,11 +892,12 @@
                 "status": "insufficient_data"
               },
               "estimated_support_cost": 27.0,
+              "evidence_tier": "csv_full_thread_resolution_evidence",
               "fix_type": "publish_help_center_answer",
               "identity_basis": "question_topic",
               "identity_confidence": "high",
               "opportunity_score": 2,
-              "owner_lane": "reporting friction",
+              "owner_lane": "Reporting",
               "priority_drivers": [
                 "repeat_volume",
                 "draft_ready",
@@ -860,6 +913,15 @@
                 "How do I export attribution reports?",
                 "reporting friction"
               ],
+              "routing_signals": {
+                "assignee": [],
+                "brand": [],
+                "custom_product_area": [],
+                "group": [],
+                "organization": [],
+                "product_area": [],
+                "tags": []
+              },
               "status": "Draft ready",
               "support_cost_formula": "ticket_count * assisted_contact_cost",
               "support_cost_source": "default_assisted_contact_benchmark",
@@ -930,6 +992,7 @@
               "evidence_quotes": [
                 "`ticket-export-1` - Export attribution: \"How do I export attribution reports?\""
               ],
+              "evidence_tier": "csv_full_thread_resolution_evidence",
               "outcome_diagnostics": {},
               "question": "How do I export attribution reports?",
               "rank": 1,
@@ -981,6 +1044,7 @@
               "evidence_quotes": [
                 "`ticket-sso-1` - SSO setup: \"How do I enable SSO for my team?\""
               ],
+              "evidence_tier": "csv_index_metadata_only",
               "outcome_diagnostics": {},
               "question": "How do I enable SSO for my team?",
               "rank": 2,

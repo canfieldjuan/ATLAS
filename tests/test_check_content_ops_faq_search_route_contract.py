@@ -93,6 +93,7 @@ def _valid_detail_item():
         "steps": ["Review the statement.", "Contact support with records."],
         "action_items": ["Review the statement.", "Contact support with records."],
         "answer_evidence_status": "resolution_evidence",
+        "evidence_tier": "csv_full_thread_resolution_evidence",
         "resolution_evidence_scope": "scoped",
         "resolution_source_count": 1,
         "when_to_contact_support": "Contact support if the payment still looks wrong.",

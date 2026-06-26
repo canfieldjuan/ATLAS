@@ -13,7 +13,7 @@ Slice phase: Vertical slice
 
 1. Preserve safe Zendesk/CSV routing metadata (`group`, `assignee`, `tags`, `brand`, `organization`, `product_area`, `custom_product_area`) during ticket normalization while keeping internal/private note filtering unchanged.
 2. Add `routing_signals` and `evidence_tier` to paid action items and generated hosted report-model contracts.
-3. Route `owner_lane` deterministically from routing signals first, then customer/topic wording, with first-slice mappings for auth, billing, reporting, and admin/access.
+3. Route `owner_lane` deterministically from customer/topic wording first, then non-identity routing signals, with first-slice mappings for auth, billing, reporting, and admin/access.
 4. Update email next-action rows and ATLAS hosted result-page smoke rendering to show owner/evidence information without source IDs, raw evidence, `top_evidence`, or exact UI-root-cause claims.
 5. Add focused tests for CSV routing metadata, index-only evidence tier, auth owner-lane routing, email privacy, and hosted result-page paid/free boundaries.
 
@@ -37,36 +37,43 @@ Risk areas:
 - Contract drift between Python producer and generated frontend artifacts.
 - Owner-lane fallback changing established report rows without useful metadata.
 
-Triggered reviewer rules:
-- R1 Requirements match.
-- R2 Test evidence.
-- R4 Data/privacy boundaries.
-- R8 Generated artifact parity.
-- R13 No hardcoded example-only fix.
-- R14 Codebase verification.
+Reviewer rules triggered: R1, R2, R4, R8, R10, R13, R14.
 
 ### Files touched
 
 - `plans/PR-CSV-Owner-Lane-Vertical.md` - this plan.
 - `extracted_content_pipeline/support_ticket_input_package.py` - preserve safe routing metadata and ticket evidence tier.
 - `extracted_content_pipeline/ticket_faq_markdown.py` - roll routing signals and item evidence tier into grouped FAQ items.
-- `extracted_content_pipeline/faq_deflection_report.py` - expose paid action fields, strengthen owner-lane mapping, and update hosted contract shapes.
+- `extracted_content_pipeline/faq_deflection_report.py` - expose paid action/detail fields, strengthen owner-lane mapping, and update hosted contract shapes.
+- `extracted_content_pipeline/deflection_report_access.py` - backfill legacy owner metadata and trim hosted routing projection to buyer-safe labels.
 - `atlas_brain/content_ops_deflection_delivery.py` - include owner/evidence tier in email action rows.
 - `portfolio-ui/src/types/deflectionReportModel.ts` - regenerated ATLAS report-model TypeScript contract.
 - `portfolio-ui/api/content-ops/deflection/report-model-contract.js` - regenerated hosted report-model contract.
 - `portfolio-ui/api/content-ops/deflection/result-page.js` - render owner/evidence/cost product-gap cards without exact root-cause claims.
 - `portfolio-ui/scripts/faq-deflection-result-page.test.mjs` - paid/free hosted result-page boundary coverage.
+- `portfolio-ui/scripts/faq-deflection-upload-shell.test.mjs` - keep package-script enrollment expectations current.
+- `portfolio-ui/scripts/faq-deflection-atlas-proxy.test.mjs` - hosted proxy smoke copy expectation for Product Gap cards.
+- `docs/frontend/content_ops_faq_report_example.json` - document FAQ item evidence tier in the core frontend example.
+- `docs/frontend/content_ops_faq_deflection_report_example.json` - refresh generated deflection report-model example with owner/evidence/routing fields.
+- `docs/extraction/validation/content_ops_faq_search_route_contract_handoff.md` - document generated detail-item evidence tier shape.
+- `scripts/check_content_ops_faq_search_route_contract.py` - validate generated contract evidence tier shape.
 - `scripts/generate_deflection_frontend_contract_types.py` - generator type mappings for evidence tier and routing signals.
+- `scripts/smoke_content_ops_faq_search_concurrency.py` - seed detail-route smoke items with evidence tier.
+- `tests/test_atlas_billing_content_ops_deflection_paid_flow.py` - paid hosted projection coverage for routing signal privacy.
 - `tests/test_smoke_content_ops_support_ticket_package.py` - CSV metadata and evidence-tier ingestion coverage.
+- `tests/test_check_content_ops_faq_search_route_contract.py` - contract checker coverage for detail-item evidence tier.
 - `tests/test_content_ops_deflection_report.py` - owner-lane, routing signal, cost, and report-model coverage.
 - `tests/test_atlas_content_ops_deflection_delivery.py` - email owner/evidence and privacy coverage.
+- `tests/test_extracted_content_deflection_submit.py` - paid report-model route projection coverage for routing metadata.
+- `tests/test_extracted_support_ticket_input_package.py` - normalized source-material routing metadata coverage.
 - `tests/test_generate_deflection_frontend_contract_types.py` - generated contract shape coverage.
+- `tests/test_smoke_content_ops_faq_search_route_concurrency.py` - route detail fixture evidence tier coverage.
 
 ## Mechanism
 
 `support_ticket_input_package` normalizes a fixed allowlist of routing/index metadata from CSV rows and computes a package-level and row-level `support_ticket_evidence_tier`. It keeps the existing private/internal exclusions and strips internal-only markers before rows become public source material.
 
-`ticket_faq_markdown` rolls grouped rows into a deterministic `routing_signals` object and chooses the strongest item evidence tier. `faq_deflection_report` admits those fields into paid action rows, generated hosted safe-field shapes, and owner-lane routing. Owner routing uses routing-signal text first, then customer/topic wording, and falls back to `Unknown` only when no useful signal exists.
+`ticket_faq_markdown` rolls grouped rows into a deterministic `routing_signals` object and chooses the strongest item evidence tier. `faq_deflection_report` admits those fields into paid action rows, generated hosted safe-field shapes, and owner-lane routing. Owner routing uses customer/topic wording first, then non-identity routing labels, and falls back to `Unknown` only when no useful signal exists.
 
 Email rows render only buyer-safe summaries: question, owner lane, evidence tier, count, cost, and action. The ATLAS hosted-result page smoke renders product-gap cards as routeable product friction, not exact UI root-cause proof.
 
@@ -89,10 +96,17 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_smoke_content_ops_support_ticket_package.py tests/test_content_ops_deflection_report.py tests/test_atlas_content_ops_deflection_delivery.py tests/test_generate_deflection_frontend_contract_types.py tests/test_smoke_content_ops_deflection_portfolio_result_page.py` - passed, 248 tests.
+- Targeted pytest suite passed, 387 tests: `tests/test_check_content_ops_faq_search_route_contract.py`, `tests/test_extracted_support_ticket_input_package.py`, `tests/test_smoke_content_ops_support_ticket_package.py`, `tests/test_content_ops_deflection_report.py`, `tests/test_atlas_content_ops_deflection_delivery.py`, and `tests/test_generate_deflection_frontend_contract_types.py`.
 - `python scripts/generate_deflection_frontend_contract_types.py --check` - passed; generated snapshot/report-model artifacts are current.
 - `node portfolio-ui/scripts/faq-deflection-result-page.test.mjs` - passed.
+- `node portfolio-ui/scripts/faq-deflection-atlas-proxy.test.mjs` - passed.
+- `python -m pytest tests/test_content_ops_deflection_report.py tests/test_generate_deflection_frontend_contract_types.py tests/test_check_content_ops_faq_search_route_contract.py tests/test_smoke_content_ops_faq_search_concurrency.py tests/test_smoke_content_ops_faq_search_route_concurrency.py -q` - passed, 377 tests.
+- `python -m pytest tests/test_content_ops_faq_report_contract_docs.py -q` - passed, 5 tests.
+- `python -m pytest tests/test_extracted_content_deflection_submit.py -q` - passed, 79 tests.
+- `python -m pytest tests/test_content_ops_faq_report_contract_docs.py tests/test_extracted_content_deflection_submit.py tests/test_content_ops_deflection_report.py tests/test_generate_deflection_frontend_contract_types.py tests/test_check_content_ops_faq_search_route_contract.py tests/test_smoke_content_ops_faq_search_concurrency.py tests/test_smoke_content_ops_faq_search_route_concurrency.py -q` - passed, 461 tests.
+- `node portfolio-ui/scripts/faq-deflection-upload-shell.test.mjs` - passed.
 - `rg "button is buried|Account Settings -> Preferences -> Billing|Account Settings > Preferences > Billing" extracted_content_pipeline atlas_brain portfolio-ui tests` - no exact UI-path/root-cause claim remains in the touched owner-lane surfaces.
+- Partial local reproduction of `scripts/run_extracted_pipeline_checks.sh` found and fixed stale docs/report-model route assertions; full local completion is blocked by Windows-only symlink, newline, and path-separator differences that do not reproduce on Linux CI.
 - Not run: Bash wrapper gauntlets (`scripts/local_pr_review.sh`, `scripts/validate_extracted_content_pipeline.sh`, `scripts/check_ascii_python.sh`) because this Windows runtime has no `bash` executable.
 
 ## Estimated diff size
@@ -100,7 +114,7 @@ Parked hardening: none.
 | Area | Approx LOC |
 |---|---:|
 | Plan | ~80 |
-| Producer/report/email/result-page code | ~356 |
+| Producer/report/email/result-page code | ~452 |
 | Generated contracts | ~240 |
-| Tests | ~78 |
-| Total | ~756 additions / ~40 deletions |
+| Tests/docs/checkers | ~567 |
+| Total | ~1262 additions / ~64 deletions |
