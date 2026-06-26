@@ -98,6 +98,21 @@ async def test_run_skips_when_db_not_ready(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_run_raises_when_batch_worker_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_delta_settings(monkeypatch)
+    pool = SimpleNamespace(is_initialized=True)
+
+    async def _raise_batch_failure(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("delta table missing")
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _raise_batch_failure)
+
+    with pytest.raises(RuntimeError, match="delta table missing"):
+        await mod.run(SimpleNamespace(metadata={}))
+
+
+@pytest.mark.asyncio
 async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
