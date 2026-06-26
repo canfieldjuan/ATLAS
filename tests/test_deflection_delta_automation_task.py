@@ -163,6 +163,60 @@ async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
 
 
 @pytest.mark.asyncio
+async def test_run_reports_degraded_when_some_reports_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    pool = SimpleNamespace(is_initialized=True)
+
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=2,
+            reports_scanned=3,
+            deltas_saved=1,
+            skipped_no_delta=1,
+            failed=1,
+        )
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert result == {
+        "_skip_synthesis": "Deflection delta automation degraded",
+        "accounts_scanned": 2,
+        "reports_scanned": 3,
+        "deltas_saved": 1,
+        "skipped_no_delta": 1,
+        "failed": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_raises_when_all_scanned_reports_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    pool = SimpleNamespace(is_initialized=True)
+
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=2,
+            reports_scanned=3,
+            deltas_saved=0,
+            skipped_no_delta=0,
+            failed=3,
+        )
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+
+    with pytest.raises(RuntimeError, match="failed for all scanned reports"):
+        await mod.run(SimpleNamespace(metadata={}))
+
+
+@pytest.mark.asyncio
 async def test_scheduler_seed_uses_typed_delta_cron_and_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
