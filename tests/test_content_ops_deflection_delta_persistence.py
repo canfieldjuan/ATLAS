@@ -4,10 +4,13 @@ from datetime import datetime, timezone
 import pytest
 
 from extracted_content_pipeline.deflection_report_access import (
+    DeflectionDeltaBatchSummary,
     DeflectionDeltaReadError,
+    DeflectionReportListRecord,
     InMemoryDeflectionReportArtifactStore,
     PostgresDeflectionReportArtifactStore,
     compute_and_save_previous_deflection_delta,
+    compute_and_save_recent_deflection_deltas,
     deflection_delta_read_payload,
     fetch_paid_deflection_delta,
 )
@@ -80,6 +83,7 @@ async def _save(
     model: dict[str, object] | None = None,
     paid: bool = True,
     created_at: datetime,
+    paid_at: datetime | None = None,
 ) -> None:
     await store.save_report(
         account_id=account_id,
@@ -90,6 +94,8 @@ async def _save(
     store._created_at_by_key[(account_id, request_id)] = created_at
     if paid:
         assert await store.mark_paid(account_id=account_id, request_id=request_id)
+        if paid_at is not None:
+            store._paid_at_by_key[(account_id, request_id)] = paid_at
 
 
 @pytest.mark.asyncio
@@ -147,6 +153,37 @@ async def test_in_memory_select_previous_paid_report_is_scoped_paid_and_ordered(
 
 
 @pytest.mark.asyncio
+async def test_in_memory_paid_account_discovery_orders_by_paid_activity() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-old-report-recent-pay",
+        request_id="old-report",
+        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 10, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-new-report-old-pay",
+        request_id="new-report",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-unpaid",
+        request_id="newer-unpaid",
+        paid=False,
+        created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+    )
+
+    assert await store.list_paid_report_accounts(limit=10) == (
+        "acct-old-report-recent-pay",
+        "acct-new-report-old-pay",
+    )
+
+
+@pytest.mark.asyncio
 async def test_compute_and_save_previous_delta_persists_pair_payload() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     baseline_model = _model(_row("repeat_1", ticket_count=2, cost=27.0))
@@ -184,6 +221,108 @@ async def test_compute_and_save_previous_delta_persists_pair_payload() -> None:
     )
     assert stored is not None
     assert json.loads(json.dumps(stored.delta)) == stored.delta
+
+
+@pytest.mark.asyncio
+async def test_recent_delta_batch_discovers_paid_accounts_and_stays_tenant_scoped() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-baseline",
+        model=_model(_row("repeat_1", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="acct-1-current",
+        model=_model(_row("repeat_1", ticket_count=5, cost=67.5)),
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-2",
+        request_id="acct-2-current",
+        model=_model(_row("repeat_2", ticket_count=4, cost=54.0)),
+        created_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-3",
+        request_id="acct-3-unpaid",
+        paid=False,
+        created_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+
+    accounts = await store.list_paid_report_accounts(limit=10)
+    summary = await compute_and_save_recent_deflection_deltas(
+        store,
+        account_limit=10,
+        reports_per_account=10,
+    )
+
+    assert accounts == ("acct-2", "acct-1")
+    assert summary == DeflectionDeltaBatchSummary(
+        accounts_scanned=2,
+        reports_scanned=3,
+        deltas_saved=1,
+        skipped_no_delta=2,
+        failed=0,
+    )
+    assert await store.get_deflection_delta(
+        account_id="acct-1",
+        current_request_id="acct-1-current",
+        baseline_request_id="acct-1-baseline",
+    )
+    assert await store.get_deflection_delta(
+        account_id="acct-2",
+        current_request_id="acct-2-current",
+        baseline_request_id="acct-1-current",
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_recent_delta_batch_logs_per_report_failures(caplog) -> None:
+    class _FailingStore:
+        async def list_paid_report_accounts(self, *, limit: int | None = 100) -> tuple[str, ...]:
+            return ("acct-1",)
+
+        async def list_reports(
+            self,
+            *,
+            account_id: str,
+            limit: int | None = 25,
+            paid: bool | None = None,
+        ) -> tuple[DeflectionReportListRecord, ...]:
+            return (
+                DeflectionReportListRecord(
+                    account_id=account_id,
+                    request_id="broken-report",
+                    snapshot={},
+                    paid=True,
+                ),
+            )
+
+        async def get_artifact_record(self, *, account_id: str, request_id: str) -> None:
+            raise RuntimeError("delta source exploded")
+
+    caplog.set_level("WARNING", logger="extracted_content_pipeline.deflection_report_access")
+
+    summary = await compute_and_save_recent_deflection_deltas(
+        _FailingStore(),
+        account_limit=10,
+        reports_per_account=10,
+    )
+
+    assert summary == DeflectionDeltaBatchSummary(
+        accounts_scanned=1,
+        reports_scanned=1,
+        deltas_saved=0,
+        skipped_no_delta=0,
+        failed=1,
+    )
+    assert "account=acct-1 report=broken-report" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -435,3 +574,30 @@ async def test_postgres_delta_methods_are_account_scoped_and_jsonb_encoded() -> 
     assert "JOIN content_ops_deflection_reports baseline_report" in paid_query
     assert "current_report.paid = true" in paid_query
     assert "baseline_report.paid = true" in paid_query
+
+
+@pytest.mark.asyncio
+async def test_postgres_paid_account_discovery_is_paid_scoped_ordered_and_bounded() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetch(self, query: str, *args: object) -> list[dict[str, object]]:
+            self.fetch_calls.append((query, args))
+            return [{"account_id": "acct-2"}, {"account_id": "acct-1"}]
+
+    pool = _Pool()
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+
+    accounts = await store.list_paid_report_accounts(limit=7)
+
+    assert accounts == ("acct-2", "acct-1")
+    query, args = pool.fetch_calls[0]
+    assert args == (7,)
+    assert "WHERE paid = true" in query
+    assert "GROUP BY account_id" in query
+    assert (
+        "ORDER BY MAX(COALESCE(paid_at, updated_at, created_at)) DESC, account_id ASC"
+        in query
+    )
+    assert "LIMIT $1" in query
