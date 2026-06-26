@@ -36,6 +36,62 @@ def test_generated_snapshot_example_matches_committed_file() -> None:
     ).as_dict()
 
 
+def test_synthetic_demo_input_is_moderate_volume_and_public_safe() -> None:
+    rows = CLI.synthetic_support_ticket_rows()
+    source_ids = [str(row["source_id"]) for row in rows]
+    encoded_rows = repr(rows).lower()
+
+    assert 300 <= len(rows) <= 450
+    assert all("source_weight" not in row for row in rows)
+    assert len(source_ids) == len(set(source_ids))
+    assert all(source_id.startswith("synthetic-") for source_id in source_ids)
+    assert {row["source_type"] for row in rows} == {"support_ticket"}
+    assert "@" not in encoded_rows
+    assert "555-" not in encoded_rows
+    assert "account " not in encoded_rows
+
+
+def test_generated_demo_example_carries_coherent_marketing_scale_volume() -> None:
+    report_payload = CLI.producer_deflection_report_payload()
+    snapshot_payload = CLI.build_deflection_snapshot(
+        report_payload,
+        top_n=CLI.SNAPSHOT_TOP_N,
+    ).as_dict()
+    sections = {
+        section["id"]: section["data"]
+        for section in report_payload["report_model"]["sections"]
+    }
+
+    assert snapshot_payload["summary"]["repeat_ticket_count"] >= 300
+    assert snapshot_payload["top_questions"][0]["ticket_count"] >= 90
+    assert len(snapshot_payload["top_questions"]) == CLI.SNAPSHOT_TOP_N
+    assert sections["support_tax"]["repeat_ticket_count"] == snapshot_payload[
+        "summary"
+    ]["repeat_ticket_count"]
+    assert report_payload["summary"]["ticket_source_count"] == snapshot_payload[
+        "summary"
+    ]["repeat_ticket_count"]
+    evidence_rows = report_payload["evidence_export"]["evidence_rows"]
+    complete_evidence = sections["complete_evidence"]
+    assert complete_evidence["evidence_row_count"] == snapshot_payload[
+        "summary"
+    ]["repeat_ticket_count"]
+    assert complete_evidence["source_id_count"] == snapshot_payload[
+        "summary"
+    ]["repeat_ticket_count"]
+    assert len(evidence_rows) == snapshot_payload["summary"]["repeat_ticket_count"]
+    for item in sections["ranked_questions"]["rows"]:
+        matching_sources = [
+            row for row in evidence_rows
+            if row["question"] == item["question"]
+        ]
+        assert len(matching_sources) == item["ticket_count"]
+        assert item["source_proof"] == f"{item['ticket_count']} source tickets"
+    assert sections["top_unresolved_repeats"]["top_item_count"] >= 3
+    assert sections["drafted_resolutions"]["top_item_count"] >= 2
+    assert sections["outcome_diagnostics"]["rows"]
+
+
 def test_cli_writes_snapshot_example_to_output(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

@@ -1,15 +1,15 @@
 {
   "locked_questions": [],
   "summary": {
-    "drafted_answer_count": 1,
-    "generated": 2,
-    "no_proven_answer_count": 1,
+    "drafted_answer_count": 2,
+    "generated": 5,
+    "no_proven_answer_count": 3,
     "non_repeat_ticket_count": 0,
-    "repeat_ticket_count": 4,
-    "source_date_end": "2026-05-15",
+    "repeat_ticket_count": 360,
+    "source_date_end": "2026-05-30",
     "source_date_start": "2026-05-01",
-    "source_window_days": 15,
-    "support_ticket_resolution_evidence_count": 1,
+    "source_window_days": 30,
+    "support_ticket_resolution_evidence_count": 2,
     "support_ticket_resolution_evidence_present": true
   },
   "teaser": {
@@ -19,20 +19,41 @@
       "question": "How do I export attribution reports?",
       "rank": 1,
       "resolution_evidence_scope": "scoped",
-      "source_count": 2,
+      "source_count": 100,
       "steps": [
         "Open Analytics, choose Attribution, then click Download report.",
         "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
       ],
-      "weighted_frequency": 2
+      "weighted_frequency": 100
     },
-    "previews": []
+    "previews": [
+      {
+        "answer_evidence_status": "resolution_evidence",
+        "body_withheld": true,
+        "question": "How do I add an invoice recipient?",
+        "rank": 4,
+        "resolution_evidence_scope": "scoped",
+        "source_count": 55,
+        "step_count": 2,
+        "weighted_frequency": 55
+      }
+    ]
   },
   "top_blind_spots": [
     {
       "question": "How do I enable SSO for my team?",
       "rank": 2,
-      "ticket_count": 2
+      "ticket_count": 85
+    },
+    {
+      "question": "How do I pause my subscription for one month?",
+      "rank": 3,
+      "ticket_count": 70
+    },
+    {
+      "question": "Which role can invite teammates?",
+      "rank": 5,
+      "ticket_count": 50
     }
   ],
   "top_questions": [
@@ -40,15 +61,36 @@
       "customer_wording": "How do I export attribution reports?",
       "question": "How do I export attribution reports?",
       "rank": 1,
-      "ticket_count": 2,
-      "weighted_frequency": 2
+      "ticket_count": 100,
+      "weighted_frequency": 100
     },
     {
       "customer_wording": "How do I enable SSO for my team?",
       "question": "How do I enable SSO for my team?",
       "rank": 2,
-      "ticket_count": 2,
-      "weighted_frequency": 2
+      "ticket_count": 85,
+      "weighted_frequency": 85
+    },
+    {
+      "customer_wording": "How do I pause my subscription for one month?",
+      "question": "How do I pause my subscription for one month?",
+      "rank": 3,
+      "ticket_count": 70,
+      "weighted_frequency": 70
+    },
+    {
+      "customer_wording": "How do I add an invoice recipient?",
+      "question": "How do I add an invoice recipient?",
+      "rank": 4,
+      "ticket_count": 55,
+      "weighted_frequency": 55
+    },
+    {
+      "customer_wording": "Which role can invite teammates?",
+      "question": "Which role can invite teammates?",
+      "rank": 5,
+      "ticket_count": 50,
+      "weighted_frequency": 50
     }
   ]
 }

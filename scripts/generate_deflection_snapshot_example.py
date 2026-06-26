@@ -24,56 +24,135 @@ DEFAULT_SNAPSHOT_OUTPUT = (
     ROOT / "docs/frontend/content_ops_faq_deflection_snapshot_example.json"
 )
 DEFAULT_OUTPUT = DEFAULT_SNAPSHOT_OUTPUT
-SNAPSHOT_TOP_N = 2
+SNAPSHOT_TOP_N = 5
+
+
+_SYNTHETIC_REPEAT_COHORTS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "export",
+        "ticket_count": 100,
+        "source_title": "Export attribution",
+        "support_ticket_cluster": "reporting friction",
+        "product_area": "Reporting",
+        "tags": "report-export, analytics",
+        "resolution_text": (
+            "Open Analytics, choose Attribution, then click Download report."
+        ),
+        "texts": (
+            "How do I export attribution reports?",
+        ),
+        "statuses": ("solved", "solved", "closed", "closed"),
+        "csat_scores": (5, 4, 4, 5),
+    },
+    {
+        "key": "sso",
+        "ticket_count": 85,
+        "source_title": "SSO setup",
+        "support_ticket_cluster": "auth setup",
+        "product_area": "Auth",
+        "tags": "sso, admin-setup",
+        "texts": (
+            "How do I enable SSO for my team?",
+        ),
+        "statuses": ("open", "reopened", "pending", "reopened"),
+        "csat_scores": (2, 1, 3, 2),
+    },
+    {
+        "key": "billing-pause",
+        "ticket_count": 70,
+        "source_title": "Subscription pause",
+        "support_ticket_cluster": "billing pause requests",
+        "product_area": "Billing",
+        "tags": "billing, subscription",
+        "texts": (
+            "How do I pause my subscription for one month?",
+        ),
+        "statuses": ("open", "pending", "reopened", "open"),
+        "csat_scores": (3, 2, 1, 2),
+    },
+    {
+        "key": "invoice-admin",
+        "ticket_count": 55,
+        "source_title": "Invoice recipients",
+        "support_ticket_cluster": "billing invoice administration",
+        "product_area": "Billing",
+        "tags": "billing, invoice-settings",
+        "resolution_text": (
+            "Open Billing, choose Invoice settings, then add the finance "
+            "recipient under Invoice contacts."
+        ),
+        "texts": (
+            "How do I add an invoice recipient?",
+        ),
+        "statuses": ("solved", "closed", "solved", "closed"),
+        "csat_scores": (5, 4, 5, 4),
+    },
+    {
+        "key": "roles",
+        "ticket_count": 50,
+        "source_title": "Role permissions",
+        "support_ticket_cluster": "workspace permission setup",
+        "product_area": "Workspace Admin",
+        "tags": "roles, permissions",
+        "texts": (
+            "Which role can invite teammates?",
+        ),
+        "statuses": ("open", "pending", "reopened", "pending"),
+        "csat_scores": (3, 3, 2, 2),
+    },
+)
+
+
+def synthetic_support_ticket_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for cohort in _SYNTHETIC_REPEAT_COHORTS:
+        texts = tuple(str(text) for text in cohort["texts"])
+        statuses = tuple(str(status) for status in cohort["statuses"])
+        csat_scores = tuple(int(score) for score in cohort["csat_scores"])
+        for index in range(int(cohort["ticket_count"])):
+            day = (index % 30) + 1
+            text = texts[index % len(texts)]
+            row: dict[str, object] = {
+                "source_id": f"synthetic-{cohort['key']}-{index + 1:04d}",
+                "source_type": "support_ticket",
+                "source_title": cohort["source_title"],
+                "support_ticket_cluster": cohort["support_ticket_cluster"],
+                "text": text,
+                "created_at": f"2026-05-{day:02d}T12:00:00Z",
+                "status": statuses[index % len(statuses)],
+                "csat_score": csat_scores[index % len(csat_scores)],
+                "group": "Synthetic Support",
+                "product_area": cohort["product_area"],
+                "tags": cohort["tags"],
+            }
+            resolution_text = cohort.get("resolution_text")
+            if resolution_text:
+                row["resolution_text"] = resolution_text
+            rows.append(row)
+    return rows
 
 
 def producer_deflection_report_payload() -> dict[str, object]:
     result = build_ticket_faq_markdown(
-        [
-            {
-                "source_id": "ticket-export-1",
-                "source_type": "support_ticket",
-                "source_title": "Export attribution",
-                "text": "How do I export attribution reports?",
-                "created_at": "2026-05-01T12:00:00Z",
-                "resolution_text": (
-                    "Open Analytics, choose Attribution, then click Download report"
-                ),
-            },
-            {
-                "source_id": "ticket-export-2",
-                "source_type": "support_ticket",
-                "source_title": "Report download",
-                "text": "Where is the report download for attribution exports?",
-                "created_at": "2026-05-03",
-                "resolution_text": (
-                    "Open Analytics, choose Attribution, then click Download report"
-                ),
-            },
-            {
-                "source_id": "ticket-sso-1",
-                "source_type": "support_ticket",
-                "source_title": "SSO setup",
-                "text": "How do I enable SSO for my team?",
-                "created_at": "2026-05-10",
-            },
-            {
-                "source_id": "ticket-sso-2",
-                "source_type": "support_ticket",
-                "source_title": "SSO setup",
-                "text": "Can we enable SSO for our team?",
-                "created_at": "2026-05-15",
-            },
-        ],
+        synthetic_support_ticket_rows(),
         title="Support Ticket FAQ Source",
-        max_items=2,
+        max_items=8,
         max_evidence_per_item=1,
         support_contact="https://example.com/support",
-        documentation_terms=("Download report", "Single sign-on setup"),
+        documentation_terms=(
+            "Download report",
+            "Single sign-on setup",
+            "Subscription pause",
+            "Invoice contacts",
+            "Workspace roles",
+        ),
         vocabulary_gap_rules=(
             ("export", "Download report"),
             ("SSO", "Single sign-on setup"),
             ("report download", "Download report"),
+            ("pause subscription", "Subscription pause"),
+            ("invoice recipient", "Invoice contacts"),
+            ("invite permissions", "Workspace roles"),
         ),
     )
 
