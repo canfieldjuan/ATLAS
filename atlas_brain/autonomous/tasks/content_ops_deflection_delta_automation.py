@@ -68,4 +68,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "_skip_synthesis": "No paid deflection reports found for delta automation",
             **payload,
         }
+    if summary.failed >= summary.reports_scanned:
+        raise RuntimeError("Deflection delta automation failed for all scanned reports")
+    if summary.failed:
+        return {"_skip_synthesis": "Deflection delta automation degraded", **payload}
     return {"_skip_synthesis": "Deflection delta automation complete", **payload}
