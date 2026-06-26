@@ -9,7 +9,8 @@ surface QA harness).
 > pass appended (see "Independent verification" below). Every code reference in
 > the evidence matrix was re-checked against the working tree at the head of
 > `claude/csv-product-gap-verification-abbwid`. Line numbers are accurate to
-> within a few lines unless a drift note says otherwise.
+> within a few lines unless a drift note says otherwise. All paths are
+> repo-relative (rooted at the repository top, not at `extracted_content_pipeline/`).
 
 ---
 
@@ -34,27 +35,27 @@ must be built.
 
 ## 2. Evidence matrix
 
-Each row: the claim, the code location, and the verification verdict.
+Each row: the claim, the repo-relative code location, and the verification verdict.
 
 | # | Claim | Location | Verdict |
 |---|-------|----------|---------|
 | 1 | Support-ticket normalization keeps core ticket fields but drops raw routing metadata (`Group`, `Tags`, `assignee`, `brand`, `organization`). | `extracted_content_pipeline/support_ticket_input_package.py:91-233`, `:503-558` | Confirmed |
-| 2 | Only FAQ passthrough keys + product/sub_product/issue/sub_issue context survive normalization. | `support_ticket_input_package.py:177-193` | Confirmed |
-| 3 | Public ticket rows are emitted from normalized rows only (underscore-prefixed keys stripped). | `support_ticket_input_package.py:409`, `:842-843` | Confirmed |
-| 4 | The generic source adapter, by contrast, preserves all non-empty raw fields. | `campaign_source_adapters.py:830-914` (decisive: `:876-886`) | Confirmed |
-| 5 | Hosted deflection submit routes through `build_support_ticket_input_package(...)`. | `api/control_surfaces.py:1499-1505` | Confirmed |
-| 6 | CSV (ticket-index) and full-thread importer modes are already separate. | `api/control_surfaces.py:172-177` (`frozenset({"csv","full_thread"})`), `:1899-1932`, `:1941-1957`, `:2120-2145` | Confirmed |
-| 7 | Provider fixture contract: full-thread exports can prove answers; ticket-index exports are gap-list only. | `examples/support_ticket_provider_exports/README.md:14-21` | Confirmed |
-| 8 | Clustering already yields broad routeable owner lanes (login, billing, export, invite, password, ...). | `support_ticket_clustering.py:37-55`, `:151-222` | Confirmed |
-| 9 | Per-gap repeat counts and costs already exist. | `ticket_faq_markdown.py:1316-1318`, `:1401-1404`; `faq_deflection_report.py:48-50`, `:2964-2984`, `:3192-3216` | Confirmed |
-| 10 | Date-window logic already exists (would power monthly/batch labels). | `support_ticket_input_package.py:314-384`; `ticket_faq_markdown.py:1414-1435`; `faq_deflection_report.py:4207-4265` | Confirmed |
-| 11 | The action queue is routing-capable but currently FAQ-shaped in copy. | `faq_deflection_report.py:3192-3216`, `:3349-3369`, `:3372-3399` | Confirmed (see add-vs-extend note) |
-| 12 | Owner lane is currently just `topic or "Unknown"`. | `faq_deflection_report.py:3244-3246` | Confirmed |
-| 13 | Representative phrasing is too thin for true customer vocabulary (<= 3 strings). | `faq_deflection_report.py:3359-3369` | Confirmed |
-| 14 | Term mappings already exist (customer term -> documentation term). | `ticket_faq_markdown.py:2005-2059` | Confirmed |
-| 15 | Evidence export is the uncapped audit lane. | `faq_deflection_report.py:1624-1657`, `:3850-3948` | Confirmed |
+| 2 | Normalization preserves a fixed aliased set -- core source id/title/text, resolution text, measured outcome, FAQ passthrough, structured context (product/sub_product/issue/sub_issue), created_at, source_url, company/vendor name, contact_email, pain_category, ticket_status, csat -- and drops only un-aliased columns, i.e. routing metadata (Group/Tags/assignee/brand/organization). | `extracted_content_pipeline/support_ticket_input_package.py:177-193`, `:503-558` | Confirmed |
+| 3 | Public ticket rows are emitted from normalized rows only (underscore-prefixed keys stripped). | `extracted_content_pipeline/support_ticket_input_package.py:409`, `:842-843` | Confirmed |
+| 4 | The generic source adapter, by contrast, preserves all non-empty raw fields. | `extracted_content_pipeline/campaign_source_adapters.py:830-914` (decisive: `:876-886`) | Confirmed |
+| 5 | Hosted deflection submit routes through `build_support_ticket_input_package(...)`. | `extracted_content_pipeline/api/control_surfaces.py:1499-1505` | Confirmed |
+| 6 | CSV (ticket-index) and full-thread importer modes are already separate. | `extracted_content_pipeline/api/control_surfaces.py:172-177` (`frozenset({"csv","full_thread"})`), `:1899-1932`, `:1941-1957`, `:2120-2145` | Confirmed |
+| 7 | Provider fixture contract: full-thread exports can prove answers; ticket-index exports are gap-list only. | `extracted_content_pipeline/examples/support_ticket_provider_exports/README.md:14-21` | Confirmed |
+| 8 | Clustering already yields broad routeable owner lanes (login, billing, export, invite, password, ...). | `extracted_content_pipeline/support_ticket_clustering.py:37-55`, `:151-222` | Confirmed |
+| 9 | Per-gap repeat counts and costs already exist. | `extracted_content_pipeline/ticket_faq_markdown.py:1316-1318`, `:1401-1404`; `extracted_content_pipeline/faq_deflection_report.py:48-50`, `:2964-2984`, `:3192-3216` | Confirmed |
+| 10 | Date-window logic already exists (would power monthly/batch labels). | `extracted_content_pipeline/support_ticket_input_package.py:314-384`; `extracted_content_pipeline/ticket_faq_markdown.py:1414-1435`; `extracted_content_pipeline/faq_deflection_report.py:4207-4265` | Confirmed |
+| 11 | The action queue is routing-capable but currently FAQ-shaped in copy. | `extracted_content_pipeline/faq_deflection_report.py:3192-3216`, `:3349-3369`, `:3372-3399` | Confirmed (see add-vs-extend note) |
+| 12 | Owner lane is currently just `topic or "Unknown"`. | `extracted_content_pipeline/faq_deflection_report.py:3244-3246` | Confirmed |
+| 13 | Representative phrasing is too thin for true customer vocabulary (<= 3 strings). | `extracted_content_pipeline/faq_deflection_report.py:3359-3369` | Confirmed |
+| 14 | Term mappings already exist (customer term -> documentation term). | `extracted_content_pipeline/ticket_faq_markdown.py:2005-2059` | Confirmed |
+| 15 | Evidence export is the uncapped audit lane. | `extracted_content_pipeline/faq_deflection_report.py:1624-1657`, `:3850-3948` | Confirmed |
 | 16 | Delivery email omits owner / evidence-tier / period fields. | `atlas_brain/content_ops_deflection_delivery.py:58-64`, `:507-567` | Confirmed |
-| 17 | Existing email key numbers describe handling "in this upload". | `content_ops_deflection_delivery.py:358-420` | Confirmed |
+| 17 | Existing email key numbers describe handling "in this upload". | `atlas_brain/content_ops_deflection_delivery.py:358-420` | Confirmed |
 | 18 | Paid result page renders FAQ-style gap cards, not product-gap cards. | `portfolio-ui/api/content-ops/deflection/result-page.js:378-473`, `:545-575` | Confirmed |
 | 19 | Hosted allowlists deliberately exclude raw top evidence. | `portfolio-ui/src/types/deflectionReportModel.ts:56-72`, `:168-180` | Confirmed |
 | 20 | Contract: free snapshots must not infer answer / evidence / source IDs. | `docs/frontend/content_ops_faq_report_contract.md:559-562` | Confirmed |
@@ -65,22 +66,28 @@ Each row: the claim, the code location, and the verification verdict.
 
 ## 3. Key code references (detail)
 
-### 3.1 Normalization drops routing metadata
-`support_ticket_input_package.py` defines a fixed set of alias key tuples
-(`_SOURCE_ID_KEYS`, `_TEXT_KEYS`, `_PASSTHROUGH_KEYS`, `_STRUCTURED_CONTEXT_KEYS`,
-`_DATE_KEYS`, `_STATUS_KEYS`, `_CSAT_KEYS`, ...). There is no alias slot for
-`Group`, `Tags`, `assignee`, `brand`, or `organization`, so those columns are
-silently dropped by `_normalize_ticket_row` (`:503-558`). Public rows are then
-emitted only from normalized rows via `_public_ticket_row` (`:409`, `:842-843`),
-which strips underscore-prefixed internal keys.
+### 3.1 Normalization preserves an aliased set and drops un-aliased routing metadata
+`extracted_content_pipeline/support_ticket_input_package.py` defines a fixed set
+of alias key tuples (`_SOURCE_ID_KEYS`, `_TEXT_KEYS`, `_RESOLUTION_TEXT_KEYS`,
+`_MEASURED_OUTCOME_KEYS`, `_PASSTHROUGH_KEYS`, `_STRUCTURED_CONTEXT_KEYS`,
+`_DATE_KEYS`, `_URL_KEYS`, `_COMPANY_KEYS`, `_VENDOR_KEYS`, `_CONTACT_EMAIL_KEYS`,
+`_PAIN_KEYS`, `_STATUS_KEYS`, `_CSAT_KEYS`). `_normalize_ticket_row` (`:503-558`)
+maps each of those into the normalized row, so date, source URL, company, vendor,
+contact email, pain category, status, and CSAT all survive alongside the core
+source fields and FAQ/structured context. What does **not** survive is any column
+without an alias slot -- there is none for `Group`, `Tags`, `assignee`, `brand`,
+or `organization`, so those routing columns are silently dropped. Public rows are
+then emitted only from normalized rows via `_public_ticket_row` (`:409`,
+`:842-843`), which strips underscore-prefixed internal keys.
 
-By contrast, `campaign_source_adapters.py:876-886`
+By contrast, `extracted_content_pipeline/campaign_source_adapters.py:876-886`
 (`source_row_to_campaign_opportunity`) preserves every non-empty field except
 title-collision and private keys. The two ingestion paths are asymmetric by
-design; the support-ticket path is the lossy one.
+design; the support-ticket path is the lossy one for routing metadata
+specifically.
 
 ### 3.2 Importer-mode separation already exists
-`api/control_surfaces.py:177` defines
+`extracted_content_pipeline/api/control_surfaces.py:177` defines
 `_DEFLECTION_SUBMIT_IMPORTER_MODES = frozenset({"csv", "full_thread"})`, the
 request model defaults `importer_mode="csv"`, and the loader branches
 `if importer_mode == "full_thread"` to JSON-thread parsing versus CSV parsing.
@@ -88,25 +95,26 @@ So S1 does not need to invent a mode split; it needs to preserve routing fields
 within the existing CSV mode and label the evidence tier.
 
 ### 3.3 Economics are deterministic and already present
-- Benchmark: `faq_deflection_report.py:49` -> `_ASSISTED_CONTACT_COST = 13.50`
-  (`:50` label `"$13.50"`, narrative cites the "Gartner $13.50 assisted-contact
-  benchmark").
+- Benchmark: `extracted_content_pipeline/faq_deflection_report.py:49` ->
+  `_ASSISTED_CONTACT_COST = 13.50` (`:50` label `"$13.50"`, narrative cites the
+  "Gartner $13.50 assisted-contact benchmark").
 - Formula: `_support_cost(ticket_count) = max(0.0, ticket_count * 13.50)`
-  (`:4335-4336`), surfaced on the action item as
-  `support_cost_formula = "ticket_count * assisted_contact_cost"` (`:3212-3213`).
+  (`extracted_content_pipeline/faq_deflection_report.py:4335-4336`), surfaced on
+  the action item as `support_cost_formula = "ticket_count * assisted_contact_cost"`
+  (`:3212-3213`).
 - The whole report renderer and its markdown dependency
-  (`ticket_faq_markdown.py`) contain **zero LLM calls** (verified by grep across
-  both files and the transitive path). The "deterministic / no-LLM" property
-  holds, so customer PII never leaves the stack.
+  (`extracted_content_pipeline/ticket_faq_markdown.py`) contain **zero LLM calls**
+  (verified by grep across both files and the transitive path). The
+  "deterministic / no-LLM" property holds, so customer PII never leaves the stack.
 
 ### 3.4 Clustering owner lanes
-`support_ticket_clustering.py` defines `_SINGLE_TOKEN_CLUSTER_LABELS`
-(`:209-222`): `billing, cancel, email, export, api, invite, invoice, login,
-password, payment, refund, subscription`, plus phrase folds (`:37-55`) and token
-folds (`:151-208`) that normalize variants ("sign in"/"log in"/"locked out" ->
-`login`, "charge"/"billed" -> `billing`, etc.). Clustering is token-set with a
-0.6 overlap threshold and a high-frequency anchor-token fallback. It is
-deterministic (no LLM).
+`extracted_content_pipeline/support_ticket_clustering.py` defines
+`_SINGLE_TOKEN_CLUSTER_LABELS` (`:209-222`): `billing, cancel, email, export, api,
+invite, invoice, login, password, payment, refund, subscription`, plus phrase
+folds (`:37-55`) and token folds (`:151-208`) that normalize variants ("sign in"/
+"log in"/"locked out" -> `login`, "charge"/"billed" -> `billing`, etc.).
+Clustering is token-set with a 0.6 overlap threshold and a high-frequency
+anchor-token fallback. It is deterministic (no LLM).
 
 ---
 
@@ -170,30 +178,32 @@ It is expected, not a defect in the proof.
 
 ## 6. Add-vs-extend: which model fields already exist
 
-The `deflection.v1` action item (`faq_deflection_report.py` `_action_item`,
+The `deflection.v1` action item
+(`extracted_content_pipeline/faq_deflection_report.py` `_action_item`,
 `:3196-3216`) is already routing/triage-shaped, not purely FAQ-shaped. It carries
 `owner_lane`, `fix_type`, `csat_signal`, `confidence`, `priority_score`,
 `priority_drivers`, `status`, `recommended_action`, `representative_phrasing`,
 `ticket_count`, `estimated_support_cost`, `support_cost_formula`, `top_evidence`,
 and stable identity keys (`repeat_key`, `cluster_id`, `identity_basis`,
-`identity_confidence`). The TS model (`deflectionReportModel.ts`) also already
-lists `owner_lane` and `fix_type` in its allowlists.
+`identity_confidence`). The TS model
+(`portfolio-ui/src/types/deflectionReportModel.ts`) also already lists
+`owner_lane` and `fix_type` in its allowlists.
 
 So the S2 (#1845) candidate-field list splits into two honest buckets:
 
-| #1845 candidate field | Status today | Where |
-|-----------------------|--------------|-------|
+| #1845 candidate field | Status today | Where (repo-relative) |
+|-----------------------|--------------|-----------------------|
 | `product_gap_summary` | New | (none) |
 | `routing_signals` | New | (none) |
 | `evidence_tier` | New | (none; `answer_evidence_status` is adjacent, not a tier) |
 | `cost_period` | New | (annualized fields are implicit-period) |
 | `cost_confidence` | New | (none) |
-| `jira_template` | New | (nearest handle: `fix_type` enum, `:3249`) |
-| `owner_lane` | Exists, weak | `:3201`, `:3244-3246` (`topic or "Unknown"`) + TS model |
-| `owner_confidence` | Partial | subsumed by generic `confidence` (`:3204`, `:3281`) |
+| `jira_template` | New | (nearest handle: `fix_type` enum, `extracted_content_pipeline/faq_deflection_report.py:3249`) |
+| `owner_lane` | Exists, weak | `faq_deflection_report.py:3201`, `:3244-3246` (`topic or "Unknown"`) + TS model |
+| `owner_confidence` | Partial | subsumed by generic `confidence` (`faq_deflection_report.py:3204`, `:3281`) |
 | `customer_vocabulary` | Partial | overlaps `customer_wording` + thin `representative_phrasing[:3]` |
-| `batch_cost` | Partial | local var in `_support_tax_section` (`:3513`), not exported |
-| `monthly_bleed` | Partial | overlaps `annualized_support_cost` / `annualized_run_rate_support_cost` (`:2937`, `:2941`) |
+| `batch_cost` | Partial | local var in `_support_tax_section` (`faq_deflection_report.py:3513`), not exported |
+| `monthly_bleed` | Partial | overlaps `annualized_support_cost` / `annualized_run_rate_support_cost` (`faq_deflection_report.py:2937`, `:2941`) |
 
 Implication: S2 is more accurately framed as **strengthen `owner_lane` (from
 `topic or "Unknown"` to real routing using preserved metadata) + add the six
@@ -214,7 +224,9 @@ net-new.
   `csv_customer_text`, `csv_full_thread_resolution_evidence`; the
   `api_full_thread_resolution_evidence` name can exist but stays deferred). This
   is the upstream root: every downstream lane is starved of routing signal
-  because normalization drops it.
+  because normalization drops it. (Note: the other aliased fields -- date, URL,
+  company, vendor, email, pain, status, CSAT -- already survive; S1's job is the
+  routing columns specifically.)
 
 - **S2 / #1845 - report/action model fields.**
   Strengthen `owner_lane` to consume preserved routing metadata; add the six
@@ -245,7 +257,9 @@ the synthetic-proof economics. Result: code references are **highly accurate**
 with no material line drift; the `$54.00 = $13.50 x 4` reconciliation is exact;
 the no-LLM property holds for the report renderer and its markdown dependency;
 and the add-vs-extend split in section 6 reflects fields that already exist in
-`deflection.v1`.
+`deflection.v1`. Row 2 was corrected during review to list the full set of
+preserved fields (date/URL/company/vendor/email/pain/status/CSAT survive too);
+the loss is scoped to routing metadata.
 
 Sequencing watch-item (from #1612): S1 and S2 are both model/ingestion-layer work
 with no buyer-visible output until S3, which repeats the horizontal-slice pattern
