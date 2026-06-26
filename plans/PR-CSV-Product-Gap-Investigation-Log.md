@@ -21,6 +21,26 @@ Slice phase: workflow/process
 2. Add this plan doc to satisfy the AGENTS.md section 1b PR-body and plan-doc
    contracts.
 
+### Review Contract
+
+- Acceptance criteria:
+  - [ ] The investigation log exists in-repo at the exact path referenced by
+        #1843 so the tracker and its slices link to a real file.
+  - [ ] The log carries the evidence matrix, synthetic-proof economics, claim
+        ladder, add-vs-extend table, and S1-S4 breakdown the issues describe.
+  - [ ] The plan doc and PR body satisfy the AGENTS.md section 1b contract,
+        confirmed by the repo's PR-body and plan-doc audits.
+  - [ ] No code, tests, schema, config, or runtime behavior change; exactly two
+        new Markdown files.
+- Affected surfaces: two new Markdown documents (one investigation log, one
+  plan doc). No report renderer, model, snapshot, delivery, payment, hosted
+  page, or test changes.
+- Risk areas: documentation drift from the code the log cites at file:line
+  (could go stale), and implying a code change where there is none.
+- Reviewer rules triggered: none -- documentation-only; the changed paths
+  (docs/, plans/) trigger no auto-enforced reviewer rules, confirmed by the
+  pre-push reviewer-rules audit.
+
 ### Files touched
 
 - `docs/extraction/validation/deflection_csv_product_gap_investigation_2026-06-25.md`
