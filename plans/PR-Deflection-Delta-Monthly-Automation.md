@@ -33,6 +33,9 @@ Slice phase: Vertical slice
    the batch helper when `ATLAS_DEFLECTION_DELTA_*` config enables it.
 4. Prove registration, scheduler seed/config behavior, disabled/DB-not-ready
    task exits, tenant scoping, idempotent generation, and no-baseline skips.
+5. Review follow-up: let real batch exceptions fail the scheduled task, rank
+   paid account discovery by paid activity instead of report creation time, and
+   enroll the automation task tests in PR CI.
 
 ### Review Contract
 
@@ -65,6 +68,7 @@ Reviewer rules triggered: R1, R6, R8, R10, R11, R12, R14.
 - `atlas_brain/autonomous/tasks/__init__.py`
 - `atlas_brain/autonomous/tasks/content_ops_deflection_delta_automation.py`
 - `atlas_brain/config.py`
+- `.github/workflows/atlas_content_ops_deflection_report_checks.yml`
 - `extracted_content_pipeline/deflection_report_access.py`
 - `plans/PR-Deflection-Delta-Monthly-Automation.md`
 - `tests/test_content_ops_deflection_delta_persistence.py`
@@ -83,10 +87,17 @@ Reviewer rules triggered: R1, R6, R8, R10, R11, R12, R14.
 - Add `atlas_brain.autonomous.tasks.content_ops_deflection_delta_automation`.
   The task exits before touching DB when disabled, exits safely when the DB pool
   is not initialized, and otherwise constructs the Postgres store and delegates
-  to the batch helper.
+  to the batch helper. Real batch exceptions are logged and re-raised so the
+  scheduler records a failed run instead of a false success.
 - Seed and register `content_ops_deflection_delta_automation` as an opt-in
   monthly cron task, with cron/account/report limits resolved from typed
   `settings.deflection_delta`.
+- Order paid account discovery by paid activity (`paid_at` with updated/created
+  fallback) so newly unlocked older reports are eligible under the account
+  limit.
+- Enroll the automation task test in the content-ops deflection report workflow
+  because it imports atlas autonomous/storage modules and should not run in the
+  extracted pipeline's lighter dependency environment.
 
 ## Intentional
 
@@ -103,6 +114,9 @@ Reviewer rules triggered: R1, R6, R8, R10, R11, R12, R14.
 - Subscription-plan entitlement checks for which accounts should receive
   monthly deltas.
 - Live production cron enablement and operator runbook.
+- The D0 stable identity foundation called out in #1316 remains the gate before
+  any customer-facing delta delivery. This slice only keeps persisted pair
+  deltas warm through the existing access boundary.
 
 Parked hardening: none.
 
@@ -118,6 +132,9 @@ Parked hardening: none.
 - Pending before push: Plan sync check.
 - Pending before push: Atlas push wrapper with the PR body file
   which runs the local PR review bundle once.
+- Review follow-up verification is GitHub Actions only in this recovery
+  session because the current Codex workspace has no local repo checkout,
+  Python, `git`, or `gh`.
 
 ## Estimated diff size
 
@@ -127,8 +144,9 @@ Parked hardening: none.
 | `atlas_brain/autonomous/tasks/__init__.py` | 1 |
 | `atlas_brain/autonomous/tasks/content_ops_deflection_delta_automation.py` | 74 |
 | `atlas_brain/config.py` | 14 |
+| `.github/workflows/atlas_content_ops_deflection_report_checks.yml` | 9 |
 | `extracted_content_pipeline/deflection_report_access.py` | 115 |
 | `plans/PR-Deflection-Delta-Monthly-Automation.md` | 134 |
 | `tests/test_content_ops_deflection_delta_persistence.py` | 85 |
 | `tests/test_deflection_delta_automation_task.py` | 201 |
-| **Total** | **641** |
+| **Total** | **650** |
