@@ -55,14 +55,12 @@ executed, or wired.
 
 ## Verification
 
-- `python3 scripts/audit_pr_body.py /tmp/pr_body.md` -> PASS (PR body matches the
-  AGENTS.md section 1b contract; the named plan doc exists in the checkout).
-- `python3 scripts/audit_plan_doc.py plans/PR-CSV-Product-Gap-Investigation-Log.md` -> all required sections present, in order.
-- `python3 scripts/audit_plan_doc_files_touched.py plans/PR-CSV-Product-Gap-Investigation-Log.md` -> claimed files match the git diff.
-- `python3 scripts/audit_plan_doc_diff_size.py plans/PR-CSV-Product-Gap-Investigation-Log.md` -> within drift threshold.
-- `python3 scripts/audit_pr_session_drift.py --skip-github` -> ownership lane and slice phase valid.
-- Independent verification pass re-checked all 22 evidence-matrix code references
-  against the working tree: highly accurate, no material line drift.
+- Ran the repo's PR-body, plan-shape, files-touched, diff-size, and
+  cross-session-drift audits locally against this slice; all report PASS
+  (plan doc present and well-formed, claimed files match the git diff,
+  diff-size within threshold, ownership lane and slice phase valid).
+- Independent verification pass re-checked all 22 evidence-matrix code
+  references against the working tree: highly accurate, no material line drift.
 - No code/tests/schema changed, so the pytest suite is unaffected by this slice.
 
 ## Estimated diff size
