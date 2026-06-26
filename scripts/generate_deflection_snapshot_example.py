@@ -19,7 +19,11 @@ from extracted_content_pipeline.faq_deflection_report import (
 from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_markdown
 
 
-DEFAULT_OUTPUT = ROOT / "docs/frontend/content_ops_faq_deflection_snapshot_example.json"
+DEFAULT_REPORT_OUTPUT = ROOT / "docs/frontend/content_ops_faq_deflection_report_example.json"
+DEFAULT_SNAPSHOT_OUTPUT = (
+    ROOT / "docs/frontend/content_ops_faq_deflection_snapshot_example.json"
+)
+DEFAULT_OUTPUT = DEFAULT_SNAPSHOT_OUTPUT
 SNAPSHOT_TOP_N = 2
 
 
@@ -83,6 +87,14 @@ def build_snapshot_example_payload() -> dict[str, Any]:
     ).as_dict()
 
 
+def render_report_example(payload: dict[str, Any] | None = None) -> str:
+    return json.dumps(
+        payload if payload is not None else producer_deflection_report_payload(),
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+
+
 def render_snapshot_example(payload: dict[str, Any] | None = None) -> str:
     return json.dumps(
         payload if payload is not None else build_snapshot_example_payload(),
@@ -91,32 +103,72 @@ def render_snapshot_example(payload: dict[str, Any] | None = None) -> str:
     ) + "\n"
 
 
+def _check_file(path: Path, expected: str) -> int:
+    try:
+        current = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        print(f"{path} is missing; run this generator to create it", file=sys.stderr)
+        return 1
+    if current != expected:
+        print(
+            f"{path} is stale; run this generator to refresh it",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"{path} is current")
+    return 0
+
+
+def _write_file(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    print(f"wrote {path}")
+
+
+def _sibling_report_output(snapshot_output: Path) -> Path:
+    suffix = snapshot_output.suffix or ".json"
+    return snapshot_output.with_name(f"{snapshot_output.stem}.report{suffix}")
+
+
+def _resolve_example_outputs(args: argparse.Namespace) -> tuple[Path, Path]:
+    snapshot_output = args.snapshot_output or args.output or DEFAULT_SNAPSHOT_OUTPUT
+    if args.report_output is not None:
+        return args.report_output, snapshot_output
+    if args.output is None and args.snapshot_output is None:
+        return DEFAULT_REPORT_OUTPUT, snapshot_output
+    return _sibling_report_output(snapshot_output), snapshot_output
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Deprecated alias for --snapshot-output.",
+    )
+    parser.add_argument("--report-output", type=Path, default=None)
+    parser.add_argument("--snapshot-output", type=Path, default=None)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
-    expected = render_snapshot_example()
-    output = args.output
+    report_output, snapshot_output = _resolve_example_outputs(args)
+    report_payload = producer_deflection_report_payload()
+    expected_report = render_report_example(report_payload)
+    expected_snapshot = render_snapshot_example(
+        build_deflection_snapshot(
+            report_payload,
+            top_n=SNAPSHOT_TOP_N,
+        ).as_dict()
+    )
 
     if args.check:
-        try:
-            current = output.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            print(f"{output} is missing; run this generator to create it", file=sys.stderr)
-            return 1
-        if current != expected:
-            print(
-                f"{output} is stale; run this generator to refresh it",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"{output} is current")
-        return 0
+        return max(
+            _check_file(report_output, expected_report),
+            _check_file(snapshot_output, expected_snapshot),
+        )
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(expected, encoding="utf-8")
-    print(f"wrote {output}")
+    _write_file(report_output, expected_report)
+    _write_file(snapshot_output, expected_snapshot)
     return 0
 
 
