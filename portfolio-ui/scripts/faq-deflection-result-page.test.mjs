@@ -353,14 +353,31 @@ await test("unlocked paid result page renders CSV owner-lane gap card fields", (
             source_id_count: 65,
           },
         },
+        report_model: {
+          schema_version: "deflection.v1",
+          sections: [
+            {
+              id: "priority_fix_queue",
+              data: {
+                items: [
+                  {
+                    question: "Where is the login button?",
+                    ticket_count: 65,
+                    estimated_support_cost: 877.5,
+                    owner_lane: "Auth / Product UX",
+                    evidence_tier: "csv_customer_text",
+                    status: "Needs answer",
+                  },
+                ],
+              },
+            },
+          ],
+        },
         faq_result: {
           items: [
             {
               question: "Where is the login button?",
               ticket_count: 65,
-              estimated_support_cost: 877.5,
-              owner_lane: "Auth / Product UX",
-              evidence_tier: "csv_customer_text",
               answer_evidence_status: "needs_review",
               top_evidence: [
                 {

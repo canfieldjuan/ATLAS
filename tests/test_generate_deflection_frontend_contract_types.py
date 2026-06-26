@@ -82,6 +82,8 @@ def test_deflection_report_model_types_include_backend_projection_fields() -> No
     assert "source_date_window: DeflectionReportSupportTaxSourceDateWindow | null;" in rendered
     assert "term_mappings: DeflectionReportQuestionDetailsTermMappings[];" in rendered
     assert "outcome_diagnostics: DeflectionReportQuestionOutcomeDiagnostics | null;" in rendered
+    assert "evidence_tier?: string;" in rendered
+    assert "routing_signals?: DeflectionReportPriorityFixQueueRoutingSignals;" in rendered
     assert "source_file?: DeflectionReportSourceFileData;" in rendered
     assert "outcome_diagnostics?: DeflectionReportOutcomeDiagnosticsData;" in rendered
     assert "export type DeflectionStructuredReport" in rendered
@@ -105,6 +107,10 @@ def test_deflection_report_model_types_publish_hosted_safe_allowlists() -> None:
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = '
         '["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = '
+        '["group", "tags", "product_area", "custom_product_area"]'
     ) in rendered
     assert (
         "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "
@@ -183,6 +189,10 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = '
         'Object.freeze(["status", "csat_present_count", "negative_csat_ticket_count", '
         '"numeric_average"])'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = '
+        'Object.freeze(["group", "tags", "product_area", "custom_product_area"])'
     ) in rendered
     assert (
         "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "

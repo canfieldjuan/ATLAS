@@ -647,8 +647,11 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
             "Subject": "Where is the login button?",
             "Requester Comment": "Where is the login button?",
             "Created At": f"2026-05-0{index}T09:00:00Z",
-            "Group": "Authentication Support",
-            "Tags": "login;mfa",
+            "Group": "Support Queue",
+            "Tags": "navigation",
+            "Organization": "Billing Team LLC",
+            "Assignee": "Export Agent",
+            "Brand": "Admin Co",
         }
         for index in range(1, 5)
     ]
@@ -672,10 +675,43 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
     assert priority_item["ticket_count"] == 4
     assert priority_item["estimated_support_cost"] == 54.0
     assert priority_item["evidence_tier"] == "csv_customer_text"
-    assert priority_item["routing_signals"]["group"] == ["Authentication Support"]
-    assert priority_item["routing_signals"]["tags"] == ["login", "mfa"]
+    assert priority_item["routing_signals"]["group"] == ["Support Queue"]
+    assert priority_item["routing_signals"]["tags"] == ["navigation"]
+    assert priority_item["routing_signals"]["organization"] == ["Billing Team LLC"]
+    assert priority_item["routing_signals"]["assignee"] == ["Export Agent"]
+    assert priority_item["routing_signals"]["brand"] == ["Admin Co"]
     assert "Account Settings" not in priority_item["recommended_action"]
     assert "buried" not in priority_item["recommended_action"].lower()
+
+
+def test_owner_lane_keyword_matching_uses_tokens_not_substrings() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "Who authored this guide?",
+                "customer_wording": "Who authored this guide?",
+                "topic": "publishing",
+                "weighted_frequency": 2,
+                "ticket_count": 2,
+                "opportunity_score": 10,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-author-1", "ticket-author-2"),
+            },
+        ),
+    )
+
+    model = build_deflection_report_model(result).as_dict()
+    priority_item = next(
+        section
+        for section in model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+
+    assert priority_item["owner_lane"] == "Publishing"
 
 
 def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:
@@ -5032,7 +5068,8 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
     assert locked is not None
     assert locked.paid is False
     assert locked.artifact == postgres_artifact
-    assert locked.report_model() == artifact["report_model"]
+    assert locked.report_model() is not None
+    assert locked.report_model()["schema_version"] == artifact["report_model"]["schema_version"]
     assert locked.delivery_email == "buyer@example.com"
     assert await store.mark_paid(
         account_id="acct-1",
@@ -5046,7 +5083,8 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
     assert unlocked is not None
     assert unlocked.paid is True
     assert unlocked.payment_reference == "checkout-session:test"
-    assert unlocked.report_model() == artifact["report_model"]
+    assert unlocked.report_model() is not None
+    assert unlocked.report_model()["schema_version"] == artifact["report_model"]["schema_version"]
     assert unlocked.delivery_email == "buyer@example.com"
     await store.save_report(
         account_id="acct-1",
@@ -5111,7 +5149,8 @@ async def test_in_memory_deflection_report_store_round_trips_report_model() -> N
     assert record is not None
     assert record.artifact is not None
     assert record.artifact["report_model"] == artifact["report_model"]
-    assert record.report_model() == artifact["report_model"]
+    assert record.report_model() is not None
+    assert record.report_model()["schema_version"] == artifact["report_model"]["schema_version"]
 
 
 def test_stored_deflection_report_model_tolerates_legacy_and_schema_drift() -> None:
@@ -5253,6 +5292,46 @@ def test_stored_deflection_report_model_backfills_legacy_action_limits() -> None
             assert key in section["required_data"]
             assert key not in section_by_id[section_id]["data"]
             assert key not in section_by_id[section_id]["required_data"]
+
+
+def test_stored_deflection_report_model_backfills_legacy_action_owner_metadata() -> None:
+    artifact = build_deflection_report_artifact(
+        _structured_report_fixture_result()
+    ).as_dict()
+    legacy_artifact = json.loads(json.dumps(artifact))
+    priority_section = next(
+        section
+        for section in legacy_artifact["report_model"]["sections"]
+        if section["id"] == "priority_fix_queue"
+    )
+    item = priority_section["data"]["items"][0]
+    item.pop("evidence_tier", None)
+    item["routing_signals"] = {
+        "group": ["Support Queue"],
+        "assignee": ["Agent Export"],
+        "tags": ["login"],
+        "brand": ["Admin Co"],
+        "organization": ["Billing Team LLC"],
+        "product_area": ["Authentication"],
+        "custom_product_area": [],
+    }
+
+    payload = stored_deflection_report_model(legacy_artifact)
+    assert payload is not None
+    section = next(
+        section
+        for section in payload["sections"]
+        if section["id"] == "priority_fix_queue"
+    )
+    normalized_item = section["data"]["items"][0]
+
+    assert normalized_item["evidence_tier"] == "csv_index_metadata_only"
+    assert normalized_item["routing_signals"] == {
+        "group": ["Support Queue"],
+        "tags": ["login"],
+        "product_area": ["Authentication"],
+        "custom_product_area": [],
+    }
 
 
 def test_stored_deflection_report_model_backfills_legacy_suppressed_review_keys() -> None:

@@ -906,6 +906,12 @@ _REPORT_ACTION_ROUTING_SIGNAL_FIELDS = (
     "product_area",
     "custom_product_area",
 )
+_REPORT_ACTION_ROUTING_LABEL_FIELDS = (
+    "group",
+    "tags",
+    "product_area",
+    "custom_product_area",
+)
 _REPORT_ACTION_TOP_EVIDENCE_FIELDS = ("source_id", "evidence_quote")
 _REPORT_ACTION_SUPPORT_COST_BASIS_FIELDS = (
     "status",
@@ -923,7 +929,7 @@ _REPORT_ACTION_ITEM_NESTED_FIELDS = (
     MappingProxyType({
         "field": "routing_signals",
         "projected_fields": _REPORT_ACTION_ROUTING_SIGNAL_FIELDS,
-        "hosted_consumer_safe_fields": _REPORT_ACTION_ROUTING_SIGNAL_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_ACTION_ROUTING_LABEL_FIELDS,
     }),
 )
 _REPORT_ACTION_ITEM_NESTED_COLLECTIONS = (
@@ -938,6 +944,7 @@ _REPORT_ACTION_ITEM_COLLECTION = MappingProxyType({
     "field": "items",
     "item_type": "object",
     "projected_fields": _REPORT_ACTION_ITEM_FIELDS,
+    "optional_projected_fields": ("evidence_tier", "routing_signals"),
     "hosted_consumer_safe_fields": _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS,
     "nested_object_fields": _REPORT_ACTION_ITEM_NESTED_FIELDS,
     "nested_collection_fields": _REPORT_ACTION_ITEM_NESTED_COLLECTIONS,
@@ -1267,6 +1274,9 @@ def _report_projection_collection_entry(metadata: Mapping[str, Any]) -> dict[str
                 default=projected_fields,
             )
         )
+        optional_fields = _field_tuple(metadata, "optional_projected_fields")
+        if optional_fields:
+            out["optional_projected_fields"] = list(optional_fields)
     nested_fields = _nested_field_entries(metadata)
     if nested_fields:
         out["nested_object_fields"] = nested_fields
@@ -3297,25 +3307,46 @@ def _action_routing_signals(item: Mapping[str, Any]) -> dict[str, list[str]]:
         key: [] for key in _REPORT_ACTION_ROUTING_SIGNAL_FIELDS
     }
     for key in _REPORT_ACTION_ROUTING_SIGNAL_FIELDS:
-        values = _texts(raw.get(key))
+        values = _routing_signal_texts(raw.get(key))
         if values:
             signals[key] = values[:8]
     return signals
 
 
+def _routing_signal_texts(value: Any) -> list[str]:
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, Mapping):
+        return []
+    if isinstance(value, str):
+        values: Sequence[Any] = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        values = value
+    else:
+        values = (value,)
+    out: list[str] = []
+    for item in values:
+        if isinstance(item, Mapping):
+            continue
+        text = _text(item)
+        if text:
+            out.append(text)
+    return out
+
+
 def _routing_signals_text(routing_signals: Mapping[str, Any]) -> str:
     parts: list[str] = []
-    for key in _REPORT_ACTION_ROUTING_SIGNAL_FIELDS:
-        parts.extend(_texts(routing_signals.get(key)))
+    for key in _REPORT_ACTION_ROUTING_LABEL_FIELDS:
+        parts.extend(_routing_signal_texts(routing_signals.get(key)))
     return " ".join(parts)
 
 
 def _owner_lane_from_text(value: str) -> str:
-    haystack = value.casefold()
-    if not haystack:
+    tokens = set(re.findall(r"[a-z0-9]+", value.casefold()))
+    if not tokens:
         return ""
     for needles, lane in _OWNER_LANE_RULES:
-        if any(needle in haystack for needle in needles):
+        if any(needle in tokens for needle in needles):
             return lane
     return ""
 
@@ -3331,7 +3362,7 @@ def _action_evidence_tier(item: Mapping[str, Any]) -> str:
         return tier
     if _text(item.get("answer_evidence_status")) == _RESOLUTION_EVIDENCE_STATUS:
         return "csv_full_thread_resolution_evidence"
-    return "csv_customer_text"
+    return "csv_index_metadata_only"
 
 
 def _action_fix_type(status: str) -> str:

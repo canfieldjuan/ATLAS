@@ -323,7 +323,34 @@ function evidenceTierLabel(value) {
   if (tier === "csv_customer_text") return "CSV customer text";
   if (tier === "csv_index_metadata_only") return "CSV index metadata only";
   if (tier === "csv_full_thread_resolution_evidence") return "CSV full-thread resolution evidence";
-  return tier ? tier.replace(/_/g, " ") : "CSV customer text";
+  return tier ? tier.replace(/_/g, " ") : "Unknown";
+}
+
+function paidActionItems(report, sectionIds) {
+  const rows = [];
+  const seen = new Set();
+  for (const sectionId of sectionIds) {
+    const data = reportModelSectionData(report, sectionId);
+    const items = Array.isArray(data.items) ? data.items.filter(isObjectRecord) : [];
+    items.forEach((item, index) => {
+      const key = clean(item.repeat_key) ||
+        clean(item.cluster_id) ||
+        clean(item.question) ||
+        `${sectionId}:${index}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      rows.push(item);
+    });
+  }
+  return rows;
+}
+
+function paidGapCardItems(report, fallbackItems) {
+  const actionRows = paidActionItems(report, [
+    "priority_fix_queue",
+    "top_unresolved_repeats",
+  ]);
+  return actionRows.length > 0 ? actionRows : fallbackItems;
 }
 
 function paidSummary(report, items) {
@@ -458,17 +485,20 @@ function renderPaidGapCards(items, evidenceExportHref = "") {
             <h3>Product Gap cards</h3>
             ${rows.length > 0
               ? `<div class="paid-card-grid">
-                  ${rows.map((item) => `<article class="paid-card">
+                  ${rows.map((item) => {
+                    const evidenceTier = clean(item.evidence_tier);
+                    return `<article class="paid-card">
                     <p class="rank">${escapeHtml(formatNumber(itemTicketCount(item)))} tickets</p>
                     <h4>${escapeHtml(item.question || item.customer_wording || "Untitled question")}</h4>
                     <p>Owner: ${escapeHtml(item.owner_lane || "Unknown")}</p>
                     <p>Estimated handling: ${escapeHtml(formatMoney(firstParsedCount(item.estimated_support_cost)))}</p>
-                    <p>Evidence: ${escapeHtml(evidenceTierLabel(item.evidence_tier))}</p>
+                    ${evidenceTier ? `<p>Evidence: ${escapeHtml(evidenceTierLabel(evidenceTier))}</p>` : ""}
                     <p>This is routeable product friction, not exact UI root-cause proof.</p>
                     ${evidenceExportHref
                       ? `<p><a href="${escapeHtml(evidenceExportHref)}" download>Download evidence JSON</a></p>`
                       : ""}
-                  </article>`).join("")}
+                  </article>`;
+                  }).join("")}
                 </div>`
               : `<p class="muted">No unresolved answer gaps were present in this unlocked report.</p>`}
           </section>`;
@@ -559,6 +589,7 @@ function resultPageQaObservation(report) {
 function renderPaidArtifact(report, requestId = "") {
   const items = paidArtifactItems(report);
   if (!items.length) return "";
+  const gapItems = paidGapCardItems(report, items);
   const summary = paidSummary(report, items);
   const evidenceExportHref = paidEvidenceExportHref(report, requestId);
   const qaObservation = resultPageQaObservation(report);
@@ -586,7 +617,7 @@ function renderPaidArtifact(report, requestId = "") {
           ${renderPaidReadiness(summary, evidenceExportHref)}
           ${renderPaidQuestionTable(items)}
           ${renderPaidAnswerCards(items)}
-          ${renderPaidGapCards(items, evidenceExportHref)}
+          ${renderPaidGapCards(gapItems, evidenceExportHref)}
           ${renderPaidPhrases(items)}
         </section>`;
 }

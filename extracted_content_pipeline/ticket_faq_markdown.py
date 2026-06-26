@@ -1467,6 +1467,9 @@ def _routing_signal_values(values: Iterable[Any]) -> tuple[str, ...]:
 def _routing_value_tokens(value: Any) -> tuple[str, ...]:
     if value in (None, "", [], {}):
         return ()
+    if isinstance(value, Mapping):
+        text = _clean(value.get("name") or value.get("title") or value.get("label"))
+        return (text,) if text else ()
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return tuple(
             token
@@ -1494,7 +1497,7 @@ def _item_evidence_tier(
         tier = _clean(row.get("support_ticket_evidence_tier"))
         if tier:
             return tier
-    return "csv_customer_text" if rows else "csv_index_metadata_only"
+    return "csv_index_metadata_only"
 
 
 def _source_date_span(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:

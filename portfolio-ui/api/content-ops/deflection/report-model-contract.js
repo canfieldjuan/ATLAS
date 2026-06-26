@@ -67,7 +67,7 @@ export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIE
 
 export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]);
 
-export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "assignee", "tags", "brand", "organization", "product_area", "custom_product_area"]);
+export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "tags", "product_area", "custom_product_area"]);
 
 export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze([]);
 
@@ -87,7 +87,7 @@ export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_HOSTED_CONSUMER_SAFE
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]);
 
-export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "assignee", "tags", "brand", "organization", "product_area", "custom_product_area"]);
+export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "tags", "product_area", "custom_product_area"]);
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze([]);
 
@@ -105,7 +105,7 @@ export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_HOSTED_CONSUMER_SAFE_FI
 
 export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]);
 
-export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "assignee", "tags", "brand", "organization", "product_area", "custom_product_area"]);
+export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "tags", "product_area", "custom_product_area"]);
 
 export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze([]);
 
@@ -123,7 +123,7 @@ export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_HOSTED_CONS
 
 export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]);
 
-export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "assignee", "tags", "brand", "organization", "product_area", "custom_product_area"]);
+export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "tags", "product_area", "custom_product_area"]);
 
 export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze([]);
 
@@ -141,7 +141,7 @@ export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS =
 
 export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]);
 
-export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "assignee", "tags", "brand", "organization", "product_area", "custom_product_area"]);
+export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "tags", "product_area", "custom_product_area"]);
 
 export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze([]);
 
@@ -171,7 +171,7 @@ export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSU
 
 export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]);
 
-export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "assignee", "tags", "brand", "organization", "product_area", "custom_product_area"]);
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["group", "tags", "product_area", "custom_product_area"]);
 
 export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze([]);
 
@@ -227,10 +227,7 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = Object.freeze({
   }),
   "already_covered_still_recurring.items.routing_signals": Object.freeze({
     "group": "scalar_array",
-    "assignee": "scalar_array",
     "tags": "scalar_array",
-    "brand": "scalar_array",
-    "organization": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
   }),
@@ -262,10 +259,7 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = Object.freeze({
   }),
   "backlog_table.items.routing_signals": Object.freeze({
     "group": "scalar_array",
-    "assignee": "scalar_array",
     "tags": "scalar_array",
-    "brand": "scalar_array",
-    "organization": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
   }),
@@ -296,10 +290,7 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = Object.freeze({
   }),
   "drafted_resolutions.items.routing_signals": Object.freeze({
     "group": "scalar_array",
-    "assignee": "scalar_array",
     "tags": "scalar_array",
-    "brand": "scalar_array",
-    "organization": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
   }),
@@ -348,10 +339,7 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = Object.freeze({
   }),
   "priority_fix_queue.items.routing_signals": Object.freeze({
     "group": "scalar_array",
-    "assignee": "scalar_array",
     "tags": "scalar_array",
-    "brand": "scalar_array",
-    "organization": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
   }),
@@ -455,10 +443,7 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = Object.freeze({
   }),
   "suppressed_repeat_review_queue.items.routing_signals": Object.freeze({
     "group": "scalar_array",
-    "assignee": "scalar_array",
     "tags": "scalar_array",
-    "brand": "scalar_array",
-    "organization": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
   }),
@@ -490,10 +475,7 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = Object.freeze({
   }),
   "top_unresolved_repeats.items.routing_signals": Object.freeze({
     "group": "scalar_array",
-    "assignee": "scalar_array",
     "tags": "scalar_array",
-    "brand": "scalar_array",
-    "organization": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
   }),

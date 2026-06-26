@@ -494,6 +494,7 @@ def _report_projection_metadata(contract: Mapping[str, Any] | None = None) -> di
                 )
             if item_type == "object":
                 item_fields = _projected_fields(collection)
+                item_optional_fields = _optional_projected_fields(collection)
                 collection_record_fields = _record_fields(
                     collection,
                     f"{section_id}.{collection_field}",
@@ -509,7 +510,7 @@ def _report_projection_metadata(contract: Mapping[str, Any] | None = None) -> di
                 _validate_report_fields(
                     section_id,
                     item_fields,
-                    [],
+                    item_optional_fields,
                     collection_record_fields,
                     collection_structural_fields,
                 )
@@ -857,6 +858,7 @@ def _render_report_nested_types(section: Mapping[str, Any]) -> list[str]:
                 _object_type_with_overrides(
                     item_type,
                     _projected_fields(collection),
+                    optional_fields=_optional_projected_fields(collection),
                     type_overrides=collection_overrides,
                 )
             )

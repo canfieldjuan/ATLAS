@@ -576,6 +576,8 @@ def _text_action_item(item: _DeliveryEmailActionItem, *, include_action: bool) -
 
 
 def _evidence_tier_label(value: str) -> str:
+    if not value:
+        return "Unknown"
     return {
         "csv_customer_text": "CSV customer text",
         "csv_index_metadata_only": "CSV index metadata only",
