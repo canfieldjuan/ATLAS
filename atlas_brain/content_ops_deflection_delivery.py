@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass, replace
 import logging
-from typing import Any, Literal, Mapping, Protocol
+from typing import Any, Literal, Mapping, Protocol, Sequence
 from urllib.parse import quote
 
 from .content_ops_deflection_incidents import emit_deflection_paid_funnel_incident_alert
@@ -62,6 +62,10 @@ class _DeliveryEmailActionItem:
     estimated_support_cost: float | None
     owner_lane: str
     evidence_tier: str
+    product_gap_summary: str
+    customer_vocabulary: tuple[str, ...]
+    cost_period: str
+    cost_confidence: str
     status: str
     recommended_action: str
 
@@ -518,6 +522,10 @@ def _email_action_item(row: Mapping[str, Any]) -> _DeliveryEmailActionItem | Non
         estimated_support_cost=estimated_support_cost,
         owner_lane=_strict_text(row.get("owner_lane")) or "",
         evidence_tier=_strict_text(row.get("evidence_tier")) or "",
+        product_gap_summary=_strict_text(row.get("product_gap_summary")) or "",
+        customer_vocabulary=tuple(_strict_texts(row.get("customer_vocabulary"))[:3]),
+        cost_period=_strict_text(row.get("cost_period")) or "",
+        cost_confidence=_strict_text(row.get("cost_confidence")) or "",
         status=_strict_text(row.get("status")) or "",
         recommended_action=_strict_text(row.get("recommended_action")) or "",
     )
@@ -568,6 +576,22 @@ def _text_action_item(item: _DeliveryEmailActionItem, *, include_action: bool) -
         parts.append(f"Owner: {item.owner_lane}")
     if item.evidence_tier:
         parts.append(f"Evidence: {_evidence_tier_label(item.evidence_tier)}")
+    if item.product_gap_summary:
+        parts.append(item.product_gap_summary)
+    if item.customer_vocabulary:
+        parts.append("Customer vocabulary: " + ", ".join(item.customer_vocabulary))
+    if item.cost_period or item.cost_confidence:
+        parts.append(
+            "Cost basis: "
+            + " / ".join(
+                part
+                for part in (
+                    _cost_period_label(item.cost_period),
+                    _cost_confidence_label(item.cost_confidence),
+                )
+                if part
+            )
+        )
     if item.status:
         parts.append(item.status)
     if include_action and item.recommended_action:
@@ -583,6 +607,35 @@ def _evidence_tier_label(value: str) -> str:
         "csv_index_metadata_only": "CSV index metadata only",
         "csv_full_thread_resolution_evidence": "CSV full-thread resolution evidence",
     }.get(value, value.replace("_", " "))
+
+
+def _cost_period_label(value: str) -> str:
+    return {
+        "batch_upload": "this upload",
+    }.get(value, value.replace("_", " ") if value else "")
+
+
+def _cost_confidence_label(value: str) -> str:
+    return {
+        "benchmark_with_resolution_evidence": "benchmark cost with resolution evidence",
+        "benchmark_with_customer_text": "benchmark cost with customer text",
+        "benchmark_index_metadata_only": "benchmark cost from index metadata",
+    }.get(value, value.replace("_", " ") if value else "")
+
+
+def _strict_texts(value: Any) -> list[str]:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        values = list(value)
+    else:
+        values = []
+    out: list[str] = []
+    for item in values:
+        text = _strict_text(item)
+        if text and text not in out:
+            out.append(text)
+    return out
 
 
 def _strict_int(value: Any) -> int | None:

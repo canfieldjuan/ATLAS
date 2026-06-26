@@ -75,6 +75,14 @@ def test_deflection_report_model_types_include_backend_projection_fields() -> No
     assert "status_counts: Record<string, number>;" in rendered
     assert "support_cost_basis: DeflectionReportPriorityFixQueueSupportCostBasis;" in rendered
     assert "csat_signal: DeflectionReportPriorityFixQueueCsatSignal;" in rendered
+    assert "product_gap_summary?: string;" in rendered
+    assert "customer_vocabulary?: string[];" in rendered
+    assert "cost_period?: string;" in rendered
+    assert "cost_confidence?: string;" in rendered
+    assert "jira_template?: DeflectionReportPriorityFixQueueJiraTemplate;" in rendered
+    assert "export type DeflectionReportPriorityFixQueueJiraTemplate" in rendered
+    assert "  product_gap_summary: string;" in rendered
+    assert "  customer_vocabulary: string[];" in rendered
     assert "top_evidence: DeflectionReportPriorityFixQueueTopEvidence[];" in rendered
     assert "review_key: string;" in rendered
     assert "suppression_reason: string;" in rendered
@@ -100,9 +108,16 @@ def test_deflection_report_model_types_publish_hosted_safe_allowlists() -> None:
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
         '["rank", "question", "status", "owner_lane", "evidence_tier", '
-        '"routing_signals", "confidence", '
+        '"routing_signals", "product_gap_summary", "customer_vocabulary", '
+        '"cost_period", "cost_confidence", "jira_template", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal"]'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_JIRA_TEMPLATE_HOSTED_CONSUMER_SAFE_FIELDS = '
+        '["recommended_title", "question", "owner_lane", "product_gap_summary", '
+        '"ticket_count", "estimated_support_cost", "cost_period", "cost_confidence", '
+        '"evidence_tier", "customer_vocabulary", "recommended_action"]'
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = '
@@ -136,6 +151,11 @@ def test_deflection_report_model_types_publish_hosted_field_shapes() -> None:
     assert '"status_mix": "scalar",' in rendered
     assert '"suppressed_repeat_review_queue": {' in rendered
     assert '"reason_counts": "record",' in rendered
+    assert '"priority_fix_queue.items": {' in rendered
+    assert '"customer_vocabulary": "scalar_array",' in rendered
+    assert '"jira_template": "object",' in rendered
+    assert '"priority_fix_queue.items.jira_template": {' in rendered
+    assert '"cost_confidence": "scalar",' in rendered
 
 
 def test_deflection_report_model_api_contract_includes_backend_projection_fields() -> None:
@@ -181,9 +201,16 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
         'Object.freeze(["rank", "question", "status", "owner_lane", "evidence_tier", '
-        '"routing_signals", "confidence", '
+        '"routing_signals", "product_gap_summary", "customer_vocabulary", '
+        '"cost_period", "cost_confidence", "jira_template", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal"])'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_JIRA_TEMPLATE_HOSTED_CONSUMER_SAFE_FIELDS = '
+        'Object.freeze(["recommended_title", "question", "owner_lane", "product_gap_summary", '
+        '"ticket_count", "estimated_support_cost", "cost_period", "cost_confidence", '
+        '"evidence_tier", "customer_vocabulary", "recommended_action"])'
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = '
@@ -201,7 +228,8 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
     assert (
         'DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
         'Object.freeze(["rank", "question", "status", "owner_lane", "evidence_tier", '
-        '"routing_signals", "confidence", '
+        '"routing_signals", "product_gap_summary", "customer_vocabulary", '
+        '"cost_period", "cost_confidence", "jira_template", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal", "review_key", '
         '"suppression_reason", "suppression_reason_label"])'

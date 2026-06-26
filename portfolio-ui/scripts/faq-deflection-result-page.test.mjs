@@ -366,6 +366,19 @@ await test("unlocked paid result page renders CSV owner-lane gap card fields", (
                     estimated_support_cost: 877.5,
                     owner_lane: "Auth / Product UX",
                     evidence_tier: "csv_customer_text",
+                    product_gap_summary:
+                      "Repeated support friction routes to Auth / Product UX. 65 support tickets in this upload.",
+                    customer_vocabulary: [
+                      "login button",
+                      "where do I sign in",
+                    ],
+                    cost_period: "batch_upload",
+                    cost_confidence: "benchmark_with_customer_text",
+                    jira_template: {
+                      product_gap_summary:
+                        "Repeated support friction routes to Auth / Product UX. 65 support tickets in this upload.",
+                      recommended_action: "Review login discoverability and create the missing answer.",
+                    },
                     status: "Needs answer",
                   },
                 ],
@@ -397,7 +410,12 @@ await test("unlocked paid result page renders CSV owner-lane gap card fields", (
   assert.match(html, /65 tickets/);
   assert.match(html, /Owner: Auth \/ Product UX/);
   assert.match(html, /Estimated handling: \$878/);
+  assert.match(html, /Repeated support friction routes to Auth \/ Product UX/);
+  assert.match(html, /Cost basis: this upload \/ benchmark cost with customer text/);
   assert.match(html, /Evidence: CSV customer text/);
+  assert.match(html, /Customer vocabulary: login button, where do I sign in/);
+  assert.match(html, /Jira handoff/);
+  assert.match(html, /Review login discoverability and create the missing answer/);
   assert.match(html, /routeable product friction, not exact UI root-cause proof/);
   assert.match(html, /Download evidence JSON/);
   assert.match(
@@ -443,6 +461,14 @@ await test("locked result page does not render paid report-model fields", () => 
                     evidence_quotes: ["customer private evidence quote"],
                     owner_lane: "Auth / Product UX",
                     evidence_tier: "csv_customer_text",
+                    product_gap_summary: "Hidden product gap summary",
+                    customer_vocabulary: ["hidden customer vocabulary"],
+                    cost_period: "batch_upload",
+                    cost_confidence: "benchmark_with_customer_text",
+                    jira_template: {
+                      product_gap_summary: "Hidden Jira product gap summary",
+                      recommended_action: "Hidden Jira next action",
+                    },
                   },
                 ],
               },
@@ -457,6 +483,14 @@ await test("locked result page does not render paid report-model fields", () => 
               estimated_support_cost: 877.5,
               owner_lane: "Auth / Product UX",
               evidence_tier: "csv_customer_text",
+              product_gap_summary: "Hidden fallback product gap summary",
+              customer_vocabulary: ["hidden fallback vocabulary"],
+              cost_period: "batch_upload",
+              cost_confidence: "benchmark_with_customer_text",
+              jira_template: {
+                product_gap_summary: "Hidden fallback Jira summary",
+                recommended_action: "Hidden fallback Jira action",
+              },
               top_evidence: [
                 {
                   source_id: "zendesk:top-evidence-source",
@@ -483,6 +517,15 @@ await test("locked result page does not render paid report-model fields", () => 
     "Owner: Auth / Product UX",
     "Estimated handling: $878",
     "Evidence: CSV customer text",
+    "Hidden product gap summary",
+    "hidden customer vocabulary",
+    "Hidden Jira product gap summary",
+    "Hidden Jira next action",
+    "Hidden fallback product gap summary",
+    "hidden fallback vocabulary",
+    "Hidden fallback Jira summary",
+    "Hidden fallback Jira action",
+    "benchmark cost with customer text",
     "zendesk:top-evidence-source",
     "private top evidence quote",
   ]) {

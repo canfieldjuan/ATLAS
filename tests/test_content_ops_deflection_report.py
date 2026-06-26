@@ -682,8 +682,118 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
     assert priority_item["routing_signals"]["organization"] == ["Billing Team LLC"]
     assert priority_item["routing_signals"]["assignee"] == ["Export Agent"]
     assert priority_item["routing_signals"]["brand"] == ["Admin Co"]
+    assert priority_item["product_gap_summary"] == (
+        "Repeated support friction routes to Auth / Product UX. "
+        "4 support tickets in this upload; estimated assisted-contact cost "
+        "is $54 based on CSV customer text."
+    )
+    assert priority_item["customer_vocabulary"] == [
+        "Where is the login button?",
+        "button login",
+    ]
+    assert priority_item["cost_period"] == "batch_upload"
+    assert priority_item["cost_confidence"] == "benchmark_with_customer_text"
+    assert priority_item["jira_template"] == {
+        "recommended_title": "Where is the login button?",
+        "question": "Where is the login button?",
+        "owner_lane": "Auth / Product UX",
+        "product_gap_summary": priority_item["product_gap_summary"],
+        "ticket_count": 4,
+        "estimated_support_cost": 54.0,
+        "cost_period": "batch_upload",
+        "cost_confidence": "benchmark_with_customer_text",
+        "evidence_tier": "csv_customer_text",
+        "customer_vocabulary": [
+            "Where is the login button?",
+            "button login",
+        ],
+        "recommended_action": (
+            "Write and approve the missing answer for this repeated customer question."
+        ),
+    }
     assert "Account Settings" not in priority_item["recommended_action"]
     assert "buried" not in priority_item["recommended_action"].lower()
+    assert "Account Settings" not in priority_item["product_gap_summary"]
+    assert "buried" not in priority_item["product_gap_summary"].lower()
+
+
+def test_product_gap_summary_does_not_copy_root_cause_or_screen_path_question() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=3,
+        ticket_source_count=3,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "Why is the login button buried under Account Settings?",
+                "customer_wording": "Why is the login button buried under Account Settings?",
+                "topic": "login",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 10,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-login-1", "ticket-login-2", "ticket-login-3"),
+            },
+        ),
+    )
+
+    model = build_deflection_report_model(result).as_dict()
+    priority_item = next(
+        section
+        for section in model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+
+    assert priority_item["owner_lane"] == "Auth / Product UX"
+    assert priority_item["product_gap_summary"] == (
+        "Repeated support friction routes to Auth / Product UX. "
+        "3 support tickets in this upload; estimated assisted-contact cost "
+        "is $41 based on CSV index metadata only."
+    )
+    assert "Account Settings" not in priority_item["product_gap_summary"]
+    assert "buried" not in priority_item["product_gap_summary"].lower()
+    assert "Why is the login button" not in priority_item["product_gap_summary"]
+
+
+def test_product_gap_summary_is_omitted_for_non_repeated_low_confidence_rows() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=1,
+        ticket_source_count=1,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I rename a workspace?",
+                "customer_wording": "How do I rename a workspace?",
+                "topic": "workspace",
+                "weighted_frequency": 1,
+                "ticket_count": 1,
+                "opportunity_score": 3,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-single-1",),
+            },
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "",
+                "weighted_frequency": 0,
+                "ticket_count": 0,
+                "opportunity_score": 0,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (),
+            },
+        ),
+    )
+
+    model = build_deflection_report_model(result).as_dict()
+    sections = {section["id"]: section for section in model["sections"]}
+    action_items = sections["priority_fix_queue"]["data"]["items"]
+
+    assert [item["ticket_count"] for item in action_items] == [1, 0]
+    assert all(item["status"] == "Low confidence" for item in action_items)
+    assert all(item["product_gap_summary"] == "" for item in action_items)
+    assert "repeated across 1" not in str(action_items)
+    assert "0 support tickets" not in str(action_items)
 
 
 def test_owner_lane_keyword_matching_uses_tokens_not_substrings() -> None:
@@ -1923,11 +2033,21 @@ def test_deflection_report_projection_separates_paid_and_hosted_action_fields() 
         "opportunity_score",
         "top_evidence",
     }
+    additive_action_context_fields = {
+        "evidence_tier",
+        "routing_signals",
+        "product_gap_summary",
+        "customer_vocabulary",
+        "cost_period",
+        "cost_confidence",
+        "jira_template",
+    }
 
     for section_id in action_section_ids:
         collection = sections[section_id]["collection"]
         projected = set(collection["projected_fields"])
         hosted_safe = set(collection["hosted_consumer_safe_fields"])
+        optional = set(collection["optional_projected_fields"])
         nested = {entry["field"]: entry for entry in collection["nested_object_fields"]}
         nested_collections = {
             entry["field"]: entry
@@ -1936,6 +2056,8 @@ def test_deflection_report_projection_separates_paid_and_hosted_action_fields() 
 
         assert collection["field"] == "items"
         assert paid_only_action_fields <= projected
+        assert additive_action_context_fields <= optional
+        assert optional <= projected
         assert hosted_safe < projected
         assert paid_only_action_fields.isdisjoint(hosted_safe)
         assert nested["csat_signal"]["hosted_consumer_safe_fields"] == [
