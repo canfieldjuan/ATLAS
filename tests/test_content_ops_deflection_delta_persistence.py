@@ -82,6 +82,7 @@ async def _save(
     model: dict[str, object] | None = None,
     paid: bool = True,
     created_at: datetime,
+    paid_at: datetime | None = None,
 ) -> None:
     await store.save_report(
         account_id=account_id,
@@ -92,6 +93,8 @@ async def _save(
     store._created_at_by_key[(account_id, request_id)] = created_at
     if paid:
         assert await store.mark_paid(account_id=account_id, request_id=request_id)
+        if paid_at is not None:
+            store._paid_at_by_key[(account_id, request_id)] = paid_at
 
 
 @pytest.mark.asyncio
@@ -146,6 +149,37 @@ async def test_in_memory_select_previous_paid_report_is_scoped_paid_and_ordered(
         account_id="acct-1",
         current_request_id="current",
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_in_memory_paid_account_discovery_orders_by_paid_activity() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-old-report-recent-pay",
+        request_id="old-report",
+        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 10, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-new-report-old-pay",
+        request_id="new-report",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-unpaid",
+        request_id="newer-unpaid",
+        paid=False,
+        created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+    )
+
+    assert await store.list_paid_report_accounts(limit=10) == (
+        "acct-old-report-recent-pay",
+        "acct-new-report-old-pay",
+    )
 
 
 @pytest.mark.asyncio
@@ -518,5 +552,8 @@ async def test_postgres_paid_account_discovery_is_paid_scoped_ordered_and_bounde
     assert args == (7,)
     assert "WHERE paid = true" in query
     assert "GROUP BY account_id" in query
-    assert "ORDER BY MAX(created_at) DESC, account_id ASC" in query
+    assert (
+        "ORDER BY MAX(COALESCE(paid_at, updated_at, created_at)) DESC, account_id ASC"
+        in query
+    )
     assert "LIMIT $1" in query
