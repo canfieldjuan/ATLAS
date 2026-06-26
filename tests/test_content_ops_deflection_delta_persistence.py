@@ -6,6 +6,7 @@ import pytest
 from extracted_content_pipeline.deflection_report_access import (
     DeflectionDeltaBatchSummary,
     DeflectionDeltaReadError,
+    DeflectionReportListRecord,
     InMemoryDeflectionReportArtifactStore,
     PostgresDeflectionReportArtifactStore,
     compute_and_save_previous_deflection_delta,
@@ -279,6 +280,49 @@ async def test_recent_delta_batch_discovers_paid_accounts_and_stays_tenant_scope
         current_request_id="acct-2-current",
         baseline_request_id="acct-1-current",
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_recent_delta_batch_logs_per_report_failures(caplog) -> None:
+    class _FailingStore:
+        async def list_paid_report_accounts(self, *, limit: int | None = 100) -> tuple[str, ...]:
+            return ("acct-1",)
+
+        async def list_reports(
+            self,
+            *,
+            account_id: str,
+            limit: int | None = 25,
+            paid: bool | None = None,
+        ) -> tuple[DeflectionReportListRecord, ...]:
+            return (
+                DeflectionReportListRecord(
+                    account_id=account_id,
+                    request_id="broken-report",
+                    snapshot={},
+                    paid=True,
+                ),
+            )
+
+        async def get_artifact_record(self, *, account_id: str, request_id: str) -> None:
+            raise RuntimeError("delta source exploded")
+
+    caplog.set_level("WARNING", logger="extracted_content_pipeline.deflection_report_access")
+
+    summary = await compute_and_save_recent_deflection_deltas(
+        _FailingStore(),
+        account_limit=10,
+        reports_per_account=10,
+    )
+
+    assert summary == DeflectionDeltaBatchSummary(
+        accounts_scanned=1,
+        reports_scanned=1,
+        deltas_saved=0,
+        skipped_no_delta=0,
+        failed=1,
+    )
+    assert "account=acct-1 report=broken-report" in caplog.text
 
 
 @pytest.mark.asyncio
