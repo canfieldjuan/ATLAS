@@ -647,7 +647,7 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
             "Subject": "Where is the login button?",
             "Requester Comment": "Where is the login button?",
             "Created At": f"2026-05-0{index}T09:00:00Z",
-            "Group": "Support Queue",
+            "Group": "Billing Support",
             "Tags": "navigation",
             "Organization": "Billing Team LLC",
             "Assignee": "Export Agent",
@@ -675,7 +675,7 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
     assert priority_item["ticket_count"] == 4
     assert priority_item["estimated_support_cost"] == 54.0
     assert priority_item["evidence_tier"] == "csv_customer_text"
-    assert priority_item["routing_signals"]["group"] == ["Support Queue"]
+    assert priority_item["routing_signals"]["group"] == ["Billing Support"]
     assert priority_item["routing_signals"]["tags"] == ["navigation"]
     assert priority_item["routing_signals"]["organization"] == ["Billing Team LLC"]
     assert priority_item["routing_signals"]["assignee"] == ["Export Agent"]
@@ -5327,7 +5327,6 @@ def test_stored_deflection_report_model_backfills_legacy_action_owner_metadata()
 
     assert normalized_item["evidence_tier"] == "csv_index_metadata_only"
     assert normalized_item["routing_signals"] == {
-        "group": ["Support Queue"],
         "tags": ["login"],
         "product_area": ["Authentication"],
         "custom_product_area": [],

@@ -110,7 +110,7 @@ def test_deflection_report_model_types_publish_hosted_safe_allowlists() -> None:
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        '["group", "tags", "product_area", "custom_product_area"]'
+        '["tags", "product_area", "custom_product_area"]'
     ) in rendered
     assert (
         "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "
@@ -192,7 +192,7 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        'Object.freeze(["group", "tags", "product_area", "custom_product_area"])'
+        'Object.freeze(["tags", "product_area", "custom_product_area"])'
     ) in rendered
     assert (
         "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "

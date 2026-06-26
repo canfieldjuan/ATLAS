@@ -67,7 +67,7 @@ export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIE
 
 export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
 
-export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["group", "tags", "product_area", "custom_product_area"] as const;
+export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["tags", "product_area", "custom_product_area"] as const;
 
 export const DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
@@ -87,7 +87,7 @@ export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_HOSTED_CONSUMER_SAFE
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
 
-export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["group", "tags", "product_area", "custom_product_area"] as const;
+export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["tags", "product_area", "custom_product_area"] as const;
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
@@ -105,7 +105,7 @@ export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_HOSTED_CONSUMER_SAFE_FI
 
 export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
 
-export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["group", "tags", "product_area", "custom_product_area"] as const;
+export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["tags", "product_area", "custom_product_area"] as const;
 
 export const DEFLECTION_REPORT_DRAFTED_RESOLUTIONS_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
@@ -123,7 +123,7 @@ export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_HOSTED_CONS
 
 export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
 
-export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["group", "tags", "product_area", "custom_product_area"] as const;
+export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["tags", "product_area", "custom_product_area"] as const;
 
 export const DEFLECTION_REPORT_ALREADY_COVERED_STILL_RECURRING_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
@@ -141,7 +141,7 @@ export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS =
 
 export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
 
-export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["group", "tags", "product_area", "custom_product_area"] as const;
+export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["tags", "product_area", "custom_product_area"] as const;
 
 export const DEFLECTION_REPORT_BACKLOG_TABLE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
@@ -171,7 +171,7 @@ export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSU
 
 export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = ["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"] as const;
 
-export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["group", "tags", "product_area", "custom_product_area"] as const;
+export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = ["tags", "product_area", "custom_product_area"] as const;
 
 export const DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = [] as const;
 
@@ -226,7 +226,6 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = {
     "numeric_average": "scalar",
   },
   "already_covered_still_recurring.items.routing_signals": {
-    "group": "scalar_array",
     "tags": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
@@ -258,7 +257,6 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = {
     "numeric_average": "scalar",
   },
   "backlog_table.items.routing_signals": {
-    "group": "scalar_array",
     "tags": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
@@ -289,7 +287,6 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = {
     "numeric_average": "scalar",
   },
   "drafted_resolutions.items.routing_signals": {
-    "group": "scalar_array",
     "tags": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
@@ -338,7 +335,6 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = {
     "numeric_average": "scalar",
   },
   "priority_fix_queue.items.routing_signals": {
-    "group": "scalar_array",
     "tags": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
@@ -442,7 +438,6 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = {
     "numeric_average": "scalar",
   },
   "suppressed_repeat_review_queue.items.routing_signals": {
-    "group": "scalar_array",
     "tags": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",
@@ -474,7 +469,6 @@ export const DEFLECTION_REPORT_HOSTED_FIELD_SHAPES = {
     "numeric_average": "scalar",
   },
   "top_unresolved_repeats.items.routing_signals": {
-    "group": "scalar_array",
     "tags": "scalar_array",
     "product_area": "scalar_array",
     "custom_product_area": "scalar_array",

@@ -906,8 +906,13 @@ _REPORT_ACTION_ROUTING_SIGNAL_FIELDS = (
     "product_area",
     "custom_product_area",
 )
-_REPORT_ACTION_ROUTING_LABEL_FIELDS = (
+_REPORT_ACTION_ROUTING_INFERENCE_FIELDS = (
     "group",
+    "tags",
+    "product_area",
+    "custom_product_area",
+)
+_REPORT_ACTION_ROUTING_HOSTED_FIELDS = (
     "tags",
     "product_area",
     "custom_product_area",
@@ -929,7 +934,7 @@ _REPORT_ACTION_ITEM_NESTED_FIELDS = (
     MappingProxyType({
         "field": "routing_signals",
         "projected_fields": _REPORT_ACTION_ROUTING_SIGNAL_FIELDS,
-        "hosted_consumer_safe_fields": _REPORT_ACTION_ROUTING_LABEL_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_ACTION_ROUTING_HOSTED_FIELDS,
     }),
 )
 _REPORT_ACTION_ITEM_NESTED_COLLECTIONS = (
@@ -3285,14 +3290,14 @@ def _action_owner_lane(
     *,
     routing_signals: Mapping[str, Any] | None = None,
 ) -> str:
-    mapped = _owner_lane_from_text(_routing_signals_text(routing_signals or {}))
-    if mapped:
-        return mapped
     mapped = _owner_lane_from_text(" ".join((
         _text(item.get("topic")),
         _text(item.get("question")),
         _text(item.get("customer_wording")),
     )))
+    if mapped:
+        return mapped
+    mapped = _owner_lane_from_text(_routing_signals_text(routing_signals or {}))
     if mapped:
         return mapped
     topic = _text(item.get("topic"))
@@ -3336,7 +3341,7 @@ def _routing_signal_texts(value: Any) -> list[str]:
 
 def _routing_signals_text(routing_signals: Mapping[str, Any]) -> str:
     parts: list[str] = []
-    for key in _REPORT_ACTION_ROUTING_LABEL_FIELDS:
+    for key in _REPORT_ACTION_ROUTING_INFERENCE_FIELDS:
         parts.extend(_routing_signal_texts(routing_signals.get(key)))
     return " ".join(parts)
 

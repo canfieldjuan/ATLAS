@@ -950,7 +950,6 @@ _STORED_ACTION_OWNER_METADATA_SECTIONS = frozenset({
     "suppressed_repeat_review_queue",
 })
 _STORED_ACTION_ROUTING_LABEL_FIELDS = (
-    "group",
     "tags",
     "product_area",
     "custom_product_area",
