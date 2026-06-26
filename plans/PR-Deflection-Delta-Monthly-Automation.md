@@ -142,11 +142,11 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/autonomous/scheduler.py` | 17 |
 | `atlas_brain/autonomous/tasks/__init__.py` | 1 |
-| `atlas_brain/autonomous/tasks/content_ops_deflection_delta_automation.py` | 74 |
+| `.github/workflows/atlas_content_ops_deflection_report_checks.yml` | 11 |
+| `atlas_brain/autonomous/tasks/content_ops_deflection_delta_automation.py` | 71 |
 | `atlas_brain/config.py` | 14 |
-| `.github/workflows/atlas_content_ops_deflection_report_checks.yml` | 9 |
-| `extracted_content_pipeline/deflection_report_access.py` | 115 |
-| `plans/PR-Deflection-Delta-Monthly-Automation.md` | 134 |
-| `tests/test_content_ops_deflection_delta_persistence.py` | 85 |
-| `tests/test_deflection_delta_automation_task.py` | 201 |
-| **Total** | **650** |
+| `extracted_content_pipeline/deflection_report_access.py` | 119 |
+| `plans/PR-Deflection-Delta-Monthly-Automation.md` | 152 |
+| `tests/test_content_ops_deflection_delta_persistence.py` | 122 |
+| `tests/test_deflection_delta_automation_task.py` | 216 |
+| **Total** | **723** |
