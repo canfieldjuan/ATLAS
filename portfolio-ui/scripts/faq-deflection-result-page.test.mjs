@@ -416,6 +416,16 @@ await test("unlocked paid result page renders CSV owner-lane gap card fields", (
   assert.match(html, /Customer vocabulary: login button, where do I sign in/);
   assert.match(html, /Jira handoff/);
   assert.match(html, /Review login discoverability and create the missing answer/);
+  assert.match(html, /Copy-ready Jira handoff/);
+  assert.match(html, /data-atlas-deflection-jira-handoff/);
+  assert.match(html, /data-atlas-deflection-jira-copy/);
+  assert.match(html, /Issue: Where is the login button\?/);
+  assert.match(html, /Owner lane: Auth \/ Product UX/);
+  assert.match(html, /Impact: 65 repeat tickets/);
+  assert.match(html, /Estimated handling cost: \$878/);
+  assert.match(html, /Cost basis: this upload \/ benchmark cost with customer text/);
+  assert.match(html, /Evidence tier: CSV customer text/);
+  assert.match(html, /Next action: Review login discoverability and create the missing answer/);
   assert.match(html, /routeable product friction, not exact UI root-cause proof/);
   assert.match(html, /Download evidence JSON/);
   assert.match(
@@ -521,6 +531,10 @@ await test("locked result page does not render paid report-model fields", () => 
     "hidden customer vocabulary",
     "Hidden Jira product gap summary",
     "Hidden Jira next action",
+    "Copy-ready Jira handoff",
+    "data-atlas-deflection-jira-handoff",
+    "data-atlas-deflection-jira-copy",
+    "Owner lane: Auth / Product UX",
     "Hidden fallback product gap summary",
     "hidden fallback vocabulary",
     "Hidden fallback Jira summary",
