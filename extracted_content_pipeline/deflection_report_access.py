@@ -322,9 +322,31 @@ class InMemoryDeflectionReportArtifactStore:
             for (row_account, _request_id), row in self._rows.items()
             if row_account == resolved_account and (paid is None or row.paid is paid)
         ]
-        selected_rows = rows if limit is None else rows[-_bounded_limit(limit):]
+        fallback = datetime.min.replace(tzinfo=timezone.utc)
+        if paid is True:
+            rows.sort(key=lambda row: row.request_id)
+            rows.sort(
+                key=lambda row: self._paid_at_by_key.get(
+                    (row.account_id, row.request_id),
+                    self._created_at_by_key.get(
+                        (row.account_id, row.request_id),
+                        fallback,
+                    ),
+                ),
+                reverse=True,
+            )
+        else:
+            rows.sort(key=lambda row: row.request_id)
+            rows.sort(
+                key=lambda row: self._created_at_by_key.get(
+                    (row.account_id, row.request_id),
+                    fallback,
+                ),
+                reverse=True,
+            )
+        selected_rows = rows if limit is None else rows[:_bounded_limit(limit)]
         out: list[DeflectionReportListRecord] = []
-        for row in reversed(selected_rows):
+        for row in selected_rows:
             out.append(
                 DeflectionReportListRecord(
                     account_id=row.account_id,
@@ -670,13 +692,18 @@ class PostgresDeflectionReportArtifactStore:
             args.append(_bounded_limit(limit))
             limit_arg = len(args)
             limit_clause = f"LIMIT ${limit_arg}"
+        order_clause = (
+            "ORDER BY COALESCE(paid_at, updated_at, created_at) DESC, request_id ASC"
+            if paid is True
+            else "ORDER BY created_at DESC, request_id ASC"
+        )
         rows = await self.pool.fetch(
             f"""
             SELECT account_id, request_id, snapshot, paid, delivery_email, created_at, updated_at
             FROM content_ops_deflection_reports
             WHERE account_id = $1
               {paid_clause}
-            ORDER BY created_at DESC
+            {order_clause}
             {limit_clause}
             """,
             *args,
