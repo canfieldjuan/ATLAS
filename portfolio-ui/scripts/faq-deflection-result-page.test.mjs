@@ -135,6 +135,18 @@ function mockResponse() {
   };
 }
 
+function parseQaObservation(html) {
+  const match = html.match(/data-atlas-deflection-qa-observation="([^"]+)"/);
+  assert.ok(match, "missing result-page QA observation");
+  const decoded = match[1]
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+  return JSON.parse(decoded);
+}
+
 async function withEnv(nextEnv, fn) {
   const previous = {};
   for (const key of Object.keys(nextEnv)) {
@@ -432,6 +444,13 @@ await test("unlocked paid result page renders CSV owner-lane gap card fields", (
     html,
     /\/api\/content-ops\/deflection\/evidence-export\?request_id=content-ops-owner-lane/,
   );
+  assert.deepEqual(parseQaObservation(html).displayed_rows, {
+    ranked_questions: 1,
+    question_details: 1,
+    product_gap_cards: 1,
+    jira_handoffs: 1,
+    seo_targets: 1,
+  });
   assert.doesNotMatch(html, /zendesk:10422/);
   assert.doesNotMatch(html, /raw source quote should stay out of cards/);
 });

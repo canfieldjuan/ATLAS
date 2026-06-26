@@ -668,7 +668,8 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
     package = build_support_ticket_input_package(rows)
     faq_result = build_ticket_faq_markdown(package.inputs["source_material"], max_items=4)
 
-    model = build_deflection_report_model(faq_result).as_dict()
+    artifact = build_deflection_report_artifact(faq_result)
+    model = artifact.report_model.as_dict()
     sections = {section["id"]: section for section in model["sections"]}
     priority_item = sections["priority_fix_queue"]["data"]["items"][0]
 
@@ -715,6 +716,37 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
     assert "buried" not in priority_item["recommended_action"].lower()
     assert "Account Settings" not in priority_item["product_gap_summary"]
     assert "buried" not in priority_item["product_gap_summary"].lower()
+
+    evidence_export = build_deflection_evidence_export(artifact)
+    assert evidence_export["summary"] == {
+        "question_count": 1,
+        "evidence_row_count": 4,
+        "source_id_count": 4,
+        "drafted_answer_count": 0,
+        "no_proven_answer_count": 1,
+    }
+    assert evidence_export["questions"][0]["question"] == "Where is the login button?"
+    assert evidence_export["questions"][0]["ticket_count"] == 4
+    assert evidence_export["questions"][0]["answer_linkage"] == "needs_review"
+    assert evidence_export["questions"][0]["source_ids"] == [
+        "zd-login-1",
+        "zd-login-2",
+        "zd-login-3",
+        "zd-login-4",
+    ]
+    login_rows = [
+        row
+        for row in evidence_export["evidence_rows"]
+        if row["question"] == "Where is the login button?"
+    ]
+    assert len(login_rows) == 4
+    assert {row["source_id"] for row in login_rows} == {
+        "zd-login-1",
+        "zd-login-2",
+        "zd-login-3",
+        "zd-login-4",
+    }
+    assert {row["answer_linkage"] for row in login_rows} == {"needs_review"}
 
 
 def test_product_gap_summary_does_not_copy_root_cause_or_screen_path_question() -> None:
@@ -3232,10 +3264,14 @@ def test_deflection_full_report_qa_harness_defers_result_page_action_row_observe
                     "estimated_support_cost": counts["estimated_support_cost"],
                     "evidence_row_count": len(export["evidence_rows"]),
                     "source_id_count": export["summary"]["source_id_count"],
+                    "product_gap_card_count": counts["product_gap_card_count"],
+                    "jira_handoff_count": counts["jira_handoff_count"],
                 },
                 "displayed_rows": {
                     "ranked_questions": counts["ranked_question_count"],
                     "question_details": counts["question_detail_count"],
+                    "product_gap_cards": counts["product_gap_card_count"],
+                    "jira_handoffs": counts["jira_handoff_count"],
                     "seo_targets": counts["seo_total_phrase_count"],
                     "outcome_diagnostics": counts["outcome_diagnostic_row_count"],
                 },
