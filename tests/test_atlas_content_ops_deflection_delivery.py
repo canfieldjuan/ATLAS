@@ -536,6 +536,7 @@ async def test_send_pending_deflection_delta_deliveries_dry_run_does_not_mutate(
     assert summary.scanned == 1
     assert summary.sent == 0
     assert summary.failed == 0
+    assert summary.deferred == 0
     assert summary.dry_run == 1
     assert sender.requests == []
     assert pool.fetchrow_calls == []
@@ -590,7 +591,8 @@ async def test_send_pending_deflection_delta_deliveries_defers_unpaid_sources(
         ),
     )
 
-    assert summary.failed == 1
+    assert summary.failed == 0
+    assert summary.deferred == 1
     assert sender.requests == []
     deferred_query, deferred_args = pool.execute_calls[-1]
     assert "delivery_status = 'pending'" in deferred_query
@@ -619,7 +621,8 @@ async def test_send_pending_deflection_delta_deliveries_defers_when_no_longer_se
         ),
     )
 
-    assert summary.failed == 1
+    assert summary.failed == 0
+    assert summary.deferred == 1
     assert sender.requests == []
     deferred_query, deferred_args = pool.execute_calls[-1]
     assert "delivery_status = 'pending'" in deferred_query
@@ -669,6 +672,7 @@ async def test_send_pending_deflection_delta_deliveries_rejects_empty_payload(
     )
 
     assert summary_result.failed == 1
+    assert summary_result.deferred == 0
     assert sender.requests == []
     failed_query, failed_args = pool.execute_calls[-1]
     assert "delivery_status = 'failed'" in failed_query
@@ -699,6 +703,7 @@ async def test_send_pending_deflection_delta_deliveries_logs_and_incidents_on_se
     )
 
     assert summary.failed == 1
+    assert summary.deferred == 0
     failed_query, failed_args = pool.execute_calls[-1]
     assert "delivery_status = 'failed'" in failed_query
     assert failed_args[-1] == "RuntimeError: resend down"

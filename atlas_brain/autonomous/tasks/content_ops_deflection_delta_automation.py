@@ -140,6 +140,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "delivery_scanned": delivery_summary.scanned if delivery_summary else 0,
         "delivery_sent": delivery_summary.sent if delivery_summary else 0,
         "delivery_failed": delivery_summary.failed if delivery_summary else 0,
+        "delivery_deferred": (
+            getattr(delivery_summary, "deferred", 0) if delivery_summary else 0
+        ),
         "delivery_dry_run": delivery_summary.dry_run if delivery_summary else 0,
         "delivery_dry_run_enabled": dry_run,
         "account_limit_reached": summary.account_limit_reached,
@@ -173,11 +176,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         }
     if summary.failed >= summary.reports_scanned:
         raise RuntimeError("Deflection delta automation failed for all scanned reports")
-    if delivery_summary and delivery_summary.failed:
+    if delivery_summary and (
+        delivery_summary.failed or getattr(delivery_summary, "deferred", 0)
+    ):
         if (
             not dry_run
             and delivery_summary.scanned > 0
             and delivery_summary.sent == 0
+            and delivery_summary.failed >= delivery_summary.scanned
         ):
             raise RuntimeError("Deflection delta delivery failed for all scanned deliveries")
         return {"_skip_synthesis": "Deflection delta delivery degraded", **payload}

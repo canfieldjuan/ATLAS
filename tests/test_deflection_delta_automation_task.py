@@ -185,6 +185,7 @@ async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
         "delivery_scanned": 0,
         "delivery_sent": 0,
         "delivery_failed": 0,
+        "delivery_deferred": 0,
         "delivery_dry_run": 0,
         "delivery_dry_run_enabled": False,
         "account_limit_reached": False,
@@ -243,6 +244,7 @@ async def test_run_drains_delta_delivery_when_generation_enqueues_work(
     assert result["delta_deliveries_enqueued"] == 1
     assert result["delivery_scanned"] == 1
     assert result["delivery_dry_run"] == 1
+    assert result["delivery_deferred"] == 0
     assert result["_skip_synthesis"] == "Deflection delta automation complete"
 
 
@@ -281,6 +283,7 @@ async def test_run_drains_existing_delta_delivery_when_no_new_row_enqueued(
     assert delivery_calls == 1
     assert result["delta_deliveries_enqueued"] == 0
     assert result["delivery_scanned"] == 1
+    assert result["delivery_deferred"] == 0
 
 
 @pytest.mark.asyncio
@@ -351,6 +354,7 @@ async def test_run_reports_degraded_when_some_reports_fail(
         "delivery_scanned": 0,
         "delivery_sent": 0,
         "delivery_failed": 0,
+        "delivery_deferred": 0,
         "delivery_dry_run": 0,
         "delivery_dry_run_enabled": False,
         "account_limit_reached": False,
@@ -367,11 +371,26 @@ async def test_run_reports_delivery_degraded_before_generation_degraded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_delta_settings(monkeypatch)
-    monkeypatch.setattr(mod.settings.deflection_delivery, "from_email", "reports@example.com", raising=False)
-    monkeypatch.setattr(mod.settings.deflection_delivery, "resend_api_key", "resend-key", raising=False)
+    monkeypatch.setattr(
+        mod.settings.deflection_delivery,
+        "from_email",
+        "reports@example.com",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        mod.settings.deflection_delivery,
+        "resend_api_key",
+        "resend-key",
+        raising=False,
+    )
     pool = _Pool(is_initialized=True)
 
-    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+    async def _compute(
+        _store: Any,
+        *,
+        account_limit: int,
+        reports_per_account: int,
+    ) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=2,
             reports_scanned=3,
@@ -394,6 +413,43 @@ async def test_run_reports_delivery_degraded_before_generation_degraded(
     assert result["_skip_synthesis"] == "Deflection delta delivery degraded"
     assert result["failed"] == 1
     assert result["delivery_failed"] == 1
+    assert result["delivery_deferred"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_reports_deferred_delivery_without_total_failure_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "from_email", "reports@example.com", raising=False)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "resend_api_key", "resend-key", raising=False)
+    pool = _Pool(is_initialized=True)
+
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=1,
+            reports_scanned=2,
+            deltas_saved=1,
+            skipped_no_delta=1,
+            delta_deliveries_enqueued=1,
+        )
+
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+        assert pool_arg is pool
+        assert config.dry_run is False
+        return SimpleNamespace(scanned=2, sent=0, failed=0, deferred=2, dry_run=0)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", _send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert result["_skip_synthesis"] == "Deflection delta delivery degraded"
+    assert result["delivery_scanned"] == 2
+    assert result["delivery_sent"] == 0
+    assert result["delivery_failed"] == 0
+    assert result["delivery_deferred"] == 2
 
 
 @pytest.mark.asyncio
@@ -470,6 +526,7 @@ async def test_run_reports_scan_window_saturation_without_failing(
         "delivery_scanned": 0,
         "delivery_sent": 0,
         "delivery_failed": 0,
+        "delivery_deferred": 0,
         "delivery_dry_run": 0,
         "delivery_dry_run_enabled": False,
         "account_limit_reached": True,
@@ -524,6 +581,7 @@ async def test_run_reports_scan_window_overflow_before_saturation_warning(
         "delivery_scanned": 0,
         "delivery_sent": 0,
         "delivery_failed": 0,
+        "delivery_deferred": 0,
         "delivery_dry_run": 0,
         "delivery_dry_run_enabled": False,
         "account_limit_reached": True,
