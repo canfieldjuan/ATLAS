@@ -62,6 +62,7 @@ pytest \
   tests/test_content_ops_deflection_report.py \
   tests/test_content_ops_deflection_delta.py \
   tests/test_content_ops_deflection_delta_persistence.py \
+  tests/test_content_ops_deflection_delta_go_live_runbook.py \
   tests/test_content_ops_deflection_resolution_live_proof.py \
   tests/test_extracted_content_deflection_submit.py \
   tests/test_prepare_content_ops_deflection_env.py \
