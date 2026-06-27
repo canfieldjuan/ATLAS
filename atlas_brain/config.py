@@ -4038,6 +4038,19 @@ class DeflectionDeliveryConfig(BaseSettings):
     resend_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0, description="Timeout for Resend email send requests")
 
 
+class DeflectionDeltaConfig(BaseSettings):
+    """Paid Content Ops deflection delta automation configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_DEFLECTION_DELTA_", env_file=ENV_FILES, extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable scheduled paid deflection delta generation")
+    cron_expression: str = Field(default="0 8 1 * *", description="Cron expression for monthly deflection delta generation")
+    account_limit: int = Field(default=100, ge=1, le=100, description="Maximum paid-report accounts scanned per run")
+    reports_per_account: int = Field(default=25, ge=1, le=100, description="Maximum recent paid reports scanned per account")
+
+
 class B2BWebhookConfig(BaseSettings):
     """B2B outbound webhook delivery configuration."""
 
@@ -5765,6 +5778,7 @@ class Settings(BaseSettings):
     b2b_watchlist_delivery: B2BWatchlistDeliveryConfig = Field(default_factory=B2BWatchlistDeliveryConfig)
     b2b_report_delivery: B2BReportDeliveryConfig = Field(default_factory=B2BReportDeliveryConfig)
     deflection_delivery: DeflectionDeliveryConfig = Field(default_factory=DeflectionDeliveryConfig)
+    deflection_delta: DeflectionDeltaConfig = Field(default_factory=DeflectionDeltaConfig)
     b2b_webhook: B2BWebhookConfig = Field(default_factory=B2BWebhookConfig)
     crm_event: CRMEventConfig = Field(default_factory=CRMEventConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)

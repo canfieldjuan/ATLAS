@@ -181,6 +181,8 @@ def test_snapshot_ranked_coverage_matches_report_ranked_questions(artifact_snaps
 
     snapshot_ranks = {q["rank"] for q in snapshot["top_questions"]}
     snapshot_ranks |= {q["rank"] for q in snapshot["locked_questions"]}
+    snapshot_ranks |= {q["rank"] for q in snapshot["top_blind_spots"]}
+    snapshot_ranks |= {q["rank"] for q in snapshot["teaser"]["previews"]}
     full_answer = snapshot["teaser"]["full_answer"]
     if isinstance(full_answer, Mapping):
         snapshot_ranks.add(full_answer["rank"])
@@ -188,6 +190,20 @@ def test_snapshot_ranked_coverage_matches_report_ranked_questions(artifact_snaps
     # The snapshot must cover exactly the report's ranked questions: a report
     # that adds or drops a ranked question must change the snapshot in lockstep.
     assert snapshot_ranks == ranked_ranks
+
+
+def test_snapshot_locked_questions_exclude_visible_ranks(artifact_snapshot) -> None:
+    _, snapshot, _, _ = artifact_snapshot
+    visible_ranks = {q["rank"] for q in snapshot["top_questions"]}
+    visible_ranks |= {q["rank"] for q in snapshot["top_blind_spots"]}
+    visible_ranks |= {q["rank"] for q in snapshot["teaser"]["previews"]}
+    full_answer = snapshot["teaser"]["full_answer"]
+    if isinstance(full_answer, Mapping):
+        visible_ranks.add(full_answer["rank"])
+
+    locked_ranks = {q["rank"] for q in snapshot["locked_questions"]}
+
+    assert visible_ranks.isdisjoint(locked_ranks)
 
 
 def test_snapshot_summary_is_derived_from_report(artifact_snapshot) -> None:
@@ -235,7 +251,6 @@ def test_snapshot_locked_questions_expose_rank_and_count_only(artifact_snapshot)
     _, snapshot, _, sections = artifact_snapshot
     ranked = _rows_by_rank(sections.get("ranked_questions"))
 
-    assert snapshot["locked_questions"], "expected locked questions at top_n=2"
     for locked in snapshot["locked_questions"]:
         assert set(locked) == {"rank", "ticket_count"}
         assert locked["ticket_count"] == ranked[locked["rank"]]["ticket_count"]

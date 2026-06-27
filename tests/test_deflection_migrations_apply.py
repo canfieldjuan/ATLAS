@@ -11,6 +11,7 @@ This check is scoped to the deflection chain, which has no such dependency:
 - 337 reconciliation NULL-session dedup (NOT NULL stripe_session_id)
 - 339 content_ops_deflection_reports retention index
 - 340 content_ops_deflection_deltas
+- 341 content_ops_deflection_delta_deliveries
 
 It applies those files in order to a fresh Postgres database and verifies the
 tables exist and the reconciliation table's idempotency constraint holds --
@@ -39,6 +40,7 @@ DEFLECTION_MIGRATION_CHAIN = (
 NULL_SESSION_MIGRATION = "337_content_ops_deflection_reconciliation_null_session.sql"
 RETENTION_INDEX_MIGRATION = "339_content_ops_deflection_reports_retention_index.sql"
 DELTA_MIGRATION = "340_content_ops_deflection_deltas.sql"
+DELTA_DELIVERY_MIGRATION = "341_content_ops_deflection_delta_deliveries.sql"
 
 _TEST_ACCOUNT_ID = "acct-deflection-migration-apply-test"
 
@@ -73,6 +75,7 @@ async def _reset(conn) -> None:
     await conn.execute(
         "DROP TABLE IF EXISTS "
         "content_ops_deflection_paid_reconciliation, "
+        "content_ops_deflection_delta_deliveries, "
         "content_ops_deflection_deltas, "
         "content_ops_deflection_report_deliveries, "
         "content_ops_deflection_reports CASCADE"
@@ -95,6 +98,7 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             NULL_SESSION_MIGRATION,
             RETENTION_INDEX_MIGRATION,
             DELTA_MIGRATION,
+            DELTA_DELIVERY_MIGRATION,
         )
 
         existing = {
@@ -109,6 +113,7 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             "content_ops_deflection_report_deliveries",
             "content_ops_deflection_paid_reconciliation",
             "content_ops_deflection_deltas",
+            "content_ops_deflection_delta_deliveries",
         } <= existing
 
         recon_columns = {
@@ -161,6 +166,26 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             "created_at",
             "updated_at",
         } <= delta_columns
+
+        delta_delivery_columns = {
+            row["column_name"]
+            for row in await conn.fetch(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'content_ops_deflection_delta_deliveries'"
+            )
+        }
+        assert {
+            "account_id",
+            "current_request_id",
+            "baseline_request_id",
+            "delivery_email",
+            "delivery_status",
+            "delivery_error",
+            "provider_message_id",
+            "created_at",
+            "updated_at",
+            "delivered_at",
+        } <= delta_delivery_columns
 
         # Non-null dedup (ON CONFLICT DO NOTHING): a second event for the same
         # checkout must not create a duplicate ledger row.
@@ -227,10 +252,24 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             _TEST_ACCOUNT_ID,
             '{"schema_version":"deflection_delta.v1"}',
         )
+        await conn.execute(
+            "INSERT INTO content_ops_deflection_delta_deliveries "
+            "(account_id, current_request_id, baseline_request_id, delivery_email) "
+            "VALUES ($1, 'current-delta', 'baseline-delta', 'buyer@example.com')",
+            _TEST_ACCOUNT_ID,
+        )
         assert (
             await conn.fetchval(
                 "SELECT count(*) FROM content_ops_deflection_deltas "
                 "WHERE account_id = $1",
+                _TEST_ACCOUNT_ID,
+            )
+            == 1
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM content_ops_deflection_delta_deliveries "
+                "WHERE account_id = $1 AND delivery_status = 'pending'",
                 _TEST_ACCOUNT_ID,
             )
             == 1

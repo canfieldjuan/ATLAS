@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 from typing import Any, Protocol
 
@@ -16,6 +17,9 @@ from .storage._jsonb_helpers import (
     parse_command_tag,
     row_to_dict,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,38 @@ class DeflectionDeltaAccessRecord:
     updated_at: Any = None
 
 
+@dataclass(frozen=True)
+class DeflectionDeltaBatchSummary:
+    """Result of a tenant-scoped batch delta generation run."""
+
+    accounts_scanned: int
+    reports_scanned: int
+    deltas_saved: int
+    skipped_no_delta: int
+    delta_deliveries_enqueued: int = 0
+    failed: int = 0
+    account_limit_reached: bool = False
+    account_limit_overflow: bool = False
+    reports_per_account_limit_reached: bool = False
+    reports_per_account_limit_overflow: bool = False
+    report_limit_reached_accounts: tuple[str, ...] = ()
+    report_limit_overflow_accounts: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _BaselineCandidate:
+    created_at: datetime
+    request_id: str
+    row: DeflectionReportAccessRecord
+
+
+@dataclass(frozen=True)
+class _SourceWindowCandidate:
+    source_end: date
+    created_at: datetime
+    request_id: str
+
+
 class DeflectionDeltaReadError(ValueError):
     """Raised when a persisted delta is unavailable to a paid read surface."""
 
@@ -101,6 +137,23 @@ class DeflectionReportArtifactStore(Protocol):
         paid: bool | None = None,
     ) -> tuple[DeflectionReportListRecord, ...]:
         """List free report snapshots for one tenant, newest first."""
+
+    async def list_paid_report_accounts(
+        self,
+        *,
+        limit: int | None = 100,
+    ) -> tuple[str, ...]:
+        """List tenants with paid reports, newest paid activity first."""
+
+    async def count_paid_report_accounts(self) -> int:
+        """Count tenants that have at least one paid report."""
+
+    async def count_paid_reports(
+        self,
+        *,
+        account_id: str,
+    ) -> int:
+        """Count paid reports for one tenant."""
 
     async def get_artifact_record(
         self,
@@ -183,6 +236,16 @@ class DeflectionReportArtifactStore(Protocol):
     ) -> DeflectionDeltaAccessRecord | None:
         """Return one persisted delta only while both source reports are paid."""
 
+    async def enqueue_deflection_delta_delivery(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+        delivery_email: str,
+    ) -> bool:
+        """Queue one persisted delta for customer email delivery."""
+
 
 _DEFLECTION_DELTA_METADATA_FIELDS = (
     "schema_version",
@@ -243,10 +306,12 @@ class InMemoryDeflectionReportArtifactStore:
     def __init__(self) -> None:
         self._rows: dict[tuple[str, str], DeflectionReportAccessRecord] = {}
         self._created_at_by_key: dict[tuple[str, str], datetime] = {}
+        self._paid_at_by_key: dict[tuple[str, str], datetime] = {}
         self._deltas: dict[
             tuple[str, str, str],
             DeflectionDeltaAccessRecord,
         ] = {}
+        self._delta_delivery_keys: set[tuple[str, str, str]] = set()
 
     async def save_report(
         self,
@@ -299,9 +364,31 @@ class InMemoryDeflectionReportArtifactStore:
             for (row_account, _request_id), row in self._rows.items()
             if row_account == resolved_account and (paid is None or row.paid is paid)
         ]
-        selected_rows = rows if limit is None else rows[-_bounded_limit(limit):]
+        fallback = datetime.min.replace(tzinfo=timezone.utc)
+        if paid is True:
+            rows.sort(key=lambda row: row.request_id)
+            rows.sort(
+                key=lambda row: self._paid_at_by_key.get(
+                    (row.account_id, row.request_id),
+                    self._created_at_by_key.get(
+                        (row.account_id, row.request_id),
+                        fallback,
+                    ),
+                ),
+                reverse=True,
+            )
+        else:
+            rows.sort(key=lambda row: row.request_id)
+            rows.sort(
+                key=lambda row: self._created_at_by_key.get(
+                    (row.account_id, row.request_id),
+                    fallback,
+                ),
+                reverse=True,
+            )
+        selected_rows = rows if limit is None else rows[:_bounded_limit(limit)]
         out: list[DeflectionReportListRecord] = []
-        for row in reversed(selected_rows):
+        for row in selected_rows:
             out.append(
                 DeflectionReportListRecord(
                     account_id=row.account_id,
@@ -315,6 +402,51 @@ class InMemoryDeflectionReportArtifactStore:
                 )
             )
         return tuple(out)
+
+    async def list_paid_report_accounts(
+        self,
+        *,
+        limit: int | None = 100,
+    ) -> tuple[str, ...]:
+        newest_by_account: dict[str, datetime] = {}
+        fallback = datetime.min.replace(tzinfo=timezone.utc)
+        for key, row in self._rows.items():
+            account_id, _request_id = key
+            if not row.paid:
+                continue
+            paid_activity_at = self._paid_at_by_key.get(
+                key,
+                self._created_at_by_key.get(key, fallback),
+            )
+            if paid_activity_at > newest_by_account.get(account_id, fallback):
+                newest_by_account[account_id] = paid_activity_at
+        ordered_items = sorted(newest_by_account.items(), key=lambda item: item[0])
+        ordered_items.sort(key=lambda item: item[1], reverse=True)
+        ordered = [account_id for account_id, _activity_at in ordered_items]
+        if limit is None:
+            return tuple(ordered)
+        return tuple(ordered[:_bounded_limit(limit)])
+
+    async def count_paid_report_accounts(self) -> int:
+        return len(
+            {
+                account_id
+                for (account_id, _request_id), row in self._rows.items()
+                if row.paid
+            }
+        )
+
+    async def count_paid_reports(
+        self,
+        *,
+        account_id: str,
+    ) -> int:
+        resolved_account = _required_text(account_id, "account_id")
+        return sum(
+            1
+            for (row_account, _request_id), row in self._rows.items()
+            if row_account == resolved_account and row.paid
+        )
 
     async def get_artifact_record(
         self,
@@ -357,6 +489,7 @@ class InMemoryDeflectionReportArtifactStore:
             delivery_email=row.delivery_email,
             created_at=row.created_at,
         )
+        self._paid_at_by_key.setdefault(key, datetime.now(timezone.utc))
         return True
 
     async def count_reports_older_than(self, *, cutoff: datetime) -> int:
@@ -419,6 +552,7 @@ class InMemoryDeflectionReportArtifactStore:
             delivery_email=row.delivery_email,
             created_at=row.created_at,
         )
+        self._paid_at_by_key.pop(key, None)
         return True
 
     async def delete_report(
@@ -463,7 +597,11 @@ class InMemoryDeflectionReportArtifactStore:
         if current_created_at is None:
             return None
         candidates = [
-            (created_at, row.request_id)
+            _BaselineCandidate(
+                created_at=created_at,
+                request_id=row.request_id,
+                row=row,
+            )
             for (row_account, request_id), row in self._rows.items()
             if row_account == resolved_account
             and request_id != resolved_current
@@ -474,10 +612,41 @@ class InMemoryDeflectionReportArtifactStore:
         ]
         if not candidates:
             return None
-        _selected_created_at, selected_request_id = max(candidates)
+        current_source_start = _report_source_date(current, "source_date_start")
+        if current_source_start is not None:
+            source_candidates = [
+                _SourceWindowCandidate(
+                    source_end=source_end,
+                    created_at=candidate.created_at,
+                    request_id=candidate.request_id,
+                )
+                for candidate in candidates
+                if (
+                    source_end := _report_source_date(candidate.row, "source_date_end")
+                )
+                is not None
+                and source_end < current_source_start
+            ]
+            if source_candidates:
+                selected = max(
+                    source_candidates,
+                    key=lambda item: (
+                        item.source_end,
+                        item.created_at,
+                        item.request_id,
+                    ),
+                )
+                return await self.get_artifact_record(
+                    account_id=resolved_account,
+                    request_id=selected.request_id,
+                )
+        selected = max(
+            candidates,
+            key=lambda item: (item.created_at, item.request_id),
+        )
         return await self.get_artifact_record(
             account_id=resolved_account,
-            request_id=selected_request_id,
+            request_id=selected.request_id,
         )
 
     async def save_deflection_delta(
@@ -543,6 +712,21 @@ class InMemoryDeflectionReportArtifactStore:
             current_request_id=resolved_current,
             baseline_request_id=resolved_baseline,
         )
+
+    async def enqueue_deflection_delta_delivery(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+        delivery_email: str,
+    ) -> bool:
+        key = _delta_key(account_id, current_request_id, baseline_request_id)
+        _required_text(delivery_email, "delivery_email")
+        if key not in self._deltas or key in self._delta_delivery_keys:
+            return False
+        self._delta_delivery_keys.add(key)
+        return True
 
 
 @dataclass(frozen=True)
@@ -621,18 +805,76 @@ class PostgresDeflectionReportArtifactStore:
             args.append(_bounded_limit(limit))
             limit_arg = len(args)
             limit_clause = f"LIMIT ${limit_arg}"
+        order_clause = (
+            "ORDER BY COALESCE(paid_at, updated_at, created_at) DESC, request_id ASC"
+            if paid is True
+            else "ORDER BY created_at DESC, request_id ASC"
+        )
         rows = await self.pool.fetch(
             f"""
             SELECT account_id, request_id, snapshot, paid, delivery_email, created_at, updated_at
             FROM content_ops_deflection_reports
             WHERE account_id = $1
               {paid_clause}
-            ORDER BY created_at DESC
+            {order_clause}
             {limit_clause}
             """,
             *args,
         )
         return tuple(_list_record_from_row(row_to_dict(row)) for row in rows)
+
+    async def list_paid_report_accounts(
+        self,
+        *,
+        limit: int | None = 100,
+    ) -> tuple[str, ...]:
+        args: list[Any] = []
+        limit_clause = ""
+        if limit is not None:
+            args.append(_bounded_limit(limit))
+            limit_clause = "LIMIT $1"
+        rows = await self.pool.fetch(
+            f"""
+            SELECT account_id
+            FROM content_ops_deflection_reports
+            WHERE paid = true
+            GROUP BY account_id
+            ORDER BY MAX(COALESCE(paid_at, updated_at, created_at)) DESC, account_id ASC
+            {limit_clause}
+            """,
+            *args,
+        )
+        return tuple(
+            account_id
+            for row in rows
+            if (account_id := _clean(row_to_dict(row).get("account_id")))
+        )
+
+    async def count_paid_report_accounts(self) -> int:
+        row = await self.pool.fetchrow(
+            """
+            SELECT COUNT(DISTINCT account_id) AS count
+            FROM content_ops_deflection_reports
+            WHERE paid = true
+            """
+        )
+        return _row_count(row)
+
+    async def count_paid_reports(
+        self,
+        *,
+        account_id: str,
+    ) -> int:
+        row = await self.pool.fetchrow(
+            """
+            SELECT COUNT(*) AS count
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1
+              AND paid = true
+            """,
+            _required_text(account_id, "account_id"),
+        )
+        return _row_count(row)
 
     async def get_artifact_record(
         self,
@@ -798,27 +1040,85 @@ class PostgresDeflectionReportArtifactStore:
     ) -> DeflectionReportAccessRecord | None:
         row = await self.pool.fetchrow(
             """
-            WITH current_report AS (
-                SELECT created_at
+            WITH current_raw AS (
+                SELECT created_at,
+                       artifact #>> '{report_model,summary,source_date_start}' AS source_date_start
                 FROM content_ops_deflection_reports
                 WHERE account_id = $1
                   AND request_id = $2
                   AND paid = true
+            ),
+            current_report AS (
+                SELECT created_at,
+                       CASE
+                         WHEN source_date_start ~ '^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$'
+                          AND to_char(to_date(source_date_start, 'YYYY-MM-DD'), 'YYYY-MM-DD') = source_date_start
+                         THEN to_date(source_date_start, 'YYYY-MM-DD')
+                         ELSE NULL
+                       END AS source_date_start
+                FROM current_raw
+            ),
+            candidate_raw AS (
+                SELECT reports.account_id,
+                       reports.request_id,
+                       reports.snapshot,
+                       reports.artifact,
+                       reports.paid,
+                       reports.payment_reference,
+                       reports.delivery_email,
+                       reports.created_at,
+                       current_report.source_date_start AS current_source_date_start,
+                       reports.artifact #>> '{report_model,summary,source_date_end}' AS source_date_end
+                FROM content_ops_deflection_reports reports
+                JOIN current_report ON true
+                WHERE reports.account_id = $1
+                  AND reports.request_id <> $2
+                  AND reports.paid = true
+                  AND reports.created_at < current_report.created_at
+            ),
+            candidate_reports AS (
+                SELECT account_id,
+                       request_id,
+                       snapshot,
+                       artifact,
+                       paid,
+                       payment_reference,
+                       delivery_email,
+                       created_at,
+                       current_source_date_start,
+                       CASE
+                         WHEN source_date_end ~ '^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$'
+                          AND to_char(to_date(source_date_end, 'YYYY-MM-DD'), 'YYYY-MM-DD') = source_date_end
+                         THEN to_date(source_date_end, 'YYYY-MM-DD')
+                         ELSE NULL
+                       END AS source_date_end
+                FROM candidate_raw
             )
-            SELECT reports.account_id,
-                   reports.request_id,
-                   reports.snapshot,
-                   reports.artifact,
-                   reports.paid,
-                   reports.payment_reference,
-                   reports.delivery_email
-            FROM content_ops_deflection_reports reports
-            JOIN current_report ON true
-            WHERE reports.account_id = $1
-              AND reports.request_id <> $2
-              AND reports.paid = true
-              AND reports.created_at < current_report.created_at
-            ORDER BY reports.created_at DESC
+            SELECT account_id,
+                   request_id,
+                   snapshot,
+                   artifact,
+                   paid,
+                   payment_reference,
+                   delivery_email,
+                   created_at
+            FROM candidate_reports
+            ORDER BY CASE
+                       WHEN current_source_date_start IS NOT NULL
+                        AND source_date_end IS NOT NULL
+                        AND source_date_end < current_source_date_start
+                       THEN 0
+                       ELSE 1
+                     END,
+                     CASE
+                       WHEN current_source_date_start IS NOT NULL
+                        AND source_date_end IS NOT NULL
+                        AND source_date_end < current_source_date_start
+                       THEN source_date_end
+                       ELSE NULL
+                     END DESC NULLS LAST,
+                     created_at DESC,
+                     request_id DESC
             LIMIT 1
             """,
             _required_text(account_id, "account_id"),
@@ -921,6 +1221,64 @@ class PostgresDeflectionReportArtifactStore:
         )
         return _delta_record_from_row(row_to_dict(row)) if row is not None else None
 
+    async def enqueue_deflection_delta_delivery(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+        delivery_email: str,
+    ) -> bool:
+        key = _delta_key(account_id, current_request_id, baseline_request_id)
+        resolved_account, resolved_current, resolved_baseline = key
+        result = await self.pool.execute(
+            """
+            INSERT INTO content_ops_deflection_delta_deliveries (
+                account_id,
+                current_request_id,
+                baseline_request_id,
+                delivery_email,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (account_id, current_request_id, baseline_request_id)
+            DO UPDATE
+            SET delivery_email = EXCLUDED.delivery_email,
+                delivery_status = CASE
+                    WHEN content_ops_deflection_delta_deliveries.delivery_status = 'failed'
+                     AND content_ops_deflection_delta_deliveries.delivery_error IN (
+                         'source_report_not_paid',
+                         'delta_no_longer_sendable'
+                     )
+                        THEN 'pending'
+                    ELSE content_ops_deflection_delta_deliveries.delivery_status
+                END,
+                delivery_error = CASE
+                    WHEN content_ops_deflection_delta_deliveries.delivery_status = 'failed'
+                     AND content_ops_deflection_delta_deliveries.delivery_error IN (
+                         'source_report_not_paid',
+                         'delta_no_longer_sendable'
+                     )
+                        THEN NULL
+                    ELSE content_ops_deflection_delta_deliveries.delivery_error
+                END,
+                updated_at = NOW()
+            WHERE content_ops_deflection_delta_deliveries.delivery_status = 'pending'
+               OR (
+                    content_ops_deflection_delta_deliveries.delivery_status = 'failed'
+                    AND content_ops_deflection_delta_deliveries.delivery_error IN (
+                        'source_report_not_paid',
+                        'delta_no_longer_sendable'
+                    )
+               )
+            """,
+            resolved_account,
+            resolved_current,
+            resolved_baseline,
+            _required_text(delivery_email, "delivery_email"),
+        )
+        return parse_command_tag(result) > 0
+
 
 _STORED_ACTION_SECTION_LIMIT_DEFAULTS = {
     "priority_fix_queue": {
@@ -941,6 +1299,19 @@ _STORED_ACTION_SECTION_LIMIT_DEFAULTS = {
         "pdf_limit": 10,
     },
 }
+_STORED_ACTION_OWNER_METADATA_SECTIONS = frozenset({
+    "priority_fix_queue",
+    "top_unresolved_repeats",
+    "drafted_resolutions",
+    "already_covered_still_recurring",
+    "backlog_table",
+    "suppressed_repeat_review_queue",
+})
+_STORED_ACTION_ROUTING_LABEL_FIELDS = (
+    "tags",
+    "product_area",
+    "custom_product_area",
+)
 
 
 def _record_from_row(row: Mapping[str, Any]) -> DeflectionReportAccessRecord:
@@ -956,6 +1327,27 @@ def _record_from_row(row: Mapping[str, Any]) -> DeflectionReportAccessRecord:
         delivery_email=_clean(row.get("delivery_email")) or None,
         created_at=row.get("created_at"),
     )
+
+
+def _report_source_date(
+    record: DeflectionReportAccessRecord,
+    field: str,
+) -> date | None:
+    model = record.report_model()
+    summary = model.get("summary") if isinstance(model, Mapping) else {}
+    if not isinstance(summary, Mapping):
+        return None
+    return _strict_iso_date(summary.get(field))
+
+
+def _strict_iso_date(value: Any) -> date | None:
+    text = _clean(value)
+    if len(text) != 10:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def stored_deflection_report_model(
@@ -1009,6 +1401,7 @@ def _stored_report_model_section(value: Any) -> dict[str, Any] | None:
         required_data,
         data,
     )
+    data = _normalize_stored_action_owner_metadata(section_id, data)
     data = _normalize_stored_suppressed_review_keys(section_id, data)
     if any(key not in data for key in required_data):
         return None
@@ -1043,6 +1436,47 @@ def _normalize_stored_action_section_limits(
         if key not in normalized_required:
             normalized_required.append(key)
     return normalized_required, normalized_data
+
+
+def _normalize_stored_action_owner_metadata(
+    section_id: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    if section_id not in _STORED_ACTION_OWNER_METADATA_SECTIONS:
+        return data
+    raw_items = data.get("items")
+    if not _is_sequence(raw_items):
+        return data
+
+    normalized_items: list[Any] = []
+    changed = False
+    for item in raw_items:
+        if not isinstance(item, Mapping):
+            normalized_items.append(item)
+            continue
+        row = dict(item)
+        if not _clean(row.get("evidence_tier")):
+            row["evidence_tier"] = "csv_index_metadata_only"
+            changed = True
+        routing_signals = _stored_action_routing_labels(row.get("routing_signals"))
+        if row.get("routing_signals") != routing_signals:
+            row["routing_signals"] = routing_signals
+            changed = True
+        normalized_items.append(row)
+
+    if not changed:
+        return data
+    normalized_data = dict(data)
+    normalized_data["items"] = normalized_items
+    return normalized_data
+
+
+def _stored_action_routing_labels(value: Any) -> dict[str, list[str]]:
+    raw = value if isinstance(value, Mapping) else {}
+    return {
+        field: _text_list(raw.get(field))[:8]
+        for field in _STORED_ACTION_ROUTING_LABEL_FIELDS
+    }
 
 
 def _normalize_stored_suppressed_review_keys(
@@ -1185,6 +1619,15 @@ def _parse_command_count(result: Any) -> int:
     if not separator or not count_text.isdecimal():
         raise ValueError(f"could not parse database command count from {result!r}")
     return int(count_text)
+
+
+def _row_count(row: Any) -> int:
+    if row is None:
+        return 0
+    parsed = _required_int(row_to_dict(row).get("count"))
+    if parsed is None or parsed < 0:
+        return 0
+    return parsed
 
 
 def _optional_int(value: Any) -> int | None:
@@ -1336,6 +1779,99 @@ async def compute_and_save_previous_deflection_delta(
     )
 
 
+async def compute_and_save_recent_deflection_deltas(
+    store: DeflectionReportArtifactStore,
+    *,
+    account_limit: int | None = 100,
+    reports_per_account: int | None = 25,
+) -> DeflectionDeltaBatchSummary:
+    """Persist previous-paid-report deltas for recent paid reports."""
+
+    resolved_account_limit = (
+        None if account_limit is None else _bounded_limit(account_limit)
+    )
+    resolved_reports_per_account = (
+        None if reports_per_account is None else _bounded_limit(reports_per_account)
+    )
+    accounts = await store.list_paid_report_accounts(limit=resolved_account_limit)
+    account_limit_reached = (
+        resolved_account_limit is not None and len(accounts) >= resolved_account_limit
+    )
+    account_limit_overflow = False
+    if account_limit_reached:
+        account_limit_overflow = (
+            await store.count_paid_report_accounts()
+        ) > resolved_account_limit
+    reports_scanned = 0
+    deltas_saved = 0
+    delta_deliveries_enqueued = 0
+    skipped_no_delta = 0
+    failed = 0
+    report_limit_reached_accounts: list[str] = []
+    report_limit_overflow_accounts: list[str] = []
+
+    for account_id in accounts:
+        reports = await store.list_reports(
+            account_id=account_id,
+            limit=resolved_reports_per_account,
+            paid=True,
+        )
+        report_limit_reached = (
+            resolved_reports_per_account is not None
+            and len(reports) >= resolved_reports_per_account
+        )
+        if report_limit_reached:
+            report_limit_reached_accounts.append(account_id)
+            if (
+                await store.count_paid_reports(account_id=account_id)
+            ) > resolved_reports_per_account:
+                report_limit_overflow_accounts.append(account_id)
+        for report in reports:
+            reports_scanned += 1
+            try:
+                record = await compute_and_save_previous_deflection_delta(
+                    store,
+                    account_id=account_id,
+                    current_request_id=report.request_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Deflection delta generation failed for account=%s report=%s",
+                    account_id,
+                    report.request_id,
+                    exc_info=True,
+                )
+                failed += 1
+                continue
+            if record is None:
+                skipped_no_delta += 1
+                continue
+            deltas_saved += 1
+            if report.delivery_email:
+                if await store.enqueue_deflection_delta_delivery(
+                    account_id=account_id,
+                    current_request_id=record.current_request_id,
+                    baseline_request_id=record.baseline_request_id,
+                    delivery_email=report.delivery_email,
+                ):
+                    delta_deliveries_enqueued += 1
+
+    return DeflectionDeltaBatchSummary(
+        accounts_scanned=len(accounts),
+        reports_scanned=reports_scanned,
+        deltas_saved=deltas_saved,
+        skipped_no_delta=skipped_no_delta,
+        delta_deliveries_enqueued=delta_deliveries_enqueued,
+        failed=failed,
+        account_limit_reached=account_limit_reached,
+        account_limit_overflow=account_limit_overflow,
+        reports_per_account_limit_reached=bool(report_limit_reached_accounts),
+        reports_per_account_limit_overflow=bool(report_limit_overflow_accounts),
+        report_limit_reached_accounts=tuple(report_limit_reached_accounts),
+        report_limit_overflow_accounts=tuple(report_limit_overflow_accounts),
+    )
+
+
 async def fetch_paid_deflection_delta(
     store: DeflectionReportArtifactStore,
     *,
@@ -1420,6 +1956,7 @@ async def fetch_paid_deflection_delta(
 
 __all__ = [
     "DeflectionDeltaAccessRecord",
+    "DeflectionDeltaBatchSummary",
     "DeflectionDeltaReadError",
     "DeflectionReportAccessRecord",
     "DeflectionReportListRecord",
@@ -1427,6 +1964,7 @@ __all__ = [
     "InMemoryDeflectionReportArtifactStore",
     "PostgresDeflectionReportArtifactStore",
     "compute_and_save_previous_deflection_delta",
+    "compute_and_save_recent_deflection_deltas",
     "deflection_delta_read_payload",
     "fetch_paid_deflection_delta",
     "stored_deflection_report_model",

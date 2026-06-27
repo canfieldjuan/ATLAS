@@ -11,6 +11,7 @@
       "answer_evidence_status": "draft_needs_review",
       "displayed_evidence_count": 2,
       "evidence_count": 2,
+      "evidence_tier": "csv_index_metadata_only",
       "evidence_quotes": [
         "`search-export-1`: \"How do I export attribution report?\"",
         "`search-export-2`: \"How can I export the attribution report?\""
@@ -74,6 +75,7 @@
       "answer_evidence_status": "resolution_evidence",
       "displayed_evidence_count": 1,
       "evidence_count": 1,
+      "evidence_tier": "csv_full_thread_resolution_evidence",
       "evidence_quotes": [
         "`ticket-email-1` - Email update: \"How do I change my email?\""
       ],

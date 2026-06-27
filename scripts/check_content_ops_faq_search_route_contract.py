@@ -49,6 +49,7 @@ DETAIL_ITEM_STRING_FIELDS = (
     "summary",
     "answer",
     "answer_evidence_status",
+    "evidence_tier",
     "resolution_evidence_scope",
     "when_to_contact_support",
 )

@@ -191,6 +191,18 @@ _STRUCTURED_CONTEXT_KEYS = (
     ("issue", ("issue", "issue_type")),
     ("sub_issue", ("sub_issue", "sub_issue_type")),
 )
+_ROUTING_CONTEXT_KEYS = (
+    ("group", ("group", "ticket_group", "support_group", "zendesk_group")),
+    ("assignee", ("assignee", "assigned_to", "agent", "agent_name")),
+    ("tags", ("tags", "tag", "ticket_tags", "labels")),
+    ("brand", ("brand", "ticket_brand", "zendesk_brand")),
+    ("organization", ("organization", "organisation", "org", "company")),
+    ("product_area", ("product_area", "product area", "area")),
+    (
+        "custom_product_area",
+        ("custom_product_area", "custom product area", "custom_area"),
+    ),
+)
 _DATE_KEYS = (
     "created_at",
     "created_time",
@@ -389,6 +401,12 @@ def build_support_ticket_input_package(
     customer_wording_examples = _customer_wording_examples(normalized_rows)
     resolution_evidence_count = _resolution_evidence_count(normalized_rows)
     resolution_evidence_examples = _resolution_evidence_examples(normalized_rows)
+    evidence_tier = _support_ticket_evidence_tier(
+        normalized_rows,
+        resolution_evidence_count=resolution_evidence_count,
+    )
+    for row in normalized_rows:
+        row["support_ticket_evidence_tier"] = _support_ticket_row_evidence_tier(row)
     measured_outcome_count = _measured_outcome_count(normalized_rows)
     measured_outcome_examples = _measured_outcome_examples(normalized_rows)
     ticket_status_summary = _ticket_status_summary(normalized_rows)
@@ -443,6 +461,7 @@ def build_support_ticket_input_package(
         "support_ticket_resolution_evidence_present": resolution_evidence_count > 0,
         "support_ticket_resolution_evidence_count": resolution_evidence_count,
         "support_ticket_resolution_examples": resolution_evidence_examples,
+        "support_ticket_evidence_tier": evidence_tier,
         "has_measured_outcomes": measured_outcome_count > 0,
         "measured_outcome_count": measured_outcome_count,
         "measured_outcome_examples": measured_outcome_examples,
@@ -463,6 +482,7 @@ def build_support_ticket_input_package(
         "has_dated_window": has_valid_date_window,
         "support_ticket_resolution_evidence_present": resolution_evidence_count > 0,
         "support_ticket_resolution_evidence_count": resolution_evidence_count,
+        "support_ticket_evidence_tier": evidence_tier,
         "has_measured_outcomes": measured_outcome_count > 0,
         "measured_outcome_count": measured_outcome_count,
         "top_ticket_clusters": top_ticket_clusters,
@@ -523,12 +543,18 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     measured_outcome = _evidence_text(_first_value(row, _MEASURED_OUTCOME_KEYS))
     if measured_outcome:
         normalized["measured_outcome"] = _clip_text(measured_outcome, max_chars=500)
+    if _has_customer_text(row):
+        normalized["_customer_text_present"] = True
     for key in _PASSTHROUGH_KEYS:
         value = row.get(key)
         if value not in (None, "", [], {}):
             normalized[key] = value
     for key, keys in _STRUCTURED_CONTEXT_KEYS:
         value = _first_value(row, keys)
+        if value not in (None, "", [], {}):
+            normalized[key] = value
+    for key, keys in _ROUTING_CONTEXT_KEYS:
+        value = _routing_context_value(_first_value(row, keys))
         if value not in (None, "", [], {}):
             normalized[key] = value
     for key, keys in (
@@ -556,6 +582,58 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         if csat_score is not None:
             normalized["csat_score"] = csat_score
     return normalized
+
+
+def _support_ticket_row_evidence_tier(row: Mapping[str, Any]) -> str:
+    if _clean(row.get("resolution_text")):
+        return "csv_full_thread_resolution_evidence"
+    if row.get("_customer_text_present"):
+        return "csv_customer_text"
+    return "csv_index_metadata_only"
+
+
+def _support_ticket_evidence_tier(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    resolution_evidence_count: int,
+) -> str:
+    if resolution_evidence_count > 0:
+        return "csv_full_thread_resolution_evidence"
+    if any(row.get("_customer_text_present") for row in rows):
+        return "csv_customer_text"
+    return "csv_index_metadata_only"
+
+
+def _has_customer_text(row: Mapping[str, Any]) -> bool:
+    return bool(_first_text(row, _TEXT_KEYS) or _comments_text(row))
+
+
+def _routing_context_value(value: Any) -> Any:
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, Mapping):
+        label = _first_text(value, ("name", "title", "label"))
+        return label or None
+    if isinstance(value, str):
+        return support_ticket_plain_text(value)
+    if isinstance(value, (bytes, bytearray)):
+        return None
+    if isinstance(value, Sequence):
+        values = [
+            normalized
+            for item in value
+            if (normalized := _routing_context_value(item)) not in (None, "", [], {})
+        ]
+        flattened: list[str] = []
+        for item in values:
+            if isinstance(item, list):
+                flattened.extend(item)
+            else:
+                flattened.append(str(item))
+        return flattened
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return None
 
 
 def _ticket_text(row: Mapping[str, Any], *, source_title: str) -> str:

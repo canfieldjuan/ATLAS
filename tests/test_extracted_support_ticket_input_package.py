@@ -138,6 +138,7 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
         "support_ticket_cluster": "profile updates",
         "support_ticket_cluster_key": "explicit:profile-updates",
         "support_ticket_cluster_source": "explicit",
+        "support_ticket_evidence_tier": "csv_customer_text",
     }
     assert package.metadata["included_row_count"] == 2
     assert package.metadata["top_ticket_clusters"] == request.inputs["top_ticket_clusters"]
@@ -203,11 +204,13 @@ def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None
                 "Manual sequence cleanup after demos Can I automate demo follow-up? "
                 "Automation is not on this plan."
             ),
+            "organization": "Riverbend Supply",
             "company_name": "Riverbend Supply",
             "vendor_name": "LegacyCRM",
             "support_ticket_cluster": "automation cleanup demo follow",
             "support_ticket_cluster_key": "tokens:automation-cleanup-demo-follow",
             "support_ticket_cluster_source": "token_set",
+            "support_ticket_evidence_tier": "csv_customer_text",
         }
     ]
     assert package.inputs["faq_questions"] == ["Can I automate demo follow-up?"]
@@ -473,6 +476,7 @@ def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> No
         "support_ticket_cluster": "code login mfa new",
         "support_ticket_cluster_key": "tokens:code-login-mfa-new",
         "support_ticket_cluster_source": "token_set",
+        "support_ticket_evidence_tier": "csv_customer_text",
     }
     assert rows[1]["source_id"] == "fd-200"
     assert rows[1]["source_title"] == "Where do I update billing?"
@@ -1162,6 +1166,7 @@ def test_support_ticket_input_package_reports_skipped_and_truncated_rows() -> No
             "support_ticket_cluster": "data export",
             "support_ticket_cluster_key": "tokens:data-export",
             "support_ticket_cluster_source": "token_set",
+            "support_ticket_evidence_tier": "csv_customer_text",
         }
     ]
     assert package.metadata["source_row_count"] == 3

@@ -52,11 +52,11 @@ jobs:
     assert any(f.level == "ERROR" and "pull_request_target" in f.detail for f in findings)
 
 
-def test_approved_security_guardrails_pull_request_target_is_allowed(tmp_path: Path) -> None:
+def test_approved_gitleaks_baseline_workflow_pull_request_target_is_allowed(tmp_path: Path) -> None:
     auditor = load_auditor()
     workflow = _write_workflow(
         tmp_path,
-        "security_guardrails.yml",
+        "gitleaks_baseline_growth_guard.yml",
         """
 name: Security
 on:
@@ -78,11 +78,36 @@ jobs:
     assert any(f.level == "WARN" and "allowed pull_request_target" in f.detail for f in findings)
 
 
-def test_security_guardrails_extra_pull_request_target_job_is_error(tmp_path: Path) -> None:
+def test_old_security_guardrails_pull_request_target_job_is_no_longer_allowed(tmp_path: Path) -> None:
     auditor = load_auditor()
     workflow = _write_workflow(
         tmp_path,
         "security_guardrails.yml",
+        """
+name: Security
+on:
+  pull_request_target:
+jobs:
+  gitleaks-baseline-guard:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1234567890abcdef1234567890abcdef12345678
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+""",
+    )
+
+    findings = auditor.audit_workflow(workflow)
+
+    assert any(f.level == "ERROR" and "pull_request_target" in f.detail for f in findings)
+
+
+def test_gitleaks_baseline_extra_pull_request_target_job_is_error(tmp_path: Path) -> None:
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "gitleaks_baseline_growth_guard.yml",
         """
 name: Security
 on:

@@ -273,10 +273,33 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
     assert unlocked["faq_result"]["items"][0]["source_ids"]
 
     report_model = await model_route.endpoint(request_id=request_id)
-    assert report_model == unlocked["report_model"]
     assert report_model["schema_version"] == "deflection.v1"
     assert "markdown" not in report_model
     assert "faq_result" not in report_model
+    full_priority_item = next(
+        section
+        for section in unlocked["report_model"]["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+    hosted_priority_item = next(
+        section
+        for section in report_model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+    assert set(full_priority_item["routing_signals"]) == {
+        "group",
+        "assignee",
+        "tags",
+        "brand",
+        "organization",
+        "product_area",
+        "custom_product_area",
+    }
+    assert hosted_priority_item["routing_signals"] == {
+        "tags": [],
+        "product_area": [],
+        "custom_product_area": [],
+    }
 
 
 @pytest.mark.asyncio

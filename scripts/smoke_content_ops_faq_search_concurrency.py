@@ -289,6 +289,7 @@ def _items_for_case(case: SearchCase, *, documents_per_corpus: int) -> list[dict
                 "Choose the attribution report export.",
                 "Contact support if the CSV is missing.",
             ],
+            "evidence_tier": "csv_customer_text",
             "answer_evidence_status": "draft_needs_review",
             "resolution_evidence_scope": "not_applicable",
             "resolution_source_count": 0,

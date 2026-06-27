@@ -29,6 +29,13 @@ const example = JSON.parse(
     'utf8',
   ),
 )
+const exampleItems = example.faq_result.items
+const exampleProvenItems = exampleItems.filter(
+  (item) => item.answer_evidence_status === 'resolution_evidence',
+)
+const exampleNoProvenItems = exampleItems.filter(
+  (item) => item.answer_evidence_status !== 'resolution_evidence',
+)
 
 const newRunSource = readFileSync(
   new URL('../src/pages/ContentOpsNewRun.tsx', import.meta.url),
@@ -39,9 +46,14 @@ test('deflection report view splits proven and no-proven answers from contract e
   const report = faqDeflectionReportView(example)
 
   assert.ok(report)
-  assert.equal(report.summary.generated, 2)
-  assert.equal(report.provenItems.length, 1)
-  assert.equal(report.noProvenItems.length, 1)
+  assert.equal(report.summary.generated, exampleItems.length)
+  assert.equal(report.provenItems.length, exampleProvenItems.length)
+  assert.equal(report.noProvenItems.length, exampleNoProvenItems.length)
+  assert.equal(
+    report.provenItems.length + report.noProvenItems.length,
+    report.summary.generated,
+  )
+  assert.ok(report.summary.ticketSourceCount >= 300)
   assert.equal(report.provenItems[0].question, 'How do I export attribution reports?')
   assert.equal(report.noProvenItems[0].question, 'How do I enable SSO for my team?')
   assert.equal(report.provenItems[0].answerEvidenceStatus, 'resolution_evidence')

@@ -1,6 +1,6 @@
 # Plan archive index
 
-1210 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1219 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -697,9 +697,17 @@
 - [PR-Deflection-Delivery-Privacy-Regressions](archive/PR-Deflection-Delivery-Privacy-Regressions.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Delivery-Reconciliation](archive/PR-Deflection-Delivery-Reconciliation.md) - lane: deflection/go-live | phase: Production hardening
 - [PR-Deflection-Delivery-Row-Claim](archive/PR-Deflection-Delivery-Row-Claim.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
+- [PR-Deflection-Delta-Cap-Saturation-Signals](archive/PR-Deflection-Delta-Cap-Saturation-Signals.md) - lane: issue-1316/deflection-delta-cap-saturation-signals | phase: Production hardening
 - [PR-Deflection-Delta-Core](archive/PR-Deflection-Delta-Core.md) - lane: issue-1316/deflection-delta-core | phase: Vertical slice
+- [PR-Deflection-Delta-Deferred-Summary](archive/PR-Deflection-Delta-Deferred-Summary.md) - lane: deflection/report-deltas | phase: Production hardening
+- [PR-Deflection-Delta-Delivery-Summary](archive/PR-Deflection-Delta-Delivery-Summary.md) - lane: issue-1316/deflection-delta-delivery-summary | phase: Vertical slice
+- [PR-Deflection-Delta-Live-Delivery](archive/PR-Deflection-Delta-Live-Delivery.md) - lane: deflection/report-deltas | phase: Vertical slice
+- [PR-Deflection-Delta-Monthly-Automation](archive/PR-Deflection-Delta-Monthly-Automation.md) - lane: issue-1316/deflection-delta-monthly-automation | phase: Vertical slice
+- [PR-Deflection-Delta-Paid-Overflow-Probes](archive/PR-Deflection-Delta-Paid-Overflow-Probes.md) - lane: issue-1316/deflection-delta-paid-overflow-probes | phase: Production hardening
+- [PR-Deflection-Delta-Paid-Report-Ordering](archive/PR-Deflection-Delta-Paid-Report-Ordering.md) - lane: issue-1316/deflection-delta-paid-report-ordering | phase: Production hardening
 - [PR-Deflection-Delta-Persistence](archive/PR-Deflection-Delta-Persistence.md) - lane: issue-1316/deflection-delta-persistence | phase: Vertical slice
 - [PR-Deflection-Delta-Read-Surface](archive/PR-Deflection-Delta-Read-Surface.md) - lane: issue-1316/deflection-delta-read-surface | phase: Vertical slice
+- [PR-Deflection-Delta-Source-Window-Baseline](archive/PR-Deflection-Delta-Source-Window-Baseline.md) - lane: issue-1316/deflection-delta-source-window-baseline | phase: Production hardening
 - [PR-Deflection-Dispute-Restore-Hardening](archive/PR-Deflection-Dispute-Restore-Hardening.md) - lane: go-live-deflection-cleanup | phase: Production hardening
 - [PR-Deflection-Email-Action-Scorecard](archive/PR-Deflection-Email-Action-Scorecard.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
 - [PR-Deflection-Email-Action-Summary](archive/PR-Deflection-Email-Action-Summary.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
@@ -1141,6 +1149,7 @@
 - [PR-SEO-Prerender](archive/PR-SEO-Prerender.md)
 - [PR-Security-CVE-Remediation-SLA](archive/PR-Security-CVE-Remediation-SLA.md) - lane: security/cve-remediation-sla | phase: Production hardening
 - [PR-Security-Disclosure-Policy](archive/PR-Security-Disclosure-Policy.md) - lane: security/hardening-1656 | phase: Production hardening
+- [PR-Security-Gitleaks-Precommit](archive/PR-Security-Gitleaks-Precommit.md) - lane: security/gitleaks-precommit | phase: Workflow/process
 - [PR-Security-Guardrail-CI](archive/PR-Security-Guardrail-CI.md) - lane: security/workflow | phase: Production hardening
 - [PR-Security-Labels-As-Code](archive/PR-Security-Labels-As-Code.md) - lane: security/labels-as-code | phase: Workflow/process
 - [PR-Security-Paid-Funnel-Alert-Channel](archive/PR-Security-Paid-Funnel-Alert-Channel.md) - lane: security/paid-funnel-alert-channel | phase: Production hardening

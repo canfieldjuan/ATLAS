@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "extracted_pipeline_checks.yml"
 CHECKS = ROOT / "scripts" / "run_extracted_pipeline_checks.sh"
+PINNED_UPLOAD_ARTIFACT_RE = re.compile(
+    r"actions/upload-artifact@[0-9a-f]{40}\s+#\s+v\d+\.\d+\.\d+"
+)
 
 
 def _workflow_step_block(workflow: str, name: str) -> str:
@@ -40,10 +44,7 @@ def test_extracted_checks_uploads_deflection_pii_recall_advisory_artifact() -> N
     )
     assert "if: ${{ !cancelled() }}" in write_step
     assert "Upload deflection PII recall advisory artifact" in workflow
-    assert (
-        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
-        in workflow
-    )
+    assert PINNED_UPLOAD_ARTIFACT_RE.search(upload_step)
     assert "if: ${{ !cancelled() }}" in upload_step
     assert "name: deflection-pii-recall-advisory" in workflow
     assert "\n          path: artifacts/deflection-pii-recall\n" in workflow

@@ -856,6 +856,13 @@ _REPORT_ACTION_ITEM_FIELDS = (
     "question",
     "status",
     "owner_lane",
+    "evidence_tier",
+    "routing_signals",
+    "product_gap_summary",
+    "customer_vocabulary",
+    "cost_period",
+    "cost_confidence",
+    "jira_template",
     "fix_type",
     "csat_signal",
     "confidence",
@@ -876,6 +883,13 @@ _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
     "question",
     "status",
     "owner_lane",
+    "evidence_tier",
+    "routing_signals",
+    "product_gap_summary",
+    "customer_vocabulary",
+    "cost_period",
+    "cost_confidence",
+    "jira_template",
     "confidence",
     "recommended_action",
     "ticket_count",
@@ -883,6 +897,15 @@ _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
     "priority_score",
     "priority_drivers",
     "csat_signal",
+)
+_REPORT_ACTION_CONTEXT_OPTIONAL_FIELDS = (
+    "evidence_tier",
+    "routing_signals",
+    "product_gap_summary",
+    "customer_vocabulary",
+    "cost_period",
+    "cost_confidence",
+    "jira_template",
 )
 _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_FIELDS = (
     *_REPORT_ACTION_ITEM_FIELDS,
@@ -902,6 +925,39 @@ _REPORT_ACTION_CSAT_SIGNAL_FIELDS = (
     "negative_csat_ticket_count",
     "numeric_average",
 )
+_REPORT_ACTION_ROUTING_SIGNAL_FIELDS = (
+    "group",
+    "assignee",
+    "tags",
+    "brand",
+    "organization",
+    "product_area",
+    "custom_product_area",
+)
+_REPORT_ACTION_ROUTING_INFERENCE_FIELDS = (
+    "group",
+    "tags",
+    "product_area",
+    "custom_product_area",
+)
+_REPORT_ACTION_ROUTING_HOSTED_FIELDS = (
+    "tags",
+    "product_area",
+    "custom_product_area",
+)
+_REPORT_ACTION_JIRA_TEMPLATE_FIELDS = (
+    "recommended_title",
+    "question",
+    "owner_lane",
+    "product_gap_summary",
+    "ticket_count",
+    "estimated_support_cost",
+    "cost_period",
+    "cost_confidence",
+    "evidence_tier",
+    "customer_vocabulary",
+    "recommended_action",
+)
 _REPORT_ACTION_TOP_EVIDENCE_FIELDS = ("source_id", "evidence_quote")
 _REPORT_ACTION_SUPPORT_COST_BASIS_FIELDS = (
     "status",
@@ -916,6 +972,16 @@ _REPORT_ACTION_ITEM_NESTED_FIELDS = (
         "projected_fields": _REPORT_ACTION_CSAT_SIGNAL_FIELDS,
         "hosted_consumer_safe_fields": _REPORT_ACTION_CSAT_SIGNAL_FIELDS,
     }),
+    MappingProxyType({
+        "field": "routing_signals",
+        "projected_fields": _REPORT_ACTION_ROUTING_SIGNAL_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_ACTION_ROUTING_HOSTED_FIELDS,
+    }),
+    MappingProxyType({
+        "field": "jira_template",
+        "projected_fields": _REPORT_ACTION_JIRA_TEMPLATE_FIELDS,
+        "hosted_consumer_safe_fields": _REPORT_ACTION_JIRA_TEMPLATE_FIELDS,
+    }),
 )
 _REPORT_ACTION_ITEM_NESTED_COLLECTIONS = (
     MappingProxyType({
@@ -929,6 +995,7 @@ _REPORT_ACTION_ITEM_COLLECTION = MappingProxyType({
     "field": "items",
     "item_type": "object",
     "projected_fields": _REPORT_ACTION_ITEM_FIELDS,
+    "optional_projected_fields": _REPORT_ACTION_CONTEXT_OPTIONAL_FIELDS,
     "hosted_consumer_safe_fields": _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS,
     "nested_object_fields": _REPORT_ACTION_ITEM_NESTED_FIELDS,
     "nested_collection_fields": _REPORT_ACTION_ITEM_NESTED_COLLECTIONS,
@@ -937,6 +1004,7 @@ _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_COLLECTION = MappingProxyType({
     "field": "items",
     "item_type": "object",
     "projected_fields": _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_FIELDS,
+    "optional_projected_fields": _REPORT_ACTION_CONTEXT_OPTIONAL_FIELDS,
     "hosted_consumer_safe_fields": (
         _REPORT_SUPPRESSED_REPEAT_REVIEW_ITEM_HOSTED_SAFE_FIELDS
     ),
@@ -1008,6 +1076,7 @@ _REPORT_QUESTION_DETAIL_ROW_FIELDS = (
     "estimated_support_cost",
     "answer_status",
     "answer_evidence_status",
+    "evidence_tier",
     "resolution_evidence_scope",
     "answer_linkage",
     "answer",
@@ -1028,6 +1097,7 @@ _REPORT_QUESTION_DETAIL_ROW_HOSTED_SAFE_FIELDS = (
     "estimated_support_cost",
     "answer_status",
     "answer_evidence_status",
+    "evidence_tier",
     "resolution_evidence_scope",
     "answer_linkage",
     "answer",
@@ -1258,6 +1328,9 @@ def _report_projection_collection_entry(metadata: Mapping[str, Any]) -> dict[str
                 default=projected_fields,
             )
         )
+        optional_fields = _field_tuple(metadata, "optional_projected_fields")
+        if optional_fields:
+            out["optional_projected_fields"] = list(optional_fields)
     nested_fields = _nested_field_entries(metadata)
     if nested_fields:
         out["nested_object_fields"] = nested_fields
@@ -1444,6 +1517,8 @@ DEFAULT_DEFLECTION_FULL_REPORT_SURFACE_CAPS: Mapping[str, Mapping[str, int]] = (
         "result_page": MappingProxyType({
             "ranked_questions": 25,
             "question_details": 10,
+            "product_gap_cards": _ACTION_RESULT_PAGE_LIMIT,
+            "jira_handoffs": _ACTION_RESULT_PAGE_LIMIT,
             "seo_targets": 20,
             "outcome_diagnostics": 25,
         }),
@@ -1477,6 +1552,8 @@ _FULL_REPORT_QA_SURFACE_COUNT_KEYS: Mapping[str, tuple[str, ...]] = (
             "estimated_support_cost",
             "evidence_row_count",
             "source_id_count",
+            "product_gap_card_count",
+            "jira_handoff_count",
         ),
         "pdf": (
             "repeat_ticket_count",
@@ -1531,6 +1608,13 @@ _SCORECARD_COUNT_KEYS = frozenset({
     "drafted_resolutions_count",
     "already_covered_still_recurring_count",
     "suppressed_repeat_review_queue_count",
+    "product_gap_card_count",
+    "jira_handoff_count",
+})
+_SCORECARD_DISPLAY_ROW_KEYS = frozenset({
+    *DEFLECTION_REPORT_SECTION_REGISTRY,
+    "product_gap_cards",
+    "jira_handoffs",
 })
 _SCORECARD_SURFACE_KEYS = frozenset({
     "email",
@@ -1881,7 +1965,7 @@ def _add_full_report_qa_required_metric_assertions(
     for section_index, section_id in enumerate(sorted(caps), start=1):
         section_safe_id = _scorecard_id_segment(
             section_id,
-            allowed=frozenset(DEFLECTION_REPORT_SECTION_REGISTRY),
+            allowed=_SCORECARD_DISPLAY_ROW_KEYS,
             fallback=f"section_{section_index}",
         )
         if _scorecard_section_total(str(section_id), counts) == 0:
@@ -2012,6 +2096,8 @@ def _scorecard_counts(sections: Mapping[str, Mapping[str, Any]]) -> dict[str, An
         "seo_omitted_phrase_count": _int(seo_targets.get("omitted_phrase_count")),
         "outcome_diagnostic_row_count": _scorecard_rows_count(diagnostics),
         "question_detail_count": _scorecard_rows_count(question_details),
+        "product_gap_card_count": _int(support_tax.get("no_proven_answer_count")),
+        "jira_handoff_count": _int(support_tax.get("no_proven_answer_count")),
         "priority_fix_queue_count": _scorecard_items_count(priority_fix_queue),
         "top_unresolved_repeats_count": _scorecard_items_count(unresolved_repeats),
         "drafted_resolutions_count": _scorecard_items_count(drafted_resolutions),
@@ -2104,6 +2190,8 @@ def _scorecard_section_total(section_id: str, counts: Mapping[str, Any]) -> int:
         "outcome_diagnostics": _int(counts.get("outcome_diagnostic_row_count")),
         "question_details": _int(counts.get("question_detail_count")),
         "complete_evidence": _int(counts.get("evidence_row_count")),
+        "product_gap_cards": _int(counts.get("product_gap_card_count")),
+        "jira_handoffs": _int(counts.get("jira_handoff_count")),
         "priority_fix_queue": _int(counts.get("priority_fix_queue_count")),
         "top_unresolved_repeats": _int(counts.get("top_unresolved_repeats_count")),
         "drafted_resolutions": _int(counts.get("drafted_resolutions_count")),
@@ -2307,7 +2395,7 @@ def _add_surface_observation_assertions(
             section_text = str(section_id)
             section_safe_id = _scorecard_id_segment(
                 section_text,
-                allowed=frozenset(DEFLECTION_REPORT_SECTION_REGISTRY),
+                allowed=_SCORECARD_DISPLAY_ROW_KEYS,
                 fallback=f"section_{section_index}",
             )
             total = _scorecard_section_total(section_text, counts)
@@ -2421,14 +2509,14 @@ def build_deflection_snapshot(
             "customer_wording": _snapshot_customer_wording(item, question),
         })
     teaser = _snapshot_teaser(items, preview_count=teaser_preview_count)
-    teaser_full_rank = _teaser_full_answer_rank(teaser)
+    visible_ranks = _visible_snapshot_ranks(top_questions, teaser=teaser)
     locked_questions = tuple(
         {
             "rank": rank,
             "ticket_count": _ticket_count(item),
         }
         for rank, item in enumerate(items[top_n:], start=top_n + 1)
-        if rank != teaser_full_rank
+        if rank not in visible_ranks
     )
     return DeflectionSnapshot(
         summary=snapshot_summary,
@@ -2483,16 +2571,6 @@ def _build_deflection_snapshot_from_report_model(
         }
         for index, row in enumerate(ranked_rows[:top_n], start=1)
     ]
-    teaser = _snapshot_teaser(detail_rows, preview_count=teaser_preview_count)
-    teaser_full_rank = _teaser_full_answer_rank(teaser)
-    locked_questions = tuple(
-        {
-            "rank": _int(row.get("rank")) or rank,
-            "ticket_count": _int(row.get("ticket_count")),
-        }
-        for rank, row in enumerate(ranked_rows[top_n:], start=top_n + 1)
-        if (_int(row.get("rank")) or rank) != teaser_full_rank
-    )
     top_blind_spots = tuple(
         {
             "rank": _int(row.get("rank")) or index,
@@ -2501,6 +2579,20 @@ def _build_deflection_snapshot_from_report_model(
         }
         for index, row in enumerate(blind_spot_rows[:blind_spot_limit], start=1)
         if _text(row.get("question"))
+    )
+    teaser = _snapshot_teaser(detail_rows, preview_count=teaser_preview_count)
+    visible_ranks = _visible_snapshot_ranks(
+        top_questions,
+        top_blind_spots,
+        teaser=teaser,
+    )
+    locked_questions = tuple(
+        {
+            "rank": row_rank,
+            "ticket_count": _int(row.get("ticket_count")),
+        }
+        for rank, row in enumerate(ranked_rows[top_n:], start=top_n + 1)
+        if (row_rank := (_int(row.get("rank")) or rank)) not in visible_ranks
     )
     return DeflectionSnapshot(
         summary=snapshot_summary,
@@ -3202,22 +3294,57 @@ def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
     status = _action_status(item)
     ticket_count = _ticket_count(item)
     identity = _action_identity(item)
+    routing_signals = _action_routing_signals(item)
+    owner_lane = _action_owner_lane(item, routing_signals=routing_signals)
+    evidence_tier = _action_evidence_tier(item)
+    estimated_support_cost = _support_cost(ticket_count)
+    recommended_title = _action_recommended_title(item)
+    recommended_action = _action_recommended_action(status)
+    customer_vocabulary = _action_customer_vocabulary(item)
+    product_gap_summary = _action_product_gap_summary(
+        item,
+        owner_lane=owner_lane,
+        evidence_tier=evidence_tier,
+        ticket_count=ticket_count,
+        estimated_support_cost=estimated_support_cost,
+    )
+    cost_period = _action_cost_period(item)
+    cost_confidence = _action_cost_confidence(item, evidence_tier=evidence_tier)
     return {
         "rank": rank,
         **identity,
         "question": _text(item.get("question")),
         "status": status,
-        "owner_lane": _action_owner_lane(item),
+        "owner_lane": owner_lane,
+        "evidence_tier": evidence_tier,
+        "routing_signals": routing_signals,
+        "product_gap_summary": product_gap_summary,
+        "customer_vocabulary": customer_vocabulary,
+        "cost_period": cost_period,
+        "cost_confidence": cost_confidence,
+        "jira_template": _action_jira_template(
+            item,
+            owner_lane=owner_lane,
+            product_gap_summary=product_gap_summary,
+            ticket_count=ticket_count,
+            estimated_support_cost=estimated_support_cost,
+            cost_period=cost_period,
+            cost_confidence=cost_confidence,
+            evidence_tier=evidence_tier,
+            customer_vocabulary=customer_vocabulary,
+            recommended_title=recommended_title,
+            recommended_action=recommended_action,
+        ),
         "fix_type": _action_fix_type(status),
         "csat_signal": _action_csat_signal(item),
         "confidence": _action_confidence(item),
         "priority_score": _action_priority_score(item, status),
         "priority_drivers": _action_priority_drivers(item, status),
-        "recommended_title": _action_recommended_title(item),
-        "recommended_action": _action_recommended_action(status),
+        "recommended_title": recommended_title,
+        "recommended_action": recommended_action,
         "representative_phrasing": _action_representative_phrasing(item),
         "ticket_count": ticket_count,
-        "estimated_support_cost": _support_cost(ticket_count),
+        "estimated_support_cost": estimated_support_cost,
         "support_cost_formula": "ticket_count * assisted_contact_cost",
         "support_cost_source": "default_assisted_contact_benchmark",
         "opportunity_score": _int(item.get("opportunity_score")),
@@ -3250,9 +3377,97 @@ def _action_status(item: Mapping[str, Any]) -> str:
     return "Needs review"
 
 
-def _action_owner_lane(item: Mapping[str, Any]) -> str:
+_OWNER_LANE_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("login", "auth", "sso", "mfa", "password"), "Auth / Product UX"),
+    (("invoice", "billing", "receipt", "payment"), "Billing"),
+    (("export", "report", "download", "csv"), "Reporting"),
+    (("invite", "role", "permission", "admin"), "Admin / Access"),
+)
+
+
+def _action_owner_lane(
+    item: Mapping[str, Any],
+    *,
+    routing_signals: Mapping[str, Any] | None = None,
+) -> str:
+    mapped = _owner_lane_from_text(" ".join((
+        _text(item.get("topic")),
+        _text(item.get("question")),
+        _text(item.get("customer_wording")),
+    )))
+    if mapped:
+        return mapped
+    mapped = _owner_lane_from_text(_routing_signals_text(routing_signals or {}))
+    if mapped:
+        return mapped
     topic = _text(item.get("topic"))
-    return topic or "Unknown"
+    return _owner_lane_title(topic) if topic else "Unknown"
+
+
+def _action_routing_signals(item: Mapping[str, Any]) -> dict[str, list[str]]:
+    raw = item.get("routing_signals")
+    if not isinstance(raw, Mapping):
+        raw = {}
+    signals: dict[str, list[str]] = {
+        key: [] for key in _REPORT_ACTION_ROUTING_SIGNAL_FIELDS
+    }
+    for key in _REPORT_ACTION_ROUTING_SIGNAL_FIELDS:
+        values = _routing_signal_texts(raw.get(key))
+        if values:
+            signals[key] = values[:8]
+    return signals
+
+
+def _routing_signal_texts(value: Any) -> list[str]:
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, Mapping):
+        return []
+    if isinstance(value, str):
+        values: Sequence[Any] = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        values = value
+    else:
+        values = (value,)
+    out: list[str] = []
+    for item in values:
+        if isinstance(item, Mapping):
+            continue
+        text = _text(item)
+        if text:
+            out.append(text)
+    return out
+
+
+def _routing_signals_text(routing_signals: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    for key in _REPORT_ACTION_ROUTING_INFERENCE_FIELDS:
+        parts.extend(_routing_signal_texts(routing_signals.get(key)))
+    return " ".join(parts)
+
+
+def _owner_lane_from_text(value: str) -> str:
+    tokens = set(re.findall(r"[a-z0-9]+", value.casefold()))
+    if not tokens:
+        return ""
+    for needles, lane in _OWNER_LANE_RULES:
+        if any(needle in tokens for needle in needles):
+            return lane
+    return ""
+
+
+def _owner_lane_title(value: str) -> str:
+    text = re.sub(r"[_/-]+", " ", value).strip()
+    return text.title() if text else "Unknown"
+
+
+def _action_evidence_tier(item: Mapping[str, Any]) -> str:
+    tier = _text(item.get("evidence_tier"))
+    if tier:
+        return tier
+    if _text(item.get("answer_evidence_status")) == _RESOLUTION_EVIDENCE_STATUS:
+        return "csv_full_thread_resolution_evidence"
+    return "csv_index_metadata_only"
 
 
 def _action_fix_type(status: str) -> str:
@@ -3390,6 +3605,88 @@ def _action_representative_phrasing(item: Mapping[str, Any]) -> list[str]:
     return phrases[:3]
 
 
+def _action_customer_vocabulary(item: Mapping[str, Any]) -> list[str]:
+    return _action_representative_phrasing(item)[:3]
+
+
+def _action_product_gap_summary(
+    item: Mapping[str, Any],
+    *,
+    owner_lane: str,
+    evidence_tier: str,
+    ticket_count: int,
+    estimated_support_cost: float,
+) -> str:
+    if ticket_count < 2:
+        return ""
+    owner = owner_lane or "the right product/support owner"
+    cost = _format_money(estimated_support_cost)
+    evidence = _action_evidence_tier_label(evidence_tier)
+    return (
+        f"Repeated support friction routes to {owner}. "
+        f"{ticket_count} support tickets in this upload; estimated "
+        f"assisted-contact cost is {cost} based on {evidence}."
+    )
+
+
+def _action_cost_period(item: Mapping[str, Any]) -> str:
+    if _text(item.get("cost_period")):
+        return _text(item.get("cost_period"))
+    return "batch_upload"
+
+
+def _action_cost_confidence(
+    item: Mapping[str, Any],
+    *,
+    evidence_tier: str,
+) -> str:
+    explicit = _text(item.get("cost_confidence"))
+    if explicit:
+        return explicit
+    if evidence_tier == "csv_full_thread_resolution_evidence":
+        return "benchmark_with_resolution_evidence"
+    if evidence_tier == "csv_customer_text":
+        return "benchmark_with_customer_text"
+    return "benchmark_index_metadata_only"
+
+
+def _action_evidence_tier_label(value: str) -> str:
+    return {
+        "csv_customer_text": "CSV customer text",
+        "csv_index_metadata_only": "CSV index metadata only",
+        "csv_full_thread_resolution_evidence": "CSV full-thread resolution evidence",
+    }.get(value, value.replace("_", " ") or "unknown evidence")
+
+
+def _action_jira_template(
+    item: Mapping[str, Any],
+    *,
+    owner_lane: str,
+    product_gap_summary: str,
+    ticket_count: int,
+    estimated_support_cost: float,
+    cost_period: str,
+    cost_confidence: str,
+    evidence_tier: str,
+    customer_vocabulary: Sequence[str],
+    recommended_title: str,
+    recommended_action: str,
+) -> dict[str, Any]:
+    return {
+        "recommended_title": recommended_title or _text(item.get("question")),
+        "question": _text(item.get("question")),
+        "owner_lane": owner_lane,
+        "product_gap_summary": product_gap_summary,
+        "ticket_count": ticket_count,
+        "estimated_support_cost": estimated_support_cost,
+        "cost_period": cost_period,
+        "cost_confidence": cost_confidence,
+        "evidence_tier": evidence_tier,
+        "customer_vocabulary": list(customer_vocabulary[:3]),
+        "recommended_action": recommended_action,
+    }
+
+
 def _action_top_evidence(item: Mapping[str, Any]) -> list[dict[str, Any]]:
     source_ids = _texts(item.get("source_ids"))
     quotes = _texts(item.get("evidence_quotes"))
@@ -3489,6 +3786,7 @@ def _question_detail_rows(
             "estimated_support_cost": _support_cost(_ticket_count(item)),
             "answer_status": _status_label(item),
             "answer_evidence_status": _text(item.get("answer_evidence_status")),
+            "evidence_tier": _action_evidence_tier(item),
             "resolution_evidence_scope": _text(item.get("resolution_evidence_scope")),
             "answer_linkage": _evidence_answer_linkage(item),
             "answer": _text(item.get("answer")),
@@ -4143,6 +4441,32 @@ def _teaser_full_answer_rank(teaser: Mapping[str, Any]) -> int | None:
         return None
     rank = _int(full_answer.get("rank"))
     return rank if rank > 0 else None
+
+
+def _visible_snapshot_ranks(
+    *row_groups: Sequence[Mapping[str, Any]],
+    teaser: Mapping[str, Any],
+) -> set[int]:
+    ranks: set[int] = set()
+    for row_group in row_groups:
+        for row in row_group:
+            rank = _int(row.get("rank"))
+            if rank > 0:
+                ranks.add(rank)
+    teaser_full_rank = _teaser_full_answer_rank(teaser)
+    if teaser_full_rank is not None:
+        ranks.add(teaser_full_rank)
+    previews = teaser.get("previews")
+    if isinstance(previews, Sequence) and not isinstance(
+        previews, (str, bytes, bytearray)
+    ):
+        for preview in previews:
+            if not isinstance(preview, Mapping):
+                continue
+            rank = _int(preview.get("rank"))
+            if rank > 0:
+                ranks.add(rank)
+    return ranks
 
 
 def _is_teaser_eligible(item: Mapping[str, Any]) -> bool:

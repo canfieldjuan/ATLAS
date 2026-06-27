@@ -145,10 +145,14 @@ def _observations() -> dict[str, object]:
                 "estimated_support_cost": 108.0,
                 "evidence_row_count": 8,
                 "source_id_count": 8,
+                "product_gap_card_count": 1,
+                "jira_handoff_count": 1,
             },
             "displayed_rows": {
                 "ranked_questions": 2,
                 "question_details": 2,
+                "product_gap_cards": 1,
+                "jira_handoffs": 1,
                 "seo_targets": 2,
             },
         },
@@ -169,6 +173,8 @@ def _surface_caps() -> dict[str, object]:
         "result_page": {
             "ranked_questions": 8,
             "question_details": 10,
+            "product_gap_cards": 5,
+            "jira_handoffs": 5,
             "seo_targets": 10,
         },
     }

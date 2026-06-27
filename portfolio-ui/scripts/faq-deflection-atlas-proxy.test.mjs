@@ -1083,7 +1083,7 @@ await test("hosted result page renders structured paid dashboard only after unlo
   assert.match(html, /Repeat-ticket workload/);
   assert.match(html, /Top ranked questions/);
   assert.match(html, /Publishable answers/);
-  assert.match(html, /No-proven-answer gaps/);
+  assert.match(html, /Product Gap cards/);
   assert.match(html, /Top customer wording and SEO phrases/);
   assert.match(html, /<strong>12<\/strong>/);
   assert.doesNotMatch(html, /<strong>15<\/strong>/);

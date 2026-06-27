@@ -755,6 +755,19 @@ class TaskScheduler:
             },
         },
         {
+            "name": "content_ops_deflection_delta_automation",
+            "description": "Generate persisted monthly deltas for paid Content Ops deflection reports",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": None,  # resolved from settings.deflection_delta.cron_expression
+            "timeout_seconds": 300,
+            "enabled": False,  # opt-in via ATLAS_DEFLECTION_DELTA_ENABLED
+            "metadata": {
+                "builtin_handler": "content_ops_deflection_delta_automation",
+                "notify_tags": "chart_with_upwards_trend,content_ops,deflection",
+            },
+        },
+        {
             "name": "b2b_scrape_target_pruning",
             "description": "Disable low-yield scrape targets based on recent scrape outcomes",
             "task_type": "builtin",
@@ -989,12 +1002,14 @@ class TaskScheduler:
                     settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_enabled
                 ),
                 "content_ops_deflection_report_delivery": settings.deflection_delivery.enabled,
+                "content_ops_deflection_delta_automation": settings.deflection_delta.enabled,
             }
             _enabled_config_keys = {
                 "content_ops_faq_macro_writeback_scheduled_publish": (
                     "settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_enabled"
                 ),
                 "content_ops_deflection_report_delivery": "settings.deflection_delivery.enabled",
+                "content_ops_deflection_delta_automation": "settings.deflection_delta.enabled",
             }
 
             # Resolve configurable cron expressions at runtime
@@ -1004,6 +1019,7 @@ class TaskScheduler:
                 "amazon_seller_campaign_generation": settings.seller_campaign.schedule_cron,
                 "b2b_blog_post_generation": settings.b2b_churn.blog_post_cron,
                 "subcategory_intelligence": settings.subcategory_intelligence.schedule_cron,
+                "content_ops_deflection_delta_automation": settings.deflection_delta.cron_expression,
             }
 
             # Merge pipeline interval overrides from registry
@@ -1208,6 +1224,7 @@ class TaskScheduler:
                 "amazon_seller_campaign_generation": settings.seller_campaign.schedule_cron,
                 "b2b_blog_post_generation": settings.b2b_churn.blog_post_cron,
                 "subcategory_intelligence": settings.subcategory_intelligence.schedule_cron,
+                "content_ops_deflection_delta_automation": settings.deflection_delta.cron_expression,
             }
 
             # Merge pipeline cron overrides

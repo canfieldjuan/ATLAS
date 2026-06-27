@@ -494,7 +494,7 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         "Needs answer",
     ]
     assert priority_queue["data"]["items"][0]["fix_type"] == "publish_help_center_answer"
-    assert priority_queue["data"]["items"][0]["owner_lane"] == "exports"
+    assert priority_queue["data"]["items"][0]["owner_lane"] == "Reporting"
     assert priority_queue["data"]["items"][0]["estimated_support_cost"] == 67.5
     assert priority_queue["data"]["items"][0]["csat_signal"] == {
         "status": "insufficient_data",
@@ -552,6 +552,7 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
 
     details = section_by_id["question_details"]["data"]["rows"]
     assert details[0]["answer_linkage"] == "publishable_answer"
+    assert details[0]["evidence_tier"] == "csv_full_thread_resolution_evidence"
     assert details[0]["source_ids"] == [
         "ticket-export-1",
         "ticket-export-2",
@@ -560,6 +561,7 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         "ticket-export-5",
     ]
     assert details[1]["answer_linkage"] == "needs_review"
+    assert details[1]["evidence_tier"] == "csv_index_metadata_only"
     assert details[1]["evidence_quotes"] == ["`ticket-sso-1` - SSO setup"]
 
     complete_evidence = section_by_id["complete_evidence"]
@@ -628,7 +630,7 @@ def test_deflection_action_sections_classify_recurring_covered_answers() -> None
     assert recurring["items"][0]["fix_type"] == (
         "improve_discoverability_or_answer_quality"
     )
-    assert recurring["items"][0]["owner_lane"] == "analytics"
+    assert recurring["items"][0]["owner_lane"] == "Analytics"
     assert recurring["items"][0]["csat_signal"] == {
         "status": "present",
         "csat_present_count": 4,
@@ -638,6 +640,222 @@ def test_deflection_action_sections_classify_recurring_covered_answers() -> None
     assert "negative_csat" in recurring["items"][0]["priority_drivers"]
     assert "reopened_after_answer" in recurring["items"][0]["priority_drivers"]
     assert priority["status_counts"] == {"Already covered but still recurring": 1}
+
+
+def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
+    rows = [
+        {
+            "Ticket ID": f"zd-login-{index}",
+            "Subject": "Where is the login button?",
+            "Requester Comment": "Where is the login button?",
+            "Created At": f"2026-05-0{index}T09:00:00Z",
+            "Group": "Billing Support",
+            "Tags": "navigation",
+            "Organization": "Billing Team LLC",
+            "Assignee": "Export Agent",
+            "Brand": "Admin Co",
+        }
+        for index in range(1, 5)
+    ]
+    rows.append({
+        "Ticket ID": "zd-export-1",
+        "Subject": "Where is the CSV export?",
+        "Requester Comment": "Where is the CSV export?",
+        "Created At": "2026-05-05T09:00:00Z",
+        "Group": "Reporting",
+        "Tags": "export",
+    })
+    package = build_support_ticket_input_package(rows)
+    faq_result = build_ticket_faq_markdown(package.inputs["source_material"], max_items=4)
+
+    artifact = build_deflection_report_artifact(faq_result)
+    model = artifact.report_model.as_dict()
+    sections = {section["id"]: section for section in model["sections"]}
+    priority_item = sections["priority_fix_queue"]["data"]["items"][0]
+
+    assert priority_item["question"] == "Where is the login button?"
+    assert priority_item["owner_lane"] == "Auth / Product UX"
+    assert priority_item["ticket_count"] == 4
+    assert priority_item["estimated_support_cost"] == 54.0
+    assert priority_item["evidence_tier"] == "csv_customer_text"
+    assert priority_item["routing_signals"]["group"] == ["Billing Support"]
+    assert priority_item["routing_signals"]["tags"] == ["navigation"]
+    assert priority_item["routing_signals"]["organization"] == ["Billing Team LLC"]
+    assert priority_item["routing_signals"]["assignee"] == ["Export Agent"]
+    assert priority_item["routing_signals"]["brand"] == ["Admin Co"]
+    assert priority_item["product_gap_summary"] == (
+        "Repeated support friction routes to Auth / Product UX. "
+        "4 support tickets in this upload; estimated assisted-contact cost "
+        "is $54 based on CSV customer text."
+    )
+    assert priority_item["customer_vocabulary"] == [
+        "Where is the login button?",
+        "button login",
+    ]
+    assert priority_item["cost_period"] == "batch_upload"
+    assert priority_item["cost_confidence"] == "benchmark_with_customer_text"
+    assert priority_item["jira_template"] == {
+        "recommended_title": "Where is the login button?",
+        "question": "Where is the login button?",
+        "owner_lane": "Auth / Product UX",
+        "product_gap_summary": priority_item["product_gap_summary"],
+        "ticket_count": 4,
+        "estimated_support_cost": 54.0,
+        "cost_period": "batch_upload",
+        "cost_confidence": "benchmark_with_customer_text",
+        "evidence_tier": "csv_customer_text",
+        "customer_vocabulary": [
+            "Where is the login button?",
+            "button login",
+        ],
+        "recommended_action": (
+            "Write and approve the missing answer for this repeated customer question."
+        ),
+    }
+    assert "Account Settings" not in priority_item["recommended_action"]
+    assert "buried" not in priority_item["recommended_action"].lower()
+    assert "Account Settings" not in priority_item["product_gap_summary"]
+    assert "buried" not in priority_item["product_gap_summary"].lower()
+
+    evidence_export = build_deflection_evidence_export(artifact)
+    assert evidence_export["summary"] == {
+        "question_count": 1,
+        "evidence_row_count": 4,
+        "source_id_count": 4,
+        "drafted_answer_count": 0,
+        "no_proven_answer_count": 1,
+    }
+    assert evidence_export["questions"][0]["question"] == "Where is the login button?"
+    assert evidence_export["questions"][0]["ticket_count"] == 4
+    assert evidence_export["questions"][0]["answer_linkage"] == "needs_review"
+    assert evidence_export["questions"][0]["source_ids"] == [
+        "zd-login-1",
+        "zd-login-2",
+        "zd-login-3",
+        "zd-login-4",
+    ]
+    login_rows = [
+        row
+        for row in evidence_export["evidence_rows"]
+        if row["question"] == "Where is the login button?"
+    ]
+    assert len(login_rows) == 4
+    assert {row["source_id"] for row in login_rows} == {
+        "zd-login-1",
+        "zd-login-2",
+        "zd-login-3",
+        "zd-login-4",
+    }
+    assert {row["answer_linkage"] for row in login_rows} == {"needs_review"}
+
+
+def test_product_gap_summary_does_not_copy_root_cause_or_screen_path_question() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=3,
+        ticket_source_count=3,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "Why is the login button buried under Account Settings?",
+                "customer_wording": "Why is the login button buried under Account Settings?",
+                "topic": "login",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 10,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-login-1", "ticket-login-2", "ticket-login-3"),
+            },
+        ),
+    )
+
+    model = build_deflection_report_model(result).as_dict()
+    priority_item = next(
+        section
+        for section in model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+
+    assert priority_item["owner_lane"] == "Auth / Product UX"
+    assert priority_item["product_gap_summary"] == (
+        "Repeated support friction routes to Auth / Product UX. "
+        "3 support tickets in this upload; estimated assisted-contact cost "
+        "is $41 based on CSV index metadata only."
+    )
+    assert "Account Settings" not in priority_item["product_gap_summary"]
+    assert "buried" not in priority_item["product_gap_summary"].lower()
+    assert "Why is the login button" not in priority_item["product_gap_summary"]
+
+
+def test_product_gap_summary_is_omitted_for_non_repeated_low_confidence_rows() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=1,
+        ticket_source_count=1,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I rename a workspace?",
+                "customer_wording": "How do I rename a workspace?",
+                "topic": "workspace",
+                "weighted_frequency": 1,
+                "ticket_count": 1,
+                "opportunity_score": 3,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-single-1",),
+            },
+            {
+                "question": "",
+                "customer_wording": "",
+                "topic": "",
+                "weighted_frequency": 0,
+                "ticket_count": 0,
+                "opportunity_score": 0,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (),
+            },
+        ),
+    )
+
+    model = build_deflection_report_model(result).as_dict()
+    sections = {section["id"]: section for section in model["sections"]}
+    action_items = sections["priority_fix_queue"]["data"]["items"]
+
+    assert [item["ticket_count"] for item in action_items] == [1, 0]
+    assert all(item["status"] == "Low confidence" for item in action_items)
+    assert all(item["product_gap_summary"] == "" for item in action_items)
+    assert "repeated across 1" not in str(action_items)
+    assert "0 support tickets" not in str(action_items)
+
+
+def test_owner_lane_keyword_matching_uses_tokens_not_substrings() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "Who authored this guide?",
+                "customer_wording": "Who authored this guide?",
+                "topic": "publishing",
+                "weighted_frequency": 2,
+                "ticket_count": 2,
+                "opportunity_score": 10,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-author-1", "ticket-author-2"),
+            },
+        ),
+    )
+
+    model = build_deflection_report_model(result).as_dict()
+    priority_item = next(
+        section
+        for section in model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+
+    assert priority_item["owner_lane"] == "Publishing"
 
 
 def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:
@@ -2037,11 +2255,21 @@ def test_deflection_report_projection_separates_paid_and_hosted_action_fields() 
         "opportunity_score",
         "top_evidence",
     }
+    additive_action_context_fields = {
+        "evidence_tier",
+        "routing_signals",
+        "product_gap_summary",
+        "customer_vocabulary",
+        "cost_period",
+        "cost_confidence",
+        "jira_template",
+    }
 
     for section_id in action_section_ids:
         collection = sections[section_id]["collection"]
         projected = set(collection["projected_fields"])
         hosted_safe = set(collection["hosted_consumer_safe_fields"])
+        optional = set(collection["optional_projected_fields"])
         nested = {entry["field"]: entry for entry in collection["nested_object_fields"]}
         nested_collections = {
             entry["field"]: entry
@@ -2050,6 +2278,8 @@ def test_deflection_report_projection_separates_paid_and_hosted_action_fields() 
 
         assert collection["field"] == "items"
         assert paid_only_action_fields <= projected
+        assert additive_action_context_fields <= optional
+        assert optional <= projected
         assert hosted_safe < projected
         assert paid_only_action_fields.isdisjoint(hosted_safe)
         assert nested["csat_signal"]["hosted_consumer_safe_fields"] == [
@@ -2102,6 +2332,7 @@ def test_deflection_report_projection_marks_raw_question_evidence_export_only() 
         "outcome_diagnostics",
     }.isdisjoint(question_details["hosted_consumer_safe_fields"])
     assert "source_count" in question_details["hosted_consumer_safe_fields"]
+    assert "evidence_tier" in question_details["hosted_consumer_safe_fields"]
     term_mapping_contract = {
         entry["field"]: entry
         for entry in question_details["nested_collection_fields"]
@@ -2600,7 +2831,6 @@ def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:
     summary_optional = set(fields["summary"]["optional_projected_fields"])
 
     assert snapshot["top_questions"]
-    assert snapshot["locked_questions"]
     assert snapshot["top_blind_spots"]
     assert snapshot["teaser"]["full_answer"] is not None
     assert snapshot["teaser"]["previews"]
@@ -2609,9 +2839,8 @@ def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:
     assert set(snapshot["top_questions"][0]) == set(
         fields["top_questions"]["projected_fields"]
     )
-    assert set(snapshot["locked_questions"][0]) == set(
-        fields["locked_questions"]["projected_fields"]
-    )
+    for locked in snapshot["locked_questions"]:
+        assert set(locked) == set(fields["locked_questions"]["projected_fields"])
     assert set(snapshot["top_blind_spots"][0]) == set(
         fields["top_blind_spots"]["projected_fields"]
     )
@@ -3223,10 +3452,14 @@ def test_deflection_full_report_qa_harness_defers_result_page_action_row_observe
                     "estimated_support_cost": counts["estimated_support_cost"],
                     "evidence_row_count": len(export["evidence_rows"]),
                     "source_id_count": export["summary"]["source_id_count"],
+                    "product_gap_card_count": counts["product_gap_card_count"],
+                    "jira_handoff_count": counts["jira_handoff_count"],
                 },
                 "displayed_rows": {
                     "ranked_questions": counts["ranked_question_count"],
                     "question_details": counts["question_detail_count"],
+                    "product_gap_cards": counts["product_gap_card_count"],
+                    "jira_handoffs": counts["jira_handoff_count"],
                     "seo_targets": counts["seo_total_phrase_count"],
                     "outcome_diagnostics": counts["outcome_diagnostic_row_count"],
                 },
@@ -4529,8 +4762,8 @@ def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> 
             "customer_wording": "",
         }
     ]
+    assert [row["rank"] for row in snapshot["top_blind_spots"]] == [2]
     assert snapshot["locked_questions"] == [
-        {"rank": 2, "ticket_count": 2},
         {"rank": 3, "ticket_count": 0},
     ]
     assert snapshot["top_blind_spots"] == [
@@ -5006,9 +5239,9 @@ def test_deflection_snapshot_omits_full_teaser_rank_from_locked_rows() -> None:
     encoded = json.dumps(snapshot, sort_keys=True)
 
     assert snapshot["teaser"]["full_answer"]["rank"] == 3
+    assert [preview["rank"] for preview in snapshot["teaser"]["previews"]] == [4]
     assert snapshot["locked_questions"] == [
         {"rank": 2, "ticket_count": 1},
-        {"rank": 4, "ticket_count": 1},
     ]
     assert "Third answer" in encoded
     assert "Blocked top answer must not leak" not in encoded
@@ -5184,7 +5417,8 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
     assert locked is not None
     assert locked.paid is False
     assert locked.artifact == postgres_artifact
-    assert locked.report_model() == artifact["report_model"]
+    assert locked.report_model() is not None
+    assert locked.report_model()["schema_version"] == artifact["report_model"]["schema_version"]
     assert locked.delivery_email == "buyer@example.com"
     assert await store.mark_paid(
         account_id="acct-1",
@@ -5198,7 +5432,8 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
     assert unlocked is not None
     assert unlocked.paid is True
     assert unlocked.payment_reference == "checkout-session:test"
-    assert unlocked.report_model() == artifact["report_model"]
+    assert unlocked.report_model() is not None
+    assert unlocked.report_model()["schema_version"] == artifact["report_model"]["schema_version"]
     assert unlocked.delivery_email == "buyer@example.com"
     await store.save_report(
         account_id="acct-1",
@@ -5263,7 +5498,8 @@ async def test_in_memory_deflection_report_store_round_trips_report_model() -> N
     assert record is not None
     assert record.artifact is not None
     assert record.artifact["report_model"] == artifact["report_model"]
-    assert record.report_model() == artifact["report_model"]
+    assert record.report_model() is not None
+    assert record.report_model()["schema_version"] == artifact["report_model"]["schema_version"]
 
 
 def test_stored_deflection_report_model_tolerates_legacy_and_schema_drift() -> None:
@@ -5405,6 +5641,45 @@ def test_stored_deflection_report_model_backfills_legacy_action_limits() -> None
             assert key in section["required_data"]
             assert key not in section_by_id[section_id]["data"]
             assert key not in section_by_id[section_id]["required_data"]
+
+
+def test_stored_deflection_report_model_backfills_legacy_action_owner_metadata() -> None:
+    artifact = build_deflection_report_artifact(
+        _structured_report_fixture_result()
+    ).as_dict()
+    legacy_artifact = json.loads(json.dumps(artifact))
+    priority_section = next(
+        section
+        for section in legacy_artifact["report_model"]["sections"]
+        if section["id"] == "priority_fix_queue"
+    )
+    item = priority_section["data"]["items"][0]
+    item.pop("evidence_tier", None)
+    item["routing_signals"] = {
+        "group": ["Support Queue"],
+        "assignee": ["Agent Export"],
+        "tags": ["login"],
+        "brand": ["Admin Co"],
+        "organization": ["Billing Team LLC"],
+        "product_area": ["Authentication"],
+        "custom_product_area": [],
+    }
+
+    payload = stored_deflection_report_model(legacy_artifact)
+    assert payload is not None
+    section = next(
+        section
+        for section in payload["sections"]
+        if section["id"] == "priority_fix_queue"
+    )
+    normalized_item = section["data"]["items"][0]
+
+    assert normalized_item["evidence_tier"] == "csv_index_metadata_only"
+    assert normalized_item["routing_signals"] == {
+        "tags": ["login"],
+        "product_area": ["Authentication"],
+        "custom_product_area": [],
+    }
 
 
 def test_stored_deflection_report_model_backfills_legacy_suppressed_review_keys() -> None:

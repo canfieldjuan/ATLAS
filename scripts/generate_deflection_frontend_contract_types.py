@@ -36,7 +36,10 @@ TYPE_BY_FIELD = {
     "body_withheld": "boolean",
     "cluster_id": "string",
     "confidence": "string",
+    "cost_confidence": "string",
+    "cost_period": "string",
     "customer_term": "string",
+    "customer_vocabulary": "string[]",
     "customer_wording": "string",
     "csat_present_count": "number",
     "default_limit": "number",
@@ -44,17 +47,23 @@ TYPE_BY_FIELD = {
     "documentation_term": "string",
     "drafted_answer_count": "number",
     "estimated_support_cost": "number",
+    "evidence_tier": "string",
     "evidence_row_count": "number",
     "evidence_quote": "string",
     "evidence_quotes": "string[]",
     "fix_type": "string",
     "formula": "string",
+    "group": "string[]",
     "full_answer": "DeflectionSnapshotTeaserFullAnswer | null",
     "generated": "number",
     "generated_question_count": "number",
     "guidance": "string",
     "identity_basis": "string",
     "identity_confidence": "string",
+    "jira_template": "DeflectionReportActionJiraTemplate",
+    "assignee": "string[]",
+    "brand": "string[]",
+    "custom_product_area": "string[]",
     "limit": "number",
     "negative_csat_ticket_count": "number",
     "no_proven_answer_count": "number",
@@ -84,6 +93,7 @@ TYPE_BY_FIELD = {
     "review_key": "string",
     "resolution_evidence_scope": "string",
     "result_page_limit": "number",
+    "routing_signals": "DeflectionReportActionRoutingSignals",
     "source": "string",
     "source_count": "number",
     "source_date_end": "string | null",
@@ -115,6 +125,10 @@ TYPE_BY_FIELD = {
     "total_item_count": "number",
     "total_phrase_count": "number",
     "topic": "string",
+    "organization": "string[]",
+    "product_area": "string[]",
+    "product_gap_summary": "string",
+    "tags": "string[]",
     "weighted_frequency": "number",
 }
 
@@ -485,6 +499,7 @@ def _report_projection_metadata(contract: Mapping[str, Any] | None = None) -> di
                 )
             if item_type == "object":
                 item_fields = _projected_fields(collection)
+                item_optional_fields = _optional_projected_fields(collection)
                 collection_record_fields = _record_fields(
                     collection,
                     f"{section_id}.{collection_field}",
@@ -500,7 +515,7 @@ def _report_projection_metadata(contract: Mapping[str, Any] | None = None) -> di
                 _validate_report_fields(
                     section_id,
                     item_fields,
-                    [],
+                    item_optional_fields,
                     collection_record_fields,
                     collection_structural_fields,
                 )
@@ -848,6 +863,7 @@ def _render_report_nested_types(section: Mapping[str, Any]) -> list[str]:
                 _object_type_with_overrides(
                     item_type,
                     _projected_fields(collection),
+                    optional_fields=_optional_projected_fields(collection),
                     type_overrides=collection_overrides,
                 )
             )

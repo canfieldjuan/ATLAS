@@ -878,7 +878,7 @@ async def test_deflection_report_delta_returns_paid_allowlisted_payload() -> Non
     delta_route = _route(router, "/ops/deflection-reports/{request_id}/delta", "GET")
     payload = await delta_route.endpoint(
         request_id="current",
-        baseline_request_id=None,
+        baseline_request_id="baseline",
     )
     encoded = json.dumps(payload, sort_keys=True)
 
@@ -1396,9 +1396,46 @@ async def test_deflection_submit_accepts_zendesk_full_thread_blob(
     assert evidence_export["evidence_rows"]
 
     model = _route(router, "/ops/deflection-reports/{request_id}/report-model", "GET")
-    assert await model.endpoint(request_id=payload["request_id"]) == report_model
-    assert "markdown" not in report_model
-    assert "faq_result" not in report_model
+    hosted_report_model = await model.endpoint(request_id=payload["request_id"])
+    assert hosted_report_model["schema_version"] == report_model["schema_version"]
+    assert "markdown" not in hosted_report_model
+    assert "faq_result" not in hosted_report_model
+    full_priority_item = next(
+        section
+        for section in report_model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+    hosted_priority_item = next(
+        section
+        for section in hosted_report_model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+    assert set(full_priority_item["routing_signals"]) == {
+        "group",
+        "assignee",
+        "tags",
+        "brand",
+        "organization",
+        "product_area",
+        "custom_product_area",
+    }
+    assert hosted_priority_item["routing_signals"] == {
+        "tags": [],
+        "product_area": [],
+        "custom_product_area": [],
+    }
+    assert hosted_priority_item["evidence_tier"] == full_priority_item["evidence_tier"]
+    full_detail_row = next(
+        section
+        for section in report_model["sections"]
+        if section["id"] == "question_details"
+    )["data"]["rows"][0]
+    hosted_detail_row = next(
+        section
+        for section in hosted_report_model["sections"]
+        if section["id"] == "question_details"
+    )["data"]["rows"][0]
+    assert hosted_detail_row["evidence_tier"] == full_detail_row["evidence_tier"]
 
     summary = artifact_payload["summary"]
     assert summary["drafted_answer_count"] == 1

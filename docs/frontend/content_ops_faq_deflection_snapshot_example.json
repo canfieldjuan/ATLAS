@@ -1,15 +1,15 @@
 {
   "locked_questions": [],
   "summary": {
-    "drafted_answer_count": 1,
-    "generated": 2,
-    "no_proven_answer_count": 1,
+    "drafted_answer_count": 4,
+    "generated": 7,
+    "no_proven_answer_count": 3,
     "non_repeat_ticket_count": 0,
-    "repeat_ticket_count": 4,
-    "source_date_end": "2026-05-15",
+    "repeat_ticket_count": 450,
+    "source_date_end": "2026-05-30",
     "source_date_start": "2026-05-01",
-    "source_window_days": 15,
-    "support_ticket_resolution_evidence_count": 1,
+    "source_window_days": 30,
+    "support_ticket_resolution_evidence_count": 4,
     "support_ticket_resolution_evidence_present": true
   },
   "teaser": {
@@ -19,20 +19,61 @@
       "question": "How do I export attribution reports?",
       "rank": 1,
       "resolution_evidence_scope": "scoped",
-      "source_count": 2,
+      "source_count": 95,
       "steps": [
         "Open Analytics, choose Attribution, then click Download report.",
         "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
       ],
-      "weighted_frequency": 2
+      "weighted_frequency": 95
     },
-    "previews": []
+    "previews": [
+      {
+        "answer_evidence_status": "resolution_evidence",
+        "body_withheld": true,
+        "question": "Why do saved search alerts keep firing after I turn them off?",
+        "rank": 3,
+        "resolution_evidence_scope": "scoped",
+        "source_count": 75,
+        "step_count": 2,
+        "weighted_frequency": 75
+      },
+      {
+        "answer_evidence_status": "resolution_evidence",
+        "body_withheld": true,
+        "question": "How do I add an invoice recipient?",
+        "rank": 5,
+        "resolution_evidence_scope": "scoped",
+        "source_count": 55,
+        "step_count": 2,
+        "weighted_frequency": 55
+      },
+      {
+        "answer_evidence_status": "resolution_evidence",
+        "body_withheld": true,
+        "question": "How do I increase my API rate limit?",
+        "rank": 7,
+        "resolution_evidence_scope": "scoped",
+        "source_count": 35,
+        "step_count": 2,
+        "weighted_frequency": 35
+      }
+    ]
   },
   "top_blind_spots": [
     {
       "question": "How do I enable SSO for my team?",
       "rank": 2,
-      "ticket_count": 2
+      "ticket_count": 80
+    },
+    {
+      "question": "How do I pause my subscription for one month?",
+      "rank": 4,
+      "ticket_count": 65
+    },
+    {
+      "question": "Which role can invite teammates?",
+      "rank": 6,
+      "ticket_count": 45
     }
   ],
   "top_questions": [
@@ -40,15 +81,36 @@
       "customer_wording": "How do I export attribution reports?",
       "question": "How do I export attribution reports?",
       "rank": 1,
-      "ticket_count": 2,
-      "weighted_frequency": 2
+      "ticket_count": 95,
+      "weighted_frequency": 95
     },
     {
       "customer_wording": "How do I enable SSO for my team?",
       "question": "How do I enable SSO for my team?",
       "rank": 2,
-      "ticket_count": 2,
-      "weighted_frequency": 2
+      "ticket_count": 80,
+      "weighted_frequency": 80
+    },
+    {
+      "customer_wording": "Why do saved search alerts keep firing after I turn them off?",
+      "question": "Why do saved search alerts keep firing after I turn them off?",
+      "rank": 3,
+      "ticket_count": 75,
+      "weighted_frequency": 75
+    },
+    {
+      "customer_wording": "How do I pause my subscription for one month?",
+      "question": "How do I pause my subscription for one month?",
+      "rank": 4,
+      "ticket_count": 65,
+      "weighted_frequency": 65
+    },
+    {
+      "customer_wording": "How do I add an invoice recipient?",
+      "question": "How do I add an invoice recipient?",
+      "rank": 5,
+      "ticket_count": 55,
+      "weighted_frequency": 55
     }
   ]
 }
