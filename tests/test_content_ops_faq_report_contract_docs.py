@@ -125,9 +125,9 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     assert set(payload["faq_result"]) == set(producer_payload["faq_result"])
     assert payload["report_model"] == producer_payload["report_model"]
     assert payload["markdown"] == producer_payload["markdown"]
-    assert payload["summary"]["drafted_answer_count"] == 2
+    assert payload["summary"]["drafted_answer_count"] == 4
     assert payload["summary"]["no_proven_answer_count"] == 3
-    assert payload["summary"]["ticket_source_count"] >= 300
+    assert payload["summary"]["ticket_source_count"] == 450
     assert payload["summary"]["generated"] == len(payload["faq_result"]["items"])
     assert payload["summary"]["output_checks"] == {
         "condensed": True,

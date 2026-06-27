@@ -30,7 +30,7 @@ SNAPSHOT_TOP_N = 5
 _SYNTHETIC_REPEAT_COHORTS: tuple[dict[str, Any], ...] = (
     {
         "key": "export",
-        "ticket_count": 100,
+        "ticket_count": 95,
         "source_title": "Export attribution",
         "support_ticket_cluster": "reporting friction",
         "product_area": "Reporting",
@@ -46,7 +46,7 @@ _SYNTHETIC_REPEAT_COHORTS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "sso",
-        "ticket_count": 85,
+        "ticket_count": 80,
         "source_title": "SSO setup",
         "support_ticket_cluster": "auth setup",
         "product_area": "Auth",
@@ -59,7 +59,7 @@ _SYNTHETIC_REPEAT_COHORTS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "billing-pause",
-        "ticket_count": 70,
+        "ticket_count": 65,
         "source_title": "Subscription pause",
         "support_ticket_cluster": "billing pause requests",
         "product_area": "Billing",
@@ -69,6 +69,23 @@ _SYNTHETIC_REPEAT_COHORTS: tuple[dict[str, Any], ...] = (
         ),
         "statuses": ("open", "pending", "reopened", "open"),
         "csat_scores": (3, 2, 1, 2),
+    },
+    {
+        "key": "saved-search-alerts",
+        "ticket_count": 75,
+        "source_title": "Saved search alerts",
+        "support_ticket_cluster": "notification search controls",
+        "product_area": "Search",
+        "tags": "search, notifications",
+        "resolution_text": (
+            "Open Notifications, choose Saved searches, disable the alert, "
+            "then save notification preferences."
+        ),
+        "texts": (
+            "Why do saved search alerts keep firing after I turn them off?",
+        ),
+        "statuses": ("solved", "reopened", "closed", "reopened"),
+        "csat_scores": (5, 2, 4, 1),
     },
     {
         "key": "invoice-admin",
@@ -89,7 +106,7 @@ _SYNTHETIC_REPEAT_COHORTS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "roles",
-        "ticket_count": 50,
+        "ticket_count": 45,
         "source_title": "Role permissions",
         "support_ticket_cluster": "workspace permission setup",
         "product_area": "Workspace Admin",
@@ -99,6 +116,23 @@ _SYNTHETIC_REPEAT_COHORTS: tuple[dict[str, Any], ...] = (
         ),
         "statuses": ("open", "pending", "reopened", "pending"),
         "csat_scores": (3, 3, 2, 2),
+    },
+    {
+        "key": "api-limit",
+        "ticket_count": 35,
+        "source_title": "API rate limits",
+        "support_ticket_cluster": "developer rate limit requests",
+        "product_area": "Developer Platform",
+        "tags": "api, rate-limits",
+        "resolution_text": (
+            "Open Developer settings, choose API limits, submit the requested "
+            "monthly volume, then confirm the limit request."
+        ),
+        "texts": (
+            "How do I increase my API rate limit?",
+        ),
+        "statuses": ("solved", "closed", "solved", "closed"),
+        "csat_scores": (5, 4, 5, 4),
     },
 )
 
@@ -145,6 +179,8 @@ def producer_deflection_report_payload() -> dict[str, object]:
             "Subscription pause",
             "Invoice contacts",
             "Workspace roles",
+            "Alert preferences",
+            "Developer quota",
         ),
         vocabulary_gap_rules=(
             ("export", "Download report"),
@@ -153,6 +189,8 @@ def producer_deflection_report_payload() -> dict[str, object]:
             ("pause subscription", "Subscription pause"),
             ("invoice recipient", "Invoice contacts"),
             ("invite permissions", "Workspace roles"),
+            ("saved search alerts", "Alert preferences"),
+            ("rate limit", "Developer quota"),
         ),
     )
 
