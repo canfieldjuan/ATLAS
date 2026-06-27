@@ -3278,7 +3278,10 @@ def _action_csat_signal(item: Mapping[str, Any]) -> dict[str, Any]:
         }
     average: float | None = None
     if present_count >= 3 and diagnostics.get("csat_score_average") is not None:
-        average = float(diagnostics.get("csat_score_average"))
+        try:
+            average = float(diagnostics.get("csat_score_average"))
+        except (TypeError, ValueError):
+            average = None
     return {
         "status": "present" if average is not None else "sparse",
         "csat_present_count": present_count,
@@ -3311,22 +3314,22 @@ def _action_priority_score(item: Mapping[str, Any], status: str) -> int:
         + _int(diagnostics.get("reopened_ticket_count"))
         * _ACTION_REOPENED_TICKET_SCORE_WEIGHT
     )
-    score += min(dissatisfaction_score, _ACTION_DISSATISFACTION_SCORE_CAP)
-    if ticket_count >= 5:
-        score += _ACTION_HIGH_REPEAT_VOLUME_SCORE
-    elif ticket_count >= 2:
-        score += _ACTION_REPEAT_VOLUME_SCORE
     average = diagnostics.get("csat_score_average")
     present_count = _int(diagnostics.get("csat_present_count"))
     if present_count >= 3 and average is not None:
         try:
             parsed_average = float(average)
         except (TypeError, ValueError):
-            parsed_average = 0.0
+            parsed_average = 3.0
         if parsed_average < 3.0:
-            score += int(
+            dissatisfaction_score += int(
                 round((3.0 - parsed_average) * _ACTION_CSAT_AVERAGE_SCORE_MULTIPLIER)
             )
+    score += min(dissatisfaction_score, _ACTION_DISSATISFACTION_SCORE_CAP)
+    if ticket_count >= 5:
+        score += _ACTION_HIGH_REPEAT_VOLUME_SCORE
+    elif ticket_count >= 2:
+        score += _ACTION_REPEAT_VOLUME_SCORE
     if _action_confidence(item) == "low":
         score -= _ACTION_LOW_CONFIDENCE_SCORE_PENALTY
     return max(0, score)

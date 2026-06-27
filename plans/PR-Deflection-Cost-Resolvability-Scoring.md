@@ -95,14 +95,16 @@ Parked hardening: none.
 ## Verification
 
 - Command: python -m pytest tests/test_content_ops_deflection_report.py -k "priority_score or priority_queue_scores_status_and_csat_signals or cost_ahead_of_resolvability or priority_fix_queue_keeps_pdf_limit_items" - passed, 3 selected.
+- Command: python -m pytest tests/test_content_ops_deflection_report.py -q - passed, 168 tests.
 - Command: python -m pytest tests/test_content_ops_faq_report_contract_docs.py - passed, 5 tests.
 - Command: python scripts/generate_deflection_snapshot_example.py --check - passed.
 - Command: bash scripts/validate_extracted_content_pipeline.sh - passed.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline - passed.
 - Command: python scripts/audit_extracted_standalone.py --fail-on-debt - passed.
 - Command: bash scripts/check_ascii_python.sh - passed.
+- Command: bash extracted/_shared/scripts/sync_extracted.sh extracted_content_pipeline - passed; diff unchanged after sync.
 - Command: python scripts/sync_pr_plan.py plans/PR-Deflection-Cost-Resolvability-Scoring.md - updated Files touched and diff size from the actual diff.
-- Command: bash scripts/local_pr_review.sh --current-pr-body-file /tmp/deflection-cost-resolvability-scoring-pr-body.md - passed.
+- Pending after this review fix: bash scripts/local_pr_review.sh --current-pr-body-file /tmp/deflection-cost-resolvability-scoring-pr-body.md.
 
 ## Estimated diff size
 
@@ -110,7 +112,7 @@ Parked hardening: none.
 |---|---:|
 | `docs/frontend/content_ops_faq_deflection_report_example.json` | 12 |
 | `docs/frontend/content_ops_faq_report_contract.md` | 7 |
-| `extracted_content_pipeline/faq_deflection_report.py` | 14 |
-| `plans/PR-Deflection-Cost-Resolvability-Scoring.md` | 116 |
-| `tests/test_content_ops_deflection_report.py` | 89 |
-| **Total** | **238** |
+| `extracted_content_pipeline/faq_deflection_report.py` | 53 |
+| `plans/PR-Deflection-Cost-Resolvability-Scoring.md` | 118 |
+| `tests/test_content_ops_deflection_report.py` | 194 |
+| **Total** | **384** |
