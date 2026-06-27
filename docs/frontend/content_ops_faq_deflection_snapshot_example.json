@@ -1,14 +1,5 @@
 {
-  "locked_questions": [
-    {
-      "rank": 6,
-      "ticket_count": 45
-    },
-    {
-      "rank": 7,
-      "ticket_count": 35
-    }
-  ],
+  "locked_questions": [],
   "summary": {
     "drafted_answer_count": 4,
     "generated": 7,

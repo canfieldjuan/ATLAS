@@ -2500,14 +2500,14 @@ def build_deflection_snapshot(
             "customer_wording": _snapshot_customer_wording(item, question),
         })
     teaser = _snapshot_teaser(items, preview_count=teaser_preview_count)
-    teaser_full_rank = _teaser_full_answer_rank(teaser)
+    visible_ranks = _visible_snapshot_ranks(top_questions, teaser=teaser)
     locked_questions = tuple(
         {
             "rank": rank,
             "ticket_count": _ticket_count(item),
         }
         for rank, item in enumerate(items[top_n:], start=top_n + 1)
-        if rank != teaser_full_rank
+        if rank not in visible_ranks
     )
     return DeflectionSnapshot(
         summary=snapshot_summary,
@@ -2562,16 +2562,6 @@ def _build_deflection_snapshot_from_report_model(
         }
         for index, row in enumerate(ranked_rows[:top_n], start=1)
     ]
-    teaser = _snapshot_teaser(detail_rows, preview_count=teaser_preview_count)
-    teaser_full_rank = _teaser_full_answer_rank(teaser)
-    locked_questions = tuple(
-        {
-            "rank": _int(row.get("rank")) or rank,
-            "ticket_count": _int(row.get("ticket_count")),
-        }
-        for rank, row in enumerate(ranked_rows[top_n:], start=top_n + 1)
-        if (_int(row.get("rank")) or rank) != teaser_full_rank
-    )
     top_blind_spots = tuple(
         {
             "rank": _int(row.get("rank")) or index,
@@ -2580,6 +2570,20 @@ def _build_deflection_snapshot_from_report_model(
         }
         for index, row in enumerate(blind_spot_rows[:blind_spot_limit], start=1)
         if _text(row.get("question"))
+    )
+    teaser = _snapshot_teaser(detail_rows, preview_count=teaser_preview_count)
+    visible_ranks = _visible_snapshot_ranks(
+        top_questions,
+        top_blind_spots,
+        teaser=teaser,
+    )
+    locked_questions = tuple(
+        {
+            "rank": row_rank,
+            "ticket_count": _int(row.get("ticket_count")),
+        }
+        for rank, row in enumerate(ranked_rows[top_n:], start=top_n + 1)
+        if (row_rank := (_int(row.get("rank")) or rank)) not in visible_ranks
     )
     return DeflectionSnapshot(
         summary=snapshot_summary,
@@ -4416,6 +4420,32 @@ def _teaser_full_answer_rank(teaser: Mapping[str, Any]) -> int | None:
         return None
     rank = _int(full_answer.get("rank"))
     return rank if rank > 0 else None
+
+
+def _visible_snapshot_ranks(
+    *row_groups: Sequence[Mapping[str, Any]],
+    teaser: Mapping[str, Any],
+) -> set[int]:
+    ranks: set[int] = set()
+    for row_group in row_groups:
+        for row in row_group:
+            rank = _int(row.get("rank"))
+            if rank > 0:
+                ranks.add(rank)
+    teaser_full_rank = _teaser_full_answer_rank(teaser)
+    if teaser_full_rank is not None:
+        ranks.add(teaser_full_rank)
+    previews = teaser.get("previews")
+    if isinstance(previews, Sequence) and not isinstance(
+        previews, (str, bytes, bytearray)
+    ):
+        for preview in previews:
+            if not isinstance(preview, Mapping):
+                continue
+            rank = _int(preview.get("rank"))
+            if rank > 0:
+                ranks.add(rank)
+    return ranks
 
 
 def _is_teaser_eligible(item: Mapping[str, Any]) -> bool:

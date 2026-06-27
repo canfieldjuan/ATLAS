@@ -2641,7 +2641,6 @@ def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:
     summary_optional = set(fields["summary"]["optional_projected_fields"])
 
     assert snapshot["top_questions"]
-    assert snapshot["locked_questions"]
     assert snapshot["top_blind_spots"]
     assert snapshot["teaser"]["full_answer"] is not None
     assert snapshot["teaser"]["previews"]
@@ -2650,9 +2649,8 @@ def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:
     assert set(snapshot["top_questions"][0]) == set(
         fields["top_questions"]["projected_fields"]
     )
-    assert set(snapshot["locked_questions"][0]) == set(
-        fields["locked_questions"]["projected_fields"]
-    )
+    for locked in snapshot["locked_questions"]:
+        assert set(locked) == set(fields["locked_questions"]["projected_fields"])
     assert set(snapshot["top_blind_spots"][0]) == set(
         fields["top_blind_spots"]["projected_fields"]
     )
@@ -4574,8 +4572,8 @@ def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> 
             "customer_wording": "",
         }
     ]
+    assert [row["rank"] for row in snapshot["top_blind_spots"]] == [2]
     assert snapshot["locked_questions"] == [
-        {"rank": 2, "ticket_count": 2},
         {"rank": 3, "ticket_count": 0},
     ]
     assert snapshot["top_blind_spots"] == [
@@ -5051,9 +5049,9 @@ def test_deflection_snapshot_omits_full_teaser_rank_from_locked_rows() -> None:
     encoded = json.dumps(snapshot, sort_keys=True)
 
     assert snapshot["teaser"]["full_answer"]["rank"] == 3
+    assert [preview["rank"] for preview in snapshot["teaser"]["previews"]] == [4]
     assert snapshot["locked_questions"] == [
         {"rank": 2, "ticket_count": 1},
-        {"rank": 4, "ticket_count": 1},
     ]
     assert "Third answer" in encoded
     assert "Blocked top answer must not leak" not in encoded

@@ -66,11 +66,26 @@ def test_generated_demo_example_carries_coherent_marketing_scale_volume() -> Non
     assert snapshot_payload["top_questions"][0]["ticket_count"] >= 90
     assert snapshot_payload["summary"]["generated"] > CLI.SNAPSHOT_TOP_N
     assert len(snapshot_payload["top_questions"]) == CLI.SNAPSHOT_TOP_N
-    assert snapshot_payload["locked_questions"]
     for question in snapshot_payload["locked_questions"]:
         assert set(question) == {"rank", "ticket_count"}
         assert "question" not in question
     assert snapshot_payload["top_blind_spots"]
+    ranked_ranks = {item["rank"] for item in sections["ranked_questions"]["rows"]}
+    visible_ranks = {question["rank"] for question in snapshot_payload["top_questions"]}
+    full_answer = snapshot_payload["teaser"]["full_answer"]
+    if isinstance(full_answer, dict):
+        visible_ranks.add(full_answer["rank"])
+    visible_ranks.update(
+        preview["rank"] for preview in snapshot_payload["teaser"]["previews"]
+    )
+    visible_ranks.update(
+        blind_spot["rank"] for blind_spot in snapshot_payload["top_blind_spots"]
+    )
+    locked_ranks = {
+        question["rank"] for question in snapshot_payload["locked_questions"]
+    }
+    assert visible_ranks.isdisjoint(locked_ranks)
+    assert visible_ranks | locked_ranks == ranked_ranks
     assert sections["support_tax"]["repeat_ticket_count"] == snapshot_payload[
         "summary"
     ]["repeat_ticket_count"]
