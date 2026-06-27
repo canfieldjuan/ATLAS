@@ -74,6 +74,7 @@ Reviewer rules triggered: R1, R2, R6, R8, R10, R14.
 - `plans/PR-Deflection-Delta-Source-Window-Baseline.md`
 - `plans/archive/PR-Deflection-Delta-Paid-Overflow-Probes.md`
 - `tests/maturity_sweep/baseline_deflection_lane.json`
+- `tests/maturity_sweep/baseline_extracted_content_pipeline.json`
 - `tests/test_content_ops_deflection_delta_persistence.py`
 
 ## Mechanism
@@ -104,9 +105,10 @@ Reviewer rules triggered: R1, R2, R6, R8, R10, R14.
 - This keeps the existing `created_at < current.created_at` guard even when a
   later-created report has an earlier source window; a report generated after
   the current report is not a safe automatic baseline.
-- The maturity baseline is bumped for one justified parse-or-None guard in this
-  file. That is intentional: a narrow stdlib `date.fromisoformat(...)` guard is
-  less brittle than duplicating calendar validation in Python and SQL.
+- The maturity baselines that cover this file are bumped for one justified
+  parse-or-None guard. That is intentional: a narrow stdlib
+  `date.fromisoformat(...)` guard is less brittle than duplicating calendar
+  validation in Python and SQL.
 - No customer-facing delta delivery, result page UI, entitlement logic,
   pagination, or live-cron enablement lands in this slice.
 
@@ -129,6 +131,7 @@ Parked hardening: none.
   -- passed.
 - `git diff --check` -- passed.
 - Deflection maturity sweep lane gate -- passed.
+- General extracted-content maturity sweep ratchet gate -- passed.
 - Plan sync and plan audits -- passed.
 - Body-wired local PR review -- passed.
 
@@ -138,8 +141,9 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/deflection_report_access.py` | 168 |
 | `plans/INDEX.md` | 141 |
-| `plans/PR-Deflection-Delta-Source-Window-Baseline.md` | 145 |
+| `plans/PR-Deflection-Delta-Source-Window-Baseline.md` | 149 |
 | `plans/archive/PR-Deflection-Delta-Paid-Overflow-Probes.md` | 0 |
 | `tests/maturity_sweep/baseline_deflection_lane.json` | 4 |
+| `tests/maturity_sweep/baseline_extracted_content_pipeline.json` | 4 |
 | `tests/test_content_ops_deflection_delta_persistence.py` | 178 |
-| **Total** | **636** |
+| **Total** | **644** |

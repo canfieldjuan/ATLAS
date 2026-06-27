@@ -442,10 +442,10 @@
   },
   "extracted_content_pipeline/deflection_report_access.py": {
     "counts": {
-      "SWALLOWED_EXCEPT": 1,
+      "SWALLOWED_EXCEPT": 2,
       "UNGUARDED_INDEX": 2
     },
-    "score": 9
+    "score": 14
   },
   "extracted_content_pipeline/embedding_port.py": {
     "counts": {
