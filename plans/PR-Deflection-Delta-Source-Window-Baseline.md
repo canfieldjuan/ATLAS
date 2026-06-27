@@ -58,8 +58,9 @@ Affected surfaces:
 - `plans/`
 
 Risk areas:
-- Invalid or missing source-date metadata causing false skips or SQL cast
-  failures.
+- Invalid or missing source-date metadata causing false skips, SQL parser
+  failures, or maturity-ratchet churn that pushes date validation into
+  hand-rolled calendar logic.
 - Accidentally weakening the paid/tenant/current-created boundary while adding
   source-window preference.
 - Treating source-window preference as full calendar-month override support.
@@ -72,22 +73,24 @@ Reviewer rules triggered: R1, R2, R6, R8, R10, R14.
 - `plans/INDEX.md`
 - `plans/PR-Deflection-Delta-Source-Window-Baseline.md`
 - `plans/archive/PR-Deflection-Delta-Paid-Overflow-Probes.md`
+- `tests/maturity_sweep/baseline_deflection_lane.json`
 - `tests/test_content_ops_deflection_delta_persistence.py`
 
 ## Mechanism
 
 - Add small helpers that extract strict calendar-valid `YYYY-MM-DD` source-date
   values from the sanitized persisted `deflection.v1` report model summary.
-  Invalid or missing values return `None` without swallowing parser exceptions.
+  Invalid or missing values return `None` through the standard library
+  `date.fromisoformat(...)` parser inside a narrow `ValueError` guard.
 - In-memory selection keeps the existing candidate set: same account, paid,
   not current, and `created_at < current.created_at`. Within that set it first
   looks for candidates whose `source_date_end` is before the current
   `source_date_start`, choosing the latest such source end. If none exist, it
   falls back to the existing newest-created candidate.
-- Postgres mirrors the same logic using JSONB text extraction, guarded integer
-  parsing, and month/day/leap-year checks. The `ORDER BY` ranks comparable
-  source-window candidates first only after both dates are calendar-valid, then
-  falls back to `created_at DESC`.
+- Postgres mirrors the same logic using JSONB text extraction plus
+  `to_date(...)` / `to_char(...)` round-trip validation. The `ORDER BY` ranks
+  comparable source-window candidates first only after both dates are
+  calendar-valid, then falls back to `created_at DESC`.
 - `compute_and_save_previous_deflection_delta(...)` and
   `fetch_paid_deflection_delta(...)` already call
   `select_previous_paid_report(...)`, so the shared boundary upgrade covers
@@ -101,6 +104,9 @@ Reviewer rules triggered: R1, R2, R6, R8, R10, R14.
 - This keeps the existing `created_at < current.created_at` guard even when a
   later-created report has an earlier source window; a report generated after
   the current report is not a safe automatic baseline.
+- The maturity baseline is bumped for one justified parse-or-None guard in this
+  file. That is intentional: a narrow stdlib `date.fromisoformat(...)` guard is
+  less brittle than duplicating calendar validation in Python and SQL.
 - No customer-facing delta delivery, result page UI, entitlement logic,
   pagination, or live-cron enablement lands in this slice.
 
@@ -130,9 +136,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/deflection_report_access.py` | 241 |
+| `extracted_content_pipeline/deflection_report_access.py` | 168 |
 | `plans/INDEX.md` | 141 |
-| `plans/PR-Deflection-Delta-Source-Window-Baseline.md` | 138 |
+| `plans/PR-Deflection-Delta-Source-Window-Baseline.md` | 145 |
 | `plans/archive/PR-Deflection-Delta-Paid-Overflow-Probes.md` | 0 |
-| `tests/test_content_ops_deflection_delta_persistence.py` | 176 |
-| **Total** | **696** |
+| `tests/maturity_sweep/baseline_deflection_lane.json` | 4 |
+| `tests/test_content_ops_deflection_delta_persistence.py` | 178 |
+| **Total** | **636** |

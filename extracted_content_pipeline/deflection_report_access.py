@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
-import re
 from typing import Any, Protocol
 
 from .deflection_delta import compute_deflection_delta
@@ -21,8 +20,6 @@ from .storage._jsonb_helpers import (
 
 
 logger = logging.getLogger(__name__)
-
-_ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 
 
 @dataclass(frozen=True)
@@ -95,7 +92,7 @@ class _BaselineCandidate:
 
 @dataclass(frozen=True)
 class _SourceWindowCandidate:
-    source_end: tuple[int, int, int]
+    source_end: date
     created_at: datetime
     request_id: str
 
@@ -1016,30 +1013,25 @@ class PostgresDeflectionReportArtifactStore:
     ) -> DeflectionReportAccessRecord | None:
         row = await self.pool.fetchrow(
             """
-            WITH current_report AS (
+            WITH current_raw AS (
                 SELECT created_at,
-                       artifact #>> '{report_model,summary,source_date_start}' AS source_date_start,
-                       CASE
-                         WHEN artifact #>> '{report_model,summary,source_date_start}' ~ '^\\d{4}-\\d{2}-\\d{2}$'
-                         THEN substring(artifact #>> '{report_model,summary,source_date_start}' from 1 for 4)::int
-                         ELSE NULL
-                       END AS current_source_year,
-                       CASE
-                         WHEN artifact #>> '{report_model,summary,source_date_start}' ~ '^\\d{4}-\\d{2}-\\d{2}$'
-                         THEN substring(artifact #>> '{report_model,summary,source_date_start}' from 6 for 2)::int
-                         ELSE NULL
-                       END AS current_source_month,
-                       CASE
-                         WHEN artifact #>> '{report_model,summary,source_date_start}' ~ '^\\d{4}-\\d{2}-\\d{2}$'
-                         THEN substring(artifact #>> '{report_model,summary,source_date_start}' from 9 for 2)::int
-                         ELSE NULL
-                       END AS current_source_day
+                       artifact #>> '{report_model,summary,source_date_start}' AS source_date_start
                 FROM content_ops_deflection_reports
                 WHERE account_id = $1
                   AND request_id = $2
                   AND paid = true
             ),
-            candidate_reports AS (
+            current_report AS (
+                SELECT created_at,
+                       CASE
+                         WHEN source_date_start ~ '^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$'
+                          AND to_char(to_date(source_date_start, 'YYYY-MM-DD'), 'YYYY-MM-DD') = source_date_start
+                         THEN to_date(source_date_start, 'YYYY-MM-DD')
+                         ELSE NULL
+                       END AS source_date_start
+                FROM current_raw
+            ),
+            candidate_raw AS (
                 SELECT reports.account_id,
                        reports.request_id,
                        reports.snapshot,
@@ -1049,31 +1041,31 @@ class PostgresDeflectionReportArtifactStore:
                        reports.delivery_email,
                        reports.created_at,
                        current_report.source_date_start AS current_source_date_start,
-                       current_report.current_source_year,
-                       current_report.current_source_month,
-                       current_report.current_source_day,
-                       reports.artifact #>> '{report_model,summary,source_date_end}' AS source_date_end,
-                       CASE
-                         WHEN reports.artifact #>> '{report_model,summary,source_date_end}' ~ '^\\d{4}-\\d{2}-\\d{2}$'
-                         THEN substring(reports.artifact #>> '{report_model,summary,source_date_end}' from 1 for 4)::int
-                         ELSE NULL
-                       END AS source_end_year,
-                       CASE
-                         WHEN reports.artifact #>> '{report_model,summary,source_date_end}' ~ '^\\d{4}-\\d{2}-\\d{2}$'
-                         THEN substring(reports.artifact #>> '{report_model,summary,source_date_end}' from 6 for 2)::int
-                         ELSE NULL
-                       END AS source_end_month,
-                       CASE
-                         WHEN reports.artifact #>> '{report_model,summary,source_date_end}' ~ '^\\d{4}-\\d{2}-\\d{2}$'
-                         THEN substring(reports.artifact #>> '{report_model,summary,source_date_end}' from 9 for 2)::int
-                         ELSE NULL
-                       END AS source_end_day
+                       reports.artifact #>> '{report_model,summary,source_date_end}' AS source_date_end
                 FROM content_ops_deflection_reports reports
                 JOIN current_report ON true
                 WHERE reports.account_id = $1
                   AND reports.request_id <> $2
                   AND reports.paid = true
                   AND reports.created_at < current_report.created_at
+            ),
+            candidate_reports AS (
+                SELECT account_id,
+                       request_id,
+                       snapshot,
+                       artifact,
+                       paid,
+                       payment_reference,
+                       delivery_email,
+                       created_at,
+                       current_source_date_start,
+                       CASE
+                         WHEN source_date_end ~ '^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$'
+                          AND to_char(to_date(source_date_end, 'YYYY-MM-DD'), 'YYYY-MM-DD') = source_date_end
+                         THEN to_date(source_date_end, 'YYYY-MM-DD')
+                         ELSE NULL
+                       END AS source_date_end
+                FROM candidate_raw
             )
             SELECT account_id,
                    request_id,
@@ -1085,63 +1077,15 @@ class PostgresDeflectionReportArtifactStore:
                    created_at
             FROM candidate_reports
             ORDER BY CASE
-                       WHEN current_source_month BETWEEN 1 AND 12
-                        AND current_source_day BETWEEN 1 AND
-                          CASE
-                            WHEN current_source_month IN (1, 3, 5, 7, 8, 10, 12) THEN 31
-                            WHEN current_source_month IN (4, 6, 9, 11) THEN 30
-                            WHEN current_source_month = 2
-                             AND (
-                               current_source_year % 400 = 0
-                               OR (current_source_year % 4 = 0 AND current_source_year % 100 <> 0)
-                             ) THEN 29
-                            WHEN current_source_month = 2 THEN 28
-                            ELSE 0
-                          END
-                        AND source_end_month BETWEEN 1 AND 12
-                        AND source_end_day BETWEEN 1 AND
-                          CASE
-                            WHEN source_end_month IN (1, 3, 5, 7, 8, 10, 12) THEN 31
-                            WHEN source_end_month IN (4, 6, 9, 11) THEN 30
-                            WHEN source_end_month = 2
-                             AND (
-                               source_end_year % 400 = 0
-                               OR (source_end_year % 4 = 0 AND source_end_year % 100 <> 0)
-                             ) THEN 29
-                            WHEN source_end_month = 2 THEN 28
-                            ELSE 0
-                          END
+                       WHEN current_source_date_start IS NOT NULL
+                        AND source_date_end IS NOT NULL
                         AND source_date_end < current_source_date_start
                        THEN 0
                        ELSE 1
                      END,
                      CASE
-                       WHEN current_source_month BETWEEN 1 AND 12
-                        AND current_source_day BETWEEN 1 AND
-                          CASE
-                            WHEN current_source_month IN (1, 3, 5, 7, 8, 10, 12) THEN 31
-                            WHEN current_source_month IN (4, 6, 9, 11) THEN 30
-                            WHEN current_source_month = 2
-                             AND (
-                               current_source_year % 400 = 0
-                               OR (current_source_year % 4 = 0 AND current_source_year % 100 <> 0)
-                             ) THEN 29
-                            WHEN current_source_month = 2 THEN 28
-                            ELSE 0
-                          END
-                        AND source_end_month BETWEEN 1 AND 12
-                        AND source_end_day BETWEEN 1 AND
-                          CASE
-                            WHEN source_end_month IN (1, 3, 5, 7, 8, 10, 12) THEN 31
-                            WHEN source_end_month IN (4, 6, 9, 11) THEN 30
-                            WHEN source_end_month = 2
-                             AND (
-                               source_end_year % 400 = 0
-                               OR (source_end_year % 4 = 0 AND source_end_year % 100 <> 0)
-                             ) THEN 29
-                            WHEN source_end_month = 2 THEN 28
-                            ELSE 0
-                          END
+                       WHEN current_source_date_start IS NOT NULL
+                        AND source_date_end IS NOT NULL
                         AND source_date_end < current_source_date_start
                        THEN source_date_end
                        ELSE NULL
@@ -1303,7 +1247,7 @@ def _record_from_row(row: Mapping[str, Any]) -> DeflectionReportAccessRecord:
 def _report_source_date(
     record: DeflectionReportAccessRecord,
     field: str,
-) -> tuple[int, int, int] | None:
+) -> date | None:
     model = record.report_model()
     summary = model.get("summary") if isinstance(model, Mapping) else {}
     if not isinstance(summary, Mapping):
@@ -1313,33 +1257,12 @@ def _report_source_date(
 
 def _strict_iso_date(value: Any) -> date | None:
     text = _clean(value)
-    match = _ISO_DATE_RE.fullmatch(text)
-    if match is None:
+    if len(text) != 10:
         return None
-    year = int(match.group(1))
-    month = int(match.group(2))
-    day = int(match.group(3))
-    if not 1 <= month <= 12:
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
         return None
-    if not 1 <= day <= _days_in_month(year, month):
-        return None
-    return (year, month, day)
-
-
-def _days_in_month(year: int, month: int) -> int:
-    if month in {1, 3, 5, 7, 8, 10, 12}:
-        return 31
-    if month in {4, 6, 9, 11}:
-        return 30
-    if month == 2 and _is_leap_year(year):
-        return 29
-    if month == 2:
-        return 28
-    return 0
-
-
-def _is_leap_year(year: int) -> bool:
-    return year % 400 == 0 or (year % 4 == 0 and year % 100 != 0)
 
 
 def stored_deflection_report_model(

@@ -891,11 +891,13 @@ async def test_postgres_delta_methods_are_account_scoped_and_jsonb_encoded() -> 
     assert "reports.created_at < current_report.created_at" in select_query
     assert "artifact #>> '{report_model,summary,source_date_start}'" in select_query
     assert "artifact #>> '{report_model,summary,source_date_end}'" in select_query
-    assert "current_source_month BETWEEN 1 AND 12" in select_query
-    assert "source_end_month BETWEEN 1 AND 12" in select_query
-    assert "current_source_year % 400 = 0" in select_query
-    assert "source_end_year % 400 = 0" in select_query
+    assert "to_date(source_date_start, 'YYYY-MM-DD')" in select_query
+    assert "to_date(source_date_end, 'YYYY-MM-DD')" in select_query
+    assert "to_char(to_date(source_date_start, 'YYYY-MM-DD')" in select_query
+    assert "to_char(to_date(source_date_end, 'YYYY-MM-DD')" in select_query
     assert "source_date_end < current_source_date_start" in select_query
+    assert "current_source_year % 400" not in select_query
+    assert "source_end_year % 400" not in select_query
     insert_query, insert_args = pool.execute_calls[0]
     assert "INSERT INTO content_ops_deflection_deltas" in insert_query
     assert "ON CONFLICT (account_id, current_request_id, baseline_request_id)" in insert_query
