@@ -22,6 +22,10 @@ examples from the real producer, and pins the fuller shape in the generator
 tests so the downstream portfolio demo can remain generated rather than
 hand-authored.
 
+This slice is over the normal LOC target because the generated report example is
+the artifact under test. Splitting the JSON refresh away from the fixture/test
+change would leave the producer and consumer contract temporarily inconsistent.
+
 ## Scope (this PR)
 
 Ownership lane: deflection/landing-demo-contract-derived
@@ -69,6 +73,7 @@ Reviewer rules triggered: R1, R2, R7, R9, R12, R13, R14.
 
 ### Files touched
 
+- `atlas-intel-ui/scripts/content-ops-deflection-report-ui.test.mjs`
 - `docs/frontend/content_ops_faq_deflection_report_example.json`
 - `docs/frontend/content_ops_faq_deflection_snapshot_example.json`
 - `plans/PR-Deflection-Landing-Demo-Full-Example.md`
@@ -98,6 +103,11 @@ The generator then rebuilds
 the generated artifacts match the producer output and the key landing-demo
 sections are non-empty.
 
+The atlas-intel UI consumer test now derives its proven/no-proven count
+expectations from the generated example instead of hardcoding the previous
+fixture counts, so a future regenerated artifact exercises the consumer rather
+than leaving a stale assertion behind.
+
 ## Intentional
 
 - This stays at a moderate real-row volume rather than returning to the 1,140-row
@@ -119,6 +129,7 @@ Parked hardening: none.
 ## Verification
 
 - Pass: `python scripts/generate_deflection_snapshot_example.py --check`.
+- Pass: `npm --prefix atlas-intel-ui run test:content-ops-deflection-report-ui` (3 passed).
 - Pass: `python -m pytest tests/test_content_ops_faq_deflection_snapshot_example_generator.py -q` (12 passed).
 - Pass: `python -m pytest tests/test_content_ops_faq_report_contract_docs.py -q` (5 passed).
 - Pass: `bash scripts/local_pr_review.sh --current-pr-body-file /tmp/pr_body_deflection_landing_demo_full_example.md`.
@@ -127,10 +138,11 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
+| `atlas-intel-ui/scripts/content-ops-deflection-report-ui.test.mjs` | 17 |
 | `docs/frontend/content_ops_faq_deflection_report_example.json` | 6667 |
 | `docs/frontend/content_ops_faq_deflection_snapshot_example.json` | 85 |
-| `plans/PR-Deflection-Landing-Demo-Full-Example.md` | 136 |
+| `plans/PR-Deflection-Landing-Demo-Full-Example.md` | 147 |
 | `scripts/generate_deflection_snapshot_example.py` | 46 |
 | `tests/test_content_ops_faq_deflection_snapshot_example_generator.py` | 23 |
 | `tests/test_content_ops_faq_report_contract_docs.py` | 4 |
-| **Total** | **6961** |
+| **Total** | **6989** |
