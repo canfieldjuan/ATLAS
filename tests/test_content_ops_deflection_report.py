@@ -1045,8 +1045,8 @@ def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:
 def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",
-        source_count=34,
-        ticket_source_count=34,
+        source_count=37,
+        ticket_source_count=37,
         output_checks={"condensed": True},
         items=(
             {
@@ -1132,6 +1132,26 @@ def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
                 ),
             },
             {
+                "question": "How do I reopen an attribution export with negative CSAT?",
+                "customer_wording": "attribution export answer has negative csat",
+                "topic": "exports",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 40,
+                "answer": "Open Attribution, select the export, and rerun the report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "outcome_diagnostics": {
+                    "csat_present_count": 5,
+                    "csat_score_average": -1.0,
+                    "ticket_status_summary": {"resolved": 5},
+                },
+                "source_ids": tuple(
+                    f"ticket-attribution-negative-csat-{index}"
+                    for index in range(3)
+                ),
+            },
+            {
                 "question": "How do I export a quarterly billing report?",
                 "customer_wording": "quarterly billing export",
                 "topic": "billing",
@@ -1182,6 +1202,9 @@ def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
     lower_cost_malformed_average = by_question[
         "How do I reopen an attribution export with malformed CSAT?"
     ]
+    lower_cost_negative_average = by_question[
+        "How do I reopen an attribution export with negative CSAT?"
+    ]
     higher_cost_clean = by_question[
         "How do I reduce repeated invoice export tickets?"
     ]
@@ -1202,6 +1225,14 @@ def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
     assert lower_cost_malformed_average["priority_score"] == 172
     assert lower_cost_malformed_average["status"] == "Draft ready"
     assert lower_cost_malformed_average["csat_signal"] == {
+        "status": "sparse",
+        "csat_present_count": 5,
+        "negative_csat_ticket_count": 0,
+        "numeric_average": None,
+    }
+    assert lower_cost_negative_average["priority_score"] == 172
+    assert lower_cost_negative_average["status"] == "Draft ready"
+    assert lower_cost_negative_average["csat_signal"] == {
         "status": "sparse",
         "csat_present_count": 5,
         "negative_csat_ticket_count": 0,

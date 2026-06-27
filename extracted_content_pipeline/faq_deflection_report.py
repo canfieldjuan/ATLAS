@@ -3480,6 +3480,16 @@ def _action_fix_type(status: str) -> str:
     }.get(status, "Unknown")
 
 
+def _parse_csat_average(value: Any) -> float | None:
+    try:
+        average = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not 1.0 <= average <= 5.0:
+        return None
+    return average
+
+
 def _action_csat_signal(item: Mapping[str, Any]) -> dict[str, Any]:
     diagnostics = _item_outcome_diagnostics(item)
     present_count = _int(diagnostics.get("csat_present_count"))
@@ -3493,10 +3503,7 @@ def _action_csat_signal(item: Mapping[str, Any]) -> dict[str, Any]:
         }
     average: float | None = None
     if present_count >= 3 and diagnostics.get("csat_score_average") is not None:
-        try:
-            average = float(diagnostics.get("csat_score_average"))
-        except (TypeError, ValueError):
-            average = None
+        average = _parse_csat_average(diagnostics.get("csat_score_average"))
     return {
         "status": "present" if average is not None else "sparse",
         "csat_present_count": present_count,
@@ -3532,11 +3539,8 @@ def _action_priority_score(item: Mapping[str, Any], status: str) -> int:
     average = diagnostics.get("csat_score_average")
     present_count = _int(diagnostics.get("csat_present_count"))
     if present_count >= 3 and average is not None:
-        try:
-            parsed_average = float(average)
-        except (TypeError, ValueError):
-            parsed_average = 3.0
-        if parsed_average < 3.0:
+        parsed_average = _parse_csat_average(average)
+        if parsed_average is not None and parsed_average < 3.0:
             dissatisfaction_score += int(
                 round((3.0 - parsed_average) * _ACTION_CSAT_AVERAGE_SCORE_MULTIPLIER)
             )

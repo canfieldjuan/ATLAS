@@ -79,6 +79,10 @@ opportunity score, then original rank. Section membership remains driven by
 status, so this slice changes scoring priority rather than customer-facing
 section shape.
 
+CSAT averages are parsed through a shared helper and only accepted inside the
+real 1-5 CSAT range. Malformed or out-of-range averages stay visible as sparse
+CSAT data and do not add a dissatisfaction bonus.
+
 ## Intentional
 
 - No paid-surface/review-control changes. Those require explicit operator
@@ -117,7 +121,7 @@ Parked hardening: none.
 |---|---:|
 | `docs/frontend/content_ops_faq_deflection_report_example.json` | 780 |
 | `docs/frontend/content_ops_faq_report_contract.md` | 7 |
-| `extracted_content_pipeline/faq_deflection_report.py` | 53 |
-| `plans/PR-Deflection-Cost-Resolvability-Scoring.md` | 123 |
-| `tests/test_content_ops_deflection_report.py` | 194 |
-| **Total** | **1157** |
+| `extracted_content_pipeline/faq_deflection_report.py` | 65 |
+| `plans/PR-Deflection-Cost-Resolvability-Scoring.md` | 127 |
+| `tests/test_content_ops_deflection_report.py` | 225 |
+| **Total** | **1204** |
