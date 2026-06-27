@@ -39,9 +39,10 @@ test('deflection report view splits proven and no-proven answers from contract e
   const report = faqDeflectionReportView(example)
 
   assert.ok(report)
-  assert.equal(report.summary.generated, 2)
-  assert.equal(report.provenItems.length, 1)
-  assert.equal(report.noProvenItems.length, 1)
+  assert.equal(report.summary.generated, 5)
+  assert.equal(report.provenItems.length, 2)
+  assert.equal(report.noProvenItems.length, 3)
+  assert.ok(report.summary.ticketSourceCount >= 300)
   assert.equal(report.provenItems[0].question, 'How do I export attribution reports?')
   assert.equal(report.noProvenItems[0].question, 'How do I enable SSO for my team?')
   assert.equal(report.provenItems[0].answerEvidenceStatus, 'resolution_evidence')
