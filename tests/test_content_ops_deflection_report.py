@@ -495,6 +495,9 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
     ]
     assert priority_queue["data"]["items"][0]["fix_type"] == "publish_help_center_answer"
     assert priority_queue["data"]["items"][0]["owner_lane"] == "Reporting"
+    assert priority_queue["data"]["items"][0]["owner_category"] == (
+        "Content / Support Enablement"
+    )
     assert priority_queue["data"]["items"][0]["estimated_support_cost"] == 67.5
     assert priority_queue["data"]["items"][0]["csat_signal"] == {
         "status": "insufficient_data",
@@ -503,6 +506,9 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
         "numeric_average": None,
     }
     assert priority_queue["data"]["items"][1]["fix_type"] == "create_missing_answer"
+    assert priority_queue["data"]["items"][1]["owner_category"] == (
+        "Content / Support Enablement"
+    )
 
     unresolved = section_by_id["top_unresolved_repeats"]["data"]
     assert unresolved["top_item_count"] == 1
@@ -631,6 +637,9 @@ def test_deflection_action_sections_classify_recurring_covered_answers() -> None
         "improve_discoverability_or_answer_quality"
     )
     assert recurring["items"][0]["owner_lane"] == "Analytics"
+    assert recurring["items"][0]["owner_category"] == (
+        "Product / Support Experience"
+    )
     assert recurring["items"][0]["csat_signal"] == {
         "status": "present",
         "csat_present_count": 4,
@@ -675,6 +684,7 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
 
     assert priority_item["question"] == "Where is the login button?"
     assert priority_item["owner_lane"] == "Auth / Product UX"
+    assert priority_item["owner_category"] == "Content / Support Enablement"
     assert priority_item["ticket_count"] == 4
     assert priority_item["estimated_support_cost"] == 54.0
     assert priority_item["evidence_tier"] == "csv_customer_text"
@@ -698,6 +708,7 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
         "recommended_title": "Where is the login button?",
         "question": "Where is the login button?",
         "owner_lane": "Auth / Product UX",
+        "owner_category": "Content / Support Enablement",
         "product_gap_summary": priority_item["product_gap_summary"],
         "ticket_count": 4,
         "estimated_support_cost": 54.0,
@@ -2287,6 +2298,7 @@ def test_deflection_report_projection_separates_paid_and_hosted_action_fields() 
         "top_evidence",
     }
     additive_action_context_fields = {
+        "owner_category",
         "evidence_tier",
         "routing_signals",
         "product_gap_summary",
@@ -5685,7 +5697,9 @@ def test_stored_deflection_report_model_backfills_legacy_action_owner_metadata()
         if section["id"] == "priority_fix_queue"
     )
     item = priority_section["data"]["items"][0]
+    item.pop("owner_category", None)
     item.pop("evidence_tier", None)
+    item["jira_template"].pop("owner_category", None)
     item["routing_signals"] = {
         "group": ["Support Queue"],
         "assignee": ["Agent Export"],
@@ -5705,6 +5719,10 @@ def test_stored_deflection_report_model_backfills_legacy_action_owner_metadata()
     )
     normalized_item = section["data"]["items"][0]
 
+    assert normalized_item["owner_category"] == "Content / Support Enablement"
+    assert normalized_item["jira_template"]["owner_category"] == (
+        "Content / Support Enablement"
+    )
     assert normalized_item["evidence_tier"] == "csv_index_metadata_only"
     assert normalized_item["routing_signals"] == {
         "tags": ["login"],

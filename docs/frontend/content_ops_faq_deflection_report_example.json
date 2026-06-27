@@ -9310,6 +9310,7 @@
                 ],
                 "estimated_support_cost": 1282.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Reporting",
                 "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
                 "question": "How do I export attribution reports?",
@@ -9318,6 +9319,7 @@
                 "ticket_count": 95
               },
               "opportunity_score": 95,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Reporting",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -9399,6 +9401,7 @@
                 ],
                 "estimated_support_cost": 1080.0,
                 "evidence_tier": "csv_index_metadata_only",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Auth / Product UX",
                 "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 80 support tickets in this upload; estimated assisted-contact cost is $1,080 based on CSV index metadata only.",
                 "question": "How do I enable SSO for my team?",
@@ -9407,6 +9410,7 @@
                 "ticket_count": 80
               },
               "opportunity_score": 80,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Auth / Product UX",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -9490,6 +9494,7 @@
                 ],
                 "estimated_support_cost": 1012.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Product / Support Experience",
                 "owner_lane": "Notification Search Controls",
                 "product_gap_summary": "Repeated support friction routes to Notification Search Controls. 75 support tickets in this upload; estimated assisted-contact cost is $1,013 based on CSV full-thread resolution evidence.",
                 "question": "Why do saved search alerts keep firing after I turn them off?",
@@ -9498,6 +9503,7 @@
                 "ticket_count": 75
               },
               "opportunity_score": 75,
+              "owner_category": "Product / Support Experience",
               "owner_lane": "Notification Search Controls",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -9581,6 +9587,7 @@
                 ],
                 "estimated_support_cost": 877.5,
                 "evidence_tier": "csv_index_metadata_only",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Billing",
                 "product_gap_summary": "Repeated support friction routes to Billing. 65 support tickets in this upload; estimated assisted-contact cost is $878 based on CSV index metadata only.",
                 "question": "How do I pause my subscription for one month?",
@@ -9589,6 +9596,7 @@
                 "ticket_count": 65
               },
               "opportunity_score": 65,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Billing",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -9672,6 +9680,7 @@
                 ],
                 "estimated_support_cost": 742.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Billing",
                 "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
                 "question": "How do I add an invoice recipient?",
@@ -9680,6 +9689,7 @@
                 "ticket_count": 55
               },
               "opportunity_score": 55,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Billing",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -9761,6 +9771,7 @@
                 ],
                 "estimated_support_cost": 607.5,
                 "evidence_tier": "csv_index_metadata_only",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Admin / Access",
                 "product_gap_summary": "Repeated support friction routes to Admin / Access. 45 support tickets in this upload; estimated assisted-contact cost is $608 based on CSV index metadata only.",
                 "question": "Which role can invite teammates?",
@@ -9769,6 +9780,7 @@
                 "ticket_count": 45
               },
               "opportunity_score": 45,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Admin / Access",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -9852,6 +9864,7 @@
                 ],
                 "estimated_support_cost": 472.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Developer Rate Limit Requests",
                 "product_gap_summary": "Repeated support friction routes to Developer Rate Limit Requests. 35 support tickets in this upload; estimated assisted-contact cost is $473 based on CSV full-thread resolution evidence.",
                 "question": "How do I increase my API rate limit?",
@@ -9860,6 +9873,7 @@
                 "ticket_count": 35
               },
               "opportunity_score": 35,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Developer Rate Limit Requests",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -9978,6 +9992,7 @@
                 ],
                 "estimated_support_cost": 1080.0,
                 "evidence_tier": "csv_index_metadata_only",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Auth / Product UX",
                 "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 80 support tickets in this upload; estimated assisted-contact cost is $1,080 based on CSV index metadata only.",
                 "question": "How do I enable SSO for my team?",
@@ -9986,6 +10001,7 @@
                 "ticket_count": 80
               },
               "opportunity_score": 80,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Auth / Product UX",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -10069,6 +10085,7 @@
                 ],
                 "estimated_support_cost": 877.5,
                 "evidence_tier": "csv_index_metadata_only",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Billing",
                 "product_gap_summary": "Repeated support friction routes to Billing. 65 support tickets in this upload; estimated assisted-contact cost is $878 based on CSV index metadata only.",
                 "question": "How do I pause my subscription for one month?",
@@ -10077,6 +10094,7 @@
                 "ticket_count": 65
               },
               "opportunity_score": 65,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Billing",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -10160,6 +10178,7 @@
                 ],
                 "estimated_support_cost": 607.5,
                 "evidence_tier": "csv_index_metadata_only",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Admin / Access",
                 "product_gap_summary": "Repeated support friction routes to Admin / Access. 45 support tickets in this upload; estimated assisted-contact cost is $608 based on CSV index metadata only.",
                 "question": "Which role can invite teammates?",
@@ -10168,6 +10187,7 @@
                 "ticket_count": 45
               },
               "opportunity_score": 45,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Admin / Access",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -10286,6 +10306,7 @@
                 ],
                 "estimated_support_cost": 1282.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Reporting",
                 "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
                 "question": "How do I export attribution reports?",
@@ -10294,6 +10315,7 @@
                 "ticket_count": 95
               },
               "opportunity_score": 95,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Reporting",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -10375,6 +10397,7 @@
                 ],
                 "estimated_support_cost": 742.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Billing",
                 "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
                 "question": "How do I add an invoice recipient?",
@@ -10383,6 +10406,7 @@
                 "ticket_count": 55
               },
               "opportunity_score": 55,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Billing",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -10464,6 +10488,7 @@
                 ],
                 "estimated_support_cost": 472.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Developer Rate Limit Requests",
                 "product_gap_summary": "Repeated support friction routes to Developer Rate Limit Requests. 35 support tickets in this upload; estimated assisted-contact cost is $473 based on CSV full-thread resolution evidence.",
                 "question": "How do I increase my API rate limit?",
@@ -10472,6 +10497,7 @@
                 "ticket_count": 35
               },
               "opportunity_score": 35,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Developer Rate Limit Requests",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -10578,6 +10604,7 @@
                 ],
                 "estimated_support_cost": 1012.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Product / Support Experience",
                 "owner_lane": "Notification Search Controls",
                 "product_gap_summary": "Repeated support friction routes to Notification Search Controls. 75 support tickets in this upload; estimated assisted-contact cost is $1,013 based on CSV full-thread resolution evidence.",
                 "question": "Why do saved search alerts keep firing after I turn them off?",
@@ -10586,6 +10613,7 @@
                 "ticket_count": 75
               },
               "opportunity_score": 75,
+              "owner_category": "Product / Support Experience",
               "owner_lane": "Notification Search Controls",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -10694,6 +10722,7 @@
                 ],
                 "estimated_support_cost": 1282.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Reporting",
                 "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
                 "question": "How do I export attribution reports?",
@@ -10702,6 +10731,7 @@
                 "ticket_count": 95
               },
               "opportunity_score": 95,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Reporting",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -10783,6 +10813,7 @@
                 ],
                 "estimated_support_cost": 1080.0,
                 "evidence_tier": "csv_index_metadata_only",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Auth / Product UX",
                 "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 80 support tickets in this upload; estimated assisted-contact cost is $1,080 based on CSV index metadata only.",
                 "question": "How do I enable SSO for my team?",
@@ -10791,6 +10822,7 @@
                 "ticket_count": 80
               },
               "opportunity_score": 80,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Auth / Product UX",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -10874,6 +10906,7 @@
                 ],
                 "estimated_support_cost": 1012.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Product / Support Experience",
                 "owner_lane": "Notification Search Controls",
                 "product_gap_summary": "Repeated support friction routes to Notification Search Controls. 75 support tickets in this upload; estimated assisted-contact cost is $1,013 based on CSV full-thread resolution evidence.",
                 "question": "Why do saved search alerts keep firing after I turn them off?",
@@ -10882,6 +10915,7 @@
                 "ticket_count": 75
               },
               "opportunity_score": 75,
+              "owner_category": "Product / Support Experience",
               "owner_lane": "Notification Search Controls",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -10965,6 +10999,7 @@
                 ],
                 "estimated_support_cost": 877.5,
                 "evidence_tier": "csv_index_metadata_only",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Billing",
                 "product_gap_summary": "Repeated support friction routes to Billing. 65 support tickets in this upload; estimated assisted-contact cost is $878 based on CSV index metadata only.",
                 "question": "How do I pause my subscription for one month?",
@@ -10973,6 +11008,7 @@
                 "ticket_count": 65
               },
               "opportunity_score": 65,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Billing",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -11056,6 +11092,7 @@
                 ],
                 "estimated_support_cost": 742.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Billing",
                 "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
                 "question": "How do I add an invoice recipient?",
@@ -11064,6 +11101,7 @@
                 "ticket_count": 55
               },
               "opportunity_score": 55,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Billing",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -11145,6 +11183,7 @@
                 ],
                 "estimated_support_cost": 607.5,
                 "evidence_tier": "csv_index_metadata_only",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Admin / Access",
                 "product_gap_summary": "Repeated support friction routes to Admin / Access. 45 support tickets in this upload; estimated assisted-contact cost is $608 based on CSV index metadata only.",
                 "question": "Which role can invite teammates?",
@@ -11153,6 +11192,7 @@
                 "ticket_count": 45
               },
               "opportunity_score": 45,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Admin / Access",
               "priority_drivers": [
                 "high_repeat_volume",
@@ -11236,6 +11276,7 @@
                 ],
                 "estimated_support_cost": 472.5,
                 "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_category": "Content / Support Enablement",
                 "owner_lane": "Developer Rate Limit Requests",
                 "product_gap_summary": "Repeated support friction routes to Developer Rate Limit Requests. 35 support tickets in this upload; estimated assisted-contact cost is $473 based on CSV full-thread resolution evidence.",
                 "question": "How do I increase my API rate limit?",
@@ -11244,6 +11285,7 @@
                 "ticket_count": 35
               },
               "opportunity_score": 35,
+              "owner_category": "Content / Support Enablement",
               "owner_lane": "Developer Rate Limit Requests",
               "priority_drivers": [
                 "high_repeat_volume",

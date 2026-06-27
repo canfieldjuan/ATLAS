@@ -1458,6 +1458,19 @@ def _normalize_stored_action_owner_metadata(
         if not _clean(row.get("evidence_tier")):
             row["evidence_tier"] = "csv_index_metadata_only"
             changed = True
+        owner_category = _stored_action_owner_category(row.get("status"))
+        if not _clean(row.get("owner_category")):
+            row["owner_category"] = owner_category
+            changed = True
+        jira_template = row.get("jira_template")
+        if isinstance(jira_template, Mapping) and not _clean(
+            jira_template.get("owner_category")
+        ):
+            row["jira_template"] = {
+                **dict(jira_template),
+                "owner_category": owner_category,
+            }
+            changed = True
         routing_signals = _stored_action_routing_labels(row.get("routing_signals"))
         if row.get("routing_signals") != routing_signals:
             row["routing_signals"] = routing_signals
@@ -1477,6 +1490,15 @@ def _stored_action_routing_labels(value: Any) -> dict[str, list[str]]:
         field: _text_list(raw.get(field))[:8]
         for field in _STORED_ACTION_ROUTING_LABEL_FIELDS
     }
+
+
+def _stored_action_owner_category(status: Any) -> str:
+    normalized = _clean(status)
+    if normalized == "Already covered but still recurring":
+        return "Product / Support Experience"
+    if normalized in {"Draft ready", "Needs answer", "Needs review", "Low confidence"}:
+        return "Content / Support Enablement"
+    return "Review"
 
 
 def _normalize_stored_suppressed_review_keys(
