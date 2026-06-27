@@ -16,6 +16,11 @@ explain resolvability separately.
 This change fixes the root in the producer scoring helper. It does not add
 another paid decision surface or continue review-control work.
 
+The diff is over the 400 LOC soft cap because the current generated report
+example now contains the larger demo corpus from `origin/main`; recalibrating
+priority scores legitimately reorders that generated `priority_fix_queue`
+artifact. The handwritten code/test surface remains narrow.
+
 ## Scope (this PR)
 
 Ownership lane: deflection/324-cost-resolvability-scoring
@@ -94,10 +99,10 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: python -m pytest tests/test_content_ops_deflection_report.py -k "priority_score or priority_queue_scores_status_and_csat_signals or cost_ahead_of_resolvability or priority_fix_queue_keeps_pdf_limit_items" - passed, 3 selected.
-- Command: python -m pytest tests/test_content_ops_deflection_report.py -q - passed, 168 tests.
-- Command: python -m pytest tests/test_content_ops_faq_report_contract_docs.py - passed, 5 tests.
-- Command: python scripts/generate_deflection_snapshot_example.py --check - passed.
+- Command: python -m pytest tests/test_content_ops_deflection_report.py -k "priority_score or priority_queue_scores_status_and_csat_signals or cost_ahead_of_resolvability or priority_fix_queue_keeps_pdf_limit_items" - passed, 3 selected, 170 deselected.
+- Command: python -m pytest tests/test_content_ops_deflection_report.py -q - passed, 173 tests.
+- Command: python -m pytest tests/test_content_ops_faq_report_contract_docs.py -q - passed, 5 tests.
+- Command: python scripts/generate_deflection_snapshot_example.py --check - passed; report and snapshot examples are current.
 - Command: bash scripts/validate_extracted_content_pipeline.sh - passed.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline - passed.
 - Command: python scripts/audit_extracted_standalone.py --fail-on-debt - passed.
@@ -110,9 +115,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `docs/frontend/content_ops_faq_deflection_report_example.json` | 12 |
+| `docs/frontend/content_ops_faq_deflection_report_example.json` | 780 |
 | `docs/frontend/content_ops_faq_report_contract.md` | 7 |
 | `extracted_content_pipeline/faq_deflection_report.py` | 53 |
-| `plans/PR-Deflection-Cost-Resolvability-Scoring.md` | 118 |
+| `plans/PR-Deflection-Cost-Resolvability-Scoring.md` | 123 |
 | `tests/test_content_ops_deflection_report.py` | 194 |
-| **Total** | **384** |
+| **Total** | **1157** |
