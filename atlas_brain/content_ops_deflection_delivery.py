@@ -87,6 +87,7 @@ class DeflectionDeltaDeliveryRunSummary:
     sent: int
     failed: int
     dry_run: int
+    deferred: int = 0
 
 
 @dataclass(frozen=True)
@@ -299,7 +300,7 @@ async def send_pending_deflection_delta_deliveries(
         _PENDING_DELTA_SQL if config.dry_run else _CLAIM_PENDING_DELTA_SQL,
         int(config.limit),
     )
-    sent = failed = dry_run = 0
+    sent = failed = deferred = dry_run = 0
     for row in rows:
         data = _row_to_dict(row)
         account_id = _required_text(data.get("account_id"), "account_id")
@@ -337,7 +338,7 @@ async def send_pending_deflection_delta_deliveries(
                 error="source_report_not_paid",
                 severity="warning",
             )
-            failed += 1
+            deferred += 1
             continue
         try:
             record = _delta_record_from_delivery_row(data)
@@ -373,7 +374,7 @@ async def send_pending_deflection_delta_deliveries(
                     error="delta_no_longer_sendable",
                     severity="warning",
                 )
-                failed += 1
+                deferred += 1
                 continue
             result = await sender.send(
                 _delta_send_request(
@@ -426,6 +427,7 @@ async def send_pending_deflection_delta_deliveries(
         sent=sent,
         failed=failed,
         dry_run=dry_run,
+        deferred=deferred,
     )
 
 
