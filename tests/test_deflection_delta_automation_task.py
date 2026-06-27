@@ -421,11 +421,26 @@ async def test_run_reports_deferred_delivery_without_total_failure_raise(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_delta_settings(monkeypatch)
-    monkeypatch.setattr(mod.settings.deflection_delivery, "from_email", "reports@example.com", raising=False)
-    monkeypatch.setattr(mod.settings.deflection_delivery, "resend_api_key", "resend-key", raising=False)
+    monkeypatch.setattr(
+        mod.settings.deflection_delivery,
+        "from_email",
+        "reports@example.com",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        mod.settings.deflection_delivery,
+        "resend_api_key",
+        "resend-key",
+        raising=False,
+    )
     pool = _Pool(is_initialized=True)
 
-    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+    async def _compute(
+        _store: Any,
+        *,
+        account_limit: int,
+        reports_per_account: int,
+    ) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=1,
             reports_scanned=2,
@@ -445,11 +460,109 @@ async def test_run_reports_deferred_delivery_without_total_failure_raise(
 
     result = await mod.run(SimpleNamespace(metadata={}))
 
-    assert result["_skip_synthesis"] == "Deflection delta delivery degraded"
+    assert result["_skip_synthesis"] == "Deflection delta delivery pending retries"
     assert result["delivery_scanned"] == 2
     assert result["delivery_sent"] == 0
     assert result["delivery_failed"] == 0
     assert result["delivery_deferred"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_reports_generation_degraded_before_deferred_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    monkeypatch.setattr(
+        mod.settings.deflection_delivery,
+        "from_email",
+        "reports@example.com",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        mod.settings.deflection_delivery,
+        "resend_api_key",
+        "resend-key",
+        raising=False,
+    )
+    pool = _Pool(is_initialized=True)
+
+    async def _compute(
+        _store: Any,
+        *,
+        account_limit: int,
+        reports_per_account: int,
+    ) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=2,
+            reports_scanned=3,
+            deltas_saved=1,
+            skipped_no_delta=1,
+            failed=1,
+            delta_deliveries_enqueued=1,
+        )
+
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+        assert pool_arg is pool
+        return SimpleNamespace(scanned=2, sent=0, failed=0, deferred=2, dry_run=0)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", _send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert result["_skip_synthesis"] == "Deflection delta automation degraded"
+    assert result["failed"] == 1
+    assert result["delivery_failed"] == 0
+    assert result["delivery_deferred"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_reports_delivery_degraded_when_failed_and_deferred(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    monkeypatch.setattr(
+        mod.settings.deflection_delivery,
+        "from_email",
+        "reports@example.com",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        mod.settings.deflection_delivery,
+        "resend_api_key",
+        "resend-key",
+        raising=False,
+    )
+    pool = _Pool(is_initialized=True)
+
+    async def _compute(
+        _store: Any,
+        *,
+        account_limit: int,
+        reports_per_account: int,
+    ) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=1,
+            reports_scanned=2,
+            deltas_saved=1,
+            skipped_no_delta=1,
+            delta_deliveries_enqueued=1,
+        )
+
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+        assert pool_arg is pool
+        return SimpleNamespace(scanned=2, sent=0, failed=1, deferred=1, dry_run=0)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", _send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert result["_skip_synthesis"] == "Deflection delta delivery degraded"
+    assert result["delivery_failed"] == 1
+    assert result["delivery_deferred"] == 1
 
 
 @pytest.mark.asyncio

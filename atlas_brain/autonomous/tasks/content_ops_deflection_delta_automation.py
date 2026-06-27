@@ -176,9 +176,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         }
     if summary.failed >= summary.reports_scanned:
         raise RuntimeError("Deflection delta automation failed for all scanned reports")
-    if delivery_summary and (
-        delivery_summary.failed or getattr(delivery_summary, "deferred", 0)
-    ):
+    if delivery_summary and delivery_summary.failed:
         if (
             not dry_run
             and delivery_summary.scanned > 0
@@ -189,6 +187,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "Deflection delta delivery degraded", **payload}
     if summary.failed:
         return {"_skip_synthesis": "Deflection delta automation degraded", **payload}
+    if delivery_summary and getattr(delivery_summary, "deferred", 0):
+        return {
+            "_skip_synthesis": "Deflection delta delivery pending retries",
+            **payload,
+        }
     if summary.account_limit_overflow or summary.reports_per_account_limit_overflow:
         return {
             "_skip_synthesis": "Deflection delta automation scan window overflow",
