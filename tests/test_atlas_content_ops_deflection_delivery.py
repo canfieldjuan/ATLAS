@@ -11,6 +11,7 @@ import pytest
 from atlas_brain.content_ops_deflection_delivery import (
     DELIVERY_CLAIM_STALE_AFTER,
     DeflectionReportDeliveryConfig,
+    deflection_delta_delivery_summary,
     deflection_delivery_email_surface_observation,
     deflection_report_result_url,
     send_pending_deflection_report_deliveries,
@@ -272,6 +273,78 @@ def _config(**overrides: Any) -> DeflectionReportDeliveryConfig:
     return DeflectionReportDeliveryConfig(**values)
 
 
+def _delta_read_payload() -> dict[str, Any]:
+    return {
+        "schema_version": "deflection_delta_read.v1",
+        "current_request_id": "current-report",
+        "baseline_request_id": "baseline-report",
+        "delta": {
+            "schema_version": "deflection_delta.v1",
+            "current": {
+                "source_date_start": "2026-05-01",
+                "source_date_end": "2026-05-31",
+            },
+            "baseline": {
+                "source_date_start": "2026-04-01",
+                "source_date_end": "2026-04-30",
+            },
+            "summary": {
+                "new_count": 2,
+                "resolved_count": 1,
+                "growing_count": 3,
+                "shrinking_count": 1,
+                "still_unresolved_count": 4,
+                "support_cost_delta": 243.0,
+            },
+            "items": [
+                {
+                    "question": "How do I export attribution reports?",
+                    "owner_lane": "Reporting",
+                    "baseline_status": "Needs answer",
+                    "current_status": "Needs answer",
+                    "ticket_count_delta": 4,
+                    "support_cost_delta": 54.0,
+                    "change_types": ["NEW", "GROWING"],
+                    "source_ids": ["ticket-secret-delta-1"],
+                    "top_evidence": [
+                        {"evidence_quote": "raw delta quote should stay out"}
+                    ],
+                    "representative_phrasing": [
+                        "raw representative phrasing should stay out"
+                    ],
+                },
+                {
+                    "question": "How do I close a workspace?",
+                    "owner_lane": "Admin",
+                    "baseline_status": "Needs answer",
+                    "current_status": "Draft ready",
+                    "ticket_count_delta": -2,
+                    "support_cost_delta": -27.0,
+                    "change_types": ["RESOLVED", "SHRINKING"],
+                },
+                {
+                    "question": "How do I enable SSO?",
+                    "owner_lane": "Security",
+                    "baseline_status": "Needs answer",
+                    "current_status": "Needs answer",
+                    "ticket_count_delta": 1,
+                    "support_cost_delta": 13.5,
+                    "change_types": ["STILL_UNRESOLVED"],
+                },
+                {
+                    "question": "How do I invite auditors?",
+                    "owner_lane": "Admin",
+                    "baseline_status": "Needs answer",
+                    "current_status": "Needs answer",
+                    "ticket_count_delta": 1,
+                    "support_cost_delta": 10.0,
+                    "change_types": ["GROWING"],
+                },
+            ],
+        },
+    }
+
+
 def _install_fake_pdf_renderer(
     monkeypatch: pytest.MonkeyPatch,
     renderer: Any,
@@ -279,6 +352,54 @@ def _install_fake_pdf_renderer(
     module = ModuleType("atlas_brain.deflection_pdf_renderer")
     module.render_deflection_full_report_pdf = renderer
     monkeypatch.setitem(sys.modules, "atlas_brain.deflection_pdf_renderer", module)
+
+
+def test_deflection_delta_delivery_summary_renders_bounded_action_copy() -> None:
+    rendered = deflection_delta_delivery_summary(_delta_read_payload(), max_items=2)
+
+    assert rendered.subject == "Your support deflection delta is ready"
+    assert "2026-05-01 to 2026-05-31 vs 2026-04-01 to 2026-04-30" in rendered.text_body
+    assert "2 new repeats" in rendered.text_body
+    assert "1 resolved repeats" in rendered.text_body
+    assert "3 growing repeats" in rendered.text_body
+    assert "4 still unresolved repeats" in rendered.text_body
+    assert "+$243 estimated assisted-contact handling" in rendered.text_body
+    assert "How do I export attribution reports?" in rendered.text_body
+    assert "New, Growing" in rendered.text_body
+    assert "+4 tickets" in rendered.text_body
+    assert "+$54 estimated handling" in rendered.text_body
+    assert "Owner: Reporting" in rendered.text_body
+    assert "Status: Needs answer -> Needs answer" in rendered.text_body
+    assert "How do I close a workspace?" in rendered.text_body
+    assert "-2 tickets" in rendered.text_body
+    assert "-$27 estimated handling" in rendered.text_body
+    assert "How do I enable SSO?" not in rendered.text_body
+    assert "How do I invite auditors?" not in rendered.text_body
+    assert "ticket-secret-delta-1" not in rendered.text_body
+    assert "raw delta quote should stay out" not in rendered.text_body
+    assert "raw representative phrasing should stay out" not in rendered.text_body
+    assert "Top changes to review" in rendered.html_body
+    assert "How do I export attribution reports?" in rendered.html_body
+    assert "ticket-secret-delta-1" not in rendered.html_body
+
+
+def test_deflection_delta_delivery_summary_escapes_html_and_handles_savings() -> None:
+    payload = _delta_read_payload()
+    delta = payload["delta"]
+    assert isinstance(delta, dict)
+    summary = delta["summary"]
+    assert isinstance(summary, dict)
+    summary["support_cost_delta"] = -135.0
+    items = delta["items"]
+    assert isinstance(items, list)
+    items[0]["question"] = "Can <script>alert('x')</script> export data?"
+
+    rendered = deflection_delta_delivery_summary(payload, max_items=1)
+
+    assert "-$135 estimated assisted-contact handling" in rendered.text_body
+    assert "Can <script>alert('x')</script> export data?" in rendered.text_body
+    assert "Can &lt;script&gt;alert('x')&lt;/script&gt; export data?" in rendered.html_body
+    assert "<script>" not in rendered.html_body
 
 
 @pytest.mark.asyncio

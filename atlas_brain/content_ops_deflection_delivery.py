@@ -24,9 +24,11 @@ from extracted_content_pipeline.storage._jsonb_helpers import decode_jsonb_field
 
 
 DEFAULT_DEFLECTION_DELIVERY_SUBJECT = "Your FAQ deflection report is ready"
+DEFAULT_DEFLECTION_DELTA_DELIVERY_SUBJECT = "Your support deflection delta is ready"
 DELIVERY_CLAIM_STALE_AFTER = "15 minutes"
 MAX_DELIVERY_ERROR_CHARS = 500
 EMAIL_ACTION_SECTION_LIMIT = 3
+DELTA_DELIVERY_ACTION_LIMIT = 3
 
 logger = logging.getLogger("atlas.content_ops_deflection_delivery")
 
@@ -53,6 +55,24 @@ class DeflectionReportDeliverySummary:
     sent: int
     failed: int
     dry_run: int
+
+
+@dataclass(frozen=True)
+class DeflectionDeltaDeliverySummary:
+    subject: str
+    text_body: str
+    html_body: str
+
+
+@dataclass(frozen=True)
+class _DeliveryDeltaActionItem:
+    question: str
+    change_types: tuple[str, ...]
+    ticket_count_delta: int
+    support_cost_delta: float
+    owner_lane: str
+    current_status: str
+    baseline_status: str
 
 
 @dataclass(frozen=True)
@@ -251,6 +271,37 @@ def deflection_report_result_url(
     return (
         f"{base.rstrip('/')}/systems/support-ticket-deflection/results/"
         f"{encoded}?checkout=success"
+    )
+
+
+def deflection_delta_delivery_summary(
+    payload: Mapping[str, Any],
+    *,
+    max_items: int = DELTA_DELIVERY_ACTION_LIMIT,
+    subject: str = DEFAULT_DEFLECTION_DELTA_DELIVERY_SUBJECT,
+) -> DeflectionDeltaDeliverySummary:
+    """Render bounded delivery copy from the paid delta read payload."""
+
+    delta = payload.get("delta") if isinstance(payload.get("delta"), Mapping) else {}
+    summary = delta.get("summary") if isinstance(delta.get("summary"), Mapping) else {}
+    current = delta.get("current") if isinstance(delta.get("current"), Mapping) else {}
+    baseline = delta.get("baseline") if isinstance(delta.get("baseline"), Mapping) else {}
+    items = _delivery_delta_action_items(delta.get("items"), max_items=max_items)
+    resolved_subject = _required_text(subject, "subject")
+    return DeflectionDeltaDeliverySummary(
+        subject=resolved_subject,
+        text_body=_render_delta_summary_text(
+            current=current,
+            baseline=baseline,
+            summary=summary,
+            items=items,
+        ),
+        html_body=_render_delta_summary_html(
+            current=current,
+            baseline=baseline,
+            summary=summary,
+            items=items,
+        ),
     )
 
 
@@ -453,6 +504,161 @@ def _delivery_email_summary(artifact: Any) -> _DeliveryEmailSummary | None:
                 ),
             )
     return None
+
+
+def _render_delta_summary_html(
+    *,
+    current: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    items: tuple[_DeliveryDeltaActionItem, ...],
+) -> str:
+    blocks = [
+        "<h1>Your support deflection delta is ready</h1>",
+        "<p>This compares the latest paid support-ticket report against the "
+        "selected paid baseline.</p>",
+        "<h2>Period compared</h2>",
+        "<p>",
+        _escape(_delta_period_line(current=current, baseline=baseline)),
+        "</p>",
+        "<h2>What changed</h2>",
+        "<ul>",
+    ]
+    for line in _delta_summary_lines(summary):
+        blocks.append(f"<li>{_escape(line)}</li>")
+    blocks.append("</ul>")
+    if items:
+        blocks.append("<h2>Top changes to review</h2><ul>")
+        for item in items:
+            blocks.append(f"<li>{_escape(_delta_action_item_text(item))}</li>")
+        blocks.append("</ul>")
+    return "".join(blocks)
+
+
+def _render_delta_summary_text(
+    *,
+    current: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    items: tuple[_DeliveryDeltaActionItem, ...],
+) -> str:
+    blocks = [
+        "Your support deflection delta is ready",
+        "",
+        "Period compared:",
+        f"- {_delta_period_line(current=current, baseline=baseline)}",
+        "",
+        "What changed:",
+    ]
+    blocks.extend(f"- {line}" for line in _delta_summary_lines(summary))
+    if items:
+        blocks.extend(["", "Top changes to review:"])
+        blocks.extend(f"- {_delta_action_item_text(item)}" for item in items)
+    return "\n".join(blocks) + "\n"
+
+
+def _delta_period_line(
+    *,
+    current: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+) -> str:
+    current_window = _delta_source_window_label(current) or "current report"
+    baseline_window = _delta_source_window_label(baseline) or "baseline report"
+    return f"{current_window} vs {baseline_window}"
+
+
+def _delta_source_window_label(value: Mapping[str, Any]) -> str:
+    start = _strict_text(value.get("source_date_start"))
+    end = _strict_text(value.get("source_date_end"))
+    if start and end:
+        return f"{start} to {end}"
+    return start or end or ""
+
+
+def _delta_summary_lines(summary: Mapping[str, Any]) -> tuple[str, ...]:
+    return (
+        f"{_email_count(_strict_int(summary.get('new_count')) or 0)} new repeats",
+        f"{_email_count(_strict_int(summary.get('resolved_count')) or 0)} resolved repeats",
+        f"{_email_count(_strict_int(summary.get('growing_count')) or 0)} growing repeats",
+        f"{_email_count(_strict_int(summary.get('shrinking_count')) or 0)} shrinking repeats",
+        f"{_email_count(_strict_int(summary.get('still_unresolved_count')) or 0)} still unresolved repeats",
+        (
+            "Support-cost movement: "
+            f"{_signed_email_money(_strict_number(summary.get('support_cost_delta')) or 0.0)}"
+            " estimated assisted-contact handling"
+        ),
+    )
+
+
+def _delivery_delta_action_items(
+    value: Any,
+    *,
+    max_items: int,
+) -> tuple[_DeliveryDeltaActionItem, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return ()
+    items = [
+        item
+        for row in value
+        if isinstance(row, Mapping)
+        and (item := _delivery_delta_action_item(row)) is not None
+    ]
+    items.sort(
+        key=lambda item: (
+            abs(item.support_cost_delta),
+            abs(item.ticket_count_delta),
+            item.question,
+        ),
+        reverse=True,
+    )
+    try:
+        limit = int(max_items)
+    except (TypeError, ValueError):
+        limit = DELTA_DELIVERY_ACTION_LIMIT
+    return tuple(items[: max(0, min(limit, 10))])
+
+
+def _delivery_delta_action_item(
+    row: Mapping[str, Any],
+) -> _DeliveryDeltaActionItem | None:
+    question = _strict_text(row.get("question"))
+    if not question:
+        return None
+    return _DeliveryDeltaActionItem(
+        question=question,
+        change_types=tuple(_strict_texts(row.get("change_types"))[:4]),
+        ticket_count_delta=_strict_int(row.get("ticket_count_delta")) or 0,
+        support_cost_delta=_strict_number(row.get("support_cost_delta")) or 0.0,
+        owner_lane=_strict_text(row.get("owner_lane")) or "",
+        current_status=_strict_text(row.get("current_status")) or "",
+        baseline_status=_strict_text(row.get("baseline_status")) or "",
+    )
+
+
+def _delta_action_item_text(item: _DeliveryDeltaActionItem) -> str:
+    parts = [
+        item.question,
+        ", ".join(_change_type_label(change) for change in item.change_types)
+        or "Changed",
+        f"{_signed_count(item.ticket_count_delta)} tickets",
+        f"{_signed_email_money(item.support_cost_delta)} estimated handling",
+    ]
+    if item.owner_lane:
+        parts.append(f"Owner: {item.owner_lane}")
+    if item.baseline_status or item.current_status:
+        parts.append(
+            "Status: "
+            + " -> ".join(
+                part
+                for part in (item.baseline_status, item.current_status)
+                if part
+            )
+        )
+    return " - ".join(parts)
+
+
+def _change_type_label(value: str) -> str:
+    return value.replace("_", " ").title()
 
 
 def _model_sections(model: Mapping[str, Any], surface: str) -> tuple[dict[str, Any], ...]:
@@ -842,6 +1048,19 @@ def _html_count(value: int) -> str:
 
 def _email_money(value: float) -> str:
     return f"${float(value):,.0f}"
+
+
+def _signed_email_money(value: float) -> str:
+    amount = float(value)
+    if amount < 0:
+        return f"-${abs(amount):,.0f}"
+    prefix = "+" if amount > 0 else ""
+    return f"{prefix}{_email_money(amount)}"
+
+
+def _signed_count(value: int) -> str:
+    prefix = "+" if int(value) > 0 else ""
+    return f"{prefix}{_email_count(value)}"
 
 
 def _html_money(value: float) -> str:
