@@ -3481,10 +3481,9 @@ def _action_fix_type(status: str) -> str:
 
 
 def _parse_csat_average(value: Any) -> float | None:
-    try:
-        average = float(value)
-    except (TypeError, ValueError):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
+    average = float(value)
     if not 1.0 <= average <= 5.0:
         return None
     return average

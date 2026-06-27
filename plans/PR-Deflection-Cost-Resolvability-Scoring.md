@@ -107,6 +107,10 @@ Parked hardening: none.
 - Command: python -m pytest tests/test_content_ops_deflection_report.py -q - passed, 173 tests.
 - Command: python -m pytest tests/test_content_ops_faq_report_contract_docs.py -q - passed, 5 tests.
 - Command: python scripts/generate_deflection_snapshot_example.py --check - passed; report and snapshot examples are current.
+- Command: python -m pytest tests/test_maturity_sweep.py --noconftest -q - passed, 14 tests.
+- Command: python -m pytest tests/test_maturity_sweep_file_lane.py tests/test_deflection_product_surface_manifest.py --noconftest -q - passed, 8 tests.
+- Command: python scripts/check_deflection_product_surface_manifest.py - passed, 37 files.
+- Command: python scripts/maturity_sweep_file_lane.py $(find atlas_brain scripts extracted_content_pipeline -type f -name '*deflection*.py' | sort -u) --tests-root tests --baseline tests/maturity_sweep/baseline_deflection_lane.json --min-score 8 --sensitive-glob '*deflection*' --sensitive-glob '**/billing/**' --sensitive-glob '**/billing*' --sensitive-glob '**/paid*' --sensitive-glob '**/auth/**' --sensitive-glob '**/auth*' --sensitive-glob '**/webhook*' --sensitive-glob '**/webhooks/**' --sensitive-glob '**/payment*' --sensitive-glob '**/invoicing/**' --sensitive-glob '**/*invoice*' --sensitive-glob '**/*deletion*' - passed; ratchet gate passed with no new brittleness above baseline.
 - Command: bash scripts/validate_extracted_content_pipeline.sh - passed.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline - passed.
 - Command: python scripts/audit_extracted_standalone.py --fail-on-debt - passed.
@@ -121,7 +125,7 @@ Parked hardening: none.
 |---|---:|
 | `docs/frontend/content_ops_faq_deflection_report_example.json` | 780 |
 | `docs/frontend/content_ops_faq_report_contract.md` | 7 |
-| `extracted_content_pipeline/faq_deflection_report.py` | 65 |
-| `plans/PR-Deflection-Cost-Resolvability-Scoring.md` | 127 |
+| `extracted_content_pipeline/faq_deflection_report.py` | 64 |
+| `plans/PR-Deflection-Cost-Resolvability-Scoring.md` | 131 |
 | `tests/test_content_ops_deflection_report.py` | 225 |
-| **Total** | **1204** |
+| **Total** | **1207** |
