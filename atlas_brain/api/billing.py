@@ -1081,16 +1081,53 @@ async def _handle_content_ops_deflection_report_dispute_closed(
         request_id=request_id,
         payment_reference=restore_reference,
     )
+    delta_delivery_result = await _requeue_content_ops_deflection_delta_deliveries(
+        pool,
+        account_id=account_id_text,
+        request_id=request_id,
+    )
     logger.warning(
         "Deflection report access restored after Stripe dispute win: "
-        "event_type=%s account=%s request=%s payment_reference=%s object=%s delivery=%s",
+        "event_type=%s account=%s request=%s payment_reference=%s object=%s delivery=%s delta_delivery=%s",
         event_type,
         account_id_text,
         request_id,
         payment_reference or "<missing>",
         _stripe_text(obj, "id") or "<missing>",
         delivery_result,
+        delta_delivery_result,
     )
+
+
+async def _requeue_content_ops_deflection_delta_deliveries(
+    pool: Any,
+    *,
+    account_id: str,
+    request_id: str,
+) -> str:
+    result = await pool.execute(
+        """
+        UPDATE content_ops_deflection_delta_deliveries
+        SET delivery_status = 'pending',
+            delivery_error = NULL,
+            updated_at = NOW()
+        WHERE account_id = $1
+          AND (current_request_id = $2 OR baseline_request_id = $2)
+          AND (
+                delivery_status IN ('pending', 'sending')
+             OR (
+                    delivery_status = 'failed'
+                    AND delivery_error IN (
+                        'source_report_not_paid',
+                        'delta_no_longer_sendable'
+                    )
+                )
+          )
+        """,
+        account_id,
+        request_id,
+    )
+    return str(result)
 
 
 def _content_ops_deflection_revocation_metadata(

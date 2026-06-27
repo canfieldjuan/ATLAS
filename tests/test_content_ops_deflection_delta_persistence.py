@@ -86,6 +86,7 @@ async def _save(
     request_id: str,
     model: dict[str, object] | None = None,
     paid: bool = True,
+    delivery_email: str | None = None,
     created_at: datetime,
     paid_at: datetime | None = None,
 ) -> None:
@@ -94,6 +95,7 @@ async def _save(
         request_id=request_id,
         snapshot=_snapshot(request_id),
         artifact=_artifact(model or _model(_row(request_id))),
+        delivery_email=delivery_email,
     )
     store._created_at_by_key[(account_id, request_id)] = created_at
     if paid:
@@ -483,6 +485,37 @@ async def test_recent_delta_batch_discovers_paid_accounts_and_stays_tenant_scope
         current_request_id="acct-2-current",
         baseline_request_id="acct-1-current",
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_recent_delta_batch_enqueues_delivery_for_current_report_email() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="baseline",
+        model=_model(_row("repeat_1", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-1",
+        request_id="current",
+        model=_model(_row("repeat_1", ticket_count=5, cost=67.5)),
+        delivery_email="buyer@example.com",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+
+    first = await compute_and_save_recent_deflection_deltas(store)
+    second = await compute_and_save_recent_deflection_deltas(store)
+
+    assert first.deltas_saved == 1
+    assert first.delta_deliveries_enqueued == 1
+    assert second.deltas_saved == 1
+    assert second.delta_deliveries_enqueued == 0
+    assert store._delta_delivery_keys == {("acct-1", "current", "baseline")}
 
 
 @pytest.mark.asyncio
@@ -881,6 +914,12 @@ async def test_postgres_delta_methods_are_account_scoped_and_jsonb_encoded() -> 
         current_request_id="current",
         baseline_request_id="baseline",
     )
+    enqueued = await store.enqueue_deflection_delta_delivery(
+        account_id="acct-1",
+        current_request_id="current",
+        baseline_request_id="baseline",
+        delivery_email="buyer@example.com",
+    )
 
     assert selected is not None
     select_query, select_args = pool.fetchrow_calls[0]
@@ -913,6 +952,18 @@ async def test_postgres_delta_methods_are_account_scoped_and_jsonb_encoded() -> 
     assert "JOIN content_ops_deflection_reports baseline_report" in paid_query
     assert "current_report.paid = true" in paid_query
     assert "baseline_report.paid = true" in paid_query
+    enqueue_query, enqueue_args = pool.execute_calls[1]
+    assert enqueued is True
+    assert "INSERT INTO content_ops_deflection_delta_deliveries" in enqueue_query
+    assert "ON CONFLICT (account_id, current_request_id, baseline_request_id)" in enqueue_query
+    assert "DO UPDATE" in enqueue_query
+    assert "delivery_email = EXCLUDED.delivery_email" in enqueue_query
+    assert "source_report_not_paid" in enqueue_query
+    assert "delta_no_longer_sendable" in enqueue_query
+    assert "delivery_status = 'pending'" in enqueue_query
+    assert "delivery_status = 'failed'" in enqueue_query
+    assert "delivery_status = 'delivered'" not in enqueue_query
+    assert enqueue_args == ("acct-1", "current", "baseline", "buyer@example.com")
 
 
 @pytest.mark.asyncio

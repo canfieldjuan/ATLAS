@@ -34,6 +34,7 @@ class _Pool:
         self.processed_event_ids: set[str] = set()
         self.report_rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.delivery_rows: dict[tuple[str, str], dict[str, Any]] = {}
+        self.delta_delivery_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     async def fetchval(self, query: str, *args: Any) -> Any:
         self.fetchval_calls.append((query, args))
@@ -92,6 +93,24 @@ class _Pool:
                 "delivery_status": "pending",
             }
             return "INSERT 0 1"
+        if "UPDATE content_ops_deflection_delta_deliveries" in query:
+            account_id, request_id = args
+            updated = 0
+            for (row_account, current_request, baseline_request), row in (
+                self.delta_delivery_rows.items()
+            ):
+                if row_account != str(account_id):
+                    continue
+                if str(request_id) not in {current_request, baseline_request}:
+                    continue
+                is_recoverable_failed = row.get("delivery_status") == "failed" and row.get(
+                    "delivery_error"
+                ) in {"source_report_not_paid", "delta_no_longer_sendable"}
+                if row.get("delivery_status") in {"pending", "sending"} or is_recoverable_failed:
+                    row["delivery_status"] = "pending"
+                    row["delivery_error"] = None
+                    updated += 1
+            return f"UPDATE {updated}"
         if self.fail_billing_event_insert and "INSERT INTO billing_events" in query:
             raise RuntimeError("billing event insert failed")
         if "INSERT INTO billing_events" in query:
@@ -1191,6 +1210,20 @@ async def test_stripe_webhook_won_dispute_restores_paid_deflection_report(
         "delivery_status": "revoked",
         "delivery_error": "payment_revoked:charge.dispute.created",
     }
+    pool.delta_delivery_rows[(account_id, "req-123", "req-baseline")] = {
+        "account_id": account_id,
+        "current_request_id": "req-123",
+        "baseline_request_id": "req-baseline",
+        "delivery_status": "failed",
+        "delivery_error": "source_report_not_paid",
+    }
+    pool.delta_delivery_rows[(account_id, "req-terminal", "req-123")] = {
+        "account_id": account_id,
+        "current_request_id": "req-terminal",
+        "baseline_request_id": "req-123",
+        "delivery_status": "failed",
+        "delivery_error": "empty_delta_payload",
+    }
 
     response = await _run_stripe_webhook(
         monkeypatch,
@@ -1213,6 +1246,11 @@ async def test_stripe_webhook_won_dispute_restores_paid_deflection_report(
         for call in pool.execute_calls
         if "INSERT INTO content_ops_deflection_report_deliveries" in call[0]
     ]
+    delta_delivery_calls = [
+        call
+        for call in pool.execute_calls
+        if "UPDATE content_ops_deflection_delta_deliveries" in call[0]
+    ]
     billing_event_calls = [
         call for call in pool.execute_calls if "INSERT INTO billing_events" in call[0]
     ]
@@ -1227,10 +1265,24 @@ async def test_stripe_webhook_won_dispute_restores_paid_deflection_report(
         "req-123",
         "cs_test_deflection_dispute_won",
     )
+    assert delta_delivery_calls[0][1] == (account_id, "req-123")
+    assert "source_report_not_paid" in delta_delivery_calls[0][0]
+    assert "delta_no_longer_sendable" in delta_delivery_calls[0][0]
     assert billing_event_calls[0][1][1] == "evt_deflection_dispute_won"
     assert billing_event_calls[0][1][2] == "charge.dispute.closed"
     assert pool.report_rows[(account_id, "req-123")]["paid"] is True
     assert pool.delivery_rows[(account_id, "req-123")]["delivery_status"] == "pending"
+    assert pool.delta_delivery_rows[(account_id, "req-123", "req-baseline")] == {
+        "account_id": account_id,
+        "current_request_id": "req-123",
+        "baseline_request_id": "req-baseline",
+        "delivery_status": "pending",
+        "delivery_error": None,
+    }
+    assert pool.delta_delivery_rows[(account_id, "req-terminal", "req-123")][
+        "delivery_status"
+    ] == "failed"
+    assert "delta_delivery=UPDATE 1" in caplog.text
     assert "access restored after Stripe dispute win" in caplog.text
 
 

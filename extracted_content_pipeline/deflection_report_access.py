@@ -74,6 +74,7 @@ class DeflectionDeltaBatchSummary:
     reports_scanned: int
     deltas_saved: int
     skipped_no_delta: int
+    delta_deliveries_enqueued: int = 0
     failed: int = 0
     account_limit_reached: bool = False
     account_limit_overflow: bool = False
@@ -235,6 +236,16 @@ class DeflectionReportArtifactStore(Protocol):
     ) -> DeflectionDeltaAccessRecord | None:
         """Return one persisted delta only while both source reports are paid."""
 
+    async def enqueue_deflection_delta_delivery(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+        delivery_email: str,
+    ) -> bool:
+        """Queue one persisted delta for customer email delivery."""
+
 
 _DEFLECTION_DELTA_METADATA_FIELDS = (
     "schema_version",
@@ -300,6 +311,7 @@ class InMemoryDeflectionReportArtifactStore:
             tuple[str, str, str],
             DeflectionDeltaAccessRecord,
         ] = {}
+        self._delta_delivery_keys: set[tuple[str, str, str]] = set()
 
     async def save_report(
         self,
@@ -700,6 +712,21 @@ class InMemoryDeflectionReportArtifactStore:
             current_request_id=resolved_current,
             baseline_request_id=resolved_baseline,
         )
+
+    async def enqueue_deflection_delta_delivery(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+        delivery_email: str,
+    ) -> bool:
+        key = _delta_key(account_id, current_request_id, baseline_request_id)
+        _required_text(delivery_email, "delivery_email")
+        if key not in self._deltas or key in self._delta_delivery_keys:
+            return False
+        self._delta_delivery_keys.add(key)
+        return True
 
 
 @dataclass(frozen=True)
@@ -1193,6 +1220,64 @@ class PostgresDeflectionReportArtifactStore:
             resolved_baseline,
         )
         return _delta_record_from_row(row_to_dict(row)) if row is not None else None
+
+    async def enqueue_deflection_delta_delivery(
+        self,
+        *,
+        account_id: str,
+        current_request_id: str,
+        baseline_request_id: str,
+        delivery_email: str,
+    ) -> bool:
+        key = _delta_key(account_id, current_request_id, baseline_request_id)
+        resolved_account, resolved_current, resolved_baseline = key
+        result = await self.pool.execute(
+            """
+            INSERT INTO content_ops_deflection_delta_deliveries (
+                account_id,
+                current_request_id,
+                baseline_request_id,
+                delivery_email,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (account_id, current_request_id, baseline_request_id)
+            DO UPDATE
+            SET delivery_email = EXCLUDED.delivery_email,
+                delivery_status = CASE
+                    WHEN content_ops_deflection_delta_deliveries.delivery_status = 'failed'
+                     AND content_ops_deflection_delta_deliveries.delivery_error IN (
+                         'source_report_not_paid',
+                         'delta_no_longer_sendable'
+                     )
+                        THEN 'pending'
+                    ELSE content_ops_deflection_delta_deliveries.delivery_status
+                END,
+                delivery_error = CASE
+                    WHEN content_ops_deflection_delta_deliveries.delivery_status = 'failed'
+                     AND content_ops_deflection_delta_deliveries.delivery_error IN (
+                         'source_report_not_paid',
+                         'delta_no_longer_sendable'
+                     )
+                        THEN NULL
+                    ELSE content_ops_deflection_delta_deliveries.delivery_error
+                END,
+                updated_at = NOW()
+            WHERE content_ops_deflection_delta_deliveries.delivery_status = 'pending'
+               OR (
+                    content_ops_deflection_delta_deliveries.delivery_status = 'failed'
+                    AND content_ops_deflection_delta_deliveries.delivery_error IN (
+                        'source_report_not_paid',
+                        'delta_no_longer_sendable'
+                    )
+               )
+            """,
+            resolved_account,
+            resolved_current,
+            resolved_baseline,
+            _required_text(delivery_email, "delivery_email"),
+        )
+        return parse_command_tag(result) > 0
 
 
 _STORED_ACTION_SECTION_LIMIT_DEFAULTS = {
@@ -1719,6 +1804,7 @@ async def compute_and_save_recent_deflection_deltas(
         ) > resolved_account_limit
     reports_scanned = 0
     deltas_saved = 0
+    delta_deliveries_enqueued = 0
     skipped_no_delta = 0
     failed = 0
     report_limit_reached_accounts: list[str] = []
@@ -1761,12 +1847,21 @@ async def compute_and_save_recent_deflection_deltas(
                 skipped_no_delta += 1
                 continue
             deltas_saved += 1
+            if report.delivery_email:
+                if await store.enqueue_deflection_delta_delivery(
+                    account_id=account_id,
+                    current_request_id=record.current_request_id,
+                    baseline_request_id=record.baseline_request_id,
+                    delivery_email=report.delivery_email,
+                ):
+                    delta_deliveries_enqueued += 1
 
     return DeflectionDeltaBatchSummary(
         accounts_scanned=len(accounts),
         reports_scanned=reports_scanned,
         deltas_saved=deltas_saved,
         skipped_no_delta=skipped_no_delta,
+        delta_deliveries_enqueued=delta_deliveries_enqueued,
         failed=failed,
         account_limit_reached=account_limit_reached,
         account_limit_overflow=account_limit_overflow,
