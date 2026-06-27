@@ -47,13 +47,17 @@ def _row(
     }
 
 
-def _model(*rows: dict[str, object], start: str = "2026-05-01") -> dict[str, object]:
+def _model(
+    *rows: dict[str, object],
+    start: str = "2026-05-01",
+    end: str = "2026-05-31",
+) -> dict[str, object]:
     return {
         "schema_version": "deflection.v1",
         "title": "Support Ticket Deflection Report",
         "summary": {
             "source_date_start": start,
-            "source_date_end": "2026-05-31",
+            "source_date_end": end,
             "source_window_days": 31,
         },
         "sections": [
@@ -150,6 +154,167 @@ async def test_in_memory_select_previous_paid_report_is_scoped_paid_and_ordered(
         account_id="acct-1",
         current_request_id="current",
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_select_previous_paid_report_prefers_prior_source_window() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        request_id="april-window",
+        model=_model(
+            _row("repeat_1"),
+            start="2026-04-01",
+            end="2026-04-30",
+        ),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="same-may-window-rerun",
+        model=_model(
+            _row("repeat_1"),
+            start="2026-05-01",
+            end="2026-05-31",
+        ),
+        created_at=datetime(2026, 5, 20, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="current",
+        model=_model(
+            _row("repeat_1"),
+            start="2026-05-01",
+            end="2026-05-31",
+        ),
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    selected = await store.select_previous_paid_report(
+        account_id="acct-1",
+        current_request_id="current",
+    )
+
+    assert selected is not None
+    assert selected.request_id == "april-window"
+
+
+@pytest.mark.asyncio
+async def test_select_previous_paid_report_ignores_invalid_candidate_source_dates() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        request_id="valid-april-window",
+        model=_model(
+            _row("repeat_1"),
+            start="2026-04-01",
+            end="2026-04-30",
+        ),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="invalid-calendar-window",
+        model=_model(
+            _row("repeat_1"),
+            start="2026-04-01",
+            end="2026-04-99",
+        ),
+        created_at=datetime(2026, 5, 20, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="current",
+        model=_model(
+            _row("repeat_1"),
+            start="2026-05-01",
+            end="2026-05-31",
+        ),
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    selected = await store.select_previous_paid_report(
+        account_id="acct-1",
+        current_request_id="current",
+    )
+
+    assert selected is not None
+    assert selected.request_id == "valid-april-window"
+
+
+@pytest.mark.asyncio
+async def test_select_previous_paid_report_falls_back_when_source_dates_missing() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    current_model = _model(_row("repeat_1"))
+    assert isinstance(current_model["summary"], dict)
+    current_model["summary"].pop("source_date_start")
+    await _save(
+        store,
+        request_id="older",
+        created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="previous",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="current",
+        model=current_model,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    selected = await store.select_previous_paid_report(
+        account_id="acct-1",
+        current_request_id="current",
+    )
+
+    assert selected is not None
+    assert selected.request_id == "previous"
+
+
+@pytest.mark.asyncio
+async def test_select_previous_paid_report_falls_back_when_current_source_date_invalid() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        request_id="older-source-window",
+        model=_model(
+            _row("repeat_1"),
+            start="2026-04-01",
+            end="2026-04-30",
+        ),
+        created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="previous-created",
+        model=_model(
+            _row("repeat_1"),
+            start="2026-05-01",
+            end="2026-05-31",
+        ),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        request_id="current",
+        model=_model(
+            _row("repeat_1"),
+            start="2026-05-99",
+            end="2026-05-31",
+        ),
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    selected = await store.select_previous_paid_report(
+        account_id="acct-1",
+        current_request_id="current",
+    )
+
+    assert selected is not None
+    assert selected.request_id == "previous-created"
 
 
 @pytest.mark.asyncio
@@ -724,6 +889,15 @@ async def test_postgres_delta_methods_are_account_scoped_and_jsonb_encoded() -> 
     assert "reports.account_id = $1" in select_query
     assert "reports.paid = true" in select_query
     assert "reports.created_at < current_report.created_at" in select_query
+    assert "artifact #>> '{report_model,summary,source_date_start}'" in select_query
+    assert "artifact #>> '{report_model,summary,source_date_end}'" in select_query
+    assert "to_date(source_date_start, 'YYYY-MM-DD')" in select_query
+    assert "to_date(source_date_end, 'YYYY-MM-DD')" in select_query
+    assert "to_char(to_date(source_date_start, 'YYYY-MM-DD')" in select_query
+    assert "to_char(to_date(source_date_end, 'YYYY-MM-DD')" in select_query
+    assert "source_date_end < current_source_date_start" in select_query
+    assert "current_source_year % 400" not in select_query
+    assert "source_end_year % 400" not in select_query
     insert_query, insert_args = pool.execute_calls[0]
     assert "INSERT INTO content_ops_deflection_deltas" in insert_query
     assert "ON CONFLICT (account_id, current_request_id, baseline_request_id)" in insert_query

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 from typing import Any, Protocol
 
@@ -81,6 +81,20 @@ class DeflectionDeltaBatchSummary:
     reports_per_account_limit_overflow: bool = False
     report_limit_reached_accounts: tuple[str, ...] = ()
     report_limit_overflow_accounts: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _BaselineCandidate:
+    created_at: datetime
+    request_id: str
+    row: DeflectionReportAccessRecord
+
+
+@dataclass(frozen=True)
+class _SourceWindowCandidate:
+    source_end: date
+    created_at: datetime
+    request_id: str
 
 
 class DeflectionDeltaReadError(ValueError):
@@ -571,7 +585,11 @@ class InMemoryDeflectionReportArtifactStore:
         if current_created_at is None:
             return None
         candidates = [
-            (created_at, row.request_id)
+            _BaselineCandidate(
+                created_at=created_at,
+                request_id=row.request_id,
+                row=row,
+            )
             for (row_account, request_id), row in self._rows.items()
             if row_account == resolved_account
             and request_id != resolved_current
@@ -582,10 +600,41 @@ class InMemoryDeflectionReportArtifactStore:
         ]
         if not candidates:
             return None
-        _selected_created_at, selected_request_id = max(candidates)
+        current_source_start = _report_source_date(current, "source_date_start")
+        if current_source_start is not None:
+            source_candidates = [
+                _SourceWindowCandidate(
+                    source_end=source_end,
+                    created_at=candidate.created_at,
+                    request_id=candidate.request_id,
+                )
+                for candidate in candidates
+                if (
+                    source_end := _report_source_date(candidate.row, "source_date_end")
+                )
+                is not None
+                and source_end < current_source_start
+            ]
+            if source_candidates:
+                selected = max(
+                    source_candidates,
+                    key=lambda item: (
+                        item.source_end,
+                        item.created_at,
+                        item.request_id,
+                    ),
+                )
+                return await self.get_artifact_record(
+                    account_id=resolved_account,
+                    request_id=selected.request_id,
+                )
+        selected = max(
+            candidates,
+            key=lambda item: (item.created_at, item.request_id),
+        )
         return await self.get_artifact_record(
             account_id=resolved_account,
-            request_id=selected_request_id,
+            request_id=selected.request_id,
         )
 
     async def save_deflection_delta(
@@ -964,27 +1013,85 @@ class PostgresDeflectionReportArtifactStore:
     ) -> DeflectionReportAccessRecord | None:
         row = await self.pool.fetchrow(
             """
-            WITH current_report AS (
-                SELECT created_at
+            WITH current_raw AS (
+                SELECT created_at,
+                       artifact #>> '{report_model,summary,source_date_start}' AS source_date_start
                 FROM content_ops_deflection_reports
                 WHERE account_id = $1
                   AND request_id = $2
                   AND paid = true
+            ),
+            current_report AS (
+                SELECT created_at,
+                       CASE
+                         WHEN source_date_start ~ '^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$'
+                          AND to_char(to_date(source_date_start, 'YYYY-MM-DD'), 'YYYY-MM-DD') = source_date_start
+                         THEN to_date(source_date_start, 'YYYY-MM-DD')
+                         ELSE NULL
+                       END AS source_date_start
+                FROM current_raw
+            ),
+            candidate_raw AS (
+                SELECT reports.account_id,
+                       reports.request_id,
+                       reports.snapshot,
+                       reports.artifact,
+                       reports.paid,
+                       reports.payment_reference,
+                       reports.delivery_email,
+                       reports.created_at,
+                       current_report.source_date_start AS current_source_date_start,
+                       reports.artifact #>> '{report_model,summary,source_date_end}' AS source_date_end
+                FROM content_ops_deflection_reports reports
+                JOIN current_report ON true
+                WHERE reports.account_id = $1
+                  AND reports.request_id <> $2
+                  AND reports.paid = true
+                  AND reports.created_at < current_report.created_at
+            ),
+            candidate_reports AS (
+                SELECT account_id,
+                       request_id,
+                       snapshot,
+                       artifact,
+                       paid,
+                       payment_reference,
+                       delivery_email,
+                       created_at,
+                       current_source_date_start,
+                       CASE
+                         WHEN source_date_end ~ '^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$'
+                          AND to_char(to_date(source_date_end, 'YYYY-MM-DD'), 'YYYY-MM-DD') = source_date_end
+                         THEN to_date(source_date_end, 'YYYY-MM-DD')
+                         ELSE NULL
+                       END AS source_date_end
+                FROM candidate_raw
             )
-            SELECT reports.account_id,
-                   reports.request_id,
-                   reports.snapshot,
-                   reports.artifact,
-                   reports.paid,
-                   reports.payment_reference,
-                   reports.delivery_email
-            FROM content_ops_deflection_reports reports
-            JOIN current_report ON true
-            WHERE reports.account_id = $1
-              AND reports.request_id <> $2
-              AND reports.paid = true
-              AND reports.created_at < current_report.created_at
-            ORDER BY reports.created_at DESC
+            SELECT account_id,
+                   request_id,
+                   snapshot,
+                   artifact,
+                   paid,
+                   payment_reference,
+                   delivery_email,
+                   created_at
+            FROM candidate_reports
+            ORDER BY CASE
+                       WHEN current_source_date_start IS NOT NULL
+                        AND source_date_end IS NOT NULL
+                        AND source_date_end < current_source_date_start
+                       THEN 0
+                       ELSE 1
+                     END,
+                     CASE
+                       WHEN current_source_date_start IS NOT NULL
+                        AND source_date_end IS NOT NULL
+                        AND source_date_end < current_source_date_start
+                       THEN source_date_end
+                       ELSE NULL
+                     END DESC NULLS LAST,
+                     created_at DESC,
+                     request_id DESC
             LIMIT 1
             """,
             _required_text(account_id, "account_id"),
@@ -1135,6 +1242,27 @@ def _record_from_row(row: Mapping[str, Any]) -> DeflectionReportAccessRecord:
         delivery_email=_clean(row.get("delivery_email")) or None,
         created_at=row.get("created_at"),
     )
+
+
+def _report_source_date(
+    record: DeflectionReportAccessRecord,
+    field: str,
+) -> date | None:
+    model = record.report_model()
+    summary = model.get("summary") if isinstance(model, Mapping) else {}
+    if not isinstance(summary, Mapping):
+        return None
+    return _strict_iso_date(summary.get(field))
+
+
+def _strict_iso_date(value: Any) -> date | None:
+    text = _clean(value)
+    if len(text) != 10:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def stored_deflection_report_model(
