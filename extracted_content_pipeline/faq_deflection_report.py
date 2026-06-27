@@ -52,11 +52,20 @@ _ACTION_RESULT_PAGE_LIMIT = 3
 _ACTION_EMAIL_LIMIT = 3
 _ACTION_PDF_LIMIT = 10
 _ACTION_BACKLOG_LIMIT = 25
+_ACTION_SUPPORT_COST_SCORE_MULTIPLIER = 3
+_ACTION_OPPORTUNITY_SCORE_CAP = 50
+_ACTION_NEGATIVE_CSAT_TICKET_SCORE_WEIGHT = 30
+_ACTION_REOPENED_TICKET_SCORE_WEIGHT = 20
+_ACTION_DISSATISFACTION_SCORE_CAP = 30
+_ACTION_HIGH_REPEAT_VOLUME_SCORE = 15
+_ACTION_REPEAT_VOLUME_SCORE = 5
+_ACTION_CSAT_AVERAGE_SCORE_MULTIPLIER = 10
+_ACTION_LOW_CONFIDENCE_SCORE_PENALTY = 25
 _ACTION_STATUS_PRIORITY_WEIGHTS = MappingProxyType({
-    "Needs answer": 50,
-    "Already covered but still recurring": 45,
-    "Needs review": 35,
-    "Draft ready": 25,
+    "Needs answer": 8,
+    "Already covered but still recurring": 7,
+    "Needs review": 6,
+    "Draft ready": 5,
     "Low confidence": 0,
 })
 _SOURCE_EXAMPLE_LIMIT = 3
@@ -3471,6 +3480,15 @@ def _action_fix_type(status: str) -> str:
     }.get(status, "Unknown")
 
 
+def _parse_csat_average(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    average = float(value)
+    if not 1.0 <= average <= 5.0:
+        return None
+    return average
+
+
 def _action_csat_signal(item: Mapping[str, Any]) -> dict[str, Any]:
     diagnostics = _item_outcome_diagnostics(item)
     present_count = _int(diagnostics.get("csat_present_count"))
@@ -3484,7 +3502,7 @@ def _action_csat_signal(item: Mapping[str, Any]) -> dict[str, Any]:
         }
     average: float | None = None
     if present_count >= 3 and diagnostics.get("csat_score_average") is not None:
-        average = float(diagnostics.get("csat_score_average"))
+        average = _parse_csat_average(diagnostics.get("csat_score_average"))
     return {
         "status": "present" if average is not None else "sparse",
         "csat_present_count": present_count,
@@ -3506,26 +3524,32 @@ def _action_confidence(item: Mapping[str, Any]) -> str:
 def _action_priority_score(item: Mapping[str, Any], status: str) -> int:
     diagnostics = _item_outcome_diagnostics(item)
     ticket_count = _ticket_count(item)
-    score = int(round(_support_cost(ticket_count)))
-    score += _int(item.get("opportunity_score"))
+    score = int(
+        round(_support_cost(ticket_count) * _ACTION_SUPPORT_COST_SCORE_MULTIPLIER)
+    )
+    score += min(_int(item.get("opportunity_score")), _ACTION_OPPORTUNITY_SCORE_CAP)
     score += int(_ACTION_STATUS_PRIORITY_WEIGHTS.get(status, 0))
-    score += _int(diagnostics.get("negative_csat_ticket_count")) * 30
-    score += _int(diagnostics.get("reopened_ticket_count")) * 20
-    if ticket_count >= 5:
-        score += 15
-    elif ticket_count >= 2:
-        score += 5
+    dissatisfaction_score = (
+        _int(diagnostics.get("negative_csat_ticket_count"))
+        * _ACTION_NEGATIVE_CSAT_TICKET_SCORE_WEIGHT
+        + _int(diagnostics.get("reopened_ticket_count"))
+        * _ACTION_REOPENED_TICKET_SCORE_WEIGHT
+    )
     average = diagnostics.get("csat_score_average")
     present_count = _int(diagnostics.get("csat_present_count"))
     if present_count >= 3 and average is not None:
-        try:
-            parsed_average = float(average)
-        except (TypeError, ValueError):
-            parsed_average = 0.0
-        if parsed_average < 3.0:
-            score += int(round((3.0 - parsed_average) * 10))
+        parsed_average = _parse_csat_average(average)
+        if parsed_average is not None and parsed_average < 3.0:
+            dissatisfaction_score += int(
+                round((3.0 - parsed_average) * _ACTION_CSAT_AVERAGE_SCORE_MULTIPLIER)
+            )
+    score += min(dissatisfaction_score, _ACTION_DISSATISFACTION_SCORE_CAP)
+    if ticket_count >= 5:
+        score += _ACTION_HIGH_REPEAT_VOLUME_SCORE
+    elif ticket_count >= 2:
+        score += _ACTION_REPEAT_VOLUME_SCORE
     if _action_confidence(item) == "low":
-        score -= 25
+        score -= _ACTION_LOW_CONFIDENCE_SCORE_PENALTY
     return max(0, score)
 
 

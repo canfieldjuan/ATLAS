@@ -9282,6 +9282,95 @@
           "backlog_limit": 25,
           "items": [
             {
+              "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
+              "confidence": "high",
+              "cost_confidence": "benchmark_with_resolution_evidence",
+              "cost_period": "batch_upload",
+              "csat_signal": {
+                "csat_present_count": 95,
+                "negative_csat_ticket_count": 0,
+                "numeric_average": 4.49,
+                "status": "present"
+              },
+              "customer_vocabulary": [
+                "How do I export attribution reports?",
+                "reporting friction"
+              ],
+              "estimated_support_cost": 1282.5,
+              "evidence_tier": "csv_full_thread_resolution_evidence",
+              "fix_type": "publish_help_center_answer",
+              "identity_basis": "question_topic",
+              "identity_confidence": "high",
+              "jira_template": {
+                "cost_confidence": "benchmark_with_resolution_evidence",
+                "cost_period": "batch_upload",
+                "customer_vocabulary": [
+                  "How do I export attribution reports?",
+                  "reporting friction"
+                ],
+                "estimated_support_cost": 1282.5,
+                "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_lane": "Reporting",
+                "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
+                "question": "How do I export attribution reports?",
+                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+                "recommended_title": "How do I export attribution reports?",
+                "ticket_count": 95
+              },
+              "opportunity_score": 95,
+              "owner_lane": "Reporting",
+              "priority_drivers": [
+                "high_repeat_volume",
+                "draft_ready",
+                "benchmark_cost"
+              ],
+              "priority_score": 3918,
+              "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
+              "question": "How do I export attribution reports?",
+              "rank": 1,
+              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+              "recommended_title": "How do I export attribution reports?",
+              "repeat_key": "repeat_b011111001111100011000011100110110000100100011010",
+              "representative_phrasing": [
+                "How do I export attribution reports?",
+                "reporting friction"
+              ],
+              "routing_signals": {
+                "assignee": [],
+                "brand": [],
+                "custom_product_area": [],
+                "group": [
+                  "Synthetic Support"
+                ],
+                "organization": [],
+                "product_area": [
+                  "Reporting"
+                ],
+                "tags": [
+                  "report-export",
+                  "analytics"
+                ]
+              },
+              "status": "Draft ready",
+              "support_cost_formula": "ticket_count * assisted_contact_cost",
+              "support_cost_source": "default_assisted_contact_benchmark",
+              "ticket_count": 95,
+              "top_evidence": [
+                {
+                  "evidence_quote": "`synthetic-export-0001` - Export attribution: \"How do I export attribution reports?\"",
+                  "source_id": "synthetic-export-0001"
+                },
+                {
+                  "evidence_quote": "",
+                  "source_id": "synthetic-export-0002"
+                },
+                {
+                  "evidence_quote": "",
+                  "source_id": "synthetic-export-0003"
+                }
+              ]
+            },
+            {
               "cluster_id": "repeat_b100011110011110000011101010111001111011111001101",
               "confidence": "high",
               "cost_confidence": "benchmark_index_metadata_only",
@@ -9326,7 +9415,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 3835,
+              "priority_score": 3343,
               "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 80 support tickets in this upload; estimated assisted-contact cost is $1,080 based on CSV index metadata only.",
               "question": "How do I enable SSO for my team?",
               "rank": 2,
@@ -9417,7 +9506,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 2997,
+              "priority_score": 3140,
               "product_gap_summary": "Repeated support friction routes to Notification Search Controls. 75 support tickets in this upload; estimated assisted-contact cost is $1,013 based on CSV full-thread resolution evidence.",
               "question": "Why do saved search alerts keep firing after I turn them off?",
               "rank": 3,
@@ -9508,7 +9597,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 2778,
+              "priority_score": 2735,
               "product_gap_summary": "Repeated support friction routes to Billing. 65 support tickets in this upload; estimated assisted-contact cost is $878 based on CSV index metadata only.",
               "question": "How do I pause my subscription for one month?",
               "rank": 4,
@@ -9551,6 +9640,95 @@
                 {
                   "evidence_quote": "",
                   "source_id": "synthetic-billing-pause-0003"
+                }
+              ]
+            },
+            {
+              "cluster_id": "repeat_b110100110010000001010011110010000000110000011001",
+              "confidence": "high",
+              "cost_confidence": "benchmark_with_resolution_evidence",
+              "cost_period": "batch_upload",
+              "csat_signal": {
+                "csat_present_count": 55,
+                "negative_csat_ticket_count": 0,
+                "numeric_average": 4.51,
+                "status": "present"
+              },
+              "customer_vocabulary": [
+                "How do I add an invoice recipient?",
+                "billing invoice administration"
+              ],
+              "estimated_support_cost": 742.5,
+              "evidence_tier": "csv_full_thread_resolution_evidence",
+              "fix_type": "publish_help_center_answer",
+              "identity_basis": "question_topic",
+              "identity_confidence": "high",
+              "jira_template": {
+                "cost_confidence": "benchmark_with_resolution_evidence",
+                "cost_period": "batch_upload",
+                "customer_vocabulary": [
+                  "How do I add an invoice recipient?",
+                  "billing invoice administration"
+                ],
+                "estimated_support_cost": 742.5,
+                "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_lane": "Billing",
+                "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
+                "question": "How do I add an invoice recipient?",
+                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+                "recommended_title": "How do I add an invoice recipient?",
+                "ticket_count": 55
+              },
+              "opportunity_score": 55,
+              "owner_lane": "Billing",
+              "priority_drivers": [
+                "high_repeat_volume",
+                "draft_ready",
+                "benchmark_cost"
+              ],
+              "priority_score": 2298,
+              "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
+              "question": "How do I add an invoice recipient?",
+              "rank": 5,
+              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+              "recommended_title": "How do I add an invoice recipient?",
+              "repeat_key": "repeat_b110100110010000001010011110010000000110000011001",
+              "representative_phrasing": [
+                "How do I add an invoice recipient?",
+                "billing invoice administration"
+              ],
+              "routing_signals": {
+                "assignee": [],
+                "brand": [],
+                "custom_product_area": [],
+                "group": [
+                  "Synthetic Support"
+                ],
+                "organization": [],
+                "product_area": [
+                  "Billing"
+                ],
+                "tags": [
+                  "billing",
+                  "invoice-settings"
+                ]
+              },
+              "status": "Draft ready",
+              "support_cost_formula": "ticket_count * assisted_contact_cost",
+              "support_cost_source": "default_assisted_contact_benchmark",
+              "ticket_count": 55,
+              "top_evidence": [
+                {
+                  "evidence_quote": "`synthetic-invoice-admin-0001` - Invoice recipients: \"How do I add an invoice recipient?\"",
+                  "source_id": "synthetic-invoice-admin-0001"
+                },
+                {
+                  "evidence_quote": "",
+                  "source_id": "synthetic-invoice-admin-0002"
+                },
+                {
+                  "evidence_quote": "",
+                  "source_id": "synthetic-invoice-admin-0003"
                 }
               ]
             },
@@ -9599,7 +9777,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 1603,
+              "priority_score": 1920,
               "product_gap_summary": "Repeated support friction routes to Admin / Access. 45 support tickets in this upload; estimated assisted-contact cost is $608 based on CSV index metadata only.",
               "question": "Which role can invite teammates?",
               "rank": 6,
@@ -9646,184 +9824,6 @@
               ]
             },
             {
-              "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
-              "confidence": "high",
-              "cost_confidence": "benchmark_with_resolution_evidence",
-              "cost_period": "batch_upload",
-              "csat_signal": {
-                "csat_present_count": 95,
-                "negative_csat_ticket_count": 0,
-                "numeric_average": 4.49,
-                "status": "present"
-              },
-              "customer_vocabulary": [
-                "How do I export attribution reports?",
-                "reporting friction"
-              ],
-              "estimated_support_cost": 1282.5,
-              "evidence_tier": "csv_full_thread_resolution_evidence",
-              "fix_type": "publish_help_center_answer",
-              "identity_basis": "question_topic",
-              "identity_confidence": "high",
-              "jira_template": {
-                "cost_confidence": "benchmark_with_resolution_evidence",
-                "cost_period": "batch_upload",
-                "customer_vocabulary": [
-                  "How do I export attribution reports?",
-                  "reporting friction"
-                ],
-                "estimated_support_cost": 1282.5,
-                "evidence_tier": "csv_full_thread_resolution_evidence",
-                "owner_lane": "Reporting",
-                "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
-                "question": "How do I export attribution reports?",
-                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
-                "recommended_title": "How do I export attribution reports?",
-                "ticket_count": 95
-              },
-              "opportunity_score": 95,
-              "owner_lane": "Reporting",
-              "priority_drivers": [
-                "high_repeat_volume",
-                "draft_ready",
-                "benchmark_cost"
-              ],
-              "priority_score": 1417,
-              "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
-              "question": "How do I export attribution reports?",
-              "rank": 1,
-              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
-              "recommended_title": "How do I export attribution reports?",
-              "repeat_key": "repeat_b011111001111100011000011100110110000100100011010",
-              "representative_phrasing": [
-                "How do I export attribution reports?",
-                "reporting friction"
-              ],
-              "routing_signals": {
-                "assignee": [],
-                "brand": [],
-                "custom_product_area": [],
-                "group": [
-                  "Synthetic Support"
-                ],
-                "organization": [],
-                "product_area": [
-                  "Reporting"
-                ],
-                "tags": [
-                  "report-export",
-                  "analytics"
-                ]
-              },
-              "status": "Draft ready",
-              "support_cost_formula": "ticket_count * assisted_contact_cost",
-              "support_cost_source": "default_assisted_contact_benchmark",
-              "ticket_count": 95,
-              "top_evidence": [
-                {
-                  "evidence_quote": "`synthetic-export-0001` - Export attribution: \"How do I export attribution reports?\"",
-                  "source_id": "synthetic-export-0001"
-                },
-                {
-                  "evidence_quote": "",
-                  "source_id": "synthetic-export-0002"
-                },
-                {
-                  "evidence_quote": "",
-                  "source_id": "synthetic-export-0003"
-                }
-              ]
-            },
-            {
-              "cluster_id": "repeat_b110100110010000001010011110010000000110000011001",
-              "confidence": "high",
-              "cost_confidence": "benchmark_with_resolution_evidence",
-              "cost_period": "batch_upload",
-              "csat_signal": {
-                "csat_present_count": 55,
-                "negative_csat_ticket_count": 0,
-                "numeric_average": 4.51,
-                "status": "present"
-              },
-              "customer_vocabulary": [
-                "How do I add an invoice recipient?",
-                "billing invoice administration"
-              ],
-              "estimated_support_cost": 742.5,
-              "evidence_tier": "csv_full_thread_resolution_evidence",
-              "fix_type": "publish_help_center_answer",
-              "identity_basis": "question_topic",
-              "identity_confidence": "high",
-              "jira_template": {
-                "cost_confidence": "benchmark_with_resolution_evidence",
-                "cost_period": "batch_upload",
-                "customer_vocabulary": [
-                  "How do I add an invoice recipient?",
-                  "billing invoice administration"
-                ],
-                "estimated_support_cost": 742.5,
-                "evidence_tier": "csv_full_thread_resolution_evidence",
-                "owner_lane": "Billing",
-                "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
-                "question": "How do I add an invoice recipient?",
-                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
-                "recommended_title": "How do I add an invoice recipient?",
-                "ticket_count": 55
-              },
-              "opportunity_score": 55,
-              "owner_lane": "Billing",
-              "priority_drivers": [
-                "high_repeat_volume",
-                "draft_ready",
-                "benchmark_cost"
-              ],
-              "priority_score": 837,
-              "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
-              "question": "How do I add an invoice recipient?",
-              "rank": 5,
-              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
-              "recommended_title": "How do I add an invoice recipient?",
-              "repeat_key": "repeat_b110100110010000001010011110010000000110000011001",
-              "representative_phrasing": [
-                "How do I add an invoice recipient?",
-                "billing invoice administration"
-              ],
-              "routing_signals": {
-                "assignee": [],
-                "brand": [],
-                "custom_product_area": [],
-                "group": [
-                  "Synthetic Support"
-                ],
-                "organization": [],
-                "product_area": [
-                  "Billing"
-                ],
-                "tags": [
-                  "billing",
-                  "invoice-settings"
-                ]
-              },
-              "status": "Draft ready",
-              "support_cost_formula": "ticket_count * assisted_contact_cost",
-              "support_cost_source": "default_assisted_contact_benchmark",
-              "ticket_count": 55,
-              "top_evidence": [
-                {
-                  "evidence_quote": "`synthetic-invoice-admin-0001` - Invoice recipients: \"How do I add an invoice recipient?\"",
-                  "source_id": "synthetic-invoice-admin-0001"
-                },
-                {
-                  "evidence_quote": "",
-                  "source_id": "synthetic-invoice-admin-0002"
-                },
-                {
-                  "evidence_quote": "",
-                  "source_id": "synthetic-invoice-admin-0003"
-                }
-              ]
-            },
-            {
               "cluster_id": "repeat_b111111101111011101010101011000011001010011100101",
               "confidence": "high",
               "cost_confidence": "benchmark_with_resolution_evidence",
@@ -9866,7 +9866,7 @@
                 "draft_ready",
                 "benchmark_cost"
               ],
-              "priority_score": 547,
+              "priority_score": 1473,
               "product_gap_summary": "Repeated support friction routes to Developer Rate Limit Requests. 35 support tickets in this upload; estimated assisted-contact cost is $473 based on CSV full-thread resolution evidence.",
               "question": "How do I increase my API rate limit?",
               "rank": 7,
@@ -9994,7 +9994,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 3835,
+              "priority_score": 3343,
               "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 80 support tickets in this upload; estimated assisted-contact cost is $1,080 based on CSV index metadata only.",
               "question": "How do I enable SSO for my team?",
               "rank": 2,
@@ -10085,7 +10085,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 2778,
+              "priority_score": 2735,
               "product_gap_summary": "Repeated support friction routes to Billing. 65 support tickets in this upload; estimated assisted-contact cost is $878 based on CSV index metadata only.",
               "question": "How do I pause my subscription for one month?",
               "rank": 4,
@@ -10176,7 +10176,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 1603,
+              "priority_score": 1920,
               "product_gap_summary": "Repeated support friction routes to Admin / Access. 45 support tickets in this upload; estimated assisted-contact cost is $608 based on CSV index metadata only.",
               "question": "Which role can invite teammates?",
               "rank": 6,
@@ -10300,7 +10300,7 @@
                 "draft_ready",
                 "benchmark_cost"
               ],
-              "priority_score": 1417,
+              "priority_score": 3918,
               "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
               "question": "How do I export attribution reports?",
               "rank": 1,
@@ -10389,7 +10389,7 @@
                 "draft_ready",
                 "benchmark_cost"
               ],
-              "priority_score": 837,
+              "priority_score": 2298,
               "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
               "question": "How do I add an invoice recipient?",
               "rank": 5,
@@ -10478,7 +10478,7 @@
                 "draft_ready",
                 "benchmark_cost"
               ],
-              "priority_score": 547,
+              "priority_score": 1473,
               "product_gap_summary": "Repeated support friction routes to Developer Rate Limit Requests. 35 support tickets in this upload; estimated assisted-contact cost is $473 based on CSV full-thread resolution evidence.",
               "question": "How do I increase my API rate limit?",
               "rank": 7,
@@ -10594,7 +10594,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 2997,
+              "priority_score": 3140,
               "product_gap_summary": "Repeated support friction routes to Notification Search Controls. 75 support tickets in this upload; estimated assisted-contact cost is $1,013 based on CSV full-thread resolution evidence.",
               "question": "Why do saved search alerts keep firing after I turn them off?",
               "rank": 3,
@@ -10666,6 +10666,95 @@
           "default_limit": 25,
           "items": [
             {
+              "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
+              "confidence": "high",
+              "cost_confidence": "benchmark_with_resolution_evidence",
+              "cost_period": "batch_upload",
+              "csat_signal": {
+                "csat_present_count": 95,
+                "negative_csat_ticket_count": 0,
+                "numeric_average": 4.49,
+                "status": "present"
+              },
+              "customer_vocabulary": [
+                "How do I export attribution reports?",
+                "reporting friction"
+              ],
+              "estimated_support_cost": 1282.5,
+              "evidence_tier": "csv_full_thread_resolution_evidence",
+              "fix_type": "publish_help_center_answer",
+              "identity_basis": "question_topic",
+              "identity_confidence": "high",
+              "jira_template": {
+                "cost_confidence": "benchmark_with_resolution_evidence",
+                "cost_period": "batch_upload",
+                "customer_vocabulary": [
+                  "How do I export attribution reports?",
+                  "reporting friction"
+                ],
+                "estimated_support_cost": 1282.5,
+                "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_lane": "Reporting",
+                "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
+                "question": "How do I export attribution reports?",
+                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+                "recommended_title": "How do I export attribution reports?",
+                "ticket_count": 95
+              },
+              "opportunity_score": 95,
+              "owner_lane": "Reporting",
+              "priority_drivers": [
+                "high_repeat_volume",
+                "draft_ready",
+                "benchmark_cost"
+              ],
+              "priority_score": 3918,
+              "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
+              "question": "How do I export attribution reports?",
+              "rank": 1,
+              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+              "recommended_title": "How do I export attribution reports?",
+              "repeat_key": "repeat_b011111001111100011000011100110110000100100011010",
+              "representative_phrasing": [
+                "How do I export attribution reports?",
+                "reporting friction"
+              ],
+              "routing_signals": {
+                "assignee": [],
+                "brand": [],
+                "custom_product_area": [],
+                "group": [
+                  "Synthetic Support"
+                ],
+                "organization": [],
+                "product_area": [
+                  "Reporting"
+                ],
+                "tags": [
+                  "report-export",
+                  "analytics"
+                ]
+              },
+              "status": "Draft ready",
+              "support_cost_formula": "ticket_count * assisted_contact_cost",
+              "support_cost_source": "default_assisted_contact_benchmark",
+              "ticket_count": 95,
+              "top_evidence": [
+                {
+                  "evidence_quote": "`synthetic-export-0001` - Export attribution: \"How do I export attribution reports?\"",
+                  "source_id": "synthetic-export-0001"
+                },
+                {
+                  "evidence_quote": "",
+                  "source_id": "synthetic-export-0002"
+                },
+                {
+                  "evidence_quote": "",
+                  "source_id": "synthetic-export-0003"
+                }
+              ]
+            },
+            {
               "cluster_id": "repeat_b100011110011110000011101010111001111011111001101",
               "confidence": "high",
               "cost_confidence": "benchmark_index_metadata_only",
@@ -10710,7 +10799,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 3835,
+              "priority_score": 3343,
               "product_gap_summary": "Repeated support friction routes to Auth / Product UX. 80 support tickets in this upload; estimated assisted-contact cost is $1,080 based on CSV index metadata only.",
               "question": "How do I enable SSO for my team?",
               "rank": 2,
@@ -10801,7 +10890,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 2997,
+              "priority_score": 3140,
               "product_gap_summary": "Repeated support friction routes to Notification Search Controls. 75 support tickets in this upload; estimated assisted-contact cost is $1,013 based on CSV full-thread resolution evidence.",
               "question": "Why do saved search alerts keep firing after I turn them off?",
               "rank": 3,
@@ -10892,7 +10981,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 2778,
+              "priority_score": 2735,
               "product_gap_summary": "Repeated support friction routes to Billing. 65 support tickets in this upload; estimated assisted-contact cost is $878 based on CSV index metadata only.",
               "question": "How do I pause my subscription for one month?",
               "rank": 4,
@@ -10935,6 +11024,95 @@
                 {
                   "evidence_quote": "",
                   "source_id": "synthetic-billing-pause-0003"
+                }
+              ]
+            },
+            {
+              "cluster_id": "repeat_b110100110010000001010011110010000000110000011001",
+              "confidence": "high",
+              "cost_confidence": "benchmark_with_resolution_evidence",
+              "cost_period": "batch_upload",
+              "csat_signal": {
+                "csat_present_count": 55,
+                "negative_csat_ticket_count": 0,
+                "numeric_average": 4.51,
+                "status": "present"
+              },
+              "customer_vocabulary": [
+                "How do I add an invoice recipient?",
+                "billing invoice administration"
+              ],
+              "estimated_support_cost": 742.5,
+              "evidence_tier": "csv_full_thread_resolution_evidence",
+              "fix_type": "publish_help_center_answer",
+              "identity_basis": "question_topic",
+              "identity_confidence": "high",
+              "jira_template": {
+                "cost_confidence": "benchmark_with_resolution_evidence",
+                "cost_period": "batch_upload",
+                "customer_vocabulary": [
+                  "How do I add an invoice recipient?",
+                  "billing invoice administration"
+                ],
+                "estimated_support_cost": 742.5,
+                "evidence_tier": "csv_full_thread_resolution_evidence",
+                "owner_lane": "Billing",
+                "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
+                "question": "How do I add an invoice recipient?",
+                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+                "recommended_title": "How do I add an invoice recipient?",
+                "ticket_count": 55
+              },
+              "opportunity_score": 55,
+              "owner_lane": "Billing",
+              "priority_drivers": [
+                "high_repeat_volume",
+                "draft_ready",
+                "benchmark_cost"
+              ],
+              "priority_score": 2298,
+              "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
+              "question": "How do I add an invoice recipient?",
+              "rank": 5,
+              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
+              "recommended_title": "How do I add an invoice recipient?",
+              "repeat_key": "repeat_b110100110010000001010011110010000000110000011001",
+              "representative_phrasing": [
+                "How do I add an invoice recipient?",
+                "billing invoice administration"
+              ],
+              "routing_signals": {
+                "assignee": [],
+                "brand": [],
+                "custom_product_area": [],
+                "group": [
+                  "Synthetic Support"
+                ],
+                "organization": [],
+                "product_area": [
+                  "Billing"
+                ],
+                "tags": [
+                  "billing",
+                  "invoice-settings"
+                ]
+              },
+              "status": "Draft ready",
+              "support_cost_formula": "ticket_count * assisted_contact_cost",
+              "support_cost_source": "default_assisted_contact_benchmark",
+              "ticket_count": 55,
+              "top_evidence": [
+                {
+                  "evidence_quote": "`synthetic-invoice-admin-0001` - Invoice recipients: \"How do I add an invoice recipient?\"",
+                  "source_id": "synthetic-invoice-admin-0001"
+                },
+                {
+                  "evidence_quote": "",
+                  "source_id": "synthetic-invoice-admin-0002"
+                },
+                {
+                  "evidence_quote": "",
+                  "source_id": "synthetic-invoice-admin-0003"
                 }
               ]
             },
@@ -10983,7 +11161,7 @@
                 "reopened_after_answer",
                 "benchmark_cost"
               ],
-              "priority_score": 1603,
+              "priority_score": 1920,
               "product_gap_summary": "Repeated support friction routes to Admin / Access. 45 support tickets in this upload; estimated assisted-contact cost is $608 based on CSV index metadata only.",
               "question": "Which role can invite teammates?",
               "rank": 6,
@@ -11030,184 +11208,6 @@
               ]
             },
             {
-              "cluster_id": "repeat_b011111001111100011000011100110110000100100011010",
-              "confidence": "high",
-              "cost_confidence": "benchmark_with_resolution_evidence",
-              "cost_period": "batch_upload",
-              "csat_signal": {
-                "csat_present_count": 95,
-                "negative_csat_ticket_count": 0,
-                "numeric_average": 4.49,
-                "status": "present"
-              },
-              "customer_vocabulary": [
-                "How do I export attribution reports?",
-                "reporting friction"
-              ],
-              "estimated_support_cost": 1282.5,
-              "evidence_tier": "csv_full_thread_resolution_evidence",
-              "fix_type": "publish_help_center_answer",
-              "identity_basis": "question_topic",
-              "identity_confidence": "high",
-              "jira_template": {
-                "cost_confidence": "benchmark_with_resolution_evidence",
-                "cost_period": "batch_upload",
-                "customer_vocabulary": [
-                  "How do I export attribution reports?",
-                  "reporting friction"
-                ],
-                "estimated_support_cost": 1282.5,
-                "evidence_tier": "csv_full_thread_resolution_evidence",
-                "owner_lane": "Reporting",
-                "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
-                "question": "How do I export attribution reports?",
-                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
-                "recommended_title": "How do I export attribution reports?",
-                "ticket_count": 95
-              },
-              "opportunity_score": 95,
-              "owner_lane": "Reporting",
-              "priority_drivers": [
-                "high_repeat_volume",
-                "draft_ready",
-                "benchmark_cost"
-              ],
-              "priority_score": 1417,
-              "product_gap_summary": "Repeated support friction routes to Reporting. 95 support tickets in this upload; estimated assisted-contact cost is $1,283 based on CSV full-thread resolution evidence.",
-              "question": "How do I export attribution reports?",
-              "rank": 1,
-              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
-              "recommended_title": "How do I export attribution reports?",
-              "repeat_key": "repeat_b011111001111100011000011100110110000100100011010",
-              "representative_phrasing": [
-                "How do I export attribution reports?",
-                "reporting friction"
-              ],
-              "routing_signals": {
-                "assignee": [],
-                "brand": [],
-                "custom_product_area": [],
-                "group": [
-                  "Synthetic Support"
-                ],
-                "organization": [],
-                "product_area": [
-                  "Reporting"
-                ],
-                "tags": [
-                  "report-export",
-                  "analytics"
-                ]
-              },
-              "status": "Draft ready",
-              "support_cost_formula": "ticket_count * assisted_contact_cost",
-              "support_cost_source": "default_assisted_contact_benchmark",
-              "ticket_count": 95,
-              "top_evidence": [
-                {
-                  "evidence_quote": "`synthetic-export-0001` - Export attribution: \"How do I export attribution reports?\"",
-                  "source_id": "synthetic-export-0001"
-                },
-                {
-                  "evidence_quote": "",
-                  "source_id": "synthetic-export-0002"
-                },
-                {
-                  "evidence_quote": "",
-                  "source_id": "synthetic-export-0003"
-                }
-              ]
-            },
-            {
-              "cluster_id": "repeat_b110100110010000001010011110010000000110000011001",
-              "confidence": "high",
-              "cost_confidence": "benchmark_with_resolution_evidence",
-              "cost_period": "batch_upload",
-              "csat_signal": {
-                "csat_present_count": 55,
-                "negative_csat_ticket_count": 0,
-                "numeric_average": 4.51,
-                "status": "present"
-              },
-              "customer_vocabulary": [
-                "How do I add an invoice recipient?",
-                "billing invoice administration"
-              ],
-              "estimated_support_cost": 742.5,
-              "evidence_tier": "csv_full_thread_resolution_evidence",
-              "fix_type": "publish_help_center_answer",
-              "identity_basis": "question_topic",
-              "identity_confidence": "high",
-              "jira_template": {
-                "cost_confidence": "benchmark_with_resolution_evidence",
-                "cost_period": "batch_upload",
-                "customer_vocabulary": [
-                  "How do I add an invoice recipient?",
-                  "billing invoice administration"
-                ],
-                "estimated_support_cost": 742.5,
-                "evidence_tier": "csv_full_thread_resolution_evidence",
-                "owner_lane": "Billing",
-                "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
-                "question": "How do I add an invoice recipient?",
-                "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
-                "recommended_title": "How do I add an invoice recipient?",
-                "ticket_count": 55
-              },
-              "opportunity_score": 55,
-              "owner_lane": "Billing",
-              "priority_drivers": [
-                "high_repeat_volume",
-                "draft_ready",
-                "benchmark_cost"
-              ],
-              "priority_score": 837,
-              "product_gap_summary": "Repeated support friction routes to Billing. 55 support tickets in this upload; estimated assisted-contact cost is $743 based on CSV full-thread resolution evidence.",
-              "question": "How do I add an invoice recipient?",
-              "rank": 5,
-              "recommended_action": "Publish or adapt the drafted resolution into help-center or macro copy.",
-              "recommended_title": "How do I add an invoice recipient?",
-              "repeat_key": "repeat_b110100110010000001010011110010000000110000011001",
-              "representative_phrasing": [
-                "How do I add an invoice recipient?",
-                "billing invoice administration"
-              ],
-              "routing_signals": {
-                "assignee": [],
-                "brand": [],
-                "custom_product_area": [],
-                "group": [
-                  "Synthetic Support"
-                ],
-                "organization": [],
-                "product_area": [
-                  "Billing"
-                ],
-                "tags": [
-                  "billing",
-                  "invoice-settings"
-                ]
-              },
-              "status": "Draft ready",
-              "support_cost_formula": "ticket_count * assisted_contact_cost",
-              "support_cost_source": "default_assisted_contact_benchmark",
-              "ticket_count": 55,
-              "top_evidence": [
-                {
-                  "evidence_quote": "`synthetic-invoice-admin-0001` - Invoice recipients: \"How do I add an invoice recipient?\"",
-                  "source_id": "synthetic-invoice-admin-0001"
-                },
-                {
-                  "evidence_quote": "",
-                  "source_id": "synthetic-invoice-admin-0002"
-                },
-                {
-                  "evidence_quote": "",
-                  "source_id": "synthetic-invoice-admin-0003"
-                }
-              ]
-            },
-            {
               "cluster_id": "repeat_b111111101111011101010101011000011001010011100101",
               "confidence": "high",
               "cost_confidence": "benchmark_with_resolution_evidence",
@@ -11250,7 +11250,7 @@
                 "draft_ready",
                 "benchmark_cost"
               ],
-              "priority_score": 547,
+              "priority_score": 1473,
               "product_gap_summary": "Repeated support friction routes to Developer Rate Limit Requests. 35 support tickets in this upload; estimated assisted-contact cost is $473 based on CSV full-thread resolution evidence.",
               "question": "How do I increase my API rate limit?",
               "rank": 7,

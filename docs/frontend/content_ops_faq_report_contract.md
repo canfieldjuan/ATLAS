@@ -262,9 +262,10 @@ The action-oriented paid sections are a work queue, not a full ticket archive:
   bounded surface (`pdf_limit`, currently 10) while `result_page_limit` tells
   the result page to render only the top three.
 - Action rows include deterministic `priority_score` and bounded
-  `priority_drivers` enum labels. The score is based on repeat volume,
-  benchmark support cost, answer evidence status, confidence, reopened-ticket
-  signal, and CSAT signal; it is not produced by an LLM or cloud classifier.
+  `priority_drivers` enum labels. The score keeps benchmark support cost as the
+  dominant axis, then uses bounded opportunity, status/resolvability,
+  confidence, and combined reopened-ticket/CSAT signals as secondary pressure;
+  it is not produced by an LLM or cloud classifier.
 - Action rows also carry paid-only `repeat_key`, `cluster_id`,
   `identity_basis`, and `identity_confidence` fields. Use those for
   cross-run/monthly-delta matching; `rank` and evidence-export `question_id`

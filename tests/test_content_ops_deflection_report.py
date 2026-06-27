@@ -999,8 +999,8 @@ def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:
     assert sparse["confidence"] == "low"
     assert sparse["priority_drivers"].count("low_confidence") == 1
     sparse_score_without_low_penalty = (
-        int(round(sparse["estimated_support_cost"]))
-        + sparse["opportunity_score"]
+        int(round(sparse["estimated_support_cost"] * 3))
+        + min(sparse["opportunity_score"], 50)
         + 5
     )
     assert sparse["priority_score"] == sparse_score_without_low_penalty - 25
@@ -1040,6 +1040,227 @@ def test_deflection_priority_queue_scores_status_and_csat_signals() -> None:
     assert suppressed_by_question[
         "Can I rename one workspace?"
     ]["suppression_reason"] == "too_low_volume"
+
+
+def test_deflection_priority_score_keeps_cost_ahead_of_resolvability() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=37,
+        ticket_source_count=37,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "Why does the nightly sync fail for enterprise workspaces?",
+                "customer_wording": "nightly sync keeps failing",
+                "topic": "integrations",
+                "weighted_frequency": 8,
+                "ticket_count": 8,
+                "opportunity_score": 4,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": tuple(f"ticket-sync-{index}" for index in range(8)),
+            },
+            {
+                "question": "How do I reduce repeated invoice export tickets?",
+                "customer_wording": "invoice export tickets keep repeating",
+                "topic": "billing",
+                "weighted_frequency": 7,
+                "ticket_count": 7,
+                "opportunity_score": 0,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": tuple(
+                    f"ticket-invoice-repeat-{index}" for index in range(7)
+                ),
+            },
+            {
+                "question": "How do I reopen an attribution export case?",
+                "customer_wording": "attribution export answer still fails",
+                "topic": "exports",
+                "weighted_frequency": 5,
+                "ticket_count": 5,
+                "opportunity_score": 50,
+                "answer": "Open Attribution, select the export, and rerun the report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "outcome_diagnostics": {
+                    "negative_csat_ticket_count": 2,
+                    "reopened_ticket_count": 2,
+                    "ticket_status_summary": {"reopened": 2, "resolved": 3},
+                },
+                "source_ids": tuple(
+                    f"ticket-attribution-risk-{index}" for index in range(5)
+                ),
+            },
+            {
+                "question": "How do I reopen an attribution export with low CSAT?",
+                "customer_wording": "attribution export answer has low csat",
+                "topic": "exports",
+                "weighted_frequency": 5,
+                "ticket_count": 5,
+                "opportunity_score": 50,
+                "answer": "Open Attribution, select the export, and rerun the report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "outcome_diagnostics": {
+                    "csat_present_count": 5,
+                    "csat_score_average": 1.0,
+                    "negative_csat_ticket_count": 2,
+                    "reopened_ticket_count": 2,
+                    "ticket_status_summary": {"reopened": 2, "resolved": 3},
+                },
+                "source_ids": tuple(
+                    f"ticket-attribution-low-csat-{index}" for index in range(5)
+                ),
+            },
+            {
+                "question": "How do I reopen an attribution export with malformed CSAT?",
+                "customer_wording": "attribution export answer has malformed csat",
+                "topic": "exports",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 40,
+                "answer": "Open Attribution, select the export, and rerun the report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "outcome_diagnostics": {
+                    "csat_present_count": 5,
+                    "csat_score_average": "not-a-number",
+                    "ticket_status_summary": {"resolved": 5},
+                },
+                "source_ids": tuple(
+                    f"ticket-attribution-malformed-csat-{index}"
+                    for index in range(3)
+                ),
+            },
+            {
+                "question": "How do I reopen an attribution export with negative CSAT?",
+                "customer_wording": "attribution export answer has negative csat",
+                "topic": "exports",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 40,
+                "answer": "Open Attribution, select the export, and rerun the report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "outcome_diagnostics": {
+                    "csat_present_count": 5,
+                    "csat_score_average": -1.0,
+                    "ticket_status_summary": {"resolved": 5},
+                },
+                "source_ids": tuple(
+                    f"ticket-attribution-negative-csat-{index}"
+                    for index in range(3)
+                ),
+            },
+            {
+                "question": "How do I export a quarterly billing report?",
+                "customer_wording": "quarterly billing export",
+                "topic": "billing",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 150,
+                "answer": "Open Billing, choose Reports, then export the quarter.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "source_ids": tuple(f"ticket-billing-{index}" for index in range(3)),
+            },
+            {
+                "question": "How do I find the workspace invite article?",
+                "customer_wording": "invite article still confusing",
+                "topic": "workspace",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 145,
+                "answer": "Open Workspace settings and choose Invitations.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "outcome_diagnostics": {
+                    "reopened_ticket_count": 1,
+                    "ticket_status_summary": {"reopened": 1, "resolved": 2},
+                },
+                "source_ids": tuple(f"ticket-workspace-{index}" for index in range(3)),
+            },
+        ),
+    )
+
+    sections = {
+        section["id"]: section
+        for section in build_deflection_report_artifact(result).as_dict()[
+            "report_model"
+        ]["sections"]
+    }
+    priority_items = sections["priority_fix_queue"]["data"]["items"]
+    by_question = {item["question"]: item for item in priority_items}
+    unresolved = by_question[
+        "Why does the nightly sync fail for enterprise workspaces?"
+    ]
+    lower_cost_dissatisfied = by_question[
+        "How do I reopen an attribution export case?"
+    ]
+    lower_cost_low_average = by_question[
+        "How do I reopen an attribution export with low CSAT?"
+    ]
+    lower_cost_malformed_average = by_question[
+        "How do I reopen an attribution export with malformed CSAT?"
+    ]
+    lower_cost_negative_average = by_question[
+        "How do I reopen an attribution export with negative CSAT?"
+    ]
+    higher_cost_clean = by_question[
+        "How do I reduce repeated invoice export tickets?"
+    ]
+
+    assert priority_items[0]["question"] == (
+        "Why does the nightly sync fail for enterprise workspaces?"
+    )
+    assert unresolved["estimated_support_cost"] == 108.0
+    assert unresolved["status"] == "Needs answer"
+    assert unresolved["fix_type"] == "create_missing_answer"
+    assert "missing_answer" in unresolved["priority_drivers"]
+    assert "answer" not in unresolved
+    assert higher_cost_clean["estimated_support_cost"] == 94.5
+    assert lower_cost_dissatisfied["estimated_support_cost"] == 67.5
+    assert higher_cost_clean["priority_score"] == 307
+    assert lower_cost_dissatisfied["priority_score"] == 304
+    assert lower_cost_low_average["priority_score"] == 304
+    assert lower_cost_malformed_average["priority_score"] == 172
+    assert lower_cost_malformed_average["status"] == "Draft ready"
+    assert lower_cost_malformed_average["csat_signal"] == {
+        "status": "sparse",
+        "csat_present_count": 5,
+        "negative_csat_ticket_count": 0,
+        "numeric_average": None,
+    }
+    assert lower_cost_negative_average["priority_score"] == 172
+    assert lower_cost_negative_average["status"] == "Draft ready"
+    assert lower_cost_negative_average["csat_signal"] == {
+        "status": "sparse",
+        "csat_present_count": 5,
+        "negative_csat_ticket_count": 0,
+        "numeric_average": None,
+    }
+    assert (
+        higher_cost_clean["priority_score"]
+        > lower_cost_dissatisfied["priority_score"]
+    )
+    assert (
+        higher_cost_clean["priority_score"]
+        > lower_cost_low_average["priority_score"]
+    )
+    assert by_question[
+        "How do I export a quarterly billing report?"
+    ]["status"] == "Draft ready"
+    assert by_question[
+        "How do I find the workspace invite article?"
+    ]["status"] == "Already covered but still recurring"
+    assert sections["top_unresolved_repeats"]["data"]["items"][0]["question"] == (
+        "Why does the nightly sync fail for enterprise workspaces?"
+    )
+    assert sections["drafted_resolutions"]["data"]["items"][0]["question"] == (
+        "How do I export a quarterly billing report?"
+    )
+    assert sections["already_covered_still_recurring"]["data"]["items"][0][
+        "question"
+    ] == "How do I reopen an attribution export case?"
 
 
 def test_deflection_suppressed_repeat_review_queue_explains_hidden_rows() -> None:
