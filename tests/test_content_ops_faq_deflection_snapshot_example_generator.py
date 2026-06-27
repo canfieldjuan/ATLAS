@@ -41,7 +41,7 @@ def test_synthetic_demo_input_is_moderate_volume_and_public_safe() -> None:
     source_ids = [str(row["source_id"]) for row in rows]
     encoded_rows = repr(rows).lower()
 
-    assert 300 <= len(rows) <= 450
+    assert len(rows) == 450
     assert all("source_weight" not in row for row in rows)
     assert len(source_ids) == len(set(source_ids))
     assert all(source_id.startswith("synthetic-") for source_id in source_ids)
@@ -64,7 +64,13 @@ def test_generated_demo_example_carries_coherent_marketing_scale_volume() -> Non
 
     assert snapshot_payload["summary"]["repeat_ticket_count"] >= 300
     assert snapshot_payload["top_questions"][0]["ticket_count"] >= 90
+    assert snapshot_payload["summary"]["generated"] > CLI.SNAPSHOT_TOP_N
     assert len(snapshot_payload["top_questions"]) == CLI.SNAPSHOT_TOP_N
+    assert snapshot_payload["locked_questions"]
+    for question in snapshot_payload["locked_questions"]:
+        assert set(question) == {"rank", "ticket_count"}
+        assert "question" not in question
+    assert snapshot_payload["top_blind_spots"]
     assert sections["support_tax"]["repeat_ticket_count"] == snapshot_payload[
         "summary"
     ]["repeat_ticket_count"]
@@ -88,8 +94,19 @@ def test_generated_demo_example_carries_coherent_marketing_scale_volume() -> Non
         assert len(matching_sources) == item["ticket_count"]
         assert item["source_proof"] == f"{item['ticket_count']} source tickets"
     assert sections["top_unresolved_repeats"]["top_item_count"] >= 3
-    assert sections["drafted_resolutions"]["top_item_count"] >= 2
-    assert sections["outcome_diagnostics"]["rows"]
+    assert sections["drafted_resolutions"]["top_item_count"] >= 3
+    assert sections["already_covered_still_recurring"]["top_item_count"] >= 1
+    assert sections["already_covered_still_recurring"]["items"][0][
+        "status"
+    ] == "Already covered but still recurring"
+    assert sections["priority_fix_queue"]["status_counts"] == {
+        "Already covered but still recurring": 1,
+        "Draft ready": 3,
+        "Needs answer": 3,
+    }
+    assert len(sections["outcome_diagnostics"]["rows"]) == snapshot_payload[
+        "summary"
+    ]["generated"]
 
 
 def test_cli_writes_snapshot_example_to_output(
