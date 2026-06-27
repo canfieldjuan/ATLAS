@@ -96,7 +96,10 @@ LIMIT 10;
 If no account appears, stop. If `has_reserved_test_email` is true, or if the
 surfaced addresses are `@example.com`, `@test`, seeds, your own inbox, or any
 other operator/test address, stop. The go-live check passes only when every
-delivery address you will send to is confirmed as a real paying customer.
+delivery address you will send to is confirmed as a real paying customer. Copy
+the opted-in row's `account_id` and `current_request_id`; the manual rehearsal
+and live-send commands must use those exact values as `target_account_id` and
+`current_request_id`.
 
 ## Dry-Run Activation
 
@@ -126,7 +129,7 @@ first run even if environment defaults have drifted:
 curl -fsS -X POST "$ATLAS_API_BASE_URL/api/v1/autonomous/content_ops_deflection_delta_automation/run" \
   -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"delivery_dry_run": true, "account_limit": 1, "reports_per_account": 2}'
+  -d '{"delivery_dry_run": true, "target_account_id": "<account-id>", "current_request_id": "<current-request-id>"}'
 ```
 
 Poll the execution by UUID and review the final payload:
@@ -143,20 +146,22 @@ curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/$DELTA_TASK_ID/executions?limit
   | jq '.executions[0] | {status, result, error}'
 ```
 
-Proceed only if the execution payload has no `delivery_missing_config`,
-`delivery_dry_run_enabled` is true, `delta_deliveries_enqueued` is at least 1,
-`delivery_dry_run` is at least 1, and `delivery_failed` is 0. If the dry-run
-processed zero delivery rows, stop; the email rendering/delivery path has not
-been rehearsed.
+Proceed only if the execution payload echoes the expected `target_account_id`
+and `current_request_id`, has no `delivery_missing_config`,
+`delivery_dry_run_enabled` is true, `reports_scanned` is 1,
+`delta_deliveries_enqueued` is at least 1, `delivery_dry_run` is 1, and
+`delivery_failed` is 0. If the dry-run processed zero delivery rows, stop; the
+email rendering/delivery path has not been rehearsed.
 
 ## Live Activation
 
 After the dry-run payload is clean, flip live email delivery and restart the
-brain only when every deliverable paid account in the Paid Pair Check is opted
-into the monthly delta email. The current task is not account-scoped; a manual
-live run scans paid accounts globally and drains pending delivery rows globally.
-Do not use a manual live run for a single buyer until the task has an
-account-scoped override.
+brain. A manual live run for one opted-in buyer must include the same
+`target_account_id` and `current_request_id` used in the dry run. Omitting
+`target_account_id` scans paid accounts globally and drains pending delivery
+rows globally; omitting `current_request_id` scopes to the account but may send
+more than one pending delta for that account. Reserve the unscoped path for the
+scheduled monthly cron after the entitlement/opt-in list is ready.
 
 ```bash
 ATLAS_DEFLECTION_DELTA_ENABLED=true
@@ -165,10 +170,20 @@ ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL="reports@example.com"
 ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY="<resend-api-key>"
 ```
 
-After restart, leave the cron scheduled for the next monthly window. If there is
-only one deliverable paid account in production and that buyer has explicitly
-opted in, an operator can choose to run the task manually; otherwise wait for an
-account-scoped activation slice before doing a manual live send.
+After restart, send only to the opted-in account:
+
+```bash
+curl -fsS -X POST "$ATLAS_API_BASE_URL/api/v1/autonomous/content_ops_deflection_delta_automation/run" \
+  -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"delivery_dry_run": false, "target_account_id": "<account-id>", "current_request_id": "<current-request-id>"}'
+```
+
+Poll the execution as above. Proceed only if the payload echoes the expected
+`target_account_id` and `current_request_id`, `reports_scanned` is 1,
+`delivery_dry_run_enabled` is false, `delivery_sent` is 1, and
+`delivery_failed` is 0. Otherwise disable the task and use the rollback steps
+below before retrying.
 
 ## Rollback
 

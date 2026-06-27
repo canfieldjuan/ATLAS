@@ -65,15 +65,21 @@ def test_deflection_delta_go_live_runbook_rehearses_before_live_send() -> None:
     assert "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false" not in dry_run
     assert "delivery_dry_run" in dry_run
     assert "delivery_dry_run_enabled" in dry_run
+    assert "current_request_id" in dry_run
+    assert "`reports_scanned` is 1" in dry_run
     assert "delivery_missing_config" in dry_run
     assert "delta_deliveries_enqueued" in dry_run
-    assert "delivery_dry_run` is at least 1" in dry_run
+    assert "`delivery_dry_run` is 1" in dry_run
     assert "delivery_failed" in dry_run
     assert "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false" in live
     assert "ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY" in live
-    assert "not account-scoped" in live
-    assert "Do not use a manual live run for a single buyer" in live
-    assert "/run" not in live
+    assert "target_account_id" in live
+    assert "current_request_id" in live
+    assert "Omitting" in live
+    assert "`target_account_id` scans" in live
+    assert "paid accounts globally" in live
+    assert "omitting `current_request_id` scopes to the account" in live
+    assert "/run" in live
     assert "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=true" not in rollback
     assert "paid report delivery drain" in rollback
 
@@ -83,8 +89,8 @@ def test_deflection_delta_go_live_runbook_manual_run_uses_safe_override() -> Non
 
     assert body == {
         "delivery_dry_run": True,
-        "account_limit": 1,
-        "reports_per_account": 2,
+        "target_account_id": "<account-id>",
+        "current_request_id": "<current-request-id>",
     }
 
 

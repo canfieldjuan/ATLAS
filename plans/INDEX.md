@@ -703,6 +703,7 @@
 - [PR-Deflection-Delta-Deferred-Status](archive/PR-Deflection-Delta-Deferred-Status.md) - lane: deflection/report-deltas | phase: Product polish
 - [PR-Deflection-Delta-Deferred-Summary](archive/PR-Deflection-Delta-Deferred-Summary.md) - lane: deflection/report-deltas | phase: Production hardening
 - [PR-Deflection-Delta-Delivery-Summary](archive/PR-Deflection-Delta-Delivery-Summary.md) - lane: issue-1316/deflection-delta-delivery-summary | phase: Vertical slice
+- [PR-Deflection-Delta-Go-Live-Runbook](archive/PR-Deflection-Delta-Go-Live-Runbook.md) - lane: deflection/report-deltas | phase: Production hardening
 - [PR-Deflection-Delta-Live-Delivery](archive/PR-Deflection-Delta-Live-Delivery.md) - lane: deflection/report-deltas | phase: Vertical slice
 - [PR-Deflection-Delta-Monthly-Automation](archive/PR-Deflection-Delta-Monthly-Automation.md) - lane: issue-1316/deflection-delta-monthly-automation | phase: Vertical slice
 - [PR-Deflection-Delta-Paid-Overflow-Probes](archive/PR-Deflection-Delta-Paid-Overflow-Probes.md) - lane: issue-1316/deflection-delta-paid-overflow-probes | phase: Production hardening
