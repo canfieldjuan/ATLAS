@@ -15,6 +15,8 @@ from extracted_content_pipeline.campaign_ports import (
     SendResult,
 )
 from extracted_content_pipeline.deflection_report_access import (
+    DeflectionDeltaAccessRecord,
+    deflection_delta_read_payload,
     stored_deflection_report_model,
 )
 from extracted_content_pipeline.faq_deflection_report import (
@@ -29,6 +31,19 @@ DELIVERY_CLAIM_STALE_AFTER = "15 minutes"
 MAX_DELIVERY_ERROR_CHARS = 500
 EMAIL_ACTION_SECTION_LIMIT = 3
 DELTA_DELIVERY_ACTION_LIMIT = 3
+_DELTA_DELIVERY_SIGNAL_FIELDS = (
+    "support_cost_delta",
+    "new_count",
+    "resolved_count",
+    "resurfaced_count",
+    "growing_count",
+    "shrinking_count",
+    "still_unresolved_count",
+    "status_changed_count",
+    "cost_changed_count",
+    "csat_changed_count",
+    "low_confidence_identity_count",
+)
 
 logger = logging.getLogger("atlas.content_ops_deflection_delivery")
 
@@ -50,7 +65,24 @@ class DeflectionReportDeliveryConfig:
 
 
 @dataclass(frozen=True)
+class DeflectionDeltaDeliveryConfig:
+    from_email: str
+    reply_to: str | None = None
+    subject: str = DEFAULT_DEFLECTION_DELTA_DELIVERY_SUBJECT
+    limit: int = 20
+    dry_run: bool = False
+
+
+@dataclass(frozen=True)
 class DeflectionReportDeliverySummary:
+    scanned: int
+    sent: int
+    failed: int
+    dry_run: int
+
+
+@dataclass(frozen=True)
+class DeflectionDeltaDeliveryRunSummary:
     scanned: int
     sent: int
     failed: int
@@ -254,6 +286,167 @@ async def send_pending_deflection_report_deliveries(
     )
 
 
+async def send_pending_deflection_delta_deliveries(
+    pool: Any,
+    *,
+    sender: DeflectionReportDeliverySender,
+    config: DeflectionDeltaDeliveryConfig,
+) -> DeflectionDeltaDeliveryRunSummary:
+    """Send pending paid-report delta delivery emails and update queue status."""
+
+    _validate_delta_config(config)
+    rows = await pool.fetch(
+        _PENDING_DELTA_SQL if config.dry_run else _CLAIM_PENDING_DELTA_SQL,
+        int(config.limit),
+    )
+    sent = failed = dry_run = 0
+    for row in rows:
+        data = _row_to_dict(row)
+        account_id = _required_text(data.get("account_id"), "account_id")
+        current_request_id = _required_text(
+            data.get("current_request_id"),
+            "current_request_id",
+        )
+        baseline_request_id = _required_text(
+            data.get("baseline_request_id"),
+            "baseline_request_id",
+        )
+        email = _clean(data.get("delivery_email"))
+        if config.dry_run:
+            dry_run += 1
+            continue
+        if not email:
+            await _fail_delta_delivery(
+                pool,
+                incident_type="delta_delivery_missing_email",
+                account_id=account_id,
+                current_request_id=current_request_id,
+                baseline_request_id=baseline_request_id,
+                error="missing_delivery_email",
+                severity="error",
+            )
+            failed += 1
+            continue
+        if not bool(data.get("current_paid")) or not bool(data.get("baseline_paid")):
+            await _defer_delta_delivery(
+                pool,
+                incident_type="delta_delivery_source_report_not_paid",
+                account_id=account_id,
+                current_request_id=current_request_id,
+                baseline_request_id=baseline_request_id,
+                error="source_report_not_paid",
+                severity="warning",
+            )
+            failed += 1
+            continue
+        try:
+            record = _delta_record_from_delivery_row(data)
+            payload = deflection_delta_read_payload(record)
+            if not _delta_payload_has_delivery_content(payload):
+                await _fail_delta_delivery(
+                    pool,
+                    incident_type="delta_delivery_empty_payload",
+                    account_id=account_id,
+                    current_request_id=current_request_id,
+                    baseline_request_id=baseline_request_id,
+                    error="empty_delta_payload",
+                    severity="warning",
+                )
+                failed += 1
+                continue
+            rendered = deflection_delta_delivery_summary(
+                payload,
+                subject=config.subject,
+            )
+            if not await _confirm_delta_delivery_still_sendable(
+                pool,
+                account_id,
+                current_request_id,
+                baseline_request_id,
+            ):
+                await _defer_delta_delivery(
+                    pool,
+                    incident_type="delta_delivery_no_longer_sendable",
+                    account_id=account_id,
+                    current_request_id=current_request_id,
+                    baseline_request_id=baseline_request_id,
+                    error="delta_no_longer_sendable",
+                    severity="warning",
+                )
+                failed += 1
+                continue
+            result = await sender.send(
+                _delta_send_request(
+                    account_id=account_id,
+                    current_request_id=current_request_id,
+                    baseline_request_id=baseline_request_id,
+                    email=email,
+                    rendered=rendered,
+                    config=config,
+                )
+            )
+        except IdempotentReplayConflict:
+            await _mark_delta_delivered(
+                pool,
+                account_id,
+                current_request_id,
+                baseline_request_id,
+                _provider_message_id("resend", "idempotent-replay"),
+            )
+            sent += 1
+            continue
+        except Exception as exc:
+            logger.exception(
+                "Deflection delta delivery failed: account=%s current=%s baseline=%s",
+                account_id,
+                current_request_id,
+                baseline_request_id,
+            )
+            await _fail_delta_delivery(
+                pool,
+                incident_type="delta_delivery_send_failed",
+                account_id=account_id,
+                current_request_id=current_request_id,
+                baseline_request_id=baseline_request_id,
+                error=_bounded_error(exc),
+                severity="error",
+            )
+            failed += 1
+            continue
+        await _mark_delta_delivered(
+            pool,
+            account_id,
+            current_request_id,
+            baseline_request_id,
+            _provider_message_id(result.provider, result.message_id),
+        )
+        sent += 1
+    return DeflectionDeltaDeliveryRunSummary(
+        scanned=len(rows),
+        sent=sent,
+        failed=failed,
+        dry_run=dry_run,
+    )
+
+
+async def pending_deflection_delta_delivery_count(pool: Any) -> int:
+    """Return queued delta deliveries that still require a configured sender."""
+
+    count = await pool.fetchval(
+        f"""
+        SELECT COUNT(*)
+        FROM content_ops_deflection_delta_deliveries
+        WHERE delivery_status = 'pending'
+           OR (
+                delivery_status = 'sending'
+                AND updated_at < NOW() - INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'
+           )
+        """
+    )
+    parsed = _strict_int(count)
+    return parsed if parsed is not None else 0
+
+
 def deflection_report_result_url(
     *,
     request_id: str,
@@ -305,6 +498,24 @@ def deflection_delta_delivery_summary(
     )
 
 
+def _delta_payload_has_delivery_content(payload: Mapping[str, Any]) -> bool:
+    delta = payload.get("delta") if isinstance(payload.get("delta"), Mapping) else {}
+    current = delta.get("current") if isinstance(delta.get("current"), Mapping) else {}
+    baseline = delta.get("baseline") if isinstance(delta.get("baseline"), Mapping) else {}
+    if not _delta_source_window_label(current) or not _delta_source_window_label(baseline):
+        return False
+    items = delta.get("items")
+    if isinstance(items, Sequence) and not isinstance(items, (str, bytes, bytearray)):
+        if any(isinstance(item, Mapping) and _strict_text(item.get("question")) for item in items):
+            return True
+    summary = delta.get("summary") if isinstance(delta.get("summary"), Mapping) else {}
+    for field in _DELTA_DELIVERY_SIGNAL_FIELDS:
+        value = _strict_number(summary.get(field))
+        if value is not None and value != 0:
+            return True
+    return False
+
+
 def _delivery_idempotency_key(account_id: str, request_id: str) -> str:
     """Deterministic Resend idempotency key for a paid report delivery (#1461).
 
@@ -316,6 +527,17 @@ def _delivery_idempotency_key(account_id: str, request_id: str) -> str:
     """
 
     return f"deflection-report:{account_id}:{request_id}"
+
+
+def _delta_delivery_idempotency_key(
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+) -> str:
+    return (
+        "deflection-delta:"
+        f"{account_id}:{current_request_id}:{baseline_request_id}"
+    )
 
 
 def _send_request(
@@ -355,6 +577,46 @@ def _send_request(
             "account_id": account_id,
             "request_id": request_id,
             "source": "content_ops_deflection_report",
+        },
+    )
+
+
+def _delta_send_request(
+    *,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+    email: str,
+    rendered: DeflectionDeltaDeliverySummary,
+    config: DeflectionDeltaDeliveryConfig,
+) -> SendRequest:
+    return SendRequest(
+        campaign_id=(
+            "content_ops_deflection_delta:"
+            f"{account_id}:{current_request_id}:{baseline_request_id}"
+        ),
+        idempotency_key=_delta_delivery_idempotency_key(
+            account_id,
+            current_request_id,
+            baseline_request_id,
+        ),
+        to_email=email,
+        from_email=_required_text(config.from_email, "from_email"),
+        reply_to=_clean(config.reply_to) or None,
+        subject=rendered.subject,
+        html_body=rendered.html_body,
+        text_body=rendered.text_body,
+        attachments=(),
+        tags=(
+            {"name": "source", "value": "content_ops_deflection_delta"},
+            {"name": "current_request_id", "value": current_request_id},
+            {"name": "baseline_request_id", "value": baseline_request_id},
+        ),
+        metadata={
+            "account_id": account_id,
+            "current_request_id": current_request_id,
+            "baseline_request_id": baseline_request_id,
+            "source": "content_ops_deflection_delta",
         },
     )
 
@@ -956,6 +1218,153 @@ async def _mark_failed(pool: Any, account_id: str, request_id: str, error: str) 
     )
 
 
+async def _mark_delta_delivered(
+    pool: Any,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+    provider_message_id: str,
+) -> None:
+    await pool.execute(
+        """
+        UPDATE content_ops_deflection_delta_deliveries
+        SET delivery_status = 'delivered',
+            delivery_error = NULL,
+            provider_message_id = $4,
+            delivered_at = NOW(),
+            updated_at = NOW()
+        WHERE account_id = $1
+          AND current_request_id = $2
+          AND baseline_request_id = $3
+          AND delivery_status = 'sending'
+        """,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        provider_message_id,
+    )
+
+
+async def _mark_delta_failed(
+    pool: Any,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+    error: str,
+) -> None:
+    await pool.execute(
+        """
+        UPDATE content_ops_deflection_delta_deliveries
+        SET delivery_status = 'failed',
+            delivery_error = $4,
+            updated_at = NOW()
+        WHERE account_id = $1
+          AND current_request_id = $2
+          AND baseline_request_id = $3
+          AND delivery_status IN ('pending', 'sending')
+        """,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        _bounded_text(error),
+    )
+
+
+async def _mark_delta_pending(
+    pool: Any,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+    error: str,
+) -> None:
+    await pool.execute(
+        """
+        UPDATE content_ops_deflection_delta_deliveries
+        SET delivery_status = 'pending',
+            delivery_error = $4,
+            updated_at = NOW()
+        WHERE account_id = $1
+          AND current_request_id = $2
+          AND baseline_request_id = $3
+          AND delivery_status IN ('pending', 'sending')
+        """,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        _bounded_text(error),
+    )
+
+
+async def _fail_delta_delivery(
+    pool: Any,
+    *,
+    incident_type: str,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+    error: str,
+    severity: Literal["error", "warning", "info"] = "error",
+) -> None:
+    logger.log(
+        logging.ERROR if severity == "error" else logging.WARNING,
+        "Deflection delta delivery failed: account=%s current=%s baseline=%s error=%s",
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        error,
+    )
+    await _mark_delta_failed(
+        pool,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        error,
+    )
+    await _emit_delta_delivery_incident(
+        incident_type,
+        account_id=account_id,
+        current_request_id=current_request_id,
+        baseline_request_id=baseline_request_id,
+        severity=severity,
+        error=error,
+    )
+
+
+async def _defer_delta_delivery(
+    pool: Any,
+    *,
+    incident_type: str,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+    error: str,
+    severity: Literal["error", "warning", "info"] = "warning",
+) -> None:
+    logger.log(
+        logging.ERROR if severity == "error" else logging.WARNING,
+        "Deflection delta delivery deferred: account=%s current=%s baseline=%s error=%s",
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        error,
+    )
+    await _mark_delta_pending(
+        pool,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        error,
+    )
+    await _emit_delta_delivery_incident(
+        incident_type,
+        account_id=account_id,
+        current_request_id=current_request_id,
+        baseline_request_id=baseline_request_id,
+        severity=severity,
+        error=error,
+    )
+
+
 async def _confirm_delivery_still_sendable(
     pool: Any,
     account_id: str,
@@ -980,6 +1389,37 @@ async def _confirm_delivery_still_sendable(
     return row is not None
 
 
+async def _confirm_delta_delivery_still_sendable(
+    pool: Any,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+) -> bool:
+    row = await pool.fetchrow(
+        """
+        UPDATE content_ops_deflection_delta_deliveries d
+        SET updated_at = NOW()
+        FROM content_ops_deflection_reports current_report,
+             content_ops_deflection_reports baseline_report
+        WHERE d.account_id = $1
+          AND d.current_request_id = $2
+          AND d.baseline_request_id = $3
+          AND current_report.account_id = d.account_id
+          AND current_report.request_id = d.current_request_id
+          AND current_report.paid = true
+          AND baseline_report.account_id = d.account_id
+          AND baseline_report.request_id = d.baseline_request_id
+          AND baseline_report.paid = true
+          AND d.delivery_status = 'sending'
+        RETURNING d.current_request_id
+        """,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+    )
+    return row is not None
+
+
 async def _emit_delivery_incident(
     incident_type: str,
     *,
@@ -998,12 +1438,40 @@ async def _emit_delivery_incident(
     )
 
 
+async def _emit_delta_delivery_incident(
+    incident_type: str,
+    *,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+    severity: Literal["error", "warning", "info"] = "error",
+    **fields: Any,
+) -> None:
+    await emit_deflection_paid_funnel_incident_alert(
+        logger,
+        incident_type=incident_type,
+        severity=severity,
+        account_id=account_id,
+        request_id=current_request_id,
+        current_request_id=current_request_id,
+        baseline_request_id=baseline_request_id,
+        **fields,
+    )
+
+
 def _validate_config(config: DeflectionReportDeliveryConfig) -> None:
     _required_text(config.from_email, "from_email")
     _required_text(config.subject, "subject")
     if int(config.limit) <= 0:
         raise ValueError("limit must be greater than 0")
     deflection_report_result_url(request_id="config-check", config=config)
+
+
+def _validate_delta_config(config: DeflectionDeltaDeliveryConfig) -> None:
+    _required_text(config.from_email, "from_email")
+    _required_text(config.subject, "subject")
+    if int(config.limit) <= 0:
+        raise ValueError("limit must be greater than 0")
 
 
 def _provider_message_id(provider: str, message_id: str) -> str:
@@ -1025,6 +1493,24 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     if isinstance(row, Mapping):
         return dict(row)
     return dict(row)
+
+
+def _delta_record_from_delivery_row(data: Mapping[str, Any]) -> DeflectionDeltaAccessRecord:
+    delta = decode_jsonb_field(data.get("delta"), default={})
+    return DeflectionDeltaAccessRecord(
+        account_id=_required_text(data.get("account_id"), "account_id"),
+        current_request_id=_required_text(
+            data.get("current_request_id"),
+            "current_request_id",
+        ),
+        baseline_request_id=_required_text(
+            data.get("baseline_request_id"),
+            "baseline_request_id",
+        ),
+        delta=dict(delta) if isinstance(delta, Mapping) else {},
+        created_at=data.get("delta_created_at"),
+        updated_at=data.get("delta_updated_at"),
+    )
 
 
 def _required_text(value: Any, label: str) -> str:
@@ -1124,4 +1610,78 @@ RETURNING
     r.delivery_email,
     r.paid,
     r.artifact
+"""
+
+_PENDING_DELTA_SQL = """
+SELECT
+    d.account_id,
+    d.current_request_id,
+    d.baseline_request_id,
+    current_report.delivery_email,
+    current_report.paid AS current_paid,
+    baseline_report.paid AS baseline_paid,
+    deltas.delta,
+    deltas.created_at AS delta_created_at,
+    deltas.updated_at AS delta_updated_at
+FROM content_ops_deflection_delta_deliveries d
+JOIN content_ops_deflection_deltas deltas
+  ON deltas.account_id = d.account_id
+ AND deltas.current_request_id = d.current_request_id
+ AND deltas.baseline_request_id = d.baseline_request_id
+JOIN content_ops_deflection_reports current_report
+  ON current_report.account_id = d.account_id
+ AND current_report.request_id = d.current_request_id
+JOIN content_ops_deflection_reports baseline_report
+  ON baseline_report.account_id = d.account_id
+ AND baseline_report.request_id = d.baseline_request_id
+WHERE d.delivery_status = 'pending'
+ORDER BY d.created_at
+LIMIT $1
+"""
+
+_CLAIM_PENDING_DELTA_SQL = f"""
+WITH claimed AS (
+    SELECT
+        d.account_id,
+        d.current_request_id,
+        d.baseline_request_id,
+        d.created_at
+    FROM content_ops_deflection_delta_deliveries d
+    WHERE d.delivery_status = 'pending'
+       OR (
+            d.delivery_status = 'sending'
+            AND d.updated_at < NOW() - INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'
+       )
+    ORDER BY d.created_at
+    FOR UPDATE SKIP LOCKED
+    LIMIT $1
+)
+UPDATE content_ops_deflection_delta_deliveries d
+SET delivery_status = 'sending',
+    delivery_error = NULL,
+    updated_at = NOW()
+FROM claimed c
+JOIN content_ops_deflection_deltas deltas
+  ON deltas.account_id = c.account_id
+ AND deltas.current_request_id = c.current_request_id
+ AND deltas.baseline_request_id = c.baseline_request_id
+JOIN content_ops_deflection_reports current_report
+  ON current_report.account_id = c.account_id
+ AND current_report.request_id = c.current_request_id
+JOIN content_ops_deflection_reports baseline_report
+  ON baseline_report.account_id = c.account_id
+ AND baseline_report.request_id = c.baseline_request_id
+WHERE d.account_id = c.account_id
+  AND d.current_request_id = c.current_request_id
+  AND d.baseline_request_id = c.baseline_request_id
+RETURNING
+    d.account_id,
+    d.current_request_id,
+    d.baseline_request_id,
+    current_report.delivery_email,
+    current_report.paid AS current_paid,
+    baseline_report.paid AS baseline_paid,
+    deltas.delta,
+    deltas.created_at AS delta_created_at,
+    deltas.updated_at AS delta_updated_at
 """

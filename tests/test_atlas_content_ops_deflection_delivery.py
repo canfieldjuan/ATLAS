@@ -10,10 +10,13 @@ import pytest
 
 from atlas_brain.content_ops_deflection_delivery import (
     DELIVERY_CLAIM_STALE_AFTER,
+    DeflectionDeltaDeliveryConfig,
     DeflectionReportDeliveryConfig,
     deflection_delta_delivery_summary,
     deflection_delivery_email_surface_observation,
     deflection_report_result_url,
+    pending_deflection_delta_delivery_count,
+    send_pending_deflection_delta_deliveries,
     send_pending_deflection_report_deliveries,
 )
 from atlas_brain.content_ops_deflection_incidents import INCIDENT_LOG_MARKER
@@ -60,6 +63,52 @@ class _Pool:
         if not self.sendable:
             return None
         return {"request_id": args[1]}
+
+    async def execute(self, query: str, *args: Any) -> str:
+        self.execute_calls.append((query, args))
+        return "UPDATE 1"
+
+
+class _DeltaPool:
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        sendable: bool = True,
+    ) -> None:
+        self.rows = rows
+        self.sendable = sendable
+        self.fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetchval_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetchrow_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        self.fetch_calls.append((query, args))
+        assert "content_ops_deflection_delta_deliveries" in query
+        assert "content_ops_deflection_deltas" in query
+        assert "content_ops_deflection_reports current_report" in query
+        assert "content_ops_deflection_reports baseline_report" in query
+        assert "current_report.delivery_email" in query
+        assert "d.delivery_email" not in query
+        return self.rows[: int(args[0])]
+
+    async def fetchval(self, query: str, *args: Any) -> int:
+        self.fetchval_calls.append((query, args))
+        assert "content_ops_deflection_delta_deliveries" in query
+        assert "delivery_status = 'pending'" in query
+        assert DELIVERY_CLAIM_STALE_AFTER in query
+        return len(self.rows)
+
+    async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
+        self.fetchrow_calls.append((query, args))
+        assert "content_ops_deflection_delta_deliveries" in query
+        assert "delivery_status = 'sending'" in query
+        assert "current_report.paid = true" in query
+        assert "baseline_report.paid = true" in query
+        if not self.sendable:
+            return None
+        return {"current_request_id": args[1]}
 
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
@@ -345,6 +394,23 @@ def _delta_read_payload() -> dict[str, Any]:
     }
 
 
+def _delta_delivery_row(**overrides: Any) -> dict[str, Any]:
+    payload = _delta_read_payload()
+    row = {
+        "account_id": "acct-123",
+        "current_request_id": payload["current_request_id"],
+        "baseline_request_id": payload["baseline_request_id"],
+        "delivery_email": "buyer@example.com",
+        "current_paid": True,
+        "baseline_paid": True,
+        "delta": json.dumps(payload["delta"]),
+        "delta_created_at": "2026-06-01T00:00:00Z",
+        "delta_updated_at": "2026-06-01T00:00:00Z",
+    }
+    row.update(overrides)
+    return row
+
+
 def _install_fake_pdf_renderer(
     monkeypatch: pytest.MonkeyPatch,
     renderer: Any,
@@ -400,6 +466,246 @@ def test_deflection_delta_delivery_summary_escapes_html_and_handles_savings() ->
     assert "Can <script>alert('x')</script> export data?" in rendered.text_body
     assert "Can &lt;script&gt;alert('x')&lt;/script&gt; export data?" in rendered.html_body
     assert "<script>" not in rendered.html_body
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_sends_allowlisted_payload() -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            reply_to="support@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+    )
+
+    assert summary.sent == 1
+    assert summary.failed == 0
+    assert summary.dry_run == 0
+    assert len(sender.requests) == 1
+    request = sender.requests[0]
+    assert request.to_email == "buyer@example.com"
+    assert request.from_email == "reports@example.com"
+    assert request.reply_to == "support@example.com"
+    assert request.subject == "Your support deflection delta is ready"
+    assert request.campaign_id == (
+        "content_ops_deflection_delta:acct-123:current-report:baseline-report"
+    )
+    assert request.idempotency_key == (
+        "deflection-delta:acct-123:current-report:baseline-report"
+    )
+    assert request.tags == (
+        {"name": "source", "value": "content_ops_deflection_delta"},
+        {"name": "current_request_id", "value": "current-report"},
+        {"name": "baseline_request_id", "value": "baseline-report"},
+    )
+    assert "ticket-secret-delta-1" not in request.text_body
+    assert "raw evidence" not in request.text_body
+    assert "raw phrasing" not in request.html_body
+    assert len(pool.fetchrow_calls) == 1
+    delivered_query, delivered_args = pool.execute_calls[-1]
+    assert "delivery_status = 'delivered'" in delivered_query
+    assert delivered_args == (
+        "acct-123",
+        "current-report",
+        "baseline-report",
+        "resend:email-123",
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_dry_run_does_not_mutate() -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=True,
+        ),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 0
+    assert summary.dry_run == 1
+    assert sender.requests == []
+    assert pool.fetchrow_calls == []
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_dry_run_skips_invalid_rows() -> None:
+    pool = _DeltaPool([
+        _delta_delivery_row(
+            delivery_email="",
+            current_paid=False,
+            baseline_paid=False,
+        )
+    ])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=True,
+        ),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 0
+    assert summary.dry_run == 1
+    assert sender.requests == []
+    assert pool.fetchrow_calls == []
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_defers_unpaid_sources(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _DeltaPool([_delta_delivery_row(current_paid=False)])
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+    )
+
+    assert summary.failed == 1
+    assert sender.requests == []
+    deferred_query, deferred_args = pool.execute_calls[-1]
+    assert "delivery_status = 'pending'" in deferred_query
+    assert "delivery_status = 'failed'" not in deferred_query
+    assert deferred_args[-1] == "source_report_not_paid"
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "delta_delivery_source_report_not_paid"
+    assert "Deflection delta delivery deferred" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_defers_when_no_longer_sendable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _DeltaPool([_delta_delivery_row()], sendable=False)
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+    )
+
+    assert summary.failed == 1
+    assert sender.requests == []
+    deferred_query, deferred_args = pool.execute_calls[-1]
+    assert "delivery_status = 'pending'" in deferred_query
+    assert deferred_args[-1] == "delta_no_longer_sendable"
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "delta_delivery_no_longer_sendable"
+
+
+@pytest.mark.asyncio
+async def test_pending_deflection_delta_delivery_count_includes_stale_sending() -> None:
+    pool = _DeltaPool([_delta_delivery_row(), _delta_delivery_row()])
+
+    count = await pending_deflection_delta_delivery_count(pool)
+
+    assert count == 2
+    query, args = pool.fetchval_calls[0]
+    assert args == ()
+    assert "delivery_status = 'pending'" in query
+    assert "delivery_status = 'sending'" in query
+    assert DELIVERY_CLAIM_STALE_AFTER in query
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_rejects_empty_payload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    payload = _delta_read_payload()
+    delta = payload["delta"]
+    assert isinstance(delta, dict)
+    delta["items"] = []
+    summary = delta["summary"]
+    assert isinstance(summary, dict)
+    for key in list(summary):
+        summary[key] = 0
+    pool = _DeltaPool([_delta_delivery_row(delta=json.dumps(delta))])
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+
+    summary_result = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+    )
+
+    assert summary_result.failed == 1
+    assert sender.requests == []
+    failed_query, failed_args = pool.execute_calls[-1]
+    assert "delivery_status = 'failed'" in failed_query
+    assert failed_args[-1] == "empty_delta_payload"
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "delta_delivery_empty_payload"
+    assert incidents[-1]["current_request_id"] == "current-report"
+    assert incidents[-1]["baseline_request_id"] == "baseline-report"
+    assert "empty_delta_payload" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_logs_and_incidents_on_send_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender(error=RuntimeError("resend down"))
+    caplog.set_level("ERROR", logger="atlas.content_ops_deflection_delivery")
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+    )
+
+    assert summary.failed == 1
+    failed_query, failed_args = pool.execute_calls[-1]
+    assert "delivery_status = 'failed'" in failed_query
+    assert failed_args[-1] == "RuntimeError: resend down"
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "delta_delivery_send_failed"
+    assert incidents[-1]["error"] == "RuntimeError: resend down"
+    assert "Deflection delta delivery failed" in caplog.text
 
 
 @pytest.mark.asyncio

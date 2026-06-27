@@ -11,6 +11,25 @@ import atlas_brain.autonomous.tasks.content_ops_deflection_delta_automation as m
 from extracted_content_pipeline.deflection_report_access import DeflectionDeltaBatchSummary
 
 
+class _Pool(SimpleNamespace):
+    def __init__(
+        self,
+        *,
+        is_initialized: bool = True,
+        pending_delta_deliveries: int = 0,
+    ) -> None:
+        super().__init__(
+            is_initialized=is_initialized,
+            pending_delta_deliveries=pending_delta_deliveries,
+            fetchval_calls=[],
+        )
+
+    async def fetchval(self, query: str, *args: Any) -> int:
+        self.fetchval_calls.append((query, args))
+        assert "content_ops_deflection_delta_deliveries" in query
+        return int(self.pending_delta_deliveries)
+
+
 def _set_delta_settings(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> None:
     values = {
         "enabled": True,
@@ -21,6 +40,9 @@ def _set_delta_settings(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> No
     values.update(overrides)
     for name, value in values.items():
         monkeypatch.setattr(mod.settings.deflection_delta, name, value, raising=False)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "from_email", "", raising=False)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "resend_api_key", "", raising=False)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "dry_run", False, raising=False)
 
 
 def test_deflection_delta_automation_task_is_registered_builtin() -> None:
@@ -89,7 +111,7 @@ async def test_run_skips_when_delta_automation_disabled(monkeypatch: pytest.Monk
 @pytest.mark.asyncio
 async def test_run_skips_when_db_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_delta_settings(monkeypatch)
-    pool = SimpleNamespace(is_initialized=False)
+    pool = _Pool(is_initialized=False)
     monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
 
     result = await mod.run(SimpleNamespace(metadata={}))
@@ -100,7 +122,7 @@ async def test_run_skips_when_db_not_ready(monkeypatch: pytest.MonkeyPatch) -> N
 @pytest.mark.asyncio
 async def test_run_raises_when_batch_worker_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_delta_settings(monkeypatch)
-    pool = SimpleNamespace(is_initialized=True)
+    pool = _Pool(is_initialized=True)
 
     async def _raise_batch_failure(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("delta table missing")
@@ -117,7 +139,7 @@ async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_delta_settings(monkeypatch, account_limit=5, reports_per_account=4)
-    pool = SimpleNamespace(is_initialized=True)
+    pool = _Pool(is_initialized=True)
     calls: list[dict[str, Any]] = []
 
     async def _compute(store: Any, *, account_limit: int, reports_per_account: int) -> Any:
@@ -157,8 +179,14 @@ async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
         "accounts_scanned": 2,
         "reports_scanned": 3,
         "deltas_saved": 1,
+        "delta_deliveries_enqueued": 0,
         "skipped_no_delta": 2,
         "failed": 0,
+        "delivery_scanned": 0,
+        "delivery_sent": 0,
+        "delivery_failed": 0,
+        "delivery_dry_run": 0,
+        "delivery_dry_run_enabled": False,
         "account_limit_reached": False,
         "account_limit_overflow": False,
         "reports_per_account_limit_reached": False,
@@ -169,11 +197,134 @@ async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
 
 
 @pytest.mark.asyncio
+async def test_run_drains_delta_delivery_when_generation_enqueues_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "from_email", "reports@example.com", raising=False)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "dry_run", True, raising=False)
+    pool = _Pool(is_initialized=True)
+    delivery_calls: list[dict[str, Any]] = []
+
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=1,
+            reports_scanned=2,
+            deltas_saved=1,
+            skipped_no_delta=1,
+            delta_deliveries_enqueued=1,
+        )
+
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+        delivery_calls.append(
+            {
+                "pool": pool_arg,
+                "sender_type": type(sender).__name__,
+                "from_email": config.from_email,
+                "dry_run": config.dry_run,
+            }
+        )
+        return SimpleNamespace(scanned=1, sent=0, failed=0, dry_run=1)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", _send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert delivery_calls == [
+        {
+            "pool": pool,
+            "sender_type": "_DryRunSender",
+            "from_email": "reports@example.com",
+            "dry_run": True,
+        }
+    ]
+    assert result["delta_deliveries_enqueued"] == 1
+    assert result["delivery_scanned"] == 1
+    assert result["delivery_dry_run"] == 1
+    assert result["_skip_synthesis"] == "Deflection delta automation complete"
+
+
+@pytest.mark.asyncio
+async def test_run_drains_existing_delta_delivery_when_no_new_row_enqueued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "from_email", "reports@example.com", raising=False)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "dry_run", True, raising=False)
+    pool = _Pool(is_initialized=True)
+    delivery_calls = 0
+
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=1,
+            reports_scanned=2,
+            deltas_saved=1,
+            skipped_no_delta=1,
+            delta_deliveries_enqueued=0,
+        )
+
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+        nonlocal delivery_calls
+        delivery_calls += 1
+        assert pool_arg is pool
+        assert config.dry_run is True
+        return SimpleNamespace(scanned=1, sent=0, failed=0, dry_run=1)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", _send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert delivery_calls == 1
+    assert result["delta_deliveries_enqueued"] == 0
+    assert result["delivery_scanned"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_reports_missing_delivery_config_for_existing_backlog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    pool = _Pool(is_initialized=True, pending_delta_deliveries=3)
+    delivery_calls = 0
+
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=1,
+            reports_scanned=2,
+            deltas_saved=0,
+            skipped_no_delta=2,
+            delta_deliveries_enqueued=0,
+        )
+
+    async def _send_pending(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal delivery_calls
+        delivery_calls += 1
+        return SimpleNamespace(scanned=0, sent=0, failed=0, dry_run=0)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", _send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert delivery_calls == 0
+    assert result["_skip_synthesis"] == "Deflection delta delivery config missing"
+    assert result["delta_deliveries_enqueued"] == 0
+    assert result["delivery_pending"] == 3
+    assert result["delivery_missing_config"] == ["from_email", "resend_api_key"]
+    assert pool.fetchval_calls
+
+
+@pytest.mark.asyncio
 async def test_run_reports_degraded_when_some_reports_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_delta_settings(monkeypatch)
-    pool = SimpleNamespace(is_initialized=True)
+    pool = _Pool(is_initialized=True)
 
     async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
         return DeflectionDeltaBatchSummary(
@@ -194,8 +345,14 @@ async def test_run_reports_degraded_when_some_reports_fail(
         "accounts_scanned": 2,
         "reports_scanned": 3,
         "deltas_saved": 1,
+        "delta_deliveries_enqueued": 0,
         "skipped_no_delta": 1,
         "failed": 1,
+        "delivery_scanned": 0,
+        "delivery_sent": 0,
+        "delivery_failed": 0,
+        "delivery_dry_run": 0,
+        "delivery_dry_run_enabled": False,
         "account_limit_reached": False,
         "account_limit_overflow": False,
         "reports_per_account_limit_reached": False,
@@ -206,11 +363,76 @@ async def test_run_reports_degraded_when_some_reports_fail(
 
 
 @pytest.mark.asyncio
+async def test_run_reports_delivery_degraded_before_generation_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "from_email", "reports@example.com", raising=False)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "resend_api_key", "resend-key", raising=False)
+    pool = _Pool(is_initialized=True)
+
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=2,
+            reports_scanned=3,
+            deltas_saved=1,
+            skipped_no_delta=1,
+            failed=1,
+            delta_deliveries_enqueued=1,
+        )
+
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+        assert pool_arg is pool
+        return SimpleNamespace(scanned=2, sent=1, failed=1, dry_run=0)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", _send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert result["_skip_synthesis"] == "Deflection delta delivery degraded"
+    assert result["failed"] == 1
+    assert result["delivery_failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_raises_when_all_scanned_delta_deliveries_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "from_email", "reports@example.com", raising=False)
+    monkeypatch.setattr(mod.settings.deflection_delivery, "resend_api_key", "resend-key", raising=False)
+    pool = _Pool(is_initialized=True)
+
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=1,
+            reports_scanned=2,
+            deltas_saved=1,
+            skipped_no_delta=1,
+            delta_deliveries_enqueued=1,
+        )
+
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+        assert pool_arg is pool
+        assert config.dry_run is False
+        return SimpleNamespace(scanned=2, sent=0, failed=2, dry_run=0)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", _send_pending)
+
+    with pytest.raises(RuntimeError, match="delivery failed for all scanned deliveries"):
+        await mod.run(SimpleNamespace(metadata={}))
+
+
+@pytest.mark.asyncio
 async def test_run_reports_scan_window_saturation_without_failing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_delta_settings(monkeypatch)
-    pool = SimpleNamespace(is_initialized=True)
+    pool = _Pool(is_initialized=True)
 
     async def _compute(
         _store: Any,
@@ -242,8 +464,14 @@ async def test_run_reports_scan_window_saturation_without_failing(
         "accounts_scanned": 1,
         "reports_scanned": 2,
         "deltas_saved": 1,
+        "delta_deliveries_enqueued": 0,
         "skipped_no_delta": 1,
         "failed": 0,
+        "delivery_scanned": 0,
+        "delivery_sent": 0,
+        "delivery_failed": 0,
+        "delivery_dry_run": 0,
+        "delivery_dry_run_enabled": False,
         "account_limit_reached": True,
         "account_limit_overflow": False,
         "reports_per_account_limit_reached": True,
@@ -258,7 +486,7 @@ async def test_run_reports_scan_window_overflow_before_saturation_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_delta_settings(monkeypatch)
-    pool = SimpleNamespace(is_initialized=True)
+    pool = _Pool(is_initialized=True)
 
     async def _compute(
         _store: Any,
@@ -290,8 +518,14 @@ async def test_run_reports_scan_window_overflow_before_saturation_warning(
         "accounts_scanned": 1,
         "reports_scanned": 2,
         "deltas_saved": 1,
+        "delta_deliveries_enqueued": 0,
         "skipped_no_delta": 1,
         "failed": 0,
+        "delivery_scanned": 0,
+        "delivery_sent": 0,
+        "delivery_failed": 0,
+        "delivery_dry_run": 0,
+        "delivery_dry_run_enabled": False,
         "account_limit_reached": True,
         "account_limit_overflow": True,
         "reports_per_account_limit_reached": True,
@@ -306,7 +540,7 @@ async def test_run_raises_when_all_scanned_reports_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_delta_settings(monkeypatch)
-    pool = SimpleNamespace(is_initialized=True)
+    pool = _Pool(is_initialized=True)
 
     async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
         return DeflectionDeltaBatchSummary(
