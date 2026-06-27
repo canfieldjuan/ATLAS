@@ -74,6 +74,7 @@ TYPE_BY_FIELD = {
     "outcome_diagnostic_ticket_count": "number",
     "outcome_diagnostics": "DeflectionReportQuestionOutcomeDiagnostics | null",
     "outcome_risk_ticket_count": "number",
+    "owner_category": "string",
     "owner_lane": "string",
     "pdf_limit": "number",
     "phrases": "string[]",

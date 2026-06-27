@@ -79,8 +79,10 @@ def test_deflection_report_model_types_include_backend_projection_fields() -> No
     assert "customer_vocabulary?: string[];" in rendered
     assert "cost_period?: string;" in rendered
     assert "cost_confidence?: string;" in rendered
+    assert "owner_category?: string;" in rendered
     assert "jira_template?: DeflectionReportPriorityFixQueueJiraTemplate;" in rendered
     assert "export type DeflectionReportPriorityFixQueueJiraTemplate" in rendered
+    assert "  owner_category: string;" in rendered
     assert "  product_gap_summary: string;" in rendered
     assert "  customer_vocabulary: string[];" in rendered
     assert "top_evidence: DeflectionReportPriorityFixQueueTopEvidence[];" in rendered
@@ -107,7 +109,7 @@ def test_deflection_report_model_types_publish_hosted_safe_allowlists() -> None:
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        '["rank", "question", "status", "owner_lane", "evidence_tier", '
+        '["rank", "question", "status", "owner_lane", "owner_category", "evidence_tier", '
         '"routing_signals", "product_gap_summary", "customer_vocabulary", '
         '"cost_period", "cost_confidence", "jira_template", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
@@ -115,7 +117,7 @@ def test_deflection_report_model_types_publish_hosted_safe_allowlists() -> None:
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_JIRA_TEMPLATE_HOSTED_CONSUMER_SAFE_FIELDS = '
-        '["recommended_title", "question", "owner_lane", "product_gap_summary", '
+        '["recommended_title", "question", "owner_lane", "owner_category", "product_gap_summary", '
         '"ticket_count", "estimated_support_cost", "cost_period", "cost_confidence", '
         '"evidence_tier", "customer_vocabulary", "recommended_action"]'
     ) in rendered
@@ -200,7 +202,7 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        'Object.freeze(["rank", "question", "status", "owner_lane", "evidence_tier", '
+        'Object.freeze(["rank", "question", "status", "owner_lane", "owner_category", "evidence_tier", '
         '"routing_signals", "product_gap_summary", "customer_vocabulary", '
         '"cost_period", "cost_confidence", "jira_template", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
@@ -208,7 +210,7 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_JIRA_TEMPLATE_HOSTED_CONSUMER_SAFE_FIELDS = '
-        'Object.freeze(["recommended_title", "question", "owner_lane", "product_gap_summary", '
+        'Object.freeze(["recommended_title", "question", "owner_lane", "owner_category", "product_gap_summary", '
         '"ticket_count", "estimated_support_cost", "cost_period", "cost_confidence", '
         '"evidence_tier", "customer_vocabulary", "recommended_action"])'
     ) in rendered
@@ -227,7 +229,7 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
     ) in rendered
     assert (
         'DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        'Object.freeze(["rank", "question", "status", "owner_lane", "evidence_tier", '
+        'Object.freeze(["rank", "question", "status", "owner_lane", "owner_category", "evidence_tier", '
         '"routing_signals", "product_gap_summary", "customer_vocabulary", '
         '"cost_period", "cost_confidence", "jira_template", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '

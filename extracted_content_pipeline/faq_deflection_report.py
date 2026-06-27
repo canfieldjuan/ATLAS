@@ -856,6 +856,7 @@ _REPORT_ACTION_ITEM_FIELDS = (
     "question",
     "status",
     "owner_lane",
+    "owner_category",
     "evidence_tier",
     "routing_signals",
     "product_gap_summary",
@@ -883,6 +884,7 @@ _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
     "question",
     "status",
     "owner_lane",
+    "owner_category",
     "evidence_tier",
     "routing_signals",
     "product_gap_summary",
@@ -899,6 +901,7 @@ _REPORT_ACTION_ITEM_HOSTED_SAFE_FIELDS = (
     "csat_signal",
 )
 _REPORT_ACTION_CONTEXT_OPTIONAL_FIELDS = (
+    "owner_category",
     "evidence_tier",
     "routing_signals",
     "product_gap_summary",
@@ -949,6 +952,7 @@ _REPORT_ACTION_JIRA_TEMPLATE_FIELDS = (
     "recommended_title",
     "question",
     "owner_lane",
+    "owner_category",
     "product_gap_summary",
     "ticket_count",
     "estimated_support_cost",
@@ -3296,6 +3300,7 @@ def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
     identity = _action_identity(item)
     routing_signals = _action_routing_signals(item)
     owner_lane = _action_owner_lane(item, routing_signals=routing_signals)
+    owner_category = _action_owner_category(status)
     evidence_tier = _action_evidence_tier(item)
     estimated_support_cost = _support_cost(ticket_count)
     recommended_title = _action_recommended_title(item)
@@ -3316,6 +3321,7 @@ def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
         "question": _text(item.get("question")),
         "status": status,
         "owner_lane": owner_lane,
+        "owner_category": owner_category,
         "evidence_tier": evidence_tier,
         "routing_signals": routing_signals,
         "product_gap_summary": product_gap_summary,
@@ -3325,6 +3331,7 @@ def _action_item(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
         "jira_template": _action_jira_template(
             item,
             owner_lane=owner_lane,
+            owner_category=owner_category,
             product_gap_summary=product_gap_summary,
             ticket_count=ticket_count,
             estimated_support_cost=estimated_support_cost,
@@ -3402,6 +3409,14 @@ def _action_owner_lane(
         return mapped
     topic = _text(item.get("topic"))
     return _owner_lane_title(topic) if topic else "Unknown"
+
+
+def _action_owner_category(status: str) -> str:
+    if status == "Already covered but still recurring":
+        return "Product / Support Experience"
+    if status in {"Draft ready", "Needs answer", "Needs review", "Low confidence"}:
+        return "Content / Support Enablement"
+    return "Review"
 
 
 def _action_routing_signals(item: Mapping[str, Any]) -> dict[str, list[str]]:
@@ -3665,6 +3680,7 @@ def _action_jira_template(
     item: Mapping[str, Any],
     *,
     owner_lane: str,
+    owner_category: str,
     product_gap_summary: str,
     ticket_count: int,
     estimated_support_cost: float,
@@ -3679,6 +3695,7 @@ def _action_jira_template(
         "recommended_title": recommended_title or _text(item.get("question")),
         "question": _text(item.get("question")),
         "owner_lane": owner_lane,
+        "owner_category": owner_category,
         "product_gap_summary": product_gap_summary,
         "ticket_count": ticket_count,
         "estimated_support_cost": estimated_support_cost,
