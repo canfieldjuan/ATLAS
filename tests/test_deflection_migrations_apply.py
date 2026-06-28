@@ -12,6 +12,8 @@ This check is scoped to the deflection chain, which has no such dependency:
 - 339 content_ops_deflection_reports retention index
 - 340 content_ops_deflection_deltas
 - 341 content_ops_deflection_delta_deliveries
+- 342 content_ops_deflection_checkout_authorization
+- 343 content_ops_deflection_delta_entitlements
 
 It applies those files in order to a fresh Postgres database and verifies the
 tables exist and the reconciliation table's idempotency constraint holds --
@@ -41,6 +43,8 @@ NULL_SESSION_MIGRATION = "337_content_ops_deflection_reconciliation_null_session
 RETENTION_INDEX_MIGRATION = "339_content_ops_deflection_reports_retention_index.sql"
 DELTA_MIGRATION = "340_content_ops_deflection_deltas.sql"
 DELTA_DELIVERY_MIGRATION = "341_content_ops_deflection_delta_deliveries.sql"
+CHECKOUT_AUTHORIZATION_MIGRATION = "342_content_ops_deflection_checkout_authorization.sql"
+DELTA_ENTITLEMENT_MIGRATION = "343_content_ops_deflection_delta_entitlements.sql"
 
 _TEST_ACCOUNT_ID = "acct-deflection-migration-apply-test"
 
@@ -75,6 +79,7 @@ async def _reset(conn) -> None:
     await conn.execute(
         "DROP TABLE IF EXISTS "
         "content_ops_deflection_paid_reconciliation, "
+        "content_ops_deflection_delta_entitlements, "
         "content_ops_deflection_delta_deliveries, "
         "content_ops_deflection_deltas, "
         "content_ops_deflection_report_deliveries, "
@@ -99,6 +104,8 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             RETENTION_INDEX_MIGRATION,
             DELTA_MIGRATION,
             DELTA_DELIVERY_MIGRATION,
+            CHECKOUT_AUTHORIZATION_MIGRATION,
+            DELTA_ENTITLEMENT_MIGRATION,
         )
 
         existing = {
@@ -114,6 +121,7 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             "content_ops_deflection_paid_reconciliation",
             "content_ops_deflection_deltas",
             "content_ops_deflection_delta_deliveries",
+            "content_ops_deflection_delta_entitlements",
         } <= existing
 
         recon_columns = {
@@ -186,6 +194,43 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             "updated_at",
             "delivered_at",
         } <= delta_delivery_columns
+
+        checkout_columns = {
+            row["column_name"]
+            for row in await conn.fetch(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'content_ops_deflection_reports'"
+            )
+        }
+        assert {
+            "checkout_price_variant",
+            "checkout_amount_cents",
+            "checkout_currency",
+            "checkout_price_id",
+            "checkout_authorized_at",
+        } <= checkout_columns
+
+        delta_entitlement_columns = {
+            row["column_name"]
+            for row in await conn.fetch(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'content_ops_deflection_delta_entitlements'"
+            )
+        }
+        assert {
+            "account_id",
+            "stripe_subscription_id",
+            "stripe_customer_id",
+            "stripe_price_id",
+            "stripe_subscription_status",
+            "entitlement_source",
+            "current_period_end",
+            "granted_at",
+            "revoked_at",
+            "metadata",
+            "created_at",
+            "updated_at",
+        } <= delta_entitlement_columns
 
         # Non-null dedup (ON CONFLICT DO NOTHING): a second event for the same
         # checkout must not create a duplicate ledger row.
@@ -274,6 +319,38 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             )
             == 1
         )
+        for suffix, status in (("active", "active"), ("trial", "trialing")):
+            await conn.execute(
+                "INSERT INTO content_ops_deflection_delta_entitlements "
+                "(account_id, stripe_subscription_id, stripe_subscription_status) "
+                "VALUES ($1, $2, $3)",
+                f"{_TEST_ACCOUNT_ID}-{suffix}",
+                f"sub-{suffix}",
+                status,
+            )
+        assert (
+            await conn.fetchval(
+                "SELECT count(DISTINCT account_id) "
+                "FROM content_ops_deflection_delta_entitlements "
+                "WHERE stripe_subscription_status IN ('active', 'trialing')"
+            )
+            == 2
+        )
+        delta_entitlement_indexdef = await conn.fetchval(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE schemaname = 'public' "
+            "AND tablename = 'content_ops_deflection_delta_entitlements' "
+            "AND indexname = 'idx_content_ops_deflection_delta_entitlements_active'"
+        )
+        assert delta_entitlement_indexdef is not None
+        assert "revoked_at IS NULL" in delta_entitlement_indexdef
+        with pytest.raises(Exception):
+            await conn.execute(
+                "INSERT INTO content_ops_deflection_delta_entitlements "
+                "(account_id, stripe_subscription_id, stripe_subscription_status) "
+                "VALUES ($1, 'sub-invalid', 'renewing')",
+                _TEST_ACCOUNT_ID,
+            )
     finally:
         await _cleanup(conn)
         await conn.close()
@@ -330,6 +407,14 @@ async def test_deflection_337_collapses_pre_existing_null_session_duplicates() -
 
 
 async def _cleanup(conn) -> None:
+    try:
+        await conn.execute(
+            "DELETE FROM content_ops_deflection_delta_entitlements "
+            "WHERE account_id LIKE $1",
+            f"{_TEST_ACCOUNT_ID}%",
+        )
+    except Exception:
+        pass
     try:
         await conn.execute(
             "DELETE FROM content_ops_deflection_deltas "

@@ -17,12 +17,37 @@ class _Pool(SimpleNamespace):
         *,
         is_initialized: bool = True,
         pending_delta_deliveries: int = 0,
+        entitlement_rows: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(
             is_initialized=is_initialized,
             pending_delta_deliveries=pending_delta_deliveries,
+            entitlement_rows=entitlement_rows or [],
+            fetch_calls=[],
             fetchval_calls=[],
         )
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        self.fetch_calls.append((query, args))
+        assert "content_ops_deflection_delta_entitlements" in query
+        statuses = set(args[0])
+        fallback_accounts = set(args[1]) if len(args) > 1 else set()
+        limit = int(args[2]) if len(args) > 2 else 100
+        rows = []
+        for row in self.entitlement_rows:
+            account_id = row["account_id"]
+            status = row.get("stripe_subscription_status")
+            if status not in statuses and account_id not in fallback_accounts:
+                continue
+            rows.append(
+                {
+                    "account_id": account_id,
+                    "grants_delta_entitlement": status in statuses
+                    and row.get("revoked_at") is None,
+                }
+            )
+        rows.sort(key=lambda row: (not row["grants_delta_entitlement"], row["account_id"]))
+        return rows[:limit]
 
     async def fetchval(self, query: str, *args: Any) -> int:
         self.fetchval_calls.append((query, args))
@@ -205,6 +230,146 @@ async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
         "report_limit_overflow_accounts": [],
         "entitled_account_count": 3,
     }
+
+
+@pytest.mark.asyncio
+async def test_run_uses_billing_entitlement_rows_before_config_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch, entitled_account_ids="acct-config")
+    pool = _Pool(
+        is_initialized=True,
+        entitlement_rows=[
+            {
+                "account_id": "acct-db-active",
+                "stripe_subscription_status": "active",
+            },
+            {
+                "account_id": "acct-db-trial",
+                "stripe_subscription_status": "trialing",
+            },
+            {
+                "account_id": "acct-db-canceled",
+                "stripe_subscription_status": "canceled",
+            },
+        ],
+    )
+    calls: list[dict[str, Any]] = []
+
+    async def _compute(
+        _store: Any,
+        *,
+        entitled_account_ids: tuple[str, ...],
+        **_kwargs: Any,
+    ) -> Any:
+        calls.append({"entitled_account_ids": entitled_account_ids})
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=2,
+            reports_scanned=2,
+            deltas_saved=0,
+            skipped_no_delta=2,
+            failed=0,
+        )
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert calls == [
+        {"entitled_account_ids": ("acct-db-active", "acct-db-trial", "acct-config")}
+    ]
+    assert pool.fetch_calls[0][1] == (["active", "trialing"], ["acct-config"], 11)
+    assert result["entitled_account_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_run_falls_back_to_config_allowlist_when_billing_rows_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch, entitled_account_ids="acct-config,acct-config")
+    pool = _Pool(is_initialized=True)
+    calls: list[dict[str, Any]] = []
+
+    async def _compute(
+        _store: Any,
+        *,
+        entitled_account_ids: tuple[str, ...],
+        **_kwargs: Any,
+    ) -> Any:
+        calls.append({"entitled_account_ids": entitled_account_ids})
+        return DeflectionDeltaBatchSummary(
+            accounts_scanned=1,
+            reports_scanned=1,
+            deltas_saved=0,
+            skipped_no_delta=1,
+            failed=0,
+        )
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", _compute)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert calls == [{"entitled_account_ids": ("acct-config",)}]
+    assert result["entitled_account_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_does_not_revive_inactive_billing_rows_from_config_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch, entitled_account_ids="acct-canceled")
+    pool = _Pool(
+        is_initialized=True,
+        entitlement_rows=[
+            {
+                "account_id": "acct-canceled",
+                "stripe_subscription_status": "canceled",
+            },
+        ],
+    )
+    compute = AsyncMock()
+    send_pending = AsyncMock()
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert result["_skip_synthesis"] == "No entitled deflection delta accounts configured"
+    assert result["entitled_account_count"] == 0
+    compute.assert_not_called()
+    send_pending.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_does_not_revive_revoked_active_billing_rows_from_config_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch, entitled_account_ids="acct-revoked")
+    pool = _Pool(
+        is_initialized=True,
+        entitlement_rows=[
+            {
+                "account_id": "acct-revoked",
+                "stripe_subscription_status": "active",
+                "revoked_at": "2026-06-28T00:00:00Z",
+            },
+        ],
+    )
+    compute = AsyncMock()
+    send_pending = AsyncMock()
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert result["_skip_synthesis"] == "No entitled deflection delta accounts configured"
+    assert result["entitled_account_count"] == 0
+    compute.assert_not_called()
+    send_pending.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -397,6 +562,33 @@ async def test_run_skips_global_generation_without_entitled_accounts(
     assert result["entitled_account_count"] == 0
     assert result["accounts_scanned"] == 0
     assert result["delivery_sent"] == 0
+    compute.assert_not_called()
+    send_pending.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_skips_global_generation_with_only_inactive_billing_entitlements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch, entitled_account_ids=" ")
+    pool = _Pool(
+        is_initialized=True,
+        entitlement_rows=[
+            {"account_id": "acct-past-due", "stripe_subscription_status": "past_due"},
+            {"account_id": "acct-unpaid", "stripe_subscription_status": "unpaid"},
+            {"account_id": "acct-canceled", "stripe_subscription_status": "canceled"},
+        ],
+    )
+    compute = AsyncMock()
+    send_pending = AsyncMock()
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert result["_skip_synthesis"] == "No entitled deflection delta accounts configured"
+    assert result["entitled_account_count"] == 0
     compute.assert_not_called()
     send_pending.assert_not_called()
 

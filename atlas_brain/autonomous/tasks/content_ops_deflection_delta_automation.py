@@ -157,7 +157,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     try:
         target_account_id = _metadata_text(task, "target_account_id", "account_id")
         target_current_request_id = _metadata_text(task, "current_request_id")
-        entitled_account_ids = _csv_text_tuple(cfg.entitled_account_ids)
+        store = PostgresDeflectionReportArtifactStore(pool=pool)
+        fallback_entitled_account_ids = _csv_text_tuple(cfg.entitled_account_ids)
+        account_limit = _metadata_int(
+            task,
+            "account_limit",
+            int(cfg.account_limit),
+        )
+        entitled_account_ids = await store.list_deflection_delta_entitled_account_ids(
+            fallback_account_ids=fallback_entitled_account_ids,
+            limit=account_limit,
+        )
         if target_current_request_id and not target_account_id:
             raise ValueError("current_request_id requires target_account_id")
         if target_account_id and target_account_id not in entitled_account_ids:
@@ -174,11 +184,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 **_entitlement_skip_payload(entitled_account_ids=entitled_account_ids),
             }
         batch_kwargs: dict[str, Any] = {
-            "account_limit": _metadata_int(
-                task,
-                "account_limit",
-                int(cfg.account_limit),
-            ),
+            "account_limit": account_limit,
             "reports_per_account": _metadata_int(
                 task,
                 "reports_per_account",
@@ -191,7 +197,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         if target_current_request_id:
             batch_kwargs["current_request_id"] = target_current_request_id
         summary = await compute_and_save_recent_deflection_deltas(
-            PostgresDeflectionReportArtifactStore(pool=pool),
+            store,
             **batch_kwargs,
         )
     except Exception:
