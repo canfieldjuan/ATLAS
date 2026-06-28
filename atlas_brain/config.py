@@ -122,6 +122,13 @@ class SaaSAuthConfig(BaseSettings):
             "deflection report"
         ),
     )
+    stripe_content_ops_deflection_delta_price_ids: str = Field(
+        default="",
+        description=(
+            "Comma-separated Stripe Price IDs for the monthly Content Ops "
+            "deflection delta subscription. Blank fails closed."
+        ),
+    )
     stripe_content_ops_deflection_report_allowed_amount_cents: str = Field(
         default="",
         description=(

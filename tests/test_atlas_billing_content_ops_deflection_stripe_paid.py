@@ -11,6 +11,9 @@ import pytest
 
 from atlas_brain.api import billing
 from atlas_brain.content_ops_deflection_incidents import INCIDENT_LOG_MARKER
+from extracted_content_pipeline.deflection_report_access import (
+    InMemoryDeflectionReportArtifactStore,
+)
 
 
 def _incident_payloads(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
@@ -35,6 +38,7 @@ class _Pool:
         self.report_rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.delivery_rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.delta_delivery_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self.customer_accounts: dict[str, uuid.UUID] = {}
 
     async def fetchval(self, query: str, *args: Any) -> Any:
         self.fetchval_calls.append((query, args))
@@ -44,6 +48,8 @@ class _Pool:
             and args[0] in self.processed_event_ids
         ):
             return "billing-event-id"
+        if "FROM saas_accounts WHERE stripe_customer_id = $1" in query:
+            return self.customer_accounts.get(str(args[0]))
         return None
 
     async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
@@ -202,6 +208,116 @@ def _session(
     )
 
 
+def _price_line(price_id: str) -> SimpleNamespace:
+    return SimpleNamespace(price=SimpleNamespace(id=price_id))
+
+
+def _subscription(
+    *,
+    account_id: str | None,
+    subscription_id: str = "sub_delta",
+    customer_id: str = "cus_delta",
+    price_id: str = "price_delta_monthly",
+    status: str = "active",
+    current_period_end: int = 1782864000,
+) -> SimpleNamespace:
+    metadata = {}
+    if account_id is not None:
+        metadata["account_id"] = account_id
+    return SimpleNamespace(
+        id=subscription_id,
+        object="subscription",
+        customer=customer_id,
+        status=status,
+        current_period_end=current_period_end,
+        metadata=metadata,
+        items=SimpleNamespace(data=[_price_line(price_id)]),
+        to_dict=lambda: {
+            "id": subscription_id,
+            "object": "subscription",
+            "customer": customer_id,
+            "status": status,
+            "current_period_end": current_period_end,
+            "metadata": dict(metadata),
+            "items": {"data": [{"price": {"id": price_id}}]},
+        },
+    )
+
+
+def _subscription_invoice(
+    *,
+    account_id: str | None,
+    invoice_id: str = "in_delta",
+    subscription_id: str = "sub_delta",
+    customer_id: str = "cus_delta",
+    price_id: str = "price_delta_monthly",
+) -> SimpleNamespace:
+    metadata = {}
+    if account_id is not None:
+        metadata["account_id"] = account_id
+    return SimpleNamespace(
+        id=invoice_id,
+        object="invoice",
+        customer=customer_id,
+        subscription=subscription_id,
+        metadata=metadata,
+        lines=SimpleNamespace(data=[_price_line(price_id)]),
+        to_dict=lambda: {
+            "id": invoice_id,
+            "object": "invoice",
+            "customer": customer_id,
+            "subscription": subscription_id,
+            "metadata": dict(metadata),
+            "lines": {"data": [{"price": {"id": price_id}}]},
+        },
+    )
+
+
+def _dahlia_subscription_invoice(
+    *,
+    account_id: str | None,
+    invoice_id: str = "in_delta",
+    subscription_id: str = "sub_delta",
+    customer_id: str = "cus_delta",
+    price_id: str = "price_delta_monthly",
+) -> SimpleNamespace:
+    metadata = {}
+    if account_id is not None:
+        metadata["account_id"] = account_id
+    parent = SimpleNamespace(
+        subscription_details=SimpleNamespace(subscription=subscription_id)
+    )
+    pricing = SimpleNamespace(
+        price_details=SimpleNamespace(price=price_id)
+    )
+    return SimpleNamespace(
+        id=invoice_id,
+        object="invoice",
+        customer=customer_id,
+        parent=parent,
+        metadata=metadata,
+        lines=SimpleNamespace(data=[SimpleNamespace(pricing=pricing)]),
+        to_dict=lambda: {
+            "id": invoice_id,
+            "object": "invoice",
+            "customer": customer_id,
+            "parent": {
+                "subscription_details": {"subscription": subscription_id},
+            },
+            "metadata": dict(metadata),
+            "lines": {
+                "data": [
+                    {
+                        "pricing": {
+                            "price_details": {"price": price_id},
+                        },
+                    }
+                ]
+            },
+        },
+    )
+
+
 def _payment_event_object(
     *,
     object_id: str = "ch_test_deflection_refund",
@@ -284,6 +400,7 @@ async def _run_stripe_webhook(
     event: Any,
     pool: _Pool,
     stripe_module: Any,
+    entitlement_store: InMemoryDeflectionReportArtifactStore | None = None,
 ) -> dict[str, Any]:
     request = SimpleNamespace(
         headers={"stripe-signature": "valid"},
@@ -300,6 +417,12 @@ async def _run_stripe_webhook(
         "stripe_webhook_secret",
         "whsec_test",
     )
+    if entitlement_store is not None:
+        monkeypatch.setattr(
+            billing,
+            "PostgresDeflectionReportArtifactStore",
+            lambda *args, **kwargs: entitlement_store,
+        )
     monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
     return await billing.stripe_webhook(request)
 
@@ -754,6 +877,11 @@ def test_deflection_checkout_amount_rejects_misconfigured_price_gate(
         "stripe_content_ops_deflection_report_currency",
         currency,
     )
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_report_allowed_amount_cents",
+        "",
+    )
 
     assert billing._deflection_checkout_amount_is_valid(session) is False
 
@@ -778,6 +906,415 @@ def test_deflection_checkout_amount_rejects_misconfigured_allowed_amount_gate(
     )
 
     assert billing._deflection_checkout_amount_is_valid(session) is False
+
+
+def test_deflection_delta_price_ids_parse_as_exact_deduped_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        " price_delta_monthly,price_delta_monthly,price_delta_partner ",
+    )
+
+    assert billing._configured_deflection_delta_price_ids() == (
+        "price_delta_monthly",
+        "price_delta_partner",
+    )
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_delta_subscription_updated_upserts_entitlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+    subscription = _subscription(account_id=account_id, status="active")
+    event = SimpleNamespace(
+        created=1_781_000_000,
+        id="evt_delta_subscription_active",
+        type="customer.subscription.updated",
+        data=SimpleNamespace(object=subscription),
+    )
+    fake_stripe, _session_list = _stripe_module_for_event(event)
+    pool = _Pool()
+    store = InMemoryDeflectionReportArtifactStore()
+
+    response = await _run_stripe_webhook(
+        monkeypatch,
+        event=event,
+        pool=pool,
+        stripe_module=fake_stripe,
+        entitlement_store=store,
+    )
+
+    assert response == {"status": "ok"}
+    assert await store.list_deflection_delta_entitled_account_ids() == (account_id,)
+    assert not any("UPDATE saas_accounts" in query for query, _args in pool.execute_calls)
+    billing_event_query, billing_event_args = pool.execute_calls[0]
+    assert "INSERT INTO billing_events" in billing_event_query
+    assert str(billing_event_args[0]) == account_id
+    assert billing_event_args[1] == "evt_delta_subscription_active"
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_delta_invoice_payment_failed_revokes_entitlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+    invoice = _dahlia_subscription_invoice(account_id=account_id)
+    event = SimpleNamespace(
+        created=200,
+        id="evt_delta_invoice_failed",
+        type="invoice.payment_failed",
+        data=SimpleNamespace(object=invoice),
+    )
+    fake_stripe, _session_list = _stripe_module_for_event(event)
+    pool = _Pool()
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.upsert_deflection_delta_entitlement(
+        account_id=account_id,
+        stripe_subscription_id="sub_delta",
+        stripe_customer_id="cus_delta",
+        stripe_price_id="price_delta_monthly",
+        stripe_subscription_status="active",
+        stripe_event_created=100,
+    )
+
+    response = await _run_stripe_webhook(
+        monkeypatch,
+        event=event,
+        pool=pool,
+        stripe_module=fake_stripe,
+        entitlement_store=store,
+    )
+
+    assert response == {"status": "ok"}
+    assert await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=(account_id, "acct-config"),
+    ) == ("acct-config",)
+    assert not any("UPDATE saas_accounts" in query for query, _args in pool.execute_calls)
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_delta_invoice_paid_grants_from_dahlia_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+    invoice = _dahlia_subscription_invoice(account_id=account_id)
+    event = SimpleNamespace(
+        created=300,
+        id="evt_delta_invoice_paid",
+        type="invoice.paid",
+        data=SimpleNamespace(object=invoice),
+    )
+    fake_stripe, _session_list = _stripe_module_for_event(event)
+    pool = _Pool()
+    store = InMemoryDeflectionReportArtifactStore()
+
+    response = await _run_stripe_webhook(
+        monkeypatch,
+        event=event,
+        pool=pool,
+        stripe_module=fake_stripe,
+        entitlement_store=store,
+    )
+
+    assert response == {"status": "ok"}
+    assert await store.list_deflection_delta_entitled_account_ids() == (account_id,)
+    assert not any("UPDATE saas_accounts" in query for query, _args in pool.execute_calls)
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_delta_subscription_created_grants_entitlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+    subscription = _subscription(account_id=account_id, status="trialing")
+    event = SimpleNamespace(
+        created=125,
+        id="evt_delta_subscription_created",
+        type="customer.subscription.created",
+        data=SimpleNamespace(object=subscription),
+    )
+    fake_stripe, _session_list = _stripe_module_for_event(event)
+    pool = _Pool()
+    store = InMemoryDeflectionReportArtifactStore()
+
+    response = await _run_stripe_webhook(
+        monkeypatch,
+        event=event,
+        pool=pool,
+        stripe_module=fake_stripe,
+        entitlement_store=store,
+    )
+
+    assert response == {"status": "ok"}
+    assert await store.list_deflection_delta_entitled_account_ids() == (account_id,)
+    assert not any("UPDATE saas_accounts" in query for query, _args in pool.execute_calls)
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_delta_checkout_completed_grants_entitlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+    session = SimpleNamespace(
+        id="cs_delta_subscription",
+        customer="cus_delta",
+        subscription="sub_delta_checkout",
+        payment_status="paid",
+        metadata={"account_id": account_id},
+        lines=SimpleNamespace(data=[_price_line("price_delta_monthly")]),
+        to_dict=lambda: {
+            "id": "cs_delta_subscription",
+            "customer": "cus_delta",
+            "subscription": "sub_delta_checkout",
+            "payment_status": "paid",
+            "metadata": {"account_id": account_id},
+            "lines": {"data": [{"price": {"id": "price_delta_monthly"}}]},
+        },
+    )
+    event = SimpleNamespace(
+        id="evt_delta_checkout",
+        type="checkout.session.completed",
+        data=SimpleNamespace(object=session),
+    )
+    fake_stripe, _session_list = _stripe_module_for_event(event)
+    pool = _Pool()
+    store = InMemoryDeflectionReportArtifactStore()
+
+    response = await _run_stripe_webhook(
+        monkeypatch,
+        event=event,
+        pool=pool,
+        stripe_module=fake_stripe,
+        entitlement_store=store,
+    )
+
+    assert response == {"status": "ok"}
+    assert await store.list_deflection_delta_entitled_account_ids() == (account_id,)
+    assert not any(
+        "UPDATE content_ops_deflection_reports" in query
+        for query, _args in pool.execute_calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_delta_checkout_source_without_price_does_not_fall_through_to_generic_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+    session = SimpleNamespace(
+        id="cs_delta_subscription_no_price",
+        customer="cus_delta",
+        subscription="sub_delta_no_price",
+        payment_status="paid",
+        metadata={
+            "account_id": account_id,
+            "source": "content_ops_deflection_delta_subscription",
+        },
+        to_dict=lambda: {
+            "id": "cs_delta_subscription_no_price",
+            "customer": "cus_delta",
+            "subscription": "sub_delta_no_price",
+            "payment_status": "paid",
+            "metadata": {
+                "account_id": account_id,
+                "source": "content_ops_deflection_delta_subscription",
+            },
+        },
+    )
+    event = SimpleNamespace(
+        id="evt_delta_checkout_no_price",
+        type="checkout.session.completed",
+        data=SimpleNamespace(object=session),
+    )
+    fake_stripe, _session_list = _stripe_module_for_event(event)
+    pool = _Pool()
+    store = InMemoryDeflectionReportArtifactStore()
+
+    response = await _run_stripe_webhook(
+        monkeypatch,
+        event=event,
+        pool=pool,
+        stripe_module=fake_stripe,
+        entitlement_store=store,
+    )
+
+    assert response == {"status": "ok"}
+    assert await store.list_deflection_delta_entitled_account_ids() == ()
+    assert not any("UPDATE saas_accounts" in query for query, _args in pool.execute_calls)
+    assert any("INSERT INTO billing_events" in query for query, _args in pool.execute_calls)
+
+
+@pytest.mark.asyncio
+async def test_non_delta_subscription_does_not_create_delta_entitlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = uuid.uuid4()
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+    subscription = _subscription(
+        account_id=None,
+        customer_id="cus_regular",
+        price_id="price_regular",
+        status="active",
+    )
+    pool = _Pool()
+    pool.customer_accounts["cus_regular"] = account_id
+
+    returned = await billing._handle_subscription_updated(pool, subscription)
+
+    assert returned == account_id
+    query, args = pool.execute_calls[0]
+    assert "UPDATE saas_accounts" in query
+    assert args[3] == "sub_delta"
+
+
+@pytest.mark.asyncio
+async def test_delta_subscription_lifecycle_uses_real_store_and_ignores_stale_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+    store = InMemoryDeflectionReportArtifactStore()
+    pool = _Pool()
+
+    await billing._handle_deflection_delta_subscription_lifecycle(
+        pool,
+        _subscription(account_id=account_id, status="active"),
+        stripe_event_created=100,
+        store=store,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids() == (account_id,)
+
+    await billing._handle_deflection_delta_subscription_lifecycle(
+        pool,
+        _subscription(account_id=account_id, status="canceled"),
+        stripe_subscription_status="canceled",
+        stripe_event_created=200,
+        store=store,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=(account_id, "acct-config"),
+    ) == ("acct-config",)
+
+    await billing._handle_deflection_delta_subscription_lifecycle(
+        pool,
+        _subscription(account_id=account_id, status="active"),
+        store=store,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=(account_id, "acct-config"),
+    ) == ("acct-config",)
+
+    await billing._handle_deflection_delta_subscription_lifecycle(
+        pool,
+        _subscription(account_id=account_id, status="active"),
+        stripe_event_created=150,
+        store=store,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=(account_id, "acct-config"),
+    ) == ("acct-config",)
+
+    await billing._handle_deflection_delta_subscription_lifecycle(
+        pool,
+        _subscription(account_id=account_id, status="active"),
+        stripe_event_created=250,
+        store=store,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids() == (account_id,)
+
+
+@pytest.mark.asyncio
+async def test_delta_invoice_lifecycle_uses_real_store_and_ignores_stale_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+    store = InMemoryDeflectionReportArtifactStore()
+    pool = _Pool()
+
+    await billing._handle_deflection_delta_invoice_lifecycle(
+        pool,
+        _subscription_invoice(account_id=account_id),
+        stripe_subscription_status="active",
+        stripe_event_created=100,
+        store=store,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids() == (account_id,)
+
+    await billing._handle_deflection_delta_invoice_lifecycle(
+        pool,
+        _subscription_invoice(account_id=account_id),
+        stripe_subscription_status="past_due",
+        stripe_event_created=200,
+        store=store,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=(account_id, "acct-config"),
+    ) == ("acct-config",)
+
+    await billing._handle_deflection_delta_invoice_lifecycle(
+        pool,
+        _subscription_invoice(account_id=account_id),
+        stripe_subscription_status="active",
+        stripe_event_created=150,
+        store=store,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=(account_id, "acct-config"),
+    ) == ("acct-config",)
 
 
 @pytest.mark.asyncio

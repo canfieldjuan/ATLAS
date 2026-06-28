@@ -472,6 +472,82 @@ async def test_in_memory_delta_entitlement_resolver_suppresses_known_inactive_fa
 
 
 @pytest.mark.asyncio
+async def test_in_memory_delta_entitlement_upsert_revokes_and_regrants() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    period_end = datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+    await store.upsert_deflection_delta_entitlement(
+        account_id="acct-1",
+        stripe_subscription_id="sub-delta",
+        stripe_customer_id="cus-delta",
+        stripe_price_id="price-delta",
+        stripe_subscription_status="active",
+        current_period_end=period_end,
+        metadata={"source": "test"},
+        stripe_event_created=100,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids() == ("acct-1",)
+
+    await store.upsert_deflection_delta_entitlement(
+        account_id="acct-1",
+        stripe_subscription_id="sub-delta",
+        stripe_customer_id="cus-delta",
+        stripe_price_id="price-delta",
+        stripe_subscription_status="past_due",
+        current_period_end=period_end,
+        metadata={"source": "test"},
+        stripe_event_created=200,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=("acct-1", "acct-config")
+    ) == ("acct-config",)
+
+    await store.upsert_deflection_delta_entitlement(
+        account_id="acct-1",
+        stripe_subscription_id="sub-delta",
+        stripe_customer_id="cus-delta",
+        stripe_price_id="price-delta",
+        stripe_subscription_status="active",
+        current_period_end=period_end,
+        metadata={"source": "test"},
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=("acct-1", "acct-config")
+    ) == ("acct-config",)
+
+    await store.upsert_deflection_delta_entitlement(
+        account_id="acct-1",
+        stripe_subscription_id="sub-delta",
+        stripe_customer_id="cus-delta",
+        stripe_price_id="price-delta",
+        stripe_subscription_status="active",
+        current_period_end=period_end,
+        metadata={"source": "test"},
+        stripe_event_created=150,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=("acct-1", "acct-config")
+    ) == ("acct-config",)
+
+    await store.upsert_deflection_delta_entitlement(
+        account_id="acct-1",
+        stripe_subscription_id="sub-delta",
+        stripe_customer_id="cus-delta",
+        stripe_price_id="price-delta",
+        stripe_subscription_status="trialing",
+        current_period_end=period_end,
+        metadata={"source": "test"},
+        stripe_event_created=250,
+    )
+
+    assert await store.list_deflection_delta_entitled_account_ids() == ("acct-1",)
+
+
+@pytest.mark.asyncio
 async def test_in_memory_paid_report_listing_orders_by_paid_activity_window() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     await _save(
@@ -1360,6 +1436,55 @@ async def test_postgres_delta_entitlement_resolver_uses_billing_table_and_fallba
     )
 
     assert fallback_accounts == ("acct-config",)
+
+
+@pytest.mark.asyncio
+async def test_postgres_delta_entitlement_upsert_uses_status_revocation_boundary() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def execute(self, query: str, *args: object) -> str:
+            self.execute_calls.append((query, args))
+            return "INSERT 0 1"
+
+    pool = _Pool()
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+    period_end = datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+    await store.upsert_deflection_delta_entitlement(
+        account_id="acct-1",
+        stripe_subscription_id="sub-delta",
+        stripe_customer_id="cus-delta",
+        stripe_price_id="price-delta",
+        stripe_subscription_status="past_due",
+        current_period_end=period_end,
+        metadata={"event": "invoice.payment_failed"},
+        stripe_event_created=1_781_000_000,
+    )
+
+    query, args = pool.execute_calls[0]
+    assert "INSERT INTO content_ops_deflection_delta_entitlements" in query
+    assert "ON CONFLICT (stripe_subscription_id) DO UPDATE" in query
+    assert "CASE WHEN $5 = ANY($8::text[]) THEN NULL ELSE NOW() END" in query
+    assert "revoked_at = EXCLUDED.revoked_at" in query
+    assert "jsonb_typeof(EXCLUDED.metadata->'stripe_event_created')" in query
+    assert "jsonb_typeof(EXCLUDED.metadata->'stripe_event_created') = 'number'" in query
+    assert ">= COALESCE" in query
+    assert "9223372036854775807" not in query
+    assert args[:6] == (
+        "acct-1",
+        "sub-delta",
+        "cus-delta",
+        "price-delta",
+        "past_due",
+        period_end,
+    )
+    assert json.loads(str(args[6])) == {
+        "event": "invoice.payment_failed",
+        "stripe_event_created": 1_781_000_000,
+    }
+    assert args[7] == ["active", "trialing"]
 
 
 @pytest.mark.asyncio
