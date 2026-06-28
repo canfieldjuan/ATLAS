@@ -2,26 +2,41 @@
   "atlas_brain/services/scraping/browser.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 14,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 3
     },
-    "score": 22
+    "score": 78
+  },
+  "atlas_brain/services/scraping/capabilities.py": {
+    "counts": {
+      "INTERNAL_MOCK": 3
+    },
+    "score": 12
   },
   "atlas_brain/services/scraping/captcha.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 4,
       "NO_RAISES_TESTS": 1,
       "UNGUARDED_INDEX": 1
     },
-    "score": 9
+    "score": 25
   },
   "atlas_brain/services/scraping/capterra_audit.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 2,
       "SWALLOWED_EXCEPT": 3,
       "UNGUARDED_INDEX": 2
     },
-    "score": 23
+    "score": 31
+  },
+  "atlas_brain/services/scraping/client.py": {
+    "counts": {
+      "INTERNAL_MOCK": 2
+    },
+    "score": 8
   },
   "atlas_brain/services/scraping/eligibility.py": {
     "counts": {
@@ -49,16 +64,18 @@
   "atlas_brain/services/scraping/getapp_audit.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 2,
       "SWALLOWED_EXCEPT": 3,
       "UNGUARDED_INDEX": 1
     },
-    "score": 21
+    "score": 29
   },
   "atlas_brain/services/scraping/parsers/__init__.py": {
     "counts": {
+      "INTERNAL_MOCK": 4,
       "SWALLOWED_EXCEPT": 2
     },
-    "score": 10
+    "score": 26
   },
   "atlas_brain/services/scraping/parsers/capterra.py": {
     "counts": {
@@ -71,11 +88,12 @@
   "atlas_brain/services/scraping/parsers/g2.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 8,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 4,
       "UNGUARDED_INDEX": 2
     },
-    "score": 31
+    "score": 63
   },
   "atlas_brain/services/scraping/parsers/gartner.py": {
     "counts": {
@@ -88,10 +106,11 @@
   },
   "atlas_brain/services/scraping/parsers/getapp.py": {
     "counts": {
+      "INTERNAL_MOCK": 3,
       "SWALLOWED_EXCEPT": 8,
       "UNGUARDED_INDEX": 3
     },
-    "score": 46
+    "score": 58
   },
   "atlas_brain/services/scraping/parsers/peerspot.py": {
     "counts": {
@@ -135,11 +154,12 @@
   "atlas_brain/services/scraping/parsers/slashdot.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 1,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 3,
       "UNGUARDED_INDEX": 1
     },
-    "score": 24
+    "score": 28
   },
   "atlas_brain/services/scraping/parsers/software_advice.py": {
     "counts": {
@@ -194,9 +214,10 @@
   },
   "atlas_brain/services/scraping/proxy.py": {
     "counts": {
-      "HAPPY_PATH_TESTS": 1
+      "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 3
     },
-    "score": 4
+    "score": 16
   },
   "atlas_brain/services/scraping/serp_discovery.py": {
     "counts": {
@@ -227,10 +248,17 @@
   },
   "atlas_brain/services/scraping/target_provisioning.py": {
     "counts": {
+      "INTERNAL_MOCK": 9,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 2
     },
-    "score": 9
+    "score": 45
+  },
+  "atlas_brain/services/scraping/target_validation.py": {
+    "counts": {
+      "INTERNAL_MOCK": 2
+    },
+    "score": 8
   },
   "atlas_brain/services/scraping/trustpilot_audit.py": {
     "counts": {

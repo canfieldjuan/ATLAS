@@ -14,10 +14,11 @@
   },
   "extracted_competitive_intelligence/api/b2b_vendor_briefing.py": {
     "counts": {
+      "INTERNAL_MOCK": 3,
       "NO_RAISES_TESTS": 1,
       "UNGUARDED_INDEX": 1
     },
-    "score": 5
+    "score": 17
   },
   "extracted_competitive_intelligence/autonomous/tasks/_b2b_batch_utils.py": {
     "counts": {
@@ -49,11 +50,12 @@
   },
   "extracted_competitive_intelligence/autonomous/tasks/b2b_vendor_briefing.py": {
     "counts": {
+      "INTERNAL_MOCK": 8,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 10,
       "UNGUARDED_INDEX": 13
     },
-    "score": 59
+    "score": 91
   },
   "extracted_competitive_intelligence/autonomous/visibility.py": {
     "counts": {
@@ -144,9 +146,16 @@
   "extracted_competitive_intelligence/services/b2b/vendor_briefing_api_ports.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 4,
       "NO_RAISES_TESTS": 1
     },
-    "score": 7
+    "score": 23
+  },
+  "extracted_competitive_intelligence/services/b2b/vendor_briefing_delivery.py": {
+    "counts": {
+      "INTERNAL_MOCK": 4
+    },
+    "score": 16
   },
   "extracted_competitive_intelligence/services/b2b/vendor_briefing_repository.py": {
     "counts": {
@@ -165,9 +174,10 @@
   "extracted_competitive_intelligence/services/b2b_competitive_sets.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 1,
       "UNGUARDED_INDEX": 1
     },
-    "score": 6
+    "score": 10
   },
   "extracted_competitive_intelligence/services/llm_router.py": {
     "counts": {

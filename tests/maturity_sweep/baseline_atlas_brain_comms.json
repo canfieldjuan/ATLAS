@@ -8,10 +8,11 @@
   },
   "atlas_brain/comms/call_intelligence.py": {
     "counts": {
+      "INTERNAL_MOCK": 29,
       "SWALLOWED_EXCEPT": 2,
       "UNGUARDED_INDEX": 4
     },
-    "score": 16
+    "score": 132
   },
   "atlas_brain/comms/invoice_detector.py": {
     "counts": {

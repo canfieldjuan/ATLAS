@@ -44,6 +44,7 @@ def sweep_files(paths, tests_root):
         result = maturity_sweep.analyze_file(path, test_sources, all_test_text)
         result.path = Path(result.path).as_posix()
         results.append(result)
+    maturity_sweep.apply_internal_mock_findings(results, test_sources)
     results.sort(key=lambda result: result.score, reverse=True)
     return results
 

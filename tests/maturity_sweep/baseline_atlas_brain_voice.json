@@ -31,19 +31,21 @@
   "atlas_brain/voice/launcher.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 2,
       "SWALLOWED_EXCEPT": 4
     },
-    "score": 24
+    "score": 32
   },
   "atlas_brain/voice/pipeline.py": {
     "counts": {
       "HEURISTIC_COMMENT": 2,
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 5,
       "UNGUARDED_INDEX": 20,
       "UNGUARDED_INPUT": 1,
       "WEAK_CONTRACT": 6
     },
-    "score": 40
+    "score": 44
   },
   "atlas_brain/voice/playback.py": {
     "counts": {

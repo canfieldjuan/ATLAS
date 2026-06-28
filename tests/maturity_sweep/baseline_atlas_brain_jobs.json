@@ -13,9 +13,10 @@
   },
   "atlas_brain/jobs/nightly_memory_sync.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 2
     },
-    "score": 9
+    "score": 13
   }
 }
