@@ -168,6 +168,20 @@ class DeflectionReportArtifactStore(Protocol):
     ) -> tuple[str, ...]:
         """List tenants with an active monthly delta entitlement."""
 
+    async def upsert_deflection_delta_entitlement(
+        self,
+        *,
+        account_id: str,
+        stripe_subscription_id: str,
+        stripe_subscription_status: str,
+        stripe_customer_id: str | None = None,
+        stripe_price_id: str | None = None,
+        current_period_end: datetime | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        stripe_event_created: int | None = None,
+    ) -> None:
+        """Record the latest Stripe Billing lifecycle state for monthly deltas."""
+
     async def count_paid_reports(
         self,
         *,
@@ -526,6 +540,60 @@ class InMemoryDeflectionReportArtifactStore:
             if account_id not in known_account_ids
         )
         return _limit_account_ids((*active_account_ids, *fallback), limit)
+
+    async def upsert_deflection_delta_entitlement(
+        self,
+        *,
+        account_id: str,
+        stripe_subscription_id: str,
+        stripe_subscription_status: str,
+        stripe_customer_id: str | None = None,
+        stripe_price_id: str | None = None,
+        current_period_end: datetime | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        stripe_event_created: int | None = None,
+    ) -> None:
+        resolved_account = _required_text(account_id, "account_id")
+        resolved_subscription = _required_text(
+            stripe_subscription_id,
+            "stripe_subscription_id",
+        )
+        status = _required_text(
+            stripe_subscription_status,
+            "stripe_subscription_status",
+        )
+        now = datetime.now(timezone.utc)
+        row_metadata = _delta_entitlement_metadata(
+            metadata,
+            stripe_event_created=stripe_event_created,
+        )
+        row = {
+            "account_id": resolved_account,
+            "stripe_subscription_id": resolved_subscription,
+            "stripe_customer_id": _clean(stripe_customer_id),
+            "stripe_price_id": _clean(stripe_price_id),
+            "stripe_subscription_status": status,
+            "current_period_end": current_period_end,
+            "metadata": row_metadata,
+            "updated_at": now,
+            "revoked_at": None
+            if _delta_entitlement_status_grants(status)
+            else now,
+        }
+        for index, existing in enumerate(self._delta_entitlement_rows):
+            if _clean(existing.get("stripe_subscription_id")) == resolved_subscription:
+                if _delta_entitlement_update_is_stale(row, existing):
+                    return
+                granted_at = existing.get("granted_at")
+                if row["revoked_at"] is None and existing.get("revoked_at") is not None:
+                    granted_at = now
+                row["granted_at"] = granted_at or now
+                row["created_at"] = existing.get("created_at") or now
+                self._delta_entitlement_rows[index] = row
+                return
+        row["granted_at"] = now
+        row["created_at"] = now
+        self._delta_entitlement_rows.append(row)
 
     async def count_paid_reports(
         self,
@@ -1078,6 +1146,88 @@ class PostgresDeflectionReportArtifactStore:
             account_id for account_id in fallback if account_id not in known_account_ids
         )
         return _limit_account_ids((*active_account_ids, *fallback_account_ids), limit)
+
+    async def upsert_deflection_delta_entitlement(
+        self,
+        *,
+        account_id: str,
+        stripe_subscription_id: str,
+        stripe_subscription_status: str,
+        stripe_customer_id: str | None = None,
+        stripe_price_id: str | None = None,
+        current_period_end: datetime | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        stripe_event_created: int | None = None,
+    ) -> None:
+        status = _required_text(
+            stripe_subscription_status,
+            "stripe_subscription_status",
+        )
+        row_metadata = _delta_entitlement_metadata(
+            metadata,
+            stripe_event_created=stripe_event_created,
+        )
+        await self.pool.execute(
+            """
+            INSERT INTO content_ops_deflection_delta_entitlements (
+                account_id,
+                stripe_subscription_id,
+                stripe_customer_id,
+                stripe_price_id,
+                stripe_subscription_status,
+                current_period_end,
+                metadata,
+                revoked_at
+            )
+            VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                $6,
+                $7::jsonb,
+                CASE WHEN $5 = ANY($8::text[]) THEN NULL ELSE NOW() END
+            )
+            ON CONFLICT (stripe_subscription_id) DO UPDATE
+            SET account_id = EXCLUDED.account_id,
+                stripe_customer_id = EXCLUDED.stripe_customer_id,
+                stripe_price_id = EXCLUDED.stripe_price_id,
+                stripe_subscription_status = EXCLUDED.stripe_subscription_status,
+                current_period_end = EXCLUDED.current_period_end,
+                metadata = EXCLUDED.metadata,
+                revoked_at = EXCLUDED.revoked_at,
+                granted_at = CASE
+                    WHEN EXCLUDED.revoked_at IS NULL
+                     AND content_ops_deflection_delta_entitlements.revoked_at IS NOT NULL
+                    THEN NOW()
+                    ELSE content_ops_deflection_delta_entitlements.granted_at
+                END,
+                updated_at = NOW()
+            WHERE jsonb_typeof(EXCLUDED.metadata->'stripe_event_created') = 'number'
+              AND COALESCE(
+                    CASE
+                        WHEN jsonb_typeof(EXCLUDED.metadata->'stripe_event_created') = 'number'
+                        THEN (EXCLUDED.metadata->>'stripe_event_created')::bigint
+                    END,
+                    -1
+                ) >= COALESCE(
+                    CASE
+                        WHEN jsonb_typeof(content_ops_deflection_delta_entitlements.metadata->'stripe_event_created') = 'number'
+                        THEN (content_ops_deflection_delta_entitlements.metadata->>'stripe_event_created')::bigint
+                    END,
+                    -1
+                )
+            """,
+            _required_text(account_id, "account_id"),
+            _required_text(stripe_subscription_id, "stripe_subscription_id"),
+            _clean(stripe_customer_id) or None,
+            _clean(stripe_price_id) or None,
+            status,
+            current_period_end,
+            json_dump_jsonb(row_metadata),
+            list(DELTA_ENTITLEMENT_ACTIVE_STATUSES),
+        )
 
     async def count_paid_reports(
         self,
@@ -2021,6 +2171,45 @@ def _limit_account_ids(
     if limit is None:
         return resolved
     return resolved[:_bounded_limit(limit)]
+
+
+def _delta_entitlement_status_grants(status: Any) -> bool:
+    return _clean(status) in DELTA_ENTITLEMENT_ACTIVE_STATUSES
+
+
+def _delta_entitlement_metadata(
+    metadata: Mapping[str, Any] | None,
+    *,
+    stripe_event_created: int | None,
+) -> dict[str, Any]:
+    row_metadata = dict(metadata or {})
+    if stripe_event_created is not None:
+        row_metadata["stripe_event_created"] = stripe_event_created
+    return row_metadata
+
+
+def _delta_entitlement_event_created(row: Mapping[str, Any]) -> int | None:
+    metadata = row.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    value = metadata.get("stripe_event_created")
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _delta_entitlement_update_is_stale(
+    incoming: Mapping[str, Any],
+    existing: Mapping[str, Any],
+) -> bool:
+    incoming_created = _delta_entitlement_event_created(incoming)
+    existing_created = _delta_entitlement_event_created(existing)
+    if incoming_created is None:
+        return existing_created is not None
+    return (
+        existing_created is not None
+        and incoming_created < existing_created
+    )
 
 
 def _required_text(value: Any, field: str) -> str:
