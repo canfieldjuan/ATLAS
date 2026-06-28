@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 
 from extracted_content_pipeline.faq_deflection_report import (
+    DEFAULT_DEFLECTION_REPORT_TITLE,
+    DEFAULT_DEFLECTION_SNAPSHOT_TITLE,
     DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
     DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
     DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION,
@@ -261,7 +263,7 @@ def _report_projection_no_conditionals_fixture_result() -> TicketFAQMarkdownResu
     )
 
 
-_STRUCTURED_REPORT_GOLDEN_MARKDOWN = """# Support Ticket Deflection Report
+_STRUCTURED_REPORT_GOLDEN_MARKDOWN = f"""# {DEFAULT_DEFLECTION_REPORT_TITLE}
 
 ## Support Tax Confirmation
 
@@ -386,7 +388,7 @@ def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
     }
 
     assert payload["schema_version"] == DEFLECTION_REPORT_SCHEMA_VERSION
-    assert payload["title"] == "Support Ticket Deflection Report"
+    assert payload["title"] == DEFAULT_DEFLECTION_REPORT_TITLE
     assert payload["summary"]["generated"] == 2
     assert [section["id"] for section in payload["sections"]] == [
         "support_tax",
@@ -1836,6 +1838,7 @@ def test_deflection_snapshot_projection_is_allowlist_only() -> None:
     snapshot = build_deflection_snapshot({"report_model": report_model}, top_n=1).as_dict()
     encoded = json.dumps(snapshot, sort_keys=True)
 
+    assert snapshot["title"] == DEFAULT_DEFLECTION_SNAPSHOT_TITLE
     assert "paid_only_metric" not in encoded
     assert "source_ids" not in encoded
     assert "ticket-export-1" not in encoded
@@ -2152,6 +2155,7 @@ def test_deflection_snapshot_projection_contract_is_registry_derived() -> None:
 
     assert projection["schema_version"] == DEFLECTION_REPORT_SCHEMA_VERSION
     assert projection["top_level_fields"] == [
+        "title",
         "summary",
         "top_questions",
         "locked_questions",
@@ -2159,6 +2163,12 @@ def test_deflection_snapshot_projection_contract_is_registry_derived() -> None:
         "teaser",
     ]
     assert list(fields) == projection["top_level_fields"]
+    assert fields["title"] == {
+        "field": "title",
+        "source": "snapshot_constant",
+        "projected_fields": ["title"],
+        "default": DEFAULT_DEFLECTION_SNAPSHOT_TITLE,
+    }
     assert fields["summary"]["source_section"] == "support_tax"
     assert fields["summary"]["snapshot_safe_fields"] == list(
         DEFLECTION_REPORT_SECTION_REGISTRY["support_tax"].snapshot_safe_fields
@@ -2936,6 +2946,8 @@ def test_deflection_snapshot_projected_fields_match_runtime_output() -> None:
     assert snapshot["teaser"]["full_answer"] is not None
     assert snapshot["teaser"]["previews"]
 
+    assert set(snapshot) == set(projection["top_level_fields"])
+    assert snapshot["title"] == fields["title"]["default"]
     assert set(snapshot["summary"]) == set(fields["summary"]["projected_fields"])
     assert set(snapshot["top_questions"][0]) == set(
         fields["top_questions"]["projected_fields"]
@@ -3994,7 +4006,7 @@ def test_deflection_report_reframes_paid_artifact_with_cost_and_seo_sections() -
     )[0]
     sso_block = details.split("### 2. Can I turn on SSO for all users?", 1)[1]
 
-    assert markdown.startswith("# Support Ticket Deflection Report\n\n## Support Tax Confirmation")
+    assert markdown.startswith(f"# {DEFAULT_DEFLECTION_REPORT_TITLE}\n\n## Support Tax Confirmation")
     assert "8 question-level repeat tickets across 2 ranked questions" in markdown
     assert "repeat-ticket hits" not in markdown
     assert "ranked repeat questions" not in markdown
@@ -4242,6 +4254,7 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
     encoded = json.dumps(snapshot, sort_keys=True)
 
     assert snapshot == {
+        "title": DEFAULT_DEFLECTION_SNAPSHOT_TITLE,
         "summary": {
             "generated": 2,
             "drafted_answer_count": 1,

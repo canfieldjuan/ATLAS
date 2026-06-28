@@ -20,6 +20,8 @@ _DRAFT_NEEDS_REVIEW_STATUS = "draft_needs_review"
 DEFAULT_DEFLECTION_SNAPSHOT_TOP_N = 5
 DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT = 3
 DEFAULT_DEFLECTION_SEO_TARGET_LIMIT = 50
+DEFAULT_DEFLECTION_REPORT_TITLE = "Resolution Audit"
+DEFAULT_DEFLECTION_SNAPSHOT_TITLE = "Resolution Snapshot"
 DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION = "deflection_evidence.v1"
 DEFLECTION_REPORT_SCHEMA_VERSION = "deflection.v1"
 DEFLECTION_FULL_REPORT_QA_SCORECARD_SCHEMA_VERSION = "deflection_full_report_qa_scorecard.v1"
@@ -400,6 +402,7 @@ _DEFLECTION_IDENTIFIER_TOKEN_PREFIX = "deflection-ref"
 class DeflectionSnapshot:
     """Free preview projection that excludes paid answer/evidence fields."""
 
+    title: str
     summary: dict[str, Any]
     top_questions: tuple[dict[str, Any], ...]
     locked_questions: tuple[dict[str, int], ...]
@@ -408,6 +411,7 @@ class DeflectionSnapshot:
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "title": self.title,
             "summary": dict(self.summary),
             "top_questions": [dict(question) for question in self.top_questions],
             "locked_questions": [
@@ -755,6 +759,7 @@ _SNAPSHOT_REQUIRED_DETAIL_TEASER_FIELDS = frozenset({
     "steps",
 })
 DEFLECTION_SNAPSHOT_TOP_LEVEL_FIELDS = (
+    "title",
     "summary",
     "top_questions",
     "locked_questions",
@@ -1454,6 +1459,12 @@ def _deflection_snapshot_projection_contract_shape() -> dict[str, Any]:
         "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
         "top_level_fields": list(DEFLECTION_SNAPSHOT_TOP_LEVEL_FIELDS),
         "fields": [
+            {
+                "field": "title",
+                "source": "snapshot_constant",
+                "projected_fields": ["title"],
+                "default": DEFAULT_DEFLECTION_SNAPSHOT_TITLE,
+            },
             _snapshot_projection_section_entry(
                 "summary",
                 source_section="support_tax",
@@ -1703,14 +1714,14 @@ class FAQDeflectionReportService:
         )
         return build_deflection_report_artifact(
             faq_result,
-            title=report_title or "Support Ticket Deflection Report",
+            title=report_title or DEFAULT_DEFLECTION_REPORT_TITLE,
         )
 
 
 def build_deflection_report_artifact(
     faq_result: TicketFAQMarkdownResult,
     *,
-    title: str = "Support Ticket Deflection Report",
+    title: str = DEFAULT_DEFLECTION_REPORT_TITLE,
     source_label: str | None = None,
 ) -> DeflectionReportArtifact:
     """Render a customer-facing report from a generated FAQ result."""
@@ -2678,6 +2689,7 @@ def build_deflection_snapshot(
         if rank not in visible_ranks
     )
     return DeflectionSnapshot(
+        title=DEFAULT_DEFLECTION_SNAPSHOT_TITLE,
         summary=snapshot_summary,
         top_questions=tuple(top_questions),
         locked_questions=locked_questions,
@@ -2772,6 +2784,7 @@ def _build_deflection_snapshot_from_report_model(
         if (row_rank := (_int(row.get("rank")) or rank)) not in visible_ranks
     )
     return DeflectionSnapshot(
+        title=DEFAULT_DEFLECTION_SNAPSHOT_TITLE,
         summary=snapshot_summary,
         top_questions=tuple(top_questions),
         locked_questions=locked_questions,
@@ -3033,7 +3046,7 @@ def deflection_report_summary(faq_result: TicketFAQMarkdownResult) -> dict[str, 
 def render_deflection_report(
     faq_result: TicketFAQMarkdownResult,
     *,
-    title: str = "Support Ticket Deflection Report",
+    title: str = DEFAULT_DEFLECTION_REPORT_TITLE,
     source_label: str | None = None,
     summary: Mapping[str, Any] | None = None,
 ) -> str:
@@ -3052,7 +3065,7 @@ def render_deflection_report(
 def build_deflection_report_model(
     faq_result: TicketFAQMarkdownResult,
     *,
-    title: str = "Support Ticket Deflection Report",
+    title: str = DEFAULT_DEFLECTION_REPORT_TITLE,
     source_label: str | None = None,
     summary: Mapping[str, Any] | None = None,
 ) -> DeflectionStructuredReport:
@@ -3140,7 +3153,7 @@ def build_deflection_report_model(
     ])
     return DeflectionStructuredReport(
         schema_version=DEFLECTION_REPORT_SCHEMA_VERSION,
-        title=_text(title) or "Support Ticket Deflection Report",
+        title=_text(title) or DEFAULT_DEFLECTION_REPORT_TITLE,
         summary=resolved_summary,
         sections=tuple(sorted(sections, key=lambda section: section.priority)),
     )

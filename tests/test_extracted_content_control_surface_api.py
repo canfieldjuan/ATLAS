@@ -2947,7 +2947,7 @@ async def test_deflection_report_artifact_route_is_locked_until_marked_paid():
     ) == {"request_id": request_id, "paid": True}
 
     artifact = await artifact_route.endpoint(request_id=request_id)
-    assert artifact["markdown"].startswith("# Support Ticket Deflection Report")
+    assert artifact["markdown"].startswith("# Resolution Audit")
     assert "Open Analytics and download the report" in artifact["markdown"]
     assert tuple(artifact["faq_result"]["items"][0]["source_ids"]) == (
         "ticket-export-1",

@@ -5,9 +5,9 @@
 
 export const DEFLECTION_SNAPSHOT_SCHEMA_VERSION = "deflection.v1" as const;
 
-export const DEFLECTION_SNAPSHOT_TOP_LEVEL_FIELDS = ["summary", "top_questions", "locked_questions", "top_blind_spots", "teaser"] as const;
+export const DEFLECTION_SNAPSHOT_TOP_LEVEL_FIELDS = ["title", "summary", "top_questions", "locked_questions", "top_blind_spots", "teaser"] as const;
 
-export const DEFLECTION_RESULT_PAGE_SNAPSHOT_FIELDS = ["summary", "top_questions", "top_blind_spots"] as const;
+export const DEFLECTION_RESULT_PAGE_SNAPSHOT_FIELDS = ["title", "summary", "top_questions", "top_blind_spots"] as const;
 
 export const DEFLECTION_SNAPSHOT_SUMMARY_FIELDS = ["generated", "drafted_answer_count", "no_proven_answer_count", "support_ticket_resolution_evidence_present", "support_ticket_resolution_evidence_count", "repeat_ticket_count", "non_repeat_ticket_count", "source_date_start", "source_date_end", "source_window_days"] as const;
 
@@ -91,6 +91,7 @@ export type DeflectionSnapshotTeaser = {
 };
 
 export type DeflectionSnapshot = {
+  title: string;
   summary: DeflectionSnapshotSummary;
   top_questions: DeflectionSnapshotTopQuestion[];
   locked_questions: DeflectionSnapshotLockedQuestion[];
@@ -98,4 +99,4 @@ export type DeflectionSnapshot = {
   teaser: DeflectionSnapshotTeaser;
 };
 
-export type DeflectionResultPageSnapshot = Pick<DeflectionSnapshot, "summary" | "top_questions" | "top_blind_spots">;
+export type DeflectionResultPageSnapshot = Pick<DeflectionSnapshot, "title" | "summary" | "top_questions" | "top_blind_spots">;

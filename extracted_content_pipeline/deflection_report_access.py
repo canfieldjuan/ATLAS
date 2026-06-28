@@ -10,7 +10,10 @@ import hashlib
 from typing import Any, Protocol
 
 from .deflection_delta import compute_deflection_delta
-from .faq_deflection_report import DEFLECTION_REPORT_SCHEMA_VERSION
+from .faq_deflection_report import (
+    DEFAULT_DEFLECTION_REPORT_TITLE,
+    DEFLECTION_REPORT_SCHEMA_VERSION,
+)
 from .storage._jsonb_helpers import (
     decode_jsonb_field,
     json_dump_jsonb,
@@ -1807,7 +1810,7 @@ def stored_deflection_report_model(
     sections.sort(key=lambda section: section["priority"])
     return {
         "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
-        "title": _clean(raw_model.get("title")) or "Support Ticket Deflection Report",
+        "title": _clean(raw_model.get("title")) or DEFAULT_DEFLECTION_REPORT_TITLE,
         "summary": dict(summary) if isinstance(summary, Mapping) else {},
         "sections": sections,
     }
