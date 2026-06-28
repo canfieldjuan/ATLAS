@@ -7,9 +7,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from atlas_brain.api import billing
-from atlas_brain.auth.dependencies import AuthUser
+from atlas_brain.auth.dependencies import AuthUser, require_auth
 
 
 class _CustomerApi:
@@ -44,6 +46,13 @@ class _Pool:
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
         return "UPDATE 1"
+
+
+def _billing_app(user: AuthUser) -> FastAPI:
+    app = FastAPI()
+    app.include_router(billing.router)
+    app.dependency_overrides[require_auth] = lambda: user
+    return app
 
 
 def _fake_stripe() -> SimpleNamespace:
@@ -220,3 +229,156 @@ async def test_create_checkout_passes_pinned_version_and_idempotency_keys(
     )
     assert checkout["customer"] == "cus_test_created"
     assert checkout["line_items"] == [{"price": "price_growth", "quantity": 1}]
+    assert checkout["metadata"] == {"account_id": account_id}
+    assert "subscription_data" not in checkout
+    assert "payment_method_types" not in checkout
+
+
+@pytest.mark.asyncio
+async def test_create_checkout_accepts_configured_deflection_delta_price_and_stamps_subscription_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    fake_stripe = _fake_stripe()
+    pool = _Pool()
+
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "rk_test_billing")
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly, price_delta_partner",
+    )
+    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
+
+    response = await billing.create_checkout(
+        billing.CheckoutRequest(
+            price_id="price_delta_monthly",
+            success_url="https://app.example.com/delta/success",
+            cancel_url="https://app.example.com/delta/cancel",
+        ),
+        AuthUser(
+            user_id=user_id,
+            account_id=account_id,
+            plan="growth",
+            plan_status="active",
+            role="owner",
+        ),
+    )
+
+    assert response.checkout_url == "https://checkout.stripe.test/session"
+    checkout = _CheckoutSessionApi.created[0]
+    delta_metadata = {
+        "account_id": account_id,
+        "source": billing.DEFLECTION_DELTA_SUBSCRIPTION_SOURCE,
+    }
+    assert checkout["mode"] == "subscription"
+    assert checkout["line_items"] == [
+        {"price": "price_delta_monthly", "quantity": 1}
+    ]
+    assert checkout["metadata"] == delta_metadata
+    assert checkout["subscription_data"] == {"metadata": delta_metadata}
+    assert "payment_method_types" not in checkout
+    assert checkout["idempotency_key"] == billing._stripe_checkout_idempotency_key(
+        account_id=account_id,
+        user_id=user_id,
+        price_id="price_delta_monthly",
+        success_url="https://app.example.com/delta/success",
+        cancel_url="https://app.example.com/delta/cancel",
+    )
+
+
+def test_checkout_endpoint_stamps_delta_subscription_metadata_for_webhook_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    fake_stripe = _fake_stripe()
+    pool = _Pool()
+
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "rk_test_billing")
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
+
+    app = _billing_app(
+        AuthUser(
+            user_id=user_id,
+            account_id=account_id,
+            plan="growth",
+            plan_status="active",
+            role="owner",
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/billing/checkout",
+            json={
+                "price_id": "price_delta_monthly",
+                "success_url": "https://app.example.com/delta/success",
+                "cancel_url": "https://app.example.com/delta/cancel",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "checkout_url": "https://checkout.stripe.test/session"
+    }
+    checkout = _CheckoutSessionApi.created[0]
+    delta_metadata = {
+        "account_id": account_id,
+        "source": billing.DEFLECTION_DELTA_SUBSCRIPTION_SOURCE,
+    }
+    assert checkout["mode"] == "subscription"
+    assert checkout["line_items"] == [
+        {"price": "price_delta_monthly", "quantity": 1}
+    ]
+    assert checkout["metadata"] == delta_metadata
+    assert checkout["subscription_data"] == {"metadata": delta_metadata}
+    assert billing._is_deflection_delta_subscription_source(
+        SimpleNamespace(metadata=checkout["subscription_data"]["metadata"])
+    )
+    assert "payment_method_types" not in checkout
+
+
+@pytest.mark.asyncio
+async def test_create_checkout_rejects_unconfigured_price_when_allowlist_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    fake_stripe = _fake_stripe()
+
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "rk_test_billing")
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_delta_price_ids",
+        "price_delta_monthly",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing.create_checkout(
+            billing.CheckoutRequest(
+                price_id="price_not_configured",
+                success_url="https://app.example.com/success",
+                cancel_url="https://app.example.com/cancel",
+            ),
+            AuthUser(
+                user_id=user_id,
+                account_id=account_id,
+                plan="growth",
+                plan_status="active",
+                role="owner",
+            ),
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 400
+    assert getattr(exc_info.value, "detail", None) == "Invalid price ID"
+    assert _CheckoutSessionApi.created == []
