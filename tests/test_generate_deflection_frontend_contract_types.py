@@ -50,11 +50,13 @@ def test_deflection_api_contract_metadata_includes_result_page_projection_fields
     assert '"non_repeat_ticket_count"' in rendered
     assert (
         'DEFLECTION_SNAPSHOT_TOP_QUESTION_FIELDS = Object.freeze(["rank", '
-        '"question", "ticket_count", "weighted_frequency", "customer_wording"])'
+        '"question", "ticket_count", "weighted_frequency", "customer_wording", '
+        '"owner_lane", "action_label", "estimated_support_cost"])'
     ) in rendered
     assert (
         'DEFLECTION_SNAPSHOT_TOP_BLIND_SPOT_FIELDS = Object.freeze(["rank", '
-        '"question", "ticket_count"])'
+        '"question", "ticket_count", "owner_lane", "action_label", '
+        '"estimated_support_cost"])'
     ) in rendered
     assert "source_ids" not in rendered
 

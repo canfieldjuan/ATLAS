@@ -25,6 +25,7 @@ DEFAULT_REPORT_MODEL_API_OUTPUT = (
 )
 
 TYPE_BY_FIELD = {
+    "action_label": "string",
     "answer": "string",
     "answer_linkage": "string",
     "answer_evidence_status": "string",

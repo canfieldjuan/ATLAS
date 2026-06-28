@@ -11,6 +11,6 @@ export const DEFLECTION_SNAPSHOT_SUMMARY_FIELDS = Object.freeze(["generated", "d
 
 export const DEFLECTION_SNAPSHOT_SUMMARY_OPTIONAL_FIELDS = Object.freeze(["source_date_start", "source_date_end", "source_window_days"]);
 
-export const DEFLECTION_SNAPSHOT_TOP_QUESTION_FIELDS = Object.freeze(["rank", "question", "ticket_count", "weighted_frequency", "customer_wording"]);
+export const DEFLECTION_SNAPSHOT_TOP_QUESTION_FIELDS = Object.freeze(["rank", "question", "ticket_count", "weighted_frequency", "customer_wording", "owner_lane", "action_label", "estimated_support_cost"]);
 
-export const DEFLECTION_SNAPSHOT_TOP_BLIND_SPOT_FIELDS = Object.freeze(["rank", "question", "ticket_count"]);
+export const DEFLECTION_SNAPSHOT_TOP_BLIND_SPOT_FIELDS = Object.freeze(["rank", "question", "ticket_count", "owner_lane", "action_label", "estimated_support_cost"]);

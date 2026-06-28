@@ -218,9 +218,10 @@ Renderer rules:
   body is the separately gated `snapshot.teaser.full_answer`.
 - Treat the backend `snapshot_projection` contract as the source map from free
   Snapshot fields to paid report sections. In particular, `top_blind_spots` is
-  sourced from `top_unresolved_repeats.items` and may project only `rank`,
-  `question`, and `ticket_count`. Use this contract before changing frontend
-  snapshot parsers; do not infer the projection from demo fixtures.
+  sourced from `top_unresolved_repeats.items` and projects only the fields
+  named by the generated contract, including display-safe owner/action preview
+  labels. Use this contract before changing frontend snapshot parsers; do not
+  infer the projection from demo fixtures.
 - Treat `complete_evidence` as export-only. It summarizes export size and should
   not be inlined into web/PDF surfaces or hosted result-page payloads.
 - Breaking shape changes bump `schema_version`; additive sections should keep
@@ -374,6 +375,9 @@ type DeflectionSnapshotQuestion = {
   ticket_count: number;
   weighted_frequency: number;
   customer_wording: string;
+  owner_lane: string;
+  action_label: string;
+  estimated_support_cost: number;
 };
 
 type DeflectionSnapshotLockedQuestion = {
@@ -385,6 +389,9 @@ type DeflectionSnapshotBlindSpot = {
   rank: number;
   question: string;
   ticket_count: number;
+  owner_lane: string;
+  action_label: string;
+  estimated_support_cost: number;
 };
 
 type DeflectionSnapshotTeaser = {
@@ -425,8 +432,10 @@ This shape intentionally excludes paid deliverable fields:
 - no vocabulary term mappings
 - no locked question text; `locked_questions` contains only rank and raw
   ticket count
-- no blind-spot paid action metadata; `top_blind_spots` contains only rank,
-  question, and raw ticket count from unresolved repeated questions
+- no paid action metadata; Snapshot repeat rows contain only display-safe
+  owner/action labels and estimated row cost, never raw routing signals,
+  evidence, Jira templates, source IDs, product-gap summary prose, or full
+  recommendation prose
 
 The teaser is fail-closed: only scoped `resolution_evidence` FAQ items are
 eligible. Preview entries never include answer body text.
@@ -561,6 +570,9 @@ type TicketFAQSearchResponse = {
   `DeflectionSnapshot.top_questions`, `DeflectionSnapshot.locked_questions`,
   `DeflectionSnapshot.top_blind_spots`, and `DeflectionSnapshot.teaser`. Do not
   infer answer text, evidence, or source IDs from the snapshot.
+- `owner_lane` and `action_label` on Snapshot repeat rows are teaser-safe
+  display labels. Use the paid report for detailed routing evidence, Jira
+  templates, source trails, and full recommended-action prose.
 - Show `source_count`, `ticket_source_count`, and `output_checks` as proof badges.
 - Show `answer_evidence_status` near steps. `draft_needs_review` means the
   system found repeated customer wording but no uploaded resolution evidence, so

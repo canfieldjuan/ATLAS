@@ -1849,18 +1849,29 @@ def test_deflection_snapshot_projection_is_allowlist_only() -> None:
     assert "hidden drafted action detail" not in encoded
     assert "LOCKED PAID ANSWER SHOULD NOT PROJECT" not in encoded
     assert "LOCKED PAID STEP SHOULD NOT PROJECT" not in encoded
+    assert "routing_signals" not in encoded
+    assert "jira_template" not in encoded
+    assert "top_evidence" not in encoded
+    assert "product_gap_summary" not in encoded
+    assert "recommended_action" not in encoded
     assert snapshot["top_questions"][0] == {
         "rank": 1,
         "question": "How do I export attribution reports?",
         "ticket_count": 5,
         "weighted_frequency": 8,
         "customer_wording": "export attribution reports",
+        "owner_lane": "Reporting",
+        "action_label": "Publish answer",
+        "estimated_support_cost": 67.5,
     }
     assert snapshot["top_blind_spots"] == [
         {
             "rank": 2,
             "question": "Can I turn on SSO for all users?",
             "ticket_count": 3,
+            "owner_lane": "Auth / Product UX",
+            "action_label": "Write missing answer",
+            "estimated_support_cost": 40.5,
         }
     ]
 
@@ -1887,6 +1898,9 @@ def test_deflection_snapshot_falls_back_when_legacy_model_lacks_row_fields() -> 
         "ticket_count": 5,
         "weighted_frequency": 8,
         "customer_wording": "export attribution reports",
+        "owner_lane": "Support Ops",
+        "action_label": "Publish answer",
+        "estimated_support_cost": 67.5,
     }
 
 
@@ -1968,14 +1982,15 @@ def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
             ["web", "pdf", "markdown"],
             None,
             ["rows"],
-            [
-                "rows.rank",
-                "rows.question",
-                "rows.ticket_count",
-                "rows.weighted_frequency",
-                "rows.customer_wording",
-            ],
-        ),
+                [
+                    "rows.rank",
+                    "rows.question",
+                    "rows.ticket_count",
+                    "rows.weighted_frequency",
+                    "rows.customer_wording",
+                    "rows.estimated_support_cost",
+                ],
+            ),
         (
             "priority_fix_queue",
             35,
@@ -2003,12 +2018,16 @@ def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
                 "pdf_limit",
                 "support_cost_basis",
             ],
-            [
-                "items.rank",
-                "items.question",
-                "items.ticket_count",
-            ],
-        ),
+                [
+                    "items.rank",
+                    "items.question",
+                    "items.ticket_count",
+                    "items.owner_lane",
+                    "items.estimated_support_cost",
+                    "items.status",
+                    "items.fix_type",
+                ],
+            ),
         (
             "drafted_resolutions",
             37,
@@ -2134,6 +2153,9 @@ def test_deflection_snapshot_projection_contract_is_registry_derived() -> None:
             "ticket_count",
             "weighted_frequency",
             "customer_wording",
+            "owner_lane",
+            "action_label",
+            "estimated_support_cost",
         ],
         "source_collection": "rows",
         "limit": "top_n",
@@ -2146,7 +2168,14 @@ def test_deflection_snapshot_projection_contract_is_registry_derived() -> None:
                 "top_unresolved_repeats"
             ].snapshot_safe_fields
         ),
-        "projected_fields": ["rank", "question", "ticket_count"],
+        "projected_fields": [
+            "rank",
+            "question",
+            "ticket_count",
+            "owner_lane",
+            "action_label",
+            "estimated_support_cost",
+        ],
         "source_collection": "items",
         "limit": "top_unresolved_repeats.result_page_limit",
     }
@@ -4196,14 +4225,17 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
             "non_repeat_ticket_count": 1,
         },
         "top_questions": [
-            {
-                "rank": 1,
-                "question": "How do I export attribution reports?",
-                "ticket_count": 4,
-                "weighted_frequency": 8,
-                "customer_wording": "How do I export attribution reports?",
-            }
-        ],
+                {
+                    "rank": 1,
+                    "question": "How do I export attribution reports?",
+                    "ticket_count": 4,
+                    "weighted_frequency": 8,
+                    "customer_wording": "How do I export attribution reports?",
+                    "owner_lane": "Reporting",
+                    "action_label": "Review cluster",
+                    "estimated_support_cost": 54.0,
+                }
+            ],
         "locked_questions": [
             {
                 "rank": 2,
@@ -4803,6 +4835,9 @@ def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> 
             "ticket_count": 7,
             "weighted_frequency": 99,
             "customer_wording": "",
+            "owner_lane": "Reporting",
+            "action_label": "Review cluster",
+            "estimated_support_cost": 94.5,
         }
     ]
     assert [row["rank"] for row in snapshot["top_blind_spots"]] == [2]
@@ -4810,7 +4845,14 @@ def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> 
         {"rank": 3, "ticket_count": 0},
     ]
     assert snapshot["top_blind_spots"] == [
-        {"rank": 2, "question": "Can I enable SSO?", "ticket_count": 2}
+        {
+            "rank": 2,
+            "question": "Can I enable SSO?",
+            "ticket_count": 2,
+            "owner_lane": "Auth / Product UX",
+            "action_label": "Write missing answer",
+            "estimated_support_cost": 27.0,
+        }
     ]
     assert "question" not in snapshot["locked_questions"][0]
     assert "Weighted score is not a ticket count" not in encoded

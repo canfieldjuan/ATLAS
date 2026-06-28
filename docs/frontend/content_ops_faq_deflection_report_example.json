@@ -9268,7 +9268,8 @@
           "rows.question",
           "rows.ticket_count",
           "rows.weighted_frequency",
-          "rows.customer_wording"
+          "rows.customer_wording",
+          "rows.estimated_support_cost"
         ],
         "surfaces": [
           "web",
@@ -10266,7 +10267,11 @@
         "snapshot_safe_fields": [
           "items.rank",
           "items.question",
-          "items.ticket_count"
+          "items.ticket_count",
+          "items.owner_lane",
+          "items.estimated_support_cost",
+          "items.status",
+          "items.fix_type"
         ],
         "surfaces": [
           "web",
