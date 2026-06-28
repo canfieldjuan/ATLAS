@@ -1,6 +1,6 @@
 # Plan archive index
 
-1222 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1224 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -698,6 +698,7 @@
 - [PR-Deflection-Delivery-Privacy-Regressions](archive/PR-Deflection-Delivery-Privacy-Regressions.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Delivery-Reconciliation](archive/PR-Deflection-Delivery-Reconciliation.md) - lane: deflection/go-live | phase: Production hardening
 - [PR-Deflection-Delivery-Row-Claim](archive/PR-Deflection-Delivery-Row-Claim.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
+- [PR-Deflection-Delta-Account-Scope](archive/PR-Deflection-Delta-Account-Scope.md) - lane: deflection/report-deltas | phase: Production hardening
 - [PR-Deflection-Delta-Cap-Saturation-Signals](archive/PR-Deflection-Delta-Cap-Saturation-Signals.md) - lane: issue-1316/deflection-delta-cap-saturation-signals | phase: Production hardening
 - [PR-Deflection-Delta-Core](archive/PR-Deflection-Delta-Core.md) - lane: issue-1316/deflection-delta-core | phase: Vertical slice
 - [PR-Deflection-Delta-Deferred-Status](archive/PR-Deflection-Delta-Deferred-Status.md) - lane: deflection/report-deltas | phase: Product polish
