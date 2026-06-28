@@ -493,6 +493,14 @@ boundary you genuinely cannot or should not hit in CI:
   pattern in `atlas_content_ops_deflection_delivery_checks.yml`), not a
   fake pool. If it exists to prove a validator/projection, call the real
   validator/projection. Don't reach around the thing you're testing.
+- **Don't assert on a mock's call arguments -- assert on the real
+  adapter's observable state.** A test that checks the positional tuple or
+  SQL string passed to `pool.execute(...)` is testing the mock, not the
+  behavior: it breaks the moment the call shape changes and proves nothing
+  about the outcome. Use the in-memory port adapter (e.g.
+  `InMemoryDeflectionReportArtifactStore`) and assert the result -- "the row
+  is marked paid", "a mismatched authorized amount is rejected" -- which is
+  invisible to the method's signature.
 - **Don't hand-author a fixture that is supposed to mirror generated or
   produced output.** Derive it (regenerate from the contract / capture
   from the real producer). A hand-kept copy is a second source of truth
@@ -509,7 +517,12 @@ client rejects; a hand-authored ground-truth whose `snapshot_safe_fields`
 drifted from the producer left a `snapshot = projection(report)` guard
 passing vacuously. Every one was a mock of something that did not need
 mocking — extra code to keep in sync, and a new way to be wrong. A real
-adapter can't drift from itself.
+adapter can't drift from itself. Most recently (#1871): a `mark_paid`
+signature change from 3 to 6 positional args broke four tests across three
+files -- two raised `too many values to unpack`, two had stale call-arg
+tuples -- because they asserted on a fake `_Pool`'s `execute` args instead of
+a real store's state; the "fix" patched the fakes to track the new signature,
+adding more mock to keep in sync. The real adapter would not have noticed it.
 
 If a real adapter is genuinely too expensive for the slice, say so in the
 plan's `Intentional`/`Deferred` and name what real-adapter coverage will

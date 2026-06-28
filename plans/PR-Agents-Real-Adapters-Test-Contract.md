@@ -14,8 +14,9 @@ mock the component under test instead of only mocking true external transports.
 
 This PR fixes the process root by making the real-adapter default explicit in
 the repo's builder contract, including examples of allowed mocks, forbidden
-component fakes, generated-fixture drift, and the required deferral language
-when a real adapter is genuinely too expensive for one slice.
+component fakes, mock call-argument assertions, generated-fixture drift, and
+the required deferral language when a real adapter is genuinely too expensive
+for one slice.
 
 ## Scope (this PR)
 
@@ -34,8 +35,9 @@ Slice phase: Workflow/process
         default.
   - [ ] The new rule distinguishes mock-allowed external seams from forbidden
         component-under-test fakes.
-  - [ ] The rule covers SQL filters, validators/projections, generated fixtures,
-        and shared validator definitions.
+  - [ ] The rule covers SQL filters, mock call-argument assertions,
+        validators/projections, generated fixtures, and shared validator
+        definitions.
   - [ ] The rule states what to do when real-adapter coverage is deferred.
 - Affected surfaces: builder/reviewer process documentation only.
 - Risk areas: docs clarity and avoiding accidental overreach into product code.
@@ -58,6 +60,7 @@ terms:
 
 - mock third-party/network/transport/time/randomness seams only;
 - never fake the component whose behavior the test is meant to prove;
+- assert real adapter state instead of fake pool call arguments;
 - derive generated/producer-shaped fixtures instead of hand-authoring copies;
 - share one validator/projection definition across same-shaped checks;
 - if real adapter coverage is deferred, name why and track the replacing slice.
@@ -87,6 +90,6 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | 39 |
-| `plans/PR-Agents-Real-Adapters-Test-Contract.md` | 92 |
-| **Total** | **131** |
+| `AGENTS.md` | 52 |
+| `plans/PR-Agents-Real-Adapters-Test-Contract.md` | 95 |
+| **Total** | **147** |
