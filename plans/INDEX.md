@@ -1,6 +1,6 @@
 # Plan archive index
 
-1224 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1225 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -704,6 +704,7 @@
 - [PR-Deflection-Delta-Deferred-Status](archive/PR-Deflection-Delta-Deferred-Status.md) - lane: deflection/report-deltas | phase: Product polish
 - [PR-Deflection-Delta-Deferred-Summary](archive/PR-Deflection-Delta-Deferred-Summary.md) - lane: deflection/report-deltas | phase: Production hardening
 - [PR-Deflection-Delta-Delivery-Summary](archive/PR-Deflection-Delta-Delivery-Summary.md) - lane: issue-1316/deflection-delta-delivery-summary | phase: Vertical slice
+- [PR-Deflection-Delta-Entitlement-Allowlist](archive/PR-Deflection-Delta-Entitlement-Allowlist.md) - lane: deflection/report-deltas | phase: Production hardening
 - [PR-Deflection-Delta-Go-Live-Runbook](archive/PR-Deflection-Delta-Go-Live-Runbook.md) - lane: deflection/report-deltas | phase: Production hardening
 - [PR-Deflection-Delta-Live-Delivery](archive/PR-Deflection-Delta-Live-Delivery.md) - lane: deflection/report-deltas | phase: Vertical slice
 - [PR-Deflection-Delta-Monthly-Automation](archive/PR-Deflection-Delta-Monthly-Automation.md) - lane: issue-1316/deflection-delta-monthly-automation | phase: Vertical slice
