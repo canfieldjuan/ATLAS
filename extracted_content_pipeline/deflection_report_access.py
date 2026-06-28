@@ -21,6 +21,8 @@ from .storage._jsonb_helpers import (
 
 logger = logging.getLogger(__name__)
 
+DELTA_ENTITLEMENT_ACTIVE_STATUSES = ("active", "trialing")
+
 
 @dataclass(frozen=True)
 class DeflectionReportAccessRecord:
@@ -157,6 +159,14 @@ class DeflectionReportArtifactStore(Protocol):
         account_ids: Sequence[str] | None = None,
     ) -> int:
         """Count tenants that have at least one paid report."""
+
+    async def list_deflection_delta_entitled_account_ids(
+        self,
+        *,
+        fallback_account_ids: Sequence[str] | None = None,
+        limit: int | None = None,
+    ) -> tuple[str, ...]:
+        """List tenants with an active monthly delta entitlement."""
 
     async def count_paid_reports(
         self,
@@ -328,7 +338,11 @@ _DEFLECTION_DELTA_CSAT_FIELDS = (
 class InMemoryDeflectionReportArtifactStore:
     """Test store with the same tenant/request semantics as the Postgres store."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        delta_entitlement_rows: Sequence[Mapping[str, Any]] | None = None,
+    ) -> None:
         self._rows: dict[tuple[str, str], DeflectionReportAccessRecord] = {}
         self._created_at_by_key: dict[tuple[str, str], datetime] = {}
         self._paid_at_by_key: dict[tuple[str, str], datetime] = {}
@@ -337,6 +351,9 @@ class InMemoryDeflectionReportArtifactStore:
             DeflectionDeltaAccessRecord,
         ] = {}
         self._delta_delivery_keys: set[tuple[str, str, str]] = set()
+        self._delta_entitlement_rows = [
+            dict(row) for row in (delta_entitlement_rows or ())
+        ]
 
     async def save_report(
         self,
@@ -481,6 +498,34 @@ class InMemoryDeflectionReportArtifactStore:
                 if row.paid
             }
         )
+
+    async def list_deflection_delta_entitled_account_ids(
+        self,
+        *,
+        fallback_account_ids: Sequence[str] | None = None,
+        limit: int | None = None,
+    ) -> tuple[str, ...]:
+        active_account_ids = _account_id_tuple(
+            [
+                account_id
+                for row in self._delta_entitlement_rows
+                if (account_id := _clean(row.get("account_id")))
+                if _clean(row.get("stripe_subscription_status"))
+                in DELTA_ENTITLEMENT_ACTIVE_STATUSES
+                if row.get("revoked_at") is None
+            ]
+        ) or ()
+        known_account_ids = {
+            account_id
+            for row in self._delta_entitlement_rows
+            if (account_id := _clean(row.get("account_id")))
+        }
+        fallback = tuple(
+            account_id
+            for account_id in (_account_id_tuple(fallback_account_ids) or ())
+            if account_id not in known_account_ids
+        )
+        return _limit_account_ids((*active_account_ids, *fallback), limit)
 
     async def count_paid_reports(
         self,
@@ -984,6 +1029,55 @@ class PostgresDeflectionReportArtifactStore:
             *args,
         )
         return _row_count(row)
+
+    async def list_deflection_delta_entitled_account_ids(
+        self,
+        *,
+        fallback_account_ids: Sequence[str] | None = None,
+        limit: int | None = None,
+    ) -> tuple[str, ...]:
+        fallback = _account_id_tuple(fallback_account_ids) or ()
+        args: list[Any] = [list(DELTA_ENTITLEMENT_ACTIVE_STATUSES), list(fallback)]
+        limit_clause = ""
+        if limit is not None:
+            args.append(_bounded_limit(limit))
+            limit_clause = f"LIMIT ${len(args)}"
+        rows = await self.pool.fetch(
+            f"""
+            SELECT
+                account_id,
+                BOOL_OR(
+                    stripe_subscription_status = ANY($1::text[])
+                    AND revoked_at IS NULL
+                ) AS grants_delta_entitlement,
+                MAX(updated_at) AS latest_entitlement_at
+            FROM content_ops_deflection_delta_entitlements
+            WHERE stripe_subscription_status = ANY($1::text[])
+               OR account_id = ANY($2::text[])
+            GROUP BY account_id
+            ORDER BY grants_delta_entitlement DESC, latest_entitlement_at DESC, account_id ASC
+            {limit_clause}
+            """,
+            *args,
+        )
+        row_maps = [row_to_dict(row) for row in rows]
+        active_account_ids = _account_id_tuple(
+            [
+                account_id
+                for row in row_maps
+                if row.get("grants_delta_entitlement") is True
+                if (account_id := _clean(row.get("account_id")))
+            ]
+        ) or ()
+        known_account_ids = {
+            account_id
+            for row in row_maps
+            if (account_id := _clean(row.get("account_id")))
+        }
+        fallback_account_ids = tuple(
+            account_id for account_id in fallback if account_id not in known_account_ids
+        )
+        return _limit_account_ids((*active_account_ids, *fallback_account_ids), limit)
 
     async def count_paid_reports(
         self,
@@ -1917,6 +2011,16 @@ def _account_id_tuple(value: Sequence[str] | None) -> tuple[str, ...] | None:
         seen.add(account_id)
         account_ids.append(account_id)
     return tuple(account_ids)
+
+
+def _limit_account_ids(
+    account_ids: Sequence[str],
+    limit: int | None,
+) -> tuple[str, ...]:
+    resolved = _account_id_tuple(account_ids) or ()
+    if limit is None:
+        return resolved
+    return resolved[:_bounded_limit(limit)]
 
 
 def _required_text(value: Any, field: str) -> str:

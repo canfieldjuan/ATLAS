@@ -391,6 +391,87 @@ async def test_in_memory_paid_account_discovery_filters_entitled_accounts() -> N
 
 
 @pytest.mark.asyncio
+async def test_in_memory_delta_entitlement_resolver_prefers_active_billing_rows() -> None:
+    store = InMemoryDeflectionReportArtifactStore(
+        delta_entitlement_rows=[
+            {
+                "account_id": "acct-active",
+                "stripe_subscription_status": "active",
+            },
+            {
+                "account_id": "acct-trial",
+                "stripe_subscription_status": "trialing",
+            },
+            {
+                "account_id": "acct-canceled",
+                "stripe_subscription_status": "canceled",
+            },
+            {
+                "account_id": "acct-revoked",
+                "stripe_subscription_status": "active",
+                "revoked_at": "2026-06-28T00:00:00Z",
+            },
+            {
+                "account_id": "acct-active",
+                "stripe_subscription_status": "active",
+            },
+        ]
+    )
+
+    account_ids = await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=("acct-config",)
+    )
+
+    assert account_ids == ("acct-active", "acct-trial", "acct-config")
+
+
+@pytest.mark.asyncio
+async def test_in_memory_delta_entitlement_resolver_falls_back_when_billing_empty() -> None:
+    store = InMemoryDeflectionReportArtifactStore(
+        delta_entitlement_rows=[
+            {
+                "account_id": "acct-past-due",
+                "stripe_subscription_status": "past_due",
+            },
+            {
+                "account_id": "acct-canceled",
+                "stripe_subscription_status": "canceled",
+            },
+        ]
+    )
+
+    account_ids = await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=("acct-config", "acct-config")
+    )
+
+    assert account_ids == ("acct-config",)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_delta_entitlement_resolver_suppresses_known_inactive_fallback() -> None:
+    store = InMemoryDeflectionReportArtifactStore(
+        delta_entitlement_rows=[
+            {
+                "account_id": "acct-canceled",
+                "stripe_subscription_status": "canceled",
+            },
+            {
+                "account_id": "acct-revoked",
+                "stripe_subscription_status": "trialing",
+                "revoked_at": "2026-06-28T00:00:00Z",
+            },
+        ]
+    )
+
+    account_ids = await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=("acct-canceled", "acct-revoked", "acct-config"),
+        limit=2,
+    )
+
+    assert account_ids == ("acct-config",)
+
+
+@pytest.mark.asyncio
 async def test_in_memory_paid_report_listing_orders_by_paid_activity_window() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     await _save(
@@ -1234,6 +1315,51 @@ async def test_postgres_paid_account_discovery_is_paid_scoped_ordered_and_bounde
         in query
     )
     assert "LIMIT $1" in query
+
+
+@pytest.mark.asyncio
+async def test_postgres_delta_entitlement_resolver_uses_billing_table_and_fallback() -> None:
+    class _Pool:
+        def __init__(self, rows: list[dict[str, object]]) -> None:
+            self.rows = rows
+            self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetch(self, query: str, *args: object) -> list[dict[str, object]]:
+            self.fetch_calls.append((query, args))
+            return self.rows
+
+    pool = _Pool(
+        [
+            {"account_id": "acct-active", "grants_delta_entitlement": True},
+            {"account_id": "acct-trial", "grants_delta_entitlement": True},
+            {"account_id": "acct-canceled", "grants_delta_entitlement": False},
+        ]
+    )
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+
+    accounts = await store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=("acct-canceled", "acct-config"),
+        limit=3,
+    )
+
+    assert accounts == ("acct-active", "acct-trial", "acct-config")
+    query, args = pool.fetch_calls[0]
+    assert args == (["active", "trialing"], ["acct-canceled", "acct-config"], 3)
+    assert "FROM content_ops_deflection_delta_entitlements" in query
+    assert "stripe_subscription_status = ANY($1::text[])" in query
+    assert "revoked_at IS NULL" in query
+    assert "GROUP BY account_id" in query
+    assert "LIMIT $3" in query
+
+    empty_pool = _Pool([])
+    empty_store = PostgresDeflectionReportArtifactStore(pool=empty_pool)
+
+    fallback_accounts = await empty_store.list_deflection_delta_entitled_account_ids(
+        fallback_account_ids=("acct-config", "acct-config"),
+        limit=1,
+    )
+
+    assert fallback_accounts == ("acct-config",)
 
 
 @pytest.mark.asyncio
