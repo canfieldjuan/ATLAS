@@ -57,6 +57,7 @@ LLM_PLAN_LIMITS = {
 
 PRICE_TO_PLAN = {}  # populated at module init from config
 STRIPE_API_VERSION = "2026-05-27.dahlia"
+DEFLECTION_DELTA_SUBSCRIPTION_SOURCE = "content_ops_deflection_delta_subscription"
 _UUID_TEXT_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
@@ -244,6 +245,8 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
         ]
         if v
     }
+    delta_price_ids = set(_configured_deflection_delta_price_ids())
+    valid_prices.update(delta_price_ids)
     if valid_prices and price_id not in valid_prices:
         raise HTTPException(status_code=400, detail="Invalid price ID")
 
@@ -280,13 +283,22 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
     if not req.cancel_url:
         raise HTTPException(status_code=400, detail="cancel_url is required")
 
+    checkout_metadata = {"account_id": str(user.account_id)}
+    session_params: dict[str, Any] = {}
+    if price_id in delta_price_ids:
+        checkout_metadata = {
+            **checkout_metadata,
+            "source": DEFLECTION_DELTA_SUBSCRIPTION_SOURCE,
+        }
+        session_params["subscription_data"] = {"metadata": checkout_metadata}
+
     session = stripe.checkout.Session.create(
         customer=customer_id,
         mode="subscription",
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=req.success_url,
         cancel_url=req.cancel_url,
-        metadata={"account_id": str(user.account_id)},
+        metadata=checkout_metadata,
         idempotency_key=_stripe_checkout_idempotency_key(
             account_id=str(user.account_id),
             user_id=str(user.user_id),
@@ -295,6 +307,7 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
             cancel_url=req.cancel_url,
         ),
         timeout=10,
+        **session_params,
     )
 
     return CheckoutResponse(checkout_url=session.url)
@@ -1360,7 +1373,7 @@ def _deflection_delta_price_id_from_object(obj: Any) -> str | None:
 def _is_deflection_delta_subscription_source(obj: Any) -> bool:
     return (
         _clean_metadata(_stripe_metadata(obj).get("source"))
-        == "content_ops_deflection_delta_subscription"
+        == DEFLECTION_DELTA_SUBSCRIPTION_SOURCE
     )
 
 
