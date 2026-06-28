@@ -2,16 +2,18 @@
   "atlas_brain/services/llm/anthropic.py": {
     "counts": {
       "HEURISTIC_COMMENT": 1,
+      "INTERNAL_MOCK": 20,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 2
     },
-    "score": 14
+    "score": 94
   },
   "atlas_brain/services/llm/cloud.py": {
     "counts": {
-      "HAPPY_PATH_TESTS": 1
+      "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 4
     },
-    "score": 4
+    "score": 20
   },
   "atlas_brain/services/llm/groq.py": {
     "counts": {
@@ -35,18 +37,20 @@
   },
   "atlas_brain/services/llm/ollama.py": {
     "counts": {
+      "INTERNAL_MOCK": 4,
       "UNGUARDED_INDEX": 1
     },
-    "score": 2
+    "score": 18
   },
   "atlas_brain/services/llm/openrouter.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 1,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 2,
       "UNGUARDED_INDEX": 3
     },
-    "score": 23
+    "score": 27
   },
   "atlas_brain/services/llm/together.py": {
     "counts": {

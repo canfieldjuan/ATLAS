@@ -8,9 +8,10 @@
   },
   "atlas_brain/alerts/manager.py": {
     "counts": {
+      "INTERNAL_MOCK": 10,
       "NO_RAISES_TESTS": 1
     },
-    "score": 3
+    "score": 43
   },
   "atlas_brain/alerts/rules.py": {
     "counts": {

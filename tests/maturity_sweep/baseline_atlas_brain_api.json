@@ -2,11 +2,12 @@
   "atlas_brain/api/admin_costs.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 5,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 5,
       "UNGUARDED_INDEX": 18
     },
-    "score": 38
+    "score": 58
   },
   "atlas_brain/api/alerts.py": {
     "counts": {
@@ -17,106 +18,133 @@
   },
   "atlas_brain/api/auth.py": {
     "counts": {
-      "HAPPY_PATH_TESTS": 1
+      "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 15
     },
-    "score": 4
+    "score": 64
   },
   "atlas_brain/api/b2b_affiliates.py": {
     "counts": {
+      "INTERNAL_MOCK": 12,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 5
+    "score": 53
   },
   "atlas_brain/api/b2b_campaigns.py": {
     "counts": {
+      "INTERNAL_MOCK": 50,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 4
     },
-    "score": 11
+    "score": 211
   },
   "atlas_brain/api/b2b_challenger_claims.py": {
     "counts": {
+      "INTERNAL_MOCK": 4,
       "NO_RAISES_TESTS": 1
     },
-    "score": 3
+    "score": 19
   },
   "atlas_brain/api/b2b_crm_events.py": {
     "counts": {
+      "INTERNAL_MOCK": 20,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 7,
       "UNGUARDED_INDEX": 1
     },
-    "score": 40
+    "score": 120
   },
   "atlas_brain/api/b2b_dashboard.py": {
     "counts": {
       "HEURISTIC_COMMENT": 1,
+      "INTERNAL_MOCK": 70,
       "SWALLOWED_EXCEPT": 6,
       "UNGUARDED_INDEX": 13
     },
-    "score": 37
+    "score": 317
   },
   "atlas_brain/api/b2b_evidence.py": {
     "counts": {
+      "INTERNAL_MOCK": 74,
       "SWALLOWED_EXCEPT": 2,
       "UNGUARDED_INDEX": 2
     },
-    "score": 14
+    "score": 310
   },
   "atlas_brain/api/b2b_reviews.py": {
     "counts": {
+      "INTERNAL_MOCK": 18,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 8
+    "score": 80
   },
   "atlas_brain/api/b2b_scrape.py": {
     "counts": {
+      "INTERNAL_MOCK": 47,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 3
     },
-    "score": 18
+    "score": 206
   },
   "atlas_brain/api/b2b_tenant_dashboard.py": {
     "counts": {
+      "INTERNAL_MOCK": 253,
       "SWALLOWED_EXCEPT": 6,
       "UNGUARDED_INDEX": 11
     },
-    "score": 36
+    "score": 1048
   },
   "atlas_brain/api/b2b_vendor_briefing.py": {
     "counts": {
+      "INTERNAL_MOCK": 17,
       "NO_RAISES_TESTS": 1,
       "UNGUARDED_INDEX": 1
     },
-    "score": 5
+    "score": 73
   },
   "atlas_brain/api/b2b_vendor_claims.py": {
     "counts": {
+      "INTERNAL_MOCK": 4,
       "NO_RAISES_TESTS": 1
     },
-    "score": 3
+    "score": 19
   },
   "atlas_brain/api/b2b_win_loss.py": {
     "counts": {
+      "INTERNAL_MOCK": 28,
       "SWALLOWED_EXCEPT": 3,
       "UNGUARDED_INDEX": 8
     },
-    "score": 21
+    "score": 133
   },
   "atlas_brain/api/billing.py": {
     "counts": {
+      "INTERNAL_MOCK": 62,
       "SWALLOWED_EXCEPT": 4,
       "UNGUARDED_INDEX": 3
     },
-    "score": 26
+    "score": 274
   },
   "atlas_brain/api/blog_admin.py": {
     "counts": {
+      "INTERNAL_MOCK": 26,
       "NO_RAISES_TESTS": 1,
       "UNGUARDED_INDEX": 3
     },
-    "score": 9
+    "score": 113
+  },
+  "atlas_brain/api/blog_public.py": {
+    "counts": {
+      "INTERNAL_MOCK": 4
+    },
+    "score": 16
+  },
+  "atlas_brain/api/campaign_webhooks.py": {
+    "counts": {
+      "INTERNAL_MOCK": 14
+    },
+    "score": 56
   },
   "atlas_brain/api/comms/call_actions.py": {
     "counts": {
@@ -135,11 +163,12 @@
   "atlas_brain/api/comms/webhooks.py": {
     "counts": {
       "HEURISTIC_COMMENT": 1,
+      "INTERNAL_MOCK": 13,
       "SWALLOWED_EXCEPT": 4,
       "UNGUARDED_INDEX": 4,
       "UNGUARDED_INPUT": 1
     },
-    "score": 31
+    "score": 83
   },
   "atlas_brain/api/consumer_dashboard.py": {
     "counts": {
@@ -177,17 +206,25 @@
     },
     "score": 37
   },
+  "atlas_brain/api/email_actions.py": {
+    "counts": {
+      "INTERNAL_MOCK": 2
+    },
+    "score": 8
+  },
   "atlas_brain/api/email_drafts.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "UNGUARDED_INDEX": 7
     },
-    "score": 6
+    "score": 10
   },
   "atlas_brain/api/inbox_rules.py": {
     "counts": {
+      "INTERNAL_MOCK": 5,
       "UNGUARDED_INDEX": 1
     },
-    "score": 2
+    "score": 22
   },
   "atlas_brain/api/invoicing/actions.py": {
     "counts": {
@@ -240,9 +277,10 @@
   },
   "atlas_brain/api/pipeline_visibility.py": {
     "counts": {
+      "INTERNAL_MOCK": 22,
       "NO_RAISES_TESTS": 1
     },
-    "score": 3
+    "score": 91
   },
   "atlas_brain/api/presence.py": {
     "counts": {
@@ -259,11 +297,12 @@
   },
   "atlas_brain/api/prospects.py": {
     "counts": {
+      "INTERNAL_MOCK": 8,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 1
     },
-    "score": 10
+    "score": 42
   },
   "atlas_brain/api/query/text.py": {
     "counts": {
@@ -273,22 +312,23 @@
   },
   "atlas_brain/api/recognition.py": {
     "counts": {
+      "INTERNAL_MOCK": 5,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 5
+    "score": 25
   },
   "atlas_brain/api/security.py": {
     "counts": {
-      "HAPPY_PATH_TESTS": 1,
-      "NO_RAISES_TESTS": 1
+      "INTERNAL_MOCK": 1
     },
-    "score": 7
+    "score": 4
   },
   "atlas_brain/api/seller_campaigns.py": {
     "counts": {
+      "INTERNAL_MOCK": 9,
       "UNGUARDED_INDEX": 2
     },
-    "score": 4
+    "score": 40
   },
   "atlas_brain/api/session.py": {
     "counts": {
@@ -303,11 +343,29 @@
     },
     "score": 7
   },
+  "atlas_brain/api/universal_scrape.py": {
+    "counts": {
+      "INTERNAL_MOCK": 7
+    },
+    "score": 28
+  },
+  "atlas_brain/api/vendor_targets.py": {
+    "counts": {
+      "INTERNAL_MOCK": 28
+    },
+    "score": 112
+  },
   "atlas_brain/api/video.py": {
     "counts": {
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 7
     },
     "score": 11
+  },
+  "atlas_brain/api/vision.py": {
+    "counts": {
+      "INTERNAL_MOCK": 7
+    },
+    "score": 28
   }
 }

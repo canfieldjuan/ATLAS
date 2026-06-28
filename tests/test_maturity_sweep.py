@@ -126,6 +126,207 @@ def test_unguarded_boundary_input_detector_fires_and_guarded_is_quiet() -> None:
     assert "UNGUARDED_INPUT" not in {f.code for f in guarded}
 
 
+def test_internal_mock_detector_attaches_to_mocked_first_party_module(tmp_path: Path) -> None:
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    module = lane / "extracted_content_pipeline" / "faq_deflection_report.py"
+    _write(module, "def build():\n    return []\n")
+    _write(
+        tests / "test_report.py",
+        "from unittest import mock\n\n"
+        "def test_internal_patch():\n"
+        "    with mock.patch('extracted_content_pipeline.faq_deflection_report.build'):\n"
+        "        pass\n\n"
+        "def test_external_patch():\n"
+        "    with mock.patch('httpx.post'):\n"
+        "        pass\n",
+    )
+
+    results = MOD.sweep(lane, tests)
+    result = next(item for item in results if item.path == str(module))
+
+    assert result.counts["INTERNAL_MOCK"] == 1
+    assert any(
+        finding.code == "INTERNAL_MOCK"
+        and "extracted_content_pipeline.faq_deflection_report.build" in finding.detail
+        for finding in result.findings
+    )
+
+
+def test_internal_mock_detector_handles_monkeypatch_module_targets(tmp_path: Path) -> None:
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    module = lane / "atlas_brain" / "api" / "billing.py"
+    _write(module, "def mark_paid():\n    return True\n")
+    _write(
+        tests / "test_billing.py",
+        "from unittest.mock import MagicMock\n"
+        "from atlas_brain.api import billing\n\n"
+        "def test_internal_monkeypatch(monkeypatch):\n"
+        "    monkeypatch.setattr(billing, 'mark_paid', MagicMock())\n",
+    )
+
+    results = MOD.sweep(lane, tests)
+    result = next(item for item in results if item.path == str(module))
+
+    assert result.counts["INTERNAL_MOCK"] == 1
+
+
+def test_internal_mock_detector_handles_patch_object_module_targets(tmp_path: Path) -> None:
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    module = lane / "atlas_brain" / "api" / "billing.py"
+    _write(module, "def mark_paid():\n    return True\n")
+    _write(
+        tests / "test_billing.py",
+        "from unittest.mock import patch\n"
+        "from atlas_brain.api import billing\n\n"
+        "def test_internal_patch_object():\n"
+        "    with patch.object(billing, 'mark_paid'):\n"
+        "        pass\n",
+    )
+
+    results = MOD.sweep(lane, tests)
+    result = next(item for item in results if item.path == str(module))
+
+    assert result.counts["INTERNAL_MOCK"] == 1
+    assert any(
+        finding.code == "INTERNAL_MOCK"
+        and "atlas_brain.api.billing.mark_paid" in finding.detail
+        and "patch.object" in finding.detail
+        for finding in result.findings
+    )
+
+
+def test_internal_mock_detector_covers_blocking_extracted_roots(tmp_path: Path) -> None:
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    module = lane / "extracted_competitive_intelligence" / "worker.py"
+    _write(module, "def run():\n    return True\n")
+    _write(
+        tests / "test_competitive_worker.py",
+        "from unittest.mock import patch\n\n"
+        "def test_internal_patch():\n"
+        "    with patch('extracted_competitive_intelligence.worker.run'):\n"
+        "        pass\n",
+    )
+
+    results = MOD.sweep(lane, tests)
+    result = next(item for item in results if item.path == str(module))
+
+    assert result.counts["INTERNAL_MOCK"] == 1
+
+
+def test_internal_mock_detector_allows_wall_clock_and_randomness_seams(tmp_path: Path) -> None:
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    module = lane / "atlas_brain" / "jobs" / "scheduler.py"
+    _write(module, "import time\nimport random\n\ndef jitter():\n    return time.perf_counter() + random.random()\n")
+    _write(
+        tests / "test_scheduler.py",
+        "from atlas_brain.jobs import scheduler\n\n"
+        "def test_clock_and_randomness(monkeypatch):\n"
+        "    monkeypatch.setattr(scheduler.time, 'perf_counter', lambda: 1.0)\n"
+        "    monkeypatch.setattr(scheduler.random, 'random', lambda: 0.5)\n",
+    )
+
+    results = MOD.sweep(lane, tests)
+    result = next(item for item in results if item.path == str(module))
+
+    assert "INTERNAL_MOCK" not in result.counts
+
+
+def test_internal_mock_detector_keeps_no_asname_dotted_import_external_seam(tmp_path: Path) -> None:
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    module = lane / "extracted_content_pipeline" / "api" / "control_surfaces.py"
+    _write(module, "import socket\n\ndef resolve():\n    return socket.getaddrinfo\n")
+    _write(
+        tests / "test_control_surfaces.py",
+        "import extracted_content_pipeline.api.control_surfaces\n\n"
+        "def test_external_socket_monkeypatch(monkeypatch):\n"
+        "    monkeypatch.setattr(\n"
+        "        extracted_content_pipeline.api.control_surfaces.socket,\n"
+        "        'getaddrinfo',\n"
+        "        lambda *a: [],\n"
+        "    )\n",
+    )
+
+    results = MOD.sweep(lane, tests)
+    result = next(item for item in results if item.path == str(module))
+
+    assert "INTERNAL_MOCK" not in result.counts
+
+
+def test_internal_mock_detector_indexes_package_init_exports(tmp_path: Path) -> None:
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    module = lane / "atlas_brain" / "auth" / "__init__.py"
+    _write(module, "def require_auth():\n    return True\n")
+    _write(
+        tests / "test_auth_package.py",
+        "from unittest.mock import patch\n\n"
+        "def test_package_export_patch():\n"
+        "    with patch('atlas_brain.auth.require_auth'):\n"
+        "        pass\n",
+    )
+
+    results = MOD.sweep(lane, tests)
+    result = next(item for item in results if item.path == str(module))
+
+    assert result.counts["INTERNAL_MOCK"] == 1
+
+
+def test_internal_mock_detector_allows_imported_external_seams(tmp_path: Path) -> None:
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    module = lane / "extracted_content_pipeline" / "api" / "control_surfaces.py"
+    _write(module, "import socket\n\ndef resolve():\n    return socket.getaddrinfo\n")
+    _write(
+        tests / "test_control_surfaces.py",
+        "from extracted_content_pipeline.api import control_surfaces\n\n"
+        "def test_external_socket_monkeypatch(monkeypatch):\n"
+        "    monkeypatch.setattr(control_surfaces.socket, 'getaddrinfo', lambda *a: [])\n",
+    )
+
+    results = MOD.sweep(lane, tests)
+    result = next(item for item in results if item.path == str(module))
+
+    assert "INTERNAL_MOCK" not in result.counts
+
+
+def test_internal_mock_ratchet_fails_on_new_mock_target(tmp_path: Path) -> None:
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(
+        lane / "scripts" / "build_content_ops_deflection_report.py",
+        "def main():\n    return 0\n",
+    )
+    _write(tests / "test_report.py", "def test_clean():\n    assert True\n")
+    baseline = tmp_path / "baseline.json"
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+    _write(
+        tests / "test_report.py",
+        "from unittest.mock import patch\n\n"
+        "def test_internal_patch():\n"
+        "    with patch('scripts.build_content_ops_deflection_report.main'):\n"
+        "        pass\n",
+    )
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+    ]) == 1
+
+
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")

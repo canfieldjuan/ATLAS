@@ -49,6 +49,7 @@ WEIGHTS = {
     "MUTABLE_DEFAULT": 2,       # def f(x=[])
     "HEURISTIC_COMMENT": 1,     # TODO/HACK/probably/best effort/brittle...
     "WEAK_CONTRACT": 1,         # public def with zero type annotations
+    "INTERNAL_MOCK": 4,         # tests mock first-party modules instead of edges
     "PARSE_ERROR": 8,           # file does not parse
 }
 
@@ -91,6 +92,37 @@ SKIP_DIRS = {
 
 TEST_NAME_RE = re.compile(r"(^test_.+\.py$)|(.+_test\.py$)")
 SENSITIVE_ZERO_TOLERANCE = ("BARE_EXCEPT", "SWALLOWED_EXCEPT")
+FIRST_PARTY_MOCK_ROOTS = (
+    "atlas_brain",
+    "extracted_competitive_intelligence",
+    "extracted_content_pipeline",
+    "extracted_evidence_to_story",
+    "extracted_llm_infrastructure",
+    "extracted_quality_gate",
+    "extracted_reasoning_core",
+    "scripts",
+)
+EXTERNAL_MOCK_SEAM_ATTRS = {
+    "anthropic",
+    "asyncpg",
+    "boto3",
+    "datetime",
+    "find_spec",
+    "httpx",
+    "monotonic",
+    "openai",
+    "perf_counter",
+    "random",
+    "requests",
+    "resend",
+    "socket",
+    "stripe",
+    "subprocess",
+    "time",
+    "twilio",
+    "urlopen",
+    "urllib",
+}
 
 
 @dataclass
@@ -259,6 +291,179 @@ class Analyzer(ast.NodeVisitor):
 # test scoring
 # ---------------------------------------------------------------------------
 
+
+def _module_name_for_path(path):
+    parts = Path(path).with_suffix("").parts
+    if not parts:
+        return ""
+    for index, part in enumerate(parts):
+        if part in FIRST_PARTY_MOCK_ROOTS:
+            return ".".join(parts[index:])
+    return ".".join(parts)
+
+
+def _mock_target_roots(results):
+    modules = {}
+    for result in results:
+        module = _module_name_for_path(result.path)
+        if module:
+            modules[module] = result
+            if module.endswith(".__init__"):
+                modules[module.rsplit(".", 1)[0]] = result
+    return modules
+
+
+def _constant_string(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _call_name_parts(node):
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Attribute):
+        base = _call_name_parts(node.value)
+        if base:
+            return [*base, node.attr]
+    return []
+
+
+def _import_aliases(tree):
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                if root in FIRST_PARTY_MOCK_ROOTS:
+                    aliases[alias.asname or root] = alias.name if alias.asname else root
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            root = module.split(".", 1)[0]
+            if root not in FIRST_PARTY_MOCK_ROOTS:
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                aliases[alias.asname or alias.name] = "%s.%s" % (module, alias.name)
+    return aliases
+
+
+def _resolve_expr_target(node, aliases):
+    parts = _call_name_parts(node)
+    if not parts:
+        return None
+    first = parts[0]
+    if first in aliases:
+        return ".".join([aliases[first], *parts[1:]])
+    if first in FIRST_PARTY_MOCK_ROOTS:
+        return ".".join(parts)
+    return None
+
+
+def _resolve_mock_target_module(target, module_results):
+    cleaned = str(target or "").strip()
+    if not cleaned:
+        return None
+    parts = cleaned.split(".")
+    if not parts or parts[0] not in FIRST_PARTY_MOCK_ROOTS:
+        return None
+    for end in range(len(parts), 0, -1):
+        candidate = ".".join(parts[:end])
+        result = module_results.get(candidate)
+        if result is not None:
+            remainder = parts[end:]
+            if remainder and remainder[0] in EXTERNAL_MOCK_SEAM_ATTRS:
+                return None
+            return result
+    return None
+
+
+class InternalMockVisitor(ast.NodeVisitor):
+    def __init__(self, aliases):
+        self.aliases = aliases
+        self.targets = []
+
+    def visit_Call(self, node):
+        parts = _call_name_parts(node.func)
+        if parts:
+            name = ".".join(parts)
+            if parts[-1] == "patch":
+                target = self._first_arg_string(node)
+                if target:
+                    self.targets.append((node.lineno, target, name))
+            elif parts[-2:] == ["patch", "object"]:
+                target = self._object_patch_target(node)
+                if target:
+                    self.targets.append((node.lineno, target, name))
+            elif parts[-2:] == ["monkeypatch", "setattr"] or parts[-1] == "setattr":
+                target = self._monkeypatch_target(node)
+                if target:
+                    self.targets.append((node.lineno, target, name))
+        self.generic_visit(node)
+
+    @staticmethod
+    def _first_arg_string(node):
+        if not node.args:
+            return None
+        return _constant_string(node.args[0])
+
+    def _monkeypatch_target(self, node):
+        if not node.args:
+            return None
+        string_target = _constant_string(node.args[0])
+        if string_target:
+            return string_target
+        if len(node.args) < 2:
+            return None
+        base = _resolve_expr_target(node.args[0], self.aliases)
+        attr = _constant_string(node.args[1])
+        if base and attr:
+            return "%s.%s" % (base, attr)
+        return base
+
+    def _object_patch_target(self, node):
+        if len(node.args) < 2:
+            return None
+        base = _resolve_expr_target(node.args[0], self.aliases)
+        attr = _constant_string(node.args[1])
+        if base and attr:
+            return "%s.%s" % (base, attr)
+        return base
+
+
+def internal_mock_findings_by_result(results, test_sources):
+    module_results = _mock_target_roots(results)
+    findings = {id(result): [] for result in results}
+    for source in test_sources.values():
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        visitor = InternalMockVisitor(_import_aliases(tree))
+        visitor.visit(tree)
+        for lineno, target, source_name in visitor.targets:
+            result = _resolve_mock_target_module(target, module_results)
+            if result is None:
+                continue
+            findings[id(result)].append(Finding(
+                "INTERNAL_MOCK",
+                lineno,
+                "test mocks first-party target %s via %s" % (target, source_name),
+            ))
+    return findings
+
+
+def apply_internal_mock_findings(results, test_sources):
+    findings_by_result = internal_mock_findings_by_result(results, test_sources)
+    for result in results:
+        extra = findings_by_result.get(id(result), [])
+        if not extra:
+            continue
+        result.findings.extend(extra)
+        result.score, result.counts = apply_caps(result.findings)
+    return results
+
 def index_tests(root):
     """Return (test_sources, all_test_text). test_sources maps a test-file stem
     to its source; all_test_text is every test file concatenated, for the
@@ -413,6 +618,7 @@ def sweep(root, tests_root=None):
             if is_test_path(path):
                 continue
             results.append(analyze_file(path, test_sources, all_test_text))
+    apply_internal_mock_findings(results, test_sources)
     results.sort(key=lambda r: r.score, reverse=True)
     return results
 
@@ -506,6 +712,14 @@ def ratchet_failures(results, baseline, min_score=None, sensitive_globs=()):
                 path=path,
                 reason="new file at or above min-score",
                 detail="score %d >= %d" % (result.score, min_score),
+            ))
+        old_internal_mocks = baseline_counts.get("INTERNAL_MOCK", 0)
+        new_internal_mocks = int(result.counts.get("INTERNAL_MOCK", 0))
+        if new_internal_mocks > old_internal_mocks:
+            failures.append(GateFailure(
+                path=path,
+                reason="new INTERNAL_MOCK",
+                detail="%d -> %d" % (old_internal_mocks, new_internal_mocks),
             ))
         if _matches_sensitive(path, sensitive_globs):
             for code in SENSITIVE_ZERO_TOLERANCE:

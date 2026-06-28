@@ -1,16 +1,18 @@
 {
   "atlas_brain/auth/api_keys.py": {
     "counts": {
-      "HEURISTIC_COMMENT": 1
+      "HEURISTIC_COMMENT": 1,
+      "INTERNAL_MOCK": 2
     },
-    "score": 1
+    "score": 9
   },
   "atlas_brain/auth/dependencies.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 4,
       "SWALLOWED_EXCEPT": 3
     },
-    "score": 19
+    "score": 35
   },
   "atlas_brain/auth/encryption.py": {
     "counts": {

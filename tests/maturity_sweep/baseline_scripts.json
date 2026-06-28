@@ -536,6 +536,12 @@
     },
     "score": 6
   },
+  "scripts/build_deflection_pii_surrogate_eval_corpus.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
   "scripts/build_evidence_to_story_sources.py": {
     "counts": {
       "UNGUARDED_INDEX": 1
@@ -645,6 +651,12 @@
     "score": 7
   },
   "scripts/check_deflection_full_report_proof_bundle.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
+  "scripts/check_deflection_pii_source_decision.py": {
     "counts": {
       "NO_RAISES_TESTS": 1
     },
@@ -1049,6 +1061,19 @@
     },
     "score": 14
   },
+  "scripts/generate_deflection_frontend_contract_types.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 7
+  },
+  "scripts/generate_deflection_snapshot_example.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
   "scripts/import_amazon_reviews.py": {
     "counts": {
       "NO_TEST_FILE": 1,
@@ -1131,11 +1156,11 @@
   "scripts/maturity_sweep.py": {
     "counts": {
       "HEURISTIC_COMMENT": 5,
-      "SWALLOWED_EXCEPT": 2,
-      "UNGUARDED_INDEX": 2,
-      "WEAK_CONTRACT": 25
+      "SWALLOWED_EXCEPT": 3,
+      "UNGUARDED_INDEX": 14,
+      "WEAK_CONTRACT": 28
     },
-    "score": 21
+    "score": 28
   },
   "scripts/maturity_sweep_file_lane.py": {
     "counts": {
@@ -1187,6 +1212,12 @@
       "UNGUARDED_INDEX": 2
     },
     "score": 4
+  },
+  "scripts/purge_content_ops_deflection_reports.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
   },
   "scripts/rag_learning.py": {
     "counts": {
@@ -1420,6 +1451,12 @@
       "SWALLOWED_EXCEPT": 1
     },
     "score": 11
+  },
+  "scripts/score_deflection_pii_recall.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
   },
   "scripts/seed_content_ops_faq_saas_demo.py": {
     "counts": {
@@ -1812,6 +1849,13 @@
     "score": 7
   },
   "scripts/start_invoicing_readonly_oauth_server.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
+  "scripts/summarize_maturity_sweep_baselines.py": {
     "counts": {
       "NO_RAISES_TESTS": 1,
       "UNGUARDED_INDEX": 2

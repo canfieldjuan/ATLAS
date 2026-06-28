@@ -1,4 +1,16 @@
 {
+  "atlas_brain/autonomous/tasks/content_ops_deflection_delta_automation.py": {
+    "counts": {
+      "INTERNAL_MOCK": 84
+    },
+    "score": 336
+  },
+  "atlas_brain/autonomous/tasks/content_ops_deflection_report_delivery.py": {
+    "counts": {
+      "INTERNAL_MOCK": 8
+    },
+    "score": 32
+  },
   "atlas_brain/content_ops_deflection_delivery.py": {
     "counts": {
       "SWALLOWED_EXCEPT": 1
@@ -7,9 +19,10 @@
   },
   "atlas_brain/content_ops_deflection_incidents.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "NO_RAISES_TESTS": 1
     },
-    "score": 3
+    "score": 7
   },
   "atlas_brain/content_ops_deflection_reconciliation.py": {
     "counts": {
@@ -19,15 +32,30 @@
   },
   "atlas_brain/deflection_pdf_renderer.py": {
     "counts": {
+      "INTERNAL_MOCK": 2,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 2
     },
-    "score": 9
+    "score": 17
   },
   "atlas_brain/mcp/content_ops_deflection_readonly_server.py": {
     "counts": {
+      "INTERNAL_MOCK": 16,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 1
+    },
+    "score": 71
+  },
+  "extracted_content_pipeline/deflection_delta.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "extracted_content_pipeline/deflection_pii_eval_corpus.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 1,
+      "UNGUARDED_INDEX": 2
     },
     "score": 7
   },
@@ -41,10 +69,16 @@
   "extracted_content_pipeline/faq_deflection_report.py": {
     "counts": {
       "SWALLOWED_EXCEPT": 3,
-      "UNGUARDED_INDEX": 3,
+      "UNGUARDED_INDEX": 7,
       "UNGUARDED_INPUT": 2
     },
     "score": 29
+  },
+  "scripts/_deflection_http.py": {
+    "counts": {
+      "UNGUARDED_INPUT": 1
+    },
+    "score": 4
   },
   "scripts/build_content_ops_deflection_report.py": {
     "counts": {
@@ -58,6 +92,12 @@
       "UNGUARDED_INDEX": 7
     },
     "score": 6
+  },
+  "scripts/build_deflection_pii_surrogate_eval_corpus.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
   },
   "scripts/check_deflection_full_report_hosted_smoke.py": {
     "counts": {
@@ -78,6 +118,12 @@
     },
     "score": 3
   },
+  "scripts/check_deflection_pii_source_decision.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
   "scripts/check_deflection_process_contract.py": {
     "counts": {
       "NO_RAISES_TESTS": 1
@@ -86,19 +132,30 @@
   },
   "scripts/check_deflection_product_surface_manifest.py": {
     "counts": {
-      "NO_TEST_FILE": 1,
       "WEAK_CONTRACT": 1
     },
+    "score": 1
+  },
+  "scripts/generate_deflection_frontend_contract_types.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1
+    },
     "score": 7
+  },
+  "scripts/generate_deflection_snapshot_example.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
   },
   "scripts/prepare_content_ops_deflection_env.py": {
     "counts": {
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 1,
-      "UNGUARDED_INDEX": 1,
-      "UNGUARDED_INPUT": 1
+      "UNGUARDED_INDEX": 1
     },
-    "score": 14
+    "score": 10
   },
   "scripts/probe_deflection_signal_spike.py": {
     "counts": {
@@ -108,20 +165,30 @@
     },
     "score": 8
   },
+  "scripts/purge_content_ops_deflection_reports.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
   "scripts/run_deflection_full_report_qa_live_runner.py": {
     "counts": {
       "NO_RAISES_TESTS": 1,
-      "UNGUARDED_INDEX": 2,
-      "UNGUARDED_INPUT": 1
+      "UNGUARDED_INDEX": 2
     },
-    "score": 11
+    "score": 7
   },
   "scripts/run_deflection_test_mode_checkout_proof.py": {
     "counts": {
-      "UNGUARDED_INDEX": 1,
-      "UNGUARDED_INPUT": 1
+      "UNGUARDED_INDEX": 1
     },
-    "score": 6
+    "score": 2
+  },
+  "scripts/score_deflection_pii_recall.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
   },
   "scripts/send_content_ops_deflection_report_deliveries.py": {
     "counts": {
@@ -139,26 +206,23 @@
     "counts": {
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 1,
-      "UNGUARDED_INDEX": 1,
-      "UNGUARDED_INPUT": 1
+      "UNGUARDED_INDEX": 1
     },
-    "score": 14
+    "score": 10
   },
   "scripts/smoke_content_ops_deflection_stripe_paid_unlock.py": {
     "counts": {
       "NO_RAISES_TESTS": 1,
-      "UNGUARDED_INDEX": 1,
-      "UNGUARDED_INPUT": 1
+      "UNGUARDED_INDEX": 1
     },
-    "score": 9
+    "score": 5
   },
   "scripts/smoke_content_ops_deflection_submit_handoff.py": {
     "counts": {
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 2,
-      "UNGUARDED_INDEX": 1,
-      "UNGUARDED_INPUT": 1
+      "UNGUARDED_INDEX": 1
     },
-    "score": 19
+    "score": 15
   }
 }

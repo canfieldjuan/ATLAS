@@ -21,9 +21,10 @@
   },
   "atlas_brain/tools/notify.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "NO_RAISES_TESTS": 1
     },
-    "score": 3
+    "score": 7
   },
   "atlas_brain/tools/presence.py": {
     "counts": {
@@ -47,17 +48,16 @@
   },
   "atlas_brain/tools/scheduling.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "UNGUARDED_INDEX": 6
     },
-    "score": 6
+    "score": 10
   },
   "atlas_brain/tools/security.py": {
     "counts": {
-      "HAPPY_PATH_TESTS": 1,
-      "NO_RAISES_TESTS": 1,
       "WEAK_CONTRACT": 1
     },
-    "score": 8
+    "score": 1
   },
   "atlas_brain/tools/time.py": {
     "counts": {

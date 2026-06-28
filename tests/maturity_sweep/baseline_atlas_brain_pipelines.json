@@ -1,4 +1,10 @@
 {
+  "atlas_brain/pipelines/__init__.py": {
+    "counts": {
+      "INTERNAL_MOCK": 10
+    },
+    "score": 40
+  },
   "atlas_brain/pipelines/comparisons.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
@@ -9,14 +15,16 @@
   },
   "atlas_brain/pipelines/llm.py": {
     "counts": {
+      "INTERNAL_MOCK": 64,
       "SWALLOWED_EXCEPT": 4
     },
-    "score": 20
+    "score": 276
   },
   "atlas_brain/pipelines/notify.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "NO_RAISES_TESTS": 1
     },
-    "score": 3
+    "score": 7
   }
 }

@@ -12,26 +12,41 @@
     },
     "score": 3
   },
+  "extracted_content_pipeline/api/b2b_campaigns.py": {
+    "counts": {
+      "INTERNAL_MOCK": 3
+    },
+    "score": 12
+  },
+  "extracted_content_pipeline/api/campaign_operations.py": {
+    "counts": {
+      "INTERNAL_MOCK": 29
+    },
+    "score": 116
+  },
   "extracted_content_pipeline/api/control_surfaces.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
       "HEURISTIC_COMMENT": 5,
+      "INTERNAL_MOCK": 18,
       "SWALLOWED_EXCEPT": 3,
       "UNGUARDED_INDEX": 6
     },
-    "score": 29
+    "score": 101
   },
   "extracted_content_pipeline/api/generated_assets.py": {
     "counts": {
-      "HAPPY_PATH_TESTS": 1
+      "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 10
     },
-    "score": 4
+    "score": 44
   },
   "extracted_content_pipeline/api/seller_campaigns.py": {
     "counts": {
+      "INTERNAL_MOCK": 35,
       "UNGUARDED_INDEX": 2
     },
-    "score": 4
+    "score": 144
   },
   "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py": {
     "counts": {
@@ -90,9 +105,10 @@
   },
   "extracted_content_pipeline/autonomous/tasks/_blog_ts.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "UNGUARDED_INDEX": 3
     },
-    "score": 6
+    "score": 10
   },
   "extracted_content_pipeline/autonomous/tasks/_campaign_sequence_context.py": {
     "counts": {
@@ -236,12 +252,13 @@
   "extracted_content_pipeline/campaign_customer_data.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 1,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 2,
       "UNGUARDED_INPUT": 6
     },
-    "score": 40
+    "score": 44
   },
   "extracted_content_pipeline/campaign_example.py": {
     "counts": {
@@ -254,10 +271,11 @@
   "extracted_content_pipeline/campaign_generation.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 2,
       "UNGUARDED_INDEX": 3
     },
-    "score": 20
+    "score": 24
   },
   "extracted_content_pipeline/campaign_install_check.py": {
     "counts": {
@@ -269,9 +287,10 @@
   },
   "extracted_content_pipeline/campaign_llm_client.py": {
     "counts": {
+      "INTERNAL_MOCK": 2,
       "SWALLOWED_EXCEPT": 5
     },
-    "score": 25
+    "score": 33
   },
   "extracted_content_pipeline/campaign_opportunities.py": {
     "counts": {
@@ -288,15 +307,17 @@
   },
   "extracted_content_pipeline/campaign_postgres_export.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 5
+    "score": 9
   },
   "extracted_content_pipeline/campaign_postgres_import.py": {
     "counts": {
-      "HAPPY_PATH_TESTS": 1
+      "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 1
     },
-    "score": 4
+    "score": 8
   },
   "extracted_content_pipeline/campaign_postgres_review.py": {
     "counts": {
@@ -360,11 +381,12 @@
   "extracted_content_pipeline/campaign_source_adapters.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 2,
       "UNGUARDED_INDEX": 1,
       "WEAK_CONTRACT": 1
     },
-    "score": 17
+    "score": 21
   },
   "extracted_content_pipeline/campaign_visibility.py": {
     "counts": {
@@ -396,11 +418,12 @@
   },
   "extracted_content_pipeline/content_image_provider.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INPUT": 2
     },
-    "score": 16
+    "score": 20
   },
   "extracted_content_pipeline/content_ops_cache_policy.py": {
     "counts": {
@@ -440,6 +463,19 @@
     },
     "score": 7
   },
+  "extracted_content_pipeline/deflection_delta.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
+  },
+  "extracted_content_pipeline/deflection_pii_eval_corpus.py": {
+    "counts": {
+      "ASSERT_AS_VALIDATION": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
+  },
   "extracted_content_pipeline/deflection_report_access.py": {
     "counts": {
       "SWALLOWED_EXCEPT": 2,
@@ -456,7 +492,7 @@
   "extracted_content_pipeline/faq_deflection_report.py": {
     "counts": {
       "SWALLOWED_EXCEPT": 3,
-      "UNGUARDED_INDEX": 3,
+      "UNGUARDED_INDEX": 7,
       "UNGUARDED_INPUT": 2
     },
     "score": 29
@@ -495,9 +531,10 @@
   },
   "extracted_content_pipeline/ingestion_diagnostics.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "NO_RAISES_TESTS": 1
     },
-    "score": 3
+    "score": 7
   },
   "extracted_content_pipeline/landing_page_export.py": {
     "counts": {
@@ -541,9 +578,10 @@
   },
   "extracted_content_pipeline/pipelines/llm.py": {
     "counts": {
+      "INTERNAL_MOCK": 3,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 5
+    "score": 17
   },
   "extracted_content_pipeline/pipelines/notify.py": {
     "counts": {
@@ -646,9 +684,10 @@
   },
   "extracted_content_pipeline/report_export.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 5
+    "score": 9
   },
   "extracted_content_pipeline/report_generation.py": {
     "counts": {
@@ -674,12 +713,24 @@
     },
     "score": 2
   },
+  "extracted_content_pipeline/services/__init__.py": {
+    "counts": {
+      "INTERNAL_MOCK": 2
+    },
+    "score": 8
+  },
   "extracted_content_pipeline/services/b2b/account_opportunity_claims.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
       "NO_RAISES_TESTS": 1
     },
     "score": 7
+  },
+  "extracted_content_pipeline/services/b2b/anthropic_batch.py": {
+    "counts": {
+      "INTERNAL_MOCK": 1
+    },
+    "score": 4
   },
   "extracted_content_pipeline/services/b2b/cache_runner.py": {
     "counts": {
@@ -729,6 +780,12 @@
     },
     "score": 3
   },
+  "extracted_content_pipeline/services/campaign_sender.py": {
+    "counts": {
+      "INTERNAL_MOCK": 1
+    },
+    "score": 4
+  },
   "extracted_content_pipeline/services/llm_router.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
@@ -774,6 +831,12 @@
       "NO_RAISES_TESTS": 1
     },
     "score": 7
+  },
+  "extracted_content_pipeline/skills/registry.py": {
+    "counts": {
+      "INTERNAL_MOCK": 1
+    },
+    "score": 4
   },
   "extracted_content_pipeline/social_post_export.py": {
     "counts": {
@@ -838,13 +901,20 @@
     },
     "score": 7
   },
+  "extracted_content_pipeline/storage/repositories/scheduled_task.py": {
+    "counts": {
+      "INTERNAL_MOCK": 1
+    },
+    "score": 4
+  },
   "extracted_content_pipeline/support_ticket_clustering.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 2,
       "NO_RAISES_TESTS": 1,
       "UNGUARDED_INDEX": 5
     },
-    "score": 13
+    "score": 21
   },
   "extracted_content_pipeline/support_ticket_context_contract.py": {
     "counts": {
@@ -893,7 +963,7 @@
   "extracted_content_pipeline/ticket_faq_markdown.py": {
     "counts": {
       "SWALLOWED_EXCEPT": 2,
-      "UNGUARDED_INDEX": 30
+      "UNGUARDED_INDEX": 32
     },
     "score": 16
   },
