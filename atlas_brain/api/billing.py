@@ -16,6 +16,7 @@ from ..content_ops_deflection_incidents import emit_deflection_paid_funnel_incid
 from ..content_ops_deflection_reconciliation import record_paid_report_missing
 from ..storage.database import get_db_pool
 from extracted_content_pipeline.deflection_report_access import (
+    DeflectionReportAccessRecord,
     PostgresDeflectionReportArtifactStore,
 )
 
@@ -678,7 +679,8 @@ async def _handle_content_ops_deflection_report_checkout_completed(
             session_id,
         )
         return
-    if not _deflection_checkout_amount_is_valid(session):
+    paid_terms = _deflection_checkout_paid_terms(session)
+    if paid_terms is None:
         await emit_deflection_paid_funnel_incident_alert(
             logger,
             incident_type="paid_report_checkout_terms_mismatch",
@@ -696,12 +698,30 @@ async def _handle_content_ops_deflection_report_checkout_completed(
         )
         return
 
-    marked = await PostgresDeflectionReportArtifactStore(pool=pool).mark_paid(
+    paid_amount_cents, paid_currency, allowed_cents = paid_terms
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+    marked = await store.mark_paid(
         account_id=account_id_text,
         request_id=request_id,
         payment_reference=session_id or None,
+        checkout_amount_cents=paid_amount_cents,
+        checkout_currency=paid_currency,
+        require_checkout_authorization=len(allowed_cents) > 1,
     )
     if not marked:
+        record = await store.get_artifact_record(
+            account_id=account_id_text,
+            request_id=request_id,
+        )
+        if record is not None:
+            await _emit_deflection_checkout_authorized_terms_mismatch(
+                record,
+                event_type=event_type,
+                session_id=session_id,
+                paid_amount_cents=paid_amount_cents,
+                paid_currency=paid_currency,
+            )
+            return
         age = _event_age_seconds(event_created)
         grace = int(
             getattr(
@@ -1239,6 +1259,12 @@ def _log_content_ops_deflection_report_async_payment_failed(
 
 
 def _deflection_checkout_amount_is_valid(session: Any) -> bool:
+    return _deflection_checkout_paid_terms(session) is not None
+
+
+def _deflection_checkout_paid_terms(
+    session: Any,
+) -> tuple[int, str, tuple[int, ...]] | None:
     cfg = settings.saas_auth
     allowed_cents = _deflection_allowed_checkout_amounts_cents(cfg)
     expected_currency = str(
@@ -1248,17 +1274,56 @@ def _deflection_checkout_amount_is_valid(session: Any) -> bool:
     currency = _stripe_text(session, "currency").lower()
     if not allowed_cents:
         logger.error("Deflection report checkout amount gate is misconfigured")
-        return False
+        return None
     if not expected_currency:
         logger.error("Deflection report checkout currency gate is misconfigured")
-        return False
+        return None
     if currency != expected_currency:
-        return False
+        return None
     try:
         actual_cents = int(amount_total)
     except (TypeError, ValueError):
-        return False
-    return actual_cents in allowed_cents
+        return None
+    if actual_cents not in allowed_cents:
+        return None
+    return actual_cents, currency, allowed_cents
+
+
+async def _emit_deflection_checkout_authorized_terms_mismatch(
+    record: DeflectionReportAccessRecord,
+    *,
+    event_type: str,
+    session_id: str,
+    paid_amount_cents: int,
+    paid_currency: str,
+) -> None:
+    await emit_deflection_paid_funnel_incident_alert(
+        logger,
+        incident_type="paid_report_checkout_terms_mismatch",
+        severity="error",
+        account_id=record.account_id,
+        request_id=record.request_id,
+        event_type=event_type,
+        stripe_session_id=session_id,
+        amount_total=paid_amount_cents,
+        currency=paid_currency,
+        expected_amount_cents=record.checkout_amount_cents,
+        expected_currency=record.checkout_currency,
+        expected_price_variant=record.checkout_price_variant,
+    )
+    logger.warning(
+        "Deflection report checkout ignored: authorized terms mismatch "
+        "account=%s request=%s session=%s paid_amount=%s paid_currency=%s "
+        "expected_amount=%s expected_currency=%s expected_variant=%s",
+        record.account_id,
+        record.request_id,
+        session_id,
+        paid_amount_cents,
+        paid_currency,
+        record.checkout_amount_cents,
+        record.checkout_currency,
+        record.checkout_price_variant,
+    )
 
 
 def _deflection_allowed_checkout_amounts_cents(cfg: Any) -> tuple[int, ...]:

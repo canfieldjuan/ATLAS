@@ -3156,6 +3156,15 @@ async def test_deflection_checkout_authorization_returns_canonical_terms_only():
     assert "Full report" not in str(payload)
     assert "Customer ticket text" not in str(payload)
     assert "buyer@example.com" not in str(payload)
+    record = await store.get_artifact_record(
+        account_id="acct-gate",
+        request_id="request-ready",
+    )
+    assert record is not None
+    assert record.checkout_price_variant == "standard"
+    assert record.checkout_amount_cents == 150000
+    assert record.checkout_currency == "usd"
+    assert record.checkout_price_id == "price_deflection_report"
 
 
 @pytest.mark.asyncio
@@ -3194,6 +3203,15 @@ async def test_deflection_checkout_authorization_returns_partner_terms_when_requ
             "price_id": "price_partner_deflection",
         },
     }
+    record = await store.get_artifact_record(
+        account_id="acct-gate",
+        request_id="request-ready",
+    )
+    assert record is not None
+    assert record.checkout_price_variant == "partner"
+    assert record.checkout_amount_cents == 100000
+    assert record.checkout_currency == "usd"
+    assert record.checkout_price_id == "price_partner_deflection"
 
 
 @pytest.mark.asyncio

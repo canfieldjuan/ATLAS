@@ -426,7 +426,7 @@ class ContentOpsControlSurfaceApiConfig:
     deflection_checkout_allowed_amount_cents: str = ""
     deflection_checkout_currency: str = "usd"
     deflection_checkout_price_id: str = ""
-    deflection_checkout_partner_amount_cents: int = 100000
+    deflection_checkout_partner_amount_cents: int = 0
     deflection_checkout_partner_price_id: str = ""
     ingestion_import_max_concurrency: int = 8
 
@@ -483,6 +483,10 @@ class ContentOpsControlSurfaceApiConfig:
             )
         if self.deflection_checkout_amount_cents < 0:
             raise ValueError("deflection_checkout_amount_cents cannot be negative")
+        if self.deflection_checkout_partner_amount_cents < 0:
+            raise ValueError(
+                "deflection_checkout_partner_amount_cents cannot be negative"
+            )
         if self.ingestion_import_max_concurrency <= 0:
             raise ValueError("ingestion_import_max_concurrency must be positive")
         if not isinstance(
@@ -1059,6 +1063,19 @@ def create_content_ops_control_surface_router(
             raise HTTPException(
                 status_code=409,
                 detail="Deflection report checkout window expired.",
+            )
+        recorded = await store.record_checkout_authorization(
+            account_id=_required_scope_account_id(scope),
+            request_id=request_id,
+            price_variant=str(checkout["variant"]),
+            amount_cents=int(checkout["amount_cents"]),
+            currency=str(checkout["currency"]),
+            price_id=str(checkout["price_id"]),
+        )
+        if not recorded:
+            raise HTTPException(
+                status_code=409,
+                detail="Deflection report checkout is no longer available.",
             )
         return {
             "request_id": request_id,

@@ -186,6 +186,8 @@ type DeflectionCheckoutAuthorization = {
 The portfolio must use `checkout.price_id` as the Stripe Checkout line item and
 must verify Stripe's returned session amount/currency against
 `checkout.amount_cents` and `checkout.currency` before redirecting the buyer.
+ATLAS persists these report-specific authorization terms; webhook completion
+must match the persisted amount and currency before ATLAS unlocks the report.
 
 The portfolio must create a one-time Stripe Checkout session with:
 
@@ -210,7 +212,7 @@ Required session properties:
 - `metadata.price_variant`: the server-bound price variant used for the report
 - `metadata.price_id`, `metadata.price_amount_cents`, and
   `metadata.price_currency`: attribution copied from ATLAS authorization
-- `amount_total`: exactly one ATLAS-configured allowed amount in cents
+- `amount_total`: exactly the amount ATLAS authorized for this report
 - `currency: "usd"`
 
 ATLAS stores the Stripe Checkout session id as the report `payment_reference`
@@ -238,6 +240,8 @@ payment trust path.
 
 - Missing or invalid metadata leaves the report locked.
 - Wrong amount or currency leaves the report locked.
+- A paid amount that is globally allowlisted but different from the report's
+  persisted authorization terms leaves the report locked.
 - A valid paid event with no matching report row returns non-2xx to Stripe so
   the event can retry or be reconciled.
 - A repeated Stripe event is idempotent through the Stripe event id.
