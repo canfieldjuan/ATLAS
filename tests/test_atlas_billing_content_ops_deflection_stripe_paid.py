@@ -1754,55 +1754,80 @@ async def test_stripe_webhook_deflection_completed_unpaid_stays_pending(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_stripe_webhook_deflection_async_success_unpaid_stays_pending(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id, payment_status="unpaid")
+    request_id = "req-live-async-success-unpaid"
+    stripe_event_id = "evt_deflection_async_success_unpaid_live"
+    session_id = "cs_test_deflection_async_success_unpaid_live"
+    session = _session(
+        account_id=account_id,
+        request_id=request_id,
+        session_id=session_id,
+        payment_status="unpaid",
+    )
     event = SimpleNamespace(
-        id="evt_deflection_async_success_unpaid",
+        id=stripe_event_id,
         type="checkout.session.async_payment_succeeded",
         data=SimpleNamespace(object=session),
     )
+    fake_stripe, _session_list = _stripe_module_for_event(event)
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live async success unpaid billing test",
+        )
 
-    class _Webhook:
-        @staticmethod
-        def construct_event(_body: bytes, _sig: str, _secret: str) -> Any:
-            return event
+        response = await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        )
 
-    fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
-    pool = _Pool()
-    pool.add_report(account_id=account_id)
-    request = SimpleNamespace(
-        headers={"stripe-signature": "valid"},
-        body=lambda: _body(),
-    )
+        assert response == {"status": "ok"}
+        assert fake_stripe.api_key == "sk_test"
+        assert fake_stripe.api_version == billing.STRIPE_API_VERSION
+        assert "checkout event arrived before funds were available" in caplog.text
+        await _assert_live_deflection_report_locked(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+            event_type="checkout.session.async_payment_succeeded",
+        )
 
-    async def _body() -> bytes:
-        return b"{}"
-
-    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
-    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "sk_test")
-    monkeypatch.setattr(
-        billing.settings.saas_auth,
-        "stripe_webhook_secret",
-        "whsec_test",
-    )
-    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
-
-    response = await billing.stripe_webhook(request)
-
-    assert response == {"status": "ok"}
-    assert "checkout event arrived before funds were available" in caplog.text
-    assert len(pool.execute_calls) == 1
-    insert_query, insert_args = pool.execute_calls[0]
-    assert "INSERT INTO billing_events" in insert_query
-    assert insert_args[1] == "evt_deflection_async_success_unpaid"
-    assert insert_args[2] == "checkout.session.async_payment_succeeded"
-    assert pool.processed_event_ids == {"evt_deflection_async_success_unpaid"}
-    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
-    assert pool.delivery_rows == {}
+        assert await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        ) == {"status": "already_processed"}
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
+        ) == 1
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
