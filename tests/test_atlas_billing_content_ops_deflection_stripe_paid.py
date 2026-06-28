@@ -93,10 +93,9 @@ async def _cleanup_live_billing_rows(
     await pool.execute(
         """
         DELETE FROM content_ops_deflection_report_deliveries
-        WHERE account_id = $1 AND request_id = $2
+        WHERE account_id = $1
         """,
         account_id,
-        request_id,
     )
     await pool.execute(
         """
@@ -224,10 +223,9 @@ async def _assert_live_deflection_report_locked(
         """
         SELECT COUNT(*)
         FROM content_ops_deflection_report_deliveries
-        WHERE account_id = $1 AND request_id = $2
+        WHERE account_id = $1
         """,
         account_id,
-        request_id,
     ) == 0
     assert await _billing_event_count(
         pool,

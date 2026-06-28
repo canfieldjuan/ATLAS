@@ -35,7 +35,8 @@ Slice phase: Production hardening
   billing migrations, seeds `saas_accounts` and a real deflection report row,
   and cleans up in `finally`.
 - The test asserts real persisted effects: event recorded, report remains
-  locked, delivery remains absent, and duplicate webhook handling is idempotent.
+  locked, delivery remains absent account-wide, and duplicate webhook handling
+  is idempotent.
 - Stripe remains mocked only at the external SDK/webhook-construction boundary.
 - Remaining `_Pool` tests stay detector-visible for later slices.
 
@@ -51,8 +52,9 @@ Build the existing unpaid async-success Checkout Session event with real
 `account_id`, `request_id`, and `session_id` values. Seed a real report row via
 `PostgresDeflectionReportArtifactStore`, run the actual `billing.stripe_webhook`
 entrypoint through `_run_stripe_webhook`, and verify the persisted locked state
-with `_assert_live_deflection_report_locked`. Then run the same webhook a second
-time to prove idempotency against the real `billing_events` table.
+with `_assert_live_deflection_report_locked`, including account-wide absence of
+delivery rows. Then run the same webhook a second time to prove idempotency
+against the real `billing_events` table.
 
 ## Intentional
 
@@ -75,12 +77,13 @@ Parked hardening: none.
 - `python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -q` - passed, 53 passed / 5 skipped.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas_dev_password@localhost:5433/atlas python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -q` - passed, 58 passed.
 - `python scripts/maturity_sweep.py atlas_brain/api --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_api.json --top 80` - passed; `billing.py` is now `INTERNAL_MOCK x47`, score 214.
+- Review-fix verification: `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas_dev_password@localhost:5433/atlas python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py::test_stripe_webhook_deflection_completed_unpaid_stays_pending tests/test_atlas_billing_content_ops_deflection_stripe_paid.py::test_stripe_webhook_deflection_async_success_unpaid_stays_pending tests/test_atlas_billing_content_ops_deflection_stripe_paid.py::test_stripe_webhook_deflection_async_failure_is_observed_without_unlock -q` - passed, 3 locked-path tests.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Billing-Async-Success-Unpaid-Live-Adapter.md` | 86 |
+| `plans/PR-Billing-Async-Success-Unpaid-Live-Adapter.md` | 89 |
 | `tests/maturity_sweep/baseline_atlas_brain_api.json` | 4 |
-| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 99 |
-| **Total** | **189** |
+| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 105 |
+| **Total** | **198** |
