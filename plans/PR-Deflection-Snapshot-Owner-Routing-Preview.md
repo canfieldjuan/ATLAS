@@ -67,6 +67,7 @@ Reviewer rules triggered: R1, R2, R3, R8, R10, R13, R14.
 - `portfolio-ui/api/content-ops/deflection/atlas-report.js`
 - `portfolio-ui/api/content-ops/deflection/report-model-contract.js`
 - `portfolio-ui/api/content-ops/deflection/snapshot-contract.js`
+- `portfolio-ui/scripts/faq-deflection-atlas-proxy.test.mjs`
 - `portfolio-ui/scripts/faq-deflection-result-page.test.mjs`
 - `portfolio-ui/src/types/deflectionReportModel.ts`
 - `portfolio-ui/src/types/deflectionSnapshot.ts`
@@ -134,10 +135,11 @@ Parked hardening: none.
 | `docs/frontend/content_ops_faq_deflection_snapshot_example.json` | 24 |
 | `docs/frontend/content_ops_faq_report_contract.md` | 22 |
 | `extracted_content_pipeline/faq_deflection_report.py` | 189 |
-| `plans/PR-Deflection-Snapshot-Owner-Routing-Preview.md` | 149 |
+| `plans/PR-Deflection-Snapshot-Owner-Routing-Preview.md` | 151 |
 | `portfolio-ui/api/content-ops/deflection/atlas-report.js` | 6 |
 | `portfolio-ui/api/content-ops/deflection/report-model-contract.js` | 4 |
 | `portfolio-ui/api/content-ops/deflection/snapshot-contract.js` | 4 |
+| `portfolio-ui/scripts/faq-deflection-atlas-proxy.test.mjs` | 6 |
 | `portfolio-ui/scripts/faq-deflection-result-page.test.mjs` | 18 |
 | `portfolio-ui/src/types/deflectionReportModel.ts` | 4 |
 | `portfolio-ui/src/types/deflectionSnapshot.ts` | 10 |
@@ -146,4 +148,4 @@ Parked hardening: none.
 | `tests/test_content_ops_faq_report_contract_docs.py` | 17 |
 | `tests/test_deflection_snapshot_report_drift.py` | 120 |
 | `tests/test_generate_deflection_frontend_contract_types.py` | 6 |
-| **Total** | **700** |
+| **Total** | **708** |
