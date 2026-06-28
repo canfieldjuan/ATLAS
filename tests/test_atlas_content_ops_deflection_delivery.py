@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -27,6 +29,15 @@ from extracted_content_pipeline.campaign_ports import (
 )
 from extracted_content_pipeline.faq_deflection_report import (
     build_deflection_full_report_qa_scorecard,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+_DEFLECTION_DELTA_DELIVERY_MIGRATIONS = (
+    ROOT / "atlas_brain" / "storage" / "migrations" / "328_content_ops_deflection_reports.sql",
+    ROOT / "atlas_brain" / "storage" / "migrations" / "331_content_ops_deflection_report_delivery_email.sql",
+    ROOT / "atlas_brain" / "storage" / "migrations" / "340_content_ops_deflection_deltas.sql",
+    ROOT / "atlas_brain" / "storage" / "migrations" / "341_content_ops_deflection_delta_deliveries.sql",
 )
 
 
@@ -736,6 +747,186 @@ async def test_delta_delivery_queue_filters_entitled_accounts_on_global_drain() 
     count_query, count_args = pool.fetchval_calls[0]
     assert count_args == (None, None, ["acct-active"])
     assert "AND ($3::text[] IS NULL OR account_id = ANY($3::text[]))" in count_query
+
+
+async def _apply_delta_delivery_migrations(conn: Any) -> None:
+    for path in _DEFLECTION_DELTA_DELIVERY_MIGRATIONS:
+        await conn.execute(path.read_text(encoding="utf-8"))
+
+
+async def _cleanup_delta_delivery_scope_rows(conn: Any, accounts: tuple[str, ...]) -> None:
+    await conn.execute(
+        "DELETE FROM content_ops_deflection_reports WHERE account_id = ANY($1::text[])",
+        list(accounts),
+    )
+
+
+async def _insert_delta_delivery_fixture(
+    conn: Any,
+    *,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+    current_email: str,
+) -> None:
+    delta = _delta_read_payload()["delta"]
+    await conn.execute(
+        """
+        INSERT INTO content_ops_deflection_reports (
+            account_id,
+            request_id,
+            snapshot,
+            artifact,
+            paid,
+            paid_at,
+            delivery_email
+        )
+        VALUES
+            ($1, $2, '{}'::jsonb, '{}'::jsonb, true, NOW(), $4),
+            ($1, $3, '{}'::jsonb, '{}'::jsonb, true, NOW(), 'baseline@example.com')
+        ON CONFLICT (account_id, request_id) DO UPDATE
+        SET paid = EXCLUDED.paid,
+            paid_at = EXCLUDED.paid_at,
+            delivery_email = EXCLUDED.delivery_email
+        """,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        current_email,
+    )
+    await conn.execute(
+        """
+        INSERT INTO content_ops_deflection_deltas (
+            account_id,
+            current_request_id,
+            baseline_request_id,
+            delta
+        )
+        VALUES ($1, $2, $3, $4::jsonb)
+        ON CONFLICT (account_id, current_request_id, baseline_request_id)
+        DO UPDATE SET delta = EXCLUDED.delta
+        """,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        json.dumps(delta),
+    )
+    await conn.execute(
+        """
+        INSERT INTO content_ops_deflection_delta_deliveries (
+            account_id,
+            current_request_id,
+            baseline_request_id,
+            delivery_email
+        )
+        VALUES ($1, $2, $3, 'queued-address-should-not-send@example.com')
+        ON CONFLICT (account_id, current_request_id, baseline_request_id)
+        DO UPDATE SET delivery_status = 'pending',
+                      delivery_error = NULL,
+                      provider_message_id = NULL,
+                      delivered_at = NULL,
+                      updated_at = NOW()
+        """,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delta_delivery_scope_live_postgres_drains_only_target_account_current_request() -> None:
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_MIGRATION_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_MIGRATION_TEST_DATABASE_URL not set")
+
+    target_account = "acct-delta-scope-target"
+    other_account = "acct-delta-scope-other"
+    target_current = "current-delta-scope-target"
+    target_baseline = "baseline-delta-scope-target"
+    other_current = "current-delta-scope-other"
+    other_baseline = "baseline-delta-scope-other"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _apply_delta_delivery_migrations(conn)
+        await _cleanup_delta_delivery_scope_rows(conn, (target_account, other_account))
+        await _insert_delta_delivery_fixture(
+            conn,
+            account_id=target_account,
+            current_request_id=target_current,
+            baseline_request_id=target_baseline,
+            current_email="target-buyer@example.com",
+        )
+        await _insert_delta_delivery_fixture(
+            conn,
+            account_id=target_account,
+            current_request_id=other_current,
+            baseline_request_id=target_baseline,
+            current_email="same-account-other-current@example.com",
+        )
+        await _insert_delta_delivery_fixture(
+            conn,
+            account_id=other_account,
+            current_request_id=target_current,
+            baseline_request_id=other_baseline,
+            current_email="other-account-same-current@example.com",
+        )
+
+        sender = _Sender()
+        summary = await send_pending_deflection_delta_deliveries(
+            conn,
+            sender=sender,
+            config=DeflectionDeltaDeliveryConfig(
+                from_email="reports@example.com",
+                limit=10,
+                dry_run=False,
+            ),
+            account_id=target_account,
+            current_request_id=target_current,
+        )
+
+        rows = await conn.fetch(
+            """
+            SELECT account_id,
+                   current_request_id,
+                   baseline_request_id,
+                   delivery_status,
+                   provider_message_id,
+                   delivered_at
+            FROM content_ops_deflection_delta_deliveries
+            WHERE account_id = ANY($1::text[])
+            ORDER BY account_id, current_request_id, baseline_request_id
+            """,
+            [target_account, other_account],
+        )
+    finally:
+        await _cleanup_delta_delivery_scope_rows(conn, (target_account, other_account))
+        await conn.close()
+
+    assert summary.scanned == 1
+    assert summary.sent == 1
+    assert summary.failed == 0
+    assert summary.deferred == 0
+    assert [request.to_email for request in sender.requests] == ["target-buyer@example.com"]
+    by_key = {
+        (row["account_id"], row["current_request_id"], row["baseline_request_id"]): row
+        for row in rows
+    }
+    target = by_key[(target_account, target_current, target_baseline)]
+    assert target["delivery_status"] == "delivered"
+    assert target["provider_message_id"] == "resend:email-123"
+    assert target["delivered_at"] is not None
+
+    same_account_other_current = by_key[(target_account, other_current, target_baseline)]
+    assert same_account_other_current["delivery_status"] == "pending"
+    assert same_account_other_current["provider_message_id"] is None
+    assert same_account_other_current["delivered_at"] is None
+
+    other_account_same_current = by_key[(other_account, target_current, other_baseline)]
+    assert other_account_same_current["delivery_status"] == "pending"
+    assert other_account_same_current["provider_message_id"] is None
+    assert other_account_same_current["delivered_at"] is None
 
 
 @pytest.mark.asyncio
