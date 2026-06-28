@@ -1,6 +1,6 @@
 # Plan archive index
 
-1234 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1235 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -1112,6 +1112,7 @@
 - [PR-Maturity-Sweep-Atlas-Brain-B2e](archive/PR-Maturity-Sweep-Atlas-Brain-B2e.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Baseline-Report](archive/PR-Maturity-Sweep-Baseline-Report.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Gate-Scope](archive/PR-Maturity-Sweep-Gate-Scope.md) - lane: ci/maturity-sweep | phase: Production hardening
+- [PR-Maturity-Sweep-Internal-Mock-Ratchet](archive/PR-Maturity-Sweep-Internal-Mock-Ratchet.md) - lane: real-adapters/test-quality | phase: Workflow/process
 - [PR-Maturity-Sweep-Phase-C1-Extracted-Core](archive/PR-Maturity-Sweep-Phase-C1-Extracted-Core.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence](archive/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Phase-C3-LLM-Infrastructure](archive/PR-Maturity-Sweep-Phase-C3-LLM-Infrastructure.md) - lane: ci/maturity-sweep | phase: Production hardening
