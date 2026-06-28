@@ -109,6 +109,133 @@ async def _cleanup_live_billing_rows(
     await pool.execute("DELETE FROM saas_accounts WHERE id = $1", account_uuid)
 
 
+async def _seed_live_deflection_report(
+    pool: _InitializedAsyncpgPool,
+    *,
+    account_id: str,
+    request_id: str,
+    account_name: str,
+) -> None:
+    await pool.execute(
+        """
+        INSERT INTO saas_accounts (id, name)
+        VALUES ($1, $2)
+        """,
+        uuid.UUID(account_id),
+        account_name,
+    )
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+    await store.save_report(
+        account_id=account_id,
+        request_id=request_id,
+        snapshot={"summary": {"generated": 1}},
+        artifact={"report_model": {"schema_version": "test"}},
+        delivery_email="buyer@example.com",
+    )
+
+
+async def _billing_event_count(
+    pool: _InitializedAsyncpgPool,
+    *,
+    stripe_event_id: str,
+    event_type: str | None = None,
+) -> int:
+    if event_type is None:
+        return int(
+            await pool.fetchval(
+                "SELECT COUNT(*) FROM billing_events WHERE stripe_event_id = $1",
+                stripe_event_id,
+            )
+        )
+    return int(
+        await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM billing_events
+            WHERE stripe_event_id = $1 AND event_type = $2
+            """,
+            stripe_event_id,
+            event_type,
+        )
+    )
+
+
+async def _assert_live_deflection_report_paid(
+    pool: _InitializedAsyncpgPool,
+    *,
+    account_id: str,
+    request_id: str,
+    session_id: str,
+    stripe_event_id: str,
+    event_type: str,
+) -> None:
+    report = await pool.fetchrow(
+        """
+        SELECT paid, payment_reference
+        FROM content_ops_deflection_reports
+        WHERE account_id = $1 AND request_id = $2
+        """,
+        account_id,
+        request_id,
+    )
+    assert report is not None
+    assert report["paid"] is True
+    assert report["payment_reference"] == session_id
+    delivery = await pool.fetchrow(
+        """
+        SELECT payment_reference, delivery_status
+        FROM content_ops_deflection_report_deliveries
+        WHERE account_id = $1 AND request_id = $2
+        """,
+        account_id,
+        request_id,
+    )
+    assert delivery is not None
+    assert delivery["payment_reference"] == session_id
+    assert delivery["delivery_status"] == "pending"
+    assert await _billing_event_count(
+        pool,
+        stripe_event_id=stripe_event_id,
+        event_type=event_type,
+    ) == 1
+
+
+async def _assert_live_deflection_report_locked(
+    pool: _InitializedAsyncpgPool,
+    *,
+    account_id: str,
+    request_id: str,
+    stripe_event_id: str,
+    event_type: str,
+) -> None:
+    report = await pool.fetchrow(
+        """
+        SELECT paid, payment_reference
+        FROM content_ops_deflection_reports
+        WHERE account_id = $1 AND request_id = $2
+        """,
+        account_id,
+        request_id,
+    )
+    assert report is not None
+    assert report["paid"] is False
+    assert report["payment_reference"] is None
+    assert await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM content_ops_deflection_report_deliveries
+        WHERE account_id = $1 AND request_id = $2
+        """,
+        account_id,
+        request_id,
+    ) == 0
+    assert await _billing_event_count(
+        pool,
+        stripe_event_id=stripe_event_id,
+        event_type=event_type,
+    ) == 1
+
+
 class _Pool:
     def __init__(self) -> None:
         self.is_initialized = True
@@ -1428,21 +1555,11 @@ async def test_stripe_webhook_live_postgres_marks_deflection_report_paid_and_ide
             request_id=request_id,
             stripe_event_id=stripe_event_id,
         )
-        await pool.execute(
-            """
-            INSERT INTO saas_accounts (id, name)
-            VALUES ($1, $2)
-            """,
-            uuid.UUID(account_id),
-            "Live billing test",
-        )
-        store = PostgresDeflectionReportArtifactStore(pool=pool)
-        await store.save_report(
+        await _seed_live_deflection_report(
+            pool,
             account_id=account_id,
             request_id=request_id,
-            snapshot={"summary": {"generated": 1}},
-            artifact={"report_model": {"schema_version": "test"}},
-            delivery_email="buyer@example.com",
+            account_name="Live billing test",
         )
 
         response = await _run_stripe_webhook(
@@ -1455,39 +1572,14 @@ async def test_stripe_webhook_live_postgres_marks_deflection_report_paid_and_ide
         assert response == {"status": "ok"}
         assert fake_stripe.api_key == "sk_test"
         assert fake_stripe.api_version == billing.STRIPE_API_VERSION
-        report = await pool.fetchrow(
-            """
-            SELECT paid, payment_reference
-            FROM content_ops_deflection_reports
-            WHERE account_id = $1 AND request_id = $2
-            """,
-            account_id,
-            request_id,
+        await _assert_live_deflection_report_paid(
+            pool,
+            account_id=account_id,
+            stripe_event_id=stripe_event_id,
+            event_type="checkout.session.completed",
+            request_id=request_id,
+            session_id=session_id,
         )
-        assert report is not None
-        assert report["paid"] is True
-        assert report["payment_reference"] == session_id
-        delivery = await pool.fetchrow(
-            """
-            SELECT payment_reference, delivery_status
-            FROM content_ops_deflection_report_deliveries
-            WHERE account_id = $1 AND request_id = $2
-            """,
-            account_id,
-            request_id,
-        )
-        assert delivery is not None
-        assert delivery["payment_reference"] == session_id
-        assert delivery["delivery_status"] == "pending"
-        assert await pool.fetchval(
-            """
-            SELECT COUNT(*)
-            FROM billing_events
-            WHERE stripe_event_id = $1 AND event_type = $2
-            """,
-            stripe_event_id,
-            "checkout.session.completed",
-        ) == 1
 
         assert await _run_stripe_webhook(
             monkeypatch,
@@ -1495,9 +1587,9 @@ async def test_stripe_webhook_live_postgres_marks_deflection_report_paid_and_ide
             pool=pool,
             stripe_module=fake_stripe,
         ) == {"status": "already_processed"}
-        assert await pool.fetchval(
-            "SELECT COUNT(*) FROM billing_events WHERE stripe_event_id = $1",
-            stripe_event_id,
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
         ) == 1
     finally:
         await _cleanup_live_billing_rows(
@@ -1538,21 +1630,11 @@ async def test_stripe_webhook_routes_deflection_async_success_to_paid_gate(
             request_id=request_id,
             stripe_event_id=stripe_event_id,
         )
-        await pool.execute(
-            """
-            INSERT INTO saas_accounts (id, name)
-            VALUES ($1, $2)
-            """,
-            uuid.UUID(account_id),
-            "Live async success billing test",
-        )
-        store = PostgresDeflectionReportArtifactStore(pool=pool)
-        await store.save_report(
+        await _seed_live_deflection_report(
+            pool,
             account_id=account_id,
             request_id=request_id,
-            snapshot={"summary": {"generated": 1}},
-            artifact={"report_model": {"schema_version": "test"}},
-            delivery_email="buyer@example.com",
+            account_name="Live async success billing test",
         )
 
         response = await _run_stripe_webhook(
@@ -1565,39 +1647,14 @@ async def test_stripe_webhook_routes_deflection_async_success_to_paid_gate(
         assert response == {"status": "ok"}
         assert fake_stripe.api_key == "sk_test"
         assert fake_stripe.api_version == billing.STRIPE_API_VERSION
-        report = await pool.fetchrow(
-            """
-            SELECT paid, payment_reference
-            FROM content_ops_deflection_reports
-            WHERE account_id = $1 AND request_id = $2
-            """,
-            account_id,
-            request_id,
+        await _assert_live_deflection_report_paid(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            session_id=session_id,
+            stripe_event_id=stripe_event_id,
+            event_type="checkout.session.async_payment_succeeded",
         )
-        assert report is not None
-        assert report["paid"] is True
-        assert report["payment_reference"] == session_id
-        delivery = await pool.fetchrow(
-            """
-            SELECT payment_reference, delivery_status
-            FROM content_ops_deflection_report_deliveries
-            WHERE account_id = $1 AND request_id = $2
-            """,
-            account_id,
-            request_id,
-        )
-        assert delivery is not None
-        assert delivery["payment_reference"] == session_id
-        assert delivery["delivery_status"] == "pending"
-        assert await pool.fetchval(
-            """
-            SELECT COUNT(*)
-            FROM billing_events
-            WHERE stripe_event_id = $1 AND event_type = $2
-            """,
-            stripe_event_id,
-            "checkout.session.async_payment_succeeded",
-        ) == 1
 
         assert await _run_stripe_webhook(
             monkeypatch,
@@ -1605,9 +1662,9 @@ async def test_stripe_webhook_routes_deflection_async_success_to_paid_gate(
             pool=pool,
             stripe_module=fake_stripe,
         ) == {"status": "already_processed"}
-        assert await pool.fetchval(
-            "SELECT COUNT(*) FROM billing_events WHERE stripe_event_id = $1",
-            stripe_event_id,
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
         ) == 1
     finally:
         await _cleanup_live_billing_rows(
@@ -1724,58 +1781,80 @@ async def test_stripe_webhook_deflection_async_success_unpaid_stays_pending(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_stripe_webhook_deflection_async_failure_is_observed_without_unlock(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     account_id = str(uuid.uuid4())
+    request_id = "req-live-async-failed"
+    stripe_event_id = "evt_deflection_async_failed_live"
+    session_id = "cs_test_deflection_async_failed_live"
     session = _session(
         account_id=account_id,
-        session_id="cs_test_deflection_async_failed",
+        request_id=request_id,
+        session_id=session_id,
         payment_status="failed",
     )
     event = SimpleNamespace(
-        id="evt_deflection_async_failed",
+        id=stripe_event_id,
         type="checkout.session.async_payment_failed",
         data=SimpleNamespace(object=session),
     )
+    fake_stripe, _session_list = _stripe_module_for_event(event)
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live async failed billing test",
+        )
 
-    class _Webhook:
-        @staticmethod
-        def construct_event(_body: bytes, _sig: str, _secret: str) -> Any:
-            return event
+        response = await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        )
 
-    fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
-    pool = _Pool()
-    pool.add_report(account_id=account_id)
-    request = SimpleNamespace(
-        headers={"stripe-signature": "valid"},
-        body=lambda: _body(),
-    )
+        assert response == {"status": "ok"}
+        assert fake_stripe.api_key == "sk_test"
+        assert fake_stripe.api_version == billing.STRIPE_API_VERSION
+        assert "async payment failed" in caplog.text
+        await _assert_live_deflection_report_locked(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+            event_type="checkout.session.async_payment_failed",
+        )
 
-    async def _body() -> bytes:
-        return b"{}"
-
-    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
-    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "sk_test")
-    monkeypatch.setattr(
-        billing.settings.saas_auth,
-        "stripe_webhook_secret",
-        "whsec_test",
-    )
-    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
-
-    response = await billing.stripe_webhook(request)
-
-    assert response == {"status": "ok"}
-    assert "async payment failed" in caplog.text
-    assert len(pool.execute_calls) == 1
-    insert_query, insert_args = pool.execute_calls[0]
-    assert "INSERT INTO billing_events" in insert_query
-    assert insert_args[1] == "evt_deflection_async_failed"
-    assert insert_args[2] == "checkout.session.async_payment_failed"
-    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
-    assert pool.delivery_rows == {}
+        assert await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        ) == {"status": "already_processed"}
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
+        ) == 1
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
