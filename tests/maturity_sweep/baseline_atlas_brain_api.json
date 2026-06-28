@@ -120,11 +120,11 @@
   },
   "atlas_brain/api/billing.py": {
     "counts": {
-      "INTERNAL_MOCK": 50,
+      "INTERNAL_MOCK": 47,
       "SWALLOWED_EXCEPT": 4,
       "UNGUARDED_INDEX": 3
     },
-    "score": 226
+    "score": 214
   },
   "atlas_brain/api/blog_admin.py": {
     "counts": {
