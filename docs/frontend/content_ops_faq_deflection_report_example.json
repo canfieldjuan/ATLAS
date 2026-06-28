@@ -10269,9 +10269,7 @@
           "items.question",
           "items.ticket_count",
           "items.owner_lane",
-          "items.estimated_support_cost",
-          "items.status",
-          "items.fix_type"
+          "items.estimated_support_cost"
         ],
         "surfaces": [
           "web",

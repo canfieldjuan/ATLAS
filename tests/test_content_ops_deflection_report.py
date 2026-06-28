@@ -1852,7 +1852,9 @@ def test_deflection_snapshot_projection_is_allowlist_only() -> None:
     assert "routing_signals" not in encoded
     assert "jira_template" not in encoded
     assert "top_evidence" not in encoded
+    assert "owner_category" not in encoded
     assert "product_gap_summary" not in encoded
+    assert "customer_vocabulary" not in encoded
     assert "recommended_action" not in encoded
     assert snapshot["top_questions"][0] == {
         "rank": 1,
@@ -1898,9 +1900,38 @@ def test_deflection_snapshot_falls_back_when_legacy_model_lacks_row_fields() -> 
         "ticket_count": 5,
         "weighted_frequency": 8,
         "customer_wording": "export attribution reports",
-        "owner_lane": "Support Ops",
+        "owner_lane": "Reporting",
         "action_label": "Publish answer",
         "estimated_support_cost": 67.5,
+    }
+
+
+def test_deflection_snapshot_constrains_raw_owner_lane_to_safe_preview() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    report_model = artifact.report_model.as_dict()
+    sections = {
+        section["id"]: section
+        for section in report_model["sections"]
+    }
+    raw_item = sections["top_unresolved_repeats"]["data"]["items"][0]
+    raw_item["owner_lane"] = "Internal Tiger Team"
+    raw_item["question"] = "Can this exception be approved?"
+    raw_item["routing_signals"] = {}
+    raw_item["product_gap_summary"] = "Repeated support friction needs review."
+    raw_item["customer_vocabulary"] = ["exception approval"]
+    raw_item["recommended_title"] = "Review exception approval"
+
+    snapshot = build_deflection_snapshot({"report_model": report_model}, top_n=1).as_dict()
+    encoded = json.dumps(snapshot, sort_keys=True)
+
+    assert "Internal Tiger Team" not in encoded
+    assert snapshot["top_blind_spots"][0] == {
+        "rank": 2,
+        "question": "Can this exception be approved?",
+        "ticket_count": 3,
+        "owner_lane": "Support Ops",
+        "action_label": "Write missing answer",
+        "estimated_support_cost": 40.5,
     }
 
 
@@ -2024,8 +2055,6 @@ def test_deflection_report_model_contract_shape_requires_version_bump() -> None:
                     "items.ticket_count",
                     "items.owner_lane",
                     "items.estimated_support_cost",
-                    "items.status",
-                    "items.fix_type",
                 ],
             ),
         (

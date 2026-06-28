@@ -79,7 +79,7 @@ export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_FIELDS = Object.freeze(["i
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_REQUIRED_DATA = Object.freeze(["items", "top_item_count", "result_page_limit", "pdf_limit", "support_cost_basis"]);
 
-export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_SNAPSHOT_SAFE_FIELDS = Object.freeze(["items.rank", "items.question", "items.ticket_count", "items.owner_lane", "items.estimated_support_cost", "items.status", "items.fix_type"]);
+export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_SNAPSHOT_SAFE_FIELDS = Object.freeze(["items.rank", "items.question", "items.ticket_count", "items.owner_lane", "items.estimated_support_cost"]);
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["items", "top_item_count", "support_cost_basis"]);
 

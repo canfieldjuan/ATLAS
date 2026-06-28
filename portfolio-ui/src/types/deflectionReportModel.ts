@@ -79,7 +79,7 @@ export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_FIELDS = ["items", "top_it
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_REQUIRED_DATA = ["items", "top_item_count", "result_page_limit", "pdf_limit", "support_cost_basis"] as const;
 
-export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_SNAPSHOT_SAFE_FIELDS = ["items.rank", "items.question", "items.ticket_count", "items.owner_lane", "items.estimated_support_cost", "items.status", "items.fix_type"] as const;
+export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_SNAPSHOT_SAFE_FIELDS = ["items.rank", "items.question", "items.ticket_count", "items.owner_lane", "items.estimated_support_cost"] as const;
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_HOSTED_CONSUMER_SAFE_FIELDS = ["items", "top_item_count", "support_cost_basis"] as const;
 

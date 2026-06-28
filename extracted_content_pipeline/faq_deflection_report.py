@@ -618,8 +618,6 @@ _DEFLECTION_REPORT_SECTION_DEFINITIONS = (
             "items.ticket_count",
             "items.owner_lane",
             "items.estimated_support_cost",
-            "items.status",
-            "items.fix_type",
         ),
     ),
     DeflectionReportSectionDefinition(
@@ -2488,6 +2486,13 @@ _SNAPSHOT_ACTION_PREVIEW_SECTIONS = (
 )
 _SNAPSHOT_FALLBACK_OWNER_LANE = "Support Ops"
 _SNAPSHOT_FALLBACK_ACTION_LABEL = "Review repeat"
+_SNAPSHOT_OWNER_LANE_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("api", "rate", "limit", "developer", "webhook"), "Developer Platform"),
+    (
+        ("search", "alert", "alerts", "notification", "notifications"),
+        "Search / Notifications",
+    ),
+)
 
 
 def _snapshot_estimated_support_cost(
@@ -2510,16 +2515,47 @@ def _snapshot_action_label(item: Mapping[str, Any]) -> str:
     return _SNAPSHOT_ACTION_LABELS.get(fix_type, _SNAPSHOT_FALLBACK_ACTION_LABEL)
 
 
+def _snapshot_owner_lane_allowlist() -> frozenset[str]:
+    return frozenset(
+        {_SNAPSHOT_FALLBACK_OWNER_LANE}
+        | {lane for _, lane in _OWNER_LANE_RULES}
+        | {lane for _, lane in _SNAPSHOT_OWNER_LANE_RULES}
+    )
+
+
+def _snapshot_owner_lane(item: Mapping[str, Any]) -> str:
+    owner_lane = _text(item.get("owner_lane"))
+    if owner_lane in _snapshot_owner_lane_allowlist():
+        return owner_lane
+    text_parts = [
+        owner_lane,
+        _text(item.get("question")),
+        _text(item.get("customer_wording")),
+        _text(item.get("topic")),
+        _text(item.get("recommended_title")),
+        _text(item.get("product_gap_summary")),
+    ]
+    routing_signals = item.get("routing_signals")
+    if isinstance(routing_signals, Mapping):
+        text_parts.append(_routing_signals_text(routing_signals))
+    searchable = " ".join(part for part in text_parts if part)
+    inferred = _owner_lane_from_text(searchable)
+    if inferred:
+        return inferred
+    tokens = set(re.findall(r"[a-z0-9]+", searchable.casefold()))
+    for needles, lane in _SNAPSHOT_OWNER_LANE_RULES:
+        if any(needle in tokens for needle in needles):
+            return lane
+    return _SNAPSHOT_FALLBACK_OWNER_LANE
+
+
 def _snapshot_routing_preview_from_action_item(
     item: Mapping[str, Any],
     *,
     fallback_ticket_count: int | None = None,
 ) -> dict[str, Any]:
-    owner_lane = _text(item.get("owner_lane"))
-    if not owner_lane or owner_lane == "Unknown":
-        owner_lane = _SNAPSHOT_FALLBACK_OWNER_LANE
     return {
-        "owner_lane": owner_lane,
+        "owner_lane": _snapshot_owner_lane(item),
         "action_label": _snapshot_action_label(item),
         "estimated_support_cost": _snapshot_estimated_support_cost(
             item,
@@ -2562,6 +2598,17 @@ def _snapshot_action_preview_lookup(
                 continue
             previews[key] = _snapshot_routing_preview_from_action_item(item)
     return previews
+
+
+def _snapshot_raw_items_by_key(
+    data: Mapping[str, Any] | None,
+) -> dict[tuple[int, str], Mapping[str, Any]]:
+    items: dict[tuple[int, str], Mapping[str, Any]] = {}
+    for item in _snapshot_items(data):
+        key = _snapshot_action_preview_key(item)
+        if key is not None:
+            items[key] = item
+    return items
 
 
 def build_deflection_snapshot(
@@ -2651,6 +2698,7 @@ def _build_deflection_snapshot_from_report_model(
     blind_spot_rows = _snapshot_items(sections.get("top_unresolved_repeats"))
     action_previews = _snapshot_action_preview_lookup(report_model)
     unresolved_data = _report_model_section_data(report_model, "top_unresolved_repeats")
+    raw_blind_spots = _snapshot_raw_items_by_key(unresolved_data)
     blind_spot_limit = (
         _int(unresolved_data.get("result_page_limit") if unresolved_data else None)
         or DEFLECTION_REPORT_SECTION_REGISTRY["top_unresolved_repeats"].default_limit
@@ -2698,7 +2746,13 @@ def _build_deflection_snapshot_from_report_model(
             "rank": _int(row.get("rank")) or index,
             "question": _text(row.get("question")),
             "ticket_count": _int(row.get("ticket_count")),
-            **_snapshot_routing_preview_from_action_item(row),
+            **_snapshot_routing_preview_from_action_item(
+                raw_blind_spots.get(
+                    _snapshot_action_preview_key(row) or (-1, ""),
+                    row,
+                ),
+                fallback_ticket_count=_int(row.get("ticket_count")),
+            ),
         }
         for index, row in enumerate(blind_spot_rows[:blind_spot_limit], start=1)
         if _text(row.get("question"))
