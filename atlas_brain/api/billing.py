@@ -10,6 +10,7 @@ from hashlib import sha256
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.params import Depends as DependsMarker
 from pydantic import BaseModel
 
 from ..auth.dependencies import AuthUser, require_auth
@@ -169,6 +170,16 @@ def _get_stripe():
     return _configure_stripe_module(stripe, cfg.stripe_secret_key)
 
 
+def _billing_db_pool() -> Any:
+    return get_db_pool()
+
+
+def _resolve_billing_db_pool(pool: Any) -> Any:
+    if isinstance(pool, DependsMarker):
+        return _billing_db_pool()
+    return pool
+
+
 # -- Request/Response schemas --
 
 PLAN_NAME_TO_CONFIG_KEY = {
@@ -215,10 +226,14 @@ class BillingStatus(BaseModel):
 # -- Endpoints --
 
 @router.post("/checkout", response_model=CheckoutResponse)
-async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require_auth)):
+async def create_checkout(
+    req: CheckoutRequest,
+    user: AuthUser = Depends(require_auth),
+    pool: Any = Depends(_billing_db_pool),
+):
     """Create a Stripe Checkout session for plan upgrade."""
     stripe = _get_stripe()
-    pool = get_db_pool()
+    pool = _resolve_billing_db_pool(pool)
     acct_uuid = _uuid.UUID(user.account_id)
     user_uuid = _uuid.UUID(user.user_id)
 
@@ -314,13 +329,17 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
 
 
 @router.post("/portal", response_model=PortalResponse)
-async def create_portal(req: PortalRequest, user: AuthUser = Depends(require_auth)):
+async def create_portal(
+    req: PortalRequest,
+    user: AuthUser = Depends(require_auth),
+    pool: Any = Depends(_billing_db_pool),
+):
     """Create a Stripe Customer Portal session."""
     if user.role not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="Only account owner/admin can manage billing")
 
     stripe = _get_stripe()
-    pool = get_db_pool()
+    pool = _resolve_billing_db_pool(pool)
 
     customer_id = await pool.fetchval(
         "SELECT stripe_customer_id FROM saas_accounts WHERE id = $1",
@@ -339,9 +358,12 @@ async def create_portal(req: PortalRequest, user: AuthUser = Depends(require_aut
 
 
 @router.get("/status", response_model=BillingStatus)
-async def billing_status(user: AuthUser = Depends(require_auth)):
+async def billing_status(
+    user: AuthUser = Depends(require_auth),
+    pool: Any = Depends(_billing_db_pool),
+):
     """Get current billing status for the account."""
-    pool = get_db_pool()
+    pool = _resolve_billing_db_pool(pool)
     row = await pool.fetchrow(
         """
         SELECT plan, plan_status, asin_limit, trial_ends_at, stripe_customer_id
@@ -364,7 +386,10 @@ async def billing_status(user: AuthUser = Depends(require_auth)):
 # -- Stripe Webhook --
 
 @webhook_router.post("/webhooks/stripe")
-async def stripe_webhook(request: Request):
+async def stripe_webhook(
+    request: Request,
+    pool: Any = Depends(_billing_db_pool),
+):
     """Handle Stripe webhook events."""
     cfg = settings.saas_auth
     if not cfg.stripe_secret_key:
@@ -395,7 +420,7 @@ async def stripe_webhook(request: Request):
         logger.warning("Stripe webhook signature verification failed: %s", e)
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    pool = get_db_pool()
+    pool = _resolve_billing_db_pool(pool)
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
