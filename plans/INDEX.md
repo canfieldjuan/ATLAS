@@ -1,6 +1,6 @@
 # Plan archive index
 
-1229 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1230 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -11,6 +11,7 @@
 - [PR-Agents-Md-Framework](archive/PR-Agents-Md-Framework.md)
 - [PR-Agents-Md-Routing-Section](archive/PR-Agents-Md-Routing-Section.md)
 - [PR-Agents-No-Wait-After-Open](archive/PR-Agents-No-Wait-After-Open.md) - lane: workflow/agents-contract | phase: Workflow/process
+- [PR-Agents-Real-Adapters-Test-Contract](archive/PR-Agents-Real-Adapters-Test-Contract.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Agents-Session-Map-Guard](archive/PR-Agents-Session-Map-Guard.md) - lane: repo-workflow/session-discipline | phase: Workflow/process
 - [PR-Agents-Session-PR-Map](archive/PR-Agents-Session-PR-Map.md) - lane: repo-workflow/session-discipline | phase: Workflow/process
 - [PR-Archive-On-Merge-Ritual](archive/PR-Archive-On-Merge-Ritual.md) - lane: governance/plans-archive | phase: Workflow/process
