@@ -13,7 +13,7 @@
     "require_output_checks": true,
     "rule_files": [],
     "support_contact": null,
-    "title": "Support Ticket Deflection Report",
+    "title": "Resolution Audit",
     "vocabulary_gap_rules": [],
     "window_days": null
   },
@@ -81,6 +81,7 @@
     "source_format": "csv"
   },
   "output": {
+    "evidence_path": null,
     "markdown_path": "docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/report.md",
     "result_path": "docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/result.json",
     "summary_path": "docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/summary.json"

@@ -27,9 +27,10 @@ def test_deflection_frontend_contract_types_include_backend_projection_fields() 
     assert "source_date_end?: string | null;" in rendered
     assert "source_window_days?: number | null;" in rendered
     assert "ticket_count: number;" in rendered
+    assert "title: string;" in rendered
     assert (
-        'export type DeflectionResultPageSnapshot = Pick<DeflectionSnapshot, "summary" | '
-        '"top_questions" | "top_blind_spots">;'
+        'export type DeflectionResultPageSnapshot = Pick<DeflectionSnapshot, "title" | '
+        '"summary" | "top_questions" | "top_blind_spots">;'
     ) in rendered
     assert "unknown" not in rendered
     assert "any" not in rendered
@@ -40,8 +41,8 @@ def test_deflection_api_contract_metadata_includes_result_page_projection_fields
 
     assert 'DEFLECTION_SNAPSHOT_SCHEMA_VERSION = "deflection.v1"' in rendered
     assert (
-        'DEFLECTION_RESULT_PAGE_SNAPSHOT_FIELDS = Object.freeze(["summary", '
-        '"top_questions", "top_blind_spots"])'
+        'DEFLECTION_RESULT_PAGE_SNAPSHOT_FIELDS = Object.freeze(["title", '
+        '"summary", "top_questions", "top_blind_spots"])'
     ) in rendered
     assert (
         'DEFLECTION_SNAPSHOT_SUMMARY_FIELDS = Object.freeze(["generated", '
@@ -447,8 +448,13 @@ def test_deflection_frontend_contract_types_check_accepts_generated_output(tmp_p
 
 def test_deflection_frontend_contract_types_fail_closed_on_unmapped_field() -> None:
     contract = MOD["deflection_report_model_contract_shape"]()
-    contract["snapshot_projection"]["fields"][0]["projected_fields"] = [
-        *contract["snapshot_projection"]["fields"][0]["projected_fields"],
+    summary_field = next(
+        field
+        for field in contract["snapshot_projection"]["fields"]
+        if field["field"] == "summary"
+    )
+    summary_field["projected_fields"] = [
+        *summary_field["projected_fields"],
         "new_backend_only_metric",
     ]
 
@@ -462,8 +468,13 @@ def test_deflection_frontend_contract_types_fail_closed_on_unmapped_field() -> N
 
 def test_deflection_frontend_contract_types_reject_unknown_optional_field() -> None:
     contract = MOD["deflection_report_model_contract_shape"]()
-    contract["snapshot_projection"]["fields"][0]["optional_projected_fields"] = [
-        *contract["snapshot_projection"]["fields"][0]["optional_projected_fields"],
+    summary_field = next(
+        field
+        for field in contract["snapshot_projection"]["fields"]
+        if field["field"] == "summary"
+    )
+    summary_field["optional_projected_fields"] = [
+        *summary_field["optional_projected_fields"],
         "not_actually_projected",
     ]
 

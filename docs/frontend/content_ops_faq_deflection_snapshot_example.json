@@ -59,6 +59,7 @@
       }
     ]
   },
+  "title": "Resolution Snapshot",
   "top_blind_spots": [
     {
       "action_label": "Write missing answer",

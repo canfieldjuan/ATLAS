@@ -24,6 +24,7 @@ from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     parse_default_fields_or_exit,
 )
 from extracted_content_pipeline.faq_deflection_report import (  # noqa: E402
+    DEFAULT_DEFLECTION_REPORT_TITLE,
     build_deflection_evidence_export,
     build_deflection_report_artifact,
 )
@@ -111,7 +112,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="auto",
         help="Source file format. Defaults to suffix-based detection.",
     )
-    parser.add_argument("--title", default="Support Ticket Deflection Report")
+    parser.add_argument("--title", default=DEFAULT_DEFLECTION_REPORT_TITLE)
     parser.add_argument("--faq-title", default=DEFAULT_TITLE)
     parser.add_argument(
         "--max-items",

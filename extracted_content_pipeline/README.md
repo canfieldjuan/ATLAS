@@ -252,7 +252,7 @@ overrides win when multiple rules match. Rule-file values use the same CLI
 delimiter guardrails: intent topics cannot contain `=` or `,`, and keywords or
 vocabulary aliases cannot contain `,`.
 
-To build the customer-facing Support Ticket Deflection Report deliverable from
+To build the customer-facing Resolution Audit deliverable from
 the same support-ticket rows, use the report CLI. It writes the full Markdown
 report, a compact summary JSON, and a result JSON with resolved rule config,
 output checks, and item-level proof metadata:

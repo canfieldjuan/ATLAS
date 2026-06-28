@@ -122,6 +122,7 @@ TYPE_BY_FIELD = {
     "surfaces": "string[]",
     "term_mappings": "DeflectionReportTermMapping[]",
     "ticket_count": "number",
+    "title": "string",
     "ticket_source_count": "number",
     "top_item_count": "number",
     "total_item_count": "number",
@@ -141,7 +142,7 @@ TYPE_NAME_BY_SNAPSHOT_FIELD = {
     "top_blind_spots": "DeflectionSnapshotTopBlindSpot",
 }
 
-RESULT_PAGE_SNAPSHOT_FIELDS = ("summary", "top_questions", "top_blind_spots")
+RESULT_PAGE_SNAPSHOT_FIELDS = ("title", "summary", "top_questions", "top_blind_spots")
 
 
 def _indent(lines: Sequence[str], spaces: int = 2) -> list[str]:
@@ -343,6 +344,9 @@ def render_types(contract: Mapping[str, Any] | None = None) -> str:
     generated.append("")
     generated.append("export type DeflectionSnapshot = {")
     for field in top_level_fields:
+        if field == "title":
+            generated.extend(_indent(["title: string;"]))
+            continue
         if field == "teaser":
             generated.extend(_indent(["teaser: DeflectionSnapshotTeaser;"]))
             continue
@@ -355,7 +359,7 @@ def render_types(contract: Mapping[str, Any] | None = None) -> str:
     generated.append("")
     generated.append(
         "export type DeflectionResultPageSnapshot = Pick<"
-        'DeflectionSnapshot, "summary" | "top_questions" | "top_blind_spots">;'
+        'DeflectionSnapshot, "title" | "summary" | "top_questions" | "top_blind_spots">;'
     )
     generated.append("")
     return "\n".join(generated)

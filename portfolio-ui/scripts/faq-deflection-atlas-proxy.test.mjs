@@ -23,6 +23,7 @@ const ENV = {
 };
 
 const SNAPSHOT = {
+  title: "Resolution Snapshot",
   summary: {
     generated: 3,
     repeat_ticket_count: 12,
@@ -417,12 +418,26 @@ await test("snapshot projection only returns known safe fields", async () => {
 await test("snapshot projection accepts missing optional date window fields as null", async () => {
   const result = projectSnapshot(SNAPSHOT);
   assert.equal(result.ok, true);
+  assert.equal(result.snapshot.title, "Resolution Snapshot");
   assert.deepEqual(result.snapshot.summary, {
     ...SNAPSHOT.summary,
     source_date_start: null,
     source_date_end: null,
     source_window_days: null,
   });
+});
+
+await test("snapshot projection falls back for older snapshots without title", async () => {
+  const { title: _title, ...legacySnapshot } = SNAPSHOT;
+  const result = projectSnapshot(legacySnapshot);
+  assert.equal(result.ok, true);
+  assert.equal(result.snapshot.title, "Resolution Snapshot");
+});
+
+await test("snapshot projection rejects malformed snapshot title", async () => {
+  assert.deepEqual(snapshotErrors({ ...SNAPSHOT, title: 42 }), [
+    "snapshot.title must be a non-empty string",
+  ]);
 });
 
 await test("snapshot projection rejects malformed optional date window fields", async () => {

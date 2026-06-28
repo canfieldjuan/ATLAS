@@ -218,6 +218,7 @@ await test("React snapshot type is generated from the backend contract", () => {
     "DEFLECTION_SNAPSHOT_TOP_LEVEL_FIELDS",
     "DeflectionSnapshot",
     "DeflectionResultPageSnapshot",
+    "title: string",
     "ticket_count: number",
     "non_repeat_ticket_count: number",
     "source_date_start\\?: string \\| null",
@@ -226,6 +227,8 @@ await test("React snapshot type is generated from the backend contract", () => {
   ]) {
     assert.match(snapshotTypeSource, new RegExp(marker));
   }
+  assert.match(pageSource, /DEFAULT_SNAPSHOT_TITLE = "Resolution Snapshot"/);
+  assert.match(pageSource, /snapshotState\.snapshot\.title/);
 });
 
 await test("paid result page source renders dashboard sections instead of raw markdown pre", () => {
@@ -816,6 +819,7 @@ await test("hosted result page loads report with configured account when URL omi
         return JSON.stringify(
           calls.length === 1
             ? {
+                title: "Resolution Snapshot",
                 summary: {
                   generated: 1,
                   repeat_ticket_count: 1,

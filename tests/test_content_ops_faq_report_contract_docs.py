@@ -156,12 +156,14 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
 
     assert payload == producer_payload
     assert set(payload) == {
+        "title",
         "summary",
         "top_questions",
         "locked_questions",
         "top_blind_spots",
         "teaser",
     }
+    assert payload["title"] == "Resolution Snapshot"
     assert set(payload["summary"]) == {
         "generated",
         "drafted_answer_count",

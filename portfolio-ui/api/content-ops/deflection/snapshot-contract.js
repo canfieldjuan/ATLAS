@@ -5,7 +5,7 @@
 
 export const DEFLECTION_SNAPSHOT_SCHEMA_VERSION = "deflection.v1";
 
-export const DEFLECTION_RESULT_PAGE_SNAPSHOT_FIELDS = Object.freeze(["summary", "top_questions", "top_blind_spots"]);
+export const DEFLECTION_RESULT_PAGE_SNAPSHOT_FIELDS = Object.freeze(["title", "summary", "top_questions", "top_blind_spots"]);
 
 export const DEFLECTION_SNAPSHOT_SUMMARY_FIELDS = Object.freeze(["generated", "drafted_answer_count", "no_proven_answer_count", "support_ticket_resolution_evidence_present", "support_ticket_resolution_evidence_count", "repeat_ticket_count", "non_repeat_ticket_count", "source_date_start", "source_date_end", "source_window_days"]);
 

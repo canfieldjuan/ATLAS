@@ -169,6 +169,7 @@ type DeflectionReportProjectionNestedCollection = {
 type DeflectionSnapshotProjectionContract = {
   schema_version: "deflection.v1";
   top_level_fields: [
+    "title",
     "summary",
     "top_questions",
     "locked_questions",
@@ -180,10 +181,12 @@ type DeflectionSnapshotProjectionContract = {
 
 type DeflectionSnapshotProjectionField = {
   field: string;
-  source_section: string;
+  source?: "snapshot_constant";
+  source_section?: string;
   source_collection?: "rows" | "items";
-  snapshot_safe_fields: string[];
+  snapshot_safe_fields?: string[];
   projected_fields: string[];
+  default?: string;
   full_answer_fields?: string[];
   preview_fields?: string[];
   policy?: "scoped_resolution_evidence_only";
@@ -353,6 +356,7 @@ canonical projection returned in `result.snapshot` from gated
 
 ```ts
 type DeflectionSnapshot = {
+  title: string;
   summary: {
     generated: number;
     drafted_answer_count: number;
@@ -566,10 +570,11 @@ type TicketFAQSearchResponse = {
 - Use `items` for ranked cards or sections, and `markdown` for the full report.
 - For `faq_deflection_report`, render top-level `markdown` as the deliverable.
   Use `summary` for proof badges and `faq_result` for drill-down cards.
-- For unpaid deflection results, render only `DeflectionSnapshot.summary`,
-  `DeflectionSnapshot.top_questions`, `DeflectionSnapshot.locked_questions`,
-  `DeflectionSnapshot.top_blind_spots`, and `DeflectionSnapshot.teaser`. Do not
-  infer answer text, evidence, or source IDs from the snapshot.
+- For unpaid deflection results, render only `DeflectionSnapshot.title`,
+  `DeflectionSnapshot.summary`, `DeflectionSnapshot.top_questions`,
+  `DeflectionSnapshot.locked_questions`, `DeflectionSnapshot.top_blind_spots`,
+  and `DeflectionSnapshot.teaser`. Do not infer answer text, evidence, or
+  source IDs from the snapshot.
 - `owner_lane` and `action_label` on Snapshot repeat rows are teaser-safe
   display labels. Use the paid report for detailed routing evidence, Jira
   templates, source trails, and full recommended-action prose.
