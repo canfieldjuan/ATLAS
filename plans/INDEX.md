@@ -1,6 +1,6 @@
 # Plan archive index
 
-1231 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1232 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -717,6 +717,7 @@
 - [PR-Deflection-Delta-Read-Surface](archive/PR-Deflection-Delta-Read-Surface.md) - lane: issue-1316/deflection-delta-read-surface | phase: Vertical slice
 - [PR-Deflection-Delta-Source-Window-Baseline](archive/PR-Deflection-Delta-Source-Window-Baseline.md) - lane: issue-1316/deflection-delta-source-window-baseline | phase: Production hardening
 - [PR-Deflection-Delta-Stripe-Entitlement-Webhooks](archive/PR-Deflection-Delta-Stripe-Entitlement-Webhooks.md) - lane: deflection/delta-billing-entitlements | phase: Production hardening
+- [PR-Deflection-Delta-Subscription-Checkout](archive/PR-Deflection-Delta-Subscription-Checkout.md) - lane: deflection/delta-billing-entitlements | phase: Production hardening
 - [PR-Deflection-Dispute-Restore-Hardening](archive/PR-Deflection-Dispute-Restore-Hardening.md) - lane: go-live-deflection-cleanup | phase: Production hardening
 - [PR-Deflection-Email-Action-Scorecard](archive/PR-Deflection-Email-Action-Scorecard.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
 - [PR-Deflection-Email-Action-Summary](archive/PR-Deflection-Email-Action-Summary.md) - lane: issue-1612/deflection-full-report-delivery-actionability | phase: Vertical slice
