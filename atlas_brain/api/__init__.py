@@ -275,6 +275,12 @@ try:
         deflection_checkout_price_id=(
             settings.saas_auth.stripe_content_ops_deflection_report_price_id
         ),
+        deflection_checkout_partner_amount_cents=(
+            settings.saas_auth.stripe_content_ops_deflection_report_partner_amount_cents
+        ),
+        deflection_checkout_partner_price_id=(
+            settings.saas_auth.stripe_content_ops_deflection_report_partner_price_id
+        ),
     )
     content_ops_router = create_content_ops_control_surface_router(
         config=content_ops_config,

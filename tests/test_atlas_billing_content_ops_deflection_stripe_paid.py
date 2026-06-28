@@ -55,7 +55,7 @@ class _Pool:
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
         if "UPDATE content_ops_deflection_reports" in query:
-            account_id, request_id, payment_reference = args
+            account_id, request_id, payment_reference = args[:3]
             row = self.report_rows.get((str(account_id), str(request_id)))
             if row is None:
                 return "UPDATE 0"
@@ -67,6 +67,8 @@ class _Pool:
                     return "UPDATE 0"
                 row["paid"] = False
                 return "UPDATE 1"
+            if len(args) >= 6 and not self._checkout_terms_match(row, *args[3:6]):
+                return "UPDATE 0"
             if row is not None:
                 row["paid"] = True
                 if payment_reference is not None:
@@ -117,6 +119,28 @@ class _Pool:
             self.processed_event_ids.add(str(args[1]))
         return "INSERT 0 1"
 
+    def _checkout_terms_match(
+        self,
+        row: dict[str, Any],
+        checkout_amount_cents: Any,
+        checkout_currency: Any,
+        require_checkout_authorization: Any,
+    ) -> bool:
+        currency = str(checkout_currency or "").strip().lower()
+        if (
+            checkout_amount_cents is None
+            and not currency
+            and not require_checkout_authorization
+        ):
+            return True
+        expected_currency = str(row.get("checkout_currency") or "").strip().lower()
+        if row.get("checkout_amount_cents") is not None or expected_currency:
+            return (
+                row.get("checkout_amount_cents") == checkout_amount_cents
+                and expected_currency == currency
+            )
+        return not require_checkout_authorization
+
     def add_report(
         self,
         *,
@@ -125,6 +149,10 @@ class _Pool:
         delivery_email: str | None = "buyer@example.com",
         paid: bool = False,
         payment_reference: str | None = None,
+        checkout_price_variant: str | None = None,
+        checkout_amount_cents: int | None = None,
+        checkout_currency: str | None = None,
+        checkout_price_id: str | None = None,
     ) -> None:
         self.report_rows[(account_id, request_id)] = {
             "account_id": account_id,
@@ -134,6 +162,10 @@ class _Pool:
             "paid": paid,
             "payment_reference": payment_reference,
             "delivery_email": delivery_email,
+            "checkout_price_variant": checkout_price_variant,
+            "checkout_amount_cents": checkout_amount_cents,
+            "checkout_currency": checkout_currency,
+            "checkout_price_id": checkout_price_id,
         }
 
 
@@ -289,7 +321,7 @@ async def test_deflection_checkout_completion_marks_report_paid() -> None:
     assert len(pool.execute_calls) == 2
     query, args = pool.execute_calls[0]
     assert "UPDATE content_ops_deflection_reports" in query
-    assert args == (account_id, "req-123", "cs_test_deflection")
+    assert args == (account_id, "req-123", "cs_test_deflection", 150000, "usd", False)
     delivery_query, delivery_args = pool.execute_calls[1]
     assert "INSERT INTO content_ops_deflection_report_deliveries" in delivery_query
     assert "delivery_status IN ('delivered', 'sending')" in delivery_query
@@ -314,7 +346,7 @@ async def test_deflection_checkout_completion_skips_delivery_queue_without_email
     assert len(pool.execute_calls) == 1
     query, args = pool.execute_calls[0]
     assert "UPDATE content_ops_deflection_reports" in query
-    assert args == (account_id, "req-123", "cs_test_deflection")
+    assert args == (account_id, "req-123", "cs_test_deflection", 150000, "usd", False)
     assert pool.delivery_rows == {}
 
 
@@ -370,7 +402,7 @@ async def test_deflection_checkout_completion_fails_closed_when_report_missing()
     assert len(pool.execute_calls) == 1
     query, args = pool.execute_calls[0]
     assert "UPDATE content_ops_deflection_reports" in query
-    assert args == (account_id, "req-123", "cs_test_deflection")
+    assert args == (account_id, "req-123", "cs_test_deflection", 150000, "usd", False)
 
 
 @pytest.mark.asyncio
@@ -562,13 +594,19 @@ async def test_deflection_checkout_completion_emits_incident_for_terms_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_deflection_checkout_completion_accepts_lower_allowlisted_amount(
+async def test_deflection_checkout_completion_accepts_lower_authorized_amount(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     account_id = str(uuid.uuid4())
     session = _session(account_id=account_id, amount_total=120000)
     pool = _Pool()
-    pool.add_report(account_id=account_id)
+    pool.add_report(
+        account_id=account_id,
+        checkout_price_variant="partner",
+        checkout_amount_cents=120000,
+        checkout_currency="usd",
+        checkout_price_id="price_partner",
+    )
     monkeypatch.setattr(
         billing.settings.saas_auth,
         "stripe_content_ops_deflection_report_allowed_amount_cents",
@@ -584,7 +622,65 @@ async def test_deflection_checkout_completion_accepts_lower_allowlisted_amount(
     assert returned is None
     query, args = pool.execute_calls[0]
     assert "UPDATE content_ops_deflection_reports" in query
-    assert args == (account_id, "req-123", "cs_test_deflection")
+    assert args == (account_id, "req-123", "cs_test_deflection", 120000, "usd", True)
+
+
+@pytest.mark.asyncio
+async def test_deflection_checkout_completion_rejects_wrong_authorized_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="atlas.api.billing")
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id, amount_total=120000)
+    pool = _Pool()
+    pool.add_report(
+        account_id=account_id,
+        checkout_price_variant="standard",
+        checkout_amount_cents=150000,
+        checkout_currency="usd",
+        checkout_price_id="price_standard",
+    )
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_report_allowed_amount_cents",
+        "120000,150000",
+    )
+
+    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+        pool,
+        session,
+        session.metadata,
+    )
+
+    assert returned is None
+    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
+    update_query, update_args = pool.execute_calls[0]
+    assert "UPDATE content_ops_deflection_reports" in update_query
+    assert update_args == (
+        account_id,
+        "req-123",
+        "cs_test_deflection",
+        120000,
+        "usd",
+        True,
+    )
+    assert len(pool.execute_calls) == 1
+    assert _incident_payloads(caplog) == [
+        {
+            "account_id": account_id,
+            "amount_total": "120000",
+            "currency": "usd",
+            "event_type": "checkout.session.completed",
+            "expected_amount_cents": "150000",
+            "expected_currency": "usd",
+            "expected_price_variant": "standard",
+            "incident_type": "paid_report_checkout_terms_mismatch",
+            "request_id": "req-123",
+            "severity": "error",
+            "stripe_session_id": "cs_test_deflection",
+        }
+    ]
 
 
 def test_deflection_checkout_amount_requires_exact_default_amount() -> None:
@@ -731,7 +827,14 @@ async def test_stripe_webhook_routes_deflection_checkout_to_paid_gate(
     delivery_query, delivery_args = pool.execute_calls[1]
     insert_query, insert_args = pool.execute_calls[2]
     assert "UPDATE content_ops_deflection_reports" in update_query
-    assert update_args == (account_id, "req-123", "cs_test_deflection")
+    assert update_args == (
+        account_id,
+        "req-123",
+        "cs_test_deflection",
+        150000,
+        "usd",
+        False,
+    )
     assert "INSERT INTO content_ops_deflection_report_deliveries" in delivery_query
     assert delivery_args == (account_id, "req-123", "cs_test_deflection")
     assert "INSERT INTO billing_events" in insert_query
@@ -792,6 +895,9 @@ async def test_stripe_webhook_routes_deflection_async_success_to_paid_gate(
         account_id,
         "req-123",
         "cs_test_deflection_async_success",
+        150000,
+        "usd",
+        False,
     )
     assert "INSERT INTO content_ops_deflection_report_deliveries" in delivery_query
     assert delivery_args == (
@@ -1258,6 +1364,9 @@ async def test_stripe_webhook_won_dispute_restores_paid_deflection_report(
         account_id,
         "req-123",
         "cs_test_deflection_dispute_won",
+        None,
+        None,
+        False,
     )
     assert "SET paid = true" in update_calls[0][0]
     assert delivery_calls[0][1] == (
@@ -1361,7 +1470,7 @@ async def test_stripe_webhook_stale_won_dispute_preserves_newer_payment_referenc
         for call in pool.execute_calls
         if "INSERT INTO content_ops_deflection_report_deliveries" in call[0]
     ]
-    assert restore_updates[0][1] == (account_id, "req-123", None)
+    assert restore_updates[0][1] == (account_id, "req-123", None, None, None, False)
     assert restore_delivery_calls[0][1] == (account_id, "req-123", None)
     assert pool.report_rows[(account_id, "req-123")]["paid"] is True
     assert pool.report_rows[(account_id, "req-123")]["payment_reference"] == (
@@ -1730,7 +1839,14 @@ async def test_stripe_webhook_keeps_paid_unlock_when_audit_insert_fails(
     delivery_query, delivery_args = pool.execute_calls[1]
     insert_query, insert_args = pool.execute_calls[2]
     assert "UPDATE content_ops_deflection_reports" in update_query
-    assert update_args == (account_id, "req-123", "cs_test_deflection")
+    assert update_args == (
+        account_id,
+        "req-123",
+        "cs_test_deflection",
+        150000,
+        "usd",
+        False,
+    )
     assert "INSERT INTO content_ops_deflection_report_deliveries" in delivery_query
     assert delivery_args == (account_id, "req-123", "cs_test_deflection")
     assert "INSERT INTO billing_events" in insert_query
@@ -1798,7 +1914,14 @@ async def test_stripe_webhook_retry_after_audit_failure_restores_idempotency(
     ]
     assert len(update_calls) == 2
     assert all(
-        call[1] == (account_id, "req-123", "cs_test_deflection")
+        call[1] == (
+            account_id,
+            "req-123",
+            "cs_test_deflection",
+            150000,
+            "usd",
+            False,
+        )
         for call in update_calls
     )
     delivery_calls = [
@@ -1854,4 +1977,11 @@ async def test_stripe_webhook_does_not_log_processed_event_when_report_missing(
     assert len(pool.execute_calls) == 1
     update_query, update_args = pool.execute_calls[0]
     assert "UPDATE content_ops_deflection_reports" in update_query
-    assert update_args == (account_id, "req-123", "cs_test_deflection")
+    assert update_args == (
+        account_id,
+        "req-123",
+        "cs_test_deflection",
+        150000,
+        "usd",
+        False,
+    )

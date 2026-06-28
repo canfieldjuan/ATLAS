@@ -5392,7 +5392,7 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
                 }
                 return "INSERT 0 1"
             if "UPDATE content_ops_deflection_reports" in query:
-                account_id, request_id, payment_reference = args
+                account_id, request_id, payment_reference = args[:3]
                 key = (str(account_id), str(request_id))
                 if key not in self.rows:
                     return "UPDATE 0"

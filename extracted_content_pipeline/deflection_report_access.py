@@ -33,6 +33,11 @@ class DeflectionReportAccessRecord:
     paid: bool
     payment_reference: str | None = None
     delivery_email: str | None = None
+    checkout_price_variant: str | None = None
+    checkout_amount_cents: int | None = None
+    checkout_currency: str | None = None
+    checkout_price_id: str | None = None
+    checkout_authorized_at: Any = None
     created_at: Any = None
 
     def report_model(self) -> dict[str, Any] | None:
@@ -174,8 +179,23 @@ class DeflectionReportArtifactStore(Protocol):
         account_id: str,
         request_id: str,
         payment_reference: str | None = None,
+        checkout_amount_cents: int | None = None,
+        checkout_currency: str | None = None,
+        require_checkout_authorization: bool = False,
     ) -> bool:
         """Mark a report paid. Returns False when no tenant/request row exists."""
+
+    async def record_checkout_authorization(
+        self,
+        *,
+        account_id: str,
+        request_id: str,
+        price_variant: str,
+        amount_cents: int,
+        currency: str,
+        price_id: str,
+    ) -> bool:
+        """Persist checkout terms authorized for one unpaid tenant/request report."""
 
     async def mark_unpaid(
         self,
@@ -344,6 +364,17 @@ class InMemoryDeflectionReportArtifactStore:
             payment_reference=existing.payment_reference if existing else None,
             delivery_email=cleaned_delivery_email
             or (existing.delivery_email if existing else None),
+            checkout_price_variant=(
+                existing.checkout_price_variant if existing else None
+            ),
+            checkout_amount_cents=(
+                existing.checkout_amount_cents if existing else None
+            ),
+            checkout_currency=existing.checkout_currency if existing else None,
+            checkout_price_id=existing.checkout_price_id if existing else None,
+            checkout_authorized_at=(
+                existing.checkout_authorized_at if existing else None
+            ),
             created_at=self._created_at_by_key.get(key),
         )
 
@@ -480,6 +511,11 @@ class InMemoryDeflectionReportArtifactStore:
             paid=row.paid,
             payment_reference=row.payment_reference,
             delivery_email=row.delivery_email,
+            checkout_price_variant=row.checkout_price_variant,
+            checkout_amount_cents=row.checkout_amount_cents,
+            checkout_currency=row.checkout_currency,
+            checkout_price_id=row.checkout_price_id,
+            checkout_authorized_at=row.checkout_authorized_at,
             created_at=self._created_at_by_key.get((row.account_id, row.request_id)),
         )
 
@@ -489,10 +525,20 @@ class InMemoryDeflectionReportArtifactStore:
         account_id: str,
         request_id: str,
         payment_reference: str | None = None,
+        checkout_amount_cents: int | None = None,
+        checkout_currency: str | None = None,
+        require_checkout_authorization: bool = False,
     ) -> bool:
         key = (account_id, request_id)
         row = self._rows.get(key)
         if row is None:
+            return False
+        if not _checkout_paid_terms_match(
+            row,
+            checkout_amount_cents=checkout_amount_cents,
+            checkout_currency=checkout_currency,
+            require_checkout_authorization=require_checkout_authorization,
+        ):
             return False
         self._rows[key] = DeflectionReportAccessRecord(
             account_id=row.account_id,
@@ -502,9 +548,49 @@ class InMemoryDeflectionReportArtifactStore:
             paid=True,
             payment_reference=_clean(payment_reference) or row.payment_reference,
             delivery_email=row.delivery_email,
+            checkout_price_variant=row.checkout_price_variant,
+            checkout_amount_cents=row.checkout_amount_cents,
+            checkout_currency=row.checkout_currency,
+            checkout_price_id=row.checkout_price_id,
+            checkout_authorized_at=row.checkout_authorized_at,
             created_at=row.created_at,
         )
         self._paid_at_by_key.setdefault(key, datetime.now(timezone.utc))
+        return True
+
+    async def record_checkout_authorization(
+        self,
+        *,
+        account_id: str,
+        request_id: str,
+        price_variant: str,
+        amount_cents: int,
+        currency: str,
+        price_id: str,
+    ) -> bool:
+        key = (account_id, request_id)
+        row = self._rows.get(key)
+        if row is None or row.paid:
+            return False
+        authorized_at = datetime.now(timezone.utc)
+        self._rows[key] = DeflectionReportAccessRecord(
+            account_id=row.account_id,
+            request_id=row.request_id,
+            snapshot=dict(row.snapshot),
+            artifact=dict(row.artifact or {}) if row.artifact is not None else None,
+            paid=row.paid,
+            payment_reference=row.payment_reference,
+            delivery_email=row.delivery_email,
+            checkout_price_variant=_required_text(price_variant, "price_variant"),
+            checkout_amount_cents=_required_positive_int(
+                amount_cents,
+                "amount_cents",
+            ),
+            checkout_currency=_required_text(currency, "currency").lower(),
+            checkout_price_id=_required_text(price_id, "price_id"),
+            checkout_authorized_at=authorized_at,
+            created_at=row.created_at,
+        )
         return True
 
     async def count_reports_older_than(self, *, cutoff: datetime) -> int:
@@ -565,6 +651,11 @@ class InMemoryDeflectionReportArtifactStore:
             paid=False,
             payment_reference=row.payment_reference,
             delivery_email=row.delivery_email,
+            checkout_price_variant=row.checkout_price_variant,
+            checkout_amount_cents=row.checkout_amount_cents,
+            checkout_currency=row.checkout_currency,
+            checkout_price_id=row.checkout_price_id,
+            checkout_authorized_at=row.checkout_authorized_at,
             created_at=row.created_at,
         )
         self._paid_at_by_key.pop(key, None)
@@ -918,7 +1009,10 @@ class PostgresDeflectionReportArtifactStore:
     ) -> DeflectionReportAccessRecord | None:
         row = await self.pool.fetchrow(
             """
-            SELECT account_id, request_id, snapshot, artifact, paid, payment_reference, delivery_email, created_at
+            SELECT account_id, request_id, snapshot, artifact, paid, payment_reference,
+                   delivery_email, checkout_price_variant, checkout_amount_cents,
+                   checkout_currency, checkout_price_id, checkout_authorized_at,
+                   created_at
             FROM content_ops_deflection_reports
             WHERE account_id = $1 AND request_id = $2
             """,
@@ -935,6 +1029,9 @@ class PostgresDeflectionReportArtifactStore:
         account_id: str,
         request_id: str,
         payment_reference: str | None = None,
+        checkout_amount_cents: int | None = None,
+        checkout_currency: str | None = None,
+        require_checkout_authorization: bool = False,
     ) -> bool:
         result = await self.pool.execute(
             """
@@ -944,10 +1041,59 @@ class PostgresDeflectionReportArtifactStore:
                 payment_reference = COALESCE($3, payment_reference),
                 updated_at = NOW()
             WHERE account_id = $1 AND request_id = $2
+              AND (
+                ($4::integer IS NULL AND NULLIF($5::text, '') IS NULL AND $6::boolean = false)
+                OR (
+                  checkout_amount_cents IS NOT NULL
+                  AND checkout_currency IS NOT NULL
+                  AND checkout_amount_cents = $4
+                  AND LOWER(checkout_currency) = LOWER($5)
+                )
+                OR (
+                  $6::boolean = false
+                  AND checkout_amount_cents IS NULL
+                  AND checkout_currency IS NULL
+                )
+              )
             """,
             account_id,
             request_id,
             _clean(payment_reference) or None,
+            checkout_amount_cents,
+            _clean(checkout_currency).lower() or None,
+            bool(require_checkout_authorization),
+        )
+        return parse_command_tag(result)
+
+    async def record_checkout_authorization(
+        self,
+        *,
+        account_id: str,
+        request_id: str,
+        price_variant: str,
+        amount_cents: int,
+        currency: str,
+        price_id: str,
+    ) -> bool:
+        result = await self.pool.execute(
+            """
+            UPDATE content_ops_deflection_reports
+            SET checkout_price_variant = $3,
+                checkout_amount_cents = $4,
+                checkout_currency = $5,
+                checkout_price_id = $6,
+                checkout_authorized_at = NOW(),
+                updated_at = NOW()
+            WHERE account_id = $1
+              AND request_id = $2
+              AND paid = false
+            """,
+            _required_text(account_id, "account_id"),
+            _required_text(request_id, "request_id"),
+            _required_text(price_variant, "price_variant"),
+            _required_positive_int(amount_cents, "amount_cents"),
+            _required_text(currency, "currency").lower(),
+            _required_text(price_id, "price_id"),
         )
         return parse_command_tag(result)
 
@@ -1359,6 +1505,11 @@ def _record_from_row(row: Mapping[str, Any]) -> DeflectionReportAccessRecord:
         paid=bool(row.get("paid")),
         payment_reference=_clean(row.get("payment_reference")),
         delivery_email=_clean(row.get("delivery_email")) or None,
+        checkout_price_variant=_clean(row.get("checkout_price_variant")) or None,
+        checkout_amount_cents=_optional_positive_int(row.get("checkout_amount_cents")),
+        checkout_currency=_clean(row.get("checkout_currency")) or None,
+        checkout_price_id=_clean(row.get("checkout_price_id")) or None,
+        checkout_authorized_at=row.get("checkout_authorized_at"),
         created_at=row.get("created_at"),
     )
 
@@ -1696,6 +1847,43 @@ def _required_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
     return _parse_int(value)
+
+
+def _optional_positive_int(value: Any) -> int | None:
+    parsed = _required_int(value)
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
+
+
+def _required_positive_int(value: Any, field: str) -> int:
+    parsed = _optional_positive_int(value)
+    if parsed is None:
+        raise ValueError(f"{field} must be greater than 0")
+    return parsed
+
+
+def _checkout_paid_terms_match(
+    row: DeflectionReportAccessRecord,
+    *,
+    checkout_amount_cents: int | None,
+    checkout_currency: str | None,
+    require_checkout_authorization: bool,
+) -> bool:
+    amount_present = checkout_amount_cents is not None
+    currency = _clean(checkout_currency).lower()
+    currency_present = bool(currency)
+    if not amount_present and not currency_present and not require_checkout_authorization:
+        return True
+
+    row_currency = _clean(row.checkout_currency).lower()
+    if row.checkout_amount_cents is not None or row_currency:
+        return (
+            row.checkout_amount_cents == checkout_amount_cents
+            and row_currency == currency
+        )
+
+    return not require_checkout_authorization
 
 
 def _parse_int(value: Any) -> int | None:
