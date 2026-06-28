@@ -125,11 +125,21 @@ class _BillingPool:
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
         if "UPDATE content_ops_deflection_reports" in query:
-            account_id, request_id, payment_reference = args
+            (
+                account_id,
+                request_id,
+                payment_reference,
+                checkout_amount_cents,
+                checkout_currency,
+                require_checkout_authorization,
+            ) = args
             marked = await self.store.mark_paid(
                 account_id=str(account_id),
                 request_id=str(request_id),
                 payment_reference=str(payment_reference or ""),
+                checkout_amount_cents=checkout_amount_cents,
+                checkout_currency=str(checkout_currency or ""),
+                require_checkout_authorization=bool(require_checkout_authorization),
             )
             return "UPDATE 1" if marked else "UPDATE 0"
         if "INSERT INTO content_ops_deflection_report_deliveries" in query:

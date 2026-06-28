@@ -1364,6 +1364,9 @@ async def test_stripe_webhook_won_dispute_restores_paid_deflection_report(
         account_id,
         "req-123",
         "cs_test_deflection_dispute_won",
+        None,
+        None,
+        False,
     )
     assert "SET paid = true" in update_calls[0][0]
     assert delivery_calls[0][1] == (
@@ -1467,7 +1470,7 @@ async def test_stripe_webhook_stale_won_dispute_preserves_newer_payment_referenc
         for call in pool.execute_calls
         if "INSERT INTO content_ops_deflection_report_deliveries" in call[0]
     ]
-    assert restore_updates[0][1] == (account_id, "req-123", None)
+    assert restore_updates[0][1] == (account_id, "req-123", None, None, None, False)
     assert restore_delivery_calls[0][1] == (account_id, "req-123", None)
     assert pool.report_rows[(account_id, "req-123")]["paid"] is True
     assert pool.report_rows[(account_id, "req-123")]["payment_reference"] == (

@@ -31,6 +31,7 @@ code change remains narrow.
 
 Ownership lane: deflection/stripe-monetization
 Slice phase: Vertical slice
+Max files: 16
 
 1. Add ATLAS config fields for the partner deflection price ID and amount while
    preserving the existing standard env names and default behavior.
@@ -59,8 +60,11 @@ Slice phase: Vertical slice
 - `extracted_content_pipeline/api/control_surfaces.py`
 - `extracted_content_pipeline/deflection_report_access.py`
 - `plans/PR-Deflection-Pricing-Variant-Authorization.md`
+- `tests/maturity_sweep/deflection_product_surface_manifest.json`
+- `tests/test_atlas_billing_content_ops_deflection_paid_flow.py`
 - `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py`
 - `tests/test_atlas_content_ops_generated_assets_api.py`
+- `tests/test_content_ops_deflection_report.py`
 - `tests/test_content_ops_faq_report_contract_docs.py`
 - `tests/test_extracted_content_control_surface_api.py`
 
@@ -156,8 +160,10 @@ Parked hardening: none.
 
 - Command: python -m pytest tests/test_extracted_content_control_surface_api.py -k "deflection_standard_pricing_terms or deflection_pricing_terms or deflection_checkout_authorization or deflection_report_routes_use_public_and_trusted_dependencies" -q
   Result: 25 passed, 136 deselected.
-- Command: python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -k "deflection_checkout_completion or deflection_checkout_amount or stripe_webhook_routes_deflection_checkout_to_paid_gate or stripe_webhook_routes_deflection_async_success_to_paid_gate or stripe_webhook_keeps_paid_unlock_when_audit_insert_fails or stripe_webhook_retry_after_audit_failure_restores_idempotency or stripe_webhook_does_not_log_processed_event_when_report_missing" -q
-  Result: 31 passed, 17 deselected, 1 existing torch warning.
+- Command: python -m pytest tests/test_alerts.py tests/test_atlas_billing_stripe_hardening.py tests/test_b2b_vendor_briefing.py tests/test_atlas_billing_content_ops_deflection_stripe_paid.py tests/test_atlas_billing_content_ops_deflection_paid_flow.py tests/test_content_ops_deflection_incidents.py tests/test_mcp_content_ops_deflection_readonly.py -q
+  Result: 189 passed, 1 existing torch warning.
+- Command: python -m pytest tests/test_content_ops_deflection_report.py::test_postgres_deflection_report_store_round_trips_paid_gate -q
+  Result: 1 passed.
 - Command: python -m pytest tests/test_atlas_content_ops_generated_assets_api.py -k "public_deflection_routes_use_rate_limit_gate" -q
   Result: 1 passed, 22 deselected, 1 existing torch warning.
 - Command: python -m pytest tests/test_atlas_main_voice_startup.py -q
@@ -168,11 +174,17 @@ Parked hardening: none.
   Result: passed.
 - Command: bash scripts/validate_extracted_content_pipeline.sh
   Result: passed.
+- Command: bash scripts/run_extracted_pipeline_checks.sh
+  Result: 5044 passed, 16 skipped, 1 existing torch warning.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
   Result: passed.
 - Command: python scripts/audit_extracted_standalone.py --fail-on-debt
   Result: passed.
 - Command: bash scripts/check_ascii_python.sh
+  Result: passed.
+- Command: python scripts/check_deflection_product_surface_manifest.py
+  Result: deflection product surface manifest ok: 38 file(s).
+- Command: python scripts/audit_ai_reconciliation.py --current-pr-body-file tmp/pr-deflection-pricing-variant-authorization.md
   Result: passed.
 - Command: python scripts/sync_pr_plan.py plans/PR-Deflection-Pricing-Variant-Authorization.md --check
   Result: passed.
@@ -190,9 +202,12 @@ Parked hardening: none.
 | `docs/frontend/content_ops_faq_deflection_checkout_contract.md` | 68 |
 | `extracted_content_pipeline/api/control_surfaces.py` | 93 |
 | `extracted_content_pipeline/deflection_report_access.py` | 190 |
-| `plans/PR-Deflection-Pricing-Variant-Authorization.md` | 198 |
-| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 149 |
+| `plans/PR-Deflection-Pricing-Variant-Authorization.md` | 213 |
+| `tests/maturity_sweep/deflection_product_surface_manifest.json` | 1 |
+| `tests/test_atlas_billing_content_ops_deflection_paid_flow.py` | 12 |
+| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 154 |
 | `tests/test_atlas_content_ops_generated_assets_api.py` | 1 |
+| `tests/test_content_ops_deflection_report.py` | 2 |
 | `tests/test_content_ops_faq_report_contract_docs.py` | 3 |
 | `tests/test_extracted_content_control_surface_api.py` | 181 |
-| **Total** | **993** |
+| **Total** | **1028** |
