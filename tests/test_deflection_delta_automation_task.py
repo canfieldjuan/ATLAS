@@ -36,6 +36,7 @@ def _set_delta_settings(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> No
         "cron_expression": "15 8 1 * *",
         "account_limit": 11,
         "reports_per_account": 9,
+        "entitled_account_ids": "acct-1,acct-2,acct-target",
     }
     values.update(overrides)
     for name, value in values.items():
@@ -142,13 +143,20 @@ async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
     pool = _Pool(is_initialized=True)
     calls: list[dict[str, Any]] = []
 
-    async def _compute(store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+    async def _compute(
+        store: Any,
+        *,
+        account_limit: int,
+        reports_per_account: int,
+        entitled_account_ids: tuple[str, ...],
+    ) -> Any:
         calls.append(
             {
                 "store_type": type(store).__name__,
                 "store_pool": getattr(store, "pool", None),
                 "account_limit": account_limit,
                 "reports_per_account": reports_per_account,
+                "entitled_account_ids": entitled_account_ids,
             }
         )
         return DeflectionDeltaBatchSummary(
@@ -172,6 +180,7 @@ async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
             "store_pool": pool,
             "account_limit": 7,
             "reports_per_account": 6,
+            "entitled_account_ids": ("acct-1", "acct-2", "acct-target"),
         }
     ]
     assert result == {
@@ -194,6 +203,7 @@ async def test_run_delegates_to_batch_worker_with_typed_and_metadata_limits(
         "reports_per_account_limit_overflow": False,
         "report_limit_reached_accounts": [],
         "report_limit_overflow_accounts": [],
+        "entitled_account_count": 3,
     }
 
 
@@ -220,6 +230,7 @@ async def test_run_scopes_generation_and_delivery_from_target_account_metadata(
         reports_per_account: int,
         account_id: str,
         current_request_id: str,
+        **_kwargs: Any,
     ) -> Any:
         compute_calls.append(
             {
@@ -244,6 +255,7 @@ async def test_run_scopes_generation_and_delivery_from_target_account_metadata(
         config: Any,
         account_id: str,
         current_request_id: str,
+        **_kwargs: Any,
     ) -> Any:
         delivery_calls.append(
             {
@@ -252,6 +264,7 @@ async def test_run_scopes_generation_and_delivery_from_target_account_metadata(
                 "dry_run": config.dry_run,
                 "account_id": account_id,
                 "current_request_id": current_request_id,
+                "entitled_account_ids": _kwargs.get("entitled_account_ids"),
             }
         )
         return SimpleNamespace(scanned=1, sent=0, failed=0, dry_run=1)
@@ -284,6 +297,7 @@ async def test_run_scopes_generation_and_delivery_from_target_account_metadata(
             "dry_run": True,
             "account_id": "acct-target",
             "current_request_id": "checked-current",
+            "entitled_account_ids": ("acct-1", "acct-2", "acct-target"),
         }
     ]
     assert result["target_account_id"] == "acct-target"
@@ -306,6 +320,7 @@ async def test_run_scopes_generation_to_checked_current_request(
         reports_per_account: int,
         account_id: str,
         current_request_id: str,
+        **_kwargs: Any,
     ) -> Any:
         compute_calls.append(
             {
@@ -365,6 +380,57 @@ async def test_run_rejects_blank_target_account_metadata(
 
 
 @pytest.mark.asyncio
+async def test_run_skips_global_generation_without_entitled_accounts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch, entitled_account_ids=" ")
+    pool = _Pool(is_initialized=True)
+    compute = AsyncMock()
+    send_pending = AsyncMock()
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", send_pending)
+
+    result = await mod.run(SimpleNamespace(metadata={}))
+
+    assert result["_skip_synthesis"] == "No entitled deflection delta accounts configured"
+    assert result["entitled_account_count"] == 0
+    assert result["accounts_scanned"] == 0
+    assert result["delivery_sent"] == 0
+    compute.assert_not_called()
+    send_pending.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_skips_target_account_not_in_entitlement_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delta_settings(monkeypatch, entitled_account_ids="acct-other")
+    pool = _Pool(is_initialized=True)
+    compute = AsyncMock()
+    send_pending = AsyncMock()
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "compute_and_save_recent_deflection_deltas", compute)
+    monkeypatch.setattr(mod, "send_pending_deflection_delta_deliveries", send_pending)
+
+    result = await mod.run(
+        SimpleNamespace(
+            metadata={
+                "target_account_id": "acct-target",
+                "current_request_id": "checked-current",
+            }
+        )
+    )
+
+    assert result["_skip_synthesis"] == "Deflection delta target account not entitled"
+    assert result["target_account_id"] == "acct-target"
+    assert result["entitled_account_count"] == 1
+    assert result["accounts_scanned"] == 0
+    compute.assert_not_called()
+    send_pending.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_run_drains_delta_delivery_when_generation_enqueues_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -374,7 +440,7 @@ async def test_run_drains_delta_delivery_when_generation_enqueues_work(
     pool = _Pool(is_initialized=True)
     delivery_calls: list[dict[str, Any]] = []
 
-    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int, **_kwargs: Any) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=1,
             reports_scanned=2,
@@ -383,13 +449,14 @@ async def test_run_drains_delta_delivery_when_generation_enqueues_work(
             delta_deliveries_enqueued=1,
         )
 
-    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any, **_kwargs: Any) -> Any:
         delivery_calls.append(
             {
                 "pool": pool_arg,
                 "sender_type": type(sender).__name__,
                 "from_email": config.from_email,
                 "dry_run": config.dry_run,
+                "entitled_account_ids": _kwargs.get("entitled_account_ids"),
             }
         )
         return SimpleNamespace(scanned=1, sent=0, failed=0, dry_run=1)
@@ -406,6 +473,7 @@ async def test_run_drains_delta_delivery_when_generation_enqueues_work(
             "sender_type": "_DryRunSender",
             "from_email": "reports@example.com",
             "dry_run": True,
+            "entitled_account_ids": ("acct-1", "acct-2", "acct-target"),
         }
     ]
     assert result["delta_deliveries_enqueued"] == 1
@@ -425,7 +493,7 @@ async def test_run_drains_existing_delta_delivery_when_no_new_row_enqueued(
     pool = _Pool(is_initialized=True)
     delivery_calls = 0
 
-    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int, **_kwargs: Any) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=1,
             reports_scanned=2,
@@ -434,7 +502,7 @@ async def test_run_drains_existing_delta_delivery_when_no_new_row_enqueued(
             delta_deliveries_enqueued=0,
         )
 
-    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any, **_kwargs: Any) -> Any:
         nonlocal delivery_calls
         delivery_calls += 1
         assert pool_arg is pool
@@ -461,7 +529,7 @@ async def test_run_reports_missing_delivery_config_for_existing_backlog(
     pool = _Pool(is_initialized=True, pending_delta_deliveries=3)
     delivery_calls = 0
 
-    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int, **_kwargs: Any) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=1,
             reports_scanned=2,
@@ -487,6 +555,7 @@ async def test_run_reports_missing_delivery_config_for_existing_backlog(
     assert result["delivery_pending"] == 3
     assert result["delivery_missing_config"] == ["from_email", "resend_api_key"]
     assert pool.fetchval_calls
+    assert pool.fetchval_calls[0][1] == (None, None, ["acct-1", "acct-2", "acct-target"])
 
 
 @pytest.mark.asyncio
@@ -496,7 +565,7 @@ async def test_run_reports_degraded_when_some_reports_fail(
     _set_delta_settings(monkeypatch)
     pool = _Pool(is_initialized=True)
 
-    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int, **_kwargs: Any) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=2,
             reports_scanned=3,
@@ -530,6 +599,7 @@ async def test_run_reports_degraded_when_some_reports_fail(
         "reports_per_account_limit_overflow": False,
         "report_limit_reached_accounts": [],
         "report_limit_overflow_accounts": [],
+        "entitled_account_count": 3,
     }
 
 
@@ -557,6 +627,7 @@ async def test_run_reports_delivery_degraded_before_generation_degraded(
         *,
         account_limit: int,
         reports_per_account: int,
+        **_kwargs: Any,
     ) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=2,
@@ -567,7 +638,7 @@ async def test_run_reports_delivery_degraded_before_generation_degraded(
             delta_deliveries_enqueued=1,
         )
 
-    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any, **_kwargs: Any) -> Any:
         assert pool_arg is pool
         return SimpleNamespace(scanned=2, sent=1, failed=1, dry_run=0)
 
@@ -607,6 +678,7 @@ async def test_run_reports_deferred_delivery_without_total_failure_raise(
         *,
         account_limit: int,
         reports_per_account: int,
+        **_kwargs: Any,
     ) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=1,
@@ -616,7 +688,7 @@ async def test_run_reports_deferred_delivery_without_total_failure_raise(
             delta_deliveries_enqueued=1,
         )
 
-    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any, **_kwargs: Any) -> Any:
         assert pool_arg is pool
         assert config.dry_run is False
         return SimpleNamespace(scanned=2, sent=0, failed=0, deferred=2, dry_run=0)
@@ -658,6 +730,7 @@ async def test_run_reports_generation_degraded_before_deferred_delivery(
         *,
         account_limit: int,
         reports_per_account: int,
+        **_kwargs: Any,
     ) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=2,
@@ -668,7 +741,7 @@ async def test_run_reports_generation_degraded_before_deferred_delivery(
             delta_deliveries_enqueued=1,
         )
 
-    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any, **_kwargs: Any) -> Any:
         assert pool_arg is pool
         return SimpleNamespace(scanned=2, sent=0, failed=0, deferred=2, dry_run=0)
 
@@ -708,6 +781,7 @@ async def test_run_reports_delivery_degraded_when_failed_and_deferred(
         *,
         account_limit: int,
         reports_per_account: int,
+        **_kwargs: Any,
     ) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=1,
@@ -717,7 +791,7 @@ async def test_run_reports_delivery_degraded_when_failed_and_deferred(
             delta_deliveries_enqueued=1,
         )
 
-    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any, **_kwargs: Any) -> Any:
         assert pool_arg is pool
         return SimpleNamespace(scanned=2, sent=0, failed=1, deferred=1, dry_run=0)
 
@@ -741,7 +815,7 @@ async def test_run_raises_when_all_scanned_delta_deliveries_fail(
     monkeypatch.setattr(mod.settings.deflection_delivery, "resend_api_key", "resend-key", raising=False)
     pool = _Pool(is_initialized=True)
 
-    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int, **_kwargs: Any) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=1,
             reports_scanned=2,
@@ -750,7 +824,7 @@ async def test_run_raises_when_all_scanned_delta_deliveries_fail(
             delta_deliveries_enqueued=1,
         )
 
-    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any) -> Any:
+    async def _send_pending(pool_arg: Any, *, sender: Any, config: Any, **_kwargs: Any) -> Any:
         assert pool_arg is pool
         assert config.dry_run is False
         return SimpleNamespace(scanned=2, sent=0, failed=2, dry_run=0)
@@ -775,6 +849,7 @@ async def test_run_reports_scan_window_saturation_without_failing(
         *,
         account_limit: int,
         reports_per_account: int,
+        **_kwargs: Any,
     ) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=1,
@@ -815,6 +890,7 @@ async def test_run_reports_scan_window_saturation_without_failing(
         "reports_per_account_limit_overflow": False,
         "report_limit_reached_accounts": ["acct-1"],
         "report_limit_overflow_accounts": [],
+        "entitled_account_count": 3,
     }
 
 
@@ -830,6 +906,7 @@ async def test_run_reports_scan_window_overflow_before_saturation_warning(
         *,
         account_limit: int,
         reports_per_account: int,
+        **_kwargs: Any,
     ) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=1,
@@ -870,6 +947,7 @@ async def test_run_reports_scan_window_overflow_before_saturation_warning(
         "reports_per_account_limit_overflow": True,
         "report_limit_reached_accounts": ["acct-1"],
         "report_limit_overflow_accounts": ["acct-1"],
+        "entitled_account_count": 3,
     }
 
 
@@ -880,7 +958,7 @@ async def test_run_raises_when_all_scanned_reports_fail(
     _set_delta_settings(monkeypatch)
     pool = _Pool(is_initialized=True)
 
-    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int) -> Any:
+    async def _compute(_store: Any, *, account_limit: int, reports_per_account: int, **_kwargs: Any) -> Any:
         return DeflectionDeltaBatchSummary(
             accounts_scanned=2,
             reports_scanned=3,

@@ -4049,6 +4049,13 @@ class DeflectionDeltaConfig(BaseSettings):
     cron_expression: str = Field(default="0 8 1 * *", description="Cron expression for monthly deflection delta generation")
     account_limit: int = Field(default=100, ge=1, le=100, description="Maximum paid-report accounts scanned per run")
     reports_per_account: int = Field(default=25, ge=1, le=100, description="Maximum recent paid reports scanned per account")
+    entitled_account_ids: str = Field(
+        default="",
+        description=(
+            "Comma-separated account IDs entitled to monthly deflection delta "
+            "generation and delivery. Blank fails closed."
+        ),
+    )
 
 
 class B2BWebhookConfig(BaseSettings):
