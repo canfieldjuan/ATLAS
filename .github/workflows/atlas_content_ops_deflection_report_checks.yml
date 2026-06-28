@@ -68,6 +68,22 @@ on:
 jobs:
   atlas-content-ops-deflection-report-checks:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas_migration_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atlas -d atlas_migration_tests"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ATLAS_MIGRATION_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/atlas_migration_tests
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -82,7 +98,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          python -m pip install pytest pytest-asyncio
+          python -m pip install asyncpg pytest pytest-asyncio
 
       - name: Run Content Ops deflection report tests
         run: |
@@ -92,10 +108,13 @@ jobs:
             tests/test_extracted_ticket_faq_markdown.py::test_build_ticket_faq_markdown_condenses_overflow_sources_instead_of_truncating \
             tests/test_generate_deflection_frontend_contract_types.py \
             tests/test_extracted_content_ops_live_execute_harness.py::test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot_top_n \
+            tests/test_content_ops_deflection_report.py::test_postgres_deflection_report_store_live_round_trips_paid_gate \
+            tests/test_content_ops_deflection_report.py::test_postgres_list_reports_live_scopes_paid_state_and_orders_newest \
+            tests/test_content_ops_deflection_report.py::test_postgres_delete_report_live_scopes_to_account_and_request_id \
             tests/test_content_ops_deflection_report.py::test_deflection_report_cli_ignores_legacy_max_items_cap \
             tests/test_content_ops_deflection_report.py::test_in_memory_report_retention_deletes_only_old_rows_with_limit \
             tests/test_content_ops_deflection_report.py::test_report_retention_store_rejects_unsafe_boundaries \
-            tests/test_content_ops_deflection_report.py::test_postgres_report_retention_uses_cutoff_and_limited_delete \
+            tests/test_content_ops_deflection_report.py::test_postgres_report_retention_live_deletes_old_rows_with_limit \
             tests/test_content_ops_deflection_report.py::test_postgres_report_retention_fails_closed_on_unparseable_delete_count \
             tests/test_content_ops_deflection_report.py::test_retention_runner_dry_run_counts_without_deleting_or_exposing_payload \
             tests/test_content_ops_deflection_report.py::test_retention_runner_requires_confirm_delete_and_valid_bounds \

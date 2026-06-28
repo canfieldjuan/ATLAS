@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,52 @@ assert RETENTION_SPEC is not None
 assert RETENTION_SPEC.loader is not None
 RETENTION_MODULE = importlib.util.module_from_spec(RETENTION_SPEC)
 RETENTION_SPEC.loader.exec_module(RETENTION_MODULE)
+
+MIGRATIONS_DIR = ROOT / "atlas_brain" / "storage" / "migrations"
+_DEFLECTION_REPORT_MIGRATIONS = (
+    "328_content_ops_deflection_reports.sql",
+    "331_content_ops_deflection_report_delivery_email.sql",
+    "332_content_ops_deflection_report_deliveries.sql",
+    "339_content_ops_deflection_reports_retention_index.sql",
+    "342_content_ops_deflection_checkout_authorization.sql",
+)
+
+
+def _deflection_report_database_url() -> str | None:
+    return os.environ.get("ATLAS_MIGRATION_TEST_DATABASE_URL")
+
+
+async def _connect_deflection_report_postgres():
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = _deflection_report_database_url()
+    if not database_url:
+        pytest.skip("ATLAS_MIGRATION_TEST_DATABASE_URL not set")
+    return await asyncpg.connect(database_url)
+
+
+async def _apply_deflection_report_migrations(conn) -> None:
+    for name in _DEFLECTION_REPORT_MIGRATIONS:
+        await conn.execute((MIGRATIONS_DIR / name).read_text())
+
+
+async def _cleanup_deflection_report_accounts(
+    conn,
+    account_ids: tuple[str, ...],
+) -> None:
+    await conn.execute(
+        """
+        DELETE FROM content_ops_deflection_report_deliveries
+        WHERE account_id = ANY($1::text[])
+        """,
+        list(account_ids),
+    )
+    await conn.execute(
+        """
+        DELETE FROM content_ops_deflection_reports
+        WHERE account_id = ANY($1::text[])
+        """,
+        list(account_ids),
+    )
 
 
 def _report_access_snapshot(question: str, *, generated: int = 1) -> dict[str, object]:
@@ -5455,152 +5502,114 @@ def _scoped_answer_item(
 
 
 @pytest.mark.asyncio
-async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
-    class _Pool:
-        def __init__(self) -> None:
-            self.rows: dict[tuple[str, str], dict[str, object]] = {}
-
-        async def execute(self, query: str, *args: object) -> str:
-            if "INSERT INTO content_ops_deflection_reports" in query:
-                account_id, request_id, snapshot, artifact, delivery_email = args
-                key = (str(account_id), str(request_id))
-                existing = self.rows.get(key, {})
-                self.rows[key] = {
-                    "account_id": account_id,
-                    "request_id": request_id,
-                    "snapshot": snapshot,
-                    "artifact": artifact,
-                    "paid": bool(existing.get("paid")),
-                    "payment_reference": existing.get("payment_reference"),
-                    "delivery_email": delivery_email or existing.get("delivery_email"),
+@pytest.mark.integration
+async def test_postgres_deflection_report_store_live_round_trips_paid_gate() -> None:
+    account_id = "acct-live-report-paid-gate"
+    conn = await _connect_deflection_report_postgres()
+    try:
+        await _apply_deflection_report_migrations(conn)
+        await _cleanup_deflection_report_accounts(conn, (account_id,))
+        store = PostgresDeflectionReportArtifactStore(pool=conn)
+        snapshot = {
+            "summary": {
+                "generated": 1,
+                "drafted_answer_count": 1,
+                "no_proven_answer_count": 0,
+            },
+            "top_questions": [
+                {
+                    "rank": 1,
+                    "question": "How do I export reports?",
+                    "weighted_frequency": 3,
+                    "customer_wording": "How do I export reports?",
                 }
-                return "INSERT 0 1"
-            if "UPDATE content_ops_deflection_reports" in query:
-                account_id, request_id, payment_reference = args[:3]
-                key = (str(account_id), str(request_id))
-                if key not in self.rows:
-                    return "UPDATE 0"
-                if "SET paid = false" in query:
-                    stored_reference = self.rows[key].get("payment_reference")
-                    if payment_reference and stored_reference not in {
-                        None,
-                        payment_reference,
-                    }:
-                        return "UPDATE 0"
-                    self.rows[key]["paid"] = False
-                    return "UPDATE 1"
-                self.rows[key]["paid"] = True
-                self.rows[key]["payment_reference"] = payment_reference
-                return "UPDATE 1"
-            raise AssertionError(query)
+            ],
+        }
+        artifact = build_deflection_report_artifact(
+            _structured_report_fixture_result()
+        ).as_dict()
+        postgres_artifact = json.loads(json.dumps(artifact))
 
-        async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
-            account_id, request_id = args
-            row = self.rows.get((str(account_id), str(request_id)))
-            if row is None:
-                return None
-            if "SELECT snapshot" in query:
-                return {"snapshot": row["snapshot"]}
-            return dict(row)
+        await store.save_report(
+            account_id=account_id,
+            request_id="request-1",
+            snapshot=snapshot,
+            artifact=artifact,
+            delivery_email=" buyer@example.com ",
+        )
 
-    store = PostgresDeflectionReportArtifactStore(pool=_Pool())
-    snapshot = {
-        "summary": {
-            "generated": 1,
-            "drafted_answer_count": 1,
-            "no_proven_answer_count": 0,
-        },
-        "top_questions": [
-            {
-                "rank": 1,
-                "question": "How do I export reports?",
-                "weighted_frequency": 3,
-                "customer_wording": "How do I export reports?",
-            }
-        ],
-    }
-    artifact = build_deflection_report_artifact(
-        _structured_report_fixture_result()
-    ).as_dict()
-    postgres_artifact = json.loads(json.dumps(artifact))
-
-    await store.save_report(
-        account_id="acct-1",
-        request_id="request-1",
-        snapshot=snapshot,
-        artifact=artifact,
-        delivery_email=" buyer@example.com ",
-    )
-
-    assert await store.get_snapshot(
-        account_id="acct-1",
-        request_id="request-1",
-    ) == snapshot
-    assert "buyer@example.com" not in str(snapshot)
-    locked = await store.get_artifact_record(
-        account_id="acct-1",
-        request_id="request-1",
-    )
-    assert locked is not None
-    assert locked.paid is False
-    assert locked.artifact == postgres_artifact
-    assert locked.report_model() is not None
-    assert locked.report_model()["schema_version"] == artifact["report_model"]["schema_version"]
-    assert locked.delivery_email == "buyer@example.com"
-    assert await store.mark_paid(
-        account_id="acct-1",
-        request_id="request-1",
-        payment_reference="checkout-session:test",
-    ) is True
-    unlocked = await store.get_artifact_record(
-        account_id="acct-1",
-        request_id="request-1",
-    )
-    assert unlocked is not None
-    assert unlocked.paid is True
-    assert unlocked.payment_reference == "checkout-session:test"
-    assert unlocked.report_model() is not None
-    assert unlocked.report_model()["schema_version"] == artifact["report_model"]["schema_version"]
-    assert unlocked.delivery_email == "buyer@example.com"
-    await store.save_report(
-        account_id="acct-1",
-        request_id="request-1",
-        snapshot=snapshot,
-        artifact=artifact,
-    )
-    preserved = await store.get_artifact_record(
-        account_id="acct-1",
-        request_id="request-1",
-    )
-    assert preserved is not None
-    assert preserved.delivery_email == "buyer@example.com"
-    assert preserved.paid is True
-    assert preserved.payment_reference == "checkout-session:test"
-    assert await store.mark_unpaid(
-        account_id="acct-1",
-        request_id="request-1",
-        payment_reference="other-checkout-session",
-    ) is False
-    assert await store.mark_unpaid(
-        account_id="acct-1",
-        request_id="request-1",
-        payment_reference="checkout-session:test",
-    ) is True
-    relocked = await store.get_artifact_record(
-        account_id="acct-1",
-        request_id="request-1",
-    )
-    assert relocked is not None
-    assert relocked.paid is False
-    assert relocked.payment_reference == "checkout-session:test"
-    assert await store.mark_paid(
-        account_id="acct-1",
-        request_id="missing",
-    ) is False
-    assert await store.mark_unpaid(
-        account_id="acct-1",
-        request_id="missing",
-    ) is False
+        assert await store.get_snapshot(
+            account_id=account_id,
+            request_id="request-1",
+        ) == snapshot
+        assert "buyer@example.com" not in str(snapshot)
+        locked = await store.get_artifact_record(
+            account_id=account_id,
+            request_id="request-1",
+        )
+        assert locked is not None
+        assert locked.paid is False
+        assert locked.artifact == postgres_artifact
+        assert locked.report_model() is not None
+        assert locked.report_model()["schema_version"] == artifact["report_model"]["schema_version"]
+        assert locked.delivery_email == "buyer@example.com"
+        assert await store.mark_paid(
+            account_id=account_id,
+            request_id="request-1",
+            payment_reference="checkout-session:test",
+        ) is True
+        unlocked = await store.get_artifact_record(
+            account_id=account_id,
+            request_id="request-1",
+        )
+        assert unlocked is not None
+        assert unlocked.paid is True
+        assert unlocked.payment_reference == "checkout-session:test"
+        assert unlocked.report_model() is not None
+        assert unlocked.report_model()["schema_version"] == artifact["report_model"]["schema_version"]
+        assert unlocked.delivery_email == "buyer@example.com"
+        await store.save_report(
+            account_id=account_id,
+            request_id="request-1",
+            snapshot=snapshot,
+            artifact=artifact,
+        )
+        preserved = await store.get_artifact_record(
+            account_id=account_id,
+            request_id="request-1",
+        )
+        assert preserved is not None
+        assert preserved.delivery_email == "buyer@example.com"
+        assert preserved.paid is True
+        assert preserved.payment_reference == "checkout-session:test"
+        assert await store.mark_unpaid(
+            account_id=account_id,
+            request_id="request-1",
+            payment_reference="other-checkout-session",
+        ) is False
+        assert await store.mark_unpaid(
+            account_id=account_id,
+            request_id="request-1",
+            payment_reference="checkout-session:test",
+        ) is True
+        relocked = await store.get_artifact_record(
+            account_id=account_id,
+            request_id="request-1",
+        )
+        assert relocked is not None
+        assert relocked.paid is False
+        assert relocked.payment_reference == "checkout-session:test"
+        assert await store.mark_paid(
+            account_id=account_id,
+            request_id="missing",
+        ) is False
+        assert await store.mark_unpaid(
+            account_id=account_id,
+            request_id="missing",
+        ) is False
+    finally:
+        await _cleanup_deflection_report_accounts(conn, (account_id,))
+        await conn.close()
 
 
 @pytest.mark.asyncio
@@ -5962,76 +5971,128 @@ async def test_in_memory_deflection_report_store_deletes_report_and_referencing_
 
 
 @pytest.mark.asyncio
-async def test_postgres_list_reports_uses_account_scope_optional_paid_filter_and_unbounded_limit() -> None:
-    class _Pool:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, tuple[object, ...]]] = []
+@pytest.mark.integration
+async def test_postgres_list_reports_live_scopes_paid_state_and_orders_newest() -> None:
+    account_id = "acct-live-report-list"
+    other_account_id = "acct-live-report-list-other"
+    conn = await _connect_deflection_report_postgres()
+    try:
+        await _apply_deflection_report_migrations(conn)
+        await _cleanup_deflection_report_accounts(conn, (account_id, other_account_id))
+        store = PostgresDeflectionReportArtifactStore(pool=conn)
+        for request_id, question in (
+            ("request-old", "Old question"),
+            ("request-new", "New question"),
+            ("request-paid", "Paid question"),
+        ):
+            await store.save_report(
+                account_id=account_id,
+                request_id=request_id,
+                snapshot=_report_access_snapshot(question),
+                artifact={},
+            )
+        await store.save_report(
+            account_id=other_account_id,
+            request_id="request-other",
+            snapshot=_report_access_snapshot("Other account question"),
+            artifact={},
+        )
+        await store.mark_paid(account_id=account_id, request_id="request-paid")
+        await conn.execute(
+            """
+            UPDATE content_ops_deflection_reports
+            SET created_at = CASE request_id
+                WHEN 'request-old' THEN TIMESTAMPTZ '2026-01-01T00:00:00Z'
+                WHEN 'request-new' THEN TIMESTAMPTZ '2026-01-03T00:00:00Z'
+                WHEN 'request-paid' THEN TIMESTAMPTZ '2026-01-02T00:00:00Z'
+                ELSE created_at
+            END,
+            updated_at = created_at
+            WHERE account_id = $1
+            """,
+            account_id,
+        )
 
-        async def fetch(self, query: str, *args: object) -> list[dict[str, object]]:
-            self.calls.append((query, args))
-            return [
-                {
-                    "account_id": "acct-1",
-                    "request_id": "request-1",
-                    "snapshot": json.dumps(
-                        _report_access_snapshot("How do I export reports?")
-                    ),
-                    "paid": False,
-                    "delivery_email": None,
-                    "created_at": "2026-01-02T00:00:00Z",
-                    "updated_at": "2026-01-02T00:00:00Z",
-                }
-            ]
+        rows = await store.list_reports(account_id=" acct-live-report-list ", limit=2)
+        paid_rows = await store.list_reports(account_id=account_id, limit=10, paid=True)
+        unpaid_rows = await store.list_reports(account_id=account_id, limit=10, paid=False)
+        unbounded_rows = await store.list_reports(account_id=account_id, limit=None)
 
-    pool = _Pool()
-    store = PostgresDeflectionReportArtifactStore(pool=pool)
-
-    rows = await store.list_reports(account_id=" acct-1 ", limit=7)
-    paid_rows = await store.list_reports(account_id="acct-1", limit=7, paid=True)
-    unbounded_rows = await store.list_reports(account_id="acct-1", limit=None)
-
-    assert rows[0].request_id == "request-1"
-    assert rows[0].snapshot["top_questions"][0]["question"] == "How do I export reports?"
-    assert pool.calls[0][1] == ("acct-1", 7)
-    assert "WHERE account_id = $1" in pool.calls[0][0]
-    assert "LIMIT $2" in pool.calls[0][0]
-    assert paid_rows[0].request_id == "request-1"
-    assert pool.calls[1][1] == ("acct-1", True, 7)
-    assert "AND paid = $2" in pool.calls[1][0]
-    assert "LIMIT $3" in pool.calls[1][0]
-    assert unbounded_rows[0].request_id == "request-1"
-    assert pool.calls[2][1] == ("acct-1",)
-    assert "ORDER BY created_at DESC" in pool.calls[2][0]
-    assert "LIMIT $" not in pool.calls[2][0]
+        assert [row.request_id for row in rows] == ["request-new", "request-paid"]
+        assert rows[0].snapshot["top_questions"][0]["question"] == "New question"
+        assert [row.request_id for row in paid_rows] == ["request-paid"]
+        assert [row.request_id for row in unpaid_rows] == ["request-new", "request-old"]
+        assert [row.request_id for row in unbounded_rows] == [
+            "request-new",
+            "request-paid",
+            "request-old",
+        ]
+        assert all(row.account_id == account_id for row in unbounded_rows)
+    finally:
+        await _cleanup_deflection_report_accounts(conn, (account_id, other_account_id))
+        await conn.close()
 
 
 @pytest.mark.asyncio
-async def test_postgres_delete_report_scopes_to_account_and_request_id() -> None:
-    class _Pool:
-        def __init__(self) -> None:
-            self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
-            self.fetchval_result = 1
+@pytest.mark.integration
+async def test_postgres_delete_report_live_scopes_to_account_and_request_id() -> None:
+    account_id = "acct-live-report-delete"
+    other_account_id = "acct-live-report-delete-other"
+    conn = await _connect_deflection_report_postgres()
+    try:
+        await _apply_deflection_report_migrations(conn)
+        await _cleanup_deflection_report_accounts(conn, (account_id, other_account_id))
+        store = PostgresDeflectionReportArtifactStore(pool=conn)
+        for current_account in (account_id, other_account_id):
+            await store.save_report(
+                account_id=current_account,
+                request_id="request-delete",
+                snapshot=_report_access_snapshot(f"Delete for {current_account}"),
+                artifact={},
+            )
+        await conn.execute(
+            """
+            INSERT INTO content_ops_deflection_report_deliveries (
+                account_id, request_id, payment_reference
+            )
+            VALUES ($1, $2, $3)
+            """,
+            account_id,
+            "request-delete",
+            "checkout-session:delete",
+        )
 
-        async def fetchval(self, query: str, *args: object) -> int:
-            self.fetchval_calls.append((query, args))
-            return self.fetchval_result
-
-    pool = _Pool()
-    store = PostgresDeflectionReportArtifactStore(pool=pool)
-
-    assert await store.delete_report(
-        account_id=" acct-1 ",
-        request_id=" request-delete ",
-    ) is True
-    query, args = pool.fetchval_calls[0]
-    assert args == ("acct-1", "request-delete")
-    assert "WITH target AS" in query
-    assert "DELETE FROM content_ops_deflection_report_deliveries" in query
-    assert "DELETE FROM content_ops_deflection_reports" in query
-    assert "WHERE account_id = $1 AND request_id = $2" in query
-
-    pool.fetchval_result = 0
-    assert await store.delete_report(account_id="acct-1", request_id="missing") is False
+        assert await store.delete_report(
+            account_id=f" {account_id} ",
+            request_id=" request-delete ",
+        ) is True
+        assert await store.get_artifact_record(
+            account_id=account_id,
+            request_id="request-delete",
+        ) is None
+        assert await store.get_artifact_record(
+            account_id=other_account_id,
+            request_id="request-delete",
+        ) is not None
+        assert (
+            await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM content_ops_deflection_report_deliveries
+                WHERE account_id = $1 AND request_id = $2
+                """,
+                account_id,
+                "request-delete",
+            )
+            == 0
+        )
+        assert await store.delete_report(
+            account_id=account_id,
+            request_id="request-delete",
+        ) is False
+    finally:
+        await _cleanup_deflection_report_accounts(conn, (account_id, other_account_id))
+        await conn.close()
 
 
 @pytest.mark.asyncio
@@ -6075,38 +6136,79 @@ async def test_report_retention_store_rejects_unsafe_boundaries() -> None:
 
 
 @pytest.mark.asyncio
-async def test_postgres_report_retention_uses_cutoff_and_limited_delete() -> None:
-    class _Pool:
-        def __init__(self) -> None:
-            self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
-            self.delete_result = 2
+@pytest.mark.integration
+async def test_postgres_report_retention_live_deletes_old_rows_with_limit() -> None:
+    account_id = "acct-live-report-retention"
+    conn = await _connect_deflection_report_postgres()
+    try:
+        await _apply_deflection_report_migrations(conn)
+        await _cleanup_deflection_report_accounts(conn, (account_id,))
+        store = PostgresDeflectionReportArtifactStore(pool=conn)
+        for request_id in ("oldest", "old", "fresh"):
+            await store.save_report(
+                account_id=account_id,
+                request_id=request_id,
+                snapshot=_report_access_snapshot(f"Question {request_id}"),
+                artifact={},
+            )
+        await conn.execute(
+            """
+            UPDATE content_ops_deflection_reports
+            SET created_at = CASE request_id
+                WHEN 'oldest' THEN TIMESTAMPTZ '2026-03-01T00:00:00Z'
+                WHEN 'old' THEN TIMESTAMPTZ '2026-04-01T00:00:00Z'
+                WHEN 'fresh' THEN TIMESTAMPTZ '2026-06-01T00:00:00Z'
+                ELSE created_at
+            END
+            WHERE account_id = $1
+            """,
+            account_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO content_ops_deflection_report_deliveries (
+                account_id, request_id, payment_reference
+            )
+            VALUES ($1, 'oldest', 'checkout-session:oldest')
+            """,
+            account_id,
+        )
+        cutoff = datetime(2026, 5, 1, tzinfo=timezone.utc)
 
-        async def fetchval(self, query: str, *args: object) -> int:
-            self.fetchval_calls.append((query, args))
-            if "SELECT COUNT(*)\n            FROM content_ops_deflection_reports" in query:
-                return 3
-            return self.delete_result
-
-    pool = _Pool()
-    store = PostgresDeflectionReportArtifactStore(pool=pool)
-    cutoff = datetime(2026, 5, 1, tzinfo=timezone.utc)
-
-    assert await store.count_reports_older_than(cutoff=cutoff) == 3
-    assert pool.fetchval_calls[0][1] == (cutoff,)
-    assert "created_at < $1" in pool.fetchval_calls[0][0]
-    assert await store.delete_reports_older_than(cutoff=cutoff, limit=25) == 2
-    limited_query, limited_args = pool.fetchval_calls[1]
-    assert limited_args == (cutoff, 25)
-    assert "WITH doomed AS" in limited_query
-    assert "DELETE FROM content_ops_deflection_report_deliveries" in limited_query
-    assert "DELETE FROM content_ops_deflection_reports" in limited_query
-    assert "LIMIT $2" in limited_query
-    pool.delete_result = 4
-    assert await store.delete_reports_older_than(cutoff=cutoff) == 4
-    unbounded_query, unbounded_args = pool.fetchval_calls[2]
-    assert unbounded_args == (cutoff,)
-    assert "DELETE FROM content_ops_deflection_reports" in unbounded_query
-    assert "LIMIT" not in unbounded_query
+        assert await store.count_reports_older_than(cutoff=cutoff) == 2
+        assert await store.delete_reports_older_than(cutoff=cutoff, limit=1) == 1
+        assert await store.get_artifact_record(
+            account_id=account_id,
+            request_id="oldest",
+        ) is None
+        assert await store.get_artifact_record(
+            account_id=account_id,
+            request_id="old",
+        ) is not None
+        assert (
+            await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM content_ops_deflection_report_deliveries
+                WHERE account_id = $1 AND request_id = 'oldest'
+                """,
+                account_id,
+            )
+            == 0
+        )
+        assert await store.count_reports_older_than(cutoff=cutoff) == 1
+        assert await store.delete_reports_older_than(cutoff=cutoff) == 1
+        assert await store.get_artifact_record(
+            account_id=account_id,
+            request_id="old",
+        ) is None
+        assert await store.get_artifact_record(
+            account_id=account_id,
+            request_id="fresh",
+        ) is not None
+    finally:
+        await _cleanup_deflection_report_accounts(conn, (account_id,))
+        await conn.close()
 
 
 @pytest.mark.asyncio
