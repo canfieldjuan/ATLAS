@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Sequence
 
 from extracted_content_pipeline.campaign_ports import SendRequest, SendResult
 from extracted_content_pipeline.campaign_sender import create_campaign_sender
@@ -62,6 +62,49 @@ def _metadata_text(task: ScheduledTask | Any, *keys: str) -> str | None:
     return None
 
 
+def _csv_text_tuple(value: Any) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in str(value or "").split(","):
+        text = item.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return tuple(out)
+
+
+def _entitlement_skip_payload(
+    *,
+    entitled_account_ids: Sequence[str],
+    target_account_id: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "entitled_account_count": len(tuple(entitled_account_ids)),
+        "accounts_scanned": 0,
+        "reports_scanned": 0,
+        "deltas_saved": 0,
+        "delta_deliveries_enqueued": 0,
+        "skipped_no_delta": 0,
+        "failed": 0,
+        "delivery_scanned": 0,
+        "delivery_sent": 0,
+        "delivery_failed": 0,
+        "delivery_deferred": 0,
+        "delivery_dry_run": 0,
+        "delivery_dry_run_enabled": bool(settings.deflection_delivery.dry_run),
+        "account_limit_reached": False,
+        "account_limit_overflow": False,
+        "reports_per_account_limit_reached": False,
+        "reports_per_account_limit_overflow": False,
+        "report_limit_reached_accounts": [],
+        "report_limit_overflow_accounts": [],
+    }
+    if target_account_id:
+        payload["target_account_id"] = target_account_id
+    return payload
+
+
 def _configured(value: Any) -> bool:
     return bool(str(value or "").strip())
 
@@ -114,8 +157,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     try:
         target_account_id = _metadata_text(task, "target_account_id", "account_id")
         target_current_request_id = _metadata_text(task, "current_request_id")
+        entitled_account_ids = _csv_text_tuple(cfg.entitled_account_ids)
         if target_current_request_id and not target_account_id:
             raise ValueError("current_request_id requires target_account_id")
+        if target_account_id and target_account_id not in entitled_account_ids:
+            return {
+                "_skip_synthesis": "Deflection delta target account not entitled",
+                **_entitlement_skip_payload(
+                    entitled_account_ids=entitled_account_ids,
+                    target_account_id=target_account_id,
+                ),
+            }
+        if not target_account_id and not entitled_account_ids:
+            return {
+                "_skip_synthesis": "No entitled deflection delta accounts configured",
+                **_entitlement_skip_payload(entitled_account_ids=entitled_account_ids),
+            }
         batch_kwargs: dict[str, Any] = {
             "account_limit": _metadata_int(
                 task,
@@ -127,6 +184,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "reports_per_account",
                 int(cfg.reports_per_account),
             ),
+            "entitled_account_ids": entitled_account_ids,
         }
         if target_account_id:
             batch_kwargs["account_id"] = target_account_id
@@ -154,6 +212,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             delivery_kwargs["account_id"] = target_account_id
         if target_current_request_id:
             delivery_kwargs["current_request_id"] = target_current_request_id
+        delivery_kwargs["entitled_account_ids"] = entitled_account_ids
         delivery_summary = await send_pending_deflection_delta_deliveries(
             pool,
             sender=_sender(dry_run=dry_run),
@@ -165,12 +224,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             count_kwargs: dict[str, Any] = {"account_id": target_account_id}
             if target_current_request_id:
                 count_kwargs["current_request_id"] = target_current_request_id
+            count_kwargs["entitled_account_ids"] = entitled_account_ids
             pending_delivery_count = await pending_deflection_delta_delivery_count(
                 pool,
                 **count_kwargs,
             )
         else:
-            pending_delivery_count = await pending_deflection_delta_delivery_count(pool)
+            pending_delivery_count = await pending_deflection_delta_delivery_count(
+                pool,
+                entitled_account_ids=entitled_account_ids,
+            )
 
     payload = {
         "accounts_scanned": summary.accounts_scanned,
@@ -199,6 +262,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "report_limit_overflow_accounts": list(
             summary.report_limit_overflow_accounts
         ),
+        "entitled_account_count": len(entitled_account_ids),
     }
     if target_account_id:
         payload["target_account_id"] = target_account_id

@@ -294,17 +294,20 @@ async def send_pending_deflection_delta_deliveries(
     config: DeflectionDeltaDeliveryConfig,
     account_id: str | None = None,
     current_request_id: str | None = None,
+    entitled_account_ids: Sequence[str] | None = None,
 ) -> DeflectionDeltaDeliveryRunSummary:
     """Send pending paid-report delta delivery emails and update queue status."""
 
     _validate_delta_config(config)
     scoped_account_id = _clean(account_id) or None
     scoped_current_request_id = _clean(current_request_id) or None
+    entitled_accounts = _optional_text_list(entitled_account_ids)
     rows = await pool.fetch(
         _PENDING_DELTA_SQL if config.dry_run else _CLAIM_PENDING_DELTA_SQL,
         int(config.limit),
         scoped_account_id,
         scoped_current_request_id,
+        entitled_accounts,
     )
     sent = failed = deferred = dry_run = 0
     for row in rows:
@@ -442,11 +445,13 @@ async def pending_deflection_delta_delivery_count(
     *,
     account_id: str | None = None,
     current_request_id: str | None = None,
+    entitled_account_ids: Sequence[str] | None = None,
 ) -> int:
     """Return queued delta deliveries that still require a configured sender."""
 
     scoped_account_id = _clean(account_id) or None
     scoped_current_request_id = _clean(current_request_id) or None
+    entitled_accounts = _optional_text_list(entitled_account_ids)
     count = await pool.fetchval(
         f"""
         SELECT COUNT(*)
@@ -460,9 +465,11 @@ async def pending_deflection_delta_delivery_count(
               )
           AND ($1::text IS NULL OR account_id = $1)
           AND ($2::text IS NULL OR current_request_id = $2)
+          AND ($3::text[] IS NULL OR account_id = ANY($3::text[]))
         """,
         scoped_account_id,
         scoped_current_request_id,
+        entitled_accounts,
     )
     parsed = _strict_int(count)
     return parsed if parsed is not None else 0
@@ -1545,6 +1552,20 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _optional_text_list(values: Sequence[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        text = _clean(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
 def _email_count(value: int) -> str:
     return f"{int(value):,}"
 
@@ -1658,6 +1679,7 @@ JOIN content_ops_deflection_reports baseline_report
 WHERE d.delivery_status = 'pending'
   AND ($2::text IS NULL OR d.account_id = $2)
   AND ($3::text IS NULL OR d.current_request_id = $3)
+  AND ($4::text[] IS NULL OR d.account_id = ANY($4::text[]))
 ORDER BY d.created_at
 LIMIT $1
 """
@@ -1679,6 +1701,7 @@ WITH claimed AS (
           )
       AND ($2::text IS NULL OR d.account_id = $2)
       AND ($3::text IS NULL OR d.current_request_id = $3)
+      AND ($4::text[] IS NULL OR d.account_id = ANY($4::text[]))
     ORDER BY d.created_at
     FOR UPDATE SKIP LOCKED
     LIMIT $1

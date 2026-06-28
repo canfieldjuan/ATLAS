@@ -99,7 +99,10 @@ other operator/test address, stop. The go-live check passes only when every
 delivery address you will send to is confirmed as a real paying customer. Copy
 the opted-in row's `account_id` and `current_request_id`; the manual rehearsal
 and live-send commands must use those exact values as `target_account_id` and
-`current_request_id`.
+`current_request_id`. Add the opted-in `account_id` to
+`ATLAS_DEFLECTION_DELTA_ENTITLED_ACCOUNT_IDS` before any dry-run or live
+activation; the delta task intentionally skips generation and pending delivery
+drain work when the allowlist is blank or when the target account is absent.
 
 ## Dry-Run Activation
 
@@ -111,6 +114,7 @@ rehearsal. Use the per-run `delivery_dry_run` override below instead.
 ```bash
 ATLAS_DEFLECTION_DELTA_ENABLED=true
 ATLAS_DEFLECTION_DELTA_CRON_EXPRESSION="0 8 1 * *"
+ATLAS_DEFLECTION_DELTA_ENTITLED_ACCOUNT_IDS="<account-id>"
 ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL="reports@example.com"
 ```
 
@@ -165,6 +169,7 @@ scheduled monthly cron after the entitlement/opt-in list is ready.
 
 ```bash
 ATLAS_DEFLECTION_DELTA_ENABLED=true
+ATLAS_DEFLECTION_DELTA_ENTITLED_ACCOUNT_IDS="<account-id>"
 ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false
 ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL="reports@example.com"
 ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY="<resend-api-key>"

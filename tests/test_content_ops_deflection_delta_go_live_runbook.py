@@ -59,6 +59,7 @@ def test_deflection_delta_go_live_runbook_rehearses_before_live_send() -> None:
     rollback = _section("Rollback")
 
     assert "ATLAS_DEFLECTION_DELTA_ENABLED=true" in dry_run
+    assert 'ATLAS_DEFLECTION_DELTA_ENTITLED_ACCOUNT_IDS="<account-id>"' in dry_run
     assert "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=true" not in dry_run
     assert "shared with the already-live" in dry_run
     assert "ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL" in dry_run
@@ -71,6 +72,7 @@ def test_deflection_delta_go_live_runbook_rehearses_before_live_send() -> None:
     assert "delta_deliveries_enqueued" in dry_run
     assert "`delivery_dry_run` is 1" in dry_run
     assert "delivery_failed" in dry_run
+    assert 'ATLAS_DEFLECTION_DELTA_ENTITLED_ACCOUNT_IDS="<account-id>"' in live
     assert "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false" in live
     assert "ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY" in live
     assert "target_account_id" in live
@@ -92,6 +94,17 @@ def test_deflection_delta_go_live_runbook_manual_run_uses_safe_override() -> Non
         "target_account_id": "<account-id>",
         "current_request_id": "<current-request-id>",
     }
+
+
+def test_deflection_delta_go_live_runbook_requires_entitlement_allowlist() -> None:
+    paid_pair = _section("Paid Pair Check")
+    dry_run = _section("Dry-Run Activation")
+    live = _section("Live Activation")
+
+    assert "ATLAS_DEFLECTION_DELTA_ENTITLED_ACCOUNT_IDS" in paid_pair
+    assert "skips generation and pending delivery" in paid_pair
+    assert 'ATLAS_DEFLECTION_DELTA_ENTITLED_ACCOUNT_IDS="<account-id>"' in dry_run
+    assert 'ATLAS_DEFLECTION_DELTA_ENTITLED_ACCOUNT_IDS="<account-id>"' in live
 
 
 def test_deflection_delta_go_live_runbook_autonomous_command_targets_delta_task() -> None:

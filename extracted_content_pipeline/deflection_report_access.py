@@ -142,10 +142,15 @@ class DeflectionReportArtifactStore(Protocol):
         self,
         *,
         limit: int | None = 100,
+        account_ids: Sequence[str] | None = None,
     ) -> tuple[str, ...]:
         """List tenants with paid reports, newest paid activity first."""
 
-    async def count_paid_report_accounts(self) -> int:
+    async def count_paid_report_accounts(
+        self,
+        *,
+        account_ids: Sequence[str] | None = None,
+    ) -> int:
         """Count tenants that have at least one paid report."""
 
     async def count_paid_reports(
@@ -407,11 +412,15 @@ class InMemoryDeflectionReportArtifactStore:
         self,
         *,
         limit: int | None = 100,
+        account_ids: Sequence[str] | None = None,
     ) -> tuple[str, ...]:
+        allowed_accounts = _account_id_tuple(account_ids)
         newest_by_account: dict[str, datetime] = {}
         fallback = datetime.min.replace(tzinfo=timezone.utc)
         for key, row in self._rows.items():
             account_id, _request_id = key
+            if allowed_accounts is not None and account_id not in allowed_accounts:
+                continue
             if not row.paid:
                 continue
             paid_activity_at = self._paid_at_by_key.get(
@@ -427,11 +436,17 @@ class InMemoryDeflectionReportArtifactStore:
             return tuple(ordered)
         return tuple(ordered[:_bounded_limit(limit)])
 
-    async def count_paid_report_accounts(self) -> int:
+    async def count_paid_report_accounts(
+        self,
+        *,
+        account_ids: Sequence[str] | None = None,
+    ) -> int:
+        allowed_accounts = _account_id_tuple(account_ids)
         return len(
             {
                 account_id
                 for (account_id, _request_id), row in self._rows.items()
+                if allowed_accounts is None or account_id in allowed_accounts
                 if row.paid
             }
         )
@@ -827,17 +842,24 @@ class PostgresDeflectionReportArtifactStore:
         self,
         *,
         limit: int | None = 100,
+        account_ids: Sequence[str] | None = None,
     ) -> tuple[str, ...]:
         args: list[Any] = []
+        filters = ["paid = true"]
+        allowed_accounts = _account_id_tuple(account_ids)
+        if allowed_accounts is not None:
+            args.append(list(allowed_accounts))
+            filters.append(f"account_id = ANY(${len(args)}::text[])")
         limit_clause = ""
         if limit is not None:
             args.append(_bounded_limit(limit))
-            limit_clause = "LIMIT $1"
+            limit_clause = f"LIMIT ${len(args)}"
+        where_clause = " AND ".join(filters)
         rows = await self.pool.fetch(
             f"""
             SELECT account_id
             FROM content_ops_deflection_reports
-            WHERE paid = true
+            WHERE {where_clause}
             GROUP BY account_id
             ORDER BY MAX(COALESCE(paid_at, updated_at, created_at)) DESC, account_id ASC
             {limit_clause}
@@ -850,13 +872,25 @@ class PostgresDeflectionReportArtifactStore:
             if (account_id := _clean(row_to_dict(row).get("account_id")))
         )
 
-    async def count_paid_report_accounts(self) -> int:
+    async def count_paid_report_accounts(
+        self,
+        *,
+        account_ids: Sequence[str] | None = None,
+    ) -> int:
+        args: list[Any] = []
+        filters = ["paid = true"]
+        allowed_accounts = _account_id_tuple(account_ids)
+        if allowed_accounts is not None:
+            args.append(list(allowed_accounts))
+            filters.append(f"account_id = ANY(${len(args)}::text[])")
+        where_clause = " AND ".join(filters)
         row = await self.pool.fetchrow(
-            """
+            f"""
             SELECT COUNT(DISTINCT account_id) AS count
             FROM content_ops_deflection_reports
-            WHERE paid = true
-            """
+            WHERE {where_clause}
+            """,
+            *args,
         )
         return _row_count(row)
 
@@ -1683,6 +1717,20 @@ def _text_list(value: Any) -> list[str]:
     return [text for item in value if (text := _clean(item))]
 
 
+def _account_id_tuple(value: Sequence[str] | None) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    seen: set[str] = set()
+    account_ids: list[str] = []
+    for item in value:
+        account_id = _clean(item)
+        if not account_id or account_id in seen:
+            continue
+        seen.add(account_id)
+        account_ids.append(account_id)
+    return tuple(account_ids)
+
+
 def _required_text(value: Any, field: str) -> str:
     text = _clean(value)
     if not text:
@@ -1806,6 +1854,7 @@ async def compute_and_save_recent_deflection_deltas(
     *,
     account_id: str | None = None,
     current_request_id: str | None = None,
+    entitled_account_ids: Sequence[str] | None = None,
     account_limit: int | None = 100,
     reports_per_account: int | None = 25,
 ) -> DeflectionDeltaBatchSummary:
@@ -1813,6 +1862,7 @@ async def compute_and_save_recent_deflection_deltas(
 
     scoped_account_id = _clean(account_id)
     scoped_current_request_id = _clean(current_request_id)
+    entitled_accounts = _account_id_tuple(entitled_account_ids)
     if scoped_current_request_id and not scoped_account_id:
         raise ValueError("current_request_id requires account_id")
     resolved_account_limit = (
@@ -1824,8 +1874,13 @@ async def compute_and_save_recent_deflection_deltas(
     accounts = (
         (scoped_account_id,)
         if scoped_account_id
-        else await store.list_paid_report_accounts(limit=resolved_account_limit)
+        else await store.list_paid_report_accounts(
+            limit=resolved_account_limit,
+            account_ids=entitled_accounts,
+        )
     )
+    if scoped_account_id and entitled_accounts is not None:
+        accounts = (scoped_account_id,) if scoped_account_id in entitled_accounts else ()
     account_limit_reached = (
         not scoped_account_id
         and resolved_account_limit is not None
@@ -1834,7 +1889,7 @@ async def compute_and_save_recent_deflection_deltas(
     account_limit_overflow = False
     if account_limit_reached:
         account_limit_overflow = (
-            await store.count_paid_report_accounts()
+            await store.count_paid_report_accounts(account_ids=entitled_accounts)
         ) > resolved_account_limit
     reports_scanned = 0
     deltas_saved = 0

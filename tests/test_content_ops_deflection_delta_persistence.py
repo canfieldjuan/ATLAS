@@ -351,6 +351,46 @@ async def test_in_memory_paid_account_discovery_orders_by_paid_activity() -> Non
 
 
 @pytest.mark.asyncio
+async def test_in_memory_paid_account_discovery_filters_entitled_accounts() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-entitled-old",
+        request_id="old-report",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-paid-not-entitled",
+        request_id="newer-report",
+        created_at=datetime(2026, 5, 2, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-entitled-new",
+        request_id="new-report",
+        created_at=datetime(2026, 5, 3, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+
+    accounts = await store.list_paid_report_accounts(
+        limit=10,
+        account_ids=(
+            "acct-entitled-old",
+            "acct-entitled-new",
+            "acct-missing",
+        ),
+    )
+
+    assert accounts == ("acct-entitled-new", "acct-entitled-old")
+    assert await store.count_paid_report_accounts(
+        account_ids=("acct-entitled-old", "acct-entitled-new")
+    ) == 2
+
+
+@pytest.mark.asyncio
 async def test_in_memory_paid_report_listing_orders_by_paid_activity_window() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     await _save(
@@ -485,6 +525,74 @@ async def test_recent_delta_batch_discovers_paid_accounts_and_stays_tenant_scope
         current_request_id="acct-2-current",
         baseline_request_id="acct-1-current",
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_recent_delta_batch_scans_only_entitled_paid_accounts() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-entitled",
+        request_id="entitled-baseline",
+        model=_model(_row("repeat_entitled", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-entitled",
+        request_id="entitled-current",
+        model=_model(_row("repeat_entitled", ticket_count=5, cost=67.5)),
+        delivery_email="entitled@example.com",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-paid-not-entitled",
+        request_id="unentitled-baseline",
+        model=_model(_row("repeat_unentitled", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-paid-not-entitled",
+        request_id="unentitled-current",
+        model=_model(_row("repeat_unentitled", ticket_count=7, cost=94.5)),
+        delivery_email="unentitled@example.com",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 4, tzinfo=timezone.utc),
+    )
+
+    summary = await compute_and_save_recent_deflection_deltas(
+        store,
+        entitled_account_ids=("acct-entitled",),
+        account_limit=10,
+        reports_per_account=10,
+    )
+
+    assert summary == DeflectionDeltaBatchSummary(
+        accounts_scanned=1,
+        reports_scanned=2,
+        deltas_saved=1,
+        delta_deliveries_enqueued=1,
+        skipped_no_delta=1,
+        failed=0,
+    )
+    assert await store.get_deflection_delta(
+        account_id="acct-entitled",
+        current_request_id="entitled-current",
+        baseline_request_id="entitled-baseline",
+    )
+    assert await store.get_deflection_delta(
+        account_id="acct-paid-not-entitled",
+        current_request_id="unentitled-current",
+        baseline_request_id="unentitled-baseline",
+    ) is None
+    assert store._delta_delivery_keys == {
+        ("acct-entitled", "entitled-current", "entitled-baseline")
+    }
 
 
 @pytest.mark.asyncio
@@ -777,7 +885,13 @@ async def test_recent_delta_batch_marks_report_window_overflow() -> None:
 @pytest.mark.asyncio
 async def test_recent_delta_batch_logs_per_report_failures(caplog) -> None:
     class _FailingStore:
-        async def list_paid_report_accounts(self, *, limit: int | None = 100) -> tuple[str, ...]:
+        async def list_paid_report_accounts(
+            self,
+            *,
+            limit: int | None = 100,
+            account_ids: tuple[str, ...] | None = None,
+        ) -> tuple[str, ...]:
+            assert account_ids is None
             return ("acct-1",)
 
         async def list_reports(
