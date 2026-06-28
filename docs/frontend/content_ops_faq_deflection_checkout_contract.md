@@ -1,7 +1,7 @@
 # Content Ops FAQ Deflection Checkout Contract
 
-This is the frontend handoff for the one-time `$1,500` FAQ deflection report
-unlock flow.
+This is the frontend handoff for the one-time FAQ deflection report unlock
+flow, including the standard and partner price variants.
 
 The portfolio owns Stripe Checkout creation and the results page UI. ATLAS owns
 the free snapshot, paid report storage, Stripe webhook verification, and the
@@ -136,6 +136,57 @@ payment.
 
 ## Stripe Checkout Metadata
 
+Before creating Stripe Checkout, the portfolio must ask ATLAS for the trusted
+charge terms. Public display routes expose only non-secret amount/currency terms:
+
+```http
+GET /content-ops/deflection-reports/pricing/standard
+GET /content-ops/deflection-reports/pricing/{price_variant}
+```
+
+Supported `price_variant` values are `standard` and `partner`. Pricing responses
+return:
+
+```ts
+type DeflectionPricingTerms = {
+  variant: "standard" | "partner";
+  status: "configured";
+  amount_cents: number;
+  currency: "usd";
+};
+```
+
+These routes never expose Stripe Price IDs. To create a charge, request report-
+specific checkout authorization:
+
+```http
+POST /content-ops/deflection-reports/{request_id}/checkout-authorization?price_variant=partner
+```
+
+The `price_variant` query parameter is optional and defaults to `standard`.
+Unknown variants return `400`. Misconfigured variants return `503`, including
+when the variant amount is not present in
+`ATLAS_SAAS_STRIPE_CONTENT_OPS_DEFLECTION_REPORT_ALLOWED_AMOUNT_CENTS`.
+
+Successful checkout authorization returns the trusted charge terms:
+
+```ts
+type DeflectionCheckoutAuthorization = {
+  request_id: string;
+  status: "authorized";
+  checkout: {
+    variant: "standard" | "partner";
+    amount_cents: number;
+    currency: "usd";
+    price_id: string;
+  };
+};
+```
+
+The portfolio must use `checkout.price_id` as the Stripe Checkout line item and
+must verify Stripe's returned session amount/currency against
+`checkout.amount_cents` and `checkout.currency` before redirecting the buyer.
+
 The portfolio must create a one-time Stripe Checkout session with:
 
 ```ts
@@ -143,6 +194,10 @@ type DeflectionCheckoutMetadata = {
   source: "content_ops_deflection_report";
   account_id: string;
   request_id: string;
+  price_variant: "standard" | "partner";
+  price_id: string;
+  price_amount_cents: string;
+  price_currency: "usd";
 };
 ```
 
@@ -152,6 +207,9 @@ Required session properties:
 - `metadata.source: "content_ops_deflection_report"`
 - `metadata.account_id`: the same ATLAS account/tenant id that owns the report
 - `metadata.request_id`: the Content Ops request id returned by execute
+- `metadata.price_variant`: the server-bound price variant used for the report
+- `metadata.price_id`, `metadata.price_amount_cents`, and
+  `metadata.price_currency`: attribution copied from ATLAS authorization
 - `amount_total`: exactly one ATLAS-configured allowed amount in cents
 - `currency: "usd"`
 

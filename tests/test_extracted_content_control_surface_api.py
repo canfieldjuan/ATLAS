@@ -95,6 +95,25 @@ def _standard_pricing_terms_route(
     )
 
 
+def _pricing_terms_route(
+    *,
+    config_kwargs: dict[str, object] | None = None,
+):
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            **(config_kwargs or {"deflection_checkout_price_id": "price_report"}),
+        ),
+        scope_provider=lambda: {"account_id": "acct-gate", "user_id": "user-gate"},
+    )
+    return _route(
+        router,
+        "/ops/deflection-reports/pricing/{price_variant}",
+        "GET",
+    )
+
+
 class _UploadFile:
     def __init__(self, filename: str, content: bytes):
         self.filename = filename
@@ -2995,6 +3014,59 @@ async def test_deflection_standard_pricing_terms_returns_public_contract_only():
 
 
 @pytest.mark.asyncio
+async def test_deflection_variant_pricing_terms_returns_partner_public_contract_only():
+    route = _pricing_terms_route(
+        config_kwargs={
+            "deflection_checkout_partner_amount_cents": 100000,
+            "deflection_checkout_allowed_amount_cents": "100000,150000",
+            "deflection_checkout_currency": "USD",
+            "deflection_checkout_partner_price_id": " price_partner_deflection ",
+        },
+    )
+
+    payload = await route.endpoint(price_variant="partner")
+
+    assert payload == {
+        "variant": "partner",
+        "status": "configured",
+        "amount_cents": 100000,
+        "currency": "usd",
+    }
+    assert "price_id" not in payload
+    assert "price_partner_deflection" not in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_deflection_pricing_terms_rejects_unknown_variant():
+    route = _pricing_terms_route()
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(price_variant="vip")
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Unsupported deflection price variant."
+
+
+@pytest.mark.asyncio
+async def test_deflection_partner_pricing_terms_fails_when_amount_not_allowed():
+    route = _pricing_terms_route(
+        config_kwargs={
+            "deflection_checkout_partner_amount_cents": 100000,
+            "deflection_checkout_allowed_amount_cents": "150000",
+            "deflection_checkout_partner_price_id": "price_partner_deflection",
+        },
+    )
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(price_variant="partner")
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == (
+        "Deflection checkout amount is not accepted by the payment gate."
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("config_kwargs", "detail"),
     [
@@ -3075,6 +3147,7 @@ async def test_deflection_checkout_authorization_returns_canonical_terms_only():
         "request_id": "request-ready",
         "status": "authorized",
         "checkout": {
+            "variant": "standard",
             "amount_cents": 150000,
             "currency": "usd",
             "price_id": "price_deflection_report",
@@ -3083,6 +3156,85 @@ async def test_deflection_checkout_authorization_returns_canonical_terms_only():
     assert "Full report" not in str(payload)
     assert "Customer ticket text" not in str(payload)
     assert "buyer@example.com" not in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_deflection_checkout_authorization_returns_partner_terms_when_requested():
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-gate",
+        request_id="request-ready",
+        snapshot={"summary": {"generated": 1}},
+        artifact={"markdown": "# Full report"},
+    )
+    route = _checkout_authorization_route(
+        store,
+        config_kwargs={
+            "deflection_checkout_amount_cents": 150000,
+            "deflection_checkout_price_id": "price_standard_deflection",
+            "deflection_checkout_partner_amount_cents": 100000,
+            "deflection_checkout_allowed_amount_cents": "100000,150000",
+            "deflection_checkout_currency": "USD",
+            "deflection_checkout_partner_price_id": " price_partner_deflection ",
+        },
+    )
+
+    payload = await route.endpoint(
+        request_id="request-ready",
+        price_variant="partner",
+    )
+
+    assert payload == {
+        "request_id": "request-ready",
+        "status": "authorized",
+        "checkout": {
+            "variant": "partner",
+            "amount_cents": 100000,
+            "currency": "usd",
+            "price_id": "price_partner_deflection",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_deflection_checkout_authorization_partner_requires_explicit_allowed_amount():
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-gate",
+        request_id="request-ready",
+        snapshot={"summary": {"generated": 1}},
+        artifact={"markdown": "# Full report"},
+    )
+    route = _checkout_authorization_route(
+        store,
+        config_kwargs={
+            "deflection_checkout_amount_cents": 150000,
+            "deflection_checkout_price_id": "price_standard_deflection",
+            "deflection_checkout_partner_amount_cents": 100000,
+            "deflection_checkout_allowed_amount_cents": "",
+            "deflection_checkout_partner_price_id": "price_partner_deflection",
+        },
+    )
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(request_id="request-ready", price_variant="partner")
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == (
+        "Deflection checkout amount is not accepted by the payment gate."
+    )
+
+
+@pytest.mark.asyncio
+async def test_deflection_checkout_authorization_rejects_unknown_variant():
+    store = InMemoryDeflectionReportArtifactStore()
+    route = _checkout_authorization_route(store)
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(request_id="request-ready", price_variant="vip")
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Unsupported deflection price variant."
 
 
 @pytest.mark.asyncio
@@ -3271,6 +3423,11 @@ def test_deflection_report_routes_use_public_and_trusted_dependencies() -> None:
         "/ops/deflection-reports/pricing/standard",
         "GET",
     )
+    variant_pricing_terms_route = _route(
+        router,
+        "/ops/deflection-reports/pricing/{price_variant}",
+        "GET",
+    )
     artifact_route = _route(
         router,
         "/ops/deflection-reports/{request_id}/artifact",
@@ -3299,6 +3456,9 @@ def test_deflection_report_routes_use_public_and_trusted_dependencies() -> None:
     assert "_public_deflection_gate" in _dependency_names(
         standard_pricing_terms_route
     )
+    assert "_public_deflection_gate" in _dependency_names(
+        variant_pricing_terms_route
+    )
     assert "_public_deflection_gate" in _dependency_names(artifact_route)
     assert "_public_deflection_gate" in _dependency_names(
         checkout_authorization_route
@@ -3307,6 +3467,9 @@ def test_deflection_report_routes_use_public_and_trusted_dependencies() -> None:
     assert "_public_deflection_gate" in _dependency_names(delete_route)
     assert "_trusted_paid_release" not in _dependency_names(
         standard_pricing_terms_route
+    )
+    assert "_trusted_paid_release" not in _dependency_names(
+        variant_pricing_terms_route
     )
     assert "_trusted_paid_release" not in _dependency_names(artifact_route)
     assert "_trusted_paid_release" not in _dependency_names(

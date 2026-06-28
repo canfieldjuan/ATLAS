@@ -489,6 +489,7 @@ def test_content_ops_public_deflection_routes_use_rate_limit_gate() -> None:
     public_routes = [
         ("/content-ops/deflection-reports/submit", "POST"),
         ("/content-ops/deflection-reports/pricing/standard", "GET"),
+        ("/content-ops/deflection-reports/pricing/{price_variant}", "GET"),
         ("/content-ops/deflection-reports/{request_id}/snapshot", "GET"),
         ("/content-ops/deflection-reports/{request_id}/artifact", "GET"),
         ("/content-ops/deflection-reports/{request_id}/report-model", "GET"),

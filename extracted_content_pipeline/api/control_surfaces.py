@@ -168,6 +168,11 @@ _DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS = 15
 _DEFLECTION_SUBMIT_OUTPUTS = ("faq_deflection_report",)
 _DEFLECTION_SUBMIT_INTERNAL_TOKEN_KEY = "_deflection_submit_internal_token"
 _DEFLECTION_SUBMIT_INTERNAL_TOKEN = object()
+_DEFLECTION_PRICE_VARIANT_STANDARD = "standard"
+_DEFLECTION_PRICE_VARIANT_PARTNER = "partner"
+_DEFLECTION_PRICE_VARIANTS = frozenset(
+    {_DEFLECTION_PRICE_VARIANT_STANDARD, _DEFLECTION_PRICE_VARIANT_PARTNER}
+)
 _DEFLECTION_SUBMIT_PLATFORMS = frozenset({
     "zendesk",
     "intercom",
@@ -421,6 +426,8 @@ class ContentOpsControlSurfaceApiConfig:
     deflection_checkout_allowed_amount_cents: str = ""
     deflection_checkout_currency: str = "usd"
     deflection_checkout_price_id: str = ""
+    deflection_checkout_partner_amount_cents: int = 100000
+    deflection_checkout_partner_price_id: str = ""
     ingestion_import_max_concurrency: int = 8
 
     def __post_init__(self) -> None:
@@ -887,7 +894,19 @@ def create_content_ops_control_surface_router(
         dependencies=public_deflection_dependencies,
     )
     async def deflection_report_standard_pricing_terms() -> dict[str, Any]:
-        return _deflection_standard_pricing_terms(resolved_config)
+        return _deflection_pricing_terms(
+            resolved_config,
+            price_variant=_DEFLECTION_PRICE_VARIANT_STANDARD,
+        )
+
+    @router.get(
+        "/deflection-reports/pricing/{price_variant}",
+        dependencies=public_deflection_dependencies,
+    )
+    async def deflection_report_pricing_terms(
+        price_variant: str = PathParam(..., min_length=1, max_length=80),
+    ) -> dict[str, Any]:
+        return _deflection_pricing_terms(resolved_config, price_variant=price_variant)
 
     @router.get(
         "/deflection-reports/{request_id}/snapshot",
@@ -1012,8 +1031,12 @@ def create_content_ops_control_surface_router(
     )
     async def deflection_report_checkout_authorization(
         request_id: str = PathParam(..., min_length=1, max_length=200),
+        price_variant: str | None = None,
     ) -> dict[str, Any]:
-        checkout = _deflection_checkout_terms(resolved_config)
+        checkout = _deflection_checkout_terms(
+            resolved_config,
+            price_variant=price_variant,
+        )
         store = await _resolve_deflection_report_store(deflection_report_store_provider)
         scope = await _resolve_scope(scope_provider)
         record = await store.get_artifact_record(
@@ -2473,22 +2496,26 @@ def _deflection_submit_title(data: Mapping[str, Any]) -> str:
 
 def _deflection_checkout_terms(
     config: ContentOpsControlSurfaceApiConfig,
+    *,
+    price_variant: str | None = None,
 ) -> dict[str, Any]:
+    variant = _deflection_checkout_variant(price_variant)
     try:
-        amount_cents = int(config.deflection_checkout_amount_cents)
+        amount_cents = int(_deflection_checkout_variant_amount(config, variant))
+        default_amount_cents = int(config.deflection_checkout_amount_cents)
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=503,
             detail="Deflection checkout amount is not configured.",
         ) from exc
     currency = (_clean(config.deflection_checkout_currency) or "").lower()
-    price_id = _clean(config.deflection_checkout_price_id)
+    price_id = _deflection_checkout_variant_price_id(config, variant)
     if amount_cents <= 0:
         raise HTTPException(
             status_code=503,
             detail="Deflection checkout amount is not configured.",
         )
-    allowed_amounts = _deflection_checkout_allowed_amounts(config, amount_cents)
+    allowed_amounts = _deflection_checkout_allowed_amounts(config, default_amount_cents)
     if amount_cents not in allowed_amounts:
         raise HTTPException(
             status_code=503,
@@ -2505,22 +2532,55 @@ def _deflection_checkout_terms(
             detail="Deflection checkout price is not configured.",
         )
     return {
+        "variant": variant,
         "amount_cents": amount_cents,
         "currency": currency,
         "price_id": price_id,
     }
 
 
-def _deflection_standard_pricing_terms(
+def _deflection_pricing_terms(
     config: ContentOpsControlSurfaceApiConfig,
+    *,
+    price_variant: str | None = None,
 ) -> dict[str, Any]:
-    checkout = _deflection_checkout_terms(config)
+    checkout = _deflection_checkout_terms(config, price_variant=price_variant)
     return {
-        "variant": "standard",
+        "variant": checkout["variant"],
         "status": "configured",
         "amount_cents": checkout["amount_cents"],
         "currency": checkout["currency"],
     }
+
+
+def _deflection_checkout_variant(price_variant: str | None) -> str:
+    normalized = (_clean(price_variant) or "").lower()
+    if not normalized:
+        return _DEFLECTION_PRICE_VARIANT_STANDARD
+    if normalized not in _DEFLECTION_PRICE_VARIANTS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported deflection price variant.",
+        )
+    return normalized
+
+
+def _deflection_checkout_variant_amount(
+    config: ContentOpsControlSurfaceApiConfig,
+    price_variant: str,
+) -> int:
+    if price_variant == _DEFLECTION_PRICE_VARIANT_PARTNER:
+        return config.deflection_checkout_partner_amount_cents
+    return config.deflection_checkout_amount_cents
+
+
+def _deflection_checkout_variant_price_id(
+    config: ContentOpsControlSurfaceApiConfig,
+    price_variant: str,
+) -> str:
+    if price_variant == _DEFLECTION_PRICE_VARIANT_PARTNER:
+        return _clean(config.deflection_checkout_partner_price_id) or ""
+    return _clean(config.deflection_checkout_price_id) or ""
 
 
 def _deflection_checkout_allowed_amounts(

@@ -107,6 +107,21 @@ class SaaSAuthConfig(BaseSettings):
         default="",
         description="Stripe Price ID for the one-time Content Ops FAQ deflection report",
     )
+    stripe_content_ops_deflection_report_partner_amount_cents: int = Field(
+        default=100000,
+        ge=0,
+        description=(
+            "Partner-variant Stripe Checkout amount for the one-time Content Ops FAQ "
+            "deflection report"
+        ),
+    )
+    stripe_content_ops_deflection_report_partner_price_id: str = Field(
+        default="",
+        description=(
+            "Stripe Price ID for the partner-variant one-time Content Ops FAQ "
+            "deflection report"
+        ),
+    )
     stripe_content_ops_deflection_report_allowed_amount_cents: str = Field(
         default="",
         description=(
