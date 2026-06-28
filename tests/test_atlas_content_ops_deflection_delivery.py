@@ -639,10 +639,73 @@ async def test_pending_deflection_delta_delivery_count_includes_stale_sending() 
 
     assert count == 2
     query, args = pool.fetchval_calls[0]
-    assert args == ()
+    assert args == (None, None)
     assert "delivery_status = 'pending'" in query
     assert "delivery_status = 'sending'" in query
     assert DELIVERY_CLAIM_STALE_AFTER in query
+
+
+@pytest.mark.asyncio
+async def test_delta_delivery_queue_can_be_scoped_to_one_account() -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=True,
+        ),
+        account_id=" acct-target ",
+    )
+    count = await pending_deflection_delta_delivery_count(
+        pool,
+        account_id=" acct-target ",
+    )
+
+    assert summary.scanned == 1
+    assert count == 1
+    fetch_query, fetch_args = pool.fetch_calls[0]
+    assert fetch_args == (5, "acct-target", None)
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in fetch_query
+    count_query, count_args = pool.fetchval_calls[0]
+    assert count_args == ("acct-target", None)
+    assert "AND ($1::text IS NULL OR account_id = $1)" in count_query
+
+
+@pytest.mark.asyncio
+async def test_delta_delivery_queue_can_be_scoped_to_one_current_request() -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+        account_id="acct-target",
+        current_request_id="checked-current",
+    )
+    count = await pending_deflection_delta_delivery_count(
+        pool,
+        account_id="acct-target",
+        current_request_id="checked-current",
+    )
+
+    assert summary.scanned == 1
+    assert count == 1
+    claim_query, claim_args = pool.fetch_calls[0]
+    assert claim_args == (5, "acct-target", "checked-current")
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in claim_query
+    assert "AND ($3::text IS NULL OR d.current_request_id = $3)" in claim_query
+    count_query, count_args = pool.fetchval_calls[0]
+    assert count_args == ("acct-target", "checked-current")
+    assert "AND ($2::text IS NULL OR current_request_id = $2)" in count_query
 
 
 @pytest.mark.asyncio

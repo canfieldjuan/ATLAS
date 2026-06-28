@@ -488,6 +488,135 @@ async def test_recent_delta_batch_discovers_paid_accounts_and_stays_tenant_scope
 
 
 @pytest.mark.asyncio
+async def test_recent_delta_batch_account_scope_scans_only_requested_account() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-target",
+        request_id="target-baseline",
+        model=_model(_row("target_repeat", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-target",
+        request_id="target-current",
+        model=_model(_row("target_repeat", ticket_count=5, cost=67.5)),
+        delivery_email="target@example.com",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-other",
+        request_id="other-baseline",
+        model=_model(_row("other_repeat", ticket_count=2, cost=27.0)),
+        created_at=datetime(2026, 5, 2, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-other",
+        request_id="other-current",
+        model=_model(_row("other_repeat", ticket_count=6, cost=81.0)),
+        delivery_email="other@example.com",
+        created_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 4, tzinfo=timezone.utc),
+    )
+
+    summary = await compute_and_save_recent_deflection_deltas(
+        store,
+        account_id=" acct-target ",
+        account_limit=1,
+        reports_per_account=10,
+    )
+
+    assert summary == DeflectionDeltaBatchSummary(
+        accounts_scanned=1,
+        reports_scanned=2,
+        deltas_saved=1,
+        delta_deliveries_enqueued=1,
+        skipped_no_delta=1,
+        failed=0,
+    )
+    assert summary.account_limit_reached is False
+    assert await store.get_deflection_delta(
+        account_id="acct-target",
+        current_request_id="target-current",
+        baseline_request_id="target-baseline",
+    )
+    assert await store.get_deflection_delta(
+        account_id="acct-other",
+        current_request_id="other-current",
+        baseline_request_id="other-baseline",
+    ) is None
+    assert store._delta_delivery_keys == {
+        ("acct-target", "target-current", "target-baseline")
+    }
+
+
+@pytest.mark.asyncio
+async def test_recent_delta_batch_current_request_scope_uses_only_checked_report() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await _save(
+        store,
+        account_id="acct-target",
+        request_id="oldest",
+        model=_model(_row("repeat", ticket_count=1, cost=13.5)),
+        created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-target",
+        request_id="checked-current",
+        model=_model(_row("repeat", ticket_count=3, cost=40.5)),
+        delivery_email="checked@example.com",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+    await _save(
+        store,
+        account_id="acct-target",
+        request_id="newer-current",
+        model=_model(_row("repeat", ticket_count=5, cost=67.5)),
+        delivery_email="newer@example.com",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        paid_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+
+    summary = await compute_and_save_recent_deflection_deltas(
+        store,
+        account_id="acct-target",
+        current_request_id="checked-current",
+        reports_per_account=100,
+    )
+
+    assert summary == DeflectionDeltaBatchSummary(
+        accounts_scanned=1,
+        reports_scanned=1,
+        deltas_saved=1,
+        delta_deliveries_enqueued=1,
+        skipped_no_delta=0,
+        failed=0,
+    )
+    assert await store.get_deflection_delta(
+        account_id="acct-target",
+        current_request_id="checked-current",
+        baseline_request_id="oldest",
+    )
+    assert await store.get_deflection_delta(
+        account_id="acct-target",
+        current_request_id="newer-current",
+        baseline_request_id="checked-current",
+    ) is None
+    assert store._delta_delivery_keys == {
+        ("acct-target", "checked-current", "oldest")
+    }
+
+
+@pytest.mark.asyncio
 async def test_recent_delta_batch_enqueues_delivery_for_current_report_email() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     await _save(

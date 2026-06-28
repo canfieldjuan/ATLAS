@@ -292,13 +292,19 @@ async def send_pending_deflection_delta_deliveries(
     *,
     sender: DeflectionReportDeliverySender,
     config: DeflectionDeltaDeliveryConfig,
+    account_id: str | None = None,
+    current_request_id: str | None = None,
 ) -> DeflectionDeltaDeliveryRunSummary:
     """Send pending paid-report delta delivery emails and update queue status."""
 
     _validate_delta_config(config)
+    scoped_account_id = _clean(account_id) or None
+    scoped_current_request_id = _clean(current_request_id) or None
     rows = await pool.fetch(
         _PENDING_DELTA_SQL if config.dry_run else _CLAIM_PENDING_DELTA_SQL,
         int(config.limit),
+        scoped_account_id,
+        scoped_current_request_id,
     )
     sent = failed = deferred = dry_run = 0
     for row in rows:
@@ -431,19 +437,32 @@ async def send_pending_deflection_delta_deliveries(
     )
 
 
-async def pending_deflection_delta_delivery_count(pool: Any) -> int:
+async def pending_deflection_delta_delivery_count(
+    pool: Any,
+    *,
+    account_id: str | None = None,
+    current_request_id: str | None = None,
+) -> int:
     """Return queued delta deliveries that still require a configured sender."""
 
+    scoped_account_id = _clean(account_id) or None
+    scoped_current_request_id = _clean(current_request_id) or None
     count = await pool.fetchval(
         f"""
         SELECT COUNT(*)
         FROM content_ops_deflection_delta_deliveries
-        WHERE delivery_status = 'pending'
-           OR (
+        WHERE (
+                delivery_status = 'pending'
+                OR (
                 delivery_status = 'sending'
                 AND updated_at < NOW() - INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'
-           )
-        """
+                )
+              )
+          AND ($1::text IS NULL OR account_id = $1)
+          AND ($2::text IS NULL OR current_request_id = $2)
+        """,
+        scoped_account_id,
+        scoped_current_request_id,
     )
     parsed = _strict_int(count)
     return parsed if parsed is not None else 0
@@ -1637,6 +1656,8 @@ JOIN content_ops_deflection_reports baseline_report
   ON baseline_report.account_id = d.account_id
  AND baseline_report.request_id = d.baseline_request_id
 WHERE d.delivery_status = 'pending'
+  AND ($2::text IS NULL OR d.account_id = $2)
+  AND ($3::text IS NULL OR d.current_request_id = $3)
 ORDER BY d.created_at
 LIMIT $1
 """
@@ -1649,11 +1670,15 @@ WITH claimed AS (
         d.baseline_request_id,
         d.created_at
     FROM content_ops_deflection_delta_deliveries d
-    WHERE d.delivery_status = 'pending'
-       OR (
+    WHERE (
+            d.delivery_status = 'pending'
+            OR (
             d.delivery_status = 'sending'
             AND d.updated_at < NOW() - INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'
-       )
+            )
+          )
+      AND ($2::text IS NULL OR d.account_id = $2)
+      AND ($3::text IS NULL OR d.current_request_id = $3)
     ORDER BY d.created_at
     FOR UPDATE SKIP LOCKED
     LIMIT $1

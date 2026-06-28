@@ -50,6 +50,18 @@ def _metadata_bool(task: ScheduledTask | Any, key: str, default: bool) -> bool:
     return bool(metadata.get(key))
 
 
+def _metadata_text(task: ScheduledTask | Any, *keys: str) -> str | None:
+    metadata = _task_metadata(task)
+    for key in keys:
+        if key not in metadata:
+            continue
+        value = str(metadata.get(key, "") or "").strip()
+        if not value:
+            raise ValueError(f"{key} must be non-empty when provided")
+        return value
+    return None
+
+
 def _configured(value: Any) -> bool:
     return bool(str(value or "").strip())
 
@@ -100,14 +112,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "DB not ready"}
 
     try:
-        summary = await compute_and_save_recent_deflection_deltas(
-            PostgresDeflectionReportArtifactStore(pool=pool),
-            account_limit=_metadata_int(task, "account_limit", int(cfg.account_limit)),
-            reports_per_account=_metadata_int(
+        target_account_id = _metadata_text(task, "target_account_id", "account_id")
+        target_current_request_id = _metadata_text(task, "current_request_id")
+        if target_current_request_id and not target_account_id:
+            raise ValueError("current_request_id requires target_account_id")
+        batch_kwargs: dict[str, Any] = {
+            "account_limit": _metadata_int(
+                task,
+                "account_limit",
+                int(cfg.account_limit),
+            ),
+            "reports_per_account": _metadata_int(
                 task,
                 "reports_per_account",
                 int(cfg.reports_per_account),
             ),
+        }
+        if target_account_id:
+            batch_kwargs["account_id"] = target_account_id
+        if target_current_request_id:
+            batch_kwargs["current_request_id"] = target_current_request_id
+        summary = await compute_and_save_recent_deflection_deltas(
+            PostgresDeflectionReportArtifactStore(pool=pool),
+            **batch_kwargs,
         )
     except Exception:
         logger.exception("Deflection delta automation failed")
@@ -122,13 +149,28 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     missing_delivery = _delta_delivery_missing_config(dry_run=dry_run)
     pending_delivery_count = 0
     if not missing_delivery:
+        delivery_kwargs: dict[str, Any] = {}
+        if target_account_id:
+            delivery_kwargs["account_id"] = target_account_id
+        if target_current_request_id:
+            delivery_kwargs["current_request_id"] = target_current_request_id
         delivery_summary = await send_pending_deflection_delta_deliveries(
             pool,
             sender=_sender(dry_run=dry_run),
             config=_delta_delivery_config(dry_run=dry_run),
+            **delivery_kwargs,
         )
     else:
-        pending_delivery_count = await pending_deflection_delta_delivery_count(pool)
+        if target_account_id:
+            count_kwargs: dict[str, Any] = {"account_id": target_account_id}
+            if target_current_request_id:
+                count_kwargs["current_request_id"] = target_current_request_id
+            pending_delivery_count = await pending_deflection_delta_delivery_count(
+                pool,
+                **count_kwargs,
+            )
+        else:
+            pending_delivery_count = await pending_deflection_delta_delivery_count(pool)
 
     payload = {
         "accounts_scanned": summary.accounts_scanned,
@@ -158,6 +200,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             summary.report_limit_overflow_accounts
         ),
     }
+    if target_account_id:
+        payload["target_account_id"] = target_account_id
+    if target_current_request_id:
+        payload["current_request_id"] = target_current_request_id
     has_blocked_delivery = bool(
         missing_delivery
         and (summary.delta_deliveries_enqueued or pending_delivery_count)

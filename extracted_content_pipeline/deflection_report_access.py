@@ -1804,20 +1804,32 @@ async def compute_and_save_previous_deflection_delta(
 async def compute_and_save_recent_deflection_deltas(
     store: DeflectionReportArtifactStore,
     *,
+    account_id: str | None = None,
+    current_request_id: str | None = None,
     account_limit: int | None = 100,
     reports_per_account: int | None = 25,
 ) -> DeflectionDeltaBatchSummary:
     """Persist previous-paid-report deltas for recent paid reports."""
 
+    scoped_account_id = _clean(account_id)
+    scoped_current_request_id = _clean(current_request_id)
+    if scoped_current_request_id and not scoped_account_id:
+        raise ValueError("current_request_id requires account_id")
     resolved_account_limit = (
         None if account_limit is None else _bounded_limit(account_limit)
     )
     resolved_reports_per_account = (
         None if reports_per_account is None else _bounded_limit(reports_per_account)
     )
-    accounts = await store.list_paid_report_accounts(limit=resolved_account_limit)
+    accounts = (
+        (scoped_account_id,)
+        if scoped_account_id
+        else await store.list_paid_report_accounts(limit=resolved_account_limit)
+    )
     account_limit_reached = (
-        resolved_account_limit is not None and len(accounts) >= resolved_account_limit
+        not scoped_account_id
+        and resolved_account_limit is not None
+        and len(accounts) >= resolved_account_limit
     )
     account_limit_overflow = False
     if account_limit_reached:
@@ -1833,21 +1845,41 @@ async def compute_and_save_recent_deflection_deltas(
     report_limit_overflow_accounts: list[str] = []
 
     for account_id in accounts:
-        reports = await store.list_reports(
-            account_id=account_id,
-            limit=resolved_reports_per_account,
-            paid=True,
-        )
-        report_limit_reached = (
-            resolved_reports_per_account is not None
-            and len(reports) >= resolved_reports_per_account
-        )
-        if report_limit_reached:
-            report_limit_reached_accounts.append(account_id)
-            if (
-                await store.count_paid_reports(account_id=account_id)
-            ) > resolved_reports_per_account:
-                report_limit_overflow_accounts.append(account_id)
+        if scoped_current_request_id:
+            current = await store.get_artifact_record(
+                account_id=account_id,
+                request_id=scoped_current_request_id,
+            )
+            reports = (
+                (
+                    DeflectionReportListRecord(
+                        account_id=current.account_id,
+                        request_id=current.request_id,
+                        snapshot=dict(current.snapshot),
+                        paid=current.paid,
+                        delivery_email=current.delivery_email,
+                        created_at=current.created_at,
+                    ),
+                )
+                if current is not None and current.paid
+                else ()
+            )
+        else:
+            reports = await store.list_reports(
+                account_id=account_id,
+                limit=resolved_reports_per_account,
+                paid=True,
+            )
+            report_limit_reached = (
+                resolved_reports_per_account is not None
+                and len(reports) >= resolved_reports_per_account
+            )
+            if report_limit_reached:
+                report_limit_reached_accounts.append(account_id)
+                if (
+                    await store.count_paid_reports(account_id=account_id)
+                ) > resolved_reports_per_account:
+                    report_limit_overflow_accounts.append(account_id)
         for report in reports:
             reports_scanned += 1
             try:
