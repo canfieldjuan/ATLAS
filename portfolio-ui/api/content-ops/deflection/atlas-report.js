@@ -138,12 +138,18 @@ const QUESTION_FIELD_READERS = {
   ticket_count: requiredNumber,
   weighted_frequency: requiredNumber,
   customer_wording: requiredString,
+  owner_lane: requiredString,
+  action_label: requiredString,
+  estimated_support_cost: requiredNumber,
 };
 
 const BLIND_SPOT_FIELD_READERS = {
   rank: requiredNumber,
   question: requiredString,
   ticket_count: requiredNumber,
+  owner_lane: requiredString,
+  action_label: requiredString,
+  estimated_support_cost: requiredNumber,
 };
 
 function projectFields(record, fields, readers, errorMessage, errors) {

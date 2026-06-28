@@ -10,11 +10,11 @@ detector so the paywall-leak half cannot fork its own denylist.
 The boundary policy under test (see docs/frontend/content_ops_faq_report_contract.md):
 - snapshot ranked coverage equals the report's ranked questions, no more/fewer;
 - top_questions carry only index-safe fields: question/ticket_count are pinned to
-  the report ranked rows, and weighted_frequency/customer_wording to the source
-  FAQ items they project from (the report model does not re-expose those two);
+  the report ranked rows, weighted_frequency/customer_wording to the source FAQ
+  items they project from, and owner/action/cost to report action rows;
 - locked_questions expose rank + ticket_count only (never question text);
 - top_blind_spots matches the report's unresolved repeated-question rows and
-  exposes only rank/question/ticket_count;
+  exposes only rank/question/ticket_count plus safe owner/action/cost previews;
 - the single teaser full answer is a genuinely scoped resolution_evidence row;
 - no paid body/evidence field appears outside $.teaser.full_answer.
 """
@@ -165,6 +165,99 @@ def _items_by_rank(section: Mapping[str, Any] | None) -> dict[int, Mapping[str, 
     return rows
 
 
+_ACTION_PREVIEW_SECTIONS = (
+    "backlog_table",
+    "priority_fix_queue",
+    "top_unresolved_repeats",
+    "drafted_resolutions",
+    "already_covered_still_recurring",
+)
+_ACTION_LABELS = {
+    "publish_help_center_answer": "Publish answer",
+    "create_missing_answer": "Write missing answer",
+    "review_resolution_evidence": "Review evidence",
+    "review_cluster_quality": "Review cluster",
+    "improve_discoverability_or_answer_quality": "Improve discoverability",
+}
+_OWNER_RULES = (
+    (("login", "auth", "sso", "mfa", "password"), "Auth / Product UX"),
+    (("invoice", "billing", "receipt", "payment"), "Billing"),
+    (("export", "report", "download", "csv"), "Reporting"),
+    (("invite", "role", "permission", "admin"), "Admin / Access"),
+    (("api", "rate", "limit", "developer", "webhook"), "Developer Platform"),
+    (
+        ("search", "alert", "alerts", "notification", "notifications"),
+        "Search / Notifications",
+    ),
+)
+_SAFE_OWNER_LANES = {
+    "Auth / Product UX",
+    "Billing",
+    "Reporting",
+    "Admin / Access",
+    "Developer Platform",
+    "Search / Notifications",
+    "Support Ops",
+}
+
+
+def _action_items_by_rank(
+    sections: Mapping[str, Mapping[str, Any]],
+) -> dict[int, Mapping[str, Any]]:
+    rows: dict[int, Mapping[str, Any]] = {}
+    for section_id in _ACTION_PREVIEW_SECTIONS:
+        for rank, item in _items_by_rank(sections.get(section_id)).items():
+            rows.setdefault(rank, item)
+    return rows
+
+
+def _tokens(value: str) -> set[str]:
+    import re
+
+    return set(re.findall(r"[a-z0-9]+", value.casefold()))
+
+
+def _expected_owner_lane(item: Mapping[str, Any]) -> str:
+    owner_lane = item.get("owner_lane")
+    if isinstance(owner_lane, str) and owner_lane in _SAFE_OWNER_LANES:
+        return owner_lane
+    searchable = " ".join(
+        str(value)
+        for value in (
+            item.get("owner_lane"),
+            item.get("question"),
+            item.get("customer_wording"),
+            item.get("topic"),
+            item.get("recommended_title"),
+            item.get("product_gap_summary"),
+        )
+        if isinstance(value, str) and value
+    )
+    tokens = _tokens(searchable)
+    for needles, lane in _OWNER_RULES:
+        if any(needle in tokens for needle in needles):
+            return lane
+    return "Support Ops"
+
+
+def _expected_action_label(item: Mapping[str, Any]) -> str:
+    fix_type = item.get("fix_type")
+    if isinstance(fix_type, str) and fix_type:
+        return _ACTION_LABELS.get(fix_type, "Review repeat")
+    status = str(item.get("status") or "")
+    if status == "Draft ready":
+        return "Publish answer"
+    if status == "Needs answer":
+        return "Write missing answer"
+    if status == "Needs review":
+        return "Review evidence"
+    if status == "Low confidence":
+        return "Review cluster"
+    if status == "Already covered but still recurring":
+        return "Improve discoverability"
+    return "Review repeat"
+
+
 @pytest.fixture()
 def artifact_snapshot() -> tuple[Any, dict[str, Any], dict[str, Any], dict[str, Any]]:
     artifact = build_deflection_report_artifact(_drift_fixture_result())
@@ -224,6 +317,7 @@ def test_snapshot_summary_is_derived_from_report(artifact_snapshot) -> None:
 def test_snapshot_top_questions_match_report_ranked_rows(artifact_snapshot) -> None:
     _, snapshot, _, sections = artifact_snapshot
     ranked = _rows_by_rank(sections.get("ranked_questions"))
+    action_rows = _action_items_by_rank(sections)
     items_by_rank = {
         rank: item for rank, item in enumerate(_drift_fixture_result().items, start=1)
     }
@@ -238,13 +332,21 @@ def test_snapshot_top_questions_match_report_ranked_rows(artifact_snapshot) -> N
             "ticket_count",
             "weighted_frequency",
             "customer_wording",
+            "owner_lane",
+            "action_label",
+            "estimated_support_cost",
         }
         row = ranked[question["rank"]]
+        action_item = action_rows[question["rank"]]
         item = items_by_rank[question["rank"]]
         assert question["question"] == row["question"]
         assert question["ticket_count"] == row["ticket_count"]
         assert question["weighted_frequency"] == item["weighted_frequency"]
         assert question["customer_wording"] == item["customer_wording"]
+        assert question["estimated_support_cost"] == row["estimated_support_cost"]
+        assert question["estimated_support_cost"] == action_item["estimated_support_cost"]
+        assert question["owner_lane"] == _expected_owner_lane(action_item)
+        assert question["action_label"] == _expected_action_label(action_item)
 
 
 def test_snapshot_locked_questions_expose_rank_and_count_only(artifact_snapshot) -> None:
@@ -262,10 +364,20 @@ def test_snapshot_blind_spots_match_unresolved_repeats(artifact_snapshot) -> Non
 
     assert snapshot["top_blind_spots"], "expected unresolved blind spots"
     for blind_spot in snapshot["top_blind_spots"]:
-        assert set(blind_spot) == {"rank", "question", "ticket_count"}
+        assert set(blind_spot) == {
+            "rank",
+            "question",
+            "ticket_count",
+            "owner_lane",
+            "action_label",
+            "estimated_support_cost",
+        }
         row = unresolved[blind_spot["rank"]]
         assert blind_spot["question"] == row["question"]
         assert blind_spot["ticket_count"] == row["ticket_count"]
+        assert blind_spot["estimated_support_cost"] == row["estimated_support_cost"]
+        assert blind_spot["owner_lane"] == _expected_owner_lane(row)
+        assert blind_spot["action_label"] == _expected_action_label(row)
 
 
 def test_snapshot_teaser_full_answer_derives_from_scoped_report_detail(

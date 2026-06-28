@@ -39,6 +39,9 @@ const SNAPSHOT = {
       ticket_count: 12,
       weighted_frequency: 12,
       customer_wording: "billing reset access",
+      owner_lane: "Billing",
+      action_label: "Publish answer",
+      estimated_support_cost: 162,
     },
   ],
   top_blind_spots: [
@@ -46,6 +49,9 @@ const SNAPSHOT = {
       rank: 1,
       question: "Can I change invoice contacts?",
       ticket_count: 3,
+      owner_lane: "Billing",
+      action_label: "Write missing answer",
+      estimated_support_cost: 40.5,
     },
   ],
 };

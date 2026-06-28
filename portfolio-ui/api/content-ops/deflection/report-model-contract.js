@@ -45,7 +45,7 @@ export const DEFLECTION_REPORT_RANKED_QUESTIONS_FIELDS = Object.freeze(["rows"])
 
 export const DEFLECTION_REPORT_RANKED_QUESTIONS_REQUIRED_DATA = Object.freeze(["rows"]);
 
-export const DEFLECTION_REPORT_RANKED_QUESTIONS_SNAPSHOT_SAFE_FIELDS = Object.freeze(["rows.rank", "rows.question", "rows.ticket_count", "rows.weighted_frequency", "rows.customer_wording"]);
+export const DEFLECTION_REPORT_RANKED_QUESTIONS_SNAPSHOT_SAFE_FIELDS = Object.freeze(["rows.rank", "rows.question", "rows.ticket_count", "rows.weighted_frequency", "rows.customer_wording", "rows.estimated_support_cost"]);
 
 export const DEFLECTION_REPORT_RANKED_QUESTIONS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["rows"]);
 
@@ -79,7 +79,7 @@ export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_FIELDS = Object.freeze(["i
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_REQUIRED_DATA = Object.freeze(["items", "top_item_count", "result_page_limit", "pdf_limit", "support_cost_basis"]);
 
-export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_SNAPSHOT_SAFE_FIELDS = Object.freeze(["items.rank", "items.question", "items.ticket_count"]);
+export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_SNAPSHOT_SAFE_FIELDS = Object.freeze(["items.rank", "items.question", "items.ticket_count", "items.owner_lane", "items.estimated_support_cost"]);
 
 export const DEFLECTION_REPORT_TOP_UNRESOLVED_REPEATS_HOSTED_CONSUMER_SAFE_FIELDS = Object.freeze(["items", "top_item_count", "support_cost_basis"]);
 
