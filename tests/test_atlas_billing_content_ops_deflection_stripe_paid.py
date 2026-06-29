@@ -1950,10 +1950,15 @@ async def test_stripe_webhook_delta_subscription_updated_upserts_entitlement(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_stripe_webhook_delta_invoice_payment_failed_revokes_entitlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     account_id = str(uuid.uuid4())
+    existing_customer_id = f"cus_existing_delta_failed_{account_id}"
+    existing_subscription_id = f"sub_existing_delta_failed_{account_id}"
+    stripe_event_id = f"evt_delta_invoice_failed_{account_id}"
+    event_type = "invoice.payment_failed"
     monkeypatch.setattr(
         billing.settings.saas_auth,
         "stripe_content_ops_deflection_delta_price_ids",
@@ -1962,12 +1967,11 @@ async def test_stripe_webhook_delta_invoice_payment_failed_revokes_entitlement(
     invoice = _dahlia_subscription_invoice(account_id=account_id)
     event = SimpleNamespace(
         created=200,
-        id="evt_delta_invoice_failed",
-        type="invoice.payment_failed",
+        id=stripe_event_id,
+        type=event_type,
         data=SimpleNamespace(object=invoice),
     )
     fake_stripe, _session_list = _stripe_module_for_event(event)
-    pool = _Pool()
     store = InMemoryDeflectionReportArtifactStore()
     await store.upsert_deflection_delta_entitlement(
         account_id=account_id,
@@ -1977,20 +1981,103 @@ async def test_stripe_webhook_delta_invoice_payment_failed_revokes_entitlement(
         stripe_subscription_status="active",
         stripe_event_created=100,
     )
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id="delta-invoice-payment-failed",
+            stripe_event_id=stripe_event_id,
+        )
+        await pool.execute(
+            """
+            INSERT INTO saas_accounts (
+                id,
+                name,
+                plan,
+                plan_status,
+                stripe_customer_id,
+                stripe_subscription_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            uuid.UUID(account_id),
+            "Delta Invoice Payment Failed Test",
+            "trial",
+            "trialing",
+            existing_customer_id,
+            existing_subscription_id,
+        )
+        account_before = await pool.fetchrow(
+            """
+            SELECT plan, plan_status, stripe_customer_id, stripe_subscription_id
+            FROM saas_accounts
+            WHERE id = $1
+            """,
+            uuid.UUID(account_id),
+        )
+        assert dict(account_before) == {
+            "plan": "trial",
+            "plan_status": "trialing",
+            "stripe_customer_id": existing_customer_id,
+            "stripe_subscription_id": existing_subscription_id,
+        }
 
-    response = await _run_stripe_webhook(
-        monkeypatch,
-        event=event,
-        pool=pool,
-        stripe_module=fake_stripe,
-        entitlement_store=store,
-    )
+        response = await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+            entitlement_store=store,
+        )
 
-    assert response == {"status": "ok"}
-    assert await store.list_deflection_delta_entitled_account_ids(
-        fallback_account_ids=(account_id, "acct-config"),
-    ) == ("acct-config",)
-    assert not any("UPDATE saas_accounts" in query for query, _args in pool.execute_calls)
+        assert response == {"status": "ok"}
+        assert await store.list_deflection_delta_entitled_account_ids(
+            fallback_account_ids=(account_id, "acct-config"),
+        ) == ("acct-config",)
+        account_after = await pool.fetchrow(
+            """
+            SELECT plan, plan_status, stripe_customer_id, stripe_subscription_id
+            FROM saas_accounts
+            WHERE id = $1
+            """,
+            uuid.UUID(account_id),
+        )
+        assert dict(account_after) == dict(account_before)
+        event_row = await pool.fetchrow(
+            """
+            SELECT account_id, event_type, payload
+            FROM billing_events
+            WHERE stripe_event_id = $1
+            """,
+            stripe_event_id,
+        )
+        assert event_row is not None
+        assert str(event_row["account_id"]) == account_id
+        assert event_row["event_type"] == event_type
+        payload = event_row["payload"]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        assert payload["id"] == "in_delta"
+        assert payload["metadata"]["account_id"] == account_id
+        assert (
+            payload["parent"]["subscription_details"]["subscription"]
+            == "sub_delta"
+        )
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
+            event_type=event_type,
+        ) == 1
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id="delta-invoice-payment-failed",
+            stripe_event_id=stripe_event_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
