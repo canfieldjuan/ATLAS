@@ -1,6 +1,6 @@
 # Plan archive index
 
-1253 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1254 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -56,6 +56,7 @@
 - [PR-Billing-Async-Success-Unpaid-Live-Adapter](archive/PR-Billing-Async-Success-Unpaid-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
 - [PR-Billing-Audit-Failure-One-Shot-Live-Adapter](archive/PR-Billing-Audit-Failure-One-Shot-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
 - [PR-Billing-Audit-Failure-Retry-Live-Adapter](archive/PR-Billing-Audit-Failure-Retry-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
+- [PR-Billing-Checkout-Aged-Reconciliation-Live-Adapter](archive/PR-Billing-Checkout-Aged-Reconciliation-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
 - [PR-Billing-Checkout-Completion-Live-Adapter](archive/PR-Billing-Checkout-Completion-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
 - [PR-Billing-Checkout-Missing-Report-Live-Adapter](archive/PR-Billing-Checkout-Missing-Report-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
 - [PR-Billing-Checkout-No-Email-Live-Adapter](archive/PR-Billing-Checkout-No-Email-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
