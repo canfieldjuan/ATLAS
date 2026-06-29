@@ -3583,6 +3583,8 @@ def _action_owner_lane(
     *,
     routing_signals: Mapping[str, Any] | None = None,
 ) -> str:
+    # Customer/topic wording is the primary deterministic signal. Routing labels
+    # are handoff context and a fallback, not an override for what customers ask.
     mapped = _owner_lane_from_text(" ".join((
         _text(item.get("topic")),
         _text(item.get("question")),
