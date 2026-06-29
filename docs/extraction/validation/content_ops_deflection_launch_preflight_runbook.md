@@ -252,13 +252,19 @@ ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false
 Then verify the deployed scheduler is enabled and scheduled:
 
 ```bash
+curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/status/summary" \
+  -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
+  | jq -e 'select(.running == true and .scheduled_count > 0)'
+
 curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/?include_disabled=true" \
   -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
   | jq '.tasks[] | select(.name == "content_ops_deflection_report_delivery") | {id, enabled, next_run_at, metadata}'
 ```
 
-Proceed only if the task is `enabled` and has a `next_run_at`. Metadata alone
-does not prove the live dry-run setting.
+Proceed only if the scheduler summary reports `running` true with at least one
+scheduled task, and the delivery task row is `enabled` with a `next_run_at`.
+Metadata alone does not prove the scheduler loop is running or the live dry-run
+setting.
 
 Before probing the hosted scheduler, prove there are no claimable paid delivery
 rows left; the manual proof row should now be delivered, and the earlier
@@ -305,26 +311,59 @@ RUN_ID="$(
     | jq -er '.execution_id'
 )"
 
-sleep 5
+python - <<'PY'
+import ast
+import json
+import os
+import time
+import urllib.request
 
-curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/$TASK_ID/executions?limit=5" \
-  -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
-  | jq -e --arg run_id "$RUN_ID" '
-      .executions[]
-      | select(.id == $run_id)
-      | select(.status == "completed")
-      | (.result_text | fromjson) as $result
-      | select($result.dry_run_enabled == false)
-      | select($result.scanned == 0)
-      | select($result.sent == 0)
-      | select($result.failed == 0)
-    '
+base_url = os.environ["ATLAS_API_BASE_URL"].rstrip("/")
+task_id = os.environ["TASK_ID"]
+run_id = os.environ["RUN_ID"]
+token = os.environ["ATLAS_ADMIN_TOKEN"]
+
+for _ in range(12):
+    req = urllib.request.Request(
+        f"{base_url}/api/v1/autonomous/{task_id}/executions?limit=5",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    payload = json.loads(urllib.request.urlopen(req, timeout=30).read())
+    execution = next(
+        (item for item in payload.get("executions", []) if item.get("id") == run_id),
+        None,
+    )
+    if execution and execution.get("status") != "running":
+        break
+    time.sleep(5)
+else:
+    raise SystemExit("scheduler proof execution did not finish")
+
+if execution is None:
+    raise SystemExit("scheduler proof execution missing")
+if execution.get("status") != "completed":
+    raise SystemExit(f"scheduler proof execution failed: {execution!r}")
+
+# HeadlessRunner persists builtin dict results with str(result), not JSON.
+result = ast.literal_eval(str(execution.get("result_text") or "{}"))
+expected = {
+    "dry_run_enabled": False,
+    "scanned": 0,
+    "sent": 0,
+    "failed": 0,
+}
+for key, value in expected.items():
+    if result.get(key) != value:
+        raise SystemExit(f"scheduler proof mismatch for {key}: {result!r}")
+print(json.dumps({"execution_id": run_id, "result": result}, sort_keys=True))
+PY
 ```
 
 Proceed only if the execution result proves `dry_run_enabled` is false with zero
 claimable work scanned/sent/failed. Stop if the task is disabled, has no
-`next_run_at`, the execution is missing/failed/running, `result_text` is not
-valid JSON, `dry_run_enabled` is true, or any row is scanned. The manual one-off email is not enough to launch public paid delivery.
+`next_run_at`, the scheduler summary is not running, the execution is
+missing/failed/running, `result_text` cannot be parsed as the builtin task
+result repr, `dry_run_enabled` is true, or any row is scanned. The manual one-off email is not enough to launch public paid delivery.
 
 The paid email must include key numbers, next actions, ready-to-publish rows
 when available, the hosted result URL, and a paid report PDF attachment. A

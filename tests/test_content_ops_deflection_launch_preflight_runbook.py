@@ -158,13 +158,20 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "deploy or restart ATLAS" in delivery
     assert "hosted scheduler configured for" in delivery
     assert "live paid delivery" in delivery
-    assert "Metadata alone\ndoes not prove the live dry-run setting" in delivery
+    assert "/api/v1/autonomous/status/summary" in delivery
+    assert "select(.running == true and .scheduled_count > 0)" in delivery
+    assert "scheduler summary reports `running` true" in delivery
+    assert "scheduler loop is running" in delivery
+    assert "Metadata alone" in delivery
+    assert "live dry-run\nsetting" in delivery
     assert "claimable_rows` is 0" in delivery
     assert "content_ops_deflection_report_delivery/run" in delivery
     assert "Do not pass `{\"dry_run\": false}`" in delivery
     assert "executions?limit=5" in delivery
-    assert ".result_text | fromjson" in delivery
-    assert "dry_run_enabled == false" in delivery
+    assert "ast.literal_eval" in delivery
+    assert "HeadlessRunner persists builtin dict results with str(result)" in delivery
+    assert ".result_text | fromjson" not in delivery
+    assert '"dry_run_enabled": False' in delivery
     assert "zero\nclaimable work scanned/sent/failed" in delivery
     assert "manual one-off email is not enough" in delivery
     assert "live JSON has `sent` 1 and `failed` 0" in delivery
