@@ -1349,6 +1349,35 @@ def test_support_ticket_input_package_recognizes_status_and_csat_columns() -> No
     assert package.metadata["csat_score_average"] == 3.5
 
 
+def test_support_ticket_input_package_preserves_support_platform_provenance() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "Ticket ID": "zd-1",
+            "Subject": "Where is the login button?",
+            "Requester Comment": "Where is the login button?",
+            "Support Platform": "zendesk",
+        },
+        {
+            "ticket_id": "hs-1",
+            "subject": "How do I export reports?",
+            "description": "How do I export reports?",
+            "platform": "help_scout",
+        },
+        {
+            "ticket_id": "ic-1",
+            "subject": "How do I update my billing email?",
+            "description": "How do I update my billing email?",
+            "support_platform": "intercom",
+        },
+    ])
+
+    rows = package.inputs["source_material"]
+
+    assert rows[0]["support_platform"] == "zendesk"
+    assert rows[1]["support_platform"] == "help_scout"
+    assert rows[2]["support_platform"] == "intercom"
+
+
 def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
     statuses = {
         "done": "resolved",
