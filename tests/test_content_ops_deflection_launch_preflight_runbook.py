@@ -149,6 +149,9 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "trap 'rm -rf \"$PREFLIGHT_TMP_DIR\"' EXIT" in delivery
     assert "paid-artifact.json" in delivery
     assert "paid-report.pdf" in delivery
+    assert "-v buyer_email=\"$LAUNCH_BUYER_EMAIL\"" in delivery
+    assert "COALESCE(delivery_email, '') = :'buyer_email'" in delivery
+    assert "COALESCE(delivery_email, '') = '$LAUNCH_BUYER_EMAIL'" not in delivery
     assert "do not commit, upload, or\nlink them" in delivery
     assert "first exercise" in delivery
     assert "paid PDF rendering" in delivery
@@ -158,14 +161,22 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "deploy or restart ATLAS" in delivery
     assert "hosted scheduler configured for" in delivery
     assert "live paid delivery" in delivery
+    assert "settings.deflection_delivery" in delivery
+    assert "deflection_report_result_url" in delivery
+    assert "preflight-url-check" in delivery
+    assert "deployed result URL path mismatch" in delivery
+    assert "do not satisfy it with the local CLI `--result-base-url`" in delivery
     assert "/api/v1/autonomous/status/summary" in delivery
     assert "select(.running == true and .scheduled_count > 0)" in delivery
     assert "scheduler summary reports `running` true" in delivery
     assert "scheduler loop is running" in delivery
     assert "Metadata alone" in delivery
-    assert "live dry-run\nsetting" in delivery
+    assert "deployed URL config" in delivery
+    assert "live dry-run setting" in " ".join(delivery.split())
     assert "claimable_rows` is 0" in delivery
     assert "content_ops_deflection_report_delivery/run" in delivery
+    assert "export TASK_ID" in delivery
+    assert "export RUN_ID" in delivery
     assert "Do not pass `{\"dry_run\": false}`" in delivery
     assert "executions?limit=5" in delivery
     assert "ast.literal_eval" in delivery

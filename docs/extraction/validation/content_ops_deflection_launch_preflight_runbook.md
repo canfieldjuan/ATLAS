@@ -189,12 +189,16 @@ renderer:
 export PREFLIGHT_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/deflection-launch-preflight.XXXXXX")"
 trap 'rm -rf "$PREFLIGHT_TMP_DIR"' EXIT
 
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "
+psql "$DATABASE_URL" \
+  -v ON_ERROR_STOP=1 \
+  -v request_id="<request-id>" \
+  -v buyer_email="$LAUNCH_BUYER_EMAIL" \
+  -At -c "
 SELECT artifact::text
 FROM content_ops_deflection_reports
-WHERE request_id = '<request-id>'
+WHERE request_id = :'request_id'
   AND paid IS TRUE
-  AND COALESCE(delivery_email, '') = '$LAUNCH_BUYER_EMAIL';
+  AND COALESCE(delivery_email, '') = :'buyer_email';
 " > "$PREFLIGHT_TMP_DIR/paid-artifact.json"
 
 python - <<'PY'
@@ -249,7 +253,44 @@ ATLAS_DEFLECTION_DELIVERY_ENABLED=true
 ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false
 ```
 
-Then verify the deployed scheduler is enabled and scheduled:
+First, from the deployed ATLAS runtime after deploy/restart, verify the
+scheduler-owned URL config builds the buyer result URL. This must use the same
+environment as the autonomous scheduler, not local CLI flags:
+
+```bash
+python - <<'PY'
+from urllib.parse import urlparse
+
+from atlas_brain.config import settings
+from atlas_brain.content_ops_deflection_delivery import (
+    DeflectionReportDeliveryConfig,
+    deflection_report_result_url,
+)
+
+cfg = settings.deflection_delivery
+url = deflection_report_result_url(
+    request_id="preflight-url-check",
+    config=DeflectionReportDeliveryConfig(
+        from_email=str(cfg.from_email or "").strip(),
+        result_base_url=str(cfg.result_base_url or "").strip(),
+        result_url_template=str(cfg.result_url_template or "").strip(),
+        subject=str(cfg.subject or "").strip(),
+    ),
+)
+parsed = urlparse(url)
+expected_prefix = (
+    "/systems/support-ticket-deflection/results/preflight-url-check"
+)
+if parsed.netloc != urlparse("https://juancanfield.com").netloc:
+    raise SystemExit(f"deployed result URL host mismatch: {url}")
+if parsed.path != expected_prefix:
+    raise SystemExit(f"deployed result URL path mismatch: {url}")
+print(url)
+PY
+```
+
+Then, from the operator shell, verify the deployed scheduler is enabled and
+scheduled:
 
 ```bash
 curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/status/summary" \
@@ -262,9 +303,13 @@ curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/?include_disabled=true" \
 ```
 
 Proceed only if the scheduler summary reports `running` true with at least one
-scheduled task, and the delivery task row is `enabled` with a `next_run_at`.
-Metadata alone does not prove the scheduler loop is running or the live dry-run
-setting.
+scheduled task, the delivery task row is `enabled` with a `next_run_at`, and the
+deployed runtime URL probe prints a
+`https://juancanfield.com/systems/support-ticket-deflection/results/preflight-url-check`
+URL. Run the URL probe inside the deployed ATLAS runtime after deploy/restart;
+do not satisfy it with the local CLI `--result-base-url`. Metadata alone does
+not prove the scheduler loop is running, the deployed URL config, or the live
+dry-run setting.
 
 Before probing the hosted scheduler, prove there are no claimable paid delivery
 rows left; the manual proof row should now be delivered, and the earlier
@@ -293,7 +338,7 @@ execution result. Do not pass `{"dry_run": false}` in the request body; that
 would prove only an override, not the hosted setting.
 
 ```bash
-TASK_ID="$(
+export TASK_ID="$(
   curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/?include_disabled=true" \
     -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
     | jq -er '.tasks[]
@@ -302,7 +347,7 @@ TASK_ID="$(
       | .id'
 )"
 
-RUN_ID="$(
+export RUN_ID="$(
   curl -fsS -X POST \
     "$ATLAS_API_BASE_URL/api/v1/autonomous/content_ops_deflection_report_delivery/run" \
     -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
