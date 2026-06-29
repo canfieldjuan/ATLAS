@@ -65,7 +65,7 @@ anthropic>=0.39.0
 boto3>=1.35.0
 
 # MCP (Model Context Protocol) — CRM and Email MCP servers
-mcp>=1.26.0
+mcp>=1.28.1
 
 # External data producers (news feeds)
 feedparser>=6.0
