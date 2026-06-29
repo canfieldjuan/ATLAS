@@ -2763,12 +2763,16 @@ async def test_stripe_webhook_revocation_miss_emits_paid_funnel_incident(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_stripe_webhook_unmapped_refund_is_observed_without_mutating_reports(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="atlas.api.billing")
     account_id = str(uuid.uuid4())
+    request_id = "req-live-refund-unmapped"
+    stripe_event_id = "evt_deflection_refund_unmapped_live"
+    payment_reference = "cs_unrelated_live"
     charge = _payment_event_object(
         payment_intent="pi_missing_metadata",
         refunded=True,
@@ -2776,41 +2780,89 @@ async def test_stripe_webhook_unmapped_refund_is_observed_without_mutating_repor
         amount_captured=150000,
     )
     event = SimpleNamespace(
-        id="evt_deflection_refund_unmapped",
+        id=stripe_event_id,
         type="charge.refunded",
         data=SimpleNamespace(object=charge),
     )
-    fake_stripe, _session_list = _stripe_module_for_event(event, checkout_sessions=[])
-    pool = _Pool()
-    pool.add_report(
-        account_id=account_id,
-        paid=True,
-        payment_reference="cs_unrelated",
-    )
+    fake_stripe, session_list = _stripe_module_for_event(event, checkout_sessions=[])
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live unmapped refund billing test",
+        )
+        store = PostgresDeflectionReportArtifactStore(pool=pool)
+        assert await store.mark_paid(
+            account_id=account_id,
+            request_id=request_id,
+            payment_reference=payment_reference,
+        )
+        report_updated_at_before = await pool.fetchval(
+            """
+            SELECT updated_at
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
 
-    response = await _run_stripe_webhook(
-        monkeypatch,
-        event=event,
-        pool=pool,
-        stripe_module=fake_stripe,
-    )
+        response = await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        )
 
-    assert response == {"status": "ok"}
-    assert "could not be mapped" in caplog.text
-    assert pool.report_rows[(account_id, "req-123")]["paid"] is True
-    assert [
-        call for call in pool.execute_calls if "UPDATE content_ops_deflection_reports" in call[0]
-    ] == []
-    assert [
-        call
-        for call in pool.execute_calls
-        if "UPDATE content_ops_deflection_report_deliveries" in call[0]
-    ] == []
-    billing_event_calls = [
-        call for call in pool.execute_calls if "INSERT INTO billing_events" in call[0]
-    ]
-    assert billing_event_calls[0][1][1] == "evt_deflection_refund_unmapped"
-    assert billing_event_calls[0][1][2] == "charge.refunded"
+        assert response == {"status": "ok"}
+        assert session_list.calls == [
+            {"payment_intent": "pi_missing_metadata", "limit": 1, "timeout": 10}
+        ]
+        assert "could not be mapped" in caplog.text
+        report = await pool.fetchrow(
+            """
+            SELECT paid, paid_at, payment_reference, updated_at
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert report is not None
+        assert report["paid"] is True
+        assert report["paid_at"] is not None
+        assert report["payment_reference"] == payment_reference
+        assert report["updated_at"] == report_updated_at_before
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1
+            """,
+            account_id,
+        ) == 0
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
+            event_type="charge.refunded",
+        ) == 1
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
