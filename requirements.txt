@@ -32,7 +32,7 @@ signalwire>=2.0.0
 zeroconf>=0.80.0
 
 # Database
-asyncpg>=0.29.0
+asyncpg>=0.31.0
 neo4j>=5.0
 
 # Natural language parsing

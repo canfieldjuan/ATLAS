@@ -26,4 +26,4 @@ neo4j>=5.0.0
 python-dotenv>=1.0.0
 
 # PostgreSQL (for fallback search)
-asyncpg>=0.29.0
+asyncpg>=0.31.0
