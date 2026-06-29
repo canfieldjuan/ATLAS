@@ -2489,12 +2489,11 @@ _DEFLECTION_SUBMIT_SUPPORT_PLATFORM_KEYS = (
 
 
 def _deflection_submit_row_support_platform(row: Mapping[str, Any]) -> str | None:
-    normalized_keys = {
-        re.sub(r"[^a-z0-9]+", "", key.lower())
-        for key in _DEFLECTION_SUBMIT_SUPPORT_PLATFORM_KEYS
-    }
-    for raw_key, value in row.items():
-        if re.sub(r"[^a-z0-9]+", "", str(raw_key).lower()) in normalized_keys:
+    for key in _DEFLECTION_SUBMIT_SUPPORT_PLATFORM_KEYS:
+        normalized_key = re.sub(r"[^a-z0-9]+", "", key.lower())
+        for raw_key, value in row.items():
+            if re.sub(r"[^a-z0-9]+", "", str(raw_key).lower()) != normalized_key:
+                continue
             platform = _clean(value)
             if platform:
                 return platform

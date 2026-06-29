@@ -93,10 +93,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/api/control_surfaces.py` | 43 |
+| `extracted_content_pipeline/api/control_surfaces.py` | 42 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
 | `plans/PR-Product-Gap-Platform-Provenance.md` | 102 |
 | `tests/test_content_ops_deflection_report.py` | 30 |
-| `tests/test_extracted_content_deflection_submit.py` | 37 |
+| `tests/test_extracted_content_deflection_submit.py` | 44 |
 | `tests/test_extracted_support_ticket_input_package.py` | 29 |
-| **Total** | **249** |
+| **Total** | **255** |

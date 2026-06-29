@@ -156,6 +156,12 @@ def test_deflection_submit_defaults_fill_blank_support_platform_cells() -> None:
                 "description": "Where do I change roles?",
                 "platform": "help_scout",
             },
+            {
+                "ticket_id": "ticket-5",
+                "description": "How do I update seats?",
+                "platform": "ios",
+                "support_platform": "intercom",
+            },
         ],
     )
 
@@ -163,6 +169,7 @@ def test_deflection_submit_defaults_fill_blank_support_platform_cells() -> None:
     assert rows[1]["support_platform"] == "help_scout"
     assert rows[2]["support_platform"] == "intercom"
     assert rows[3]["support_platform"] == "help_scout"
+    assert rows[4]["support_platform"] == "intercom"
 
 
 @pytest.mark.asyncio
