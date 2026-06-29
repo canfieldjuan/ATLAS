@@ -204,7 +204,6 @@ def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None
                 "Manual sequence cleanup after demos Can I automate demo follow-up? "
                 "Automation is not on this plan."
             ),
-            "organization": "Riverbend Supply",
             "company_name": "Riverbend Supply",
             "vendor_name": "LegacyCRM",
             "support_ticket_cluster": "automation cleanup demo follow",
@@ -1116,6 +1115,48 @@ def test_support_ticket_input_package_uses_stable_duplicate_key_precedence() -> 
     ])
 
     assert package.inputs["source_material"][0]["company_name"] == "First Account"
+
+
+def test_support_ticket_input_package_keeps_company_out_of_routing_organization() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Where do I update billing contacts?",
+            "Company": "Acme Only",
+        },
+    ])
+
+    row = package.inputs["source_material"][0]
+
+    assert row["company_name"] == "Acme Only"
+    assert "organization" not in row
+
+
+@pytest.mark.parametrize(
+    ("organization_key", "expected"),
+    (
+        ("Organization", "Acme Org"),
+        ("Organisation", "Acme UK Org"),
+        ("Org", "Acme Short Org"),
+        ("Requester Organization", "Acme Requester Org"),
+    ),
+)
+def test_support_ticket_input_package_preserves_explicit_routing_organization(
+    organization_key: str,
+    expected: str,
+) -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Where is the login button?",
+            organization_key: expected,
+        },
+    ])
+
+    row = package.inputs["source_material"][0]
+
+    assert row["organization"] == expected
+    assert "company_name" not in row
 
 
 def test_support_ticket_input_package_keeps_request_overrides_authoritative() -> None:
