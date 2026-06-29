@@ -1221,7 +1221,7 @@ def _pdf_attachments(
             f"paid_report_pdf_render_failed: {_bounded_error(exc)}"
         ) from exc
     if not pdf_bytes:
-        raise ValueError("paid_report_pdf_empty")
+        raise PaidReportPdfRenderError("paid_report_pdf_empty")
     return ({
         "filename": f"{_attachment_slug(request_id)}-support-deflection-report.pdf",
         "content": base64.b64encode(pdf_bytes).decode("ascii"),

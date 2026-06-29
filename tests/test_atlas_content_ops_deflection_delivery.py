@@ -1478,6 +1478,43 @@ async def test_delivery_worker_repeated_stale_render_outage_remains_reclaim(
 
 
 @pytest.mark.asyncio
+async def test_delivery_worker_preserves_stale_reclaim_when_paid_pdf_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _Pool([_row(previous_delivery_status="sending")])
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'sending'" in update_query
+    assert "delivery_status = 'pending'" not in update_query
+    assert "delivery_status = 'failed'" not in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_empty",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == (
+        "paid_report_delivery_pdf_render_reclaim_deferred"
+    )
+    assert incidents[-1]["severity"] == "warning"
+    assert incidents[-1]["error"] == update_args[-1]
+
+
+@pytest.mark.asyncio
 async def test_delivery_worker_fails_when_paid_pdf_artifact_is_malformed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

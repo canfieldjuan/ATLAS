@@ -40,9 +40,10 @@ Slice phase: Production hardening
   - Both cases mark the delivery row failed with a bounded error.
   - Both cases emit a paid-funnel incident so the launch proof can see the
     missing paid PDF as a hard failure.
-  - Stale `sending` reclaims whose PDF renderer fails do not call
-    `sender.send(...)` and remain `sending` with a warning incident instead of
-    being marked terminal `failed` or losing reclaim provenance.
+  - Stale `sending` reclaims whose PDF renderer fails or returns empty PDF
+    output do not call `sender.send(...)` and remain `sending` with a warning
+    incident instead of being marked terminal `failed` or losing reclaim
+    provenance.
   - Successful deliveries still attach the PDF and mark delivered.
 - Affected surfaces:
   - Paid report delivery worker only.
@@ -73,9 +74,9 @@ helper that raises when the artifact is missing/malformed or when
 row's previous delivery status before it is claimed as `sending`, so the worker
 can distinguish first-attempt `pending` sends from stale `sending` reclaims.
 
-First-attempt PDF render failures still emit `paid_report_delivery_send_failed`,
-mark the row failed, increment `failed`, and skip `sender.send(...)`. Stale
-reclaim PDF render failures emit
+First-attempt PDF render failures and empty PDF output still emit
+`paid_report_delivery_send_failed`, mark the row failed, increment `failed`, and
+skip `sender.send(...)`. Stale reclaim PDF render failures and empty PDF output emit
 `paid_report_delivery_pdf_render_reclaim_deferred`, keep the row `sending` with
 the bounded render error, increment `failed` for this run, and skip
 `sender.send(...)`; the next worker run still sees a reclaimed `sending` row
@@ -112,7 +113,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `pytest tests/test_atlas_content_ops_deflection_delivery.py -q` - 37 passed,
+- `pytest tests/test_atlas_content_ops_deflection_delivery.py -q` - 38 passed,
   1 skipped.
 - `python -m unittest tests.test_security_policy_docs` - 20 passed.
 - `python scripts/sync_pr_plan.py plans/PR-Deflection-Paid-PDF-Required.md --check`
@@ -124,6 +125,6 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/content_ops_deflection_delivery.py` | 74 |
 | `docs/INCIDENT_RESPONSE.md` | 1 |
-| `plans/PR-Deflection-Paid-PDF-Required.md` | 129 |
-| `tests/test_atlas_content_ops_deflection_delivery.py` | 149 |
-| **Total** | **353** |
+| `plans/PR-Deflection-Paid-PDF-Required.md` | 130 |
+| `tests/test_atlas_content_ops_deflection_delivery.py` | 186 |
+| **Total** | **391** |
