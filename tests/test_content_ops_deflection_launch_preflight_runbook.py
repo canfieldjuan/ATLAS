@@ -58,6 +58,8 @@ def test_launch_runbook_names_required_surfaces_and_trackers() -> None:
     assert "paid report PDF attachment" in doc
     assert "emailed hosted result URL" in doc
     assert "not complete until both buyer-facing email surfaces" in doc
+    assert 'export ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL="<paid-report-from-email>"' in doc
+    assert 'export ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY="<paid-report-resend-key>"' in doc
 
 
 def test_launch_runbook_pins_deployed_config_and_scheduler_gates() -> None:
@@ -133,7 +135,15 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "does not accept a request/account filter" in delivery
     assert "claimable_rows" in delivery
     assert "target_rows" in delivery
-    assert "Proceed only if `claimable_rows` is 1 and `target_rows` is 1" in delivery
+    assert "pending_or_sending_rows" in delivery
+    assert "other_pending_or_sending_rows" in delivery
+    assert "SELECT account_id, request_id, created_at, updated_at, delivery_status" in delivery
+    assert "delivery_status IN ('pending', 'sending')" in delivery
+    assert "non-target `sending` row ages into the\nclaim window" in delivery
+    assert (
+        "Proceed only if `claimable_rows` is 1, `target_rows` is 1, and\n"
+        "`other_pending_or_sending_rows` is 0"
+    ) in delivery
     assert "scripts/send_content_ops_deflection_report_deliveries.py" in delivery
     assert "--json" in delivery
     assert "--send" in delivery
@@ -156,6 +166,8 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "first exercise" in delivery
     assert "paid PDF rendering" in delivery
     assert "live buyer send" in delivery
+    assert "rerun the queue-isolation SQL above immediately before live send" in delivery
+    assert "it still shows `claimable_rows` 1, `target_rows` 1, and\n`other_pending_or_sending_rows` 0" in delivery
     assert "ATLAS_DEFLECTION_DELIVERY_ENABLED=true" in delivery
     assert "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false" in delivery
     assert "deploy or restart ATLAS" in delivery
@@ -164,6 +176,8 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "settings.deflection_delivery" in delivery
     assert "deflection_report_result_url" in delivery
     assert "preflight-url-check" in delivery
+    assert "parsed.scheme != \"https\"" in delivery
+    assert "deployed result URL scheme mismatch" in delivery
     assert "deployed result URL path mismatch" in delivery
     assert "do not satisfy it with the local CLI `--result-base-url`" in delivery
     assert "/api/v1/autonomous/status/summary" in delivery
@@ -215,8 +229,10 @@ def test_hosted_url_cleanup_and_closeout_are_required() -> None:
     assert "rm -rf \"${PREFLIGHT_TMP_DIR:-}\"" in section
     assert "sanitized proof scorecard" in section
     assert "not raw live artifacts" in section
+    assert "Resend provider message IDs" in section
+    assert "Stripe\nevent IDs" in section
     assert "Raw live bundles stay uncommitted" in section
     assert "scripts/check_deflection_full_report_proof_bundle.py" in section
     assert "redaction-check.json" in section
-    assert "Stop\nif the redaction gate fails" in section
+    assert "Stop if the redaction gate fails" in " ".join(section.split())
     assert "#1921, #1440, and #1386" in section

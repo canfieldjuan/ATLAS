@@ -40,11 +40,12 @@ Slice phase: Production hardening
     ATLAS paid delivery drain for paid report delivery.
   - The runbook pins ATLAS delivery config, pre-rehearsal scheduler safety,
     paid delivery and checkout authorization migrations, real Stripe Checkout
-    unlock, target queue isolation, queue-only dry-run, local paid-PDF render
-    validation, live send, deployed scheduler enablement plus deployed URL
-    config proof and live `dry_run_enabled=false` execution proof, curated
-    PDF/TOC shape, hosted URL checks, local proof-file cleanup, sanitized proof
-    scorecard redaction, and #1921/#1440/#1386 closeout.
+    unlock, target queue isolation, immediate pre-send queue re-isolation,
+    queue-only dry-run, local paid-PDF render validation, live send, deployed
+    scheduler enablement plus deployed URL config proof and live
+    `dry_run_enabled=false` execution proof, curated PDF/TOC shape, hosted URL
+    checks, local proof-file cleanup, sanitized proof scorecard redaction, and
+    #1921/#1440/#1386 closeout.
   - Tests fail if those gates disappear.
   - The new test is enrolled in `scripts/run_extracted_pipeline_checks.sh`.
 - Affected surfaces:
@@ -54,19 +55,23 @@ Slice phase: Production hardening
   - Money/customer email path activation.
   - Launch proof passing on incomplete delivery.
   - Operator runbook drift.
+- Reviewer rules triggered: R1, R2, R3, R6, R8, R10, R14.
 - Triggered reviewer rules:
   - R1 Requirements match.
   - R2 Test evidence.
   - R3 Security/auth/money path.
   - R6 Workflow/job behavior.
   - R8 Persistence/data lifecycle.
+  - R10 Logic/checker correctness.
   - R14 Codebase verification.
 
 ### Files touched
 
 - `docs/extraction/validation/content_ops_deflection_launch_preflight_runbook.md`
 - `plans/PR-Deflection-Launch-Preflight-Runbook.md`
+- `scripts/check_deflection_full_report_proof_bundle.py`
 - `scripts/run_extracted_pipeline_checks.sh`
+- `tests/test_check_deflection_full_report_proof_bundle.py`
 - `tests/test_content_ops_deflection_launch_preflight_runbook.py`
 
 ## Mechanism
@@ -80,8 +85,9 @@ with the operator sequence:
    attachment.
 4. Complete checkout/webhook unlock and require a pending paid delivery row.
 5. Keep the scheduler from auto-sending before rehearsal, prove the target row
-   is the only claimable delivery row, and run the current unscoped drain only
-   after that isolation check passes.
+   is the only pending/sending and claimable delivery row, rerun that isolation
+   check immediately before live send, and run the current unscoped drain only
+   after those isolation checks pass.
 6. Treat the dry run as queue-only, render the target artifact locally with the
    real paid PDF renderer, then send live only after queue isolation and render
    validation pass.
@@ -97,17 +103,22 @@ with the operator sequence:
 9. Open the exact emailed URLs and close out cleanup/legal/support plus
    #1921/#1440/#1386 using only a sanitized proof scorecard that passes the
    full-report proof-bundle redaction gate.
+10. Extend the proof-bundle redaction gate so a passing scorecard also excludes
+    Resend provider message IDs and Stripe event IDs.
 
 Add `tests/test_content_ops_deflection_launch_preflight_runbook.py` to assert
 the checked runbook still contains the required surfaces, env gates,
 migrations, checkout authorization gate, skip-log blocker, delivery script,
-live-send proof, deployed scheduler enablement, deployed URL config proof,
-scheduler-loop running proof, exported task/run identifiers, safe psql variable
-quoting for the buyer email, actual `dry_run_enabled=false` execution proof,
-builtin-result repr decoding, PDF shape, URL checks, legacy-route rejection,
-real-checkout wording, queue isolation, queue-only dry-run wording, local render
-validation, proof-file cleanup, sanitized scorecard redaction, and tracker
-closeout.
+live-send proof, local sender env exports, deployed scheduler enablement,
+deployed URL config proof with HTTPS enforcement, scheduler-loop running proof,
+exported task/run identifiers, safe psql variable quoting for the buyer email,
+actual `dry_run_enabled=false` execution proof, builtin-result repr decoding,
+PDF shape, URL checks, legacy-route rejection, real-checkout wording, queue
+isolation, immediate pre-send queue re-isolation, queue-only dry-run wording,
+local render validation, proof-file cleanup, sanitized scorecard redaction, and
+tracker closeout.
+Update `scripts/check_deflection_full_report_proof_bundle.py` and its tests so
+the redaction gate catches Resend provider message IDs and Stripe event IDs.
 Enroll that test in the extracted-pipeline runner next to the existing delta
 go-live runbook test.
 
@@ -134,17 +145,20 @@ Parked hardening: none.
 
 ## Verification
 
-- python -m py_compile tests/test_content_ops_deflection_launch_preflight_runbook.py -- passed
-- pytest tests/test_content_ops_deflection_launch_preflight_runbook.py -q -- 7 passed
+- python -m py_compile tests/test_content_ops_deflection_launch_preflight_runbook.py tests/test_check_deflection_full_report_proof_bundle.py scripts/check_deflection_full_report_proof_bundle.py -- passed
+- pytest tests/test_content_ops_deflection_launch_preflight_runbook.py tests/test_check_deflection_full_report_proof_bundle.py -q -- 39 passed
 - python scripts/audit_extracted_pipeline_ci_enrollment.py -- OK: 195 matching tests are enrolled
 - python scripts/sync_pr_plan.py plans/PR-Deflection-Launch-Preflight-Runbook.md --check -- passed
+- Local PR review gate with the current PR body file wired in -- passed
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/extraction/validation/content_ops_deflection_launch_preflight_runbook.md` | 468 |
-| `plans/PR-Deflection-Launch-Preflight-Runbook.md` | 150 |
+| `docs/extraction/validation/content_ops_deflection_launch_preflight_runbook.md` | 498 |
+| `plans/PR-Deflection-Launch-Preflight-Runbook.md` | 164 |
+| `scripts/check_deflection_full_report_proof_bundle.py` | 8 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_content_ops_deflection_launch_preflight_runbook.py` | 222 |
-| **Total** | **841** |
+| `tests/test_check_deflection_full_report_proof_bundle.py` | 2 |
+| `tests/test_content_ops_deflection_launch_preflight_runbook.py` | 238 |
+| **Total** | **911** |

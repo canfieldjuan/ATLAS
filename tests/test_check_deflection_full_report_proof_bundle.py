@@ -34,6 +34,8 @@ FORBIDDEN_FIXTURES = {
     "absolute_local_path": "artifact written to /home/juan-canfield/Desktop/live/report.pdf",
     "stripe_checkout_session_id": "checkout session cs_live_a1b2c3d4e5f6g7h8",
     "stripe_payment_intent_id": "payment intent pi_3Pmtlivea1b2c3d4",
+    "stripe_event_id": "stripe event evt_deflection_paid_live_123456789",
+    "resend_message_id": "provider message resend:email_123456789abcdef",
     "raw_evidence_quote": '{"evidence_quote": "Customer says their invoice exposes PII"}',
     "source_id_list": '{"source_ids": ["zd-proof-001", "zd-proof-002"]}',
     "private_note": '{"public": false, "body": "private note from agent"}',

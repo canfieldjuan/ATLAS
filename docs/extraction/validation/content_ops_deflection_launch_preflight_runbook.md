@@ -19,6 +19,8 @@ export ATLAS_ADMIN_TOKEN="<operator-token>"
 export DATABASE_URL="<production-postgres-dsn>"
 export LAUNCH_BUYER_EMAIL="<real-opted-in-buyer-email>"
 export LAUNCH_CSV_FILE="<realistic-or-full-volume-support-export.csv>"
+export ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL="<paid-report-from-email>"
+export ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY="<paid-report-resend-key>"
 ```
 
 Use an opted-in buyer address for the live proof. Do not use `@example.com`,
@@ -142,30 +144,50 @@ and `delivery_status` is `pending`.
 ## Paid Report Email And PDF Proof
 
 The current manual drain CLI is queue-wide and only has `--limit`; it does not accept a request/account filter. Before running it, prove the target request is
-the only claimable delivery row:
+the only pending/sending delivery row and the only claimable row. This blocks
+older non-target `sending` rows that could age into the stale-reclaim window
+between rehearsal and the live send:
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
-WITH claimable AS (
-  SELECT account_id, request_id, created_at, delivery_status
+WITH delivery_candidates AS (
+  SELECT account_id, request_id, created_at, updated_at, delivery_status
   FROM content_ops_deflection_report_deliveries
-  WHERE delivery_status = 'pending'
-     OR (
-       delivery_status = 'sending'
-       AND updated_at < NOW() - INTERVAL '15 minutes'
-     )
+  WHERE delivery_status IN ('pending', 'sending')
 )
 SELECT
-  count(*) AS claimable_rows,
-  count(*) FILTER (WHERE request_id = '<request-id>') AS target_rows,
-  min(created_at) AS oldest_claimable_at
-FROM claimable;
+  count(*) FILTER (
+    WHERE delivery_status = 'pending'
+       OR delivery_status = 'sending'
+  ) AS pending_or_sending_rows,
+  count(*) FILTER (
+    WHERE delivery_status = 'pending'
+       OR (
+         delivery_status = 'sending'
+         AND updated_at < NOW() - INTERVAL '15 minutes'
+       )
+  ) AS claimable_rows,
+  count(*) FILTER (
+    WHERE request_id = '<request-id>'
+      AND delivery_status = 'pending'
+  ) AS target_rows,
+  count(*) FILTER (WHERE request_id <> '<request-id>') AS other_pending_or_sending_rows,
+  min(created_at) FILTER (
+    WHERE delivery_status = 'pending'
+       OR (
+         delivery_status = 'sending'
+         AND updated_at < NOW() - INTERVAL '15 minutes'
+       )
+  ) AS oldest_claimable_at
+FROM delivery_candidates;
 "
 ```
 
-Proceed only if `claimable_rows` is 1 and `target_rows` is 1. If any other
-claimable row exists, stop and add a scoped paid-delivery proof before live
-send; otherwise the proof can email a different buyer.
+Proceed only if `claimable_rows` is 1, `target_rows` is 1, and
+`other_pending_or_sending_rows` is 0. If any other pending/sending row exists,
+stop and add a scoped paid-delivery proof before live send; otherwise the proof
+can email a different buyer after a non-target `sending` row ages into the
+claim window.
 
 Run the delivery drain in queue-only dry-run mode:
 
@@ -226,7 +248,10 @@ link them. The shell `trap` removes them on exit; if the shell is interrupted,
 run `rm -rf "$PREFLIGHT_TMP_DIR"` before closeout.
 
 Only after queue isolation, queue-only dry-run, and local PDF render validation
-pass, run one manual live send for the isolated proof row:
+pass, rerun the queue-isolation SQL above immediately before live send. Proceed
+only if it still shows `claimable_rows` 1, `target_rows` 1, and
+`other_pending_or_sending_rows` 0. Then run one manual live send for the
+isolated proof row:
 
 ```bash
 ATLAS_DEFLECTION_DELIVERY_ENABLED=true
@@ -283,6 +308,8 @@ expected_prefix = (
 )
 if parsed.netloc != urlparse("https://juancanfield.com").netloc:
     raise SystemExit(f"deployed result URL host mismatch: {url}")
+if parsed.scheme != "https":
+    raise SystemExit(f"deployed result URL scheme mismatch: {url}")
 if parsed.path != expected_prefix:
     raise SystemExit(f"deployed result URL path mismatch: {url}")
 print(url)
@@ -461,8 +488,11 @@ python scripts/check_deflection_full_report_proof_bundle.py \
   --pretty
 ```
 
-Link only the sanitized scorecard plus the passing redaction-check output. Stop
-if the redaction gate fails.
+The redaction gate must fail on request IDs, exact result URLs, buyer emails,
+checkout session IDs, payment intent IDs, Resend provider message IDs, Stripe
+event IDs, raw evidence, source ID lists, private notes, local paths, unreadable
+artifacts, and PDFs. Link only the sanitized scorecard plus the passing
+redaction-check output. Stop if the redaction gate fails.
 
 If any gate fails, stop launch, record the failed gate on #1921, and rerun this
 runbook after the fix lands.
