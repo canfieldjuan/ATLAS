@@ -1298,29 +1298,64 @@ async def test_deflection_reconciliation_binds_empty_string_for_missing_session_
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_deflection_checkout_completion_retries_409_within_race_window() -> None:
     # A recent event is the transient write-ordering race: keep the 409 so Stripe
     # retries and finds the report row once its write commits. No reconciliation
     # row is written for the race case.
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id)
-    pool = _Pool()
-    pool.update_result = "UPDATE 0"
-
-    with pytest.raises(billing.HTTPException) as exc:
-        await billing._handle_content_ops_deflection_report_checkout_completed(
+    request_id = "req-live-checkout-race-window"
+    session = _session(account_id=account_id, request_id=request_id)
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
             pool,
-            session,
-            session.metadata,
-            event_created=int(time.time()),
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_race_window_unused",
         )
 
-    assert exc.value.status_code == 409
-    assert [
-        call
-        for call in pool.execute_calls
-        if "content_ops_deflection_paid_reconciliation" in call[0]
-    ] == []
+        with pytest.raises(billing.HTTPException) as exc:
+            await billing._handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                session,
+                session.metadata,
+                event_created=int(time.time()),
+            )
+
+        assert exc.value.status_code == 409
+        assert (
+            await pool.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM content_ops_deflection_paid_reconciliation
+                WHERE account_id = $1 AND request_id = $2
+                """,
+                account_id,
+                request_id,
+            )
+            == 0
+        )
+        assert (
+            await pool.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM content_ops_deflection_report_deliveries
+                WHERE account_id = $1
+                """,
+                account_id,
+            )
+            == 0
+        )
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_race_window_unused",
+        )
+        await pool.close()
 
 
 def test_reconcile_grace_config_rejects_non_positive_values() -> None:
