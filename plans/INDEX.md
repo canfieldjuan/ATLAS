@@ -1,6 +1,6 @@
 # Plan archive index
 
-1241 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1242 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -55,6 +55,7 @@
 - [PR-Billing-Async-Success-Live-Adapter](archive/PR-Billing-Async-Success-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
 - [PR-Billing-Async-Success-Unpaid-Live-Adapter](archive/PR-Billing-Async-Success-Unpaid-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
 - [PR-Billing-Completed-Unpaid-Live-Adapter](archive/PR-Billing-Completed-Unpaid-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
+- [PR-Billing-Dispute-Relock-Live-Adapter](archive/PR-Billing-Dispute-Relock-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
 - [PR-Billing-Internal-Mock-Burndown](archive/PR-Billing-Internal-Mock-Burndown.md) - lane: real-adapters/test-quality | phase: Production hardening
 - [PR-Billing-Refund-Relock-Live-Adapter](archive/PR-Billing-Refund-Relock-Live-Adapter.md) - lane: real-adapters/test-quality | phase: Production hardening
 - [PR-Blog-Affiliate-Disclosure-Prerender](archive/PR-Blog-Affiliate-Disclosure-Prerender.md)
