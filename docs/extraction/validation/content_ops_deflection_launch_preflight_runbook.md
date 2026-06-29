@@ -34,11 +34,19 @@ GAP_REPORT_NOTIFICATION_RESEND_API_KEY
 GAP_REPORT_NOTIFICATION_FROM_EMAIL
 ```
 
-Verify ATLAS can send the paid report email:
+The Snapshot sender is implemented in the deployed `atlas-portfolio` Next.js
+app (`web/src/lib/gap-report-intake.ts`, `sendSnapshotEmail`). The hosted result
+URL must be served by that same `atlas-portfolio` deployment at
+`/systems/support-ticket-deflection/results/{request_id}`. Do not point this
+proof at the legacy in-repo `portfolio-ui` SPA route
+`/services/faq-deflection/results/{request_id}`.
+
+Verify ATLAS has the paid report email config present, but keep live scheduling
+off until after queue isolation and PDF render validation:
 
 ```bash
-ATLAS_DEFLECTION_DELIVERY_ENABLED=true
-ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false
+ATLAS_DEFLECTION_DELIVERY_ENABLED=false
+ATLAS_DEFLECTION_DELIVERY_DRY_RUN=true
 ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL
 ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY
 ATLAS_DEFLECTION_DELIVERY_RESULT_BASE_URL="https://juancanfield.com"
@@ -49,7 +57,9 @@ ATLAS_DEFLECTION_DELIVERY_RESULT_BASE_URL="https://juancanfield.com"
 `{request_id}` and resolve to
 `/systems/support-ticket-deflection/results/{request_id}`.
 
-Confirm the paid delivery task is enabled and scheduled:
+Confirm the paid delivery task will not auto-send before the rehearsal. Before
+checkout, either the task must be disabled or deployed delivery must still be in
+dry-run:
 
 ```bash
 curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/?include_disabled=true" \
@@ -57,8 +67,9 @@ curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/?include_disabled=true" \
   | jq '.tasks[] | select(.name == "content_ops_deflection_report_delivery") | {id, enabled, next_run_at, metadata}'
 ```
 
-Stop if `enabled` is not true, if `next_run_at` is empty, or if the deployed
-delivery config still reports dry-run for the live-send proof.
+Stop if the scheduler is enabled and live-send config is active before the
+queue-only rehearsal. That can claim the pending delivery row as soon as Stripe
+queues it and bypass the dry-run proof.
 
 ## Database Gate
 
@@ -102,8 +113,8 @@ An email without the Snapshot PDF is not launch proof.
 
 ## Paid Unlock Gate
 
-Complete checkout for the same `request_id`, then confirm the webhook unlocked
-the report and queued paid delivery:
+Complete a real Stripe Checkout for the same `request_id`, then confirm the
+webhook unlocked the report and queued paid delivery. Do not replay a synthetic webhook for launch proof; replay proves delivery wiring but can skip the real Checkout price authorization path.
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
@@ -127,7 +138,33 @@ and `delivery_status` is `pending`.
 
 ## Paid Report Email And PDF Proof
 
-Rehearse the delivery drain first:
+The current manual drain CLI is queue-wide and only has `--limit`; it does not accept a request/account filter. Before running it, prove the target request is
+the only claimable delivery row:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+WITH claimable AS (
+  SELECT account_id, request_id, created_at, delivery_status
+  FROM content_ops_deflection_report_deliveries
+  WHERE delivery_status = 'pending'
+     OR (
+       delivery_status = 'sending'
+       AND updated_at < NOW() - INTERVAL '15 minutes'
+     )
+)
+SELECT
+  count(*) AS claimable_rows,
+  count(*) FILTER (WHERE request_id = '<request-id>') AS target_rows,
+  min(created_at) AS oldest_claimable_at
+FROM claimable;
+"
+```
+
+Proceed only if `claimable_rows` is 1 and `target_rows` is 1. If any other
+claimable row exists, stop and add a scoped paid-delivery proof before live
+send; otherwise the proof can email a different buyer.
+
+Run the delivery drain in queue-only dry-run mode:
 
 ```bash
 python scripts/send_content_ops_deflection_report_deliveries.py \
@@ -139,12 +176,48 @@ python scripts/send_content_ops_deflection_report_deliveries.py \
 ```
 
 The dry-run JSON must show at least one scanned row, `dry_run` at least 1,
-`sent` 0, and `failed` 0. If the dry run scans zero rows, the email path was
-not rehearsed.
+`sent` 0, and `failed` 0. This proves queue selection and paid/email gating
+only. It does not render the PDF or build the email body.
 
-Only after the dry-run payload is reviewed, send live:
+Before live send, render the paid PDF from the target artifact with the real
+renderer:
 
 ```bash
+mkdir -p tmp/deflection-launch-preflight
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "
+SELECT artifact::text
+FROM content_ops_deflection_reports
+WHERE request_id = '<request-id>'
+  AND paid IS TRUE
+  AND COALESCE(delivery_email, '') = '$LAUNCH_BUYER_EMAIL';
+" > tmp/deflection-launch-preflight/paid-artifact.json
+
+python - <<'PY'
+import json
+from pathlib import Path
+from atlas_brain.deflection_pdf_renderer import render_deflection_full_report_pdf
+
+artifact_path = Path("tmp/deflection-launch-preflight/paid-artifact.json")
+pdf_path = Path("tmp/deflection-launch-preflight/paid-report.pdf")
+artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+pdf_bytes = render_deflection_full_report_pdf(artifact)
+assert pdf_bytes.startswith(b"%PDF-")
+assert len(pdf_bytes) > 1000
+pdf_path.write_bytes(pdf_bytes)
+print(f"rendered {pdf_path} ({len(pdf_bytes)} bytes)")
+PY
+```
+
+Stop if rendering fails or the artifact query returns no row. The first exercise
+of paid PDF rendering must not be the live buyer send.
+
+Only after queue isolation, queue-only dry-run, and local PDF render validation
+pass, temporarily enable live delivery and send:
+
+```bash
+ATLAS_DEFLECTION_DELIVERY_ENABLED=true
+ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false
+
 python scripts/send_content_ops_deflection_report_deliveries.py \
   --database-url "$DATABASE_URL" \
   --from-email "$ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL" \

@@ -38,8 +38,9 @@ Slice phase: Production hardening
     is link-only without its PDF attachment.
   - The runbook names the portfolio intake path for Snapshot delivery and the
     ATLAS paid delivery drain for paid report delivery.
-  - The runbook pins ATLAS delivery config, delivery scheduler state, paid
-    delivery migrations, paid unlock queue state, dry-run rehearsal, live send,
+  - The runbook pins ATLAS delivery config, pre-rehearsal scheduler safety,
+    paid delivery migrations, real Stripe Checkout unlock, target queue
+    isolation, queue-only dry-run, local paid-PDF render validation, live send,
     curated PDF/TOC shape, hosted URL checks, cleanup/legal/support checks, and
     #1921/#1440/#1386 closeout.
   - Tests fail if those gates disappear.
@@ -76,18 +77,24 @@ with the operator sequence:
 3. Submit through deployed portfolio intake and require Snapshot email with PDF
    attachment.
 4. Complete checkout/webhook unlock and require a pending paid delivery row.
-5. Dry-run the paid delivery drain, then send live only after a positive dry
-   run.
-6. Verify the paid email attachment is the curated PDF with TOC/caps and that
+5. Keep the scheduler from auto-sending before rehearsal, prove the target row
+   is the only claimable delivery row, and run the current unscoped drain only
+   after that isolation check passes.
+6. Treat the dry run as queue-only, render the target artifact locally with the
+   real paid PDF renderer, then send live only after queue isolation and render
+   validation pass.
+7. Verify the paid email attachment is the curated PDF with TOC/caps and that
    complete evidence remains on the hosted/export surface.
-7. Open the exact emailed URLs and close out cleanup/legal/support plus
+8. Open the exact emailed URLs and close out cleanup/legal/support plus
    #1921/#1440/#1386.
 
 Add `tests/test_content_ops_deflection_launch_preflight_runbook.py` to assert
 the checked runbook still contains the required surfaces, env gates,
 migrations, skip-log blocker, delivery script, live-send proof, PDF shape, URL
-checks, and tracker closeout. Enroll that test in the extracted-pipeline
-runner next to the existing delta go-live runbook test.
+checks, legacy-route rejection, real-checkout wording, queue isolation,
+queue-only dry-run wording, local render validation, and tracker closeout.
+Enroll that test in the extracted-pipeline runner next to the existing delta
+go-live runbook test.
 
 ## Intentional
 
@@ -121,8 +128,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `docs/extraction/validation/content_ops_deflection_launch_preflight_runbook.md` | 198 |
-| `plans/PR-Deflection-Launch-Preflight-Runbook.md` | 128 |
+| `docs/extraction/validation/content_ops_deflection_launch_preflight_runbook.md` | 271 |
+| `plans/PR-Deflection-Launch-Preflight-Runbook.md` | 135 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_content_ops_deflection_launch_preflight_runbook.py` | 146 |
-| **Total** | **473** |
+| `tests/test_content_ops_deflection_launch_preflight_runbook.py` | 171 |
+| **Total** | **578** |

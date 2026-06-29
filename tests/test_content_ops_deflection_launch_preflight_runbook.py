@@ -61,8 +61,8 @@ def test_launch_runbook_pins_deployed_config_and_scheduler_gates() -> None:
         "ATLAS_B2B_SERVICE_TOKEN",
         "GAP_REPORT_NOTIFICATION_RESEND_API_KEY",
         "GAP_REPORT_NOTIFICATION_FROM_EMAIL",
-        "ATLAS_DEFLECTION_DELIVERY_ENABLED=true",
-        "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false",
+        "ATLAS_DEFLECTION_DELIVERY_ENABLED=false",
+        "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=true",
         "ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL",
         "ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY",
         "ATLAS_DEFLECTION_DELIVERY_RESULT_BASE_URL",
@@ -72,8 +72,13 @@ def test_launch_runbook_pins_deployed_config_and_scheduler_gates() -> None:
         "{id, enabled, next_run_at, metadata}",
     ):
         assert required in section
+    assert "sendSnapshotEmail" in section
+    assert "atlas-portfolio" in section
+    assert "legacy in-repo `portfolio-ui` SPA route" in section
+    assert "/services/faq-deflection/results/{request_id}" in section
     assert "/systems/support-ticket-deflection/results/{request_id}" in section
-    assert "Stop if `enabled` is not true" in section
+    assert "will not auto-send before the rehearsal" in section
+    assert "bypass the dry-run proof" in section
 
 
 def test_launch_runbook_requires_paid_delivery_schema() -> None:
@@ -106,16 +111,36 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     unlock = _section("Paid Unlock Gate")
     delivery = _section("Paid Report Email And PDF Proof")
 
+    assert "real Stripe Checkout" in unlock
+    assert "Do not replay a synthetic webhook" in unlock
+    assert "Checkout price authorization" in unlock
     assert "content_ops_deflection_reports" in unlock
     assert "content_ops_deflection_report_deliveries" in unlock
     assert "r.request_id = '<request-id>'" in unlock
     assert "`paid` is true" in unlock
     assert "`delivery_status` is `pending`" in unlock
+    assert "queue-wide" in delivery
+    assert "does not accept a request/account filter" in delivery
+    assert "claimable_rows" in delivery
+    assert "target_rows" in delivery
+    assert "Proceed only if `claimable_rows` is 1 and `target_rows` is 1" in delivery
     assert "scripts/send_content_ops_deflection_report_deliveries.py" in delivery
     assert "--json" in delivery
     assert "--send" in delivery
     assert "--resend-api-key" in delivery
     assert "dry-run JSON must show at least one scanned row" in delivery
+    assert "queue selection" in delivery
+    assert "paid/email gating" in delivery
+    assert "does not render the PDF" in delivery
+    assert "build the email body" in delivery
+    assert "render_deflection_full_report_pdf" in delivery
+    assert "paid-artifact.json" in delivery
+    assert "paid-report.pdf" in delivery
+    assert "first exercise" in delivery
+    assert "paid PDF rendering" in delivery
+    assert "live buyer send" in delivery
+    assert "ATLAS_DEFLECTION_DELIVERY_ENABLED=true" in delivery
+    assert "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false" in delivery
     assert "live JSON has `sent` 1 and `failed` 0" in delivery
     assert "link-only paid email is not launch proof" in delivery
 
