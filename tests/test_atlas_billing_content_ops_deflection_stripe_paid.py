@@ -114,6 +114,7 @@ async def _seed_live_deflection_report(
     account_id: str,
     request_id: str,
     account_name: str,
+    delivery_email: str | None = "buyer@example.com",
 ) -> None:
     await pool.execute(
         """
@@ -129,7 +130,7 @@ async def _seed_live_deflection_report(
         request_id=request_id,
         snapshot={"summary": {"generated": 1}},
         artifact={"report_model": {"schema_version": "test"}},
-        delivery_email="buyer@example.com",
+        delivery_email=delivery_email,
     )
 
 
@@ -902,24 +903,67 @@ async def test_deflection_checkout_completion_enforces_authorized_terms_live(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_deflection_checkout_completion_skips_delivery_queue_without_email() -> None:
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id)
-    pool = _Pool()
-    pool.add_report(account_id=account_id, delivery_email=None)
+    request_id = "req-live-checkout-no-email"
+    session = _session(account_id=account_id, request_id=request_id)
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_no_email_unused",
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live checkout no-email billing test",
+            delivery_email=None,
+        )
 
-    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
-        pool,
-        session,
-        session.metadata,
-    )
+        returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+            pool,
+            session,
+            session.metadata,
+        )
 
-    assert returned is None
-    assert len(pool.execute_calls) == 1
-    query, args = pool.execute_calls[0]
-    assert "UPDATE content_ops_deflection_reports" in query
-    assert args == (account_id, "req-123", "cs_test_deflection", 150000, "usd", False)
-    assert pool.delivery_rows == {}
+        assert returned is None
+        report = await pool.fetchrow(
+            """
+            SELECT paid, payment_reference, delivery_email
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert report is not None
+        assert report["paid"] is True
+        assert report["payment_reference"] == "cs_test_deflection"
+        assert report["delivery_email"] is None
+        assert (
+            await pool.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM content_ops_deflection_report_deliveries
+                WHERE account_id = $1
+                """,
+                account_id,
+            )
+            == 0
+        )
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_no_email_unused",
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
