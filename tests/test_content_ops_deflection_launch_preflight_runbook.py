@@ -144,8 +144,12 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "does not render the PDF" in delivery
     assert "build the email body" in delivery
     assert "render_deflection_full_report_pdf" in delivery
+    assert "mktemp -d" in delivery
+    assert "PREFLIGHT_TMP_DIR" in delivery
+    assert "trap 'rm -rf \"$PREFLIGHT_TMP_DIR\"' EXIT" in delivery
     assert "paid-artifact.json" in delivery
     assert "paid-report.pdf" in delivery
+    assert "do not commit, upload, or\nlink them" in delivery
     assert "first exercise" in delivery
     assert "paid PDF rendering" in delivery
     assert "live buyer send" in delivery
@@ -154,7 +158,14 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "deploy or restart ATLAS" in delivery
     assert "hosted scheduler configured for" in delivery
     assert "live paid delivery" in delivery
-    assert "enabled config value is live" in delivery
+    assert "Metadata alone\ndoes not prove the live dry-run setting" in delivery
+    assert "claimable_rows` is 0" in delivery
+    assert "content_ops_deflection_report_delivery/run" in delivery
+    assert "Do not pass `{\"dry_run\": false}`" in delivery
+    assert "executions?limit=5" in delivery
+    assert ".result_text | fromjson" in delivery
+    assert "dry_run_enabled == false" in delivery
+    assert "zero\nclaimable work scanned/sent/failed" in delivery
     assert "manual one-off email is not enough" in delivery
     assert "live JSON has `sent` 1 and `failed` 0" in delivery
     assert "link-only paid email is not launch proof" in delivery
@@ -183,4 +194,11 @@ def test_hosted_url_cleanup_and_closeout_are_required() -> None:
     assert "CRON_SECRET" in section
     assert "Privacy, Security, Terms" in section
     assert "refund" in section
+    assert "rm -rf \"${PREFLIGHT_TMP_DIR:-}\"" in section
+    assert "sanitized proof scorecard" in section
+    assert "not raw live artifacts" in section
+    assert "Raw live bundles stay uncommitted" in section
+    assert "scripts/check_deflection_full_report_proof_bundle.py" in section
+    assert "redaction-check.json" in section
+    assert "Stop\nif the redaction gate fails" in section
     assert "#1921, #1440, and #1386" in section

@@ -4,8 +4,9 @@ Use this runbook before public paid Resolution Audit traffic. The launch proof
 is not complete until both buyer-facing email surfaces are observed with their
 PDF attachments and the emailed hosted result URL opens the expected report.
 
-Track the finished proof on #1921, then link the final artifact back to #1440
-and #1386.
+Track the finished proof on #1921, then link the sanitized proof scorecard back
+to #1440 and #1386. Never attach raw live emails, exact result URLs, PDFs, or
+artifact JSON to GitHub issues.
 
 ## Inputs
 
@@ -185,22 +186,26 @@ Before live send, render the paid PDF from the target artifact with the real
 renderer:
 
 ```bash
-mkdir -p tmp/deflection-launch-preflight
+export PREFLIGHT_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/deflection-launch-preflight.XXXXXX")"
+trap 'rm -rf "$PREFLIGHT_TMP_DIR"' EXIT
+
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "
 SELECT artifact::text
 FROM content_ops_deflection_reports
 WHERE request_id = '<request-id>'
   AND paid IS TRUE
   AND COALESCE(delivery_email, '') = '$LAUNCH_BUYER_EMAIL';
-" > tmp/deflection-launch-preflight/paid-artifact.json
+" > "$PREFLIGHT_TMP_DIR/paid-artifact.json"
 
 python - <<'PY'
 import json
+import os
 from pathlib import Path
 from atlas_brain.deflection_pdf_renderer import render_deflection_full_report_pdf
 
-artifact_path = Path("tmp/deflection-launch-preflight/paid-artifact.json")
-pdf_path = Path("tmp/deflection-launch-preflight/paid-report.pdf")
+tmp_dir = Path(os.environ["PREFLIGHT_TMP_DIR"])
+artifact_path = tmp_dir / "paid-artifact.json"
+pdf_path = tmp_dir / "paid-report.pdf"
 artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
 pdf_bytes = render_deflection_full_report_pdf(artifact)
 assert pdf_bytes.startswith(b"%PDF-")
@@ -211,7 +216,10 @@ PY
 ```
 
 Stop if rendering fails or the artifact query returns no row. The first exercise
-of paid PDF rendering must not be the live buyer send.
+of paid PDF rendering must not be the live buyer send. The files in
+`PREFLIGHT_TMP_DIR` contain paid buyer report data; do not commit, upload, or
+link them. The shell `trap` removes them on exit; if the shell is interrupted,
+run `rm -rf "$PREFLIGHT_TMP_DIR"` before closeout.
 
 Only after queue isolation, queue-only dry-run, and local PDF render validation
 pass, run one manual live send for the isolated proof row:
@@ -241,7 +249,7 @@ ATLAS_DEFLECTION_DELIVERY_ENABLED=true
 ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false
 ```
 
-Then verify the deployed scheduler picked up that configuration:
+Then verify the deployed scheduler is enabled and scheduled:
 
 ```bash
 curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/?include_disabled=true" \
@@ -249,10 +257,74 @@ curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/?include_disabled=true" \
   | jq '.tasks[] | select(.name == "content_ops_deflection_report_delivery") | {id, enabled, next_run_at, metadata}'
 ```
 
-Proceed only if the task is `enabled`, has a `next_run_at`, and its metadata
-shows the enabled config value is live. Stop if the hosted scheduler still
-reports disabled or dry-run config; a manual one-off email is not enough to
-launch public paid delivery.
+Proceed only if the task is `enabled` and has a `next_run_at`. Metadata alone
+does not prove the live dry-run setting.
+
+Before probing the hosted scheduler, prove there are no claimable paid delivery
+rows left; the manual proof row should now be delivered, and the earlier
+isolation gate proved no other row was claimable:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+WITH claimable AS (
+  SELECT account_id, request_id
+  FROM content_ops_deflection_report_deliveries
+  WHERE delivery_status = 'pending'
+     OR (
+       delivery_status = 'sending'
+       AND updated_at < NOW() - INTERVAL '15 minutes'
+     )
+)
+SELECT count(*) AS claimable_rows FROM claimable;
+"
+```
+
+Proceed only if `claimable_rows` is 0. If any row is claimable, stop and drain
+or quarantine it before running the autonomous task probe.
+
+Now run the deployed task without metadata overrides and inspect the completed
+execution result. Do not pass `{"dry_run": false}` in the request body; that
+would prove only an override, not the hosted setting.
+
+```bash
+TASK_ID="$(
+  curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/?include_disabled=true" \
+    -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
+    | jq -er '.tasks[]
+      | select(.name == "content_ops_deflection_report_delivery")
+      | select(.enabled == true and .next_run_at != null)
+      | .id'
+)"
+
+RUN_ID="$(
+  curl -fsS -X POST \
+    "$ATLAS_API_BASE_URL/api/v1/autonomous/content_ops_deflection_report_delivery/run" \
+    -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{}' \
+    | jq -er '.execution_id'
+)"
+
+sleep 5
+
+curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/$TASK_ID/executions?limit=5" \
+  -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
+  | jq -e --arg run_id "$RUN_ID" '
+      .executions[]
+      | select(.id == $run_id)
+      | select(.status == "completed")
+      | (.result_text | fromjson) as $result
+      | select($result.dry_run_enabled == false)
+      | select($result.scanned == 0)
+      | select($result.sent == 0)
+      | select($result.failed == 0)
+    '
+```
+
+Proceed only if the execution result proves `dry_run_enabled` is false with zero
+claimable work scanned/sent/failed. Stop if the task is disabled, has no
+`next_run_at`, the execution is missing/failed/running, `result_text` is not
+valid JSON, `dry_run_enabled` is true, or any row is scanned. The manual one-off email is not enough to launch public paid delivery.
 
 The paid email must include key numbers, next actions, ready-to-publish rows
 when available, the hosted result URL, and a paid report PDF attachment. A
@@ -288,7 +360,25 @@ Before launch, also confirm:
 - portfolio cleanup cron is installed and authenticated with `CRON_SECRET`;
 - Privacy, Security, Terms, refund, and support-contact links are present or
   explicitly accepted as hand-held beta gaps;
-- the final proof artifact is linked on #1921, #1440, and #1386.
+- the local paid artifact/PDF temp directory has been removed:
+  `rm -rf "${PREFLIGHT_TMP_DIR:-}"`;
+- a sanitized proof scorecard, not raw live artifacts, is linked on #1921, #1440, and #1386.
+
+Build the scorecard from manually sanitized proof notes only. Exclude raw
+emails, exact hosted result URLs, raw PDFs, paid artifact JSON, source IDs,
+ticket evidence, buyer email addresses, request IDs, checkout session IDs,
+Resend message IDs, and Stripe event IDs. Raw live bundles stay uncommitted.
+Before linking anything, run the redaction gate:
+
+```bash
+python scripts/check_deflection_full_report_proof_bundle.py \
+  tmp/deflection-launch-preflight-scorecard \
+  --output tmp/deflection-launch-preflight-scorecard/redaction-check.json \
+  --pretty
+```
+
+Link only the sanitized scorecard plus the passing redaction-check output. Stop
+if the redaction gate fails.
 
 If any gate fails, stop launch, record the failed gate on #1921, and rerun this
 runbook after the fix lands.
