@@ -2036,21 +2036,29 @@ async def test_stripe_webhook_refund_relocks_paid_deflection_report_via_checkout
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_stripe_webhook_partial_refund_keeps_deflection_report_paid(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="atlas.api.billing")
     account_id = str(uuid.uuid4())
-    checkout_session = _session(account_id=account_id)
+    request_id = "req-live-partial-refund"
+    session_id = "cs_test_partial_refund_live"
+    stripe_event_id = "evt_deflection_partial_refund_live"
+    checkout_session = _session(
+        account_id=account_id,
+        request_id=request_id,
+        session_id=session_id,
+    )
     charge = _payment_event_object(
-        payment_intent="pi_test_partial_refund",
+        payment_intent="pi_test_partial_refund_live",
         refunded=False,
         amount_refunded=50000,
         amount_captured=150000,
     )
     event = SimpleNamespace(
-        id="evt_deflection_partial_refund",
+        id=stripe_event_id,
         type="charge.refunded",
         data=SimpleNamespace(object=charge),
     )
@@ -2058,30 +2066,72 @@ async def test_stripe_webhook_partial_refund_keeps_deflection_report_paid(
         event,
         checkout_sessions=[checkout_session],
     )
-    pool = _Pool()
-    pool.add_report(account_id=account_id, paid=True, payment_reference="cs_test")
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live partial refund billing test",
+        )
+        store = PostgresDeflectionReportArtifactStore(pool=pool)
+        assert await store.mark_paid(
+            account_id=account_id,
+            request_id=request_id,
+            payment_reference=session_id,
+        )
 
-    response = await _run_stripe_webhook(
-        monkeypatch,
-        event=event,
-        pool=pool,
-        stripe_module=fake_stripe,
-    )
+        response = await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        )
 
-    assert response == {"status": "ok"}
-    assert session_list.calls == []
-    assert pool.report_rows[(account_id, "req-123")]["paid"] is True
-    update_calls = [
-        call
-        for call in pool.execute_calls
-        if "UPDATE content_ops_deflection_reports" in call[0]
-    ]
-    assert update_calls == []
-    billing_event_calls = [
-        call for call in pool.execute_calls if "INSERT INTO billing_events" in call[0]
-    ]
-    assert billing_event_calls[0][1][1] == "evt_deflection_partial_refund"
-    assert "partial refund observed without revocation" in caplog.text
+        assert response == {"status": "ok"}
+        assert session_list.calls == []
+        report = await pool.fetchrow(
+            """
+            SELECT paid, paid_at, payment_reference
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert report is not None
+        assert report["paid"] is True
+        assert report["paid_at"] is not None
+        assert report["payment_reference"] == session_id
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1
+            """,
+            account_id,
+        ) == 0
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
+            event_type="charge.refunded",
+        ) == 1
+        assert "partial refund observed without revocation" in caplog.text
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
