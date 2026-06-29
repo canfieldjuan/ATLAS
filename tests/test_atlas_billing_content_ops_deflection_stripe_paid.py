@@ -1001,24 +1001,65 @@ async def test_deflection_checkout_completion_fails_closed_for_invalid_sessions(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_deflection_checkout_completion_fails_closed_when_report_missing() -> None:
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id)
-    pool = _Pool()
-    pool.update_result = "UPDATE 0"
-
-    with pytest.raises(billing.HTTPException) as exc:
-        await billing._handle_content_ops_deflection_report_checkout_completed(
+    request_id = "req-live-checkout-missing-report"
+    session = _session(
+        account_id=account_id,
+        request_id=request_id,
+        session_id="cs_test_checkout_missing_report_live",
+    )
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
             pool,
-            session,
-            session.metadata,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_missing_report_unused",
         )
 
-    assert exc.value.status_code == 409
-    assert len(pool.execute_calls) == 1
-    query, args = pool.execute_calls[0]
-    assert "UPDATE content_ops_deflection_reports" in query
-    assert args == (account_id, "req-123", "cs_test_deflection", 150000, "usd", False)
+        with pytest.raises(billing.HTTPException) as exc:
+            await billing._handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                session,
+                session.metadata,
+            )
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail == "Deflection report not found"
+        assert (
+            await pool.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM content_ops_deflection_reports
+                WHERE account_id = $1 AND request_id = $2
+                """,
+                account_id,
+                request_id,
+            )
+            == 0
+        )
+        assert (
+            await pool.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM content_ops_deflection_report_deliveries
+                WHERE account_id = $1
+                """,
+                account_id,
+            )
+            == 0
+        )
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_missing_report_unused",
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
