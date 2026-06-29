@@ -27,6 +27,8 @@ _LIVE_BILLING_MIGRATIONS = (
     "328_content_ops_deflection_reports.sql",
     "331_content_ops_deflection_report_delivery_email.sql",
     "332_content_ops_deflection_report_deliveries.sql",
+    "336_content_ops_deflection_paid_reconciliation.sql",
+    "337_content_ops_deflection_reconciliation_null_session.sql",
     "342_content_ops_deflection_checkout_authorization.sql",
 )
 
@@ -89,6 +91,14 @@ async def _cleanup_live_billing_rows(
         "DELETE FROM billing_events WHERE account_id = $1 OR stripe_event_id = $2",
         account_uuid,
         stripe_event_id,
+    )
+    await pool.execute(
+        """
+        DELETE FROM content_ops_deflection_paid_reconciliation
+        WHERE account_id = $1 AND request_id = $2
+        """,
+        account_id,
+        request_id,
     )
     await pool.execute(
         """
@@ -1093,6 +1103,7 @@ async def test_deflection_checkout_completion_emits_incident_when_report_missing
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_deflection_checkout_completion_records_reconciliation_when_event_aged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1101,39 +1112,95 @@ async def test_deflection_checkout_completion_records_reconciliation_when_event_
     # the Stripe retry storm), instead of 409-retrying into the void.
     caplog.set_level(logging.ERROR, logger="atlas.api.billing")
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id)
-    pool = _Pool()
-    pool.update_result = "UPDATE 0"
+    request_id = "req-live-checkout-aged-reconciliation"
+    session_id = "cs_test_checkout_aged_reconciliation_live"
+    session = _session(
+        account_id=account_id,
+        request_id=request_id,
+        session_id=session_id,
+    )
     aged_event_created = int(time.time()) - 100_000  # well past the 300s grace
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_aged_reconciliation_unused",
+        )
 
-    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
-        pool,
-        session,
-        session.metadata,
-        event_created=aged_event_created,
-    )
+        returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+            pool,
+            session,
+            session.metadata,
+            event_created=aged_event_created,
+        )
 
-    assert returned is None  # 2xx, no HTTPException
-    reconciliations = [
-        call
-        for call in pool.execute_calls
-        if "content_ops_deflection_paid_reconciliation" in call[0]
-    ]
-    assert len(reconciliations) == 1
-    query, args = reconciliations[0]
-    assert "INSERT INTO content_ops_deflection_paid_reconciliation" in query
-    assert "ON CONFLICT" in query
-    assert args == (
-        account_id,
-        "req-123",
-        "cs_test_deflection",
-        "checkout.session.completed",
-        "paid_report_missing",
-    )
-    payloads = _incident_payloads(caplog)
-    assert len(payloads) == 1
-    assert payloads[0]["incident_type"] == "paid_report_missing_after_payment"
-    assert payloads[0]["disposition"] == "reconciled"
+        assert returned is None  # 2xx, no HTTPException
+        reconciliation = await pool.fetchrow(
+            """
+            SELECT account_id, request_id, stripe_session_id, event_type, reason
+            FROM content_ops_deflection_paid_reconciliation
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert reconciliation is not None
+        assert dict(reconciliation) == {
+            "account_id": account_id,
+            "request_id": request_id,
+            "stripe_session_id": session_id,
+            "event_type": "checkout.session.completed",
+            "reason": "paid_report_missing",
+        }
+        reconciliation_count_query = """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_paid_reconciliation
+            WHERE account_id = $1 AND request_id = $2
+            """
+        assert (
+            await pool.fetchval(reconciliation_count_query, account_id, request_id)
+            == 1
+        )
+        payloads = _incident_payloads(caplog)
+        assert len(payloads) == 1
+        assert payloads[0]["incident_type"] == "paid_report_missing_after_payment"
+        assert payloads[0]["disposition"] == "reconciled"
+
+        retry_returned = (
+            await billing._handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                session,
+                session.metadata,
+                event_created=aged_event_created,
+            )
+        )
+        assert retry_returned is None
+        assert (
+            await pool.fetchval(reconciliation_count_query, account_id, request_id)
+            == 1
+        )
+        assert (
+            await pool.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM content_ops_deflection_report_deliveries
+                WHERE account_id = $1
+                """,
+                account_id,
+            )
+            == 0
+        )
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_aged_reconciliation_unused",
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
