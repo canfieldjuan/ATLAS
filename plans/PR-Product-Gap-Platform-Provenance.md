@@ -13,12 +13,15 @@ provenance without changing owner-lane routing semantics.
 
 Ownership lane: deflection/product-gap-hardening
 Slice phase: Production hardening
-Max files: 4
+Max files: 6
 
 1. Preserve safe support-platform aliases on normalized support-ticket rows as
    provenance metadata.
-2. Keep platform metadata out of routing signals and owner-lane inference.
-3. Add focused normalization and report-model regression coverage.
+2. Preserve hosted-submit platform defaults when sparse CSV platform columns
+   contain blank cells.
+3. Keep platform metadata out of routing signals and owner-lane inference.
+4. Add focused submit/default, normalization, and report-model regression
+   coverage.
 
 ### Review Contract
 
@@ -26,12 +29,14 @@ Acceptance criteria:
 - Support-ticket rows preserve `support_platform`, `Support Platform`, and
   `platform` aliases as `support_platform`.
 - Existing hosted submit defaults that add `support_platform` continue to flow
-  into normalized source material.
+  into normalized source material, including when a sparse CSV
+  `support_platform` column contains blank cells.
 - `support_platform` does not appear inside product-gap `routing_signals`.
 - Adding `support_platform` does not change owner-lane routing.
 
 Affected surfaces:
 - Support-ticket input package normalization.
+- Hosted deflection submit row defaults.
 - Focused support-ticket/report regression tests.
 
 Risk areas:
@@ -42,9 +47,11 @@ Reviewer rules triggered: R1, R2, R4, R8, R10, R14.
 
 ### Files touched
 
+- `extracted_content_pipeline/api/control_surfaces.py`
 - `extracted_content_pipeline/support_ticket_input_package.py`
 - `plans/PR-Product-Gap-Platform-Provenance.md`
 - `tests/test_content_ops_deflection_report.py`
+- `tests/test_extracted_content_deflection_submit.py`
 - `tests/test_extracted_support_ticket_input_package.py`
 
 ## Mechanism
@@ -52,8 +59,10 @@ Reviewer rules triggered: R1, R2, R4, R8, R10, R14.
 The normalizer gets a dedicated support-platform alias tuple and copies the
 first non-empty platform value into `support_platform` during the same
 source-row shaping pass that already handles company/vendor/contact metadata.
-It is deliberately not added to `_ROUTING_CONTEXT_KEYS`, so grouped FAQ items
-and product-gap action rows do not treat the provider as a routing signal.
+Hosted submit row defaults also restore the selected form platform if a sparse
+CSV `support_platform` cell is blank. Platform is deliberately not added to
+`_ROUTING_CONTEXT_KEYS`, so grouped FAQ items and product-gap action rows do
+not treat the provider as a routing signal.
 
 ## Intentional
 
@@ -74,15 +83,17 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_extracted_support_ticket_input_package.py::test_support_ticket_input_package_preserves_support_platform_provenance tests/test_content_ops_deflection_report.py::test_support_platform_provenance_does_not_route_owner_lane -q` - passed, 2 tests.
+- `python -m pytest tests/test_extracted_content_deflection_submit.py::test_deflection_submit_defaults_fill_blank_support_platform_cells tests/test_extracted_support_ticket_input_package.py::test_support_ticket_input_package_preserves_support_platform_provenance tests/test_content_ops_deflection_report.py::test_support_platform_provenance_does_not_route_owner_lane -q` - passed, 3 tests.
 - Local PR review gate with the current PR body file wired in - passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
+| `extracted_content_pipeline/api/control_surfaces.py` | 17 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
-| `plans/PR-Product-Gap-Platform-Provenance.md` | 88 |
+| `plans/PR-Product-Gap-Platform-Provenance.md` | 97 |
 | `tests/test_content_ops_deflection_report.py` | 30 |
+| `tests/test_extracted_content_deflection_submit.py` | 25 |
 | `tests/test_extracted_support_ticket_input_package.py` | 29 |
-| **Total** | **155** |
+| **Total** | **206** |

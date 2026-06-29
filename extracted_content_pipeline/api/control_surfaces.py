@@ -2462,12 +2462,17 @@ def _deflection_submit_rows_with_defaults(
         "contact_email": data["contact_email"],
         "support_platform": data["support_platform"],
     }
-    return [
-        {**defaults, **dict(row)}
-        if isinstance(row, Mapping)
-        else row
-        for row in rows
-    ]
+    default_platform = data["support_platform"]
+    out: list[Any] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            out.append(row)
+            continue
+        merged = {**defaults, **dict(row)}
+        if not _clean(merged.get("support_platform")):
+            merged["support_platform"] = default_platform
+        out.append(merged)
+    return out
 
 
 def _deflection_submit_english_rows(rows: Sequence[Any]) -> tuple[list[Any], int]:
