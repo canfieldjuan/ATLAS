@@ -2125,45 +2125,98 @@ async def test_stripe_webhook_refund_lookup_failure_retries_without_unlocking(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_stripe_webhook_dispute_relocks_paid_deflection_report_from_direct_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     account_id = str(uuid.uuid4())
+    request_id = "req-live-dispute-relock"
+    stripe_event_id = "evt_deflection_dispute_live"
     dispute = _payment_event_object(
-        object_id="du_test_deflection",
+        object_id="du_test_deflection_live",
+        payment_intent="pi_test_deflection_dispute_live",
         metadata={
             "source": "content_ops_deflection_report",
             "account_id": account_id,
-            "request_id": "req-123",
+            "request_id": request_id,
         },
     )
     event = SimpleNamespace(
-        id="evt_deflection_dispute",
+        id=stripe_event_id,
         type="charge.dispute.created",
         data=SimpleNamespace(object=dispute),
     )
     fake_stripe, session_list = _stripe_module_for_event(event, checkout_sessions=[])
-    pool = _Pool()
-    pool.add_report(account_id=account_id, paid=True, payment_reference=None)
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live dispute relock billing test",
+        )
+        store = PostgresDeflectionReportArtifactStore(pool=pool)
+        assert await store.mark_paid(
+            account_id=account_id,
+            request_id=request_id,
+            payment_reference=None,
+        )
 
-    response = await _run_stripe_webhook(
-        monkeypatch,
-        event=event,
-        pool=pool,
-        stripe_module=fake_stripe,
-    )
+        response = await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        )
 
-    assert response == {"status": "ok"}
-    assert session_list.calls == [
-        {"payment_intent": "pi_test_deflection", "limit": 1, "timeout": 10}
-    ]
-    update_calls = [
-        call for call in pool.execute_calls if "UPDATE content_ops_deflection_reports" in call[0]
-    ]
-    assert update_calls[0][1] == (account_id, "req-123", None)
-    assert "SET paid = false" in update_calls[0][0]
-    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
-    assert pool.delivery_rows == {}
+        assert response == {"status": "ok"}
+        assert session_list.calls == [
+            {
+                "payment_intent": "pi_test_deflection_dispute_live",
+                "limit": 1,
+                "timeout": 10,
+            }
+        ]
+        await _assert_live_deflection_report_locked(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+            event_type="charge.dispute.created",
+        )
+
+        assert await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        ) == {"status": "already_processed"}
+        assert session_list.calls == [
+            {
+                "payment_intent": "pi_test_deflection_dispute_live",
+                "limit": 1,
+                "timeout": 10,
+            }
+        ]
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
+        ) == 1
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
