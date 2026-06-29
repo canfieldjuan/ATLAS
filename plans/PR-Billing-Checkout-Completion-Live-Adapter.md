@@ -26,7 +26,9 @@ Slice phase: Production hardening
 2. Preserve the current behavior contract: the handler returns `None`, marks the
    report paid with the Stripe session reference, and creates one pending
    delivery row without exposing the delivery email in the row body.
-3. Keep maturity-sweep honest: only ratchet `atlas_brain/api/billing.py` if this
+3. Add live regression probes for checkout terms binding and delivery
+   no-downgrade behavior that the fake-pool SQL-string assertions used to cover.
+4. Keep maturity-sweep honest: only ratchet `atlas_brain/api/billing.py` if this
    conversion earns a detector-visible reduction. Remaining `_Pool` tests stay
    grep-visible for later burn-down slices.
 
@@ -45,6 +47,12 @@ Acceptance criteria:
 - The test asserts the report is paid with the expected `payment_reference`,
   delivery status is `pending`, and the delivery row does not store the buyer
   email.
+- The live test reruns the handler against existing `delivered` and `sending`
+  delivery rows and proves those statuses are preserved instead of downgraded
+  to `pending`.
+- A separate live test records checkout authorization terms, proves a matching
+  Stripe Checkout amount marks the report paid, and proves a mismatched amount
+  leaves the report unpaid and queues no delivery.
 - Remaining `_Pool` tests stay detector-visible for later slices.
 
 Affected surfaces:
@@ -58,6 +66,8 @@ Risk areas:
 - Billing checkout completion on the paid report unlock path.
 - Delivery upsert state must remain idempotent and not persist buyer email in
   the delivery queue row.
+- Checkout completion must remain bound to the amount/currency authorized at
+  checkout creation time, not merely any globally allowed amount.
 - The live adapter proof must not weaken the old fake-pool happy-path contract.
 
 Reviewer rules: R1, R2, R3, R6, R8, R10, R13, R14.
@@ -74,7 +84,16 @@ call `_handle_content_ops_deflection_report_checkout_completed` with the existin
 synthetic Stripe Checkout session. Query `content_ops_deflection_reports` and
 `content_ops_deflection_report_deliveries` to prove the handler marked the
 report paid, set `payment_reference`, created one pending delivery row, and did
-not store `buyer@example.com` in the delivery row.
+not store `buyer@example.com` in the delivery row. Then mutate the same delivery
+row to `delivered` and `sending`, rerun the handler, and prove the upsert keeps
+the terminal/in-flight status instead of downgrading it.
+
+Seed two additional live reports with recorded checkout authorizations for the
+same price variant and `150000/usd`. A matching Checkout session marks one report
+paid; a mismatched `120000` Checkout session leaves the other report unpaid and
+with no delivery row. The test widens the allowed-amount setting only after the
+live pool is connected and restores it in `finally`, so skipped no-DB runs cannot
+leak configuration into the rest of the file.
 
 ## Intentional
 
@@ -84,6 +103,9 @@ not store `buyer@example.com` in the delivery row.
   not own event dedupe/audit logging.
 - The Stripe session remains synthetic; the database adapter and persisted state
   are real.
+- The checkout amount allowlist is temporarily widened in one live test and
+  restored manually because the direct handler reads settings, while the live
+  Postgres adapter is still the boundary under test.
 
 ## Deferred
 
@@ -98,15 +120,15 @@ Parked hardening: none.
 - Python compile check for
   `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` with
   `python -m py_compile` - passed.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas_dev_password@localhost:5433/atlas python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py::test_deflection_checkout_completion_marks_report_paid -q` - passed, 1 test.
-- `python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -q` - passed, 42 passed / 16 skipped.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas_dev_password@localhost:5433/atlas python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -q` - passed, 58 passed.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas_dev_password@localhost:5433/atlas python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py::test_deflection_checkout_completion_marks_report_paid tests/test_atlas_billing_content_ops_deflection_stripe_paid.py::test_deflection_checkout_completion_enforces_authorized_terms_live -q` - passed, 2 tests.
+- `python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -q` - passed, 42 passed / 17 skipped.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas_dev_password@localhost:5433/atlas python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -q` - passed, 59 passed.
 - `python scripts/maturity_sweep.py atlas_brain/api --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_api.json --top 80` - passed; no baseline update because `billing.py` remained `INTERNAL_MOCK x38`, score 178.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Billing-Checkout-Completion-Live-Adapter.md` | 112 |
-| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 80 |
-| **Total** | **192** |
+| `plans/PR-Billing-Checkout-Completion-Live-Adapter.md` | 134 |
+| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 233 |
+| **Total** | **367** |

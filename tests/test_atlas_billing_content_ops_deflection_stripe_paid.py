@@ -736,6 +736,37 @@ async def test_deflection_checkout_completion_marks_report_paid() -> None:
         assert delivery["payment_reference"] == session_id
         assert delivery["delivery_status"] == "pending"
         assert "buyer@example.com" not in delivery["row_json"]
+        for preserved_status in ("delivered", "sending"):
+            await pool.execute(
+                """
+                UPDATE content_ops_deflection_report_deliveries
+                SET delivery_status = $3
+                WHERE account_id = $1 AND request_id = $2
+                """,
+                account_id,
+                request_id,
+                preserved_status,
+            )
+            assert (
+                await billing._handle_content_ops_deflection_report_checkout_completed(
+                    pool,
+                    session,
+                    session.metadata,
+                )
+                is None
+            )
+            assert (
+                await pool.fetchval(
+                    """
+                    SELECT delivery_status
+                    FROM content_ops_deflection_report_deliveries
+                    WHERE account_id = $1 AND request_id = $2
+                    """,
+                    account_id,
+                    request_id,
+                )
+                == preserved_status
+            )
     finally:
         await _cleanup_live_billing_rows(
             pool,
@@ -743,6 +774,130 @@ async def test_deflection_checkout_completion_marks_report_paid() -> None:
             request_id=request_id,
             stripe_event_id="evt_live_checkout_completion_unused",
         )
+        await pool.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_deflection_checkout_completion_enforces_authorized_terms_live(
+) -> None:
+    matching_account_id = str(uuid.uuid4())
+    mismatched_account_id = str(uuid.uuid4())
+    matching_request_id = "req-live-checkout-terms-match"
+    mismatched_request_id = "req-live-checkout-terms-mismatch"
+    pool = await _connect_live_billing_pool()
+    original_allowed_amounts = (
+        billing.settings.saas_auth.stripe_content_ops_deflection_report_allowed_amount_cents
+    )
+    billing.settings.saas_auth.stripe_content_ops_deflection_report_allowed_amount_cents = (
+        "120000,150000"
+    )
+    try:
+        await _apply_live_billing_migrations(pool)
+        for account_id, request_id in (
+            (matching_account_id, matching_request_id),
+            (mismatched_account_id, mismatched_request_id),
+        ):
+            await _cleanup_live_billing_rows(
+                pool,
+                account_id=account_id,
+                request_id=request_id,
+                stripe_event_id="evt_live_checkout_terms_unused",
+            )
+            await _seed_live_deflection_report(
+                pool,
+                account_id=account_id,
+                request_id=request_id,
+                account_name="Live checkout terms billing test",
+            )
+            store = PostgresDeflectionReportArtifactStore(pool=pool)
+            assert await store.record_checkout_authorization(
+                account_id=account_id,
+                request_id=request_id,
+                price_variant="standard",
+                amount_cents=150000,
+                currency="usd",
+                price_id="price_standard",
+            )
+
+        matching_session = _session(
+            account_id=matching_account_id,
+            request_id=matching_request_id,
+            session_id="cs_test_checkout_terms_match_live",
+            amount_total=150000,
+        )
+        assert (
+            await billing._handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                matching_session,
+                matching_session.metadata,
+            )
+            is None
+        )
+        matching_report = await pool.fetchrow(
+            """
+            SELECT paid, payment_reference
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            matching_account_id,
+            matching_request_id,
+        )
+        assert matching_report is not None
+        assert matching_report["paid"] is True
+        assert matching_report["payment_reference"] == "cs_test_checkout_terms_match_live"
+
+        mismatched_session = _session(
+            account_id=mismatched_account_id,
+            request_id=mismatched_request_id,
+            session_id="cs_test_checkout_terms_mismatch_live",
+            amount_total=120000,
+        )
+        assert (
+            await billing._handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                mismatched_session,
+                mismatched_session.metadata,
+            )
+            is None
+        )
+        mismatched_report = await pool.fetchrow(
+            """
+            SELECT paid, payment_reference
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            mismatched_account_id,
+            mismatched_request_id,
+        )
+        assert mismatched_report is not None
+        assert mismatched_report["paid"] is False
+        assert mismatched_report["payment_reference"] is None
+        assert (
+            await pool.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM content_ops_deflection_report_deliveries
+                WHERE account_id = $1
+                """,
+                mismatched_account_id,
+            )
+            == 0
+        )
+    finally:
+        billing.settings.saas_auth.stripe_content_ops_deflection_report_allowed_amount_cents = (
+            original_allowed_amounts
+        )
+        for account_id, request_id in (
+            (matching_account_id, matching_request_id),
+            (mismatched_account_id, mismatched_request_id),
+        ):
+            await _cleanup_live_billing_rows(
+                pool,
+                account_id=account_id,
+                request_id=request_id,
+                stripe_event_id="evt_live_checkout_terms_unused",
+            )
         await pool.close()
 
 
