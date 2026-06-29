@@ -27,7 +27,9 @@ Slice phase: Production hardening
 3. Preserve the behavior contract: an aged paid-but-missing Checkout event
    returns `None`/2xx, records one reconciliation ledger row, and queues no
    delivery row.
-4. Keep maturity-sweep honest: only ratchet `atlas_brain/api/billing.py` if this
+4. Enroll the reconciliation migrations in the Stripe paid workflow path
+   filters, so migration-only PRs rerun this live billing suite.
+5. Keep maturity-sweep honest: only ratchet `atlas_brain/api/billing.py` if this
    conversion earns a detector-visible reduction. Remaining `_Pool` tests stay
    grep-visible for later burn-down slices.
 
@@ -48,13 +50,19 @@ Acceptance criteria:
 - State is asserted from Postgres: exactly one reconciliation row exists with
   account id, request id, Stripe session id, event type, and
   `paid_report_missing`; no delivery row exists for the account.
+- The test asserts `COUNT(*) == 1` after the first ledger write, then reruns the
+  same aged event and asserts the count remains `1` to prove retry-storm
+  idempotency.
 - The incident log still records `paid_report_missing_after_payment` with
   `disposition="reconciled"`.
+- The workflow path filters include migrations 336/337 under both
+  `pull_request` and `push`.
 - Remaining `_Pool` tests stay detector-visible for later slices.
 
 Affected surfaces:
 
-- `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` only.
+- `.github/workflows/atlas_content_ops_deflection_stripe_paid_checks.yml`
+- `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py`
 - Runtime billing code is exercised through the existing direct handler, but
   production implementation files are intentionally unchanged.
 
@@ -64,6 +72,8 @@ Risk areas:
   still has not appeared after the write-ordering grace window.
 - The aged path must stop Stripe retry storms by returning 2xx while still
   recording a durable manual-reconciliation row.
+- CI enrollment must follow the new live migration dependencies, or migration
+  regressions can bypass the Stripe paid live suite.
 - The live adapter proof must not weaken the old fake-pool reconciliation
   contract.
 
@@ -71,6 +81,7 @@ Reviewer rules: R1, R2, R3, R6, R8, R10, R13, R14.
 
 ### Files touched
 
+- `.github/workflows/atlas_content_ops_deflection_stripe_paid_checks.yml`
 - `plans/PR-Billing-Checkout-Aged-Reconciliation-Live-Adapter.md`
 - `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py`
 
@@ -83,7 +94,11 @@ report row. Call `_handle_content_ops_deflection_report_checkout_completed` with
 an aged `event_created` timestamp, then query
 `content_ops_deflection_paid_reconciliation` and
 `content_ops_deflection_report_deliveries` to prove the handler recorded the
-manual reconciliation case and did not queue delivery.
+manual reconciliation case and did not queue delivery. Query `COUNT(*)` for the
+ledger row after the first call, then rerun the same aged event and assert the
+count remains `1`, proving the `ON CONFLICT` idempotency behavior without
+SQL-string assertions. Add migrations 336/337 to both workflow path-filter lists
+so changes to the ledger schema rerun this suite.
 
 ## Intentional
 
@@ -122,6 +137,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Billing-Checkout-Aged-Reconciliation-Live-Adapter.md` | 127 |
-| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 104 |
-| **Total** | **231** |
+| `.github/workflows/atlas_content_ops_deflection_stripe_paid_checks.yml` | 4 |
+| `plans/PR-Billing-Checkout-Aged-Reconciliation-Live-Adapter.md` | 143 |
+| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 127 |
+| **Total** | **274** |

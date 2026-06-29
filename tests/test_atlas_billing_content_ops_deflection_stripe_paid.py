@@ -1155,6 +1155,33 @@ async def test_deflection_checkout_completion_records_reconciliation_when_event_
             "event_type": "checkout.session.completed",
             "reason": "paid_report_missing",
         }
+        reconciliation_count_query = """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_paid_reconciliation
+            WHERE account_id = $1 AND request_id = $2
+            """
+        assert (
+            await pool.fetchval(reconciliation_count_query, account_id, request_id)
+            == 1
+        )
+        payloads = _incident_payloads(caplog)
+        assert len(payloads) == 1
+        assert payloads[0]["incident_type"] == "paid_report_missing_after_payment"
+        assert payloads[0]["disposition"] == "reconciled"
+
+        retry_returned = (
+            await billing._handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                session,
+                session.metadata,
+                event_created=aged_event_created,
+            )
+        )
+        assert retry_returned is None
+        assert (
+            await pool.fetchval(reconciliation_count_query, account_id, request_id)
+            == 1
+        )
         assert (
             await pool.fetchval(
                 """
@@ -1166,10 +1193,6 @@ async def test_deflection_checkout_completion_records_reconciliation_when_event_
             )
             == 0
         )
-        payloads = _incident_payloads(caplog)
-        assert len(payloads) == 1
-        assert payloads[0]["incident_type"] == "paid_report_missing_after_payment"
-        assert payloads[0]["disposition"] == "reconciled"
     finally:
         await _cleanup_live_billing_rows(
             pool,
