@@ -678,28 +678,72 @@ async def _run_stripe_webhook(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_deflection_checkout_completion_marks_report_paid() -> None:
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id)
-    pool = _Pool()
-    pool.add_report(account_id=account_id)
-
-    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
-        pool,
-        session,
-        session.metadata,
+    request_id = "req-live-checkout-completion"
+    session_id = "cs_test_checkout_completion_live"
+    session = _session(
+        account_id=account_id,
+        request_id=request_id,
+        session_id=session_id,
     )
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_completion_unused",
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live checkout completion billing test",
+        )
 
-    assert returned is None
-    assert len(pool.execute_calls) == 2
-    query, args = pool.execute_calls[0]
-    assert "UPDATE content_ops_deflection_reports" in query
-    assert args == (account_id, "req-123", "cs_test_deflection", 150000, "usd", False)
-    delivery_query, delivery_args = pool.execute_calls[1]
-    assert "INSERT INTO content_ops_deflection_report_deliveries" in delivery_query
-    assert "delivery_status IN ('delivered', 'sending')" in delivery_query
-    assert delivery_args == (account_id, "req-123", "cs_test_deflection")
-    assert "buyer@example.com" not in str(pool.delivery_rows)
+        returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+            pool,
+            session,
+            session.metadata,
+        )
+
+        assert returned is None
+        report = await pool.fetchrow(
+            """
+            SELECT paid, payment_reference
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert report is not None
+        assert report["paid"] is True
+        assert report["payment_reference"] == session_id
+        delivery = await pool.fetchrow(
+            """
+            SELECT payment_reference, delivery_status, row_to_json(d)::text AS row_json
+            FROM content_ops_deflection_report_deliveries AS d
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert delivery is not None
+        assert delivery["payment_reference"] == session_id
+        assert delivery["delivery_status"] == "pending"
+        assert "buyer@example.com" not in delivery["row_json"]
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_completion_unused",
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
