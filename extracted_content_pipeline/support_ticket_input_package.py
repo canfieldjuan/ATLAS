@@ -196,7 +196,7 @@ _ROUTING_CONTEXT_KEYS = (
     ("assignee", ("assignee", "assigned_to", "agent", "agent_name")),
     ("tags", ("tags", "tag", "ticket_tags", "labels")),
     ("brand", ("brand", "ticket_brand", "zendesk_brand")),
-    ("organization", ("organization", "organisation", "org", "company")),
+    ("organization", ("organization", "organisation", "org", "requester_organization")),
     ("product_area", ("product_area", "product area", "area")),
     (
         "custom_product_area",
