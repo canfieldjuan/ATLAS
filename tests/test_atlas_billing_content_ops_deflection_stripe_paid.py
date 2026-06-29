@@ -2085,18 +2085,22 @@ async def test_stripe_webhook_partial_refund_keeps_deflection_report_paid(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_stripe_webhook_refund_lookup_failure_retries_without_unlocking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     account_id = str(uuid.uuid4())
+    request_id = "req-live-refund-lookup-down"
+    session_id = "cs_test_refund_lookup_down_live"
+    stripe_event_id = "evt_deflection_refund_lookup_down_live"
     charge = _payment_event_object(
-        payment_intent="pi_lookup_down",
+        payment_intent="pi_lookup_down_live",
         refunded=True,
         amount_refunded=150000,
         amount_captured=150000,
     )
     event = SimpleNamespace(
-        id="evt_deflection_refund_lookup_down",
+        id=stripe_event_id,
         type="charge.refunded",
         data=SimpleNamespace(object=charge),
     )
@@ -2104,24 +2108,73 @@ async def test_stripe_webhook_refund_lookup_failure_retries_without_unlocking(
         event,
         checkout_error=RuntimeError("stripe down"),
     )
-    pool = _Pool()
-    pool.add_report(account_id=account_id, paid=True, payment_reference="cs_test")
-
-    with pytest.raises(billing.HTTPException) as exc:
-        await _run_stripe_webhook(
-            monkeypatch,
-            event=event,
-            pool=pool,
-            stripe_module=fake_stripe,
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live refund lookup failure billing test",
+        )
+        store = PostgresDeflectionReportArtifactStore(pool=pool)
+        assert await store.mark_paid(
+            account_id=account_id,
+            request_id=request_id,
+            payment_reference=session_id,
         )
 
-    assert exc.value.status_code == 503
-    assert session_list.calls == [
-        {"payment_intent": "pi_lookup_down", "limit": 1, "timeout": 10}
-    ]
-    assert pool.report_rows[(account_id, "req-123")]["paid"] is True
-    assert pool.execute_calls == []
-    assert pool.processed_event_ids == set()
+        with pytest.raises(billing.HTTPException) as exc:
+            await _run_stripe_webhook(
+                monkeypatch,
+                event=event,
+                pool=pool,
+                stripe_module=fake_stripe,
+            )
+
+        assert exc.value.status_code == 503
+        assert session_list.calls == [
+            {"payment_intent": "pi_lookup_down_live", "limit": 1, "timeout": 10}
+        ]
+        report = await pool.fetchrow(
+            """
+            SELECT paid, paid_at, payment_reference
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert report is not None
+        assert report["paid"] is True
+        assert report["paid_at"] is not None
+        assert report["payment_reference"] == session_id
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1
+            """,
+            account_id,
+        ) == 0
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
+        ) == 0
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
