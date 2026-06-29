@@ -1392,12 +1392,51 @@ async def test_delivery_worker_fails_when_paid_pdf_render_fails(
     assert update_args == (
         "acct-123",
         "content-ops-abc123",
-        "RuntimeError: paid_report_pdf_render_failed: RuntimeError: pdf down",
+        "PaidReportPdfRenderError: paid_report_pdf_render_failed: RuntimeError: pdf down",
     )
     incidents = _incident_payloads(caplog)
     assert incidents[-1]["incident_type"] == "paid_report_delivery_send_failed"
     assert incidents[-1]["error"] == update_args[-1]
     assert "Deflection report PDF render failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_defers_stale_reclaim_when_paid_pdf_render_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _Pool([_row(previous_delivery_status="sending")])
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+
+    def _raise_pdf(_artifact: Any) -> bytes:
+        raise RuntimeError("pdf down")
+
+    _install_fake_pdf_renderer(monkeypatch, _raise_pdf)
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'pending'" in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_render_failed: RuntimeError: pdf down",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == (
+        "paid_report_delivery_pdf_render_reclaim_deferred"
+    )
+    assert incidents[-1]["severity"] == "warning"
+    assert incidents[-1]["error"] == update_args[-1]
 
 
 @pytest.mark.asyncio
@@ -1498,6 +1537,7 @@ async def test_delivery_worker_claim_query_retries_stale_sending_rows() -> None:
     claim_query, _claim_args = pool.fetch_calls[0]
     assert "d.delivery_status = 'pending'" in claim_query
     assert "d.delivery_status = 'sending'" in claim_query
+    assert "d.delivery_status AS previous_delivery_status" in claim_query
     assert f"INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'" in claim_query
 
 

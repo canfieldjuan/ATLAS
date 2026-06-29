@@ -135,6 +135,10 @@ class _DeliveryEmailSummary:
     drafted_resolution_items: tuple[_DeliveryEmailActionItem, ...] = ()
 
 
+class PaidReportPdfRenderError(RuntimeError):
+    """Raised when the paid report PDF renderer fails."""
+
+
 def deflection_delivery_email_surface_observation(
     text_body: str | None,
 ) -> dict[str, dict[str, int]]:
@@ -259,6 +263,29 @@ async def send_pending_deflection_report_deliveries(
                 _provider_message_id("resend", "idempotent-replay"),
             )
             sent += 1
+            continue
+        except PaidReportPdfRenderError as exc:
+            error = _bounded_error(exc)
+            if _claimed_previous_delivery_status(data) == "sending":
+                await _emit_delivery_incident(
+                    "paid_report_delivery_pdf_render_reclaim_deferred",
+                    account_id=account_id,
+                    request_id=request_id,
+                    severity="warning",
+                    error=error,
+                )
+                await _mark_pending(pool, account_id, request_id, error)
+                failed += 1
+                continue
+            await _emit_delivery_incident(
+                "paid_report_delivery_send_failed",
+                account_id=account_id,
+                request_id=request_id,
+                severity="error",
+                error=error,
+            )
+            await _mark_failed(pool, account_id, request_id, error)
+            failed += 1
             continue
         except Exception as exc:
             error = _bounded_error(exc)
@@ -1170,6 +1197,10 @@ def _decoded_artifact(artifact: Any) -> Any:
     return decode_jsonb_field(artifact, default={})
 
 
+def _claimed_previous_delivery_status(data: Mapping[str, Any]) -> str:
+    return _clean(data.get("previous_delivery_status")) or "pending"
+
+
 def _pdf_attachments(
     *,
     artifact: Any,
@@ -1186,7 +1217,7 @@ def _pdf_attachments(
             "Deflection report PDF render failed for %s",
             request_id,
         )
-        raise RuntimeError(
+        raise PaidReportPdfRenderError(
             f"paid_report_pdf_render_failed: {_bounded_error(exc)}"
         ) from exc
     if not pdf_bytes:
@@ -1234,6 +1265,23 @@ async def _mark_failed(pool: Any, account_id: str, request_id: str, error: str) 
         """
         UPDATE content_ops_deflection_report_deliveries
         SET delivery_status = 'failed',
+            delivery_error = $3,
+            updated_at = NOW()
+        WHERE account_id = $1
+          AND request_id = $2
+          AND delivery_status = 'sending'
+        """,
+        account_id,
+        request_id,
+        _bounded_text(error),
+    )
+
+
+async def _mark_pending(pool: Any, account_id: str, request_id: str, error: str) -> None:
+    await pool.execute(
+        """
+        UPDATE content_ops_deflection_report_deliveries
+        SET delivery_status = 'pending',
             delivery_error = $3,
             updated_at = NOW()
         WHERE account_id = $1
@@ -1608,6 +1656,7 @@ _PENDING_SQL = """
 SELECT
     d.account_id,
     d.request_id,
+    d.delivery_status AS previous_delivery_status,
     r.delivery_email,
     r.paid,
     r.artifact
@@ -1625,7 +1674,8 @@ WITH claimed AS (
     SELECT
         d.account_id,
         d.request_id,
-        d.created_at
+        d.created_at,
+        d.delivery_status AS previous_delivery_status
     FROM content_ops_deflection_report_deliveries d
     WHERE d.delivery_status = 'pending'
        OR (
@@ -1649,6 +1699,7 @@ WHERE d.account_id = c.account_id
 RETURNING
     d.account_id,
     d.request_id,
+    c.previous_delivery_status,
     r.delivery_email,
     r.paid,
     r.artifact

@@ -25,6 +25,10 @@ Slice phase: Production hardening
    fallback so it proves no sender call, failed status, and an incident.
 3. Keep idempotent replay coverage for regenerated-but-different PDF payloads
    so the provider conflict branch remains protected.
+4. Treat stale `sending` reclaims differently from first-attempt `pending`
+   sends when PDF rendering fails, so a transient render outage cannot
+   terminal-fail a delivery row after the buyer may already have received the
+   first email.
 
 ### Review Contract
 
@@ -36,6 +40,9 @@ Slice phase: Production hardening
   - Both cases mark the delivery row failed with a bounded error.
   - Both cases emit a paid-funnel incident so the launch proof can see the
     missing paid PDF as a hard failure.
+  - Stale `sending` reclaims whose PDF renderer fails do not call
+    `sender.send(...)` and are reset to `pending` with a warning incident
+    instead of being marked terminal `failed`.
   - Successful deliveries still attach the PDF and mark delivered.
 - Affected surfaces:
   - Paid report delivery worker only.
@@ -61,9 +68,17 @@ Slice phase: Production hardening
 
 Replace `_pdf_attachments(...)`'s silent fallback with a small required renderer
 helper that raises when the artifact is missing/malformed or when
-`render_deflection_full_report_pdf(...)` fails. The existing `try/except` around
-the delivery build/send path already emits `paid_report_delivery_send_failed`,
-marks the row failed, increments `failed`, and skips `sender.send(...)`.
+`render_deflection_full_report_pdf(...)` fails. The claim query now returns the
+row's previous delivery status before it is claimed as `sending`, so the worker
+can distinguish first-attempt `pending` sends from stale `sending` reclaims.
+
+First-attempt PDF render failures still emit `paid_report_delivery_send_failed`,
+mark the row failed, increment `failed`, and skip `sender.send(...)`. Stale
+reclaim PDF render failures emit
+`paid_report_delivery_pdf_render_reclaim_deferred`, reset the row to `pending`,
+increment `failed` for this run, and skip `sender.send(...)`; the next worker
+run can retry rendering instead of terminal-failing a row whose first email may
+already have reached Resend.
 
 The test that currently expects link-only fallback becomes the regression for
 the new contract. It asserts the worker records a failed delivery, no email
@@ -92,16 +107,16 @@ Parked hardening: none.
 
 ## Verification
 
-- `pytest tests/test_atlas_content_ops_deflection_delivery.py -q` - 35 passed,
+- `pytest tests/test_atlas_content_ops_deflection_delivery.py -q` - 36 passed,
   1 skipped.
-- Pending before push wrapper:
-  - `python scripts/sync_pr_plan.py plans/PR-Deflection-Paid-PDF-Required.md --check`
+- `python scripts/sync_pr_plan.py plans/PR-Deflection-Paid-PDF-Required.md --check`
+  - passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/content_ops_deflection_delivery.py` | 16 |
-| `plans/PR-Deflection-Paid-PDF-Required.md` | 107 |
-| `tests/test_atlas_content_ops_deflection_delivery.py` | 71 |
-| **Total** | **194** |
+| `atlas_brain/content_ops_deflection_delivery.py` | 69 |
+| `plans/PR-Deflection-Paid-PDF-Required.md` | 122 |
+| `tests/test_atlas_content_ops_deflection_delivery.py` | 111 |
+| **Total** | **302** |
