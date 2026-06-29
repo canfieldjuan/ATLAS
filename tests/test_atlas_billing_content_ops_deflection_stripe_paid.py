@@ -65,6 +65,22 @@ class _InitializedAsyncpgPool:
         await self._pool.close()
 
 
+class _NoDbPool:
+    is_initialized = True
+
+    async def execute(self, *_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("invalid session should not touch the DB")
+
+    async def fetchval(self, *_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("invalid session should not touch the DB")
+
+    async def fetchrow(self, *_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("invalid session should not touch the DB")
+
+    async def fetch(self, *_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("invalid session should not touch the DB")
+
+
 async def _connect_live_billing_pool() -> _InitializedAsyncpgPool:
     asyncpg = pytest.importorskip("asyncpg")
     database_url = os.environ.get("ATLAS_MIGRATION_TEST_DATABASE_URL")
@@ -998,7 +1014,7 @@ async def test_deflection_checkout_completion_fails_closed_for_invalid_sessions(
     kwargs = {"account_id": str(uuid.uuid4())}
     kwargs[field] = value
     session = _session(**kwargs)
-    pool = _Pool()
+    pool = _NoDbPool()
 
     returned = await billing._handle_content_ops_deflection_report_checkout_completed(
         pool,
@@ -1007,7 +1023,6 @@ async def test_deflection_checkout_completion_fails_closed_for_invalid_sessions(
     )
 
     assert returned is None
-    assert pool.execute_calls == []
 
 
 @pytest.mark.asyncio
@@ -1073,33 +1088,73 @@ async def test_deflection_checkout_completion_fails_closed_when_report_missing()
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_deflection_checkout_completion_emits_incident_when_report_missing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.ERROR, logger="atlas.api.billing")
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id)
-    pool = _Pool()
-    pool.update_result = "UPDATE 0"
-
-    with pytest.raises(billing.HTTPException):
-        await billing._handle_content_ops_deflection_report_checkout_completed(
+    request_id = "req-live-checkout-missing-report-incident"
+    session = _session(
+        account_id=account_id,
+        request_id=request_id,
+        session_id="cs_test_checkout_missing_report_incident_live",
+    )
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
             pool,
-            session,
-            session.metadata,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_missing_report_incident_unused",
         )
 
-    payloads = _incident_payloads(caplog)
-    assert payloads == [
-        {
-            "account_id": account_id,
-            "event_type": "checkout.session.completed",
-            "incident_type": "paid_report_missing_after_payment",
-            "request_id": "req-123",
-            "severity": "error",
-            "stripe_session_id": "cs_test_deflection",
-        }
-    ]
+        with pytest.raises(billing.HTTPException) as exc:
+            await billing._handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                session,
+                session.metadata,
+            )
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail == "Deflection report not found"
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        ) == 0
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1
+            """,
+            account_id,
+        ) == 0
+        payloads = _incident_payloads(caplog)
+        assert payloads == [
+            {
+                "account_id": account_id,
+                "event_type": "checkout.session.completed",
+                "incident_type": "paid_report_missing_after_payment",
+                "request_id": request_id,
+                "severity": "error",
+                "stripe_session_id": "cs_test_checkout_missing_report_incident_live",
+            }
+        ]
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_missing_report_incident_unused",
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
@@ -1376,36 +1431,90 @@ def test_reconcile_grace_config_rejects_non_positive_values() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_deflection_checkout_completion_emits_incident_for_terms_mismatch(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.ERROR, logger="atlas.api.billing")
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id, amount_total=149999)
-    pool = _Pool()
-    pool.add_report(account_id=account_id)
-
-    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
-        pool,
-        session,
-        session.metadata,
+    request_id = "req-live-checkout-terms-mismatch-amount"
+    session = _session(
+        account_id=account_id,
+        request_id=request_id,
+        session_id="cs_test_checkout_terms_mismatch_amount_live",
+        amount_total=149999,
     )
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_terms_mismatch_unused",
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live checkout terms mismatch billing test",
+        )
 
-    assert returned is None
-    assert pool.execute_calls == []
-    payloads = _incident_payloads(caplog)
-    assert payloads == [
-        {
-            "account_id": account_id,
-            "amount_total": "149999",
-            "currency": "usd",
-            "event_type": "checkout.session.completed",
-            "incident_type": "paid_report_checkout_terms_mismatch",
-            "request_id": "req-123",
-            "severity": "error",
-            "stripe_session_id": "cs_test_deflection",
+        returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+            pool,
+            session,
+            session.metadata,
+        )
+
+        assert returned is None
+        report = await pool.fetchrow(
+            """
+            SELECT paid, payment_reference, checkout_price_variant,
+                   checkout_amount_cents, checkout_currency, checkout_price_id
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert report is not None
+        assert dict(report) == {
+            "paid": False,
+            "payment_reference": None,
+            "checkout_price_variant": None,
+            "checkout_amount_cents": None,
+            "checkout_currency": None,
+            "checkout_price_id": None,
         }
-    ]
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1
+            """,
+            account_id,
+        ) == 0
+        payloads = _incident_payloads(caplog)
+        assert payloads == [
+            {
+                "account_id": account_id,
+                "amount_total": "149999",
+                "currency": "usd",
+                "event_type": "checkout.session.completed",
+                "incident_type": "paid_report_checkout_terms_mismatch",
+                "request_id": request_id,
+                "severity": "error",
+                "stripe_session_id": "cs_test_checkout_terms_mismatch_amount_live",
+            }
+        ]
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_terms_mismatch_unused",
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
@@ -1502,61 +1611,107 @@ async def test_deflection_checkout_completion_accepts_lower_authorized_amount(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_deflection_checkout_completion_rejects_wrong_authorized_variant(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.ERROR, logger="atlas.api.billing")
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id, amount_total=120000)
-    pool = _Pool()
-    pool.add_report(
+    request_id = "req-live-checkout-wrong-authorized-variant"
+    session = _session(
         account_id=account_id,
-        checkout_price_variant="standard",
-        checkout_amount_cents=150000,
-        checkout_currency="usd",
-        checkout_price_id="price_standard",
+        request_id=request_id,
+        session_id="cs_test_checkout_wrong_authorized_variant_live",
+        amount_total=120000,
     )
     monkeypatch.setattr(
         billing.settings.saas_auth,
         "stripe_content_ops_deflection_report_allowed_amount_cents",
         "120000,150000",
     )
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_wrong_authorized_variant_unused",
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live checkout wrong authorized variant test",
+        )
+        store = PostgresDeflectionReportArtifactStore(pool=pool)
+        assert await store.record_checkout_authorization(
+            account_id=account_id,
+            request_id=request_id,
+            price_variant="standard",
+            amount_cents=150000,
+            currency="usd",
+            price_id="price_standard",
+        )
 
-    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
-        pool,
-        session,
-        session.metadata,
-    )
+        returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+            pool,
+            session,
+            session.metadata,
+        )
 
-    assert returned is None
-    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
-    update_query, update_args = pool.execute_calls[0]
-    assert "UPDATE content_ops_deflection_reports" in update_query
-    assert update_args == (
-        account_id,
-        "req-123",
-        "cs_test_deflection",
-        120000,
-        "usd",
-        True,
-    )
-    assert len(pool.execute_calls) == 1
-    assert _incident_payloads(caplog) == [
-        {
-            "account_id": account_id,
-            "amount_total": "120000",
-            "currency": "usd",
-            "event_type": "checkout.session.completed",
-            "expected_amount_cents": "150000",
-            "expected_currency": "usd",
-            "expected_price_variant": "standard",
-            "incident_type": "paid_report_checkout_terms_mismatch",
-            "request_id": "req-123",
-            "severity": "error",
-            "stripe_session_id": "cs_test_deflection",
+        assert returned is None
+        report = await pool.fetchrow(
+            """
+            SELECT paid, payment_reference, checkout_price_variant,
+                   checkout_amount_cents, checkout_currency, checkout_price_id
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert report is not None
+        assert dict(report) == {
+            "paid": False,
+            "payment_reference": None,
+            "checkout_price_variant": "standard",
+            "checkout_amount_cents": 150000,
+            "checkout_currency": "usd",
+            "checkout_price_id": "price_standard",
         }
-    ]
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1
+            """,
+            account_id,
+        ) == 0
+        assert _incident_payloads(caplog) == [
+            {
+                "account_id": account_id,
+                "amount_total": "120000",
+                "currency": "usd",
+                "event_type": "checkout.session.completed",
+                "expected_amount_cents": "150000",
+                "expected_currency": "usd",
+                "expected_price_variant": "standard",
+                "incident_type": "paid_report_checkout_terms_mismatch",
+                "request_id": request_id,
+                "severity": "error",
+                "stripe_session_id": "cs_test_checkout_wrong_authorized_variant_live",
+            }
+        ]
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_wrong_authorized_variant_unused",
+        )
+        await pool.close()
 
 
 def test_deflection_checkout_amount_requires_exact_default_amount() -> None:
