@@ -81,15 +81,17 @@ SELECT name
 FROM schema_migrations
 WHERE name IN (
   '331_content_ops_deflection_report_delivery_email',
-  '332_content_ops_deflection_report_deliveries'
+  '332_content_ops_deflection_report_deliveries',
+  '342_content_ops_deflection_checkout_authorization'
 )
 ORDER BY name;
 "
 ```
 
-Both rows must be present before paid delivery proof. Migration 331 stores the
-buyer delivery email on the report; migration 332 creates the paid delivery
-queue.
+All three rows must be present before paid delivery proof. Migration 331 stores
+the buyer delivery email on the report; migration 332 creates the paid delivery
+queue; migration 342 adds the checkout authorization columns that the real
+Stripe unlock path reads and writes.
 
 ## Snapshot Email And PDF Proof
 
@@ -212,7 +214,7 @@ Stop if rendering fails or the artifact query returns no row. The first exercise
 of paid PDF rendering must not be the live buyer send.
 
 Only after queue isolation, queue-only dry-run, and local PDF render validation
-pass, temporarily enable live delivery and send:
+pass, run one manual live send for the isolated proof row:
 
 ```bash
 ATLAS_DEFLECTION_DELIVERY_ENABLED=true
@@ -230,6 +232,27 @@ python scripts/send_content_ops_deflection_report_deliveries.py \
 
 Proceed only if the live JSON has `sent` 1 and `failed` 0, and the buyer inbox
 receives the paid report email.
+
+Before launch, deploy or restart ATLAS with the hosted scheduler configured for
+live paid delivery, not only the one-off manual CLI:
+
+```bash
+ATLAS_DEFLECTION_DELIVERY_ENABLED=true
+ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false
+```
+
+Then verify the deployed scheduler picked up that configuration:
+
+```bash
+curl -fsS "$ATLAS_API_BASE_URL/api/v1/autonomous/?include_disabled=true" \
+  -H "Authorization: Bearer $ATLAS_ADMIN_TOKEN" \
+  | jq '.tasks[] | select(.name == "content_ops_deflection_report_delivery") | {id, enabled, next_run_at, metadata}'
+```
+
+Proceed only if the task is `enabled`, has a `next_run_at`, and its metadata
+shows the enabled config value is live. Stop if the hosted scheduler still
+reports disabled or dry-run config; a manual one-off email is not enough to
+launch public paid delivery.
 
 The paid email must include key numbers, next actions, ready-to-publish rows
 when available, the hosted result URL, and a paid report PDF attachment. A

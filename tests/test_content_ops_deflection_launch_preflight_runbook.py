@@ -26,6 +26,13 @@ PAID_QUEUE_MIGRATION = (
     / "migrations"
     / "332_content_ops_deflection_report_deliveries.sql"
 )
+CHECKOUT_AUTHORIZATION_MIGRATION = (
+    ROOT
+    / "atlas_brain"
+    / "storage"
+    / "migrations"
+    / "342_content_ops_deflection_checkout_authorization.sql"
+)
 
 
 def _doc() -> str:
@@ -87,9 +94,12 @@ def test_launch_runbook_requires_paid_delivery_schema() -> None:
     assert "schema_migrations" in section
     assert "331_content_ops_deflection_report_delivery_email" in section
     assert "332_content_ops_deflection_report_deliveries" in section
-    assert "Both rows must be present" in section
+    assert "342_content_ops_deflection_checkout_authorization" in section
+    assert "All three rows must be present" in section
+    assert "checkout authorization columns" in section
     assert PAID_EMAIL_MIGRATION.exists()
     assert PAID_QUEUE_MIGRATION.exists()
+    assert CHECKOUT_AUTHORIZATION_MIGRATION.exists()
 
 
 def test_snapshot_email_proof_requires_attachment_and_blocks_skip_log() -> None:
@@ -141,6 +151,11 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "live buyer send" in delivery
     assert "ATLAS_DEFLECTION_DELIVERY_ENABLED=true" in delivery
     assert "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false" in delivery
+    assert "deploy or restart ATLAS" in delivery
+    assert "hosted scheduler configured for" in delivery
+    assert "live paid delivery" in delivery
+    assert "enabled config value is live" in delivery
+    assert "manual one-off email is not enough" in delivery
     assert "live JSON has `sent` 1 and `failed` 0" in delivery
     assert "link-only paid email is not launch proof" in delivery
 
