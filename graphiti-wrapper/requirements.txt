@@ -20,7 +20,7 @@ numpy>=1.24.0
 torch>=2.0.0
 
 # Neo4j Driver (usually bundled with graphiti-core)
-neo4j>=5.0.0
+neo4j>=6.2.0
 
 # Utils
 python-dotenv>=1.0.0
