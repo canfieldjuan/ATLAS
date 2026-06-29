@@ -1364,11 +1364,13 @@ async def test_delivery_worker_renders_pdf_with_lazy_renderer_import(
 
 
 @pytest.mark.asyncio
-async def test_delivery_worker_falls_back_to_link_only_when_pdf_render_fails(
+async def test_delivery_worker_fails_when_paid_pdf_render_fails(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     pool = _Pool([_row()])
     sender = _Sender()
+    caplog.set_level("ERROR", logger="atlas.content_ops_deflection_delivery")
 
     def _raise_pdf(_artifact: Any) -> bytes:
         raise RuntimeError("pdf down")
@@ -1381,14 +1383,51 @@ async def test_delivery_worker_falls_back_to_link_only_when_pdf_render_fails(
         config=_config(),
     )
 
-    assert summary.sent == 1
-    request = sender.requests[0]
-    assert request.attachments == ()
-    assert "full report PDF is attached" not in request.html_body
-    assert "full report PDF is attached" not in (request.text_body or "")
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
     update_query, update_args = pool.execute_calls[0]
-    assert "delivery_status = 'delivered'" in update_query
-    assert update_args == ("acct-123", "content-ops-abc123", "resend:email-123")
+    assert "delivery_status = 'failed'" in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "RuntimeError: paid_report_pdf_render_failed: RuntimeError: pdf down",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "paid_report_delivery_send_failed"
+    assert incidents[-1]["error"] == update_args[-1]
+    assert "Deflection report PDF render failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_fails_when_paid_pdf_artifact_is_malformed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _Pool([_row(artifact=json.dumps(["not", "a", "report"]))])
+    sender = _Sender()
+    caplog.set_level("ERROR", logger="atlas.content_ops_deflection_delivery")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'failed'" in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "ValueError: paid_report_pdf_missing_artifact",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "paid_report_delivery_send_failed"
+    assert incidents[-1]["error"] == update_args[-1]
 
 
 @pytest.mark.asyncio
@@ -1559,11 +1598,11 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # End-to-end regression for the R8 BLOCKER (real ResendCampaignSender + the
-    # real render->link-only fallback transition): first send carries the PDF
-    # attachment; on re-claim the render fails so the email is link-only -- a
-    # DIFFERENT payload under the SAME idempotency key. A Resend-like client
-    # returns 409 invalid_idempotent_request for that mismatch, and the delivery
-    # path must mark the row delivered (idempotent replay), not failed.
+    # real render->attachment transition): both attempts carry a PDF, but a
+    # regenerated attachment can still differ byte-for-byte under the SAME
+    # idempotency key. A Resend-like client returns 409 invalid_idempotent_request
+    # for that mismatch, and the delivery path must mark the row delivered
+    # (idempotent replay), not failed.
     from extracted_content_pipeline.campaign_sender import (
         ResendCampaignSender,
         ResendSenderConfig,
@@ -1608,7 +1647,7 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
         render_calls["n"] += 1
         if render_calls["n"] == 1:
             return b"%PDF-first-render"
-        raise RuntimeError("render failed on reclaim")
+        return b"%PDF-second-render"
 
     _install_fake_pdf_renderer(monkeypatch, _renderer)
     row = _row()
@@ -1618,7 +1657,7 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
     )
     assert first.sent == 1 and first.failed == 0
 
-    # Re-claim: render now fails -> link-only -> different payload, same key.
+    # Re-claim: render returns a different PDF payload under the same key.
     second = await send_pending_deflection_report_deliveries(
         _Pool([row]), sender=sender, config=_config()
     )
@@ -1626,7 +1665,7 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
     assert second.failed == 0
     assert len(http.posts) == 2
     assert http.posts[0]["key"] == http.posts[1]["key"]  # same idempotency key
-    assert http.posts[0]["json"] != http.posts[1]["json"]  # attachment vs link-only
+    assert http.posts[0]["json"] != http.posts[1]["json"]  # regenerated attachment
 
 
 @pytest.mark.asyncio

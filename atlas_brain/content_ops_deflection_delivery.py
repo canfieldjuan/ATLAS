@@ -1176,21 +1176,21 @@ def _pdf_attachments(
     request_id: str,
 ) -> tuple[dict[str, str], ...]:
     if not isinstance(artifact, Mapping):
-        logger.warning(
-            "Skipping deflection report PDF attachment for %s: missing artifact",
-            request_id,
-        )
-        return ()
+        raise ValueError("paid_report_pdf_missing_artifact")
     try:
         from .deflection_pdf_renderer import render_deflection_full_report_pdf
 
         pdf_bytes = render_deflection_full_report_pdf(artifact)
-    except Exception:
+    except Exception as exc:
         logger.exception(
-            "Deflection report PDF render failed for %s; sending link-only email",
+            "Deflection report PDF render failed for %s",
             request_id,
         )
-        return ()
+        raise RuntimeError(
+            f"paid_report_pdf_render_failed: {_bounded_error(exc)}"
+        ) from exc
+    if not pdf_bytes:
+        raise ValueError("paid_report_pdf_empty")
     return ({
         "filename": f"{_attachment_slug(request_id)}-support-deflection-report.pdf",
         "content": base64.b64encode(pdf_bytes).decode("ascii"),
