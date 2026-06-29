@@ -274,7 +274,7 @@ async def send_pending_deflection_report_deliveries(
                     severity="warning",
                     error=error,
                 )
-                await _mark_pending(pool, account_id, request_id, error)
+                await _defer_reclaimed_sending(pool, account_id, request_id, error)
                 failed += 1
                 continue
             await _emit_delivery_incident(
@@ -1277,11 +1277,16 @@ async def _mark_failed(pool: Any, account_id: str, request_id: str, error: str) 
     )
 
 
-async def _mark_pending(pool: Any, account_id: str, request_id: str, error: str) -> None:
+async def _defer_reclaimed_sending(
+    pool: Any,
+    account_id: str,
+    request_id: str,
+    error: str,
+) -> None:
     await pool.execute(
         """
         UPDATE content_ops_deflection_report_deliveries
-        SET delivery_status = 'pending',
+        SET delivery_status = 'sending',
             delivery_error = $3,
             updated_at = NOW()
         WHERE account_id = $1

@@ -41,8 +41,8 @@ Slice phase: Production hardening
   - Both cases emit a paid-funnel incident so the launch proof can see the
     missing paid PDF as a hard failure.
   - Stale `sending` reclaims whose PDF renderer fails do not call
-    `sender.send(...)` and are reset to `pending` with a warning incident
-    instead of being marked terminal `failed`.
+    `sender.send(...)` and remain `sending` with a warning incident instead of
+    being marked terminal `failed` or losing reclaim provenance.
   - Successful deliveries still attach the PDF and mark delivered.
 - Affected surfaces:
   - Paid report delivery worker only.
@@ -76,12 +76,14 @@ can distinguish first-attempt `pending` sends from stale `sending` reclaims.
 First-attempt PDF render failures still emit `paid_report_delivery_send_failed`,
 mark the row failed, increment `failed`, and skip `sender.send(...)`. Stale
 reclaim PDF render failures emit
-`paid_report_delivery_pdf_render_reclaim_deferred`, reset the row to `pending`,
-increment `failed` for this run, and skip `sender.send(...)`; the next worker
-run can retry rendering instead of terminal-failing a row whose first email may
-already have reached Resend. The new warning incident is listed in the paid
-funnel incident response catalog so the security-policy docs gate and launch
-triage surface stay aligned with the worker emitter.
+`paid_report_delivery_pdf_render_reclaim_deferred`, keep the row `sending` with
+the bounded render error, increment `failed` for this run, and skip
+`sender.send(...)`; the next worker run still sees a reclaimed `sending` row
+instead of a fresh `pending` row, so repeated transient render failures cannot
+terminal-fail a row whose first email may already have reached Resend. The new
+warning incident is listed in the paid funnel incident response catalog so the
+security-policy docs gate and launch triage surface stay aligned with the worker
+emitter.
 
 The test that currently expects link-only fallback becomes the regression for
 the new contract. It asserts the worker records a failed delivery, no email
@@ -110,7 +112,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `pytest tests/test_atlas_content_ops_deflection_delivery.py -q` - 36 passed,
+- `pytest tests/test_atlas_content_ops_deflection_delivery.py -q` - 37 passed,
   1 skipped.
 - `python -m unittest tests.test_security_policy_docs` - 20 passed.
 - `python scripts/sync_pr_plan.py plans/PR-Deflection-Paid-PDF-Required.md --check`
@@ -120,8 +122,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/content_ops_deflection_delivery.py` | 69 |
+| `atlas_brain/content_ops_deflection_delivery.py` | 74 |
 | `docs/INCIDENT_RESPONSE.md` | 1 |
-| `plans/PR-Deflection-Paid-PDF-Required.md` | 127 |
-| `tests/test_atlas_content_ops_deflection_delivery.py` | 111 |
-| **Total** | **308** |
+| `plans/PR-Deflection-Paid-PDF-Required.md` | 129 |
+| `tests/test_atlas_content_ops_deflection_delivery.py` | 149 |
+| **Total** | **353** |

@@ -1401,7 +1401,7 @@ async def test_delivery_worker_fails_when_paid_pdf_render_fails(
 
 
 @pytest.mark.asyncio
-async def test_delivery_worker_defers_stale_reclaim_when_paid_pdf_render_fails(
+async def test_delivery_worker_preserves_stale_reclaim_when_paid_pdf_render_fails(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1425,7 +1425,9 @@ async def test_delivery_worker_defers_stale_reclaim_when_paid_pdf_render_fails(
     assert summary.failed == 1
     assert sender.requests == []
     update_query, update_args = pool.execute_calls[0]
-    assert "delivery_status = 'pending'" in update_query
+    assert "delivery_status = 'sending'" in update_query
+    assert "delivery_status = 'pending'" not in update_query
+    assert "delivery_status = 'failed'" not in update_query
     assert update_args == (
         "acct-123",
         "content-ops-abc123",
@@ -1437,6 +1439,42 @@ async def test_delivery_worker_defers_stale_reclaim_when_paid_pdf_render_fails(
     )
     assert incidents[-1]["severity"] == "warning"
     assert incidents[-1]["error"] == update_args[-1]
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_repeated_stale_render_outage_remains_reclaim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([
+        _row(
+            previous_delivery_status="sending",
+            delivery_error="PaidReportPdfRenderError: prior render outage",
+        )
+    ])
+    sender = _Sender()
+
+    def _raise_pdf(_artifact: Any) -> bytes:
+        raise RuntimeError("pdf still down")
+
+    _install_fake_pdf_renderer(monkeypatch, _raise_pdf)
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'sending'" in update_query
+    assert "delivery_status = 'failed'" not in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_render_failed: RuntimeError: pdf still down",
+    )
 
 
 @pytest.mark.asyncio
