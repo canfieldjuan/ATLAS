@@ -61,6 +61,7 @@ Slice phase: Production hardening
 ### Files touched
 
 - `atlas_brain/content_ops_deflection_delivery.py`
+- `docs/INCIDENT_RESPONSE.md`
 - `plans/PR-Deflection-Paid-PDF-Required.md`
 - `tests/test_atlas_content_ops_deflection_delivery.py`
 
@@ -78,7 +79,9 @@ reclaim PDF render failures emit
 `paid_report_delivery_pdf_render_reclaim_deferred`, reset the row to `pending`,
 increment `failed` for this run, and skip `sender.send(...)`; the next worker
 run can retry rendering instead of terminal-failing a row whose first email may
-already have reached Resend.
+already have reached Resend. The new warning incident is listed in the paid
+funnel incident response catalog so the security-policy docs gate and launch
+triage surface stay aligned with the worker emitter.
 
 The test that currently expects link-only fallback becomes the regression for
 the new contract. It asserts the worker records a failed delivery, no email
@@ -109,6 +112,7 @@ Parked hardening: none.
 
 - `pytest tests/test_atlas_content_ops_deflection_delivery.py -q` - 36 passed,
   1 skipped.
+- `python -m unittest tests.test_security_policy_docs` - 20 passed.
 - `python scripts/sync_pr_plan.py plans/PR-Deflection-Paid-PDF-Required.md --check`
   - passed.
 
@@ -117,6 +121,7 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/content_ops_deflection_delivery.py` | 69 |
-| `plans/PR-Deflection-Paid-PDF-Required.md` | 122 |
+| `docs/INCIDENT_RESPONSE.md` | 1 |
+| `plans/PR-Deflection-Paid-PDF-Required.md` | 127 |
 | `tests/test_atlas_content_ops_deflection_delivery.py` | 111 |
-| **Total** | **302** |
+| **Total** | **308** |
