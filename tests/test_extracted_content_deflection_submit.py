@@ -146,11 +146,23 @@ def test_deflection_submit_defaults_fill_blank_support_platform_cells() -> None:
                 "description": "How do I export reports?",
                 "support_platform": "help_scout",
             },
+            {
+                "ticket_id": "ticket-3",
+                "description": "How do I update notifications?",
+                "Support Platform": "intercom",
+            },
+            {
+                "ticket_id": "ticket-4",
+                "description": "Where do I change roles?",
+                "platform": "help_scout",
+            },
         ],
     )
 
     assert rows[0]["support_platform"] == "zendesk"
     assert rows[1]["support_platform"] == "help_scout"
+    assert rows[2]["support_platform"] == "intercom"
+    assert rows[3]["support_platform"] == "help_scout"
 
 
 @pytest.mark.asyncio

@@ -18,7 +18,7 @@ Max files: 6
 1. Preserve safe support-platform aliases on normalized support-ticket rows as
    provenance metadata.
 2. Preserve hosted-submit platform defaults when sparse CSV platform columns
-   contain blank cells.
+   contain blank cells, while still letting non-empty row platform aliases win.
 3. Keep platform metadata out of routing signals and owner-lane inference.
 4. Add focused submit/default, normalization, and report-model regression
    coverage.
@@ -31,6 +31,8 @@ Acceptance criteria:
 - Existing hosted submit defaults that add `support_platform` continue to flow
   into normalized source material, including when a sparse CSV
   `support_platform` column contains blank cells.
+- Non-empty row aliases such as `Support Platform` and `platform` are not
+  shadowed by the hosted-submit default.
 - `support_platform` does not appear inside product-gap `routing_signals`.
 - Adding `support_platform` does not change owner-lane routing.
 
@@ -59,8 +61,9 @@ Reviewer rules triggered: R1, R2, R4, R8, R10, R14.
 The normalizer gets a dedicated support-platform alias tuple and copies the
 first non-empty platform value into `support_platform` during the same
 source-row shaping pass that already handles company/vendor/contact metadata.
-Hosted submit row defaults also restore the selected form platform if a sparse
-CSV `support_platform` cell is blank. Platform is deliberately not added to
+Hosted submit row defaults preserve the first non-empty row platform alias when
+present, and otherwise restore the selected form platform if a sparse CSV
+`support_platform` cell is blank. Platform is deliberately not added to
 `_ROUTING_CONTEXT_KEYS`, so grouped FAQ items and product-gap action rows do
 not treat the provider as a routing signal.
 
@@ -90,10 +93,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/api/control_surfaces.py` | 17 |
+| `extracted_content_pipeline/api/control_surfaces.py` | 43 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
-| `plans/PR-Product-Gap-Platform-Provenance.md` | 97 |
+| `plans/PR-Product-Gap-Platform-Provenance.md` | 102 |
 | `tests/test_content_ops_deflection_report.py` | 30 |
-| `tests/test_extracted_content_deflection_submit.py` | 25 |
+| `tests/test_extracted_content_deflection_submit.py` | 37 |
 | `tests/test_extracted_support_ticket_input_package.py` | 29 |
-| **Total** | **206** |
+| **Total** | **249** |
