@@ -1409,35 +1409,96 @@ async def test_deflection_checkout_completion_emits_incident_for_terms_mismatch(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_deflection_checkout_completion_accepts_lower_authorized_amount(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id, amount_total=120000)
-    pool = _Pool()
-    pool.add_report(
+    request_id = "req-live-checkout-lower-authorized-amount"
+    session = _session(
         account_id=account_id,
-        checkout_price_variant="partner",
-        checkout_amount_cents=120000,
-        checkout_currency="usd",
-        checkout_price_id="price_partner",
+        request_id=request_id,
+        session_id="cs_test_checkout_lower_authorized_amount_live",
+        amount_total=120000,
     )
     monkeypatch.setattr(
         billing.settings.saas_auth,
         "stripe_content_ops_deflection_report_allowed_amount_cents",
         "120000,150000,180000",
     )
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_lower_authorized_unused",
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live checkout lower authorized amount test",
+        )
+        store = PostgresDeflectionReportArtifactStore(pool=pool)
+        assert await store.record_checkout_authorization(
+            account_id=account_id,
+            request_id=request_id,
+            price_variant="partner",
+            amount_cents=120000,
+            currency="usd",
+            price_id="price_partner",
+        )
 
-    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
-        pool,
-        session,
-        session.metadata,
-    )
+        returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+            pool,
+            session,
+            session.metadata,
+        )
 
-    assert returned is None
-    query, args = pool.execute_calls[0]
-    assert "UPDATE content_ops_deflection_reports" in query
-    assert args == (account_id, "req-123", "cs_test_deflection", 120000, "usd", True)
+        assert returned is None
+        report = await pool.fetchrow(
+            """
+            SELECT paid, payment_reference, checkout_price_variant,
+                   checkout_amount_cents, checkout_currency, checkout_price_id
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert report is not None
+        assert dict(report) == {
+            "paid": True,
+            "payment_reference": "cs_test_checkout_lower_authorized_amount_live",
+            "checkout_price_variant": "partner",
+            "checkout_amount_cents": 120000,
+            "checkout_currency": "usd",
+            "checkout_price_id": "price_partner",
+        }
+        delivery = await pool.fetchrow(
+            """
+            SELECT payment_reference, delivery_status
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert delivery is not None
+        assert dict(delivery) == {
+            "payment_reference": "cs_test_checkout_lower_authorized_amount_live",
+            "delivery_status": "pending",
+        }
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_lower_authorized_unused",
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
