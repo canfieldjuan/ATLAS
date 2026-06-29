@@ -159,6 +159,49 @@ async def _billing_event_count(
     )
 
 
+async def _install_billing_event_insert_failure_trigger(
+    pool: _InitializedAsyncpgPool,
+    *,
+    stripe_event_id: str,
+    suffix: str,
+) -> tuple[str, str]:
+    trigger_name = f"test_fail_billing_event_insert_{suffix}"
+    function_name = f"test_fail_billing_event_insert_fn_{suffix}"
+    event_literal = stripe_event_id.replace("'", "''")
+    await pool.execute(
+        f"""
+        CREATE OR REPLACE FUNCTION public.{function_name}()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+            RAISE EXCEPTION 'billing event insert failed';
+        END;
+        $$;
+        """
+    )
+    await pool.execute(
+        f"""
+        CREATE TRIGGER {trigger_name}
+        BEFORE INSERT ON billing_events
+        FOR EACH ROW
+        WHEN (NEW.stripe_event_id = '{event_literal}')
+        EXECUTE FUNCTION public.{function_name}();
+        """
+    )
+    return trigger_name, function_name
+
+
+async def _drop_billing_event_insert_failure_trigger(
+    pool: _InitializedAsyncpgPool,
+    *,
+    trigger_name: str,
+    function_name: str,
+) -> None:
+    await pool.execute(f"DROP TRIGGER IF EXISTS {trigger_name} ON billing_events")
+    await pool.execute(f"DROP FUNCTION IF EXISTS public.{function_name}()")
+
+
 async def _assert_live_deflection_report_paid(
     pool: _InitializedAsyncpgPool,
     *,
@@ -3138,81 +3181,149 @@ async def test_stripe_webhook_keeps_paid_unlock_when_audit_insert_fails(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_stripe_webhook_retry_after_audit_failure_restores_idempotency(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.ERROR, logger="atlas.api.billing")
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id)
+    request_id = "req-live-paid-audit-retry"
+    session_id = "cs_test_paid_audit_retry_live"
+    stripe_event_id = "evt_deflection_paid_retry_live"
+    session = _session(
+        account_id=account_id,
+        request_id=request_id,
+        session_id=session_id,
+    )
     event = SimpleNamespace(
-        id="evt_deflection_paid_retry",
+        id=stripe_event_id,
         type="checkout.session.completed",
         data=SimpleNamespace(object=session),
     )
-
-    class _Webhook:
-        @staticmethod
-        def construct_event(_body: bytes, _sig: str, _secret: str) -> Any:
-            return event
-
-    fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
-    pool = _Pool()
-    pool.add_report(account_id=account_id)
-    pool.fail_billing_event_insert = True
-    request = SimpleNamespace(
-        headers={"stripe-signature": "valid"},
-        body=lambda: _body(),
-    )
-
-    async def _body() -> bytes:
-        return b"{}"
-
-    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
-    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "sk_test")
-    monkeypatch.setattr(
-        billing.settings.saas_auth,
-        "stripe_webhook_secret",
-        "whsec_test",
-    )
-    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
-
-    assert await billing.stripe_webhook(request) == {"status": "ok"}
-    assert pool.processed_event_ids == set()
-    assert "billing_events audit insert failed" in caplog.text
-
-    pool.fail_billing_event_insert = False
-    assert await billing.stripe_webhook(request) == {"status": "ok"}
-    assert pool.processed_event_ids == {"evt_deflection_paid_retry"}
-
-    assert await billing.stripe_webhook(request) == {"status": "already_processed"}
-
-    update_calls = [
-        call
-        for call in pool.execute_calls
-        if "UPDATE content_ops_deflection_reports" in call[0]
-    ]
-    insert_calls = [
-        call for call in pool.execute_calls if "INSERT INTO billing_events" in call[0]
-    ]
-    assert len(update_calls) == 2
-    assert all(
-        call[1] == (
-            account_id,
-            "req-123",
-            "cs_test_deflection",
-            150000,
-            "usd",
-            False,
+    fake_stripe, session_list = _stripe_module_for_event(event)
+    pool = await _connect_live_billing_pool()
+    trigger_name = ""
+    function_name = ""
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
         )
-        for call in update_calls
-    )
-    delivery_calls = [
-        call
-        for call in pool.execute_calls
-        if "INSERT INTO content_ops_deflection_report_deliveries" in call[0]
-    ]
-    assert len(delivery_calls) == 2
-    assert len(insert_calls) == 2
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live billing audit retry test",
+        )
+        trigger_name, function_name = await _install_billing_event_insert_failure_trigger(
+            pool,
+            stripe_event_id=stripe_event_id,
+            suffix=uuid.uuid4().hex[:8],
+        )
+
+        assert await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        ) == {"status": "ok"}
+        assert session_list.calls == []
+        assert "billing_events audit insert failed" in caplog.text
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
+            event_type="checkout.session.completed",
+        ) == 0
+        report = await pool.fetchrow(
+            """
+            SELECT paid, payment_reference
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert report is not None
+        assert report["paid"] is True
+        assert report["payment_reference"] == session_id
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        ) == 1
+
+        await _drop_billing_event_insert_failure_trigger(
+            pool,
+            trigger_name=trigger_name,
+            function_name=function_name,
+        )
+        trigger_name = ""
+        function_name = ""
+
+        assert await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        ) == {"status": "ok"}
+        await _assert_live_deflection_report_paid(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            session_id=session_id,
+            stripe_event_id=stripe_event_id,
+            event_type="checkout.session.completed",
+        )
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1
+            """,
+            account_id,
+        ) == 1
+
+        assert await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        ) == {"status": "already_processed"}
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1
+            """,
+            account_id,
+        ) == 1
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
+            event_type="checkout.session.completed",
+        ) == 1
+    finally:
+        if trigger_name and function_name:
+            await _drop_billing_event_insert_failure_trigger(
+                pool,
+                trigger_name=trigger_name,
+                function_name=function_name,
+            )
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
