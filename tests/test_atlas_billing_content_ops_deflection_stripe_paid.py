@@ -1204,6 +1204,7 @@ async def test_deflection_checkout_completion_records_reconciliation_when_event_
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_deflection_reconciliation_binds_empty_string_for_missing_session_id(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1212,33 +1213,88 @@ async def test_deflection_reconciliation_binds_empty_string_for_missing_session_
     # so a NULL would defeat the ON CONFLICT dedup on a Stripe retry (#1462 gap).
     caplog.set_level(logging.ERROR, logger="atlas.api.billing")
     account_id = str(uuid.uuid4())
-    session = _session(account_id=account_id, session_id="")
-    pool = _Pool()
-    pool.update_result = "UPDATE 0"
+    request_id = "req-live-checkout-missing-session-reconciliation"
+    session = _session(account_id=account_id, request_id=request_id, session_id="")
     aged_event_created = int(time.time()) - 100_000  # past the 300s grace
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_missing_session_unused",
+        )
 
-    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
-        pool,
-        session,
-        session.metadata,
-        event_created=aged_event_created,
-    )
+        returned = (
+            await billing._handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                session,
+                session.metadata,
+                event_created=aged_event_created,
+            )
+        )
 
-    assert returned is None
-    reconciliations = [
-        call
-        for call in pool.execute_calls
-        if "content_ops_deflection_paid_reconciliation" in call[0]
-    ]
-    assert len(reconciliations) == 1
-    _query, args = reconciliations[0]
-    assert args == (
-        account_id,
-        "req-123",
-        "",  # '' not None -- the NULL-dedup gap fix
-        "checkout.session.completed",
-        "paid_report_missing",
-    )
+        assert returned is None
+        reconciliation = await pool.fetchrow(
+            """
+            SELECT account_id, request_id, stripe_session_id, event_type, reason
+            FROM content_ops_deflection_paid_reconciliation
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert reconciliation is not None
+        assert dict(reconciliation) == {
+            "account_id": account_id,
+            "request_id": request_id,
+            "stripe_session_id": "",
+            "event_type": "checkout.session.completed",
+            "reason": "paid_report_missing",
+        }
+        reconciliation_count_query = """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_paid_reconciliation
+            WHERE account_id = $1 AND request_id = $2
+            """
+        assert (
+            await pool.fetchval(reconciliation_count_query, account_id, request_id)
+            == 1
+        )
+
+        retry_returned = (
+            await billing._handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                session,
+                session.metadata,
+                event_created=aged_event_created,
+            )
+        )
+        assert retry_returned is None
+        assert (
+            await pool.fetchval(reconciliation_count_query, account_id, request_id)
+            == 1
+        )
+        assert (
+            await pool.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM content_ops_deflection_report_deliveries
+                WHERE account_id = $1
+                """,
+                account_id,
+            )
+            == 0
+        )
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id="evt_live_checkout_missing_session_unused",
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
