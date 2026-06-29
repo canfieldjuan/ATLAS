@@ -2546,20 +2546,28 @@ async def test_stripe_webhook_stale_won_dispute_preserves_newer_payment_referenc
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_stripe_webhook_non_won_dispute_close_does_not_restore_report(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="atlas.api.billing")
     account_id = str(uuid.uuid4())
-    checkout_session = _session(account_id=account_id)
+    request_id = "req-live-dispute-lost"
+    session_id = "cs_test_deflection_dispute_lost_live"
+    stripe_event_id = "evt_deflection_dispute_lost_live"
+    checkout_session = _session(
+        account_id=account_id,
+        request_id=request_id,
+        session_id=session_id,
+    )
     dispute = _payment_event_object(
-        object_id="du_test_deflection_lost",
-        payment_intent="pi_test_dispute_lost",
+        object_id="du_test_deflection_lost_live",
+        payment_intent="pi_test_dispute_lost_live",
         status="lost",
     )
     event = SimpleNamespace(
-        id="evt_deflection_dispute_lost",
+        id=stripe_event_id,
         type="charge.dispute.closed",
         data=SimpleNamespace(object=dispute),
     )
@@ -2567,37 +2575,87 @@ async def test_stripe_webhook_non_won_dispute_close_does_not_restore_report(
         event,
         checkout_sessions=[checkout_session],
     )
-    pool = _Pool()
-    pool.add_report(
-        account_id=account_id,
-        paid=False,
-        payment_reference="cs_test_deflection",
-    )
+    pool = await _connect_live_billing_pool()
+    try:
+        await _apply_live_billing_migrations(pool)
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await _seed_live_deflection_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            account_name="Live non-won dispute billing test",
+        )
+        store = PostgresDeflectionReportArtifactStore(pool=pool)
+        assert await store.mark_paid(
+            account_id=account_id,
+            request_id=request_id,
+            payment_reference=session_id,
+        )
+        assert await store.mark_unpaid(
+            account_id=account_id,
+            request_id=request_id,
+            payment_reference=session_id,
+        )
+        report_updated_at_before = await pool.fetchval(
+            """
+            SELECT updated_at
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
 
-    response = await _run_stripe_webhook(
-        monkeypatch,
-        event=event,
-        pool=pool,
-        stripe_module=fake_stripe,
-    )
+        response = await _run_stripe_webhook(
+            monkeypatch,
+            event=event,
+            pool=pool,
+            stripe_module=fake_stripe,
+        )
 
-    assert response == {"status": "ok"}
-    assert session_list.calls == []
-    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
-    assert [
-        call for call in pool.execute_calls if "UPDATE content_ops_deflection_reports" in call[0]
-    ] == []
-    assert [
-        call
-        for call in pool.execute_calls
-        if "INSERT INTO content_ops_deflection_report_deliveries" in call[0]
-    ] == []
-    billing_event_calls = [
-        call for call in pool.execute_calls if "INSERT INTO billing_events" in call[0]
-    ]
-    assert billing_event_calls[0][1][1] == "evt_deflection_dispute_lost"
-    assert billing_event_calls[0][1][2] == "charge.dispute.closed"
-    assert "dispute closed without restore" in caplog.text
+        assert response == {"status": "ok"}
+        assert session_list.calls == []
+        report = await pool.fetchrow(
+            """
+            SELECT paid, paid_at, payment_reference, updated_at
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1 AND request_id = $2
+            """,
+            account_id,
+            request_id,
+        )
+        assert report is not None
+        assert report["paid"] is False
+        assert report["paid_at"] is None
+        assert report["payment_reference"] == session_id
+        assert report["updated_at"] == report_updated_at_before
+        assert await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM content_ops_deflection_report_deliveries
+            WHERE account_id = $1
+            """,
+            account_id,
+        ) == 0
+        assert await _billing_event_count(
+            pool,
+            stripe_event_id=stripe_event_id,
+            event_type="charge.dispute.closed",
+        ) == 1
+        assert "dispute closed without restore" in caplog.text
+    finally:
+        await _cleanup_live_billing_rows(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+            stripe_event_id=stripe_event_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
