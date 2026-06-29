@@ -213,6 +213,13 @@ _DATE_KEYS = (
     "date",
 )
 _URL_KEYS = ("source_url", "ticket_url", "url", "link")
+_SUPPORT_PLATFORM_KEYS = (
+    "support_platform",
+    "support platform",
+    "platform",
+    "source_platform",
+    "helpdesk_platform",
+)
 _COMPANY_KEYS = ("company_name", "account_name", "company", "account")
 _VENDOR_KEYS = ("vendor_name", "product_name", "vendor", "product")
 _CONTACT_EMAIL_KEYS = (
@@ -560,6 +567,7 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     for key, keys in (
         ("created_at", _DATE_KEYS),
         ("source_url", _URL_KEYS),
+        ("support_platform", _SUPPORT_PLATFORM_KEYS),
         ("company_name", _COMPANY_KEYS),
         ("vendor_name", _VENDOR_KEYS),
         ("contact_email", _CONTACT_EMAIL_KEYS),

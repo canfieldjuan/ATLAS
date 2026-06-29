@@ -128,6 +128,50 @@ def _csv_dict_bytes(rows: list[dict[str, str]]) -> bytes:
     return out.getvalue().encode("utf-8")
 
 
+def test_deflection_submit_defaults_fill_blank_support_platform_cells() -> None:
+    rows = api_module._deflection_submit_rows_with_defaults(
+        {
+            "company_name": "Acme Inc.",
+            "contact_email": "ops@example.com",
+            "support_platform": "zendesk",
+        },
+        [
+            {
+                "ticket_id": "ticket-1",
+                "description": "Where is the login button?",
+                "support_platform": "",
+            },
+            {
+                "ticket_id": "ticket-2",
+                "description": "How do I export reports?",
+                "support_platform": "help_scout",
+            },
+            {
+                "ticket_id": "ticket-3",
+                "description": "How do I update notifications?",
+                "Support Platform": "intercom",
+            },
+            {
+                "ticket_id": "ticket-4",
+                "description": "Where do I change roles?",
+                "platform": "help_scout",
+            },
+            {
+                "ticket_id": "ticket-5",
+                "description": "How do I update seats?",
+                "platform": "ios",
+                "support_platform": "intercom",
+            },
+        ],
+    )
+
+    assert rows[0]["support_platform"] == "zendesk"
+    assert rows[1]["support_platform"] == "help_scout"
+    assert rows[2]["support_platform"] == "intercom"
+    assert rows[3]["support_platform"] == "help_scout"
+    assert rows[4]["support_platform"] == "intercom"
+
+
 @pytest.mark.asyncio
 async def test_deflection_submit_upload_copy_streams_chunks_not_whole_limit() -> None:
     data = b"a" * (api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES + 17)

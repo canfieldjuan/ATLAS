@@ -809,6 +809,36 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
     assert {row["answer_linkage"] for row in login_rows} == {"needs_review"}
 
 
+def test_support_platform_provenance_does_not_route_owner_lane() -> None:
+    rows = [
+        {
+            "Ticket ID": f"zd-login-{index}",
+            "Subject": "Where is the login button?",
+            "Requester Comment": "Where is the login button?",
+            "Support Platform": "zendesk",
+            "Group": "Billing Support",
+            "Tags": "navigation",
+        }
+        for index in range(1, 4)
+    ]
+    package = build_support_ticket_input_package(rows)
+
+    assert {
+        row["support_platform"]
+        for row in package.inputs["source_material"]
+    } == {"zendesk"}
+
+    faq_result = build_ticket_faq_markdown(package.inputs["source_material"], max_items=4)
+    artifact = build_deflection_report_artifact(faq_result)
+    sections = {section["id"]: section for section in artifact.report_model.as_dict()["sections"]}
+    priority_item = sections["priority_fix_queue"]["data"]["items"][0]
+
+    assert priority_item["owner_lane"] == "Auth / Product UX"
+    assert "support_platform" not in priority_item["routing_signals"]
+    assert priority_item["routing_signals"]["group"] == ["Billing Support"]
+    assert priority_item["routing_signals"]["tags"] == ["navigation"]
+
+
 def test_product_gap_summary_does_not_copy_root_cause_or_screen_path_question() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",
