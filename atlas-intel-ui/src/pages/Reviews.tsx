@@ -266,7 +266,7 @@ export default function Reviews() {
                 type="date"
                 value={filters.imported_after}
                 onChange={(e) => setFilterAndReset('imported_after', e.target.value)}
-                className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
+                className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-hidden focus:border-cyan-500/50"
               />
             </div>
             <div>
@@ -275,7 +275,7 @@ export default function Reviews() {
                 type="date"
                 value={filters.imported_before}
                 onChange={(e) => setFilterAndReset('imported_before', e.target.value)}
-                className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
+                className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-hidden focus:border-cyan-500/50"
               />
             </div>
             <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer self-end pb-1">

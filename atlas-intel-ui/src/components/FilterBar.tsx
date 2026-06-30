@@ -72,7 +72,7 @@ export function FilterSearch({
           value={display}
           onChange={(e) => handleChange(e.target.value)}
           placeholder={placeholder}
-          className={`w-full ${icon ? 'pl-9' : 'pl-3'} pr-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50`}
+          className={`w-full ${icon ? 'pl-9' : 'pl-3'} pr-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50`}
         />
       </div>
     </div>
@@ -106,7 +106,7 @@ export function FilterSelect({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
+        className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-hidden focus:border-cyan-500/50"
       >
         <option value="">{placeholder}</option>
         {options.map((o) => (

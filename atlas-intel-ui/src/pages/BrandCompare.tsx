@@ -161,7 +161,7 @@ function BrandCompareInner() {
               onFocus={() => setShowSuggestions(true)}
               onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
               placeholder={brands.length === 0 ? 'Search brands to compare...' : 'Add another brand...'}
-              className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+              className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
             />
             {showSuggestions && suggestions.length > 0 && (
               <div className="absolute z-20 top-full mt-1 w-full bg-slate-800 border border-slate-700 rounded-lg shadow-xl max-h-48 overflow-y-auto">
