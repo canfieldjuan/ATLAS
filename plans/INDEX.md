@@ -1,6 +1,6 @@
 # Plan archive index
 
-1259 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1261 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -774,6 +774,7 @@
 - [PR-Deflection-Html-Strip-Before-Clustering](archive/PR-Deflection-Html-Strip-Before-Clustering.md) - lane: go-live-deflection-cleanup | phase: Production hardening
 - [PR-Deflection-Inline-Html-Strip-Before-Clustering](archive/PR-Deflection-Inline-Html-Strip-Before-Clustering.md) - lane: deflection/clustering-html-normalization | phase: Production hardening
 - [PR-Deflection-Inspect-Preview-Gate](archive/PR-Deflection-Inspect-Preview-Gate.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
+- [PR-Deflection-Launch-Preflight-Runbook](archive/PR-Deflection-Launch-Preflight-Runbook.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Live-Artifact-Model-Export-Contract](archive/PR-Deflection-Live-Artifact-Model-Export-Contract.md) - lane: content-ops/deflection-full-report-qa | phase: Functional validation
 - [PR-Deflection-Live-Proof-Report-Golden](archive/PR-Deflection-Live-Proof-Report-Golden.md) - lane: deflection/clustering-raw-data | phase: Production hardening
 - [PR-Deflection-Local-NER-Scrub](archive/PR-Deflection-Local-NER-Scrub.md) - lane: content-ops/deflection-privacy | phase: Production hardening
@@ -861,6 +862,7 @@
 - [PR-Deflection-Resolution-Evidence-Preview-Signal](archive/PR-Deflection-Resolution-Evidence-Preview-Signal.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-SaaS-Demo-Dotenv-Preflight](archive/PR-Deflection-SaaS-Demo-Dotenv-Preflight.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Safe-Label-Disambiguation](archive/PR-Deflection-Safe-Label-Disambiguation.md) - lane: deflection/clustering | phase: Production hardening
+- [PR-Deflection-Scoped-Delivery-Proof](archive/PR-Deflection-Scoped-Delivery-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Scrub-Regression](archive/PR-Deflection-Scrub-Regression.md) - lane: content-ops/deflection-privacy | phase: Production hardening
 - [PR-Deflection-Section-Registry](archive/PR-Deflection-Section-Registry.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-See-Something-Invariant](archive/PR-Deflection-See-Something-Invariant.md) - lane: content-ops/deflection-parser | phase: Production hardening
