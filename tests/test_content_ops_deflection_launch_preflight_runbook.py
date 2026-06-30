@@ -131,20 +131,21 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "r.request_id = '<request-id>'" in unlock
     assert "`paid` is true" in unlock
     assert "`delivery_status` is `pending`" in unlock
-    assert "queue-wide" in delivery
-    assert "does not accept a request/account filter" in delivery
-    assert "claimable_rows" in delivery
-    assert "target_rows" in delivery
-    assert "pending_or_sending_rows" in delivery
-    assert "other_pending_or_sending_rows" in delivery
+    assert 'export LAUNCH_ACCOUNT_ID="<account-id-from-query>"' in unlock
+    assert 'export LAUNCH_REQUEST_ID="<request-id>"' in unlock
+    assert "manual drain CLI accepts an account/request scope" in delivery
+    assert "target_claimable_rows" in delivery
+    assert "target_pending_rows" in delivery
+    assert "pending_or_sending_rows" not in delivery
+    assert "other_pending_or_sending_rows" not in delivery
     assert "SELECT account_id, request_id, created_at, updated_at, delivery_status" in delivery
-    assert "delivery_status IN ('pending', 'sending')" in delivery
-    assert "non-target `sending` row ages into the\nclaim window" in delivery
-    assert (
-        "Proceed only if `claimable_rows` is 1, `target_rows` is 1, and\n"
-        "`other_pending_or_sending_rows` is 0"
-    ) in delivery
+    assert "WHERE account_id = :'account_id'" in delivery
+    assert "AND request_id = :'request_id'" in delivery
+    assert "non-target `sending` row ages into the\nclaim window" not in delivery
+    assert "Proceed only if `target_claimable_rows` is 1 and `target_pending_rows` is 1" in delivery
     assert "scripts/send_content_ops_deflection_report_deliveries.py" in delivery
+    assert "--account-id \"$LAUNCH_ACCOUNT_ID\"" in delivery
+    assert "--request-id \"$LAUNCH_REQUEST_ID\"" in delivery
     assert "--json" in delivery
     assert "--send" in delivery
     assert "--resend-api-key" in delivery
@@ -159,15 +160,18 @@ def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> No
     assert "trap 'rm -rf \"$PREFLIGHT_TMP_DIR\"' EXIT" in delivery
     assert "paid-artifact.json" in delivery
     assert "paid-report.pdf" in delivery
+    assert "-v account_id=\"$LAUNCH_ACCOUNT_ID\"" in delivery
+    assert "-v request_id=\"$LAUNCH_REQUEST_ID\"" in delivery
     assert "-v buyer_email=\"$LAUNCH_BUYER_EMAIL\"" in delivery
+    assert "WHERE account_id = :'account_id'" in delivery
     assert "COALESCE(delivery_email, '') = :'buyer_email'" in delivery
     assert "COALESCE(delivery_email, '') = '$LAUNCH_BUYER_EMAIL'" not in delivery
     assert "do not commit, upload, or\nlink them" in delivery
     assert "first exercise" in delivery
     assert "paid PDF rendering" in delivery
     assert "live buyer send" in delivery
-    assert "rerun the queue-isolation SQL above immediately before live send" in delivery
-    assert "it still shows `claimable_rows` 1, `target_rows` 1, and\n`other_pending_or_sending_rows` 0" in delivery
+    assert "rerun the\ntarget claimability SQL above immediately before live send" in delivery
+    assert "it\nstill shows `target_claimable_rows` 1 and `target_pending_rows` 1" in delivery
     assert "ATLAS_DEFLECTION_DELIVERY_ENABLED=true" in delivery
     assert "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false" in delivery
     assert "deploy or restart ATLAS" in delivery

@@ -139,39 +139,42 @@ WHERE r.request_id = '<request-id>';
 ```
 
 Proceed only if `paid` is true, `delivery_email` is the opted-in buyer email,
-and `delivery_status` is `pending`.
+and `delivery_status` is `pending`. Record the returned `account_id` and
+`request_id` for the scoped manual delivery proof:
+
+```bash
+export LAUNCH_ACCOUNT_ID="<account-id-from-query>"
+export LAUNCH_REQUEST_ID="<request-id>"
+```
 
 ## Paid Report Email And PDF Proof
 
-The current manual drain CLI is queue-wide and only has `--limit`; it does not accept a request/account filter. Before running it, prove the target request is
-the only pending/sending delivery row and the only claimable row. This blocks
-older non-target `sending` rows that could age into the stale-reclaim window
-between rehearsal and the live send:
+The manual drain CLI accepts an account/request scope for launch proof. Before
+running it, prove the target row is claimable:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
-WITH delivery_candidates AS (
+psql "$DATABASE_URL" \
+  -v ON_ERROR_STOP=1 \
+  -v account_id="$LAUNCH_ACCOUNT_ID" \
+  -v request_id="$LAUNCH_REQUEST_ID" \
+  -c "
+WITH target AS (
   SELECT account_id, request_id, created_at, updated_at, delivery_status
   FROM content_ops_deflection_report_deliveries
-  WHERE delivery_status IN ('pending', 'sending')
+  WHERE account_id = :'account_id'
+    AND request_id = :'request_id'
 )
 SELECT
   count(*) FILTER (
     WHERE delivery_status = 'pending'
-       OR delivery_status = 'sending'
-  ) AS pending_or_sending_rows,
+  ) AS target_pending_rows,
   count(*) FILTER (
     WHERE delivery_status = 'pending'
        OR (
          delivery_status = 'sending'
          AND updated_at < NOW() - INTERVAL '15 minutes'
        )
-  ) AS claimable_rows,
-  count(*) FILTER (
-    WHERE request_id = '<request-id>'
-      AND delivery_status = 'pending'
-  ) AS target_rows,
-  count(*) FILTER (WHERE request_id <> '<request-id>') AS other_pending_or_sending_rows,
+  ) AS target_claimable_rows,
   min(created_at) FILTER (
     WHERE delivery_status = 'pending'
        OR (
@@ -179,23 +182,24 @@ SELECT
          AND updated_at < NOW() - INTERVAL '15 minutes'
        )
   ) AS oldest_claimable_at
-FROM delivery_candidates;
+FROM target;
 "
 ```
 
-Proceed only if `claimable_rows` is 1, `target_rows` is 1, and
-`other_pending_or_sending_rows` is 0. If any other pending/sending row exists,
-stop and add a scoped paid-delivery proof before live send; otherwise the proof
-can email a different buyer after a non-target `sending` row ages into the
-claim window.
+Proceed only if `target_claimable_rows` is 1 and `target_pending_rows` is 1.
+If the target row is already `sending`, stop unless this is an intentional
+stale reclaim rehearsal; the first launch proof send should start from
+`pending`.
 
-Run the delivery drain in queue-only dry-run mode:
+Run the scoped delivery drain in queue-only dry-run mode:
 
 ```bash
 python scripts/send_content_ops_deflection_report_deliveries.py \
   --database-url "$DATABASE_URL" \
   --from-email "$ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL" \
   --result-base-url "$PORTFOLIO_BASE_URL" \
+  --account-id "$LAUNCH_ACCOUNT_ID" \
+  --request-id "$LAUNCH_REQUEST_ID" \
   --limit 1 \
   --json
 ```
@@ -213,12 +217,14 @@ trap 'rm -rf "$PREFLIGHT_TMP_DIR"' EXIT
 
 psql "$DATABASE_URL" \
   -v ON_ERROR_STOP=1 \
-  -v request_id="<request-id>" \
+  -v account_id="$LAUNCH_ACCOUNT_ID" \
+  -v request_id="$LAUNCH_REQUEST_ID" \
   -v buyer_email="$LAUNCH_BUYER_EMAIL" \
   -At -c "
 SELECT artifact::text
 FROM content_ops_deflection_reports
-WHERE request_id = :'request_id'
+WHERE account_id = :'account_id'
+  AND request_id = :'request_id'
   AND paid IS TRUE
   AND COALESCE(delivery_email, '') = :'buyer_email';
 " > "$PREFLIGHT_TMP_DIR/paid-artifact.json"
@@ -247,11 +253,10 @@ of paid PDF rendering must not be the live buyer send. The files in
 link them. The shell `trap` removes them on exit; if the shell is interrupted,
 run `rm -rf "$PREFLIGHT_TMP_DIR"` before closeout.
 
-Only after queue isolation, queue-only dry-run, and local PDF render validation
-pass, rerun the queue-isolation SQL above immediately before live send. Proceed
-only if it still shows `claimable_rows` 1, `target_rows` 1, and
-`other_pending_or_sending_rows` 0. Then run one manual live send for the
-isolated proof row:
+Only after the scoped dry-run and local PDF render validation pass, rerun the
+target claimability SQL above immediately before live send. Proceed only if it
+still shows `target_claimable_rows` 1 and `target_pending_rows` 1. Then run one
+manual live send for the scoped proof row:
 
 ```bash
 ATLAS_DEFLECTION_DELIVERY_ENABLED=true
@@ -262,6 +267,8 @@ python scripts/send_content_ops_deflection_report_deliveries.py \
   --from-email "$ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL" \
   --result-base-url "$PORTFOLIO_BASE_URL" \
   --resend-api-key "$ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY" \
+  --account-id "$LAUNCH_ACCOUNT_ID" \
+  --request-id "$LAUNCH_REQUEST_ID" \
   --limit 1 \
   --send \
   --json

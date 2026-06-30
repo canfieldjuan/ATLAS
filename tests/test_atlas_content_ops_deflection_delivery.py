@@ -1017,7 +1017,9 @@ async def test_delivery_worker_sends_pending_paid_report_link(
     claim_query, claim_args = pool.fetch_calls[0]
     assert "FOR UPDATE SKIP LOCKED" in claim_query
     assert "SET delivery_status = 'sending'" in claim_query
-    assert claim_args == (20,)
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in claim_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in claim_query
+    assert claim_args == (20, None, None)
     assert len(sender.requests) == 1
     confirm_query, confirm_args = pool.fetchrow_calls[0]
     assert "RETURNING d.request_id" in confirm_query
@@ -1049,6 +1051,41 @@ async def test_delivery_worker_sends_pending_paid_report_link(
     assert "delivery_status = 'sending'" in update_query
     assert update_args == ("acct-123", "content-ops-abc123", "resend:email-123")
     assert "buyer@example.com" not in str(update_args)
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_scopes_live_claim_query_to_account_and_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(
+        [
+            _row(
+                account_id="acct-target",
+                request_id="content-ops-target",
+            )
+        ]
+    )
+    sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-fake-bytes")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+        account_id="acct-target",
+        request_id="content-ops-target",
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 1
+    claim_query, claim_args = pool.fetch_calls[0]
+    assert "FOR UPDATE SKIP LOCKED" in claim_query
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in claim_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in claim_query
+    assert claim_args == (20, "acct-target", "content-ops-target")
+    assert sender.requests[0].campaign_id == (
+        "content_ops_deflection_report:acct-target:content-ops-target"
+    )
 
 
 @pytest.mark.asyncio
@@ -1561,7 +1598,40 @@ async def test_delivery_worker_dry_run_does_not_send_or_update() -> None:
     pending_query, pending_args = pool.fetch_calls[0]
     assert "FOR UPDATE SKIP LOCKED" not in pending_query
     assert "WHERE d.delivery_status = 'pending'" in pending_query
-    assert pending_args == (20,)
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in pending_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in pending_query
+    assert pending_args == (20, None, None)
+    assert sender.requests == []
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_scopes_dry_run_selection_to_account_and_request() -> None:
+    pool = _Pool(
+        [
+            _row(
+                account_id="acct-target",
+                request_id="content-ops-target",
+            )
+        ]
+    )
+    sender = _Sender()
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(dry_run=True),
+        account_id="acct-target",
+        request_id="content-ops-target",
+    )
+
+    assert summary.scanned == 1
+    assert summary.dry_run == 1
+    pending_query, pending_args = pool.fetch_calls[0]
+    assert "FOR UPDATE SKIP LOCKED" not in pending_query
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in pending_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in pending_query
+    assert pending_args == (20, "acct-target", "content-ops-target")
     assert sender.requests == []
     assert pool.execute_calls == []
 
