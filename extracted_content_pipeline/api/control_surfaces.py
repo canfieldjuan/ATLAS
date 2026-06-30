@@ -2462,12 +2462,42 @@ def _deflection_submit_rows_with_defaults(
         "contact_email": data["contact_email"],
         "support_platform": data["support_platform"],
     }
-    return [
-        {**defaults, **dict(row)}
-        if isinstance(row, Mapping)
-        else row
-        for row in rows
-    ]
+    default_platform = data["support_platform"]
+    out: list[Any] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            out.append(row)
+            continue
+        row_dict = dict(row)
+        row_platform = _deflection_submit_row_support_platform(row_dict)
+        merged = {**defaults, **row_dict}
+        if row_platform:
+            merged["support_platform"] = row_platform
+        elif not _clean(merged.get("support_platform")):
+            merged["support_platform"] = default_platform
+        out.append(merged)
+    return out
+
+
+_DEFLECTION_SUBMIT_SUPPORT_PLATFORM_KEYS = (
+    "support_platform",
+    "support platform",
+    "platform",
+    "source_platform",
+    "helpdesk_platform",
+)
+
+
+def _deflection_submit_row_support_platform(row: Mapping[str, Any]) -> str | None:
+    for key in _DEFLECTION_SUBMIT_SUPPORT_PLATFORM_KEYS:
+        normalized_key = re.sub(r"[^a-z0-9]+", "", key.lower())
+        for raw_key, value in row.items():
+            if re.sub(r"[^a-z0-9]+", "", str(raw_key).lower()) != normalized_key:
+                continue
+            platform = _clean(value)
+            if platform:
+                return platform
+    return None
 
 
 def _deflection_submit_english_rows(rows: Sequence[Any]) -> tuple[list[Any], int]:

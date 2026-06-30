@@ -135,6 +135,10 @@ class _DeliveryEmailSummary:
     drafted_resolution_items: tuple[_DeliveryEmailActionItem, ...] = ()
 
 
+class PaidReportPdfRenderError(RuntimeError):
+    """Raised when the paid report PDF renderer fails."""
+
+
 def deflection_delivery_email_surface_observation(
     text_body: str | None,
 ) -> dict[str, dict[str, int]]:
@@ -170,13 +174,19 @@ async def send_pending_deflection_report_deliveries(
     *,
     sender: DeflectionReportDeliverySender,
     config: DeflectionReportDeliveryConfig,
+    account_id: str | None = None,
+    request_id: str | None = None,
 ) -> DeflectionReportDeliverySummary:
     """Send pending paid-report delivery emails and update queue status."""
 
     _validate_config(config)
+    scoped_account_id = _clean(account_id) or None
+    scoped_request_id = _clean(request_id) or None
     rows = await pool.fetch(
         _PENDING_SQL if config.dry_run else _CLAIM_PENDING_SQL,
         int(config.limit),
+        scoped_account_id,
+        scoped_request_id,
     )
     sent = failed = dry_run = 0
     for row in rows:
@@ -259,6 +269,29 @@ async def send_pending_deflection_report_deliveries(
                 _provider_message_id("resend", "idempotent-replay"),
             )
             sent += 1
+            continue
+        except PaidReportPdfRenderError as exc:
+            error = _bounded_error(exc)
+            if _claimed_previous_delivery_status(data) == "sending":
+                await _emit_delivery_incident(
+                    "paid_report_delivery_pdf_render_reclaim_deferred",
+                    account_id=account_id,
+                    request_id=request_id,
+                    severity="warning",
+                    error=error,
+                )
+                await _defer_reclaimed_sending(pool, account_id, request_id, error)
+                failed += 1
+                continue
+            await _emit_delivery_incident(
+                "paid_report_delivery_send_failed",
+                account_id=account_id,
+                request_id=request_id,
+                severity="error",
+                error=error,
+            )
+            await _mark_failed(pool, account_id, request_id, error)
+            failed += 1
             continue
         except Exception as exc:
             error = _bounded_error(exc)
@@ -1170,27 +1203,31 @@ def _decoded_artifact(artifact: Any) -> Any:
     return decode_jsonb_field(artifact, default={})
 
 
+def _claimed_previous_delivery_status(data: Mapping[str, Any]) -> str:
+    return _clean(data.get("previous_delivery_status")) or "pending"
+
+
 def _pdf_attachments(
     *,
     artifact: Any,
     request_id: str,
 ) -> tuple[dict[str, str], ...]:
     if not isinstance(artifact, Mapping):
-        logger.warning(
-            "Skipping deflection report PDF attachment for %s: missing artifact",
-            request_id,
-        )
-        return ()
+        raise ValueError("paid_report_pdf_missing_artifact")
     try:
         from .deflection_pdf_renderer import render_deflection_full_report_pdf
 
         pdf_bytes = render_deflection_full_report_pdf(artifact)
-    except Exception:
+    except Exception as exc:
         logger.exception(
-            "Deflection report PDF render failed for %s; sending link-only email",
+            "Deflection report PDF render failed for %s",
             request_id,
         )
-        return ()
+        raise PaidReportPdfRenderError(
+            f"paid_report_pdf_render_failed: {_bounded_error(exc)}"
+        ) from exc
+    if not pdf_bytes:
+        raise PaidReportPdfRenderError("paid_report_pdf_empty")
     return ({
         "filename": f"{_attachment_slug(request_id)}-support-deflection-report.pdf",
         "content": base64.b64encode(pdf_bytes).decode("ascii"),
@@ -1234,6 +1271,28 @@ async def _mark_failed(pool: Any, account_id: str, request_id: str, error: str) 
         """
         UPDATE content_ops_deflection_report_deliveries
         SET delivery_status = 'failed',
+            delivery_error = $3,
+            updated_at = NOW()
+        WHERE account_id = $1
+          AND request_id = $2
+          AND delivery_status = 'sending'
+        """,
+        account_id,
+        request_id,
+        _bounded_text(error),
+    )
+
+
+async def _defer_reclaimed_sending(
+    pool: Any,
+    account_id: str,
+    request_id: str,
+    error: str,
+) -> None:
+    await pool.execute(
+        """
+        UPDATE content_ops_deflection_report_deliveries
+        SET delivery_status = 'sending',
             delivery_error = $3,
             updated_at = NOW()
         WHERE account_id = $1
@@ -1608,6 +1667,7 @@ _PENDING_SQL = """
 SELECT
     d.account_id,
     d.request_id,
+    d.delivery_status AS previous_delivery_status,
     r.delivery_email,
     r.paid,
     r.artifact
@@ -1616,6 +1676,8 @@ JOIN content_ops_deflection_reports r
   ON r.account_id = d.account_id
  AND r.request_id = d.request_id
 WHERE d.delivery_status = 'pending'
+  AND ($2::text IS NULL OR d.account_id = $2)
+  AND ($3::text IS NULL OR d.request_id = $3)
 ORDER BY d.created_at
 LIMIT $1
 """
@@ -1625,13 +1687,18 @@ WITH claimed AS (
     SELECT
         d.account_id,
         d.request_id,
-        d.created_at
+        d.created_at,
+        d.delivery_status AS previous_delivery_status
     FROM content_ops_deflection_report_deliveries d
-    WHERE d.delivery_status = 'pending'
-       OR (
+    WHERE (
+            d.delivery_status = 'pending'
+            OR (
             d.delivery_status = 'sending'
             AND d.updated_at < NOW() - INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'
-       )
+            )
+          )
+      AND ($2::text IS NULL OR d.account_id = $2)
+      AND ($3::text IS NULL OR d.request_id = $3)
     ORDER BY d.created_at
     FOR UPDATE SKIP LOCKED
     LIMIT $1
@@ -1649,6 +1716,7 @@ WHERE d.account_id = c.account_id
 RETURNING
     d.account_id,
     d.request_id,
+    c.previous_delivery_status,
     r.delivery_email,
     r.paid,
     r.artifact

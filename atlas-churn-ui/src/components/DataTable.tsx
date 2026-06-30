@@ -185,7 +185,7 @@ export default function DataTable<T>({
             <select
               value={perPage}
               onChange={(e) => { setPerPage(Number(e.target.value)); setPage(0) }}
-              className="bg-slate-800/50 border border-slate-700/50 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
+              className="bg-slate-800/50 border border-slate-700/50 rounded px-1.5 py-0.5 text-xs text-white focus:outline-hidden"
             >
               {PAGE_SIZES.map((s) => (
                 <option key={s} value={s}>{s} / page</option>

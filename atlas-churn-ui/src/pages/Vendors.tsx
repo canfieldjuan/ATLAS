@@ -332,7 +332,7 @@ export default function Vendors() {
             placeholder="Search vendors..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+            className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
           />
         </div>
         <div className="flex items-center gap-2 text-sm text-slate-400">
@@ -352,7 +352,7 @@ export default function Vendors() {
           <select
             value={category}
             onChange={(e) => setCategory(e.target.value)}
-            className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+            className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
           >
             <option value="">All Categories</option>
             {categories.map((c) => (

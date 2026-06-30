@@ -809,6 +809,123 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
     assert {row["answer_linkage"] for row in login_rows} == {"needs_review"}
 
 
+def test_support_platform_provenance_does_not_route_owner_lane() -> None:
+    rows = [
+        {
+            "Ticket ID": f"zd-login-{index}",
+            "Subject": "Where is the login button?",
+            "Requester Comment": "Where is the login button?",
+            "Support Platform": "zendesk",
+            "Group": "Billing Support",
+            "Tags": "navigation",
+        }
+        for index in range(1, 4)
+    ]
+    package = build_support_ticket_input_package(rows)
+
+    assert {
+        row["support_platform"]
+        for row in package.inputs["source_material"]
+    } == {"zendesk"}
+
+    faq_result = build_ticket_faq_markdown(package.inputs["source_material"], max_items=4)
+    artifact = build_deflection_report_artifact(faq_result)
+    sections = {section["id"]: section for section in artifact.report_model.as_dict()["sections"]}
+    priority_item = sections["priority_fix_queue"]["data"]["items"][0]
+
+    assert priority_item["owner_lane"] == "Auth / Product UX"
+    assert "support_platform" not in priority_item["routing_signals"]
+    assert priority_item["routing_signals"]["group"] == ["Billing Support"]
+    assert priority_item["routing_signals"]["tags"] == ["navigation"]
+
+
+def test_owner_lane_precedence_customer_text_beats_conflicting_routing_signals() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=3,
+        ticket_source_count=3,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "Where is my invoice?",
+                "customer_wording": "Where is my invoice?",
+                "topic": "billing",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 10,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (
+                    "ticket-invoice-1",
+                    "ticket-invoice-2",
+                    "ticket-invoice-3",
+                ),
+                "routing_signals": {
+                    "group": ("Auth Support",),
+                    "tags": ("mfa",),
+                    "product_area": ("Authentication",),
+                },
+            },
+        ),
+    )
+
+    model = build_deflection_report_model(result).as_dict()
+    priority_item = next(
+        section
+        for section in model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+
+    assert priority_item["owner_lane"] == "Billing"
+    assert priority_item["routing_signals"]["group"] == ["Auth Support"]
+    assert priority_item["routing_signals"]["tags"] == ["mfa"]
+    assert priority_item["routing_signals"]["product_area"] == ["Authentication"]
+    assert priority_item["jira_template"]["owner_lane"] == "Billing"
+    assert priority_item["product_gap_summary"].startswith(
+        "Repeated support friction routes to Billing."
+    )
+
+
+def test_owner_lane_uses_routing_signals_when_customer_text_is_neutral() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=3,
+        ticket_source_count=3,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "Where do I find this setting?",
+                "customer_wording": "Where do I find this setting?",
+                "topic": "settings",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "opportunity_score": 10,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (
+                    "ticket-setting-1",
+                    "ticket-setting-2",
+                    "ticket-setting-3",
+                ),
+                "routing_signals": {
+                    "tags": ("mfa",),
+                    "product_area": ("Authentication",),
+                },
+            },
+        ),
+    )
+
+    model = build_deflection_report_model(result).as_dict()
+    priority_item = next(
+        section
+        for section in model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+
+    assert priority_item["owner_lane"] == "Auth / Product UX"
+    assert priority_item["routing_signals"]["tags"] == ["mfa"]
+    assert priority_item["routing_signals"]["product_area"] == ["Authentication"]
+    assert priority_item["jira_template"]["owner_lane"] == "Auth / Product UX"
+
+
 def test_product_gap_summary_does_not_copy_root_cause_or_screen_path_question() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",

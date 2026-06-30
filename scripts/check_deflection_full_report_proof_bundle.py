@@ -22,6 +22,8 @@ CHECK_KEYS = (
     "absolute_local_path",
     "stripe_checkout_session_id",
     "stripe_payment_intent_id",
+    "stripe_event_id",
+    "resend_message_id",
     "raw_evidence_quote",
     "source_id_list",
     "private_note",
@@ -41,6 +43,8 @@ _ABSOLUTE_LOCAL_PATH_RE = re.compile(
 )
 _STRIPE_CHECKOUT_RE = re.compile(r"\bcs_(?:test|live)_[A-Za-z0-9]{8,}\b")
 _STRIPE_PAYMENT_RE = re.compile(r"\bpi_[A-Za-z0-9]{8,}\b")
+_STRIPE_EVENT_RE = re.compile(r"\bevt_[A-Za-z0-9_]{8,}\b")
+_RESEND_MESSAGE_RE = re.compile(r"\bresend:[A-Za-z0-9_-]{8,}\b")
 _RAW_EVIDENCE_RE = re.compile(r"(?i)(\"evidence_quotes?\"\s*:|`[^`]+`\s*-\s+|raw evidence|complete evidence)")
 _SOURCE_ID_LIST_RE = re.compile(
     r"(?im)(\"source_ids?\"\s*:|(?:^|[\n\r,])source_ids?(?:[, \t\r\n]|$)|source ids? \(full list\)|full source[-_ ]id list)"
@@ -56,6 +60,8 @@ DETECTORS = (
     ("absolute_local_path", _ABSOLUTE_LOCAL_PATH_RE, None),
     ("stripe_checkout_session_id", _STRIPE_CHECKOUT_RE, None),
     ("stripe_payment_intent_id", _STRIPE_PAYMENT_RE, None),
+    ("stripe_event_id", _STRIPE_EVENT_RE, None),
+    ("resend_message_id", _RESEND_MESSAGE_RE, None),
     ("raw_evidence_quote", _RAW_EVIDENCE_RE, None),
     ("source_id_list", _SOURCE_ID_LIST_RE, None),
     ("private_note", _PRIVATE_NOTE_RE, None),
@@ -125,6 +131,8 @@ def _redact_sensitive_text(text: str) -> str:
     text = _EMAIL_RE.sub("[email]", text)
     text = _STRIPE_CHECKOUT_RE.sub("[stripe_checkout_session_id]", text)
     text = _STRIPE_PAYMENT_RE.sub("[stripe_payment_intent_id]", text)
+    text = _STRIPE_EVENT_RE.sub("[stripe_event_id]", text)
+    text = _RESEND_MESSAGE_RE.sub("[resend_message_id]", text)
     text = _ABSOLUTE_LOCAL_PATH_RE.sub("[absolute_local_path]", text)
     return text
 

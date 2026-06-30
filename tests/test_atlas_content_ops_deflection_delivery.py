@@ -1017,7 +1017,9 @@ async def test_delivery_worker_sends_pending_paid_report_link(
     claim_query, claim_args = pool.fetch_calls[0]
     assert "FOR UPDATE SKIP LOCKED" in claim_query
     assert "SET delivery_status = 'sending'" in claim_query
-    assert claim_args == (20,)
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in claim_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in claim_query
+    assert claim_args == (20, None, None)
     assert len(sender.requests) == 1
     confirm_query, confirm_args = pool.fetchrow_calls[0]
     assert "RETURNING d.request_id" in confirm_query
@@ -1049,6 +1051,41 @@ async def test_delivery_worker_sends_pending_paid_report_link(
     assert "delivery_status = 'sending'" in update_query
     assert update_args == ("acct-123", "content-ops-abc123", "resend:email-123")
     assert "buyer@example.com" not in str(update_args)
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_scopes_live_claim_query_to_account_and_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(
+        [
+            _row(
+                account_id="acct-target",
+                request_id="content-ops-target",
+            )
+        ]
+    )
+    sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-fake-bytes")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+        account_id="acct-target",
+        request_id="content-ops-target",
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 1
+    claim_query, claim_args = pool.fetch_calls[0]
+    assert "FOR UPDATE SKIP LOCKED" in claim_query
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in claim_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in claim_query
+    assert claim_args == (20, "acct-target", "content-ops-target")
+    assert sender.requests[0].campaign_id == (
+        "content_ops_deflection_report:acct-target:content-ops-target"
+    )
 
 
 @pytest.mark.asyncio
@@ -1364,11 +1401,13 @@ async def test_delivery_worker_renders_pdf_with_lazy_renderer_import(
 
 
 @pytest.mark.asyncio
-async def test_delivery_worker_falls_back_to_link_only_when_pdf_render_fails(
+async def test_delivery_worker_fails_when_paid_pdf_render_fails(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     pool = _Pool([_row()])
     sender = _Sender()
+    caplog.set_level("ERROR", logger="atlas.content_ops_deflection_delivery")
 
     def _raise_pdf(_artifact: Any) -> bytes:
         raise RuntimeError("pdf down")
@@ -1381,14 +1420,165 @@ async def test_delivery_worker_falls_back_to_link_only_when_pdf_render_fails(
         config=_config(),
     )
 
-    assert summary.sent == 1
-    request = sender.requests[0]
-    assert request.attachments == ()
-    assert "full report PDF is attached" not in request.html_body
-    assert "full report PDF is attached" not in (request.text_body or "")
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
     update_query, update_args = pool.execute_calls[0]
-    assert "delivery_status = 'delivered'" in update_query
-    assert update_args == ("acct-123", "content-ops-abc123", "resend:email-123")
+    assert "delivery_status = 'failed'" in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_render_failed: RuntimeError: pdf down",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "paid_report_delivery_send_failed"
+    assert incidents[-1]["error"] == update_args[-1]
+    assert "Deflection report PDF render failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_preserves_stale_reclaim_when_paid_pdf_render_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _Pool([_row(previous_delivery_status="sending")])
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+
+    def _raise_pdf(_artifact: Any) -> bytes:
+        raise RuntimeError("pdf down")
+
+    _install_fake_pdf_renderer(monkeypatch, _raise_pdf)
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'sending'" in update_query
+    assert "delivery_status = 'pending'" not in update_query
+    assert "delivery_status = 'failed'" not in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_render_failed: RuntimeError: pdf down",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == (
+        "paid_report_delivery_pdf_render_reclaim_deferred"
+    )
+    assert incidents[-1]["severity"] == "warning"
+    assert incidents[-1]["error"] == update_args[-1]
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_repeated_stale_render_outage_remains_reclaim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([
+        _row(
+            previous_delivery_status="sending",
+            delivery_error="PaidReportPdfRenderError: prior render outage",
+        )
+    ])
+    sender = _Sender()
+
+    def _raise_pdf(_artifact: Any) -> bytes:
+        raise RuntimeError("pdf still down")
+
+    _install_fake_pdf_renderer(monkeypatch, _raise_pdf)
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'sending'" in update_query
+    assert "delivery_status = 'failed'" not in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_render_failed: RuntimeError: pdf still down",
+    )
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_preserves_stale_reclaim_when_paid_pdf_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _Pool([_row(previous_delivery_status="sending")])
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'sending'" in update_query
+    assert "delivery_status = 'pending'" not in update_query
+    assert "delivery_status = 'failed'" not in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_empty",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == (
+        "paid_report_delivery_pdf_render_reclaim_deferred"
+    )
+    assert incidents[-1]["severity"] == "warning"
+    assert incidents[-1]["error"] == update_args[-1]
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_fails_when_paid_pdf_artifact_is_malformed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _Pool([_row(artifact=json.dumps(["not", "a", "report"]))])
+    sender = _Sender()
+    caplog.set_level("ERROR", logger="atlas.content_ops_deflection_delivery")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'failed'" in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "ValueError: paid_report_pdf_missing_artifact",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "paid_report_delivery_send_failed"
+    assert incidents[-1]["error"] == update_args[-1]
 
 
 @pytest.mark.asyncio
@@ -1408,7 +1598,40 @@ async def test_delivery_worker_dry_run_does_not_send_or_update() -> None:
     pending_query, pending_args = pool.fetch_calls[0]
     assert "FOR UPDATE SKIP LOCKED" not in pending_query
     assert "WHERE d.delivery_status = 'pending'" in pending_query
-    assert pending_args == (20,)
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in pending_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in pending_query
+    assert pending_args == (20, None, None)
+    assert sender.requests == []
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_scopes_dry_run_selection_to_account_and_request() -> None:
+    pool = _Pool(
+        [
+            _row(
+                account_id="acct-target",
+                request_id="content-ops-target",
+            )
+        ]
+    )
+    sender = _Sender()
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(dry_run=True),
+        account_id="acct-target",
+        request_id="content-ops-target",
+    )
+
+    assert summary.scanned == 1
+    assert summary.dry_run == 1
+    pending_query, pending_args = pool.fetch_calls[0]
+    assert "FOR UPDATE SKIP LOCKED" not in pending_query
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in pending_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in pending_query
+    assert pending_args == (20, "acct-target", "content-ops-target")
     assert sender.requests == []
     assert pool.execute_calls == []
 
@@ -1459,6 +1682,7 @@ async def test_delivery_worker_claim_query_retries_stale_sending_rows() -> None:
     claim_query, _claim_args = pool.fetch_calls[0]
     assert "d.delivery_status = 'pending'" in claim_query
     assert "d.delivery_status = 'sending'" in claim_query
+    assert "d.delivery_status AS previous_delivery_status" in claim_query
     assert f"INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'" in claim_query
 
 
@@ -1559,11 +1783,11 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # End-to-end regression for the R8 BLOCKER (real ResendCampaignSender + the
-    # real render->link-only fallback transition): first send carries the PDF
-    # attachment; on re-claim the render fails so the email is link-only -- a
-    # DIFFERENT payload under the SAME idempotency key. A Resend-like client
-    # returns 409 invalid_idempotent_request for that mismatch, and the delivery
-    # path must mark the row delivered (idempotent replay), not failed.
+    # real render->attachment transition): both attempts carry a PDF, but a
+    # regenerated attachment can still differ byte-for-byte under the SAME
+    # idempotency key. A Resend-like client returns 409 invalid_idempotent_request
+    # for that mismatch, and the delivery path must mark the row delivered
+    # (idempotent replay), not failed.
     from extracted_content_pipeline.campaign_sender import (
         ResendCampaignSender,
         ResendSenderConfig,
@@ -1608,7 +1832,7 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
         render_calls["n"] += 1
         if render_calls["n"] == 1:
             return b"%PDF-first-render"
-        raise RuntimeError("render failed on reclaim")
+        return b"%PDF-second-render"
 
     _install_fake_pdf_renderer(monkeypatch, _renderer)
     row = _row()
@@ -1618,7 +1842,7 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
     )
     assert first.sent == 1 and first.failed == 0
 
-    # Re-claim: render now fails -> link-only -> different payload, same key.
+    # Re-claim: render returns a different PDF payload under the same key.
     second = await send_pending_deflection_report_deliveries(
         _Pool([row]), sender=sender, config=_config()
     )
@@ -1626,7 +1850,7 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
     assert second.failed == 0
     assert len(http.posts) == 2
     assert http.posts[0]["key"] == http.posts[1]["key"]  # same idempotency key
-    assert http.posts[0]["json"] != http.posts[1]["json"]  # attachment vs link-only
+    assert http.posts[0]["json"] != http.posts[1]["json"]  # regenerated attachment
 
 
 @pytest.mark.asyncio

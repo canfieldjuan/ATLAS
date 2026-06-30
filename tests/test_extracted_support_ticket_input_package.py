@@ -204,7 +204,6 @@ def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None
                 "Manual sequence cleanup after demos Can I automate demo follow-up? "
                 "Automation is not on this plan."
             ),
-            "organization": "Riverbend Supply",
             "company_name": "Riverbend Supply",
             "vendor_name": "LegacyCRM",
             "support_ticket_cluster": "automation cleanup demo follow",
@@ -1118,6 +1117,48 @@ def test_support_ticket_input_package_uses_stable_duplicate_key_precedence() -> 
     assert package.inputs["source_material"][0]["company_name"] == "First Account"
 
 
+def test_support_ticket_input_package_keeps_company_out_of_routing_organization() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Where do I update billing contacts?",
+            "Company": "Acme Only",
+        },
+    ])
+
+    row = package.inputs["source_material"][0]
+
+    assert row["company_name"] == "Acme Only"
+    assert "organization" not in row
+
+
+@pytest.mark.parametrize(
+    ("organization_key", "expected"),
+    (
+        ("Organization", "Acme Org"),
+        ("Organisation", "Acme UK Org"),
+        ("Org", "Acme Short Org"),
+        ("Requester Organization", "Acme Requester Org"),
+    ),
+)
+def test_support_ticket_input_package_preserves_explicit_routing_organization(
+    organization_key: str,
+    expected: str,
+) -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Where is the login button?",
+            organization_key: expected,
+        },
+    ])
+
+    row = package.inputs["source_material"][0]
+
+    assert row["organization"] == expected
+    assert "company_name" not in row
+
+
 def test_support_ticket_input_package_keeps_request_overrides_authoritative() -> None:
     package = build_support_ticket_input_package(
         [{"ticket_id": "ticket-1", "subject": "How do I export reports?"}],
@@ -1347,6 +1388,35 @@ def test_support_ticket_input_package_recognizes_status_and_csat_columns() -> No
     assert package.metadata["csat_present_count"] == 2
     assert package.metadata["csat_score_count"] == 2
     assert package.metadata["csat_score_average"] == 3.5
+
+
+def test_support_ticket_input_package_preserves_support_platform_provenance() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "Ticket ID": "zd-1",
+            "Subject": "Where is the login button?",
+            "Requester Comment": "Where is the login button?",
+            "Support Platform": "zendesk",
+        },
+        {
+            "ticket_id": "hs-1",
+            "subject": "How do I export reports?",
+            "description": "How do I export reports?",
+            "platform": "help_scout",
+        },
+        {
+            "ticket_id": "ic-1",
+            "subject": "How do I update my billing email?",
+            "description": "How do I update my billing email?",
+            "support_platform": "intercom",
+        },
+    ])
+
+    rows = package.inputs["source_material"]
+
+    assert rows[0]["support_platform"] == "zendesk"
+    assert rows[1]["support_platform"] == "help_scout"
+    assert rows[2]["support_platform"] == "intercom"
 
 
 def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:

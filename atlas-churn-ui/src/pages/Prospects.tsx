@@ -1108,7 +1108,7 @@ export default function ProspectsPage() {
                 value={resolveDomain}
                 onChange={(e) => setResolveDomain(e.target.value)}
                 placeholder="domain.com"
-                className="px-2 py-1 bg-slate-800/50 border border-slate-700/50 rounded text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 w-32"
+                className="px-2 py-1 bg-slate-800/50 border border-slate-700/50 rounded text-xs text-slate-200 placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50 w-32"
               />
               <button
                 onClick={() => handleResolve(r.id, 'retry')}
@@ -1306,13 +1306,13 @@ export default function ProspectsPage() {
                 value={companySearch}
                 onChange={(e) => setCompanySearch(e.target.value)}
                 placeholder="Search company..."
-                className="pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 w-56"
+                className="pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50 w-56"
               />
             </div>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-hidden focus:border-cyan-500/50"
             >
               <option value="">All Statuses</option>
               <option value="active">Active</option>
@@ -1324,7 +1324,7 @@ export default function ProspectsPage() {
             <select
               value={seniorityFilter}
               onChange={(e) => setSeniorityFilter(e.target.value)}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-hidden focus:border-cyan-500/50"
             >
               <option value="">All Seniority</option>
               <option value="c_suite">C-Suite</option>
@@ -1401,7 +1401,7 @@ export default function ProspectsPage() {
                 value={mqSearch}
                 onChange={(e) => setMqSearch(e.target.value)}
                 placeholder="Search company..."
-                className="pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 w-56"
+                className="pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50 w-56"
               />
             </div>
           </div>
@@ -1441,7 +1441,7 @@ export default function ProspectsPage() {
                 value={coSearch}
                 onChange={(e) => setCoSearch(e.target.value)}
                 placeholder="Search company..."
-                className="pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 w-56"
+                className="pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50 w-56"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -1480,7 +1480,7 @@ export default function ProspectsPage() {
                     type="text"
                     value={overrideForm.company_name_raw}
                     onChange={(e) => setOverrideForm((f) => ({ ...f, company_name_raw: e.target.value }))}
-                    className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                     placeholder="Acme Corp"
                   />
                 </div>
@@ -1490,7 +1490,7 @@ export default function ProspectsPage() {
                     type="text"
                     value={overrideForm.search_names}
                     onChange={(e) => setOverrideForm((f) => ({ ...f, search_names: e.target.value }))}
-                    className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                     placeholder="Acme, Acme Corporation"
                   />
                 </div>
@@ -1500,7 +1500,7 @@ export default function ProspectsPage() {
                     type="text"
                     value={overrideForm.domains}
                     onChange={(e) => setOverrideForm((f) => ({ ...f, domains: e.target.value }))}
-                    className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                     placeholder="acme.com, acmecorp.com"
                   />
                 </div>

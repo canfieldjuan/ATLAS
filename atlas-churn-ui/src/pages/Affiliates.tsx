@@ -624,7 +624,7 @@ export default function Affiliates() {
             placeholder="Filter vendor..."
             value={vendorSearch}
             onChange={(e) => setVendorSearch(e.target.value)}
-            className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 w-48"
+            className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50 w-48"
           />
           <label className="flex items-center gap-2 text-sm text-slate-400">
             Min Urgency
@@ -635,7 +635,7 @@ export default function Affiliates() {
               step={1}
               value={minUrgency}
               onChange={(e) => setMinUrgency(Number(e.target.value))}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-2 py-1.5 text-sm text-white w-16 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-2 py-1.5 text-sm text-white w-16 focus:outline-hidden focus:border-cyan-500/50"
             />
           </label>
           <label className="flex items-center gap-2 text-sm text-slate-400">
@@ -647,7 +647,7 @@ export default function Affiliates() {
               step={5}
               value={minScore}
               onChange={(e) => setMinScore(Number(e.target.value))}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-2 py-1.5 text-sm text-white w-16 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-2 py-1.5 text-sm text-white w-16 focus:outline-hidden focus:border-cyan-500/50"
             />
           </label>
           <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
@@ -725,36 +725,36 @@ export default function Affiliates() {
                     placeholder="Name *"
                     value={form.name}
                     onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                   />
                   <input
                     placeholder="Product name * (matches competitor)"
                     value={form.product_name}
                     onChange={(e) => setForm((f) => ({ ...f, product_name: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                   />
                   <input
                     placeholder="Aliases (comma-separated)"
                     value={aliasInput}
                     onChange={(e) => setAliasInput(e.target.value)}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                   />
                   <input
                     placeholder="Category"
                     value={form.category}
                     onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                   />
                   <input
                     placeholder="Affiliate URL *"
                     value={form.affiliate_url}
                     onChange={(e) => setForm((f) => ({ ...f, affiliate_url: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                   />
                   <select
                     value={form.commission_type}
                     onChange={(e) => setForm((f) => ({ ...f, commission_type: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-cyan-500/50"
+                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-hidden focus:border-cyan-500/50"
                   >
                     {COMMISSION_TYPES.map((t) => (
                       <option key={t} value={t}>
@@ -766,13 +766,13 @@ export default function Affiliates() {
                     placeholder="Commission value (e.g. $150/signup)"
                     value={form.commission_value}
                     onChange={(e) => setForm((f) => ({ ...f, commission_value: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                   />
                   <input
                     placeholder="Notes"
                     value={form.notes}
                     onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                   />
                 </div>
                 <div className="flex items-center gap-3 pt-1">

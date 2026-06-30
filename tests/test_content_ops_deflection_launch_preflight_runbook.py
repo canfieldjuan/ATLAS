@@ -1,0 +1,242 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+RUNBOOK = (
+    ROOT
+    / "docs"
+    / "extraction"
+    / "validation"
+    / "content_ops_deflection_launch_preflight_runbook.md"
+)
+PAID_EMAIL_MIGRATION = (
+    ROOT
+    / "atlas_brain"
+    / "storage"
+    / "migrations"
+    / "331_content_ops_deflection_report_delivery_email.sql"
+)
+PAID_QUEUE_MIGRATION = (
+    ROOT
+    / "atlas_brain"
+    / "storage"
+    / "migrations"
+    / "332_content_ops_deflection_report_deliveries.sql"
+)
+CHECKOUT_AUTHORIZATION_MIGRATION = (
+    ROOT
+    / "atlas_brain"
+    / "storage"
+    / "migrations"
+    / "342_content_ops_deflection_checkout_authorization.sql"
+)
+
+
+def _doc() -> str:
+    return RUNBOOK.read_text(encoding="utf-8")
+
+
+def _section(title: str) -> str:
+    doc = _doc()
+    start = doc.index(f"## {title}")
+    next_heading = doc.find("\n## ", start + 1)
+    return doc[start:] if next_heading == -1 else doc[start:next_heading]
+
+
+def test_launch_runbook_names_required_surfaces_and_trackers() -> None:
+    doc = _doc()
+
+    assert "#1921" in doc
+    assert "#1440" in doc
+    assert "#1386" in doc
+    assert "Snapshot email" in doc
+    assert "Snapshot PDF" in doc
+    assert "paid report email" in doc
+    assert "paid report PDF attachment" in doc
+    assert "emailed hosted result URL" in doc
+    assert "not complete until both buyer-facing email surfaces" in doc
+    assert 'export ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL="<paid-report-from-email>"' in doc
+    assert 'export ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY="<paid-report-resend-key>"' in doc
+
+
+def test_launch_runbook_pins_deployed_config_and_scheduler_gates() -> None:
+    section = _section("Deployed Config Check")
+
+    for required in (
+        "ATLAS_API_BASE_URL",
+        "ATLAS_B2B_SERVICE_TOKEN",
+        "GAP_REPORT_NOTIFICATION_RESEND_API_KEY",
+        "GAP_REPORT_NOTIFICATION_FROM_EMAIL",
+        "ATLAS_DEFLECTION_DELIVERY_ENABLED=false",
+        "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=true",
+        "ATLAS_DEFLECTION_DELIVERY_FROM_EMAIL",
+        "ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY",
+        "ATLAS_DEFLECTION_DELIVERY_RESULT_BASE_URL",
+        "ATLAS_DEFLECTION_DELIVERY_RESULT_URL_TEMPLATE",
+        "content_ops_deflection_report_delivery",
+        "include_disabled=true",
+        "{id, enabled, next_run_at, metadata}",
+    ):
+        assert required in section
+    assert "sendSnapshotEmail" in section
+    assert "atlas-portfolio" in section
+    assert "legacy in-repo `portfolio-ui` SPA route" in section
+    assert "/services/faq-deflection/results/{request_id}" in section
+    assert "/systems/support-ticket-deflection/results/{request_id}" in section
+    assert "will not auto-send before the rehearsal" in section
+    assert "bypass the dry-run proof" in section
+
+
+def test_launch_runbook_requires_paid_delivery_schema() -> None:
+    section = _section("Database Gate")
+
+    assert "schema_migrations" in section
+    assert "331_content_ops_deflection_report_delivery_email" in section
+    assert "332_content_ops_deflection_report_deliveries" in section
+    assert "342_content_ops_deflection_checkout_authorization" in section
+    assert "All three rows must be present" in section
+    assert "checkout authorization columns" in section
+    assert PAID_EMAIL_MIGRATION.exists()
+    assert PAID_QUEUE_MIGRATION.exists()
+    assert CHECKOUT_AUTHORIZATION_MIGRATION.exists()
+
+
+def test_snapshot_email_proof_requires_attachment_and_blocks_skip_log() -> None:
+    section = _section("Snapshot Email And PDF Proof")
+
+    assert "deployed portfolio intake" in section
+    assert "fetch the free Snapshot" in section
+    assert "Body says the free Snapshot is ready" in section
+    assert "/systems/support-ticket-deflection/results/<request-id>" in section
+    assert "A Snapshot PDF is attached" in section
+    assert "deflection.record.snapshot_pdf_attachment_skipped" in section
+    assert "email without the Snapshot PDF is not launch proof" in section
+    assert "excludes source IDs" in section
+    assert "raw ticket bodies" in section
+    assert "paid report markdown" in section
+
+
+def test_paid_unlock_and_delivery_proof_require_real_queue_and_live_send() -> None:
+    unlock = _section("Paid Unlock Gate")
+    delivery = _section("Paid Report Email And PDF Proof")
+
+    assert "real Stripe Checkout" in unlock
+    assert "Do not replay a synthetic webhook" in unlock
+    assert "Checkout price authorization" in unlock
+    assert "content_ops_deflection_reports" in unlock
+    assert "content_ops_deflection_report_deliveries" in unlock
+    assert "r.request_id = '<request-id>'" in unlock
+    assert "`paid` is true" in unlock
+    assert "`delivery_status` is `pending`" in unlock
+    assert 'export LAUNCH_ACCOUNT_ID="<account-id-from-query>"' in unlock
+    assert 'export LAUNCH_REQUEST_ID="<request-id>"' in unlock
+    assert "manual drain CLI accepts an account/request scope" in delivery
+    assert "target_claimable_rows" in delivery
+    assert "target_pending_rows" in delivery
+    assert "pending_or_sending_rows" not in delivery
+    assert "other_pending_or_sending_rows" not in delivery
+    assert "SELECT account_id, request_id, created_at, updated_at, delivery_status" in delivery
+    assert "WHERE account_id = :'account_id'" in delivery
+    assert "AND request_id = :'request_id'" in delivery
+    assert "non-target `sending` row ages into the\nclaim window" not in delivery
+    assert "Proceed only if `target_claimable_rows` is 1 and `target_pending_rows` is 1" in delivery
+    assert "scripts/send_content_ops_deflection_report_deliveries.py" in delivery
+    assert "--account-id \"$LAUNCH_ACCOUNT_ID\"" in delivery
+    assert "--request-id \"$LAUNCH_REQUEST_ID\"" in delivery
+    assert "--json" in delivery
+    assert "--send" in delivery
+    assert "--resend-api-key" in delivery
+    assert "dry-run JSON must show at least one scanned row" in delivery
+    assert "queue selection" in delivery
+    assert "paid/email gating" in delivery
+    assert "does not render the PDF" in delivery
+    assert "build the email body" in delivery
+    assert "render_deflection_full_report_pdf" in delivery
+    assert "mktemp -d" in delivery
+    assert "PREFLIGHT_TMP_DIR" in delivery
+    assert "trap 'rm -rf \"$PREFLIGHT_TMP_DIR\"' EXIT" in delivery
+    assert "paid-artifact.json" in delivery
+    assert "paid-report.pdf" in delivery
+    assert "-v account_id=\"$LAUNCH_ACCOUNT_ID\"" in delivery
+    assert "-v request_id=\"$LAUNCH_REQUEST_ID\"" in delivery
+    assert "-v buyer_email=\"$LAUNCH_BUYER_EMAIL\"" in delivery
+    assert "WHERE account_id = :'account_id'" in delivery
+    assert "COALESCE(delivery_email, '') = :'buyer_email'" in delivery
+    assert "COALESCE(delivery_email, '') = '$LAUNCH_BUYER_EMAIL'" not in delivery
+    assert "do not commit, upload, or\nlink them" in delivery
+    assert "first exercise" in delivery
+    assert "paid PDF rendering" in delivery
+    assert "live buyer send" in delivery
+    assert "rerun the\ntarget claimability SQL above immediately before live send" in delivery
+    assert "it\nstill shows `target_claimable_rows` 1 and `target_pending_rows` 1" in delivery
+    assert "ATLAS_DEFLECTION_DELIVERY_ENABLED=true" in delivery
+    assert "ATLAS_DEFLECTION_DELIVERY_DRY_RUN=false" in delivery
+    assert "deploy or restart ATLAS" in delivery
+    assert "hosted scheduler configured for" in delivery
+    assert "live paid delivery" in delivery
+    assert "settings.deflection_delivery" in delivery
+    assert "deflection_report_result_url" in delivery
+    assert "preflight-url-check" in delivery
+    assert "parsed.scheme != \"https\"" in delivery
+    assert "deployed result URL scheme mismatch" in delivery
+    assert "deployed result URL path mismatch" in delivery
+    assert "do not satisfy it with the local CLI `--result-base-url`" in delivery
+    assert "/api/v1/autonomous/status/summary" in delivery
+    assert "select(.running == true and .scheduled_count > 0)" in delivery
+    assert "scheduler summary reports `running` true" in delivery
+    assert "scheduler loop is running" in delivery
+    assert "Metadata alone" in delivery
+    assert "deployed URL config" in delivery
+    assert "live dry-run setting" in " ".join(delivery.split())
+    assert "claimable_rows` is 0" in delivery
+    assert "content_ops_deflection_report_delivery/run" in delivery
+    assert "export TASK_ID" in delivery
+    assert "export RUN_ID" in delivery
+    assert "Do not pass `{\"dry_run\": false}`" in delivery
+    assert "executions?limit=5" in delivery
+    assert "ast.literal_eval" in delivery
+    assert "HeadlessRunner persists builtin dict results with str(result)" in delivery
+    assert ".result_text | fromjson" not in delivery
+    assert '"dry_run_enabled": False' in delivery
+    assert "zero\nclaimable work scanned/sent/failed" in delivery
+    assert "manual one-off email is not enough" in delivery
+    assert "live JSON has `sent` 1 and `failed` 0" in delivery
+    assert "link-only paid email is not launch proof" in delivery
+
+
+def test_paid_pdf_shape_is_curated_with_toc_and_export_pointer() -> None:
+    section = _section("Paid PDF Shape Check")
+
+    assert "curated/shareable report" in section
+    assert "not the full evidence archive" in section
+    assert "Table of contents" in section
+    assert "not a 600+ page raw evidence dump" in section
+    assert re.search(r"capped at 25 rows", section)
+    assert re.search(r"capped at 10 questions", section)
+    assert "complete evidence export" in section
+    assert "hosted paid result page" in section
+
+
+def test_hosted_url_cleanup_and_closeout_are_required() -> None:
+    section = _section("Hosted URL, Cleanup, And Tracker Closeout")
+
+    assert "exact URL from each email" in section
+    assert "locked/free Snapshot state" in section
+    assert "unlocked paid report" in section
+    assert "must not fall back to demo data" in section
+    assert "CRON_SECRET" in section
+    assert "Privacy, Security, Terms" in section
+    assert "refund" in section
+    assert "rm -rf \"${PREFLIGHT_TMP_DIR:-}\"" in section
+    assert "sanitized proof scorecard" in section
+    assert "not raw live artifacts" in section
+    assert "Resend provider message IDs" in section
+    assert "Stripe\nevent IDs" in section
+    assert "Raw live bundles stay uncommitted" in section
+    assert "scripts/check_deflection_full_report_proof_bundle.py" in section
+    assert "redaction-check.json" in section
+    assert "Stop if the redaction gate fails" in " ".join(section.split())
+    assert "#1921, #1440, and #1386" in section

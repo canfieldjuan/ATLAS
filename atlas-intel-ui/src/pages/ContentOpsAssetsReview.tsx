@@ -203,9 +203,9 @@ const ASSETS: Array<{
 
 const STATUSES: StatusFilter[] = ['draft', 'approved', 'rejected', 'all']
 const inputClassName =
-  'w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-400 focus:outline-none'
+  'w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-400 focus:outline-hidden'
 const textAreaClassName =
-  'w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm leading-6 text-slate-100 placeholder:text-slate-600 focus:border-cyan-400 focus:outline-none'
+  'w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm leading-6 text-slate-100 placeholder:text-slate-600 focus:border-cyan-400 focus:outline-hidden'
 const ID_FILTERED_ASSETS = new Set<GeneratedAssetType>([
   'blog_post',
   'landing_page',
