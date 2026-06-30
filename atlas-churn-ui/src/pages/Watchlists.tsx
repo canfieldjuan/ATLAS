@@ -3488,7 +3488,7 @@ export default function Watchlists() {
               value={savedViewName}
               onChange={(event) => setSavedViewName(event.target.value)}
               placeholder={activeWatchlistView ? activeWatchlistView.name : 'Name this view'}
-              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-hidden"
             />
             <button
               className="rounded-md bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
@@ -3511,7 +3511,7 @@ export default function Watchlists() {
               value={vendorAlertThreshold}
               onChange={(event) => setVendorAlertThreshold(event.target.value)}
               placeholder="Optional"
-              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-hidden"
             />
           </label>
           <label className="space-y-1">
@@ -3525,7 +3525,7 @@ export default function Watchlists() {
               value={accountAlertThreshold}
               onChange={(event) => setAccountAlertThreshold(event.target.value)}
               placeholder="Optional"
-              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-hidden"
             />
           </label>
           <label className="space-y-1">
@@ -3539,7 +3539,7 @@ export default function Watchlists() {
               value={staleDaysThreshold}
               onChange={(event) => setStaleDaysThreshold(event.target.value)}
               placeholder="Optional"
-              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-hidden"
             />
           </label>
         </div>
@@ -3564,7 +3564,7 @@ export default function Watchlists() {
               value={alertDeliveryFrequency}
               onChange={(event) => setAlertDeliveryFrequency(event.target.value as 'daily' | 'weekly')}
               disabled={!alertEmailEnabled}
-              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="daily">Daily</option>
               <option value="weekly">Weekly</option>
@@ -4048,7 +4048,7 @@ export default function Watchlists() {
               Vendors {selectedVendorFilters.length > 0 && `(${selectedVendorFilters.length})`}
             </span>
             <select
-              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-hidden"
               multiple
               size={Math.min(vendorFilterOptions.length + 1, 6)}
               value={selectedVendorFilters}
@@ -4068,7 +4068,7 @@ export default function Watchlists() {
           <label className="space-y-1">
             <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Category</span>
             <select
-              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-hidden"
               value={selectedCategoryFilter}
               onChange={(event) => setSelectedCategoryFilter(event.target.value)}
             >
@@ -4083,7 +4083,7 @@ export default function Watchlists() {
           <label className="space-y-1">
             <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Source</span>
             <select
-              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-hidden"
               value={selectedSourceFilter}
               onChange={(event) => setSelectedSourceFilter(event.target.value)}
             >
@@ -4098,7 +4098,7 @@ export default function Watchlists() {
           <label className="space-y-1">
             <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Min Urgency</span>
             <select
-              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-hidden"
               value={selectedMinUrgency}
               onChange={(event) => setSelectedMinUrgency(event.target.value)}
             >
@@ -4174,7 +4174,7 @@ export default function Watchlists() {
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
+      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-6">
           <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 overflow-hidden">
             <div className="border-b border-slate-700/50 px-4 py-3">
@@ -4297,7 +4297,7 @@ export default function Watchlists() {
                   placeholder="Search vendors..."
                   value={searchInput}
                   onChange={(event) => setSearchInput(event.target.value)}
-                  className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 py-2 pl-9 pr-3 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+                  className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 py-2 pl-9 pr-3 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-hidden"
                 />
               </div>
 
@@ -4307,7 +4307,7 @@ export default function Watchlists() {
                   <select
                     value={trackMode}
                     onChange={(event) => setTrackMode(event.target.value as 'own' | 'competitor')}
-                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-hidden"
                   >
                     <option value="competitor">Competitor</option>
                     <option value="own">Own vendor</option>
@@ -4320,7 +4320,7 @@ export default function Watchlists() {
                     value={label}
                     onChange={(event) => setLabel(event.target.value)}
                     placeholder="Optional team label"
-                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-hidden"
                   />
                 </label>
               </div>
@@ -4395,7 +4395,7 @@ export default function Watchlists() {
                   value={competitiveSetName}
                   onChange={(event) => setCompetitiveSetName(event.target.value)}
                   placeholder="Salesforce core competitors"
-                  className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+                  className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-hidden"
                 />
               </label>
 
@@ -4408,7 +4408,7 @@ export default function Watchlists() {
                       setCompetitiveSetFocal(event.target.value)
                       setCompetitiveSetCompetitors((current) => current.filter((item) => item !== event.target.value))
                     }}
-                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-hidden"
                   >
                     <option value="">Select tracked vendor</option>
                     {focalOptions.map((vendor) => (
@@ -4423,7 +4423,7 @@ export default function Watchlists() {
                   <select
                     value={competitiveSetRefreshMode}
                     onChange={(event) => setCompetitiveSetRefreshMode(event.target.value as 'manual' | 'scheduled')}
-                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-hidden"
                   >
                     <option value="manual">Manual</option>
                     <option value="scheduled">Scheduled</option>
@@ -4440,7 +4440,7 @@ export default function Watchlists() {
                     max={720}
                     value={competitiveSetRefreshHours}
                     onChange={(event) => setCompetitiveSetRefreshHours(event.target.value)}
-                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-hidden"
                   />
                 </label>
               ) : null}

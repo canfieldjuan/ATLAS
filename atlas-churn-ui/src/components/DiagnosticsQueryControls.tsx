@@ -29,7 +29,7 @@ function QuerySelect({
       <select
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+        className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
       >
         {options.map((option) => (
           <option key={option} value={option}>

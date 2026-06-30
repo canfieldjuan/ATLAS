@@ -328,7 +328,7 @@ export default function SubscriptionModal({
                 type="text"
                 value={label}
                 onChange={e => setLabel(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-hidden"
                 placeholder="e.g. Weekly Zendesk Intel"
               />
             </div>
@@ -341,7 +341,7 @@ export default function SubscriptionModal({
                   id={`${idPrefix}-frequency`}
                   value={frequency}
                   onChange={e => setFrequency(e.target.value as typeof frequency)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-hidden"
                 >
                   <option value="weekly">Weekly</option>
                   <option value="monthly">Monthly</option>
@@ -354,7 +354,7 @@ export default function SubscriptionModal({
                   id={`${idPrefix}-focus`}
                   value={focus}
                   onChange={e => setFocus(e.target.value as typeof focus)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-hidden"
                 >
                   <option value="all">All Reports</option>
                   <option value="battle_cards">Battle Cards</option>
@@ -371,7 +371,7 @@ export default function SubscriptionModal({
                 id={`${idPrefix}-freshness`}
                 value={freshness}
                 onChange={e => setFreshness(e.target.value as typeof freshness)}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-hidden"
               >
                 <option value="fresh_only">Fresh only (skip if no new data)</option>
                 <option value="fresh_or_monitor">Fresh or monitoring (include stale with label)</option>
@@ -387,7 +387,7 @@ export default function SubscriptionModal({
                 value={recipients}
                 onChange={e => setRecipients(e.target.value)}
                 rows={2}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none resize-none"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-hidden resize-none"
                 placeholder="team@company.com, analyst@company.com"
               />
               <p className="text-xs text-slate-500 mt-0.5">Comma-separated email addresses</p>
@@ -401,7 +401,7 @@ export default function SubscriptionModal({
                 type="text"
                 value={note}
                 onChange={e => setNote(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-hidden"
                 placeholder="Internal context for this subscription"
               />
             </div>

@@ -1312,7 +1312,7 @@ export default function Reports() {
                     setVendorSearch(nextValue)
                     updateSearchFilterParams({ vendor_filter: nextValue })
                   }}
-                  className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                  className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                 />
               </div>
               <select
@@ -1322,7 +1322,7 @@ export default function Reports() {
                   setTypeFilter(nextValue)
                   updateSearchFilterParams({ report_type: nextValue })
                 }}
-                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
               >
                 <option value="">All Types</option>
                 <option value="weekly_churn_feed">Weekly Churn Feed</option>
@@ -1346,7 +1346,7 @@ export default function Reports() {
                   setQualityFilter(nextValue)
                   updateSearchFilterParams({ quality_status: nextValue })
                 }}
-                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
               >
                 <option value="">All Quality</option>
                 <option value="sales_ready">Sales Ready</option>
@@ -1361,7 +1361,7 @@ export default function Reports() {
                   setFreshnessFilter(nextValue)
                   updateSearchFilterParams({ freshness_state: nextValue })
                 }}
-                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
               >
                 <option value="">All Freshness</option>
                 <option value="fresh">Fresh</option>
@@ -1375,7 +1375,7 @@ export default function Reports() {
                   setReviewFilter(nextValue)
                   updateSearchFilterParams({ review_state: nextValue })
                 }}
-                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
               >
                 <option value="">All Review States</option>
                 <option value="clean">Clean</option>
@@ -1443,7 +1443,7 @@ export default function Reports() {
                       updateComposerParams('vendor_comparison', { primary_vendor: nextValue })
                     }}
                     placeholder="Example: Salesforce"
-                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
                   />
                 </div>
                 <div className="flex-1">
@@ -1458,7 +1458,7 @@ export default function Reports() {
                       updateComposerParams('vendor_comparison', { comparison_vendor: nextValue })
                     }}
                     placeholder="Example: HubSpot"
-                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
                   />
                 </div>
                 <button
@@ -1485,7 +1485,7 @@ export default function Reports() {
                       updateComposerParams('account_deep_dive', { deep_dive_company: nextValue })
                     }}
                     placeholder="Example: DataPulse Analytics"
-                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
                   />
                 </div>
                 <button
@@ -1512,7 +1512,7 @@ export default function Reports() {
                       updateComposerParams('account_comparison', { primary_company: nextValue })
                     }}
                     placeholder="Example: DataPulse Analytics"
-                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
                   />
                 </div>
                 <div className="flex-1">
@@ -1527,7 +1527,7 @@ export default function Reports() {
                       updateComposerParams('account_comparison', { comparison_company: nextValue })
                     }}
                     placeholder="Example: FinEdge Capital"
-                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
                   />
                 </div>
                 <button
@@ -1554,7 +1554,7 @@ export default function Reports() {
                       updateComposerParams('battle_card', { battle_card_vendor: nextValue })
                     }}
                     placeholder="Example: Zendesk"
-                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-hidden focus:border-cyan-500/50"
                   />
                 </div>
                 <button
@@ -1704,7 +1704,7 @@ export default function Reports() {
                       <select
                         value={perPage}
                         onChange={(e) => { setPerPage(Number(e.target.value)); setPage(0) }}
-                        className="bg-slate-800/50 border border-slate-700/50 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
+                        className="bg-slate-800/50 border border-slate-700/50 rounded px-1.5 py-0.5 text-xs text-white focus:outline-hidden"
                       >
                         {PAGE_SIZES.map((s) => (
                           <option key={s} value={s}>{s} / page</option>

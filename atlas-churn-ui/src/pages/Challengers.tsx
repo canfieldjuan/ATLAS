@@ -590,7 +590,7 @@ export default function Challengers() {
           placeholder="Search challenger..."
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 w-48"
+          className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50 w-48"
         />
       </div>
 

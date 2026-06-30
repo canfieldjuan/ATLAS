@@ -441,7 +441,7 @@ export default function AccountMovementDrawer({
             </div>
           </section>
 
-          <section className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
+          <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
             <div className="rounded-xl border border-slate-700/40 bg-slate-800/20 p-5">
               <div className="flex items-center gap-2 text-sm font-medium text-white">
                 <FileText className="h-4 w-4 text-cyan-400" />
