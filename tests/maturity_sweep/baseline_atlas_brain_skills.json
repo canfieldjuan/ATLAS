@@ -1,9 +1,16 @@
 {
+  "atlas_brain/skills/__init__.py": {
+    "counts": {
+      "INTERNAL_MOCK": 28
+    },
+    "score": 112
+  },
   "atlas_brain/skills/registry.py": {
     "counts": {
+      "INTERNAL_MOCK": 2,
       "UNGUARDED_INDEX": 1,
       "UNGUARDED_INPUT": 2
     },
-    "score": 10
+    "score": 18
   }
 }

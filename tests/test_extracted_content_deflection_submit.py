@@ -128,6 +128,50 @@ def _csv_dict_bytes(rows: list[dict[str, str]]) -> bytes:
     return out.getvalue().encode("utf-8")
 
 
+def test_deflection_submit_defaults_fill_blank_support_platform_cells() -> None:
+    rows = api_module._deflection_submit_rows_with_defaults(
+        {
+            "company_name": "Acme Inc.",
+            "contact_email": "ops@example.com",
+            "support_platform": "zendesk",
+        },
+        [
+            {
+                "ticket_id": "ticket-1",
+                "description": "Where is the login button?",
+                "support_platform": "",
+            },
+            {
+                "ticket_id": "ticket-2",
+                "description": "How do I export reports?",
+                "support_platform": "help_scout",
+            },
+            {
+                "ticket_id": "ticket-3",
+                "description": "How do I update notifications?",
+                "Support Platform": "intercom",
+            },
+            {
+                "ticket_id": "ticket-4",
+                "description": "Where do I change roles?",
+                "platform": "help_scout",
+            },
+            {
+                "ticket_id": "ticket-5",
+                "description": "How do I update seats?",
+                "platform": "ios",
+                "support_platform": "intercom",
+            },
+        ],
+    )
+
+    assert rows[0]["support_platform"] == "zendesk"
+    assert rows[1]["support_platform"] == "help_scout"
+    assert rows[2]["support_platform"] == "intercom"
+    assert rows[3]["support_platform"] == "help_scout"
+    assert rows[4]["support_platform"] == "intercom"
+
+
 @pytest.mark.asyncio
 async def test_deflection_submit_upload_copy_streams_chunks_not_whole_limit() -> None:
     data = b"a" * (api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES + 17)
@@ -878,7 +922,7 @@ async def test_deflection_report_delta_returns_paid_allowlisted_payload() -> Non
     delta_route = _route(router, "/ops/deflection-reports/{request_id}/delta", "GET")
     payload = await delta_route.endpoint(
         request_id="current",
-        baseline_request_id=None,
+        baseline_request_id="baseline",
     )
     encoded = json.dumps(payload, sort_keys=True)
 
@@ -1396,9 +1440,46 @@ async def test_deflection_submit_accepts_zendesk_full_thread_blob(
     assert evidence_export["evidence_rows"]
 
     model = _route(router, "/ops/deflection-reports/{request_id}/report-model", "GET")
-    assert await model.endpoint(request_id=payload["request_id"]) == report_model
-    assert "markdown" not in report_model
-    assert "faq_result" not in report_model
+    hosted_report_model = await model.endpoint(request_id=payload["request_id"])
+    assert hosted_report_model["schema_version"] == report_model["schema_version"]
+    assert "markdown" not in hosted_report_model
+    assert "faq_result" not in hosted_report_model
+    full_priority_item = next(
+        section
+        for section in report_model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+    hosted_priority_item = next(
+        section
+        for section in hosted_report_model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+    assert set(full_priority_item["routing_signals"]) == {
+        "group",
+        "assignee",
+        "tags",
+        "brand",
+        "organization",
+        "product_area",
+        "custom_product_area",
+    }
+    assert hosted_priority_item["routing_signals"] == {
+        "tags": [],
+        "product_area": [],
+        "custom_product_area": [],
+    }
+    assert hosted_priority_item["evidence_tier"] == full_priority_item["evidence_tier"]
+    full_detail_row = next(
+        section
+        for section in report_model["sections"]
+        if section["id"] == "question_details"
+    )["data"]["rows"][0]
+    hosted_detail_row = next(
+        section
+        for section in hosted_report_model["sections"]
+        if section["id"] == "question_details"
+    )["data"]["rows"][0]
+    assert hosted_detail_row["evidence_tier"] == full_detail_row["evidence_tier"]
 
     summary = artifact_payload["summary"]
     assert summary["drafted_answer_count"] == 1

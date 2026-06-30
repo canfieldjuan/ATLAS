@@ -10,6 +10,9 @@ from typing import Any, Mapping
 from extracted_content_pipeline.deflection_report_access import (
     stored_deflection_report_model,
 )
+from extracted_content_pipeline.faq_deflection_report import (
+    DEFAULT_DEFLECTION_REPORT_TITLE,
+)
 from fpdf import FPDF
 
 
@@ -91,7 +94,7 @@ class DeflectionReportPDF(FPDF):
         self.cell(
             0,
             8,
-            "Support Ticket Deflection Report",
+            DEFAULT_DEFLECTION_REPORT_TITLE,
             new_x="LMARGIN",
             new_y="NEXT",
         )
@@ -166,7 +169,7 @@ class DeflectionReportPDF(FPDF):
 def render_deflection_full_report_pdf(
     artifact: Mapping[str, Any],
     *,
-    fallback_title: str = "Support Ticket Deflection Report",
+    fallback_title: str = DEFAULT_DEFLECTION_REPORT_TITLE,
 ) -> bytes:
     """Render a curated/shareable paid deflection report PDF."""
 
@@ -214,7 +217,7 @@ def _artifact_report_model_pdf_markdown(artifact: Mapping[str, Any]) -> str:
 
 
 def _report_model_pdf_markdown(model: Mapping[str, Any]) -> str:
-    title = _model_text(model.get("title")) or "Support Ticket Deflection Report"
+    title = _model_text(model.get("title")) or DEFAULT_DEFLECTION_REPORT_TITLE
     lines: list[str] = [f"# {title}", ""]
     rendered_section = False
     for section in _model_pdf_sections(model):

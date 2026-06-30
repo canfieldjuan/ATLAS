@@ -5,19 +5,19 @@
 
 export const DEFLECTION_SNAPSHOT_SCHEMA_VERSION = "deflection.v1" as const;
 
-export const DEFLECTION_SNAPSHOT_TOP_LEVEL_FIELDS = ["summary", "top_questions", "locked_questions", "top_blind_spots", "teaser"] as const;
+export const DEFLECTION_SNAPSHOT_TOP_LEVEL_FIELDS = ["title", "summary", "top_questions", "locked_questions", "top_blind_spots", "teaser"] as const;
 
-export const DEFLECTION_RESULT_PAGE_SNAPSHOT_FIELDS = ["summary", "top_questions", "top_blind_spots"] as const;
+export const DEFLECTION_RESULT_PAGE_SNAPSHOT_FIELDS = ["title", "summary", "top_questions", "top_blind_spots"] as const;
 
 export const DEFLECTION_SNAPSHOT_SUMMARY_FIELDS = ["generated", "drafted_answer_count", "no_proven_answer_count", "support_ticket_resolution_evidence_present", "support_ticket_resolution_evidence_count", "repeat_ticket_count", "non_repeat_ticket_count", "source_date_start", "source_date_end", "source_window_days"] as const;
 
 export const DEFLECTION_SNAPSHOT_SUMMARY_OPTIONAL_FIELDS = ["source_date_start", "source_date_end", "source_window_days"] as const;
 
-export const DEFLECTION_SNAPSHOT_TOP_QUESTION_FIELDS = ["rank", "question", "ticket_count", "weighted_frequency", "customer_wording"] as const;
+export const DEFLECTION_SNAPSHOT_TOP_QUESTION_FIELDS = ["rank", "question", "ticket_count", "weighted_frequency", "customer_wording", "owner_lane", "action_label", "estimated_support_cost"] as const;
 
 export const DEFLECTION_SNAPSHOT_LOCKED_QUESTION_FIELDS = ["rank", "ticket_count"] as const;
 
-export const DEFLECTION_SNAPSHOT_TOP_BLIND_SPOT_FIELDS = ["rank", "question", "ticket_count"] as const;
+export const DEFLECTION_SNAPSHOT_TOP_BLIND_SPOT_FIELDS = ["rank", "question", "ticket_count", "owner_lane", "action_label", "estimated_support_cost"] as const;
 
 export const DEFLECTION_SNAPSHOT_TEASER_FIELDS = ["full_answer", "previews"] as const;
 
@@ -44,6 +44,9 @@ export type DeflectionSnapshotTopQuestion = {
   ticket_count: number;
   weighted_frequency: number;
   customer_wording: string;
+  owner_lane: string;
+  action_label: string;
+  estimated_support_cost: number;
 };
 
 export type DeflectionSnapshotLockedQuestion = {
@@ -55,6 +58,9 @@ export type DeflectionSnapshotTopBlindSpot = {
   rank: number;
   question: string;
   ticket_count: number;
+  owner_lane: string;
+  action_label: string;
+  estimated_support_cost: number;
 };
 
 export type DeflectionSnapshotTeaserFullAnswer = {
@@ -85,6 +91,7 @@ export type DeflectionSnapshotTeaser = {
 };
 
 export type DeflectionSnapshot = {
+  title: string;
   summary: DeflectionSnapshotSummary;
   top_questions: DeflectionSnapshotTopQuestion[];
   locked_questions: DeflectionSnapshotLockedQuestion[];
@@ -92,4 +99,4 @@ export type DeflectionSnapshot = {
   teaser: DeflectionSnapshotTeaser;
 };
 
-export type DeflectionResultPageSnapshot = Pick<DeflectionSnapshot, "summary" | "top_questions" | "top_blind_spots">;
+export type DeflectionResultPageSnapshot = Pick<DeflectionSnapshot, "title" | "summary" | "top_questions" | "top_blind_spots">;

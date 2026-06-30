@@ -20,4 +20,6 @@ jobs:
         run: printf '%s\n' "$PR_BODY" > /tmp/pr_body.md
 
       - name: Audit PR body against AGENTS.md section 1b
-        run: python3 scripts/audit_pr_body.py /tmp/pr_body.md
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: python3 scripts/audit_pr_body.py --pr-author "$PR_AUTHOR" /tmp/pr_body.md

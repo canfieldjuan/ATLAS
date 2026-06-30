@@ -1,8 +1,9 @@
 {
   "atlas_brain/orchestration/temporal.py": {
     "counts": {
+      "INTERNAL_MOCK": 2,
       "UNGUARDED_INDEX": 1
     },
-    "score": 2
+    "score": 10
   }
 }

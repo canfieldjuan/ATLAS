@@ -41,22 +41,25 @@
   "atlas_brain/mcp/b2b/evidence.py": {
     "counts": {
       "HEURISTIC_COMMENT": 18,
+      "INTERNAL_MOCK": 16,
       "UNGUARDED_INDEX": 4
     },
-    "score": 10
+    "score": 74
   },
   "atlas_brain/mcp/b2b/pipeline.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 5
+    "score": 9
   },
   "atlas_brain/mcp/b2b/products.py": {
     "counts": {
+      "INTERNAL_MOCK": 4,
       "NO_RAISES_TESTS": 1,
       "UNGUARDED_INDEX": 1
     },
-    "score": 5
+    "score": 21
   },
   "atlas_brain/mcp/b2b/reviews.py": {
     "counts": {
@@ -66,9 +69,10 @@
   },
   "atlas_brain/mcp/b2b/scrape_targets.py": {
     "counts": {
+      "INTERNAL_MOCK": 3,
       "NO_RAISES_TESTS": 1
     },
-    "score": 3
+    "score": 15
   },
   "atlas_brain/mcp/b2b/server.py": {
     "counts": {
@@ -79,9 +83,10 @@
   },
   "atlas_brain/mcp/b2b/signals.py": {
     "counts": {
+      "INTERNAL_MOCK": 11,
       "NO_RAISES_TESTS": 1
     },
-    "score": 3
+    "score": 47
   },
   "atlas_brain/mcp/b2b/vendor_history.py": {
     "counts": {
@@ -98,23 +103,26 @@
   },
   "atlas_brain/mcp/b2b/write_intelligence.py": {
     "counts": {
+      "INTERNAL_MOCK": 2,
       "UNGUARDED_INDEX": 3
     },
-    "score": 6
+    "score": 14
   },
   "atlas_brain/mcp/calendar_server.py": {
     "counts": {
+      "INTERNAL_MOCK": 11,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INPUT": 1
     },
-    "score": 9
+    "score": 53
   },
   "atlas_brain/mcp/content_ops_deflection_readonly_server.py": {
     "counts": {
+      "INTERNAL_MOCK": 16,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 1
     },
-    "score": 7
+    "score": 71
   },
   "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py": {
     "counts": {
@@ -132,16 +140,24 @@
   },
   "atlas_brain/mcp/content_ops_marketer_verify_server.py": {
     "counts": {
+      "INTERNAL_MOCK": 49,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 5
+    "score": 201
   },
   "atlas_brain/mcp/crm_server.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 4
     },
-    "score": 11
+    "score": 15
+  },
+  "atlas_brain/mcp/email_server.py": {
+    "counts": {
+      "INTERNAL_MOCK": 2
+    },
+    "score": 8
   },
   "atlas_brain/mcp/intelligence_server.py": {
     "counts": {
@@ -151,9 +167,10 @@
   },
   "atlas_brain/mcp/invoicing_draft_writer_server.py": {
     "counts": {
-      "ASSERT_AS_VALIDATION": 1
+      "ASSERT_AS_VALIDATION": 1,
+      "INTERNAL_MOCK": 9
     },
-    "score": 3
+    "score": 39
   },
   "atlas_brain/mcp/invoicing_readonly_oauth.py": {
     "counts": {
@@ -161,18 +178,31 @@
     },
     "score": 5
   },
+  "atlas_brain/mcp/invoicing_readonly_server.py": {
+    "counts": {
+      "INTERNAL_MOCK": 1
+    },
+    "score": 4
+  },
   "atlas_brain/mcp/invoicing_server.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 2,
       "UNGUARDED_INPUT": 2
     },
-    "score": 17
+    "score": 21
   },
   "atlas_brain/mcp/scraper_server.py": {
     "counts": {
       "UNGUARDED_INPUT": 1
     },
     "score": 4
+  },
+  "atlas_brain/mcp/twilio_server.py": {
+    "counts": {
+      "INTERNAL_MOCK": 3
+    },
+    "score": 12
   }
 }

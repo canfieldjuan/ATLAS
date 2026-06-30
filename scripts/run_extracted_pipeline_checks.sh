@@ -51,6 +51,7 @@ pytest \
   tests/test_content_ops_deflection_source_proof_docs.py \
   tests/test_docs_no_raw_deflection_request_ids.py \
   tests/test_content_ops_deflection_pii_surrogate_eval_corpus.py \
+  tests/test_check_deflection_pii_source_decision.py \
   tests/test_score_deflection_pii_recall.py \
   tests/test_content_ops_deflection_pii_review_bundle_candidate.py \
   tests/test_content_ops_deflection_pii_review_bundle_pipeline.py \
@@ -61,6 +62,8 @@ pytest \
   tests/test_content_ops_deflection_report.py \
   tests/test_content_ops_deflection_delta.py \
   tests/test_content_ops_deflection_delta_persistence.py \
+  tests/test_content_ops_deflection_delta_go_live_runbook.py \
+  tests/test_content_ops_deflection_launch_preflight_runbook.py \
   tests/test_content_ops_deflection_resolution_live_proof.py \
   tests/test_extracted_content_deflection_submit.py \
   tests/test_prepare_content_ops_deflection_env.py \

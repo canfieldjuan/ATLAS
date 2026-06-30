@@ -157,6 +157,67 @@ async def test_main_dry_run_wires_worker_without_resend(
 
 
 @pytest.mark.asyncio
+async def test_main_forwards_account_and_request_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pool = _Pool()
+    calls: list[dict[str, Any]] = []
+
+    async def _create_pool(database_url: str) -> _Pool:
+        calls.append({"database_url": database_url})
+        return pool
+
+    async def _send_pending(
+        pool_arg: Any,
+        *,
+        sender: Any,
+        config: Any,
+        account_id: str | None = None,
+        request_id: str | None = None,
+    ) -> Any:
+        calls.append(
+            {
+                "pool": pool_arg,
+                "sender_type": type(sender).__name__,
+                "dry_run": config.dry_run,
+                "account_id": account_id,
+                "request_id": request_id,
+            }
+        )
+        return SimpleNamespace(scanned=1, sent=0, failed=0, dry_run=1)
+
+    monkeypatch.setattr(send_cli, "_create_pool", _create_pool)
+    monkeypatch.setattr(send_cli, "send_pending_deflection_report_deliveries", _send_pending)
+
+    code = await send_cli._main(
+        [
+            *_base_args(
+                "--account-id",
+                "acct-target",
+                "--request-id",
+                "content-ops-target",
+            ),
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    assert pool.closed is True
+    assert calls == [
+        {"database_url": "postgresql://atlas@example/db"},
+        {
+            "pool": pool,
+            "sender_type": "_DryRunSender",
+            "dry_run": True,
+            "account_id": "acct-target",
+            "request_id": "content-ops-target",
+        },
+    ]
+    assert json.loads(capsys.readouterr().out)["dry_run"] == 1
+
+
+@pytest.mark.asyncio
 async def test_main_live_send_uses_resend_sender_and_returns_failed_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

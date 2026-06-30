@@ -19,6 +19,8 @@ const EVIDENCE_EXPORT_SCHEMA_VERSION = "deflection_evidence.v1";
 const RESULT_PAGE_QA_SURFACE_CAPS = Object.freeze({
   ranked_questions: PAID_QUESTION_LIMIT,
   question_details: PAID_DETAIL_LIMIT * 2,
+  product_gap_cards: PAID_DETAIL_LIMIT,
+  jira_handoffs: PAID_DETAIL_LIMIT,
   seo_targets: PAID_PHRASE_LIMIT,
 });
 const DEFLECTION_REPORT_SECTION_ID_SET = new Set(DEFLECTION_REPORT_SECTION_IDS);
@@ -318,6 +320,92 @@ function hasResolutionEvidence(item) {
   return clean(item.answer_evidence_status) === RESOLUTION_EVIDENCE_STATUS;
 }
 
+function evidenceTierLabel(value) {
+  const tier = clean(value);
+  if (tier === "csv_customer_text") return "CSV customer text";
+  if (tier === "csv_index_metadata_only") return "CSV index metadata only";
+  if (tier === "csv_full_thread_resolution_evidence") return "CSV full-thread resolution evidence";
+  return tier ? tier.replace(/_/g, " ") : "Unknown";
+}
+
+function costPeriodLabel(value) {
+  const period = clean(value);
+  if (period === "batch_upload") return "this upload";
+  return period ? period.replace(/_/g, " ") : "";
+}
+
+function costConfidenceLabel(value) {
+  const confidence = clean(value);
+  if (confidence === "benchmark_with_resolution_evidence") return "benchmark cost with resolution evidence";
+  if (confidence === "benchmark_with_customer_text") return "benchmark cost with customer text";
+  if (confidence === "benchmark_index_metadata_only") return "benchmark cost from index metadata";
+  return confidence ? confidence.replace(/_/g, " ") : "";
+}
+
+function cleanTextList(value, limit = 3) {
+  const values = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  const out = [];
+  for (const item of values) {
+    const text = clean(item);
+    if (!text) continue;
+    const key = text.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function jiraHandoffText(item, jiraTemplate, { costBasis = "", evidenceTier = "", vocabulary = [] } = {}) {
+  const issue = clean(item.question) || clean(item.customer_wording);
+  const ownerLane = clean(jiraTemplate.owner_lane) || clean(item.owner_lane);
+  const summary = clean(jiraTemplate.product_gap_summary) || clean(item.product_gap_summary);
+  const nextAction = clean(jiraTemplate.recommended_action) || clean(item.recommended_action);
+  const ticketCount = itemTicketCount(item);
+  const estimatedCost = firstParsedCount(item.estimated_support_cost);
+  const lines = [
+    issue ? `Issue: ${issue}` : "",
+    ownerLane ? `Owner lane: ${ownerLane}` : "",
+    ticketCount > 0 ? `Impact: ${formatNumber(ticketCount)} repeat tickets` : "",
+    estimatedCost > 0 ? `Estimated handling cost: ${formatMoney(estimatedCost)}` : "",
+    costBasis ? `Cost basis: ${costBasis}` : "",
+    evidenceTier ? `Evidence tier: ${evidenceTierLabel(evidenceTier)}` : "",
+    vocabulary.length > 0 ? `Customer vocabulary: ${vocabulary.join(", ")}` : "",
+    summary ? `Summary: ${summary}` : "",
+    nextAction ? `Next action: ${nextAction}` : "",
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+function paidActionItems(report, sectionIds) {
+  const rows = [];
+  const seen = new Set();
+  for (const sectionId of sectionIds) {
+    const data = reportModelSectionData(report, sectionId);
+    const items = Array.isArray(data.items) ? data.items.filter(isObjectRecord) : [];
+    items.forEach((item, index) => {
+      const key = clean(item.repeat_key) ||
+        clean(item.cluster_id) ||
+        clean(item.question) ||
+        `${sectionId}:${index}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      rows.push(item);
+    });
+  }
+  return rows;
+}
+
+function paidGapCardItems(report, fallbackItems) {
+  const actionRows = paidActionItems(report, [
+    "priority_fix_queue",
+    "top_unresolved_repeats",
+  ]);
+  return actionRows.length > 0 ? actionRows : fallbackItems;
+}
+
 function paidSummary(report, items) {
   const summary = isObjectRecord(report.artifact.summary) ? report.artifact.summary : {};
   const repeatTickets = finiteCount(summary.repeat_ticket_count);
@@ -444,17 +532,57 @@ function renderPaidAnswerCards(items) {
           </section>`;
 }
 
-function renderPaidGapCards(items) {
+function renderPaidGapCards(items, evidenceExportHref = "") {
   const rows = items.filter((item) => !hasResolutionEvidence(item)).slice(0, PAID_DETAIL_LIMIT);
   return `<section id="paid-gap-list" class="paid-report-block">
-            <h3>No-proven-answer gaps</h3>
+            <h3>Product Gap cards</h3>
             ${rows.length > 0
               ? `<div class="paid-card-grid">
-                  ${rows.map((item) => `<article class="paid-card">
+                  ${rows.map((item) => {
+                    const evidenceTier = clean(item.evidence_tier);
+                    const vocabulary = cleanTextList(item.customer_vocabulary);
+                    const costBasis = [
+                      costPeriodLabel(item.cost_period),
+                      costConfidenceLabel(item.cost_confidence),
+                    ].filter(Boolean).join(" / ");
+                    const jiraTemplate = isObjectRecord(item.jira_template) ? item.jira_template : {};
+                    const jiraSummary = clean(jiraTemplate.product_gap_summary) || clean(item.product_gap_summary);
+                    const jiraAction = clean(jiraTemplate.recommended_action) || clean(item.recommended_action);
+                    const jiraHandoff = jiraHandoffText(item, jiraTemplate, {
+                      costBasis,
+                      evidenceTier,
+                      vocabulary,
+                    });
+                    return `<article class="paid-card">
                     <p class="rank">${escapeHtml(formatNumber(itemTicketCount(item)))} tickets</p>
                     <h4>${escapeHtml(item.question || item.customer_wording || "Untitled question")}</h4>
-                    <p>Needs uploaded resolution evidence before ATLAS can mark this as publishable help-center copy.</p>
-                  </article>`).join("")}
+                    ${item.product_gap_summary ? `<p>${escapeHtml(item.product_gap_summary)}</p>` : ""}
+                    <p>Owner: ${escapeHtml(item.owner_lane || "Unknown")}</p>
+                    <p>Estimated handling: ${escapeHtml(formatMoney(firstParsedCount(item.estimated_support_cost)))}</p>
+                    ${costBasis ? `<p>Cost basis: ${escapeHtml(costBasis)}</p>` : ""}
+                    ${evidenceTier ? `<p>Evidence: ${escapeHtml(evidenceTierLabel(evidenceTier))}</p>` : ""}
+                    ${vocabulary.length > 0
+                      ? `<p>Customer vocabulary: ${vocabulary.map(escapeHtml).join(", ")}</p>`
+                      : ""}
+                    ${jiraSummary || jiraAction
+                      ? `<details><summary>Jira handoff</summary>
+                          ${jiraSummary ? `<p>${escapeHtml(jiraSummary)}</p>` : ""}
+                          ${jiraAction ? `<p>${escapeHtml(jiraAction)}</p>` : ""}
+                        </details>`
+                      : ""}
+                    ${jiraHandoff
+                      ? `<div class="jira-copy">
+                          <label>Copy-ready Jira handoff</label>
+                          <textarea readonly rows="9" data-atlas-deflection-jira-handoff>${escapeHtml(jiraHandoff)}</textarea>
+                          <button type="button" class="jira-copy-button" data-atlas-deflection-jira-copy>Copy Jira handoff</button>
+                        </div>`
+                      : ""}
+                    <p>This is routeable product friction, not exact UI root-cause proof.</p>
+                    ${evidenceExportHref
+                      ? `<p><a href="${escapeHtml(evidenceExportHref)}" download>Download evidence JSON</a></p>`
+                      : ""}
+                  </article>`;
+                  }).join("")}
                 </div>`
               : `<p class="muted">No unresolved answer gaps were present in this unlocked report.</p>`}
           </section>`;
@@ -472,7 +600,7 @@ function renderPaidPhrases(items) {
           </section>`;
 }
 
-function resultPageQaObservation(report) {
+function resultPageQaObservation(report, gapItems = null) {
   const items = paidArtifactItems(report);
   if (!items.length) return null;
 
@@ -488,7 +616,27 @@ function resultPageQaObservation(report) {
   const summary = paidSummary(report, items);
   const publishable = items.filter(hasResolutionEvidence);
   const needsProof = items.filter((item) => !hasResolutionEvidence(item));
+  const productGapItems = Array.isArray(gapItems)
+    ? gapItems
+    : paidGapCardItems(report, items);
   const phrases = paidCustomerPhrases(items);
+  const productGapCards = productGapItems
+    .filter((item) => !hasResolutionEvidence(item))
+    .slice(0, PAID_DETAIL_LIMIT);
+  const jiraHandoffCards = productGapCards.filter((item) => {
+    const evidenceTier = clean(item.evidence_tier);
+    const vocabulary = cleanTextList(item.customer_vocabulary);
+    const costBasis = [
+      costPeriodLabel(item.cost_period),
+      costConfidenceLabel(item.cost_confidence),
+    ].filter(Boolean).join(" / ");
+    const jiraTemplate = isObjectRecord(item.jira_template) ? item.jira_template : {};
+    return Boolean(jiraHandoffText(item, jiraTemplate, {
+      costBasis,
+      evidenceTier,
+      vocabulary,
+    }));
+  });
 
   return {
     counts: {
@@ -527,6 +675,8 @@ function resultPageQaObservation(report) {
         completeEvidence.source_id_count,
         exportSummary.source_id_count,
       ),
+      product_gap_card_count: productGapCards.length,
+      jira_handoff_count: jiraHandoffCards.length,
     },
     displayed_rows: {
       ranked_questions: Math.min(items.length, RESULT_PAGE_QA_SURFACE_CAPS.ranked_questions),
@@ -534,6 +684,8 @@ function resultPageQaObservation(report) {
         rowCount(questionDetails) || publishable.length + needsProof.length,
         RESULT_PAGE_QA_SURFACE_CAPS.question_details,
       ),
+      product_gap_cards: productGapCards.length,
+      jira_handoffs: jiraHandoffCards.length,
       seo_targets: Math.min(
         firstParsedCount(seoTargets.total_phrase_count, phrases.length),
         RESULT_PAGE_QA_SURFACE_CAPS.seo_targets,
@@ -545,9 +697,10 @@ function resultPageQaObservation(report) {
 function renderPaidArtifact(report, requestId = "") {
   const items = paidArtifactItems(report);
   if (!items.length) return "";
+  const gapItems = paidGapCardItems(report, items);
   const summary = paidSummary(report, items);
   const evidenceExportHref = paidEvidenceExportHref(report, requestId);
-  const qaObservation = resultPageQaObservation(report);
+  const qaObservation = resultPageQaObservation(report, gapItems);
   const qaObservationAttr = qaObservation
     ? ` data-atlas-deflection-qa-observation="${escapeHtml(JSON.stringify(qaObservation))}"`
     : "";
@@ -572,7 +725,7 @@ function renderPaidArtifact(report, requestId = "") {
           ${renderPaidReadiness(summary, evidenceExportHref)}
           ${renderPaidQuestionTable(items)}
           ${renderPaidAnswerCards(items)}
-          ${renderPaidGapCards(items)}
+          ${renderPaidGapCards(gapItems, evidenceExportHref)}
           ${renderPaidPhrases(items)}
         </section>`;
 }
@@ -615,6 +768,29 @@ function renderArtifactRetryScript({ requestId, shouldRetry }) {
         retryAttempt += 1;
       }
     })();
+  </script>`;
+}
+
+function renderJiraCopyScript({ enabled }) {
+  if (!enabled) return "";
+
+  return `\n  <script data-atlas-deflection-jira-copy-script>
+    document.querySelectorAll("[data-atlas-deflection-jira-copy]").forEach((copyButton) => {
+      copyButton.addEventListener("click", async () => {
+        const handoff = copyButton
+          .closest(".jira-copy")
+          ?.querySelector("[data-atlas-deflection-jira-handoff]");
+        if (!handoff) return;
+        try {
+          await navigator.clipboard.writeText(handoff.value);
+          copyButton.textContent = "Copied";
+        } catch {
+          handoff.focus();
+          handoff.select();
+          copyButton.textContent = "Select and copy";
+        }
+      });
+    });
   </script>`;
 }
 
@@ -720,6 +896,10 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     .paid-card { padding: 14px; }
     .paid-card h4 { margin: 6px 0 8px; font-size: 16px; }
     .paid-card p:not(.rank) { margin: 0; color: rgba(226, 232, 240, .75); line-height: 1.55; }
+    .jira-copy { display: grid; gap: 8px; margin-top: 12px; }
+    .jira-copy label { color: rgba(226, 232, 240, .66); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    .jira-copy textarea { width: 100%; box-sizing: border-box; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; background: rgba(15, 23, 42, .68); color: #f8fafc; padding: 10px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.45; resize: vertical; }
+    .jira-copy-button { width: auto; justify-self: start; padding: 9px 12px; font-size: 12px; }
     .paid-phrase-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
     .paid-phrase-list li { padding: 9px 11px; line-height: 1.45; }
     .notice { margin-top: 20px; border-radius: 8px; padding: 14px 16px; color: #fde68a; background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .28); }
@@ -793,6 +973,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     }
   </script>
   ${renderArtifactRetryScript({ requestId, shouldRetry: shouldRetryArtifact })}
+  ${renderJiraCopyScript({ enabled: isUnlocked })}
 </body>
 </html>`;
 }

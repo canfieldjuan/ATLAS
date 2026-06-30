@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -10,9 +12,13 @@ import pytest
 
 from atlas_brain.content_ops_deflection_delivery import (
     DELIVERY_CLAIM_STALE_AFTER,
+    DeflectionDeltaDeliveryConfig,
     DeflectionReportDeliveryConfig,
+    deflection_delta_delivery_summary,
     deflection_delivery_email_surface_observation,
     deflection_report_result_url,
+    pending_deflection_delta_delivery_count,
+    send_pending_deflection_delta_deliveries,
     send_pending_deflection_report_deliveries,
 )
 from atlas_brain.content_ops_deflection_incidents import INCIDENT_LOG_MARKER
@@ -23,6 +29,15 @@ from extracted_content_pipeline.campaign_ports import (
 )
 from extracted_content_pipeline.faq_deflection_report import (
     build_deflection_full_report_qa_scorecard,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+_DEFLECTION_DELTA_DELIVERY_MIGRATIONS = (
+    ROOT / "atlas_brain" / "storage" / "migrations" / "328_content_ops_deflection_reports.sql",
+    ROOT / "atlas_brain" / "storage" / "migrations" / "331_content_ops_deflection_report_delivery_email.sql",
+    ROOT / "atlas_brain" / "storage" / "migrations" / "340_content_ops_deflection_deltas.sql",
+    ROOT / "atlas_brain" / "storage" / "migrations" / "341_content_ops_deflection_delta_deliveries.sql",
 )
 
 
@@ -59,6 +74,52 @@ class _Pool:
         if not self.sendable:
             return None
         return {"request_id": args[1]}
+
+    async def execute(self, query: str, *args: Any) -> str:
+        self.execute_calls.append((query, args))
+        return "UPDATE 1"
+
+
+class _DeltaPool:
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        sendable: bool = True,
+    ) -> None:
+        self.rows = rows
+        self.sendable = sendable
+        self.fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetchval_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetchrow_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        self.fetch_calls.append((query, args))
+        assert "content_ops_deflection_delta_deliveries" in query
+        assert "content_ops_deflection_deltas" in query
+        assert "content_ops_deflection_reports current_report" in query
+        assert "content_ops_deflection_reports baseline_report" in query
+        assert "current_report.delivery_email" in query
+        assert "d.delivery_email" not in query
+        return self.rows[: int(args[0])]
+
+    async def fetchval(self, query: str, *args: Any) -> int:
+        self.fetchval_calls.append((query, args))
+        assert "content_ops_deflection_delta_deliveries" in query
+        assert "delivery_status = 'pending'" in query
+        assert DELIVERY_CLAIM_STALE_AFTER in query
+        return len(self.rows)
+
+    async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
+        self.fetchrow_calls.append((query, args))
+        assert "content_ops_deflection_delta_deliveries" in query
+        assert "delivery_status = 'sending'" in query
+        assert "current_report.paid = true" in query
+        assert "baseline_report.paid = true" in query
+        if not self.sendable:
+            return None
+        return {"current_request_id": args[1]}
 
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
@@ -183,6 +244,18 @@ def _delivery_report_model_artifact(
                                 "question": "How do I export attribution reports?",
                                 "ticket_count": 9,
                                 "estimated_support_cost": 121.5,
+                                "owner_lane": "Reporting",
+                                "evidence_tier": "csv_customer_text",
+                                "product_gap_summary": (
+                                    "Repeated support friction routes to Reporting. "
+                                    "9 support tickets in this upload."
+                                ),
+                                "customer_vocabulary": [
+                                    "export attribution reports",
+                                    "download attribution CSV",
+                                ],
+                                "cost_period": "batch_upload",
+                                "cost_confidence": "benchmark_with_customer_text",
                                 "status": "Needs answer",
                                 "recommended_action": "Create a help-center answer",
                                 "representative_phrasing": [
@@ -260,6 +333,95 @@ def _config(**overrides: Any) -> DeflectionReportDeliveryConfig:
     return DeflectionReportDeliveryConfig(**values)
 
 
+def _delta_read_payload() -> dict[str, Any]:
+    return {
+        "schema_version": "deflection_delta_read.v1",
+        "current_request_id": "current-report",
+        "baseline_request_id": "baseline-report",
+        "delta": {
+            "schema_version": "deflection_delta.v1",
+            "current": {
+                "source_date_start": "2026-05-01",
+                "source_date_end": "2026-05-31",
+            },
+            "baseline": {
+                "source_date_start": "2026-04-01",
+                "source_date_end": "2026-04-30",
+            },
+            "summary": {
+                "new_count": 2,
+                "resolved_count": 1,
+                "growing_count": 3,
+                "shrinking_count": 1,
+                "still_unresolved_count": 4,
+                "support_cost_delta": 243.0,
+            },
+            "items": [
+                {
+                    "question": "How do I export attribution reports?",
+                    "owner_lane": "Reporting",
+                    "baseline_status": "Needs answer",
+                    "current_status": "Needs answer",
+                    "ticket_count_delta": 4,
+                    "support_cost_delta": 54.0,
+                    "change_types": ["NEW", "GROWING"],
+                    "source_ids": ["ticket-secret-delta-1"],
+                    "top_evidence": [
+                        {"evidence_quote": "raw delta quote should stay out"}
+                    ],
+                    "representative_phrasing": [
+                        "raw representative phrasing should stay out"
+                    ],
+                },
+                {
+                    "question": "How do I close a workspace?",
+                    "owner_lane": "Admin",
+                    "baseline_status": "Needs answer",
+                    "current_status": "Draft ready",
+                    "ticket_count_delta": -2,
+                    "support_cost_delta": -27.0,
+                    "change_types": ["RESOLVED", "SHRINKING"],
+                },
+                {
+                    "question": "How do I enable SSO?",
+                    "owner_lane": "Security",
+                    "baseline_status": "Needs answer",
+                    "current_status": "Needs answer",
+                    "ticket_count_delta": 1,
+                    "support_cost_delta": 13.5,
+                    "change_types": ["STILL_UNRESOLVED"],
+                },
+                {
+                    "question": "How do I invite auditors?",
+                    "owner_lane": "Admin",
+                    "baseline_status": "Needs answer",
+                    "current_status": "Needs answer",
+                    "ticket_count_delta": 1,
+                    "support_cost_delta": 10.0,
+                    "change_types": ["GROWING"],
+                },
+            ],
+        },
+    }
+
+
+def _delta_delivery_row(**overrides: Any) -> dict[str, Any]:
+    payload = _delta_read_payload()
+    row = {
+        "account_id": "acct-123",
+        "current_request_id": payload["current_request_id"],
+        "baseline_request_id": payload["baseline_request_id"],
+        "delivery_email": "buyer@example.com",
+        "current_paid": True,
+        "baseline_paid": True,
+        "delta": json.dumps(payload["delta"]),
+        "delta_created_at": "2026-06-01T00:00:00Z",
+        "delta_updated_at": "2026-06-01T00:00:00Z",
+    }
+    row.update(overrides)
+    return row
+
+
 def _install_fake_pdf_renderer(
     monkeypatch: pytest.MonkeyPatch,
     renderer: Any,
@@ -267,6 +429,572 @@ def _install_fake_pdf_renderer(
     module = ModuleType("atlas_brain.deflection_pdf_renderer")
     module.render_deflection_full_report_pdf = renderer
     monkeypatch.setitem(sys.modules, "atlas_brain.deflection_pdf_renderer", module)
+
+
+def test_deflection_delta_delivery_summary_renders_bounded_action_copy() -> None:
+    rendered = deflection_delta_delivery_summary(_delta_read_payload(), max_items=2)
+
+    assert rendered.subject == "Your support deflection delta is ready"
+    assert "2026-05-01 to 2026-05-31 vs 2026-04-01 to 2026-04-30" in rendered.text_body
+    assert "2 new repeats" in rendered.text_body
+    assert "1 resolved repeats" in rendered.text_body
+    assert "3 growing repeats" in rendered.text_body
+    assert "4 still unresolved repeats" in rendered.text_body
+    assert "+$243 estimated assisted-contact handling" in rendered.text_body
+    assert "How do I export attribution reports?" in rendered.text_body
+    assert "New, Growing" in rendered.text_body
+    assert "+4 tickets" in rendered.text_body
+    assert "+$54 estimated handling" in rendered.text_body
+    assert "Owner: Reporting" in rendered.text_body
+    assert "Status: Needs answer -> Needs answer" in rendered.text_body
+    assert "How do I close a workspace?" in rendered.text_body
+    assert "-2 tickets" in rendered.text_body
+    assert "-$27 estimated handling" in rendered.text_body
+    assert "How do I enable SSO?" not in rendered.text_body
+    assert "How do I invite auditors?" not in rendered.text_body
+    assert "ticket-secret-delta-1" not in rendered.text_body
+    assert "raw delta quote should stay out" not in rendered.text_body
+    assert "raw representative phrasing should stay out" not in rendered.text_body
+    assert "Top changes to review" in rendered.html_body
+    assert "How do I export attribution reports?" in rendered.html_body
+    assert "ticket-secret-delta-1" not in rendered.html_body
+
+
+def test_deflection_delta_delivery_summary_escapes_html_and_handles_savings() -> None:
+    payload = _delta_read_payload()
+    delta = payload["delta"]
+    assert isinstance(delta, dict)
+    summary = delta["summary"]
+    assert isinstance(summary, dict)
+    summary["support_cost_delta"] = -135.0
+    items = delta["items"]
+    assert isinstance(items, list)
+    items[0]["question"] = "Can <script>alert('x')</script> export data?"
+
+    rendered = deflection_delta_delivery_summary(payload, max_items=1)
+
+    assert "-$135 estimated assisted-contact handling" in rendered.text_body
+    assert "Can <script>alert('x')</script> export data?" in rendered.text_body
+    assert "Can &lt;script&gt;alert('x')&lt;/script&gt; export data?" in rendered.html_body
+    assert "<script>" not in rendered.html_body
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_sends_allowlisted_payload() -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            reply_to="support@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+    )
+
+    assert summary.sent == 1
+    assert summary.failed == 0
+    assert summary.dry_run == 0
+    assert len(sender.requests) == 1
+    request = sender.requests[0]
+    assert request.to_email == "buyer@example.com"
+    assert request.from_email == "reports@example.com"
+    assert request.reply_to == "support@example.com"
+    assert request.subject == "Your support deflection delta is ready"
+    assert request.campaign_id == (
+        "content_ops_deflection_delta:acct-123:current-report:baseline-report"
+    )
+    assert request.idempotency_key == (
+        "deflection-delta:acct-123:current-report:baseline-report"
+    )
+    assert request.tags == (
+        {"name": "source", "value": "content_ops_deflection_delta"},
+        {"name": "current_request_id", "value": "current-report"},
+        {"name": "baseline_request_id", "value": "baseline-report"},
+    )
+    assert "ticket-secret-delta-1" not in request.text_body
+    assert "raw evidence" not in request.text_body
+    assert "raw phrasing" not in request.html_body
+    assert len(pool.fetchrow_calls) == 1
+    delivered_query, delivered_args = pool.execute_calls[-1]
+    assert "delivery_status = 'delivered'" in delivered_query
+    assert delivered_args == (
+        "acct-123",
+        "current-report",
+        "baseline-report",
+        "resend:email-123",
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_dry_run_does_not_mutate() -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=True,
+        ),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 0
+    assert summary.deferred == 0
+    assert summary.dry_run == 1
+    assert sender.requests == []
+    assert pool.fetchrow_calls == []
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_dry_run_skips_invalid_rows() -> None:
+    pool = _DeltaPool([
+        _delta_delivery_row(
+            delivery_email="",
+            current_paid=False,
+            baseline_paid=False,
+        )
+    ])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=True,
+        ),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 0
+    assert summary.dry_run == 1
+    assert sender.requests == []
+    assert pool.fetchrow_calls == []
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_defers_unpaid_sources(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _DeltaPool([_delta_delivery_row(current_paid=False)])
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+    )
+
+    assert summary.failed == 0
+    assert summary.deferred == 1
+    assert sender.requests == []
+    deferred_query, deferred_args = pool.execute_calls[-1]
+    assert "delivery_status = 'pending'" in deferred_query
+    assert "delivery_status = 'failed'" not in deferred_query
+    assert deferred_args[-1] == "source_report_not_paid"
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "delta_delivery_source_report_not_paid"
+    assert "Deflection delta delivery deferred" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_defers_when_no_longer_sendable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _DeltaPool([_delta_delivery_row()], sendable=False)
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+    )
+
+    assert summary.failed == 0
+    assert summary.deferred == 1
+    assert sender.requests == []
+    deferred_query, deferred_args = pool.execute_calls[-1]
+    assert "delivery_status = 'pending'" in deferred_query
+    assert deferred_args[-1] == "delta_no_longer_sendable"
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "delta_delivery_no_longer_sendable"
+
+
+@pytest.mark.asyncio
+async def test_pending_deflection_delta_delivery_count_includes_stale_sending() -> None:
+    pool = _DeltaPool([_delta_delivery_row(), _delta_delivery_row()])
+
+    count = await pending_deflection_delta_delivery_count(pool)
+
+    assert count == 2
+    query, args = pool.fetchval_calls[0]
+    assert args == (None, None, None)
+    assert "delivery_status = 'pending'" in query
+    assert "delivery_status = 'sending'" in query
+    assert DELIVERY_CLAIM_STALE_AFTER in query
+
+
+@pytest.mark.asyncio
+async def test_delta_delivery_queue_can_be_scoped_to_one_account() -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=True,
+        ),
+        account_id=" acct-target ",
+    )
+    count = await pending_deflection_delta_delivery_count(
+        pool,
+        account_id=" acct-target ",
+    )
+
+    assert summary.scanned == 1
+    assert count == 1
+    fetch_query, fetch_args = pool.fetch_calls[0]
+    assert fetch_args == (5, "acct-target", None, None)
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in fetch_query
+    count_query, count_args = pool.fetchval_calls[0]
+    assert count_args == ("acct-target", None, None)
+    assert "AND ($1::text IS NULL OR account_id = $1)" in count_query
+
+
+@pytest.mark.asyncio
+async def test_delta_delivery_queue_can_be_scoped_to_one_current_request() -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+        account_id="acct-target",
+        current_request_id="checked-current",
+    )
+    count = await pending_deflection_delta_delivery_count(
+        pool,
+        account_id="acct-target",
+        current_request_id="checked-current",
+    )
+
+    assert summary.scanned == 1
+    assert count == 1
+    claim_query, claim_args = pool.fetch_calls[0]
+    assert claim_args == (5, "acct-target", "checked-current", None)
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in claim_query
+    assert "AND ($3::text IS NULL OR d.current_request_id = $3)" in claim_query
+    count_query, count_args = pool.fetchval_calls[0]
+    assert count_args == ("acct-target", "checked-current", None)
+    assert "AND ($2::text IS NULL OR current_request_id = $2)" in count_query
+
+
+@pytest.mark.asyncio
+async def test_delta_delivery_queue_filters_entitled_accounts_on_global_drain() -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender()
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=True,
+        ),
+        entitled_account_ids=("acct-active", " ", "acct-active"),
+    )
+    count = await pending_deflection_delta_delivery_count(
+        pool,
+        entitled_account_ids=("acct-active",),
+    )
+
+    assert summary.scanned == 1
+    assert count == 1
+    fetch_query, fetch_args = pool.fetch_calls[0]
+    assert fetch_args == (5, None, None, ["acct-active"])
+    assert "AND ($4::text[] IS NULL OR d.account_id = ANY($4::text[]))" in fetch_query
+    count_query, count_args = pool.fetchval_calls[0]
+    assert count_args == (None, None, ["acct-active"])
+    assert "AND ($3::text[] IS NULL OR account_id = ANY($3::text[]))" in count_query
+
+
+async def _apply_delta_delivery_migrations(conn: Any) -> None:
+    for path in _DEFLECTION_DELTA_DELIVERY_MIGRATIONS:
+        await conn.execute(path.read_text(encoding="utf-8"))
+
+
+async def _cleanup_delta_delivery_scope_rows(conn: Any, accounts: tuple[str, ...]) -> None:
+    await conn.execute(
+        "DELETE FROM content_ops_deflection_reports WHERE account_id = ANY($1::text[])",
+        list(accounts),
+    )
+
+
+async def _insert_delta_delivery_fixture(
+    conn: Any,
+    *,
+    account_id: str,
+    current_request_id: str,
+    baseline_request_id: str,
+    current_email: str,
+) -> None:
+    delta = _delta_read_payload()["delta"]
+    await conn.execute(
+        """
+        INSERT INTO content_ops_deflection_reports (
+            account_id,
+            request_id,
+            snapshot,
+            artifact,
+            paid,
+            paid_at,
+            delivery_email
+        )
+        VALUES
+            ($1, $2, '{}'::jsonb, '{}'::jsonb, true, NOW(), $4),
+            ($1, $3, '{}'::jsonb, '{}'::jsonb, true, NOW(), 'baseline@example.com')
+        ON CONFLICT (account_id, request_id) DO UPDATE
+        SET paid = EXCLUDED.paid,
+            paid_at = EXCLUDED.paid_at,
+            delivery_email = EXCLUDED.delivery_email
+        """,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        current_email,
+    )
+    await conn.execute(
+        """
+        INSERT INTO content_ops_deflection_deltas (
+            account_id,
+            current_request_id,
+            baseline_request_id,
+            delta
+        )
+        VALUES ($1, $2, $3, $4::jsonb)
+        ON CONFLICT (account_id, current_request_id, baseline_request_id)
+        DO UPDATE SET delta = EXCLUDED.delta
+        """,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+        json.dumps(delta),
+    )
+    await conn.execute(
+        """
+        INSERT INTO content_ops_deflection_delta_deliveries (
+            account_id,
+            current_request_id,
+            baseline_request_id,
+            delivery_email
+        )
+        VALUES ($1, $2, $3, 'queued-address-should-not-send@example.com')
+        ON CONFLICT (account_id, current_request_id, baseline_request_id)
+        DO UPDATE SET delivery_status = 'pending',
+                      delivery_error = NULL,
+                      provider_message_id = NULL,
+                      delivered_at = NULL,
+                      updated_at = NOW()
+        """,
+        account_id,
+        current_request_id,
+        baseline_request_id,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delta_delivery_scope_live_postgres_drains_only_target_account_current_request() -> None:
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_MIGRATION_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_MIGRATION_TEST_DATABASE_URL not set")
+
+    target_account = "acct-delta-scope-target"
+    other_account = "acct-delta-scope-other"
+    target_current = "current-delta-scope-target"
+    target_baseline = "baseline-delta-scope-target"
+    other_current = "current-delta-scope-other"
+    other_baseline = "baseline-delta-scope-other"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _apply_delta_delivery_migrations(conn)
+        await _cleanup_delta_delivery_scope_rows(conn, (target_account, other_account))
+        await _insert_delta_delivery_fixture(
+            conn,
+            account_id=target_account,
+            current_request_id=target_current,
+            baseline_request_id=target_baseline,
+            current_email="target-buyer@example.com",
+        )
+        await _insert_delta_delivery_fixture(
+            conn,
+            account_id=target_account,
+            current_request_id=other_current,
+            baseline_request_id=target_baseline,
+            current_email="same-account-other-current@example.com",
+        )
+        await _insert_delta_delivery_fixture(
+            conn,
+            account_id=other_account,
+            current_request_id=target_current,
+            baseline_request_id=other_baseline,
+            current_email="other-account-same-current@example.com",
+        )
+
+        sender = _Sender()
+        summary = await send_pending_deflection_delta_deliveries(
+            conn,
+            sender=sender,
+            config=DeflectionDeltaDeliveryConfig(
+                from_email="reports@example.com",
+                limit=10,
+                dry_run=False,
+            ),
+            account_id=target_account,
+            current_request_id=target_current,
+        )
+
+        rows = await conn.fetch(
+            """
+            SELECT account_id,
+                   current_request_id,
+                   baseline_request_id,
+                   delivery_status,
+                   provider_message_id,
+                   delivered_at
+            FROM content_ops_deflection_delta_deliveries
+            WHERE account_id = ANY($1::text[])
+            ORDER BY account_id, current_request_id, baseline_request_id
+            """,
+            [target_account, other_account],
+        )
+    finally:
+        await _cleanup_delta_delivery_scope_rows(conn, (target_account, other_account))
+        await conn.close()
+
+    assert summary.scanned == 1
+    assert summary.sent == 1
+    assert summary.failed == 0
+    assert summary.deferred == 0
+    assert [request.to_email for request in sender.requests] == ["target-buyer@example.com"]
+    by_key = {
+        (row["account_id"], row["current_request_id"], row["baseline_request_id"]): row
+        for row in rows
+    }
+    target = by_key[(target_account, target_current, target_baseline)]
+    assert target["delivery_status"] == "delivered"
+    assert target["provider_message_id"] == "resend:email-123"
+    assert target["delivered_at"] is not None
+
+    same_account_other_current = by_key[(target_account, other_current, target_baseline)]
+    assert same_account_other_current["delivery_status"] == "pending"
+    assert same_account_other_current["provider_message_id"] is None
+    assert same_account_other_current["delivered_at"] is None
+
+    other_account_same_current = by_key[(other_account, target_current, other_baseline)]
+    assert other_account_same_current["delivery_status"] == "pending"
+    assert other_account_same_current["provider_message_id"] is None
+    assert other_account_same_current["delivered_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_rejects_empty_payload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    payload = _delta_read_payload()
+    delta = payload["delta"]
+    assert isinstance(delta, dict)
+    delta["items"] = []
+    summary = delta["summary"]
+    assert isinstance(summary, dict)
+    for key in list(summary):
+        summary[key] = 0
+    pool = _DeltaPool([_delta_delivery_row(delta=json.dumps(delta))])
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+
+    summary_result = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+    )
+
+    assert summary_result.failed == 1
+    assert summary_result.deferred == 0
+    assert sender.requests == []
+    failed_query, failed_args = pool.execute_calls[-1]
+    assert "delivery_status = 'failed'" in failed_query
+    assert failed_args[-1] == "empty_delta_payload"
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "delta_delivery_empty_payload"
+    assert incidents[-1]["current_request_id"] == "current-report"
+    assert incidents[-1]["baseline_request_id"] == "baseline-report"
+    assert "empty_delta_payload" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_send_pending_deflection_delta_deliveries_logs_and_incidents_on_send_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _DeltaPool([_delta_delivery_row()])
+    sender = _Sender(error=RuntimeError("resend down"))
+    caplog.set_level("ERROR", logger="atlas.content_ops_deflection_delivery")
+
+    summary = await send_pending_deflection_delta_deliveries(
+        pool,
+        sender=sender,
+        config=DeflectionDeltaDeliveryConfig(
+            from_email="reports@example.com",
+            limit=5,
+            dry_run=False,
+        ),
+    )
+
+    assert summary.failed == 1
+    assert summary.deferred == 0
+    failed_query, failed_args = pool.execute_calls[-1]
+    assert "delivery_status = 'failed'" in failed_query
+    assert failed_args[-1] == "RuntimeError: resend down"
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "delta_delivery_send_failed"
+    assert incidents[-1]["error"] == "RuntimeError: resend down"
+    assert "Deflection delta delivery failed" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -289,7 +1017,9 @@ async def test_delivery_worker_sends_pending_paid_report_link(
     claim_query, claim_args = pool.fetch_calls[0]
     assert "FOR UPDATE SKIP LOCKED" in claim_query
     assert "SET delivery_status = 'sending'" in claim_query
-    assert claim_args == (20,)
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in claim_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in claim_query
+    assert claim_args == (20, None, None)
     assert len(sender.requests) == 1
     confirm_query, confirm_args = pool.fetchrow_calls[0]
     assert "RETURNING d.request_id" in confirm_query
@@ -324,6 +1054,41 @@ async def test_delivery_worker_sends_pending_paid_report_link(
 
 
 @pytest.mark.asyncio
+async def test_delivery_worker_scopes_live_claim_query_to_account_and_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(
+        [
+            _row(
+                account_id="acct-target",
+                request_id="content-ops-target",
+            )
+        ]
+    )
+    sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-fake-bytes")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+        account_id="acct-target",
+        request_id="content-ops-target",
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 1
+    claim_query, claim_args = pool.fetch_calls[0]
+    assert "FOR UPDATE SKIP LOCKED" in claim_query
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in claim_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in claim_query
+    assert claim_args == (20, "acct-target", "content-ops-target")
+    assert sender.requests[0].campaign_id == (
+        "content_ops_deflection_report:acct-target:content-ops-target"
+    )
+
+
+@pytest.mark.asyncio
 async def test_delivery_worker_renders_model_backed_email_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -350,6 +1115,11 @@ async def test_delivery_worker_renders_model_backed_email_summary(
     assert "How do I export attribution reports?" in request.html_body
     assert "9 repeat tickets" in request.html_body
     assert "$122 estimated handling" in request.html_body
+    assert "Owner: Reporting" in request.html_body
+    assert "Evidence: CSV customer text" in request.html_body
+    assert "Repeated support friction routes to Reporting" in request.html_body
+    assert "Customer vocabulary: export attribution reports, download attribution CSV" in request.html_body
+    assert "Cost basis: this upload / benchmark cost with customer text" in request.html_body
     assert "Create a help-center answer" in request.html_body
     assert "How do I update invoice contacts?" in request.html_body
     assert "How do I invite an auditor?" not in request.html_body
@@ -374,6 +1144,11 @@ async def test_delivery_worker_renders_model_backed_email_summary(
     assert "$16,659 estimated assisted-contact handling" in request.text_body
     assert "Next actions" in request.text_body
     assert "How do I export attribution reports?" in request.text_body
+    assert "Owner: Reporting" in request.text_body
+    assert "Evidence: CSV customer text" in request.text_body
+    assert "Repeated support friction routes to Reporting" in request.text_body
+    assert "Customer vocabulary: export attribution reports, download attribution CSV" in request.text_body
+    assert "Cost basis: this upload / benchmark cost with customer text" in request.text_body
     assert "How do I update invoice contacts?" in request.text_body
     assert "How do I invite an auditor?" not in request.text_body
     assert "Ready to publish" in request.text_body
@@ -626,11 +1401,13 @@ async def test_delivery_worker_renders_pdf_with_lazy_renderer_import(
 
 
 @pytest.mark.asyncio
-async def test_delivery_worker_falls_back_to_link_only_when_pdf_render_fails(
+async def test_delivery_worker_fails_when_paid_pdf_render_fails(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     pool = _Pool([_row()])
     sender = _Sender()
+    caplog.set_level("ERROR", logger="atlas.content_ops_deflection_delivery")
 
     def _raise_pdf(_artifact: Any) -> bytes:
         raise RuntimeError("pdf down")
@@ -643,14 +1420,165 @@ async def test_delivery_worker_falls_back_to_link_only_when_pdf_render_fails(
         config=_config(),
     )
 
-    assert summary.sent == 1
-    request = sender.requests[0]
-    assert request.attachments == ()
-    assert "full report PDF is attached" not in request.html_body
-    assert "full report PDF is attached" not in (request.text_body or "")
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
     update_query, update_args = pool.execute_calls[0]
-    assert "delivery_status = 'delivered'" in update_query
-    assert update_args == ("acct-123", "content-ops-abc123", "resend:email-123")
+    assert "delivery_status = 'failed'" in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_render_failed: RuntimeError: pdf down",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "paid_report_delivery_send_failed"
+    assert incidents[-1]["error"] == update_args[-1]
+    assert "Deflection report PDF render failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_preserves_stale_reclaim_when_paid_pdf_render_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _Pool([_row(previous_delivery_status="sending")])
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+
+    def _raise_pdf(_artifact: Any) -> bytes:
+        raise RuntimeError("pdf down")
+
+    _install_fake_pdf_renderer(monkeypatch, _raise_pdf)
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'sending'" in update_query
+    assert "delivery_status = 'pending'" not in update_query
+    assert "delivery_status = 'failed'" not in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_render_failed: RuntimeError: pdf down",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == (
+        "paid_report_delivery_pdf_render_reclaim_deferred"
+    )
+    assert incidents[-1]["severity"] == "warning"
+    assert incidents[-1]["error"] == update_args[-1]
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_repeated_stale_render_outage_remains_reclaim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([
+        _row(
+            previous_delivery_status="sending",
+            delivery_error="PaidReportPdfRenderError: prior render outage",
+        )
+    ])
+    sender = _Sender()
+
+    def _raise_pdf(_artifact: Any) -> bytes:
+        raise RuntimeError("pdf still down")
+
+    _install_fake_pdf_renderer(monkeypatch, _raise_pdf)
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'sending'" in update_query
+    assert "delivery_status = 'failed'" not in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_render_failed: RuntimeError: pdf still down",
+    )
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_preserves_stale_reclaim_when_paid_pdf_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _Pool([_row(previous_delivery_status="sending")])
+    sender = _Sender()
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'sending'" in update_query
+    assert "delivery_status = 'pending'" not in update_query
+    assert "delivery_status = 'failed'" not in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "PaidReportPdfRenderError: paid_report_pdf_empty",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == (
+        "paid_report_delivery_pdf_render_reclaim_deferred"
+    )
+    assert incidents[-1]["severity"] == "warning"
+    assert incidents[-1]["error"] == update_args[-1]
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_fails_when_paid_pdf_artifact_is_malformed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool = _Pool([_row(artifact=json.dumps(["not", "a", "report"]))])
+    sender = _Sender()
+    caplog.set_level("ERROR", logger="atlas.content_ops_deflection_delivery")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'failed'" in update_query
+    assert update_args == (
+        "acct-123",
+        "content-ops-abc123",
+        "ValueError: paid_report_pdf_missing_artifact",
+    )
+    incidents = _incident_payloads(caplog)
+    assert incidents[-1]["incident_type"] == "paid_report_delivery_send_failed"
+    assert incidents[-1]["error"] == update_args[-1]
 
 
 @pytest.mark.asyncio
@@ -670,7 +1598,40 @@ async def test_delivery_worker_dry_run_does_not_send_or_update() -> None:
     pending_query, pending_args = pool.fetch_calls[0]
     assert "FOR UPDATE SKIP LOCKED" not in pending_query
     assert "WHERE d.delivery_status = 'pending'" in pending_query
-    assert pending_args == (20,)
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in pending_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in pending_query
+    assert pending_args == (20, None, None)
+    assert sender.requests == []
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_scopes_dry_run_selection_to_account_and_request() -> None:
+    pool = _Pool(
+        [
+            _row(
+                account_id="acct-target",
+                request_id="content-ops-target",
+            )
+        ]
+    )
+    sender = _Sender()
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(dry_run=True),
+        account_id="acct-target",
+        request_id="content-ops-target",
+    )
+
+    assert summary.scanned == 1
+    assert summary.dry_run == 1
+    pending_query, pending_args = pool.fetch_calls[0]
+    assert "FOR UPDATE SKIP LOCKED" not in pending_query
+    assert "AND ($2::text IS NULL OR d.account_id = $2)" in pending_query
+    assert "AND ($3::text IS NULL OR d.request_id = $3)" in pending_query
+    assert pending_args == (20, "acct-target", "content-ops-target")
     assert sender.requests == []
     assert pool.execute_calls == []
 
@@ -721,6 +1682,7 @@ async def test_delivery_worker_claim_query_retries_stale_sending_rows() -> None:
     claim_query, _claim_args = pool.fetch_calls[0]
     assert "d.delivery_status = 'pending'" in claim_query
     assert "d.delivery_status = 'sending'" in claim_query
+    assert "d.delivery_status AS previous_delivery_status" in claim_query
     assert f"INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'" in claim_query
 
 
@@ -821,11 +1783,11 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # End-to-end regression for the R8 BLOCKER (real ResendCampaignSender + the
-    # real render->link-only fallback transition): first send carries the PDF
-    # attachment; on re-claim the render fails so the email is link-only -- a
-    # DIFFERENT payload under the SAME idempotency key. A Resend-like client
-    # returns 409 invalid_idempotent_request for that mismatch, and the delivery
-    # path must mark the row delivered (idempotent replay), not failed.
+    # real render->attachment transition): both attempts carry a PDF, but a
+    # regenerated attachment can still differ byte-for-byte under the SAME
+    # idempotency key. A Resend-like client returns 409 invalid_idempotent_request
+    # for that mismatch, and the delivery path must mark the row delivered
+    # (idempotent replay), not failed.
     from extracted_content_pipeline.campaign_sender import (
         ResendCampaignSender,
         ResendSenderConfig,
@@ -870,7 +1832,7 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
         render_calls["n"] += 1
         if render_calls["n"] == 1:
             return b"%PDF-first-render"
-        raise RuntimeError("render failed on reclaim")
+        return b"%PDF-second-render"
 
     _install_fake_pdf_renderer(monkeypatch, _renderer)
     row = _row()
@@ -880,7 +1842,7 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
     )
     assert first.sent == 1 and first.failed == 0
 
-    # Re-claim: render now fails -> link-only -> different payload, same key.
+    # Re-claim: render returns a different PDF payload under the same key.
     second = await send_pending_deflection_report_deliveries(
         _Pool([row]), sender=sender, config=_config()
     )
@@ -888,7 +1850,7 @@ async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_rese
     assert second.failed == 0
     assert len(http.posts) == 2
     assert http.posts[0]["key"] == http.posts[1]["key"]  # same idempotency key
-    assert http.posts[0]["json"] != http.posts[1]["json"]  # attachment vs link-only
+    assert http.posts[0]["json"] != http.posts[1]["json"]  # regenerated attachment
 
 
 @pytest.mark.asyncio

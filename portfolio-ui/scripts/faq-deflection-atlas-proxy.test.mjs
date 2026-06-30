@@ -23,6 +23,7 @@ const ENV = {
 };
 
 const SNAPSHOT = {
+  title: "Resolution Snapshot",
   summary: {
     generated: 3,
     repeat_ticket_count: 12,
@@ -39,6 +40,9 @@ const SNAPSHOT = {
       ticket_count: 12,
       weighted_frequency: 12,
       customer_wording: "billing reset access",
+      owner_lane: "Billing",
+      action_label: "Publish answer",
+      estimated_support_cost: 162,
     },
   ],
   top_blind_spots: [
@@ -46,6 +50,9 @@ const SNAPSHOT = {
       rank: 1,
       question: "Can I change invoice contacts?",
       ticket_count: 3,
+      owner_lane: "Billing",
+      action_label: "Write missing answer",
+      estimated_support_cost: 40.5,
     },
   ],
 };
@@ -411,12 +418,26 @@ await test("snapshot projection only returns known safe fields", async () => {
 await test("snapshot projection accepts missing optional date window fields as null", async () => {
   const result = projectSnapshot(SNAPSHOT);
   assert.equal(result.ok, true);
+  assert.equal(result.snapshot.title, "Resolution Snapshot");
   assert.deepEqual(result.snapshot.summary, {
     ...SNAPSHOT.summary,
     source_date_start: null,
     source_date_end: null,
     source_window_days: null,
   });
+});
+
+await test("snapshot projection falls back for older snapshots without title", async () => {
+  const { title: _title, ...legacySnapshot } = SNAPSHOT;
+  const result = projectSnapshot(legacySnapshot);
+  assert.equal(result.ok, true);
+  assert.equal(result.snapshot.title, "Resolution Snapshot");
+});
+
+await test("snapshot projection rejects malformed snapshot title", async () => {
+  assert.deepEqual(snapshotErrors({ ...SNAPSHOT, title: 42 }), [
+    "snapshot.title must be a non-empty string",
+  ]);
 });
 
 await test("snapshot projection rejects malformed optional date window fields", async () => {
@@ -1083,7 +1104,7 @@ await test("hosted result page renders structured paid dashboard only after unlo
   assert.match(html, /Repeat-ticket workload/);
   assert.match(html, /Top ranked questions/);
   assert.match(html, /Publishable answers/);
-  assert.match(html, /No-proven-answer gaps/);
+  assert.match(html, /Product Gap cards/);
   assert.match(html, /Top customer wording and SEO phrases/);
   assert.match(html, /<strong>12<\/strong>/);
   assert.doesNotMatch(html, /<strong>15<\/strong>/);

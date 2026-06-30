@@ -125,11 +125,21 @@ class _BillingPool:
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
         if "UPDATE content_ops_deflection_reports" in query:
-            account_id, request_id, payment_reference = args
+            (
+                account_id,
+                request_id,
+                payment_reference,
+                checkout_amount_cents,
+                checkout_currency,
+                require_checkout_authorization,
+            ) = args
             marked = await self.store.mark_paid(
                 account_id=str(account_id),
                 request_id=str(request_id),
                 payment_reference=str(payment_reference or ""),
+                checkout_amount_cents=checkout_amount_cents,
+                checkout_currency=str(checkout_currency or ""),
+                require_checkout_authorization=bool(require_checkout_authorization),
             )
             return "UPDATE 1" if marked else "UPDATE 0"
         if "INSERT INTO content_ops_deflection_report_deliveries" in query:
@@ -273,10 +283,33 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
     assert unlocked["faq_result"]["items"][0]["source_ids"]
 
     report_model = await model_route.endpoint(request_id=request_id)
-    assert report_model == unlocked["report_model"]
     assert report_model["schema_version"] == "deflection.v1"
     assert "markdown" not in report_model
     assert "faq_result" not in report_model
+    full_priority_item = next(
+        section
+        for section in unlocked["report_model"]["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+    hosted_priority_item = next(
+        section
+        for section in report_model["sections"]
+        if section["id"] == "priority_fix_queue"
+    )["data"]["items"][0]
+    assert set(full_priority_item["routing_signals"]) == {
+        "group",
+        "assignee",
+        "tags",
+        "brand",
+        "organization",
+        "product_area",
+        "custom_product_area",
+    }
+    assert hosted_priority_item["routing_signals"] == {
+        "tags": [],
+        "product_area": [],
+        "custom_product_area": [],
+    }
 
 
 @pytest.mark.asyncio

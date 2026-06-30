@@ -169,6 +169,7 @@ type DeflectionReportProjectionNestedCollection = {
 type DeflectionSnapshotProjectionContract = {
   schema_version: "deflection.v1";
   top_level_fields: [
+    "title",
     "summary",
     "top_questions",
     "locked_questions",
@@ -180,10 +181,12 @@ type DeflectionSnapshotProjectionContract = {
 
 type DeflectionSnapshotProjectionField = {
   field: string;
-  source_section: string;
+  source?: "snapshot_constant";
+  source_section?: string;
   source_collection?: "rows" | "items";
-  snapshot_safe_fields: string[];
+  snapshot_safe_fields?: string[];
   projected_fields: string[];
+  default?: string;
   full_answer_fields?: string[];
   preview_fields?: string[];
   policy?: "scoped_resolution_evidence_only";
@@ -218,9 +221,10 @@ Renderer rules:
   body is the separately gated `snapshot.teaser.full_answer`.
 - Treat the backend `snapshot_projection` contract as the source map from free
   Snapshot fields to paid report sections. In particular, `top_blind_spots` is
-  sourced from `top_unresolved_repeats.items` and may project only `rank`,
-  `question`, and `ticket_count`. Use this contract before changing frontend
-  snapshot parsers; do not infer the projection from demo fixtures.
+  sourced from `top_unresolved_repeats.items` and projects only the fields
+  named by the generated contract, including display-safe owner/action preview
+  labels. Use this contract before changing frontend snapshot parsers; do not
+  infer the projection from demo fixtures.
 - Treat `complete_evidence` as export-only. It summarizes export size and should
   not be inlined into web/PDF surfaces or hosted result-page payloads.
 - Breaking shape changes bump `schema_version`; additive sections should keep
@@ -262,9 +266,10 @@ The action-oriented paid sections are a work queue, not a full ticket archive:
   bounded surface (`pdf_limit`, currently 10) while `result_page_limit` tells
   the result page to render only the top three.
 - Action rows include deterministic `priority_score` and bounded
-  `priority_drivers` enum labels. The score is based on repeat volume,
-  benchmark support cost, answer evidence status, confidence, reopened-ticket
-  signal, and CSAT signal; it is not produced by an LLM or cloud classifier.
+  `priority_drivers` enum labels. The score keeps benchmark support cost as the
+  dominant axis, then uses bounded opportunity, status/resolvability,
+  confidence, and combined reopened-ticket/CSAT signals as secondary pressure;
+  it is not produced by an LLM or cloud classifier.
 - Action rows also carry paid-only `repeat_key`, `cluster_id`,
   `identity_basis`, and `identity_confidence` fields. Use those for
   cross-run/monthly-delta matching; `rank` and evidence-export `question_id`
@@ -351,6 +356,7 @@ canonical projection returned in `result.snapshot` from gated
 
 ```ts
 type DeflectionSnapshot = {
+  title: string;
   summary: {
     generated: number;
     drafted_answer_count: number;
@@ -373,6 +379,9 @@ type DeflectionSnapshotQuestion = {
   ticket_count: number;
   weighted_frequency: number;
   customer_wording: string;
+  owner_lane: string;
+  action_label: string;
+  estimated_support_cost: number;
 };
 
 type DeflectionSnapshotLockedQuestion = {
@@ -384,6 +393,9 @@ type DeflectionSnapshotBlindSpot = {
   rank: number;
   question: string;
   ticket_count: number;
+  owner_lane: string;
+  action_label: string;
+  estimated_support_cost: number;
 };
 
 type DeflectionSnapshotTeaser = {
@@ -424,8 +436,10 @@ This shape intentionally excludes paid deliverable fields:
 - no vocabulary term mappings
 - no locked question text; `locked_questions` contains only rank and raw
   ticket count
-- no blind-spot paid action metadata; `top_blind_spots` contains only rank,
-  question, and raw ticket count from unresolved repeated questions
+- no paid action metadata; Snapshot repeat rows contain only display-safe
+  owner/action labels and estimated row cost, never raw routing signals,
+  evidence, Jira templates, source IDs, product-gap summary prose, or full
+  recommendation prose
 
 The teaser is fail-closed: only scoped `resolution_evidence` FAQ items are
 eligible. Preview entries never include answer body text.
@@ -556,10 +570,14 @@ type TicketFAQSearchResponse = {
 - Use `items` for ranked cards or sections, and `markdown` for the full report.
 - For `faq_deflection_report`, render top-level `markdown` as the deliverable.
   Use `summary` for proof badges and `faq_result` for drill-down cards.
-- For unpaid deflection results, render only `DeflectionSnapshot.summary`,
-  `DeflectionSnapshot.top_questions`, `DeflectionSnapshot.locked_questions`,
-  `DeflectionSnapshot.top_blind_spots`, and `DeflectionSnapshot.teaser`. Do not
-  infer answer text, evidence, or source IDs from the snapshot.
+- For unpaid deflection results, render only `DeflectionSnapshot.title`,
+  `DeflectionSnapshot.summary`, `DeflectionSnapshot.top_questions`,
+  `DeflectionSnapshot.locked_questions`, `DeflectionSnapshot.top_blind_spots`,
+  and `DeflectionSnapshot.teaser`. Do not infer answer text, evidence, or
+  source IDs from the snapshot.
+- `owner_lane` and `action_label` on Snapshot repeat rows are teaser-safe
+  display labels. Use the paid report for detailed routing evidence, Jira
+  templates, source trails, and full recommended-action prose.
 - Show `source_count`, `ticket_source_count`, and `output_checks` as proof badges.
 - Show `answer_evidence_status` near steps. `draft_needs_review` means the
   system found repeated customer wording but no uploaded resolution evidence, so

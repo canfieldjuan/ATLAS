@@ -8,6 +8,7 @@ import {
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{5,160}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEFAULT_ATLAS_TIMEOUT_MS = 5000;
+const DEFAULT_DEFLECTION_SNAPSHOT_TITLE = "Resolution Snapshot";
 const INVALID_FIELD = Symbol("invalid-field");
 
 function clean(value) {
@@ -138,12 +139,18 @@ const QUESTION_FIELD_READERS = {
   ticket_count: requiredNumber,
   weighted_frequency: requiredNumber,
   customer_wording: requiredString,
+  owner_lane: requiredString,
+  action_label: requiredString,
+  estimated_support_cost: requiredNumber,
 };
 
 const BLIND_SPOT_FIELD_READERS = {
   rank: requiredNumber,
   question: requiredString,
   ticket_count: requiredNumber,
+  owner_lane: requiredString,
+  action_label: requiredString,
+  estimated_support_cost: requiredNumber,
 };
 
 function projectFields(record, fields, readers, errorMessage, errors) {
@@ -191,6 +198,11 @@ function projectSnapshot(snapshot) {
     errors.push("snapshot.top_blind_spots must be an array");
   }
   if (errors.length > 0) return { ok: false, errors };
+  const title =
+    snapshot.title === undefined ? DEFAULT_DEFLECTION_SNAPSHOT_TITLE : requiredString(snapshot.title);
+  if (title === INVALID_FIELD) {
+    errors.push("snapshot.title must be a non-empty string");
+  }
 
   assertContractReaders(
     DEFLECTION_SNAPSHOT_SUMMARY_FIELDS,
@@ -250,6 +262,7 @@ function projectSnapshot(snapshot) {
   return {
     ok: true,
     snapshot: {
+      title,
       summary: Object.fromEntries(
         Object.entries(summary).filter(
           ([field, value]) => value !== null || optionalSummaryFields.has(field),

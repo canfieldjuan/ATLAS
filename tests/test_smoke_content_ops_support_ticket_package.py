@@ -213,6 +213,86 @@ def test_support_ticket_package_skips_private_comment_objects_in_history() -> No
     assert package.warnings == ()
 
 
+def test_support_ticket_package_private_only_comments_stay_index_metadata() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-private",
+        "subject": "Login ticket index row",
+        "comments": [
+            {"body": "PRIVATE customer cannot find login", "public": False},
+        ],
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert len(source_material) == 1
+    assert source_material[0]["text"] == "Login ticket index row"
+    assert "PRIVATE customer cannot find login" not in source_material[0]["text"]
+    assert source_material[0]["support_ticket_evidence_tier"] == (
+        "csv_index_metadata_only"
+    )
+
+
+def test_support_ticket_package_scopes_resolution_evidence_tier_per_row() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "zd-resolved",
+            "subject": "How do I reset my password?",
+            "description": "How do I reset my password?",
+            "resolution": "Use the password reset page.",
+        },
+        {
+            "ticket_id": "zd-open",
+            "subject": "Where is the login button?",
+            "description": "Where is the login button?",
+        },
+    ])
+
+    source_rows = {
+        row["source_id"]: row
+        for row in package.inputs["source_material"]
+    }
+
+    assert package.metadata["support_ticket_evidence_tier"] == (
+        "csv_full_thread_resolution_evidence"
+    )
+    assert source_rows["zd-resolved"]["support_ticket_evidence_tier"] == (
+        "csv_full_thread_resolution_evidence"
+    )
+    assert source_rows["zd-open"]["support_ticket_evidence_tier"] == (
+        "csv_customer_text"
+    )
+
+
+def test_support_ticket_package_sanitizes_object_shaped_routing_metadata() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-routing",
+        "subject": "Where is the login button?",
+        "description": "Where is the login button?",
+        "group": {
+            "id": 47,
+            "name": "Authentication Support",
+            "email": "group-private@example.com",
+        },
+        "assignee": {
+            "id": 91,
+            "name": "Riley Agent",
+            "email": "agent-private@example.com",
+        },
+        "tags": [
+            {"id": 1, "name": "login", "email": "tag-private@example.com"},
+            "mfa",
+        ],
+    }])
+
+    source_row = package.inputs["source_material"][0]
+
+    assert source_row["group"] == "Authentication Support"
+    assert source_row["assignee"] == "Riley Agent"
+    assert source_row["tags"] == ["login", "mfa"]
+    assert "group-private@example.com" not in str(source_row)
+    assert "agent-private@example.com" not in str(source_row)
+    assert "tag-private@example.com" not in str(source_row)
+
+
 def test_support_ticket_package_smoke_keeps_date_window_for_dated_rows(
     tmp_path: Path,
 ) -> None:
@@ -376,7 +456,27 @@ def test_support_ticket_package_smoke_marks_ticket_index_only_export_gap_list_on
     assert summary["question_like_ticket_count"] == 0
     assert summary["support_ticket_resolution_evidence_present"] is False
     assert summary["support_ticket_resolution_evidence_count"] == 0
+    assert summary["metadata"]["support_ticket_evidence_tier"] == "csv_index_metadata_only"
     assert summary["faq_questions"] == []
+
+
+def test_support_ticket_package_preserves_zendesk_routing_metadata() -> None:
+    rows = load_source_rows_from_file(
+        _PROVIDER_FIXTURE_DIR / "zendesk_full_thread_export.csv",
+        file_format="csv",
+    )
+
+    package = build_support_ticket_input_package(rows)
+    source_rows = package.inputs["source_material"]
+
+    assert package.metadata["support_ticket_evidence_tier"] == (
+        "csv_full_thread_resolution_evidence"
+    )
+    assert source_rows[0]["tags"] == "login;mfa"
+    assert source_rows[0]["support_ticket_evidence_tier"] == (
+        "csv_full_thread_resolution_evidence"
+    )
+    assert "_customer_text_present" not in source_rows[0]
 
 
 def test_support_ticket_package_smoke_reports_measured_outcome_evidence(

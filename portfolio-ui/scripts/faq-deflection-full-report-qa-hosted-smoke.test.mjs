@@ -19,7 +19,7 @@ const requestId = "content-ops-hosted-qa";
 
 const reportModel = {
   schema_version: "deflection.v1",
-  title: "Support Ticket Deflection Report",
+  title: "Resolution Audit",
   summary: { generated: 2 },
   sections: [
     {

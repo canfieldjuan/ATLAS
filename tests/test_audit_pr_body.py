@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +18,7 @@ sys.modules[SPEC.name] = audit_pr_body_module
 SPEC.loader.exec_module(audit_pr_body_module)
 
 audit_pr_body = audit_pr_body_module.audit_pr_body
+is_dependabot_author = audit_pr_body_module.is_dependabot_author
 
 
 def _valid_body(plan: str = "plans/PR-Example.md") -> str:
@@ -169,3 +172,61 @@ def test_slice_phase_after_first_heading_fails(tmp_path: Path) -> None:
     failures = audit_pr_body(body, root=root)
 
     assert any("Slice phase" in failure for failure in failures)
+
+
+def test_dependabot_author_detection() -> None:
+    assert is_dependabot_author("app/dependabot")
+    assert is_dependabot_author("dependabot[bot]")
+    assert is_dependabot_author(" dependabot ")
+    assert not is_dependabot_author("canfieldjuan")
+    assert not is_dependabot_author(None)
+
+
+def test_dependabot_cli_exempts_invalid_body() -> None:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as body_file:
+        body_file.write("Dependabot generated body without the Atlas plan contract.\n")
+        body_path = Path(body_file.name)
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--pr-author",
+                "app/dependabot",
+                str(body_path),
+            ],
+            check=False,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0
+        assert "Dependabot PR body exempt" in result.stdout
+    finally:
+        body_path.unlink(missing_ok=True)
+
+
+def test_normal_author_cli_rejects_same_invalid_body() -> None:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as body_file:
+        body_file.write("Dependabot generated body without the Atlas plan contract.\n")
+        body_path = Path(body_file.name)
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--pr-author",
+                "canfieldjuan",
+                str(body_path),
+            ],
+            check=False,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 1
+        assert "AGENTS.md section 1b contract" in result.stdout
+    finally:
+        body_path.unlink(missing_ok=True)

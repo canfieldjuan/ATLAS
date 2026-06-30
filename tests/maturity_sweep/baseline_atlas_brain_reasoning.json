@@ -37,16 +37,18 @@
   "atlas_brain/reasoning/cross_vendor_selection.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 12,
       "NO_RAISES_TESTS": 1,
       "UNGUARDED_INDEX": 3
     },
-    "score": 13
+    "score": 61
   },
   "atlas_brain/reasoning/ecosystem.py": {
     "counts": {
+      "INTERNAL_MOCK": 3,
       "UNGUARDED_INDEX": 1
     },
-    "score": 2
+    "score": 14
   },
   "atlas_brain/reasoning/entity_locks.py": {
     "counts": {
@@ -70,10 +72,17 @@
   "atlas_brain/reasoning/evidence_engine.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 14,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 12
+    "score": 68
+  },
+  "atlas_brain/reasoning/graph.py": {
+    "counts": {
+      "INTERNAL_MOCK": 16
+    },
+    "score": 64
   },
   "atlas_brain/reasoning/knowledge_graph.py": {
     "counts": {
@@ -113,10 +122,11 @@
   },
   "atlas_brain/reasoning/patterns.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 8
+    "score": 12
   },
   "atlas_brain/reasoning/phrase_metadata.py": {
     "counts": {
@@ -125,11 +135,24 @@
     },
     "score": 8
   },
-  "atlas_brain/reasoning/semantic_cache.py": {
+  "atlas_brain/reasoning/port_adapters.py": {
     "counts": {
-      "HAPPY_PATH_TESTS": 1
+      "INTERNAL_MOCK": 1
     },
     "score": 4
+  },
+  "atlas_brain/reasoning/producers.py": {
+    "counts": {
+      "INTERNAL_MOCK": 2
+    },
+    "score": 8
+  },
+  "atlas_brain/reasoning/semantic_cache.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "INTERNAL_MOCK": 3
+    },
+    "score": 16
   },
   "atlas_brain/reasoning/single_pass_prompts/battle_card_reasoning.py": {
     "counts": {

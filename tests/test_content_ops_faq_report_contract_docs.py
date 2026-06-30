@@ -125,8 +125,9 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     assert set(payload["faq_result"]) == set(producer_payload["faq_result"])
     assert payload["report_model"] == producer_payload["report_model"]
     assert payload["markdown"] == producer_payload["markdown"]
-    assert payload["summary"]["drafted_answer_count"] == 1
-    assert payload["summary"]["no_proven_answer_count"] == 1
+    assert payload["summary"]["drafted_answer_count"] == 4
+    assert payload["summary"]["no_proven_answer_count"] == 3
+    assert payload["summary"]["ticket_source_count"] == 450
     assert payload["summary"]["generated"] == len(payload["faq_result"]["items"])
     assert payload["summary"]["output_checks"] == {
         "condensed": True,
@@ -155,12 +156,14 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
 
     assert payload == producer_payload
     assert set(payload) == {
+        "title",
         "summary",
         "top_questions",
         "locked_questions",
         "top_blind_spots",
         "teaser",
     }
+    assert payload["title"] == "Resolution Snapshot"
     assert set(payload["summary"]) == {
         "generated",
         "drafted_answer_count",
@@ -182,11 +185,21 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
             "ticket_count",
             "weighted_frequency",
             "customer_wording",
+            "owner_lane",
+            "action_label",
+            "estimated_support_cost",
         }
     for question in payload["locked_questions"]:
         assert set(question) == {"rank", "ticket_count"}
     for blind_spot in payload["top_blind_spots"]:
-        assert set(blind_spot) == {"rank", "question", "ticket_count"}
+        assert set(blind_spot) == {
+            "rank",
+            "question",
+            "ticket_count",
+            "owner_lane",
+            "action_label",
+            "estimated_support_cost",
+        }
     assert set(payload["teaser"]) == {"full_answer", "previews"}
     if payload["teaser"]["full_answer"] is not None:
         assert set(payload["teaser"]["full_answer"]) == {
@@ -221,6 +234,11 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
     assert "source_ids" not in encoded
     assert "evidence_quotes" not in encoded
     assert "representative_phrasing" not in encoded
+    assert "routing_signals" not in encoded
+    assert "jira_template" not in encoded
+    assert "top_evidence" not in encoded
+    assert "product_gap_summary" not in encoded
+    assert "recommended_action" not in encoded
     assert "steps" not in json.dumps(payload["top_questions"], sort_keys=True)
     assert "steps" not in json.dumps(payload["top_blind_spots"], sort_keys=True)
 
@@ -291,7 +309,8 @@ def test_content_ops_faq_deflection_checkout_contract_pins_paid_handoff() -> Non
         "csv_file: File;",
         "do not expose raw support-ticket CSVs through a",
         "POST /content-ops/deflection-reports/{request_id}/paid",
-        "`amount_total`: exactly one ATLAS-configured allowed amount in cents",
+        "`amount_total`: exactly the amount ATLAS authorized for this report",
+        "persisted amount and currency",
         'currency: "usd"',
         "The portfolio does not call an authed \"mark paid\" endpoint",
         "Stripe webhook -> ATLAS verifies -> ATLAS marks paid",

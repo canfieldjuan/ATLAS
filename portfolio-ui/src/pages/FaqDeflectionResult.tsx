@@ -14,6 +14,7 @@ import type { DeflectionResultPageSnapshot } from "@/types/deflectionSnapshot";
 const SNAPSHOT_STORAGE_PREFIX = "atlas:deflection:snapshot:";
 const CHECKOUT_ENDPOINT = "/api/content-ops/deflection/checkout";
 const CHECKOUT_SOURCE = "content_ops_deflection_report";
+const DEFAULT_SNAPSHOT_TITLE = "Resolution Snapshot";
 const LIGHT_REPEAT_TICKET_THRESHOLD = 10;
 const FORBIDDEN_SNAPSHOT_KEYS = new Set([
   "answer",
@@ -114,7 +115,14 @@ function parseSnapshot(value: unknown): SnapshotState {
   const sourceDateStart = optionalNullableString(value.summary, "source_date_start");
   const sourceDateEnd = optionalNullableString(value.summary, "source_date_end");
   const sourceWindowDays = optionalNullableNumber(value.summary, "source_window_days");
+  const title =
+    value.title === undefined
+      ? DEFAULT_SNAPSHOT_TITLE
+      : typeof value.title === "string"
+        ? value.title.trim()
+        : "";
   if (
+    !title ||
     generated === null ||
     repeatTicketCount === null ||
     draftedAnswerCount === null ||
@@ -137,15 +145,21 @@ function parseSnapshot(value: unknown): SnapshotState {
     const rank = finiteNumber(item.rank);
     const ticketCount = finiteNumber(item.ticket_count);
     const weightedFrequency = finiteNumber(item.weighted_frequency);
+    const estimatedSupportCost = finiteNumber(item.estimated_support_cost);
     const question = typeof item.question === "string" ? item.question.trim() : "";
     const customerWording =
       typeof item.customer_wording === "string" ? item.customer_wording.trim() : "";
+    const ownerLane = typeof item.owner_lane === "string" ? item.owner_lane.trim() : "";
+    const actionLabel = typeof item.action_label === "string" ? item.action_label.trim() : "";
     if (
       rank === null ||
       ticketCount === null ||
       weightedFrequency === null ||
+      estimatedSupportCost === null ||
       !question ||
-      !customerWording
+      !customerWording ||
+      !ownerLane ||
+      !actionLabel
     ) {
       return null;
     }
@@ -155,6 +169,9 @@ function parseSnapshot(value: unknown): SnapshotState {
       ticket_count: ticketCount,
       weighted_frequency: weightedFrequency,
       customer_wording: customerWording,
+      owner_lane: ownerLane,
+      action_label: actionLabel,
+      estimated_support_cost: estimatedSupportCost,
     };
   });
 
@@ -165,11 +182,28 @@ function parseSnapshot(value: unknown): SnapshotState {
     if (!isRecord(item)) return null;
     const rank = finiteNumber(item.rank);
     const ticketCount = finiteNumber(item.ticket_count);
+    const estimatedSupportCost = finiteNumber(item.estimated_support_cost);
     const question = typeof item.question === "string" ? item.question.trim() : "";
-    if (rank === null || ticketCount === null || !question) {
+    const ownerLane = typeof item.owner_lane === "string" ? item.owner_lane.trim() : "";
+    const actionLabel = typeof item.action_label === "string" ? item.action_label.trim() : "";
+    if (
+      rank === null ||
+      ticketCount === null ||
+      estimatedSupportCost === null ||
+      !question ||
+      !ownerLane ||
+      !actionLabel
+    ) {
       return null;
     }
-    return { rank, question, ticket_count: ticketCount };
+    return {
+      rank,
+      question,
+      ticket_count: ticketCount,
+      owner_lane: ownerLane,
+      action_label: actionLabel,
+      estimated_support_cost: estimatedSupportCost,
+    };
   });
 
   if (topBlindSpots.some((item) => item === null)) {
@@ -179,6 +213,7 @@ function parseSnapshot(value: unknown): SnapshotState {
   return {
     status: "available",
     snapshot: {
+      title,
       summary: {
         generated,
         repeat_ticket_count: repeatTicketCount,
@@ -242,6 +277,8 @@ export default function FaqDeflectionResult() {
       .filter((phrase) => phrase.length > 0)
       .slice(0, 5);
   }, [snapshotState]);
+  const resultTitle =
+    snapshotState.status === "available" ? snapshotState.snapshot.title : DEFAULT_SNAPSHOT_TITLE;
 
   const resolutionEvidence = useMemo(() => {
     if (snapshotState.status !== "available") return null;
@@ -329,7 +366,7 @@ export default function FaqDeflectionResult() {
               Locked report
             </div>
             <h1 className="max-w-3xl text-4xl font-bold tracking-normal text-white md:text-5xl">
-              FAQ deflection report is ready for review
+              {resultTitle} is ready for review
             </h1>
             <p className="mt-5 max-w-3xl text-lg leading-8 text-surface-200/85">
               The free snapshot shows only repeated customer questions and

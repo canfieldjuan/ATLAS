@@ -33,6 +33,21 @@ REQUIRED_SECTIONS = (
     "Verification",
     "Diff size",
 )
+DEPENDABOT_AUTHORS = frozenset(
+    {
+        "app/dependabot",
+        "dependabot",
+        "dependabot[bot]",
+    }
+)
+
+
+def is_dependabot_author(author: str | None) -> bool:
+    """Return true for Dependabot identities seen in GitHub PR events."""
+
+    if author is None:
+        return False
+    return author.strip() in DEPENDABOT_AUTHORS
 
 
 def audit_pr_body(body: str, *, root: Path = ROOT) -> list[str]:
@@ -98,6 +113,11 @@ def audit_pr_body(body: str, *, root: Path = ROOT) -> list[str]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--pr-author",
+        default="",
+        help="GitHub PR author login; Dependabot PRs are exempt",
+    )
     parser.add_argument("body_file", help="path to a file holding the PR body")
     args = parser.parse_args(argv)
 
@@ -106,6 +126,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"pr body audit: body file not found: {body_path}", file=sys.stderr)
         return 2
     body = body_path.read_text(encoding="utf-8", errors="replace")
+
+    if is_dependabot_author(args.pr_author):
+        print("pr body audit: PASS (Dependabot PR body exempt)")
+        return 0
 
     failures = audit_pr_body(body)
     if failures:

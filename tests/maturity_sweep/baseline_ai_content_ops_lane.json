@@ -20,10 +20,17 @@
   },
   "atlas_brain/_content_ops_reasoning.py": {
     "counts": {
+      "INTERNAL_MOCK": 2,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 1
     },
-    "score": 7
+    "score": 15
+  },
+  "atlas_brain/_content_ops_zendesk_credentials.py": {
+    "counts": {
+      "INTERNAL_MOCK": 12
+    },
+    "score": 48
   },
   "atlas_brain/api/content_ops_brand_voice_profiles.py": {
     "counts": {
@@ -54,9 +61,10 @@
   },
   "atlas_brain/mcp/content_ops_marketer_verify_server.py": {
     "counts": {
+      "INTERNAL_MOCK": 49,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 5
+    "score": 201
   },
   "scripts/audit_content_ops_marketing_claims.py": {
     "counts": {

@@ -27,9 +27,10 @@ def test_deflection_frontend_contract_types_include_backend_projection_fields() 
     assert "source_date_end?: string | null;" in rendered
     assert "source_window_days?: number | null;" in rendered
     assert "ticket_count: number;" in rendered
+    assert "title: string;" in rendered
     assert (
-        'export type DeflectionResultPageSnapshot = Pick<DeflectionSnapshot, "summary" | '
-        '"top_questions" | "top_blind_spots">;'
+        'export type DeflectionResultPageSnapshot = Pick<DeflectionSnapshot, "title" | '
+        '"summary" | "top_questions" | "top_blind_spots">;'
     ) in rendered
     assert "unknown" not in rendered
     assert "any" not in rendered
@@ -40,8 +41,8 @@ def test_deflection_api_contract_metadata_includes_result_page_projection_fields
 
     assert 'DEFLECTION_SNAPSHOT_SCHEMA_VERSION = "deflection.v1"' in rendered
     assert (
-        'DEFLECTION_RESULT_PAGE_SNAPSHOT_FIELDS = Object.freeze(["summary", '
-        '"top_questions", "top_blind_spots"])'
+        'DEFLECTION_RESULT_PAGE_SNAPSHOT_FIELDS = Object.freeze(["title", '
+        '"summary", "top_questions", "top_blind_spots"])'
     ) in rendered
     assert (
         'DEFLECTION_SNAPSHOT_SUMMARY_FIELDS = Object.freeze(["generated", '
@@ -50,11 +51,13 @@ def test_deflection_api_contract_metadata_includes_result_page_projection_fields
     assert '"non_repeat_ticket_count"' in rendered
     assert (
         'DEFLECTION_SNAPSHOT_TOP_QUESTION_FIELDS = Object.freeze(["rank", '
-        '"question", "ticket_count", "weighted_frequency", "customer_wording"])'
+        '"question", "ticket_count", "weighted_frequency", "customer_wording", '
+        '"owner_lane", "action_label", "estimated_support_cost"])'
     ) in rendered
     assert (
         'DEFLECTION_SNAPSHOT_TOP_BLIND_SPOT_FIELDS = Object.freeze(["rank", '
-        '"question", "ticket_count"])'
+        '"question", "ticket_count", "owner_lane", "action_label", '
+        '"estimated_support_cost"])'
     ) in rendered
     assert "source_ids" not in rendered
 
@@ -75,6 +78,16 @@ def test_deflection_report_model_types_include_backend_projection_fields() -> No
     assert "status_counts: Record<string, number>;" in rendered
     assert "support_cost_basis: DeflectionReportPriorityFixQueueSupportCostBasis;" in rendered
     assert "csat_signal: DeflectionReportPriorityFixQueueCsatSignal;" in rendered
+    assert "product_gap_summary?: string;" in rendered
+    assert "customer_vocabulary?: string[];" in rendered
+    assert "cost_period?: string;" in rendered
+    assert "cost_confidence?: string;" in rendered
+    assert "owner_category?: string;" in rendered
+    assert "jira_template?: DeflectionReportPriorityFixQueueJiraTemplate;" in rendered
+    assert "export type DeflectionReportPriorityFixQueueJiraTemplate" in rendered
+    assert "  owner_category: string;" in rendered
+    assert "  product_gap_summary: string;" in rendered
+    assert "  customer_vocabulary: string[];" in rendered
     assert "top_evidence: DeflectionReportPriorityFixQueueTopEvidence[];" in rendered
     assert "review_key: string;" in rendered
     assert "suppression_reason: string;" in rendered
@@ -82,6 +95,8 @@ def test_deflection_report_model_types_include_backend_projection_fields() -> No
     assert "source_date_window: DeflectionReportSupportTaxSourceDateWindow | null;" in rendered
     assert "term_mappings: DeflectionReportQuestionDetailsTermMappings[];" in rendered
     assert "outcome_diagnostics: DeflectionReportQuestionOutcomeDiagnostics | null;" in rendered
+    assert "evidence_tier?: string;" in rendered
+    assert "routing_signals?: DeflectionReportPriorityFixQueueRoutingSignals;" in rendered
     assert "source_file?: DeflectionReportSourceFileData;" in rendered
     assert "outcome_diagnostics?: DeflectionReportOutcomeDiagnosticsData;" in rendered
     assert "export type DeflectionStructuredReport" in rendered
@@ -97,13 +112,25 @@ def test_deflection_report_model_types_publish_hosted_safe_allowlists() -> None:
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        '["rank", "question", "status", "owner_lane", "confidence", '
+        '["rank", "question", "status", "owner_lane", "owner_category", "evidence_tier", '
+        '"routing_signals", "product_gap_summary", "customer_vocabulary", '
+        '"cost_period", "cost_confidence", "jira_template", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal"]'
     ) in rendered
     assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_JIRA_TEMPLATE_HOSTED_CONSUMER_SAFE_FIELDS = '
+        '["recommended_title", "question", "owner_lane", "owner_category", "product_gap_summary", '
+        '"ticket_count", "estimated_support_cost", "cost_period", "cost_confidence", '
+        '"evidence_tier", "customer_vocabulary", "recommended_action"]'
+    ) in rendered
+    assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = '
         '["status", "csat_present_count", "negative_csat_ticket_count", "numeric_average"]'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = '
+        '["tags", "product_area", "custom_product_area"]'
     ) in rendered
     assert (
         "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "
@@ -129,6 +156,11 @@ def test_deflection_report_model_types_publish_hosted_field_shapes() -> None:
     assert '"status_mix": "scalar",' in rendered
     assert '"suppressed_repeat_review_queue": {' in rendered
     assert '"reason_counts": "record",' in rendered
+    assert '"priority_fix_queue.items": {' in rendered
+    assert '"customer_vocabulary": "scalar_array",' in rendered
+    assert '"jira_template": "object",' in rendered
+    assert '"priority_fix_queue.items.jira_template": {' in rendered
+    assert '"cost_confidence": "scalar",' in rendered
 
 
 def test_deflection_report_model_api_contract_includes_backend_projection_fields() -> None:
@@ -173,9 +205,17 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        'Object.freeze(["rank", "question", "status", "owner_lane", "confidence", '
+        'Object.freeze(["rank", "question", "status", "owner_lane", "owner_category", "evidence_tier", '
+        '"routing_signals", "product_gap_summary", "customer_vocabulary", '
+        '"cost_period", "cost_confidence", "jira_template", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal"])'
+    ) in rendered
+    assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_JIRA_TEMPLATE_HOSTED_CONSUMER_SAFE_FIELDS = '
+        'Object.freeze(["recommended_title", "question", "owner_lane", "owner_category", "product_gap_summary", '
+        '"ticket_count", "estimated_support_cost", "cost_period", "cost_confidence", '
+        '"evidence_tier", "customer_vocabulary", "recommended_action"])'
     ) in rendered
     assert (
         'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_CSAT_SIGNAL_HOSTED_CONSUMER_SAFE_FIELDS = '
@@ -183,12 +223,18 @@ def test_deflection_report_model_api_contract_publishes_hosted_safe_allowlists()
         '"numeric_average"])'
     ) in rendered
     assert (
+        'DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_ROUTING_SIGNALS_HOSTED_CONSUMER_SAFE_FIELDS = '
+        'Object.freeze(["tags", "product_area", "custom_product_area"])'
+    ) in rendered
+    assert (
         "DEFLECTION_REPORT_PRIORITY_FIX_QUEUE_ITEMS_TOP_EVIDENCE_HOSTED_CONSUMER_SAFE_FIELDS = "
         "Object.freeze([])"
     ) in rendered
     assert (
         'DEFLECTION_REPORT_SUPPRESSED_REPEAT_REVIEW_QUEUE_ITEMS_HOSTED_CONSUMER_SAFE_FIELDS = '
-        'Object.freeze(["rank", "question", "status", "owner_lane", "confidence", '
+        'Object.freeze(["rank", "question", "status", "owner_lane", "owner_category", "evidence_tier", '
+        '"routing_signals", "product_gap_summary", "customer_vocabulary", '
+        '"cost_period", "cost_confidence", "jira_template", "confidence", '
         '"recommended_action", "ticket_count", "estimated_support_cost", '
         '"priority_score", "priority_drivers", "csat_signal", "review_key", '
         '"suppression_reason", "suppression_reason_label"])'
@@ -251,8 +297,11 @@ def test_generated_deflection_api_contracts_are_enrolled_in_product_surface_mani
     manifest = json.loads(DEFLECTION_PRODUCT_SURFACE_MANIFEST.read_text(encoding="utf-8"))
     manifest_files = set(manifest["files"])
 
-    assert str(MOD["DEFAULT_API_OUTPUT"].relative_to(ROOT)) in manifest_files
-    assert str(MOD["DEFAULT_REPORT_MODEL_API_OUTPUT"].relative_to(ROOT)) in manifest_files
+    assert MOD["DEFAULT_API_OUTPUT"].relative_to(ROOT).as_posix() in manifest_files
+    assert (
+        MOD["DEFAULT_REPORT_MODEL_API_OUTPUT"].relative_to(ROOT).as_posix()
+        in manifest_files
+    )
 
 
 def test_deflection_frontend_contract_types_check_rejects_stale_output(tmp_path) -> None:
@@ -399,8 +448,13 @@ def test_deflection_frontend_contract_types_check_accepts_generated_output(tmp_p
 
 def test_deflection_frontend_contract_types_fail_closed_on_unmapped_field() -> None:
     contract = MOD["deflection_report_model_contract_shape"]()
-    contract["snapshot_projection"]["fields"][0]["projected_fields"] = [
-        *contract["snapshot_projection"]["fields"][0]["projected_fields"],
+    summary_field = next(
+        field
+        for field in contract["snapshot_projection"]["fields"]
+        if field["field"] == "summary"
+    )
+    summary_field["projected_fields"] = [
+        *summary_field["projected_fields"],
         "new_backend_only_metric",
     ]
 
@@ -414,8 +468,13 @@ def test_deflection_frontend_contract_types_fail_closed_on_unmapped_field() -> N
 
 def test_deflection_frontend_contract_types_reject_unknown_optional_field() -> None:
     contract = MOD["deflection_report_model_contract_shape"]()
-    contract["snapshot_projection"]["fields"][0]["optional_projected_fields"] = [
-        *contract["snapshot_projection"]["fields"][0]["optional_projected_fields"],
+    summary_field = next(
+        field
+        for field in contract["snapshot_projection"]["fields"]
+        if field["field"] == "summary"
+    )
+    summary_field["optional_projected_fields"] = [
+        *summary_field["optional_projected_fields"],
         "not_actually_projected",
     ]
 

@@ -1,13 +1,16 @@
 """Stripe billing endpoints: checkout, portal, status, webhook."""
 
 import logging
+import re
 import time
 import uuid as _uuid
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.params import Depends as DependsMarker
 from pydantic import BaseModel
 
 from ..auth.dependencies import AuthUser, require_auth
@@ -16,6 +19,9 @@ from ..content_ops_deflection_incidents import emit_deflection_paid_funnel_incid
 from ..content_ops_deflection_reconciliation import record_paid_report_missing
 from ..storage.database import get_db_pool
 from extracted_content_pipeline.deflection_report_access import (
+    DELTA_ENTITLEMENT_ACTIVE_STATUSES,
+    DeflectionReportAccessRecord,
+    DeflectionReportArtifactStore,
     PostgresDeflectionReportArtifactStore,
 )
 
@@ -52,6 +58,10 @@ LLM_PLAN_LIMITS = {
 
 PRICE_TO_PLAN = {}  # populated at module init from config
 STRIPE_API_VERSION = "2026-05-27.dahlia"
+DEFLECTION_DELTA_SUBSCRIPTION_SOURCE = "content_ops_deflection_delta_subscription"
+_UUID_TEXT_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 def _init_price_map():
@@ -160,6 +170,16 @@ def _get_stripe():
     return _configure_stripe_module(stripe, cfg.stripe_secret_key)
 
 
+def _billing_db_pool() -> Any:
+    return get_db_pool()
+
+
+def _resolve_billing_db_pool(pool: Any) -> Any:
+    if isinstance(pool, DependsMarker):
+        return _billing_db_pool()
+    return pool
+
+
 # -- Request/Response schemas --
 
 PLAN_NAME_TO_CONFIG_KEY = {
@@ -206,10 +226,14 @@ class BillingStatus(BaseModel):
 # -- Endpoints --
 
 @router.post("/checkout", response_model=CheckoutResponse)
-async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require_auth)):
+async def create_checkout(
+    req: CheckoutRequest,
+    user: AuthUser = Depends(require_auth),
+    pool: Any = Depends(_billing_db_pool),
+):
     """Create a Stripe Checkout session for plan upgrade."""
     stripe = _get_stripe()
-    pool = get_db_pool()
+    pool = _resolve_billing_db_pool(pool)
     acct_uuid = _uuid.UUID(user.account_id)
     user_uuid = _uuid.UUID(user.user_id)
 
@@ -236,6 +260,8 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
         ]
         if v
     }
+    delta_price_ids = set(_configured_deflection_delta_price_ids())
+    valid_prices.update(delta_price_ids)
     if valid_prices and price_id not in valid_prices:
         raise HTTPException(status_code=400, detail="Invalid price ID")
 
@@ -272,13 +298,22 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
     if not req.cancel_url:
         raise HTTPException(status_code=400, detail="cancel_url is required")
 
+    checkout_metadata = {"account_id": str(user.account_id)}
+    session_params: dict[str, Any] = {}
+    if price_id in delta_price_ids:
+        checkout_metadata = {
+            **checkout_metadata,
+            "source": DEFLECTION_DELTA_SUBSCRIPTION_SOURCE,
+        }
+        session_params["subscription_data"] = {"metadata": checkout_metadata}
+
     session = stripe.checkout.Session.create(
         customer=customer_id,
         mode="subscription",
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=req.success_url,
         cancel_url=req.cancel_url,
-        metadata={"account_id": str(user.account_id)},
+        metadata=checkout_metadata,
         idempotency_key=_stripe_checkout_idempotency_key(
             account_id=str(user.account_id),
             user_id=str(user.user_id),
@@ -287,19 +322,24 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
             cancel_url=req.cancel_url,
         ),
         timeout=10,
+        **session_params,
     )
 
     return CheckoutResponse(checkout_url=session.url)
 
 
 @router.post("/portal", response_model=PortalResponse)
-async def create_portal(req: PortalRequest, user: AuthUser = Depends(require_auth)):
+async def create_portal(
+    req: PortalRequest,
+    user: AuthUser = Depends(require_auth),
+    pool: Any = Depends(_billing_db_pool),
+):
     """Create a Stripe Customer Portal session."""
     if user.role not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="Only account owner/admin can manage billing")
 
     stripe = _get_stripe()
-    pool = get_db_pool()
+    pool = _resolve_billing_db_pool(pool)
 
     customer_id = await pool.fetchval(
         "SELECT stripe_customer_id FROM saas_accounts WHERE id = $1",
@@ -318,9 +358,12 @@ async def create_portal(req: PortalRequest, user: AuthUser = Depends(require_aut
 
 
 @router.get("/status", response_model=BillingStatus)
-async def billing_status(user: AuthUser = Depends(require_auth)):
+async def billing_status(
+    user: AuthUser = Depends(require_auth),
+    pool: Any = Depends(_billing_db_pool),
+):
     """Get current billing status for the account."""
-    pool = get_db_pool()
+    pool = _resolve_billing_db_pool(pool)
     row = await pool.fetchrow(
         """
         SELECT plan, plan_status, asin_limit, trial_ends_at, stripe_customer_id
@@ -343,7 +386,10 @@ async def billing_status(user: AuthUser = Depends(require_auth)):
 # -- Stripe Webhook --
 
 @webhook_router.post("/webhooks/stripe")
-async def stripe_webhook(request: Request):
+async def stripe_webhook(
+    request: Request,
+    pool: Any = Depends(_billing_db_pool),
+):
     """Handle Stripe webhook events."""
     cfg = settings.saas_auth
     if not cfg.stripe_secret_key:
@@ -374,7 +420,7 @@ async def stripe_webhook(request: Request):
         logger.warning("Stripe webhook signature verification failed: %s", e)
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    pool = get_db_pool()
+    pool = _resolve_billing_db_pool(pool)
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
@@ -391,6 +437,7 @@ async def stripe_webhook(request: Request):
 
     event_type = event.type
     obj = event.data.object
+    event_created = _stripe_event_created(event)
 
     account_id = None
 
@@ -409,6 +456,22 @@ async def stripe_webhook(request: Request):
                     meta,
                     event_type=event_type,
                     event_created=getattr(event, "created", None),
+                )
+        elif _is_deflection_delta_subscription_source(obj) or (
+            _deflection_delta_price_id_from_object(obj) is not None
+        ):
+            if _stripe_text(obj, "payment_status") == "paid":
+                account_id = await _handle_deflection_delta_invoice_lifecycle(
+                    pool,
+                    obj,
+                    stripe_subscription_status="active",
+                    stripe_event_created=event_created,
+                )
+            else:
+                logger.warning(
+                    "Deflection delta checkout completed before funds were available: session=%s payment_status=%s",
+                    _stripe_text(obj, "id") or "<missing>",
+                    _stripe_text(obj, "payment_status") or "<missing>",
                 )
         else:
             account_id = await _handle_checkout_completed(pool, obj)
@@ -449,16 +512,46 @@ async def stripe_webhook(request: Request):
         )
 
     elif event_type == "invoice.paid":
-        account_id = await _handle_invoice_paid(pool, obj)
+        if _deflection_delta_price_id_from_object(obj) is not None:
+            account_id = await _handle_deflection_delta_invoice_lifecycle(
+                pool,
+                obj,
+                stripe_subscription_status="active",
+                stripe_event_created=event_created,
+            )
+        else:
+            account_id = await _handle_invoice_paid(pool, obj)
 
     elif event_type == "invoice.payment_failed":
-        account_id = await _handle_invoice_failed(pool, obj)
+        if _deflection_delta_price_id_from_object(obj) is not None:
+            account_id = await _handle_deflection_delta_invoice_lifecycle(
+                pool,
+                obj,
+                stripe_subscription_status="past_due",
+                stripe_event_created=event_created,
+            )
+        else:
+            account_id = await _handle_invoice_failed(pool, obj)
 
-    elif event_type == "customer.subscription.updated":
-        account_id = await _handle_subscription_updated(pool, obj)
+    elif event_type in {"customer.subscription.created", "customer.subscription.updated"}:
+        if (
+            event_type == "customer.subscription.created"
+            and _deflection_delta_price_id_from_object(obj) is None
+        ):
+            account_id = None
+        else:
+            account_id = await _handle_subscription_updated(
+                pool,
+                obj,
+                stripe_event_created=event_created,
+            )
 
     elif event_type == "customer.subscription.deleted":
-        account_id = await _handle_subscription_deleted(pool, obj)
+        account_id = await _handle_subscription_deleted(
+            pool,
+            obj,
+            stripe_event_created=event_created,
+        )
 
     # Log event -- pass dict for JSONB column, add ::jsonb cast for asyncpg
     import json
@@ -678,7 +771,8 @@ async def _handle_content_ops_deflection_report_checkout_completed(
             session_id,
         )
         return
-    if not _deflection_checkout_amount_is_valid(session):
+    paid_terms = _deflection_checkout_paid_terms(session)
+    if paid_terms is None:
         await emit_deflection_paid_funnel_incident_alert(
             logger,
             incident_type="paid_report_checkout_terms_mismatch",
@@ -696,12 +790,30 @@ async def _handle_content_ops_deflection_report_checkout_completed(
         )
         return
 
-    marked = await PostgresDeflectionReportArtifactStore(pool=pool).mark_paid(
+    paid_amount_cents, paid_currency, allowed_cents = paid_terms
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+    marked = await store.mark_paid(
         account_id=account_id_text,
         request_id=request_id,
         payment_reference=session_id or None,
+        checkout_amount_cents=paid_amount_cents,
+        checkout_currency=paid_currency,
+        require_checkout_authorization=len(allowed_cents) > 1,
     )
     if not marked:
+        record = await store.get_artifact_record(
+            account_id=account_id_text,
+            request_id=request_id,
+        )
+        if record is not None:
+            await _emit_deflection_checkout_authorized_terms_mismatch(
+                record,
+                event_type=event_type,
+                session_id=session_id,
+                paid_amount_cents=paid_amount_cents,
+                paid_currency=paid_currency,
+            )
+            return
         age = _event_age_seconds(event_created)
         grace = int(
             getattr(
@@ -1081,16 +1193,53 @@ async def _handle_content_ops_deflection_report_dispute_closed(
         request_id=request_id,
         payment_reference=restore_reference,
     )
+    delta_delivery_result = await _requeue_content_ops_deflection_delta_deliveries(
+        pool,
+        account_id=account_id_text,
+        request_id=request_id,
+    )
     logger.warning(
         "Deflection report access restored after Stripe dispute win: "
-        "event_type=%s account=%s request=%s payment_reference=%s object=%s delivery=%s",
+        "event_type=%s account=%s request=%s payment_reference=%s object=%s delivery=%s delta_delivery=%s",
         event_type,
         account_id_text,
         request_id,
         payment_reference or "<missing>",
         _stripe_text(obj, "id") or "<missing>",
         delivery_result,
+        delta_delivery_result,
     )
+
+
+async def _requeue_content_ops_deflection_delta_deliveries(
+    pool: Any,
+    *,
+    account_id: str,
+    request_id: str,
+) -> str:
+    result = await pool.execute(
+        """
+        UPDATE content_ops_deflection_delta_deliveries
+        SET delivery_status = 'pending',
+            delivery_error = NULL,
+            updated_at = NOW()
+        WHERE account_id = $1
+          AND (current_request_id = $2 OR baseline_request_id = $2)
+          AND (
+                delivery_status IN ('pending', 'sending')
+             OR (
+                    delivery_status = 'failed'
+                    AND delivery_error IN (
+                        'source_report_not_paid',
+                        'delta_no_longer_sendable'
+                    )
+                )
+          )
+        """,
+        account_id,
+        request_id,
+    )
+    return str(result)
 
 
 def _content_ops_deflection_revocation_metadata(
@@ -1160,6 +1309,17 @@ def _stripe_int(obj: Any, key: str) -> int | None:
         return None
 
 
+def _stripe_event_created(event: Any) -> int | None:
+    value = getattr(event, "created", None)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
 def _payment_intent_from_payment_event(obj: Any) -> str:
     payment_intent = _stripe_text(obj, "payment_intent")
     if payment_intent:
@@ -1173,6 +1333,195 @@ def _payment_intent_from_payment_event(obj: Any) -> str:
 def _stripe_metadata(obj: Any) -> Mapping[str, Any]:
     metadata = _stripe_object_value(obj, "metadata")
     return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _configured_deflection_delta_price_ids() -> tuple[str, ...]:
+    raw = str(
+        getattr(
+            settings.saas_auth,
+            "stripe_content_ops_deflection_delta_price_ids",
+            "",
+        )
+        or ""
+    )
+    seen: set[str] = set()
+    price_ids: list[str] = []
+    for item in raw.split(","):
+        price_id = item.strip()
+        if not price_id or price_id in seen:
+            continue
+        seen.add(price_id)
+        price_ids.append(price_id)
+    return tuple(price_ids)
+
+
+def _stripe_price_ids_from_object(obj: Any) -> tuple[str, ...]:
+    price_ids: list[str] = []
+
+    def add_price_id(value: Any) -> None:
+        price_id = _stripe_text(value, "id") if not isinstance(value, str) else value
+        if price_id:
+            price_ids.append(price_id)
+
+    direct_price = _stripe_object_value(obj, "price")
+    if direct_price is not None:
+        add_price_id(direct_price)
+
+    items = _stripe_object_value(obj, "items")
+    data = _stripe_object_value(items, "data")
+    if isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray)):
+        for item in data:
+            add_price_id(_stripe_object_value(item, "price"))
+
+    lines = _stripe_object_value(obj, "lines")
+    line_data = _stripe_object_value(lines, "data")
+    if isinstance(line_data, Sequence) and not isinstance(line_data, (str, bytes, bytearray)):
+        for line in line_data:
+            add_price_id(_stripe_object_value(line, "price"))
+            pricing = _stripe_object_value(line, "pricing")
+            price_details = _stripe_object_value(pricing, "price_details")
+            add_price_id(_stripe_object_value(price_details, "price"))
+
+    return tuple(dict.fromkeys(price_ids))
+
+
+def _deflection_delta_price_id_from_object(obj: Any) -> str | None:
+    configured = set(_configured_deflection_delta_price_ids())
+    if not configured:
+        return None
+    for price_id in _stripe_price_ids_from_object(obj):
+        if price_id in configured:
+            return price_id
+    return None
+
+
+def _is_deflection_delta_subscription_source(obj: Any) -> bool:
+    return (
+        _clean_metadata(_stripe_metadata(obj).get("source"))
+        == DEFLECTION_DELTA_SUBSCRIPTION_SOURCE
+    )
+
+
+def _stripe_subscription_id(obj: Any) -> str:
+    subscription_id = _stripe_text(obj, "id")
+    object_type = _stripe_text(obj, "object")
+    if subscription_id.startswith("sub_") or object_type == "subscription":
+        return subscription_id
+    legacy_subscription_id = _stripe_text(obj, "subscription")
+    if legacy_subscription_id:
+        return legacy_subscription_id
+    parent = _stripe_object_value(obj, "parent")
+    subscription_details = _stripe_object_value(parent, "subscription_details")
+    return _stripe_text(subscription_details, "subscription")
+
+
+def _stripe_current_period_end(obj: Any) -> datetime | None:
+    period_end = _stripe_int(obj, "current_period_end")
+    if period_end is None or period_end <= 0 or period_end > 4_102_444_800:
+        return None
+    return datetime.fromtimestamp(period_end, timezone.utc)
+
+
+async def _account_id_for_stripe_object(pool: Any, obj: Any) -> _uuid.UUID | None:
+    meta = _stripe_metadata(obj)
+    account_id_str = _clean_metadata(meta.get("account_id"))
+    if account_id_str:
+        if not _UUID_TEXT_RE.fullmatch(account_id_str):
+            return None
+        return _uuid.UUID(account_id_str)
+    customer_id = _stripe_text(obj, "customer")
+    if not customer_id:
+        return None
+    return await _find_account_by_customer(pool, customer_id)
+
+
+async def _handle_deflection_delta_subscription_lifecycle(
+    pool: Any,
+    subscription: Any,
+    *,
+    stripe_subscription_status: str | None = None,
+    stripe_event_created: int | None = None,
+    store: DeflectionReportArtifactStore | None = None,
+) -> _uuid.UUID | None:
+    price_id = _deflection_delta_price_id_from_object(subscription)
+    if price_id is None:
+        return None
+    subscription_id = _stripe_subscription_id(subscription)
+    if not subscription_id:
+        logger.warning("Deflection delta subscription event missing subscription id")
+        return None
+    account_id = await _account_id_for_stripe_object(pool, subscription)
+    if account_id is None:
+        logger.warning(
+            "Deflection delta subscription event missing account mapping: customer=%s subscription=%s",
+            _stripe_text(subscription, "customer") or "<missing>",
+            subscription_id,
+        )
+        return None
+    status = stripe_subscription_status or _stripe_text(subscription, "status")
+    if not status:
+        logger.warning(
+            "Deflection delta subscription event missing status: account=%s subscription=%s",
+            account_id,
+            subscription_id,
+        )
+        return account_id
+    entitlement_store = store or PostgresDeflectionReportArtifactStore(pool)
+    await entitlement_store.upsert_deflection_delta_entitlement(
+        account_id=str(account_id),
+        stripe_subscription_id=subscription_id,
+        stripe_customer_id=_stripe_text(subscription, "customer") or None,
+        stripe_price_id=price_id,
+        stripe_subscription_status=status,
+        current_period_end=_stripe_current_period_end(subscription),
+        stripe_event_created=stripe_event_created,
+        metadata={
+            "source": "stripe_billing_webhook",
+            "grants_delta_entitlement": status in DELTA_ENTITLEMENT_ACTIVE_STATUSES,
+        },
+    )
+    return account_id
+
+
+async def _handle_deflection_delta_invoice_lifecycle(
+    pool: Any,
+    invoice: Any,
+    *,
+    stripe_subscription_status: str,
+    stripe_event_created: int | None = None,
+    store: DeflectionReportArtifactStore | None = None,
+) -> _uuid.UUID | None:
+    price_id = _deflection_delta_price_id_from_object(invoice)
+    if price_id is None:
+        return None
+    subscription_id = _stripe_subscription_id(invoice)
+    if not subscription_id:
+        logger.warning("Deflection delta invoice event missing subscription id")
+        return None
+    account_id = await _account_id_for_stripe_object(pool, invoice)
+    if account_id is None:
+        logger.warning(
+            "Deflection delta invoice event missing account mapping: customer=%s subscription=%s",
+            _stripe_text(invoice, "customer") or "<missing>",
+            subscription_id,
+        )
+        return None
+    entitlement_store = store or PostgresDeflectionReportArtifactStore(pool)
+    await entitlement_store.upsert_deflection_delta_entitlement(
+        account_id=str(account_id),
+        stripe_subscription_id=subscription_id,
+        stripe_customer_id=_stripe_text(invoice, "customer") or None,
+        stripe_price_id=price_id,
+        stripe_subscription_status=stripe_subscription_status,
+        current_period_end=_stripe_current_period_end(invoice),
+        stripe_event_created=stripe_event_created,
+        metadata={
+            "source": "stripe_billing_invoice_webhook",
+            "grants_delta_entitlement": stripe_subscription_status
+            in DELTA_ENTITLEMENT_ACTIVE_STATUSES,
+        },
+    )
+    return account_id
 
 
 def _log_content_ops_deflection_report_payment_pending(
@@ -1202,6 +1551,12 @@ def _log_content_ops_deflection_report_async_payment_failed(
 
 
 def _deflection_checkout_amount_is_valid(session: Any) -> bool:
+    return _deflection_checkout_paid_terms(session) is not None
+
+
+def _deflection_checkout_paid_terms(
+    session: Any,
+) -> tuple[int, str, tuple[int, ...]] | None:
     cfg = settings.saas_auth
     allowed_cents = _deflection_allowed_checkout_amounts_cents(cfg)
     expected_currency = str(
@@ -1211,17 +1566,56 @@ def _deflection_checkout_amount_is_valid(session: Any) -> bool:
     currency = _stripe_text(session, "currency").lower()
     if not allowed_cents:
         logger.error("Deflection report checkout amount gate is misconfigured")
-        return False
+        return None
     if not expected_currency:
         logger.error("Deflection report checkout currency gate is misconfigured")
-        return False
+        return None
     if currency != expected_currency:
-        return False
+        return None
     try:
         actual_cents = int(amount_total)
     except (TypeError, ValueError):
-        return False
-    return actual_cents in allowed_cents
+        return None
+    if actual_cents not in allowed_cents:
+        return None
+    return actual_cents, currency, allowed_cents
+
+
+async def _emit_deflection_checkout_authorized_terms_mismatch(
+    record: DeflectionReportAccessRecord,
+    *,
+    event_type: str,
+    session_id: str,
+    paid_amount_cents: int,
+    paid_currency: str,
+) -> None:
+    await emit_deflection_paid_funnel_incident_alert(
+        logger,
+        incident_type="paid_report_checkout_terms_mismatch",
+        severity="error",
+        account_id=record.account_id,
+        request_id=record.request_id,
+        event_type=event_type,
+        stripe_session_id=session_id,
+        amount_total=paid_amount_cents,
+        currency=paid_currency,
+        expected_amount_cents=record.checkout_amount_cents,
+        expected_currency=record.checkout_currency,
+        expected_price_variant=record.checkout_price_variant,
+    )
+    logger.warning(
+        "Deflection report checkout ignored: authorized terms mismatch "
+        "account=%s request=%s session=%s paid_amount=%s paid_currency=%s "
+        "expected_amount=%s expected_currency=%s expected_variant=%s",
+        record.account_id,
+        record.request_id,
+        session_id,
+        paid_amount_cents,
+        paid_currency,
+        record.checkout_amount_cents,
+        record.checkout_currency,
+        record.checkout_price_variant,
+    )
 
 
 def _deflection_allowed_checkout_amounts_cents(cfg: Any) -> tuple[int, ...]:
@@ -1309,8 +1703,20 @@ async def _handle_invoice_failed(pool, invoice) -> _uuid.UUID | None:
     return account_id
 
 
-async def _handle_subscription_updated(pool, subscription) -> _uuid.UUID | None:
+async def _handle_subscription_updated(
+    pool,
+    subscription,
+    *,
+    stripe_event_created: int | None = None,
+) -> _uuid.UUID | None:
     """Handle subscription changes (upgrades/downgrades)."""
+    if _deflection_delta_price_id_from_object(subscription) is not None:
+        return await _handle_deflection_delta_subscription_lifecycle(
+            pool,
+            subscription,
+            stripe_event_created=stripe_event_created,
+        )
+
     customer_id = subscription.customer
     account_id = await _find_account_by_customer(pool, customer_id)
     if not account_id:
@@ -1370,8 +1776,21 @@ async def _handle_subscription_updated(pool, subscription) -> _uuid.UUID | None:
     return account_id
 
 
-async def _handle_subscription_deleted(pool, subscription) -> _uuid.UUID | None:
+async def _handle_subscription_deleted(
+    pool,
+    subscription,
+    *,
+    stripe_event_created: int | None = None,
+) -> _uuid.UUID | None:
     """Handle subscription cancellation."""
+    if _deflection_delta_price_id_from_object(subscription) is not None:
+        return await _handle_deflection_delta_subscription_lifecycle(
+            pool,
+            subscription,
+            stripe_subscription_status="canceled",
+            stripe_event_created=stripe_event_created,
+        )
+
     customer_id = subscription.customer
     account_id = await _find_account_by_customer(pool, customer_id)
     if account_id:

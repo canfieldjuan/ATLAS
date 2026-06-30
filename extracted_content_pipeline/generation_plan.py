@@ -26,6 +26,7 @@ from .landing_page_generation import LandingPageGenerationConfig
 from .landing_page_repair_contract import (
     landing_page_quality_repair_attempts_from_inputs,
 )
+from .faq_deflection_report import DEFAULT_DEFLECTION_REPORT_TITLE
 from .quote_card_generation import QuoteCardGenerationConfig
 from .reasoning_policy import (
     NOOP_REASONING_PRESETS,
@@ -582,7 +583,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
         if output == "faq_deflection_report":
             step_config["report_title"] = (
                 _text_input(request.inputs, "deflection_report_title")
-                or "Support Ticket Deflection Report"
+                or DEFAULT_DEFLECTION_REPORT_TITLE
             )
         return GenerationPlanStep(
             output=output,

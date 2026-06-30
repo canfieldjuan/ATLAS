@@ -69,6 +69,7 @@ triage proves otherwise:
 - `paid_report_delivery_missing_email`
 - `paid_report_delivery_no_longer_sendable`
 - `paid_report_delivery_idempotent_replay`
+- `paid_report_delivery_pdf_render_reclaim_deferred`
 - `paid_report_delivery_send_failed`
 
 For these incidents, capture the Stripe event ID, checkout session ID, account

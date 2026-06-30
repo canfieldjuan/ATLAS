@@ -135,6 +135,18 @@ function mockResponse() {
   };
 }
 
+function parseQaObservation(html) {
+  const match = html.match(/data-atlas-deflection-qa-observation="([^"]+)"/);
+  assert.ok(match, "missing result-page QA observation");
+  const decoded = match[1]
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+  return JSON.parse(decoded);
+}
+
 async function withEnv(nextEnv, fn) {
   const previous = {};
   for (const key of Object.keys(nextEnv)) {
@@ -206,6 +218,7 @@ await test("React snapshot type is generated from the backend contract", () => {
     "DEFLECTION_SNAPSHOT_TOP_LEVEL_FIELDS",
     "DeflectionSnapshot",
     "DeflectionResultPageSnapshot",
+    "title: string",
     "ticket_count: number",
     "non_repeat_ticket_count: number",
     "source_date_start\\?: string \\| null",
@@ -214,6 +227,8 @@ await test("React snapshot type is generated from the backend contract", () => {
   ]) {
     assert.match(snapshotTypeSource, new RegExp(marker));
   }
+  assert.match(pageSource, /DEFAULT_SNAPSHOT_TITLE = "Resolution Snapshot"/);
+  assert.match(pageSource, /snapshotState\.snapshot\.title/);
 });
 
 await test("paid result page source renders dashboard sections instead of raw markdown pre", () => {
@@ -227,7 +242,8 @@ await test("paid result page source renders dashboard sections instead of raw ma
     "deflection_evidence.v1",
     "Top ranked questions",
     "Publishable answers",
-    "No-proven-answer gaps",
+    "Product Gap cards",
+    "routeable product friction",
     "Top customer wording and SEO phrases",
   ]) {
     assert.match(resultPageSource, new RegExp(marker));
@@ -321,6 +337,127 @@ await test("paid dashboard uses canonical repeat-ticket count for support tax", 
   assert.match(html, /Can I rename a workspace\?/);
 });
 
+await test("unlocked paid result page renders CSV owner-lane gap card fields", () => {
+  const html = renderResultPage({
+    requestId: "content-ops-owner-lane",
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    report: {
+      ok: true,
+      snapshot: {
+        summary: {
+          generated: 1,
+          repeat_ticket_count: 65,
+          drafted_answer_count: 0,
+          no_proven_answer_count: 1,
+          support_ticket_resolution_evidence_present: false,
+          support_ticket_resolution_evidence_count: 0,
+        },
+        top_questions: [],
+      },
+      artifact_status: "unlocked",
+      artifact: {
+        summary: {
+          generated: 1,
+          repeat_ticket_count: 65,
+        },
+        evidence_export: {
+          schema_version: "deflection_evidence.v1",
+          rows: [],
+          summary: {
+            evidence_row_count: 0,
+            source_id_count: 65,
+          },
+        },
+        report_model: {
+          schema_version: "deflection.v1",
+          sections: [
+            {
+              id: "priority_fix_queue",
+              data: {
+                items: [
+                  {
+                    question: "Where is the login button?",
+                    ticket_count: 65,
+                    estimated_support_cost: 877.5,
+                    owner_lane: "Auth / Product UX",
+                    evidence_tier: "csv_customer_text",
+                    product_gap_summary:
+                      "Repeated support friction routes to Auth / Product UX. 65 support tickets in this upload.",
+                    customer_vocabulary: [
+                      "login button",
+                      "where do I sign in",
+                    ],
+                    cost_period: "batch_upload",
+                    cost_confidence: "benchmark_with_customer_text",
+                    jira_template: {
+                      product_gap_summary:
+                        "Repeated support friction routes to Auth / Product UX. 65 support tickets in this upload.",
+                      recommended_action: "Review login discoverability and create the missing answer.",
+                    },
+                    status: "Needs answer",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        faq_result: {
+          items: [
+            {
+              question: "Where is the login button?",
+              ticket_count: 65,
+              answer_evidence_status: "needs_review",
+              top_evidence: [
+                {
+                  source_id: "zendesk:10422",
+                  evidence_quote: "raw source quote should stay out of cards",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert.match(html, /Product Gap cards/);
+  assert.match(html, /Where is the login button\?/);
+  assert.match(html, /65 tickets/);
+  assert.match(html, /Owner: Auth \/ Product UX/);
+  assert.match(html, /Estimated handling: \$878/);
+  assert.match(html, /Repeated support friction routes to Auth \/ Product UX/);
+  assert.match(html, /Cost basis: this upload \/ benchmark cost with customer text/);
+  assert.match(html, /Evidence: CSV customer text/);
+  assert.match(html, /Customer vocabulary: login button, where do I sign in/);
+  assert.match(html, /Jira handoff/);
+  assert.match(html, /Review login discoverability and create the missing answer/);
+  assert.match(html, /Copy-ready Jira handoff/);
+  assert.match(html, /data-atlas-deflection-jira-handoff/);
+  assert.match(html, /data-atlas-deflection-jira-copy/);
+  assert.match(html, /Issue: Where is the login button\?/);
+  assert.match(html, /Owner lane: Auth \/ Product UX/);
+  assert.match(html, /Impact: 65 repeat tickets/);
+  assert.match(html, /Estimated handling cost: \$878/);
+  assert.match(html, /Cost basis: this upload \/ benchmark cost with customer text/);
+  assert.match(html, /Evidence tier: CSV customer text/);
+  assert.match(html, /Next action: Review login discoverability and create the missing answer/);
+  assert.match(html, /routeable product friction, not exact UI root-cause proof/);
+  assert.match(html, /Download evidence JSON/);
+  assert.match(
+    html,
+    /\/api\/content-ops\/deflection\/evidence-export\?request_id=content-ops-owner-lane/,
+  );
+  assert.deepEqual(parseQaObservation(html).displayed_rows, {
+    ranked_questions: 1,
+    question_details: 1,
+    product_gap_cards: 1,
+    jira_handoffs: 1,
+    seo_targets: 1,
+  });
+  assert.doesNotMatch(html, /zendesk:10422/);
+  assert.doesNotMatch(html, /raw source quote should stay out of cards/);
+});
+
 await test("locked result page does not render paid report-model fields", () => {
   const html = renderResultPage({
     requestId: "content-ops-locked-model",
@@ -354,6 +491,16 @@ await test("locked result page does not render paid report-model fields", () => 
                     steps: ["Hidden paid step"],
                     source_ids: ["zendesk:secret-source"],
                     evidence_quotes: ["customer private evidence quote"],
+                    owner_lane: "Auth / Product UX",
+                    evidence_tier: "csv_customer_text",
+                    product_gap_summary: "Hidden product gap summary",
+                    customer_vocabulary: ["hidden customer vocabulary"],
+                    cost_period: "batch_upload",
+                    cost_confidence: "benchmark_with_customer_text",
+                    jira_template: {
+                      product_gap_summary: "Hidden Jira product gap summary",
+                      recommended_action: "Hidden Jira next action",
+                    },
                   },
                 ],
               },
@@ -364,6 +511,18 @@ await test("locked result page does not render paid report-model fields", () => 
           items: [
             {
               question: "Hidden paid item question",
+              ticket_count: 65,
+              estimated_support_cost: 877.5,
+              owner_lane: "Auth / Product UX",
+              evidence_tier: "csv_customer_text",
+              product_gap_summary: "Hidden fallback product gap summary",
+              customer_vocabulary: ["hidden fallback vocabulary"],
+              cost_period: "batch_upload",
+              cost_confidence: "benchmark_with_customer_text",
+              jira_template: {
+                product_gap_summary: "Hidden fallback Jira summary",
+                recommended_action: "Hidden fallback Jira action",
+              },
               top_evidence: [
                 {
                   source_id: "zendesk:top-evidence-source",
@@ -386,6 +545,23 @@ await test("locked result page does not render paid report-model fields", () => 
     "zendesk:secret-source",
     "customer private evidence quote",
     "Hidden paid item question",
+    "65 tickets",
+    "Owner: Auth / Product UX",
+    "Estimated handling: $878",
+    "Evidence: CSV customer text",
+    "Hidden product gap summary",
+    "hidden customer vocabulary",
+    "Hidden Jira product gap summary",
+    "Hidden Jira next action",
+    "Copy-ready Jira handoff",
+    "data-atlas-deflection-jira-handoff",
+    "data-atlas-deflection-jira-copy",
+    "Owner lane: Auth / Product UX",
+    "Hidden fallback product gap summary",
+    "hidden fallback vocabulary",
+    "Hidden fallback Jira summary",
+    "Hidden fallback Jira action",
+    "benchmark cost with customer text",
     "zendesk:top-evidence-source",
     "private top evidence quote",
   ]) {
@@ -450,8 +626,12 @@ await test("real snapshot page groups bounded customer wording examples", () => 
   const topQuestions = Array.from({ length: 6 }, (_, index) => ({
     rank: index + 1,
     question: `Question ${index + 1}`,
+    ticket_count: 6 - index,
     weighted_frequency: 6 - index,
     customer_wording: `customer phrase ${index + 1}`,
+    owner_lane: "Support Ops",
+    action_label: "Review repeat",
+    estimated_support_cost: (6 - index) * 13.5,
   }));
   const html = renderResultPage({
     requestId: "content-ops-abc123",
@@ -473,11 +653,17 @@ await test("real snapshot page groups bounded customer wording examples", () => 
             rank: 1,
             question: "Can I enable SSO?",
             ticket_count: 4,
+            owner_lane: "Auth / Product UX",
+            action_label: "Write missing answer",
+            estimated_support_cost: 54,
           },
           {
             rank: 2,
             question: "Where are invoice webhooks configured?",
             ticket_count: 3,
+            owner_lane: "Billing",
+            action_label: "Review repeat",
+            estimated_support_cost: 40.5,
           },
         ],
       },
@@ -563,10 +749,15 @@ await test("hosted result page flags absent resolution evidence as gap list only
           {
             rank: 1,
             question: "How do I reset my password?",
+            ticket_count: 3,
             weighted_frequency: 5,
             customer_wording: "Password reset help How do I reset my password?",
+            owner_lane: "Auth / Product UX",
+            action_label: "Write missing answer",
+            estimated_support_cost: 40.5,
           },
         ],
+        top_blind_spots: [],
       },
       artifact_status: "locked",
     },
@@ -628,6 +819,7 @@ await test("hosted result page loads report with configured account when URL omi
         return JSON.stringify(
           calls.length === 1
             ? {
+                title: "Resolution Snapshot",
                 summary: {
                   generated: 1,
                   repeat_ticket_count: 1,
@@ -644,6 +836,9 @@ await test("hosted result page loads report with configured account when URL omi
                     ticket_count: 1,
                     weighted_frequency: 3,
                     customer_wording: "export reports",
+                    owner_lane: "Reporting",
+                    action_label: "Publish answer",
+                    estimated_support_cost: 13.5,
                   },
                 ],
                 top_blind_spots: [],

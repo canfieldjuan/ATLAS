@@ -107,6 +107,28 @@ class SaaSAuthConfig(BaseSettings):
         default="",
         description="Stripe Price ID for the one-time Content Ops FAQ deflection report",
     )
+    stripe_content_ops_deflection_report_partner_amount_cents: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Partner-variant Stripe Checkout amount for the one-time Content Ops FAQ "
+            "deflection report"
+        ),
+    )
+    stripe_content_ops_deflection_report_partner_price_id: str = Field(
+        default="",
+        description=(
+            "Stripe Price ID for the partner-variant one-time Content Ops FAQ "
+            "deflection report"
+        ),
+    )
+    stripe_content_ops_deflection_delta_price_ids: str = Field(
+        default="",
+        description=(
+            "Comma-separated Stripe Price IDs for the monthly Content Ops "
+            "deflection delta subscription. Blank fails closed."
+        ),
+    )
     stripe_content_ops_deflection_report_allowed_amount_cents: str = Field(
         default="",
         description=(
@@ -4038,6 +4060,26 @@ class DeflectionDeliveryConfig(BaseSettings):
     resend_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0, description="Timeout for Resend email send requests")
 
 
+class DeflectionDeltaConfig(BaseSettings):
+    """Paid Content Ops deflection delta automation configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_DEFLECTION_DELTA_", env_file=ENV_FILES, extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable scheduled paid deflection delta generation")
+    cron_expression: str = Field(default="0 8 1 * *", description="Cron expression for monthly deflection delta generation")
+    account_limit: int = Field(default=100, ge=1, le=100, description="Maximum paid-report accounts scanned per run")
+    reports_per_account: int = Field(default=25, ge=1, le=100, description="Maximum recent paid reports scanned per account")
+    entitled_account_ids: str = Field(
+        default="",
+        description=(
+            "Comma-separated account IDs entitled to monthly deflection delta "
+            "generation and delivery. Blank fails closed."
+        ),
+    )
+
+
 class B2BWebhookConfig(BaseSettings):
     """B2B outbound webhook delivery configuration."""
 
@@ -5765,6 +5807,7 @@ class Settings(BaseSettings):
     b2b_watchlist_delivery: B2BWatchlistDeliveryConfig = Field(default_factory=B2BWatchlistDeliveryConfig)
     b2b_report_delivery: B2BReportDeliveryConfig = Field(default_factory=B2BReportDeliveryConfig)
     deflection_delivery: DeflectionDeliveryConfig = Field(default_factory=DeflectionDeliveryConfig)
+    deflection_delta: DeflectionDeltaConfig = Field(default_factory=DeflectionDeltaConfig)
     b2b_webhook: B2BWebhookConfig = Field(default_factory=B2BWebhookConfig)
     crm_event: CRMEventConfig = Field(default_factory=CRMEventConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)

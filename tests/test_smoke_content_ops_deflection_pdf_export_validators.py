@@ -47,7 +47,7 @@ def _report_model() -> dict[str, object]:
     ]
     return {
         "schema_version": "deflection.v1",
-        "title": "Support Ticket Deflection Report",
+        "title": "Resolution Audit",
         "summary": {"generated": 2},
         "sections": [
             {
@@ -211,7 +211,7 @@ def _pdf_bytes() -> bytes:
 
 def _pdf_text() -> str:
     return """
-    Support Ticket Deflection Report
+    Resolution Audit
 
     Support Tax Confirmation
     This report found 8 question-level repeat tickets across 2 ranked questions.
@@ -549,7 +549,7 @@ def test_pdf_export_validator_keeps_action_section_row_cap_observations_enabled(
 
 def test_pdf_export_validator_does_not_treat_body_copy_as_section_end() -> None:
     text = """
-    Support Ticket Deflection Report
+    Resolution Audit
 
     Support Tax Confirmation
     This report found 8 question-level repeat tickets across 2 ranked questions.

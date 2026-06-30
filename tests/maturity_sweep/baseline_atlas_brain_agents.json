@@ -38,13 +38,6 @@
     },
     "score": 3
   },
-  "atlas_brain/agents/graphs/security.py": {
-    "counts": {
-      "HAPPY_PATH_TESTS": 1,
-      "NO_RAISES_TESTS": 1
-    },
-    "score": 7
-  },
   "atlas_brain/agents/graphs/state.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
