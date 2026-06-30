@@ -65,6 +65,7 @@ Reviewer rules triggered: R2, R8, R9, R12, R14.
 - `atlas-churn-ui/package-lock.json`
 - `atlas-churn-ui/package.json`
 - `atlas-churn-ui/postcss.config.js`
+- `atlas-churn-ui/src/components/AccountMovementDrawer.tsx`
 - `atlas-churn-ui/src/components/DataTable.tsx`
 - `atlas-churn-ui/src/components/DiagnosticsQueryControls.tsx`
 - `atlas-churn-ui/src/components/PipelineReviewCompanySignalQueue.tsx`
@@ -136,6 +137,8 @@ Parked hardening: none.
 - `rg -n "focus:outline-none|@tailwind base|@tailwind components|@tailwind utilities|tailwindcss:\\s*\\{\\}" atlas-churn-ui -S || true`: no stale
   Tailwind v3 CSS directives, direct PostCSS `tailwindcss: {}` plugin usage,
   or `focus:outline-none` utilities remained in `atlas-churn-ui`.
+- `rg -n "grid-cols-\[[0-9.]+fr,[0-9.]+fr\]|grid-cols-\[minmax\(0,1fr\),auto\]" atlas-churn-ui/src -S`: no stale top-level comma-separated arbitrary grid values remained.
+- `npm test && npm run build` from `atlas-churn-ui`: passed after the arbitrary grid value migration; Vitest reported 85 files and 681 tests passed; Vite build completed.
 
 ## Estimated diff size
 
@@ -144,9 +147,10 @@ Parked hardening: none.
 | `atlas-churn-ui/package-lock.json` | 1104 |
 | `atlas-churn-ui/package.json` | 3 |
 | `atlas-churn-ui/postcss.config.js` | 2 |
+| `atlas-churn-ui/src/components/AccountMovementDrawer.tsx` | 2 |
 | `atlas-churn-ui/src/components/DataTable.tsx` | 2 |
 | `atlas-churn-ui/src/components/DiagnosticsQueryControls.tsx` | 2 |
-| `atlas-churn-ui/src/components/PipelineReviewCompanySignalQueue.tsx` | 2 |
+| `atlas-churn-ui/src/components/PipelineReviewCompanySignalQueue.tsx` | 8 |
 | `atlas-churn-ui/src/components/SubscriptionModal.tsx` | 12 |
 | `atlas-churn-ui/src/components/report-renderers/SpecializedReportData.tsx` | 2 |
 | `atlas-churn-ui/src/index.css` | 4 |
@@ -158,7 +162,7 @@ Parked hardening: none.
 | `atlas-churn-ui/src/pages/Login.tsx` | 4 |
 | `atlas-churn-ui/src/pages/Onboarding.tsx` | 2 |
 | `atlas-churn-ui/src/pages/Opportunities.tsx` | 6 |
-| `atlas-churn-ui/src/pages/PipelineReview.tsx` | 2 |
+| `atlas-churn-ui/src/pages/PipelineReview.tsx` | 14 |
 | `atlas-churn-ui/src/pages/Prospects.tsx` | 18 |
 | `atlas-churn-ui/src/pages/Report.tsx` | 10 |
 | `atlas-churn-ui/src/pages/Reports.tsx` | 24 |
@@ -167,7 +171,7 @@ Parked hardening: none.
 | `atlas-churn-ui/src/pages/Signup.tsx` | 8 |
 | `atlas-churn-ui/src/pages/VendorTargets.tsx` | 22 |
 | `atlas-churn-ui/src/pages/Vendors.tsx` | 4 |
-| `atlas-churn-ui/src/pages/Watchlists.tsx` | 32 |
+| `atlas-churn-ui/src/pages/Watchlists.tsx` | 34 |
 | `atlas-churn-ui/src/pages/WinLossPredictor.tsx` | 8 |
-| `plans/PR-Atlas-Churn-UI-Tailwind-v4-Migration.md` | 173 |
-| **Total** | **1490** |
+| `plans/PR-Atlas-Churn-UI-Tailwind-v4-Migration.md` | 175 |
+| **Total** | **1514** |

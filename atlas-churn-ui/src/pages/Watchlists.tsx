@@ -4174,7 +4174,7 @@ export default function Watchlists() {
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
+      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-6">
           <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 overflow-hidden">
             <div className="border-b border-slate-700/50 px-4 py-3">

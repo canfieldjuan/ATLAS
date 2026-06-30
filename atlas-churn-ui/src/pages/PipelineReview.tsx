@@ -885,7 +885,7 @@ function WatchlistDeliveryDetailDrawer({
             {actionError ? <span className="text-xs text-rose-300">{actionError}</span> : null}
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[0.95fr,1.05fr]">
+          <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
             <div className="rounded border border-slate-700/50 bg-slate-900/40">
               <div className="border-b border-slate-700/50 px-4 py-3">
                 <h4 className="text-sm font-medium text-white">Current Alert Events</h4>
@@ -1088,7 +1088,7 @@ function CompanySignalGroupDetailDrawer({
             </div>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[0.9fr,1.1fr]">
+          <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
             <div className="rounded border border-slate-700/50 bg-slate-900/40 p-4">
               <h4 className="text-sm font-medium text-white">Source Coverage</h4>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -2372,7 +2372,7 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
           />
         </div>
 
-        <div className="grid gap-4 border-b border-slate-700/50 p-4 xl:grid-cols-[0.9fr,1.1fr]">
+        <div className="grid gap-4 border-b border-slate-700/50 p-4 xl:grid-cols-[0.9fr_1.1fr]">
           <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-sm font-medium text-white">Scheduler</span>
@@ -5724,7 +5724,7 @@ function CostsTab() {
           />
         </div>
 
-        <div className="grid gap-4 p-4 xl:grid-cols-[1.15fr,0.85fr]">
+        <div className="grid gap-4 p-4 xl:grid-cols-[1.15fr_0.85fr]">
           <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
             <div className="border-b border-slate-700/50 px-4 py-3">
               <h3 className="text-sm font-medium text-white">Exact Cache Stages</h3>
@@ -6049,7 +6049,7 @@ function CostsTab() {
               </div>
             )}
 
-              <div className="grid gap-4 p-4 xl:grid-cols-[1.05fr,0.95fr]">
+              <div className="grid gap-4 p-4 xl:grid-cols-[1.05fr_0.95fr]">
                 <div className="space-y-4">
                   <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
                     <div className="flex items-center justify-between gap-3">
@@ -6625,7 +6625,7 @@ function CostsTab() {
         )}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.1fr,0.9fr]">
+      <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-700/50">
             <h2 className="text-sm font-medium text-white">Cost By Operation</h2>

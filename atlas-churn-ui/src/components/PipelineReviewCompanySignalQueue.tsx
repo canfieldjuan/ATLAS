@@ -289,7 +289,7 @@ function ReviewActivitySection({
   formatCompanySignalCode: (value: string | null | undefined) => string
 }) {
   return (
-    <div className="grid gap-4 border-b border-slate-700/50 p-4 xl:grid-cols-[0.9fr,1.1fr]">
+    <div className="grid gap-4 border-b border-slate-700/50 p-4 xl:grid-cols-[0.9fr_1.1fr]">
       <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
         <h3 className="text-sm font-medium text-white">Review Activity</h3>
         {loading ? (
@@ -572,7 +572,7 @@ function QueueSummarySection({
         <StatCard label="Overdue" value={formatNumber(totals?.overdue_pending_groups)} icon={<Clock className="h-4 w-4" />} skeleton={loading} />
       </div>
 
-      <div className="grid gap-4 border-b border-slate-700/50 p-4 xl:grid-cols-[0.95fr,1.05fr]">
+      <div className="grid gap-4 border-b border-slate-700/50 p-4 xl:grid-cols-[0.95fr_1.05fr]">
         <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
           <h3 className="text-sm font-medium text-white">Blocking Reasons</h3>
           <p className="mt-1 text-xs text-slate-500">Why groups are still held in analyst review.</p>
@@ -730,7 +730,7 @@ function GroupsSection({
           </p>
         ) : null}
         {isPendingView ? (
-          <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr),auto]">
+          <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
             <label className="block">
               <span className="mb-1 block text-[11px] uppercase tracking-wide text-slate-500">Review notes</span>
               <textarea
