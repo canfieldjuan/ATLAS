@@ -11,14 +11,12 @@ deflection report example and a derived snapshot example, but the generator's
 the demo handoff outside the producer -> generated artifact -> CI drift gate
 arc.
 
-This slice fixes the root for the ATLAS half by making the existing synthetic
-producer example generator own both committed public demo artifacts: the report
-artifact and the snapshot derived from that same artifact.
-
-The diff is slightly above the 400 LOC soft cap because the generator now owns
-two artifacts and the tests prove both stale and missing failure branches for
-each artifact. Splitting the report check from the snapshot check would leave
-the drift gate only half-proven.
+This slice fixes the remaining ATLAS half by documenting the generated public
+demo artifacts and preserving the legacy scratch-output behavior while the
+generator owns both committed artifacts by default. After catching up with
+`origin/main`, the workflow enrollment and generated artifact expansion are
+already present upstream, so this PR's remaining diff is the docs handoff plus
+the snapshot-only compatibility guard and tests.
 
 ## Scope (this PR)
 
@@ -29,12 +27,12 @@ Slice phase: Workflow/process
    validates both the report artifact and its derived snapshot projection.
 2. Add generator tests for report-output writes, report-output stale/missing
    failures, and the report -> snapshot projection invariant.
-3. Enroll the generated report example in the extracted-pipeline workflow path
-   filter so changes to the ATLAS-owned demo artifact trigger the check.
+3. Document that the frontend deflection report/Snapshot examples are generated
+   from fabricated support-ticket records and should be consumed as generated
+   artifacts.
 
 ### Files touched
 
-- `.github/workflows/extracted_pipeline_checks.yml`
 - `docs/frontend/content_ops_faq_deflection_checkout_contract.md`
 - `docs/frontend/content_ops_faq_report_contract.md`
 - `plans/PR-Deflection-Landing-Demo-Example.md`
@@ -82,9 +80,9 @@ checking or rewriting the tracked report example as a side effect.
   parallel artifact.
 - The legacy `--output` alias is intentionally snapshot-only unless the caller
   explicitly opts into two-artifact mode with `--report-output`.
-- The synthetic fixture remains compact. Portfolio can still render a curated
-  subset in the locked preview; the invariant here is derivation, not section
-  count or marketing density.
+- The synthetic fixture remains fabricated and public-safe. Portfolio can still
+  render a curated subset in the locked preview; the invariant here is
+  derivation, not section count or marketing density.
 
 ## Deferred
 
@@ -100,17 +98,15 @@ Parked hardening: none.
 - Command passed: python scripts/generate_deflection_snapshot_example.py --check; report and snapshot examples current.
 - Command passed: python scripts/generate_deflection_snapshot_example.py --output /tmp/atlas-pr1836-snapshot-only.json; wrote only the snapshot scratch file and did not dirty tracked artifacts.
 - Command passed: python scripts/generate_deflection_snapshot_example.py --check --output /tmp/atlas-pr1836-snapshot-only.json; snapshot scratch file current.
-- Command passed: python -m pytest tests/test_content_ops_faq_deflection_snapshot_example_generator.py tests/test_content_ops_faq_report_contract_docs.py -q -- 16 passed.
-- Command passed: bash scripts/run_extracted_pipeline_checks.sh -- 4958 passed, 15 skipped.
+- Command passed: python -m pytest tests/test_content_ops_faq_deflection_snapshot_example_generator.py tests/test_content_ops_faq_report_contract_docs.py -q -- 17 passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/extracted_pipeline_checks.yml` | 2 |
 | `docs/frontend/content_ops_faq_deflection_checkout_contract.md` | 4 |
 | `docs/frontend/content_ops_faq_report_contract.md` | 4 |
-| `plans/PR-Deflection-Landing-Demo-Example.md` | 116 |
-| `scripts/generate_deflection_snapshot_example.py` | 194 |
-| `tests/test_content_ops_faq_deflection_snapshot_example_generator.py` | 213 |
-| **Total** | **533** |
+| `plans/PR-Deflection-Landing-Demo-Example.md` | 112 |
+| `scripts/generate_deflection_snapshot_example.py` | 21 |
+| `tests/test_content_ops_faq_deflection_snapshot_example_generator.py` | 25 |
+| **Total** | **166** |
