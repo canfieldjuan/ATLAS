@@ -93,6 +93,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum pending delivery rows to process.",
     )
     parser.add_argument(
+        "--account-id",
+        default=_env("ATLAS_DEFLECTION_DELIVERY_ACCOUNT_ID"),
+        help="Optional account_id scope for a one-report proof send.",
+    )
+    parser.add_argument(
+        "--request-id",
+        default=_env("ATLAS_DEFLECTION_DELIVERY_REQUEST_ID"),
+        help="Optional request_id scope for a one-report proof send.",
+    )
+    parser.add_argument(
         "--from-email",
         default=_env(*FROM_EMAIL_ENV),
         help="Transactional From email.",
@@ -202,6 +212,15 @@ def _sender(args: argparse.Namespace) -> Any:
     )
 
 
+def _worker_scope(args: argparse.Namespace) -> dict[str, str]:
+    scope: dict[str, str] = {}
+    if _configured(args.account_id):
+        scope["account_id"] = str(args.account_id).strip()
+    if _configured(args.request_id):
+        scope["request_id"] = str(args.request_id).strip()
+    return scope
+
+
 async def _create_pool(database_url: str) -> Any:
     try:
         import asyncpg  # type: ignore[import-not-found]
@@ -230,6 +249,7 @@ async def _main(argv: list[str] | None = None) -> int:
             pool,
             sender=_sender(args),
             config=_delivery_config(args),
+            **_worker_scope(args),
         )
     finally:
         await pool.close()

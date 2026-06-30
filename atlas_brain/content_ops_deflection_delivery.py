@@ -174,13 +174,19 @@ async def send_pending_deflection_report_deliveries(
     *,
     sender: DeflectionReportDeliverySender,
     config: DeflectionReportDeliveryConfig,
+    account_id: str | None = None,
+    request_id: str | None = None,
 ) -> DeflectionReportDeliverySummary:
     """Send pending paid-report delivery emails and update queue status."""
 
     _validate_config(config)
+    scoped_account_id = _clean(account_id) or None
+    scoped_request_id = _clean(request_id) or None
     rows = await pool.fetch(
         _PENDING_SQL if config.dry_run else _CLAIM_PENDING_SQL,
         int(config.limit),
+        scoped_account_id,
+        scoped_request_id,
     )
     sent = failed = dry_run = 0
     for row in rows:
@@ -1670,6 +1676,8 @@ JOIN content_ops_deflection_reports r
   ON r.account_id = d.account_id
  AND r.request_id = d.request_id
 WHERE d.delivery_status = 'pending'
+  AND ($2::text IS NULL OR d.account_id = $2)
+  AND ($3::text IS NULL OR d.request_id = $3)
 ORDER BY d.created_at
 LIMIT $1
 """
@@ -1682,11 +1690,15 @@ WITH claimed AS (
         d.created_at,
         d.delivery_status AS previous_delivery_status
     FROM content_ops_deflection_report_deliveries d
-    WHERE d.delivery_status = 'pending'
-       OR (
+    WHERE (
+            d.delivery_status = 'pending'
+            OR (
             d.delivery_status = 'sending'
             AND d.updated_at < NOW() - INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'
-       )
+            )
+          )
+      AND ($2::text IS NULL OR d.account_id = $2)
+      AND ($3::text IS NULL OR d.request_id = $3)
     ORDER BY d.created_at
     FOR UPDATE SKIP LOCKED
     LIMIT $1
