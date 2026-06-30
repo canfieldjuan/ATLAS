@@ -173,5 +173,5 @@ Parked hardening: none.
 | `atlas-churn-ui/src/pages/Vendors.tsx` | 4 |
 | `atlas-churn-ui/src/pages/Watchlists.tsx` | 34 |
 | `atlas-churn-ui/src/pages/WinLossPredictor.tsx` | 8 |
-| `plans/PR-Atlas-Churn-UI-Tailwind-v4-Migration.md` | 175 |
-| **Total** | **1514** |
+| `plans/PR-Atlas-Churn-UI-Tailwind-v4-Migration.md` | 177 |
+| **Total** | **1516** |
