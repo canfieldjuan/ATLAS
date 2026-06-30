@@ -706,7 +706,7 @@ function FilterSelect({
         aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="bg-slate-800/50 border border-slate-700/50 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+        className="bg-slate-800/50 border border-slate-700/50 rounded px-2 py-1 text-xs text-white focus:outline-hidden focus:border-cyan-500/50"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>

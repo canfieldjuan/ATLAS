@@ -991,7 +991,7 @@ export default function EvidenceExplorer() {
             onChange={e => handleSearchInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && vendorInput.trim() && selectVendor(vendorInput.trim())}
             placeholder="Search vendor to explore evidence..."
-            className="w-full pl-10 pr-4 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+            className="w-full pl-10 pr-4 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-hidden"
           />
           {showSuggestions && suggestions.length > 0 && (
             <div className="absolute z-20 mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
@@ -1096,7 +1096,7 @@ export default function EvidenceExplorer() {
                       <select
                         value={filterPain}
                         onChange={e => { setFilterPain(e.target.value); setOffset(0) }}
-                        className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+                        className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-slate-200 focus:border-cyan-500 focus:outline-hidden"
                       >
                         <option value="">All</option>
                         {facets.pain_categories.map(c => <option key={c} value={c}>{c}</option>)}
@@ -1111,7 +1111,7 @@ export default function EvidenceExplorer() {
                       <select
                         value={filterSource}
                         onChange={e => { setFilterSource(e.target.value); setOffset(0) }}
-                        className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+                        className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-slate-200 focus:border-cyan-500 focus:outline-hidden"
                       >
                         <option value="">All sources</option>
                         {facets.sources.map(s => <option key={s} value={s}>{s}</option>)}
@@ -1126,7 +1126,7 @@ export default function EvidenceExplorer() {
                       <select
                         value={filterType}
                         onChange={e => { setFilterType(e.target.value); setOffset(0) }}
-                        className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+                        className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-slate-200 focus:border-cyan-500 focus:outline-hidden"
                       >
                         <option value="">All types</option>
                         {facets.witness_types.map(t => <option key={t} value={t}>{t}</option>)}

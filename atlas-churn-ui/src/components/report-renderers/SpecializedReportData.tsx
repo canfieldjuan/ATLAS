@@ -2221,7 +2221,7 @@ function VendorDeepDiveDetail({ items }: { items: VendorDeepDiveViewModel[] }) {
         <select
           value={selected}
           onChange={e => setSelected(Number(e.target.value))}
-          className="bg-slate-800 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-cyan-500"
+          className="bg-slate-800 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-1.5 focus:outline-hidden focus:border-cyan-500"
         >
           {items.map((item, i) => (
             <option key={i} value={i}>

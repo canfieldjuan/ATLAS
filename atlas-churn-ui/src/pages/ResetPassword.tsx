@@ -101,7 +101,7 @@ export default function ResetPassword() {
                   onChange={e => setPassword(e.target.value)}
                   required
                   minLength={8}
-                  className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                  className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
                   placeholder="Min 8 characters"
                 />
               </div>
@@ -114,7 +114,7 @@ export default function ResetPassword() {
                   onChange={e => setConfirm(e.target.value)}
                   required
                   minLength={8}
-                  className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                  className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
                   placeholder="Re-enter password"
                 />
               </div>

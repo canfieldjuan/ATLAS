@@ -155,7 +155,7 @@ export default function Onboarding() {
             value={query}
             onChange={e => handleQueryChange(e.target.value)}
             placeholder="Search by vendor name (e.g. Salesforce, HubSpot, Zendesk)..."
-            className="w-full pl-10 pr-4 py-2.5 bg-slate-800/60 border border-slate-700/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+            className="w-full pl-10 pr-4 py-2.5 bg-slate-800/60 border border-slate-700/50 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
           />
           {searching && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-cyan-400 animate-spin" />}
         </div>

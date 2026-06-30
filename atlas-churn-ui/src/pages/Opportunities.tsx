@@ -1723,21 +1723,21 @@ function CampaignQueue({ company, vendor, refreshKey, onAction }: { company: str
                     value={editFields.subject}
                     onChange={(e) => setEditFields((f) => ({ ...f, subject: e.target.value }))}
                     placeholder="Subject"
-                    className="w-full px-3 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full px-3 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                   />
                   <textarea
                     value={editFields.body}
                     onChange={(e) => setEditFields((f) => ({ ...f, body: e.target.value }))}
                     rows={6}
                     placeholder="Body"
-                    className="w-full px-3 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded text-xs text-slate-200 font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full px-3 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded text-xs text-slate-200 font-mono placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                   />
                   <input
                     type="text"
                     value={editFields.cta}
                     onChange={(e) => setEditFields((f) => ({ ...f, cta: e.target.value }))}
                     placeholder="CTA"
-                    className="w-full px-3 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded text-sm text-cyan-400 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full px-3 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded text-sm text-cyan-400 placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
                   />
                   <div className="flex items-center gap-2">
                     <button

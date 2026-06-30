@@ -569,12 +569,12 @@ export default function VendorTargets() {
           placeholder="Search company..."
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 w-48"
+          className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50 w-48"
         />
         <select
           value={modeFilter}
           onChange={(e) => setModeFilter(e.target.value)}
-          className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-cyan-500/50"
+          className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-hidden focus:border-cyan-500/50"
         >
           <option value="">All modes</option>
           {TARGET_MODES.map(m => (
@@ -608,12 +608,12 @@ export default function VendorTargets() {
               placeholder="Company name *"
               value={form.company_name}
               onChange={(e) => setForm(f => ({ ...f, company_name: e.target.value }))}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
             />
             <select
               value={form.target_mode}
               onChange={(e) => setForm(f => ({ ...f, target_mode: e.target.value }))}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-hidden focus:border-cyan-500/50"
             >
               {TARGET_MODES.map(m => (
                 <option key={m.value} value={m.value}>{m.label}</option>
@@ -623,24 +623,24 @@ export default function VendorTargets() {
               placeholder="Contact name"
               value={form.contact_name}
               onChange={(e) => setForm(f => ({ ...f, contact_name: e.target.value }))}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
             />
             <input
               placeholder="Contact email"
               value={form.contact_email}
               onChange={(e) => setForm(f => ({ ...f, contact_email: e.target.value }))}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
             />
             <input
               placeholder="Contact role (e.g., VP Customer Success)"
               value={form.contact_role}
               onChange={(e) => setForm(f => ({ ...f, contact_role: e.target.value }))}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
             />
             <select
               value={form.tier}
               onChange={(e) => setForm(f => ({ ...f, tier: e.target.value }))}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-hidden focus:border-cyan-500/50"
             >
               {TIERS.map(t => (
                 <option key={t} value={t}>{t}</option>
@@ -650,19 +650,19 @@ export default function VendorTargets() {
               placeholder="Products tracked (comma-separated)"
               value={productsInput}
               onChange={(e) => setProductsInput(e.target.value)}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
             />
             <input
               placeholder="Competitors tracked (comma-separated)"
               value={competitorsInput}
               onChange={(e) => setCompetitorsInput(e.target.value)}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
             />
             <input
               placeholder="Notes"
               value={form.notes}
               onChange={(e) => setForm(f => ({ ...f, notes: e.target.value }))}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500/50"
             />
           </div>
           <div className="flex items-center gap-3 pt-1">

@@ -739,7 +739,7 @@ function GroupsSection({
                 onChange={(event) => onActionNotesChange(event.target.value)}
                 rows={2}
                 placeholder="Capture why this group should be promoted or suppressed."
-                className="w-full rounded border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-cyan-500/60 focus:outline-none"
+                className="w-full rounded border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-cyan-500/60 focus:outline-hidden"
               />
             </label>
             <label className="flex items-center gap-2 self-start rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-xs text-slate-300">

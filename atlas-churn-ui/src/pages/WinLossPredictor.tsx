@@ -501,7 +501,7 @@ export default function WinLossPredictor() {
                 onChange={e => handleSearch(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handlePredict()}
                 placeholder="e.g. Zendesk, Salesforce, HubSpot..."
-                className="w-full pl-10 pr-4 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+                className="w-full pl-10 pr-4 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-hidden"
               />
             </div>
             {showSuggestions && suggestions.length > 0 && (
@@ -530,7 +530,7 @@ export default function WinLossPredictor() {
                   onChange={e => handleSearchB(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handlePredict()}
                   placeholder="e.g. Freshdesk, Intercom..."
-                  className="w-full pl-10 pr-4 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+                  className="w-full pl-10 pr-4 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-hidden"
                 />
               </div>
               {showSuggestionsB && suggestionsB.length > 0 && (
@@ -554,7 +554,7 @@ export default function WinLossPredictor() {
             <select
               value={companySize}
               onChange={e => setCompanySize(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:border-cyan-500 focus:outline-none"
+              className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:border-cyan-500 focus:outline-hidden"
             >
               <option value="">Any size</option>
               <option value="startup">Startup (1-50)</option>
@@ -572,7 +572,7 @@ export default function WinLossPredictor() {
               onChange={e => setIndustry(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handlePredict()}
               placeholder="e.g. fintech, healthcare..."
-              className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+              className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-hidden"
             />
           </div>
         </div>

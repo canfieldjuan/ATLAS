@@ -953,7 +953,7 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
                         value={fullName}
                         onChange={e => setFullName(e.target.value)}
                         required
-                        className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                        className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
                         placeholder="Jane Smith"
                       />
                     </div>
@@ -964,7 +964,7 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
                         value={companyName}
                         onChange={e => setCompanyName(e.target.value)}
                         required
-                        className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                        className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
                         placeholder="Acme Inc."
                       />
                     </div>
@@ -977,7 +977,7 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
                     value={sessionEmail}
                     onChange={e => setSessionEmail(e.target.value)}
                     required
-                    className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                    className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
                     placeholder="you@company.com"
                   />
                 </div>
@@ -989,7 +989,7 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
                     onChange={e => setPassword(e.target.value)}
                     required
                     minLength={8}
-                    className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                    className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
                     placeholder="Min. 8 characters"
                   />
                 </div>
@@ -1197,7 +1197,7 @@ export default function Report() {
                 onChange={e => setEmail(e.target.value)}
                 placeholder="you@company.com"
                 autoComplete="email"
-                className="w-full pl-11 pr-4 py-3 bg-slate-800/80 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/30 transition-colors"
+                className="w-full pl-11 pr-4 py-3 bg-slate-800/80 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/30 transition-colors"
               />
             </div>
 

@@ -765,7 +765,7 @@ export default function BlogReview() {
                       value={notes}
                       onChange={(e) => setNotes(e.target.value)}
                       rows={2}
-                      className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg p-2 text-sm text-slate-200 placeholder-slate-500 resize-none focus:outline-none focus:border-cyan-500/50"
+                      className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg p-2 text-sm text-slate-200 placeholder-slate-500 resize-none focus:outline-hidden focus:border-cyan-500/50"
                       placeholder="Add notes..."
                     />
                     <button
