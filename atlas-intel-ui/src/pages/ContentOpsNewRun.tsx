@@ -1273,7 +1273,7 @@ export default function ContentOpsNewRun() {
             }}
             rows={6}
             spellCheck={false}
-            className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+            className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-hidden"
             placeholder='{"target_account": "Acme", "offer": "Audit"}'
           />
           {landingPageOutputSelected && landingPageInputContracts.length > 0 && (
@@ -1294,7 +1294,7 @@ export default function ContentOpsNewRun() {
                     contract,
                   )
                   const controlClass =
-                    'mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60'
+                    'mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-60'
 
                   return (
                     <label key={contract.key} className="block text-sm">
@@ -1370,7 +1370,7 @@ export default function ContentOpsNewRun() {
                     handleLandingPageRepairAttemptsChange(e.target.value)
                   }
                   disabled={landingPageRepairAttemptDisabled}
-                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {landingPageRepairAttemptValue ===
                     INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE && (
@@ -1430,7 +1430,7 @@ export default function ContentOpsNewRun() {
                       }
                       rows={3}
                       disabled={faqInputsDisabled}
-                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-60"
                       placeholder={faqIntentRulesDisplay.placeholder}
                     />
                   </label>
@@ -1447,7 +1447,7 @@ export default function ContentOpsNewRun() {
                       }
                       rows={4}
                       disabled={faqInputsDisabled}
-                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-60"
                       placeholder={faqDocumentationTermsDisplay.placeholder}
                     />
                   </label>
@@ -1466,7 +1466,7 @@ export default function ContentOpsNewRun() {
                       }
                       rows={4}
                       disabled={faqInputsDisabled}
-                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-60"
                       placeholder={faqRepresentativeTaxonomyTermsDisplay.placeholder}
                     />
                   </label>
@@ -1483,7 +1483,7 @@ export default function ContentOpsNewRun() {
                       }
                       rows={4}
                       disabled={faqInputsDisabled}
-                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-60"
                       placeholder={faqVocabularyGapRulesDisplay.placeholder}
                     />
                   </label>
@@ -1515,7 +1515,7 @@ export default function ContentOpsNewRun() {
                 type="button"
                 onClick={() => ingestionFileInputRef.current?.click()}
                 disabled={ingestionFileLoadState.kind === 'loading'}
-                className="flex items-center justify-center gap-2 rounded-md border border-slate-600 bg-slate-800/70 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 disabled:opacity-50"
+                className="flex items-center justify-center gap-2 rounded-md border border-slate-600 bg-slate-800/70 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-cyan-400 disabled:opacity-50"
               >
                 <FileUp className="h-3.5 w-3.5" />
                 Load JSON/JSONL/CSV
@@ -1573,7 +1573,7 @@ export default function ContentOpsNewRun() {
                   setIngestionSource(e.target.value)
                   markIngestionStale()
                 }}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden"
               />
             </label>
             <label className="flex items-end gap-2 text-sm">
@@ -1625,7 +1625,7 @@ export default function ContentOpsNewRun() {
               }}
               rows={3}
               spellCheck={false}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-hidden"
               placeholder='{"company_name": "Acme", "contact_email": "ops@example.com"}'
             />
           </label>
@@ -1651,7 +1651,7 @@ export default function ContentOpsNewRun() {
               }}
               rows={5}
               spellCheck={false}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-hidden"
               placeholder='[{"company_name": "Acme", "vendor": "HubSpot", "email": "ops@example.com"}]'
             />
           </label>
@@ -1684,7 +1684,7 @@ export default function ContentOpsNewRun() {
                   }))
                   markStale()
                 }}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden"
               />
             </label>
             <label className="block text-sm">
@@ -1703,7 +1703,7 @@ export default function ContentOpsNewRun() {
                   markStale()
                 }}
                 placeholder="(no cap)"
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden"
               />
             </label>
             <label className="block text-sm">
@@ -1717,7 +1717,7 @@ export default function ContentOpsNewRun() {
                   markStale()
                 }}
                 placeholder="(no account cap)"
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden"
               />
               <span className="mt-1 block text-xs text-slate-500">
                 Stops the run if projected account spend would cross this cap.
@@ -1734,7 +1734,7 @@ export default function ContentOpsNewRun() {
                   setAccountUsageBudgetDaysInput(e.target.value)
                   markStale()
                 }}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden"
               />
               <span className="mt-1 block text-xs text-slate-500">
                 Uses account-scoped Content Ops usage for this lookback window.
@@ -1752,7 +1752,7 @@ export default function ContentOpsNewRun() {
                   }))
                   markStale()
                 }}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden"
               >
                 <option value="">Backend default</option>
                 <option value="no_store">No store</option>
@@ -1770,7 +1770,7 @@ export default function ContentOpsNewRun() {
                   setRequest((p) => ({ ...p, ingestionProfile: e.target.value }))
                   markStale()
                 }}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden"
               >
                 {catalog.ingestionProfiles.map((profile) => (
                   <option key={profile} value={profile}>
@@ -2151,7 +2151,7 @@ function ZendeskCredentialCard({
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden"
             placeholder="agent@example.com"
           />
         </label>
@@ -2161,7 +2161,7 @@ function ZendeskCredentialCard({
             type="password"
             value={apiToken}
             onChange={(e) => setApiToken(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden"
             placeholder="Paste token to add or rotate"
           />
         </label>
@@ -2171,7 +2171,7 @@ function ZendeskCredentialCard({
             type="text"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden"
             placeholder="Primary"
           />
         </label>
@@ -2181,7 +2181,7 @@ function ZendeskCredentialCard({
             type="text"
             value={subdomain}
             onChange={(e) => setSubdomain(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden"
             placeholder="acme"
           />
         </label>
@@ -2191,7 +2191,7 @@ function ZendeskCredentialCard({
             type="url"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden"
             placeholder="https://acme.zendesk.com"
           />
         </label>

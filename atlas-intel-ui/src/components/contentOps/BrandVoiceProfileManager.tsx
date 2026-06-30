@@ -349,7 +349,7 @@ export function BrandVoiceProfileManager({
           value={selectedProfileId ?? ''}
           disabled={loading || mutating}
           onChange={(event) => onChange(event.target.value || null)}
-          className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+          className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:opacity-50"
         >
           <option value="">
             {loading ? 'Loading profiles...' : 'No saved brand voice'}
@@ -430,7 +430,7 @@ export function BrandVoiceProfileManager({
                     setPresetApplyState({ kind: 'idle' })
                   }}
                   disabled={mutating}
-                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:opacity-50"
                 >
                   {BRAND_VOICE_PROFILE_PRESETS.map((preset) => (
                     <option key={preset.id} value={preset.id}>
@@ -492,7 +492,7 @@ export function BrandVoiceProfileManager({
                   }}
                   disabled={mutating || sampleFetching}
                   placeholder="https://example.com/about"
-                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:opacity-50"
                 />
               </label>
               <button
@@ -519,7 +519,7 @@ export function BrandVoiceProfileManager({
               disabled={mutating || sampleFetching}
               rows={4}
               placeholder="Paste customer copy samples here."
-              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:opacity-50"
             />
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               {sampleImportState.kind !== 'idle' ? (
@@ -557,7 +557,7 @@ export function BrandVoiceProfileManager({
                 value={editor.name}
                 onChange={(event) => updateEditor('name', event.target.value)}
                 disabled={mutating}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:opacity-50"
               />
             </label>
             <label className="block text-sm">
@@ -566,7 +566,7 @@ export function BrandVoiceProfileManager({
                 value={editor.preferredPov}
                 onChange={(event) => updateEditor('preferredPov', event.target.value)}
                 disabled={mutating}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:opacity-50"
               />
             </label>
             <label className="block text-sm">
@@ -575,7 +575,7 @@ export function BrandVoiceProfileManager({
                 value={editor.readingLevel}
                 onChange={(event) => updateEditor('readingLevel', event.target.value)}
                 disabled={mutating}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:opacity-50"
               />
             </label>
             <label className="block text-sm lg:col-span-2">
@@ -585,7 +585,7 @@ export function BrandVoiceProfileManager({
                 onChange={(event) => updateEditor('descriptorsText', event.target.value)}
                 disabled={mutating}
                 rows={3}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:opacity-50"
               />
             </label>
             <label className="block text-sm">
@@ -595,7 +595,7 @@ export function BrandVoiceProfileManager({
                 onChange={(event) => updateEditor('exemplarsText', event.target.value)}
                 disabled={mutating}
                 rows={4}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:opacity-50"
               />
             </label>
             <label className="block text-sm">
@@ -605,7 +605,7 @@ export function BrandVoiceProfileManager({
                 onChange={(event) => updateEditor('bannedTermsText', event.target.value)}
                 disabled={mutating}
                 rows={4}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-hidden disabled:opacity-50"
               />
             </label>
           </div>

@@ -107,7 +107,7 @@ export default function B2BOnboarding() {
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder="Search vendors (e.g. Salesforce, HubSpot)..."
-          className="w-full pl-10 pr-4 py-3 bg-slate-800/60 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+          className="w-full pl-10 pr-4 py-3 bg-slate-800/60 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
         />
         {searching && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-500 animate-spin" />}
       </div>

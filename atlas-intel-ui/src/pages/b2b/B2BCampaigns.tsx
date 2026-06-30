@@ -183,7 +183,7 @@ export default function B2BCampaigns() {
             <select
               value={genVendor}
               onChange={e => setGenVendor(e.target.value)}
-              className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
+              className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-hidden focus:border-cyan-500/50"
             >
               <option value="">Select vendor</option>
               {vendors.map(v => (
