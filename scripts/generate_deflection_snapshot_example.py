@@ -242,18 +242,13 @@ def _write_file(path: Path, content: str) -> None:
     print(f"wrote {path}")
 
 
-def _sibling_report_output(snapshot_output: Path) -> Path:
-    suffix = snapshot_output.suffix or ".json"
-    return snapshot_output.with_name(f"{snapshot_output.stem}.report{suffix}")
-
-
-def _resolve_example_outputs(args: argparse.Namespace) -> tuple[Path, Path]:
+def _resolve_example_outputs(args: argparse.Namespace) -> tuple[Path | None, Path]:
     snapshot_output = args.snapshot_output or args.output or DEFAULT_SNAPSHOT_OUTPUT
     if args.report_output is not None:
         return args.report_output, snapshot_output
     if args.output is None and args.snapshot_output is None:
         return DEFAULT_REPORT_OUTPUT, snapshot_output
-    return _sibling_report_output(snapshot_output), snapshot_output
+    return None, snapshot_output
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -278,14 +273,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         ).as_dict()
     )
 
+    expected_outputs = [(snapshot_output, expected_snapshot)]
+    if report_output is not None:
+        expected_outputs.insert(0, (report_output, expected_report))
+
     if args.check:
         return max(
-            _check_file(report_output, expected_report),
-            _check_file(snapshot_output, expected_snapshot),
+            _check_file(output, expected)
+            for output, expected in expected_outputs
         )
 
-    _write_file(report_output, expected_report)
-    _write_file(snapshot_output, expected_snapshot)
+    for output, expected in expected_outputs:
+        _write_file(output, expected)
     return 0
 
 

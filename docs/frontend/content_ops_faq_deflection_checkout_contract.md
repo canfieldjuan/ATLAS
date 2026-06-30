@@ -251,3 +251,7 @@ payment trust path.
 - [`content_ops_faq_report_contract.md`](./content_ops_faq_report_contract.md)
 - [`content_ops_faq_deflection_snapshot_example.json`](./content_ops_faq_deflection_snapshot_example.json)
 - [`content_ops_faq_deflection_report_example.json`](./content_ops_faq_deflection_report_example.json)
+
+The deflection report and Snapshot examples are generated from fabricated
+support-ticket records by `scripts/generate_deflection_snapshot_example.py`.
+They are safe public-demo inputs, not real customer exports.
