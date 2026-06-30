@@ -76,7 +76,7 @@ jobs:
       ATLAS_MIGRATION_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/atlas_migration_tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
