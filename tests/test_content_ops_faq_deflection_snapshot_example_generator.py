@@ -48,7 +48,7 @@ def test_demo_records_are_synthetic() -> None:
     assert all("example.com" not in str(record.get("text", "")) for record in records)
 
 
-def test_cli_writes_snapshot_example_to_output(
+def test_cli_writes_report_and_snapshot_examples_to_outputs(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -72,7 +72,21 @@ def test_cli_writes_snapshot_example_to_output(
     assert captured.err == ""
 
 
-def test_check_passes_when_snapshot_example_is_current(
+def test_cli_writes_legacy_snapshot_output_without_report_side_effect(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    snapshot_output = tmp_path / "snapshot.json"
+
+    assert CLI.main(["--output", str(snapshot_output)]) == 0
+
+    assert snapshot_output.read_text(encoding="utf-8") == CLI.render_snapshot_example()
+    captured = capsys.readouterr()
+    assert captured.out == f"wrote {snapshot_output}\n"
+    assert captured.err == ""
+
+
+def test_check_passes_when_report_and_snapshot_examples_are_current(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -96,6 +110,20 @@ def test_check_passes_when_snapshot_example_is_current(
     assert captured.out == (
         f"{report_output} is current\n{snapshot_output} is current\n"
     )
+    assert captured.err == ""
+
+
+def test_check_legacy_snapshot_output_ignores_default_report(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    snapshot_output = tmp_path / "snapshot.json"
+    snapshot_output.write_text(CLI.render_snapshot_example(), encoding="utf-8")
+
+    assert CLI.main(["--output", str(snapshot_output), "--check"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == f"{snapshot_output} is current\n"
     assert captured.err == ""
 
 

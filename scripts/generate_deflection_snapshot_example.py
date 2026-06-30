@@ -140,6 +140,7 @@ def _write_output(output: Path, expected: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
     parser.add_argument(
         "--output",
         "--snapshot-output",
@@ -149,14 +150,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--report-output", type=Path, default=DEFAULT_REPORT_OUTPUT)
     parser.add_argument("--check", action="store_true")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
+    custom_snapshot_output = any(
+        arg == "--output"
+        or arg == "--snapshot-output"
+        or arg.startswith("--output=")
+        or arg.startswith("--snapshot-output=")
+        for arg in raw_argv
+    )
+    custom_report_output = any(
+        arg == "--report-output" or arg.startswith("--report-output=")
+        for arg in raw_argv
+    )
     report_payload = build_report_example_payload()
+    snapshot_expected = (
+        args.snapshot_output,
+        render_snapshot_example(build_snapshot_example_payload(report_payload)),
+    )
     expected = (
-        (args.report_output, render_report_example(report_payload)),
-        (
-            args.snapshot_output,
-            render_snapshot_example(build_snapshot_example_payload(report_payload)),
-        ),
+        (snapshot_expected,)
+        if custom_snapshot_output and not custom_report_output
+        else (
+            (args.report_output, render_report_example(report_payload)),
+            snapshot_expected,
+        )
     )
 
     if args.check:

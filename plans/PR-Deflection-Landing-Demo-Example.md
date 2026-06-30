@@ -45,8 +45,9 @@ Slice phase: Workflow/process
 
 - Acceptance criteria: the committed deflection report example is generated
   from the same synthetic producer path as the snapshot, `--check` fails if
-  either committed artifact drifts, and the snapshot is proven to derive from
-  the generated report artifact.
+  either committed artifact drifts, the legacy `--output` / `--snapshot-output`
+  scratch path remains snapshot-only unless `--report-output` is also provided,
+  and the snapshot is proven to derive from the generated report artifact.
 - Affected surfaces: frontend/docs deflection example artifacts and extracted
   pipeline CI drift checks.
 - Risk areas: public-demo PII boundary and accidental divergence between the
@@ -64,10 +65,14 @@ payloads from that one source:
 - `docs/frontend/content_ops_faq_deflection_snapshot_example.json` from
   `build_deflection_snapshot(report_payload, ...)`.
 
-The CLI checks or writes both files by default. Tests use temporary report and
-snapshot outputs to prove write and check behavior without mutating the
-committed artifacts, while the normal no-arg `--check` mode is the
+The CLI checks or writes both committed files by default. Tests use temporary
+report and snapshot outputs to prove write and check behavior without mutating
+the committed artifacts, while the normal no-arg `--check` mode is the
 CI/load-bearing drift gate.
+
+For backward compatibility, the legacy `--output` alias remains snapshot-only
+when used without `--report-output`. That keeps scratch snapshot generation from
+checking or rewriting the tracked report example as a side effect.
 
 ## Intentional
 
@@ -75,6 +80,8 @@ CI/load-bearing drift gate.
   frontend deflection report/snapshot examples into the generated public demo
   source of truth so atlas-portfolio #386 can consume them without another
   parallel artifact.
+- The legacy `--output` alias is intentionally snapshot-only unless the caller
+  explicitly opts into two-artifact mode with `--report-output`.
 - The synthetic fixture remains compact. Portfolio can still render a curated
   subset in the locked preview; the invariant here is derivation, not section
   count or marketing density.
@@ -91,7 +98,9 @@ Parked hardening: none.
 
 - Command passed: python -m py_compile scripts/generate_deflection_snapshot_example.py tests/test_content_ops_faq_deflection_snapshot_example_generator.py.
 - Command passed: python scripts/generate_deflection_snapshot_example.py --check; report and snapshot examples current.
-- Command passed: python -m pytest tests/test_content_ops_faq_deflection_snapshot_example_generator.py tests/test_content_ops_faq_report_contract_docs.py -q -- 14 passed.
+- Command passed: python scripts/generate_deflection_snapshot_example.py --output /tmp/atlas-pr1836-snapshot-only.json; wrote only the snapshot scratch file and did not dirty tracked artifacts.
+- Command passed: python scripts/generate_deflection_snapshot_example.py --check --output /tmp/atlas-pr1836-snapshot-only.json; snapshot scratch file current.
+- Command passed: python -m pytest tests/test_content_ops_faq_deflection_snapshot_example_generator.py tests/test_content_ops_faq_report_contract_docs.py -q -- 16 passed.
 - Command passed: bash scripts/run_extracted_pipeline_checks.sh -- 4958 passed, 15 skipped.
 
 ## Estimated diff size
@@ -101,7 +110,7 @@ Parked hardening: none.
 | `.github/workflows/extracted_pipeline_checks.yml` | 2 |
 | `docs/frontend/content_ops_faq_deflection_checkout_contract.md` | 4 |
 | `docs/frontend/content_ops_faq_report_contract.md` | 4 |
-| `plans/PR-Deflection-Landing-Demo-Example.md` | 107 |
-| `scripts/generate_deflection_snapshot_example.py` | 175 |
-| `tests/test_content_ops_faq_deflection_snapshot_example_generator.py` | 187 |
-| **Total** | **479** |
+| `plans/PR-Deflection-Landing-Demo-Example.md` | 116 |
+| `scripts/generate_deflection_snapshot_example.py` | 194 |
+| `tests/test_content_ops_faq_deflection_snapshot_example_generator.py` | 213 |
+| **Total** | **533** |
