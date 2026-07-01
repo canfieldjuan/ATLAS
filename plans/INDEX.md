@@ -1,6 +1,6 @@
 # Plan archive index
 
-1261 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1262 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -1126,6 +1126,7 @@
 - [PR-Landing-Repair-Attempt-Contract](archive/PR-Landing-Repair-Attempt-Contract.md)
 - [PR-Live-Provider-Circular-Import](archive/PR-Live-Provider-Circular-Import.md)
 - [PR-Live-Smoke-Saved-Draft-Export](archive/PR-Live-Smoke-Saved-Draft-Export.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Local-MCP-Model-Eval-Harness](archive/PR-Local-MCP-Model-Eval-Harness.md) - lane: mcp/local-model-evals | phase: Vertical slice
 - [PR-Lucide-React-Major-Batch](archive/PR-Lucide-React-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-MCP-ChatGPT-OAuth-Rollout-Runbook](archive/PR-MCP-ChatGPT-OAuth-Rollout-Runbook.md)
 - [PR-MCP-Connector-Session-Handoff](archive/PR-MCP-Connector-Session-Handoff.md)
