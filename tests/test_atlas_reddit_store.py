@@ -452,6 +452,90 @@ def test_reply_for_untracked_thread_rejected(store: ListeningStore) -> None:
     )
 
 
+# -- wave-2 class probes: type-loose flags, degenerate iterables, stale replays
+
+
+@pytest.mark.parametrize("bad", [None, "false", "true", 1, 0])
+def test_non_bool_is_reply_to_me_rejected(store: ListeningStore, bad: object) -> None:
+    """Cited class: truthiness coercion would persist malformed parser
+    output ("false" -> 1, None -> 0) as valid state."""
+    store.upsert_tracked_thread(thread_id="t3_thread", my_comment_ids=(), checked_at=0)
+    with pytest.raises(StoreError, match="is_reply_to_me"):
+        store.insert_reply(
+            reply_id="t1_bad",
+            thread_id="t3_thread",
+            parent_id=None,
+            author=None,
+            body="x",
+            created_utc=1,
+            is_reply_to_me=bad,  # type: ignore[arg-type]
+        )
+    assert store.list_replies() == []
+
+
+@pytest.mark.parametrize("bad", [None, "yes", 1, 0])
+def test_non_bool_dormant_rejected(store: ListeningStore, bad: object) -> None:
+    """Unseen same-class site: set_thread_dormant had the identical
+    truthiness coercion."""
+    store.upsert_tracked_thread(thread_id="t3_thread", my_comment_ids=(), checked_at=0)
+    with pytest.raises(StoreError, match="dormant"):
+        store.set_thread_dormant("t3_thread", bad)  # type: ignore[arg-type]
+    assert store.list_tracked_threads()[0].dormant is False
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["t1_bare_string", b"t1_bytes", ("t1_ok", ""), ("t1_ok", 42), 7],
+)
+def test_degenerate_comment_id_collections_rejected(
+    store: ListeningStore, bad: object
+) -> None:
+    """Cited class: a bare string iterates into one-character garbage ids
+    that break reply classification; empty/non-str elements are the same
+    corruption one level down."""
+    with pytest.raises(StoreError, match="my_comment_ids"):
+        store.upsert_tracked_thread(
+            thread_id="t3_thread", my_comment_ids=bad, checked_at=0  # type: ignore[arg-type]
+        )
+    assert store.list_tracked_threads(include_dormant=True) == []
+
+
+def test_valid_comment_id_list_still_accepted(store: ListeningStore) -> None:
+    store.upsert_tracked_thread(
+        thread_id="t3_thread", my_comment_ids=["t1_a", "t1_b"], checked_at=1
+    )
+    assert store.list_tracked_threads()[0].my_comment_ids == ("t1_a", "t1_b")
+
+
+def test_stale_replay_cannot_regress_any_field(store: ListeningStore) -> None:
+    """Class fix beyond the cited last_seen symptom: a stale out-of-order
+    window must not overwrite ANY fresher volatile field."""
+    _add_candidate(
+        store, title="fresh title", reddit_score=50, final_score=2.0, observed_at=200
+    )
+    _add_candidate(
+        store, title="stale title", reddit_score=5, final_score=0.5, observed_at=100
+    )
+    row = store.get_candidate("t3_abc")
+    assert row is not None
+    assert row.title == "fresh title"
+    assert row.reddit_score == 50
+    assert row.final_score == 2.0
+    assert row.last_seen == 200
+    assert row.first_seen == 200
+
+
+def test_equal_time_replay_still_applies(store: ListeningStore) -> None:
+    """Boundary: the guard is >=, so a same-timestamp re-observation (the
+    ordinary duplicate replay) still refreshes volatile fields."""
+    _add_candidate(store, reddit_score=10, observed_at=200)
+    _add_candidate(store, reddit_score=60, observed_at=200)
+    row = store.get_candidate("t3_abc")
+    assert row is not None
+    assert row.reddit_score == 60
+    assert row.last_seen == 200
+
+
 # -- purge log --------------------------------------------------------------
 
 

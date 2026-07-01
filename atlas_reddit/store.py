@@ -18,7 +18,8 @@ Design rules:
   boundary, so it enters as data instead of being read inside the store;
   tests stay deterministic without mocking.
 - Writes are idempotent where ingestion can replay: candidate upserts
-  preserve ``first_seen`` and ``status``; reply inserts ignore only
+  preserve ``first_seen`` and ``status`` and refuse to regress fresher
+  state from stale out-of-order windows; reply inserts ignore only
   duplicate ``reply_id`` replays -- any other integrity violation raises
   instead of being masked as a replay.
 - State mutations fail closed: an unknown id or status raises
@@ -103,6 +104,31 @@ def _require_id(value: object, *, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise StoreError(f"{field} must be a non-empty string, got {value!r}")
     return value
+
+
+def _require_bool(value: object, *, field: str) -> bool:
+    """Fail closed on non-bool flags. Truthiness coercion would turn a
+    malformed parser value like "false" or None into valid persisted
+    state, bypassing the CHECK constraint's intent."""
+    if not isinstance(value, bool):
+        raise StoreError(f"{field} must be a bool, got {value!r}")
+    return value
+
+
+def _require_comment_ids(value: object) -> list[str]:
+    """Validate a collection of comment ids. A bare string is the classic
+    degenerate iterable (it would persist one character per id), so
+    str/bytes collections are rejected, and every element must be a
+    non-empty string."""
+    if isinstance(value, (str, bytes)):
+        raise StoreError(
+            f"my_comment_ids must be a collection of ids, not a bare {type(value).__name__}"
+        )
+    try:
+        items = list(value)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise StoreError(f"my_comment_ids must be iterable, got {value!r}") from exc
+    return [_require_id(item, field="my_comment_ids element") for item in items]
 
 
 @dataclass(frozen=True)
@@ -206,8 +232,12 @@ class ListeningStore:
         matched_topics: tuple[str, ...],
         observed_at: int,
     ) -> None:
-        """Insert or refresh a candidate. Replay-safe: on conflict the
-        volatile fields update and ``first_seen``/``status`` are preserved."""
+        """Insert or refresh a candidate. Replay-safe two ways: on conflict
+        the volatile fields update while ``first_seen``/``status`` are
+        preserved, and a stale (out-of-order) observation -- one whose
+        ``observed_at`` is older than the stored ``last_seen`` -- updates
+        nothing, so replayed old polling windows can never regress fresher
+        state."""
         _require_id(post_id, field="post_id")
         with self._conn:
             self._conn.execute(
@@ -228,6 +258,7 @@ class ListeningStore:
                     final_score = excluded.final_score,
                     matched_topics = excluded.matched_topics,
                     last_seen = excluded.last_seen
+                WHERE excluded.last_seen >= candidates.last_seen
                 """,
                 (
                     post_id,
@@ -307,15 +338,16 @@ class ListeningStore:
         set union (replays and re-discoveries never drop known ids);
         ``dormant`` is preserved on conflict."""
         _require_id(thread_id, field="thread_id")
+        incoming = _require_comment_ids(my_comment_ids)
         existing = self._conn.execute(
             "SELECT my_comment_ids FROM tracked_threads WHERE thread_id = ?",
             (thread_id,),
         ).fetchone()
         if existing is None:
-            merged = list(dict.fromkeys(my_comment_ids))
+            merged = list(dict.fromkeys(incoming))
         else:
             known: list[str] = json.loads(existing["my_comment_ids"])
-            merged = list(dict.fromkeys([*known, *my_comment_ids]))
+            merged = list(dict.fromkeys([*known, *incoming]))
         with self._conn:
             self._conn.execute(
                 """
@@ -329,6 +361,7 @@ class ListeningStore:
             )
 
     def set_thread_dormant(self, thread_id: str, dormant: bool) -> None:
+        _require_bool(dormant, field="dormant")
         with self._conn:
             cursor = self._conn.execute(
                 "UPDATE tracked_threads SET dormant = ? WHERE thread_id = ?",
@@ -365,6 +398,7 @@ class ListeningStore:
         reply must reference a registered tracked thread."""
         _require_id(reply_id, field="reply_id")
         _require_id(thread_id, field="thread_id")
+        _require_bool(is_reply_to_me, field="is_reply_to_me")
         with self._conn:
             cursor = self._conn.execute(
                 """

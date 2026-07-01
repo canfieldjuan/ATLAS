@@ -167,6 +167,28 @@ fixed at root in this PR):
   connection); tests register threads before replies, mirroring the real S5
   discovery order.
 
+Review-fix notes (Codex wave 2 on cee634d09; all three verified real and
+fixed at root in this PR):
+
+- **is_reply_to_me accepted any truthy value** (P2): "false" coerced to 1,
+  None to 0 -- malformed parser output became valid persisted state,
+  bypassing the CHECK constraint's intent. Root cause: truthiness coercion
+  at a validation boundary (same type-loose class as S1's bool/float
+  traps). Fixed with a strict bool guard -- and applied to the unseen
+  same-class site Codex did not cite, set_thread_dormant (R13).
+- **my_comment_ids accepted a bare string** (P2): iterating it persisted
+  one character per id, breaking future reply classification. Root cause:
+  iterable-accepting API without rejecting the str/bytes degenerate case or
+  validating elements. Fixed by rejecting str/bytes collections and
+  validating every element as a non-empty string id.
+- **Stale out-of-order replays regressed state** (P2, cited as last_seen
+  moving backwards): Codex suggested MAX() on last_seen, but that treats
+  the timestamp symptom -- a stale window would still overwrite title and
+  scores with old data. Fixed one level up at the invariant: the conflict
+  update carries WHERE excluded.last_seen >= candidates.last_seen, so a
+  stale observation updates nothing. Both sides probed (stale replay
+  regresses no field; equal-timestamp replay still applies).
+
 ## Deferred
 
 - S3 Markdown digest + `python -m atlas_reddit` CLI (first consumer of
@@ -186,7 +208,7 @@ Parked hardening: none.
 
 - pytest on `tests/test_atlas_reddit_store.py`,
   `tests/test_atlas_reddit_config.py`, and
-  `tests/test_atlas_reddit_scoring.py`: 148 passed (S1 suite unchanged plus
+  `tests/test_atlas_reddit_scoring.py`: 165 passed (S1 suite unchanged plus
   the store suite: schema create/reopen/fail-closed-version, replay
   preservation probes, dual-layer enum enforcement, unknown-id fail-closed
   mutations, replayed reply ignores, dormant preservation, set-union merge,
@@ -194,8 +216,9 @@ Parked hardening: none.
   tiebreak, purge-log validation both sides, db_path setting default and
   override; wave-1 class probes: None and empty-string ids across all four
   write paths, NULL-PK schema-layer rejection, malformed-reply-raises vs
-  true-replay-False both sides, untracked-thread FK rejection). 148 passed
-  after the wave-1 review fixes. This line is the single verification-count
+  true-replay-False both sides, untracked-thread FK rejection; wave-2 probes: non-bool flags on both
+  write sites, degenerate comment-id collections, stale-replay regression
+  both sides). 165 passed after the wave-2 review fixes. This line is the single verification-count
   source; the PR body mirrors it.
 - ASCII byte-scan on the four changed Python files: clean.
 - python `scripts/sync_pr_plan.py` on this plan: Files touched + diff table
@@ -207,10 +230,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_reddit/config.py` | 8 |
-| `atlas_reddit/store.py` | 500 |
+| `atlas_reddit/store.py` | 534 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Sqlite-Store.md` | 216 |
+| `plans/PR-Reddit-Listening-Sqlite-Store.md` | 239 |
 | `plans/archive/PR-Reddit-Listening-Config-Scoring.md` | 0 |
 | `tests/test_atlas_reddit_config.py` | 9 |
-| `tests/test_atlas_reddit_store.py` | 483 |
-| **Total** | **1219** |
+| `tests/test_atlas_reddit_store.py` | 567 |
+| **Total** | **1360** |
