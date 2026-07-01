@@ -174,6 +174,17 @@ fixed at root in this PR):
   rounding; the exact-equality test assertions it papered over moved to
   pytest.approx. Class-proofed with the cited tiny weight, an unseen
   composed-smallness probe, and a tiny-match-outranks-any-no-match property.
+- **`version = 1.0` (TOML float) passed the version check** (Codex wave 3):
+  Python's `1.0 == 1` means a plain `!=` comparison admits the float form.
+  Same class as the bool-is-int trap already guarded one line up; root cause
+  is type-loose numeric comparison in a strict-shape validator. Fixed by
+  requiring exact int; class-proofed with 1.0/0.0/2.0/1.5 float probes in
+  the version parametrize.
+- **Stale verification counts in the contract docs** (Codex wave 3): the
+  plan's Verification said 88 and the PR body said 106 while the suite had
+  grown to 109 (now 113). Root cause: the same fact manually duplicated in
+  two documents across fix waves. Fixed by updating both and declaring the
+  plan's Verification line the single count source that the body mirrors.
 
 ## Deferred
 
@@ -196,11 +207,15 @@ Parked hardening: none.
 ## Verification
 
 - pytest on `tests/test_atlas_reddit_config.py` and
-  `tests/test_atlas_reddit_scoring.py`: 88 passed (happy path, per-branch
-  negative fixtures, boundary values both sides, bool-typed-number traps,
-  duplicates, mixed valid/invalid collections, near-miss zero-scores,
-  word-boundary probes, regex-metachar phrases, emoji-adjacent matches,
-  non-dict input contract, committed-sample-parses, env override).
+  `tests/test_atlas_reddit_scoring.py`: 113 passed (happy path, per-branch
+  negative fixtures, boundary values both sides, bool- and float-typed
+  version/number traps, duplicates incl. normalized whitespace/case
+  variants, mixed valid/invalid collections, near-miss zero-scores,
+  word-boundary probes, newline/CR name probes, regex-metachar phrases,
+  emoji-adjacent matches, tiny-weight ranking probes, non-dict input
+  contract, committed-sample-parses, env override). Count current as of the
+  wave-3 review fixes; this line is the single verification-count source and
+  the PR body mirrors it.
 - bash `scripts/check_ascii_python.sh`: passed (no non-ASCII in new .py).
 - python `scripts/audit_workflow_security_posture.py` over .github/workflows:
   passed (new workflow clean; pre-existing WARNs on other files unchanged).
@@ -214,10 +229,10 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_reddit_checks.yml` | 31 |
 | `atlas_reddit/__init__.py` | 9 |
-| `atlas_reddit/config.py` | 276 |
+| `atlas_reddit/config.py` | 283 |
 | `atlas_reddit/scoring.py` | 107 |
 | `atlas_reddit/watchlist.sample.toml` | 115 |
-| `plans/PR-Reddit-Listening-Config-Scoring.md` | 223 |
-| `tests/test_atlas_reddit_config.py` | 365 |
+| `plans/PR-Reddit-Listening-Config-Scoring.md` | 238 |
+| `tests/test_atlas_reddit_config.py` | 378 |
 | `tests/test_atlas_reddit_scoring.py` | 319 |
-| **Total** | **1445** |
+| **Total** | **1480** |

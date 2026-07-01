@@ -226,9 +226,16 @@ def parse_watchlist(raw: dict) -> Watchlist:
         raise WatchlistError(f"watchlist must be a table, got {type(raw).__name__}")
     _reject_unknown_keys(raw, _ALLOWED_TOP_KEYS, context="watchlist")
     version = raw.get("version")
-    if isinstance(version, bool) or version != WATCHLIST_VERSION:
+    # Exact-int check: bool is a subclass of int (version = true), and a
+    # TOML float compares equal to the int (1.0 == 1), so both would
+    # otherwise slip past a plain != comparison.
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != WATCHLIST_VERSION
+    ):
         raise WatchlistError(
-            f"watchlist must declare version = {WATCHLIST_VERSION}, got {version!r}"
+            f"watchlist must declare version = {WATCHLIST_VERSION} (integer), got {version!r}"
         )
     subreddits = _parse_subreddits(raw.get("subreddits"))
     topics = _parse_topics(raw.get("topics"))

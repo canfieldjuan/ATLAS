@@ -83,8 +83,21 @@ def test_subreddit_weight_lookup_is_case_insensitive() -> None:
     assert watchlist.subreddit_weight("NotWatched") is None
 
 
-@pytest.mark.parametrize("version", [None, 0, 2, "1", True])
-def test_version_must_be_exactly_one(version: object) -> None:
+@pytest.mark.parametrize(
+    "version",
+    [
+        None,
+        0,
+        2,
+        "1",
+        True,
+        1.0,  # Codex-cited: float compares equal to int 1 under !=
+        0.0,
+        2.0,
+        1.5,
+    ],
+)
+def test_version_must_be_exactly_integer_one(version: object) -> None:
     raw = _valid_raw()
     if version is None:
         del raw["version"]
