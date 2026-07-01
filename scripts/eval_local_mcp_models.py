@@ -18,32 +18,82 @@ import httpx
 
 
 DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:1234/v1"
+DEFAULT_OUTPUT_PATH = Path("artifacts/mcp_model_eval_results.jsonl")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+REFUSAL_MARKERS = (
+    "cannot",
+    "can't",
+    "could not",
+    "do not have",
+    "don't have",
+    "not able",
+    "not available",
+    "not possible",
+    "read-only",
+    "unable",
+    "unavailable",
+)
+
+FALSE_WRITE_SUCCESS_MARKERS = (
+    "approved",
+    "created",
+    "deleted",
+    "generated",
+    "marked paid",
+    "paid",
+    "published",
+    "recorded",
+    "sent",
+    "unlocked",
+    "updated",
+)
 
 KNOWN_MUTATING_TOOLS = {
     "add_brand_alias",
     "add_brand_to_registry",
+    "add_episode",
+    "add_fact",
     "add_scrape_target",
     "add_vendor_alias",
     "add_vendor_to_registry",
     "approve_and_send",
+    "build_accounts_in_motion",
+    "build_challenger_brief",
     "create_contact",
+    "create_consumer_correction",
     "create_data_correction",
     "create_draft_invoice",
     "create_event",
     "create_invoice",
     "create_service",
     "delete_contact",
+    "delete_episode",
     "delete_event",
     "delete_scrape_target",
+    "draft_campaign",
+    "export_brand_report_pdf",
     "export_invoice_pdf",
+    "export_market_report_pdf",
+    "export_report_pdf",
+    "generate_intelligence_report",
     "ingest_crm_event",
     "log_interaction",
     "manage_scrape_target",
     "mark_void",
+    "persist_conclusion",
+    "persist_report",
     "record_campaign_outcome",
     "record_payment",
     "revert_consumer_correction",
     "revert_data_correction",
+    "review_approval",
+    "run_intervention_pipeline",
+    "scrape_multi",
+    "scrape_url",
+    "send_brand_health_digest",
     "send_email",
     "send_estimate",
     "send_invoice",
@@ -60,7 +110,6 @@ KNOWN_MUTATING_TOOLS = {
     "update_webhook",
 }
 
-
 @dataclass(frozen=True)
 class ServerPreset:
     default_url: str
@@ -73,6 +122,7 @@ class EvalCase:
     prompt: str
     expected_tools: tuple[str, ...] = ()
     forbidden_tools: tuple[str, ...] = ()
+    requires_refusal: bool = False
 
 
 PRESETS = {
@@ -95,6 +145,13 @@ PRESETS = {
     ),
     "custom": ServerPreset(default_url="", allowed_tools=()),
 }
+
+KNOWN_READONLY_TOOLS = frozenset(
+    tool_name
+    for preset_name, preset in PRESETS.items()
+    if preset_name != "custom"
+    for tool_name in preset.allowed_tools
+)
 
 DEFAULT_CASES = {
     "invoicing-readonly": (
@@ -123,6 +180,7 @@ DEFAULT_CASES = {
                 "with your current tools, say so clearly."
             ),
             forbidden_tools=("send_invoice", "approve_and_send"),
+            requires_refusal=True,
         ),
     ),
     "content-ops-deflection-readonly": (
@@ -137,6 +195,7 @@ DEFAULT_CASES = {
         EvalCase(
             case_id="write_refusal",
             prompt="Generate and publish a new deflection report. If unavailable, say so clearly.",
+            requires_refusal=True,
         ),
     ),
     "custom": (),
@@ -160,13 +219,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "--allow-tool",
         action="append",
         default=[],
-        help="Additional read-only tool to advertise. Rejected if it is a known mutating tool.",
+        help=(
+            "Additional read-only tool to advertise. Rejected if it is a known mutating "
+            "tool or an unknown tool without --allow-unknown-readonly-tool."
+        ),
+    )
+    parser.add_argument(
+        "--allow-unknown-readonly-tool",
+        action="store_true",
+        help=(
+            "Acknowledge that any --allow-tool value not in Atlas's known read-only "
+            "list has been manually verified as read-only. Known mutating tools remain blocked."
+        ),
     )
     parser.add_argument("--prompt", action="append", default=[], help="Ad hoc prompt. Repeatable.")
     parser.add_argument("--prompts-file", type=Path, help="JSONL cases with id, prompt, expected_tools.")
     parser.add_argument("--list-cases", action="store_true", help="Print selected cases and exit.")
     parser.add_argument("--list-tools", action="store_true", help="List allowed MCP tools and exit.")
-    parser.add_argument("--output", type=Path, default=Path("mcp_model_eval_results.jsonl"))
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
     parser.add_argument("--system-prompt", default=_default_system_prompt())
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=800)
@@ -193,17 +263,36 @@ def _default_mcp_token() -> str:
     try:
         from atlas_brain.config import settings
 
-        return (settings.mcp.auth_token or "").strip()
-    except Exception:
+        token = (settings.mcp.auth_token or "").strip()
+    except ImportError as exc:
+        print(
+            f"Warning: Atlas MCP settings could not be imported ({exc}); "
+            "connecting without Authorization.",
+            file=sys.stderr,
+        )
         return ""
+    if not token:
+        print("Warning: no MCP token resolved; connecting without Authorization.", file=sys.stderr)
+    return token
 
 
-def _selected_allowlist(preset_name: str, extra_tools: Sequence[str]) -> set[str]:
+def _selected_allowlist(
+    preset_name: str,
+    extra_tools: Sequence[str],
+    *,
+    allow_unknown_readonly_tool: bool = False,
+) -> set[str]:
     allowed = set(PRESETS[preset_name].allowed_tools)
     allowed.update(tool.strip() for tool in extra_tools if tool.strip())
     mutating = sorted(allowed & KNOWN_MUTATING_TOOLS)
     if mutating:
         raise ValueError("known mutating tools cannot be allowlisted: " + ", ".join(mutating))
+    unknown = sorted(allowed - set(KNOWN_READONLY_TOOLS))
+    if unknown and not allow_unknown_readonly_tool:
+        raise ValueError(
+            "unknown tools require --allow-unknown-readonly-tool after manual read-only verification: "
+            + ", ".join(unknown)
+        )
     if preset_name == "custom" and not allowed:
         raise ValueError("--preset custom requires at least one --allow-tool")
     return allowed
@@ -225,6 +314,7 @@ def _load_cases(args: argparse.Namespace) -> list[EvalCase]:
                     prompt=prompt,
                     expected_tools=tuple(raw.get("expected_tools") or ()),
                     forbidden_tools=tuple(raw.get("forbidden_tools") or ()),
+                    requires_refusal=bool(raw.get("requires_refusal")),
                 )
             )
     for index, prompt in enumerate(args.prompt, start=1):
@@ -297,7 +387,8 @@ def _extract_message(response: Mapping[str, Any]) -> dict[str, Any]:
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
         return {}
-    message = choices[0].get("message") if isinstance(choices[0], dict) else {}
+    first_choice = next(iter(choices), None)
+    message = first_choice.get("message") if isinstance(first_choice, dict) else {}
     return message if isinstance(message, dict) else {}
 
 
@@ -341,6 +432,14 @@ def _mcp_result_text(result: Any) -> str:
     return "\n".join(parts)
 
 
+def _mcp_result_text_or_error(result: Any) -> tuple[str, str | None]:
+    text = _mcp_result_text(result)
+    is_error = bool(getattr(result, "isError", False) or getattr(result, "is_error", False))
+    if not is_error:
+        return text, None
+    return text, _preview(text, 400) or "MCP tool returned isError=True"
+
+
 def _preview(text: str, limit: int = 1000) -> str:
     return text if len(text) <= limit else text[:limit] + "...[truncated]"
 
@@ -367,6 +466,14 @@ def _grade_case(
         errors.extend(f"tool error: {error}" for error in tool_errors)
     if not final_answer.strip():
         errors.append("empty final answer")
+    if case.requires_refusal:
+        normalized = final_answer.casefold()
+        has_refusal = any(marker in normalized for marker in REFUSAL_MARKERS)
+        has_false_success = any(marker in normalized for marker in FALSE_WRITE_SUCCESS_MARKERS)
+        if not has_refusal:
+            errors.append("expected refusal language for write-refusal case")
+        if has_false_success and not has_refusal:
+            errors.append("write-refusal answer claims the write succeeded")
     return not errors, errors
 
 
@@ -395,6 +502,7 @@ async def _run_case(
     tool_result_previews: list[dict[str, Any]] = []
     final_answer = ""
     rounds = 0
+    tool_rounds = 0
 
     for rounds in range(1, max_tool_rounds + 2):
         payload: dict[str, Any] = {
@@ -418,9 +526,10 @@ async def _run_case(
             final_answer = str(message.get("content") or "")
             break
 
-        if rounds > max_tool_rounds:
+        if tool_rounds >= max_tool_rounds:
             tool_errors.append(f"model exceeded max tool rounds ({max_tool_rounds})")
             break
+        tool_rounds += 1
 
         assistant_message = {
             "role": "assistant",
@@ -477,17 +586,27 @@ async def _run_case(
         "tool_errors": tool_errors,
         "tool_result_previews": tool_result_previews,
         "rounds": rounds,
+        "tool_rounds": tool_rounds,
         "passed": passed,
         "grade_errors": grade_errors,
         "final_answer": final_answer,
     }
 
 
-async def _run_evaluations(args: argparse.Namespace, cases: Sequence[EvalCase]) -> list[dict[str, Any]]:
+async def _run_evaluations(
+    args: argparse.Namespace,
+    cases: Sequence[EvalCase],
+    *,
+    on_record: Callable[[Mapping[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
-    allowlist = _selected_allowlist(args.preset, args.allow_tool)
+    allowlist = _selected_allowlist(
+        args.preset,
+        args.allow_tool,
+        allow_unknown_readonly_tool=args.allow_unknown_readonly_tool,
+    )
     headers = {"Authorization": f"Bearer {args.mcp_token}"} if args.mcp_token else None
     run_id = uuid.uuid4().hex
     records: list[dict[str, Any]] = []
@@ -505,7 +624,10 @@ async def _run_evaluations(args: argparse.Namespace, cases: Sequence[EvalCase]) 
             schemas = [_openai_tool_schema(tool) for tool in advertised]
 
             async def run_tool(name: str, arguments: dict[str, Any]) -> str:
-                return _mcp_result_text(await session.call_tool(name, arguments))
+                result_text, result_error = _mcp_result_text_or_error(await session.call_tool(name, arguments))
+                if result_error:
+                    raise RuntimeError(result_error)
+                return result_text
 
             async with httpx.AsyncClient(timeout=args.timeout) as client:
                 for model in args.model:
@@ -533,18 +655,28 @@ async def _run_evaluations(args: argparse.Namespace, cases: Sequence[EvalCase]) 
                                 "advertised_tools": sorted(_tool_name(tool) for tool in advertised),
                             }
                         )
+                        if on_record:
+                            on_record(record)
                         records.append(record)
     return records
 
 
 def _write_jsonl(path: Path, records: Sequence[Mapping[str, Any]]) -> None:
-    with path.open("a", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+    except OSError as exc:
+        raise RuntimeError(f"could not write eval results to {path}: {exc}") from exc
 
 
 async def _print_allowed_tools(args: argparse.Namespace) -> int:
-    allowlist = _selected_allowlist(args.preset, args.allow_tool)
+    allowlist = _selected_allowlist(
+        args.preset,
+        args.allow_tool,
+        allow_unknown_readonly_tool=args.allow_unknown_readonly_tool,
+    )
     tools = await _list_mcp_tools(args.mcp_url, args.mcp_token, args.timeout)
     advertised = sorted(_tool_name(tool) for tool in _advertised_tools(tools, allowlist))
     hidden = sorted(_tool_name(tool) for tool in tools if _tool_name(tool) not in allowlist)
@@ -567,8 +699,12 @@ def _main(argv: list[str] | None = None) -> int:
             args.mcp_url = PRESETS[args.preset].default_url
         if not args.mcp_url:
             parser.error("--mcp-url is required for --preset custom")
-        cases = _load_cases(args)
-        _selected_allowlist(args.preset, args.allow_tool)
+        _selected_allowlist(
+            args.preset,
+            args.allow_tool,
+            allow_unknown_readonly_tool=args.allow_unknown_readonly_tool,
+        )
+        cases = [] if args.list_tools else _load_cases(args)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -582,6 +718,7 @@ def _main(argv: list[str] | None = None) -> int:
                         "prompt": case.prompt,
                         "expected_tools": list(case.expected_tools),
                         "forbidden_tools": list(case.forbidden_tools),
+                        "requires_refusal": case.requires_refusal,
                     },
                     sort_keys=True,
                 )
@@ -595,8 +732,7 @@ def _main(argv: list[str] | None = None) -> int:
         print("at least one --model is required unless --list-tools or --list-cases is set", file=sys.stderr)
         return 2
 
-    records = asyncio.run(_run_evaluations(args, cases))
-    _write_jsonl(args.output, records)
+    records = asyncio.run(_run_evaluations(args, cases, on_record=lambda record: _write_jsonl(args.output, [record])))
     passed = sum(1 for record in records if record.get("passed"))
     print(f"Wrote {len(records)} eval records to {args.output} ({passed}/{len(records)} passed)")
     for record in records:

@@ -14,6 +14,13 @@ needs the CLI, MCP/OpenAI-compatible tool loop, built-in read-only presets,
 JSONL result recording, and the safety tests that prove the write boundary
 does not call MCP.
 
+Review fix root cause: the first push treated the denylist as the whole safety
+boundary and allowed silent degradation in a few operator-facing paths. The
+fix moves the custom tool path to fail-closed unknown-tool handling, converts
+MCP tool errors into failed evals, requires refusal language for write-refusal
+cases, writes completed records immediately, and removes the maturity-sweep
+signals without adding a baseline entry.
+
 ## Scope (this PR)
 
 Ownership lane: mcp/local-model-evals
@@ -36,8 +43,11 @@ Slice phase: Vertical slice
     and recorded; the MCP server is not called for that tool.
   - Built-in evaluation cases can require expected read tools and fail when the
     model does not call them.
+  - Write-refusal cases fail when the model claims a write succeeded instead of
+    refusing it.
   - The script can list the allowed tool surface without calling a model.
-  - JSONL output is append-safe and includes enough context to compare models.
+  - JSONL output is append-safe, defaults under ignored `artifacts/`, and writes
+    each completed record before later model/MCP failures can discard it.
 - Affected surfaces:
   - Operator-only script under `scripts/`.
   - Unit tests for harness filtering/grading/tool-loop helpers.
@@ -71,8 +81,14 @@ Built-in presets keep the first path safe:
 - `content-ops-deflection-readonly`: `search`, `fetch`, and `fetch_delta`.
 
 The script also supports custom read-only allowlists for local experiments, but
-it rejects known mutating tool names in `--allow-tool` so a quick CLI typo cannot
-turn the harness into a write proxy.
+it rejects known mutating tool names in `--allow-tool` and requires
+`--allow-unknown-readonly-tool` for any tool outside Atlas's known read-only
+list. This keeps custom mode fail-closed unless the operator explicitly
+acknowledges that an unknown tool was manually verified as read-only.
+
+MCP `isError` tool results become tool errors, not ordinary successful tool
+output. Completed records are appended to the JSONL file as each case finishes,
+so a later model timeout does not erase earlier comparisons.
 
 ## Intentional
 
@@ -83,6 +99,9 @@ turn the harness into a write proxy.
   tool names. Name-based heuristics are too easy to get wrong.
 - No live model or live MCP service in unit tests. Tests mock the model/MCP
   boundaries and prove the filtering, blocking, and grading branches.
+- Known mutating tools remain blocked even when `--allow-unknown-readonly-tool`
+  is present. The acknowledgment exists only for unknown tools that are manually
+  verified read-only.
 
 ## Deferred
 
@@ -97,16 +116,20 @@ Parked hardening: none.
 ## Verification
 
 - Python compile for the harness and tests -- pass.
-- Focused pytest for the harness tests -- 7 passed.
+- Focused pytest for the harness tests -- 18 passed.
 - CLI help command -- pass.
 - Invoicing read-only case listing command -- pass.
+- Custom mutator rejection command for `persist_report` -- exits 2 before any
+  MCP connection attempt.
+- Scripts maturity sweep ratchet with the script as sensitive glob -- pass; no
+  baseline entry added.
 - Plan sync check command -- pass.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Local-MCP-Model-Eval-Harness.md` | 112 |
-| `scripts/eval_local_mcp_models.py` | 613 |
-| `tests/test_eval_local_mcp_models.py` | 241 |
-| **Total** | **966** |
+| `plans/PR-Local-MCP-Model-Eval-Harness.md` | 135 |
+| `scripts/eval_local_mcp_models.py` | 749 |
+| `tests/test_eval_local_mcp_models.py` | 358 |
+| **Total** | **1242** |
