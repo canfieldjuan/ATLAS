@@ -69,6 +69,14 @@ class RedditListeningSettings(BaseSettings):
             "there to start."
         ),
     )
+    db_path: Path = Field(
+        default=Path("data/atlas_reddit/listening.db"),
+        description=(
+            "Path to the local SQLite state file (candidates, tracked "
+            "threads, replies, purge log). Defaults under the gitignored "
+            "data/ tree."
+        ),
+    )
 
 
 class WatchlistError(ValueError):
