@@ -30,8 +30,10 @@ ENV_FILES = (".env", ".env.local")
 WATCHLIST_VERSION = 1
 
 # Reddit subreddit names: 3-21 chars, letters/digits/underscore, and the
-# first character may not be an underscore.
-_SUBREDDIT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_]{2,20}$")
+# first character may not be an underscore. Matched with fullmatch(): a
+# "$" anchor would tolerate a trailing newline ("SaaS\n") and admit a
+# name that later breaks subreddit_weight() lookups.
+_SUBREDDIT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_]{2,20}")
 
 # Weights are multipliers, not probabilities; 10 is an arbitrary sanity
 # ceiling so a typo like 100 is rejected rather than dominating ranking.
@@ -147,9 +149,9 @@ def _parse_subreddits(raw: object) -> tuple[SubredditEntry, ...]:
         table = _require_table(item, context=context)
         _reject_unknown_keys(table, _ALLOWED_SUBREDDIT_KEYS, context=context)
         name = table.get("name")
-        if not isinstance(name, str) or not _SUBREDDIT_NAME_RE.match(name):
+        if not isinstance(name, str) or not _SUBREDDIT_NAME_RE.fullmatch(name):
             raise WatchlistError(
-                f"{context}.name must match {_SUBREDDIT_NAME_RE.pattern}, got {name!r}"
+                f"{context}.name must fully match {_SUBREDDIT_NAME_RE.pattern}, got {name!r}"
             )
         if name.casefold() in seen:
             raise WatchlistError(f"duplicate subreddit name: {name!r}")
@@ -190,9 +192,16 @@ def _parse_topics(raw: object) -> tuple[Topic, ...]:
         context = f"topics[{index}]"
         table = _require_table(item, context=context)
         _reject_unknown_keys(table, _ALLOWED_TOPIC_KEYS, context=context)
-        name = table.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise WatchlistError(f"{context}.name must be a non-empty string, got {name!r}")
+        raw_name = table.get("name")
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise WatchlistError(
+                f"{context}.name must be a non-empty string, got {raw_name!r}"
+            )
+        # Normalize BEFORE the duplicate check so it compares the same
+        # value that gets stored; checking the untrimmed name would let
+        # " ticket-deflection " slip past "ticket-deflection" and
+        # double-count that topic's weight in score_post.
+        name = raw_name.strip()
         if name.casefold() in seen:
             raise WatchlistError(f"duplicate topic name: {name!r}")
         seen.add(name.casefold())
@@ -203,7 +212,7 @@ def _parse_topics(raw: object) -> tuple[Topic, ...]:
             maximum=_MAX_WEIGHT,
             allow_zero=False,
         )
-        topics.append(Topic(name=name.strip(), phrases=phrases, weight=weight))
+        topics.append(Topic(name=name, phrases=phrases, weight=weight))
     return tuple(topics)
 
 

@@ -148,6 +148,22 @@ pre-push during implementation):
   caller's contract instead of checking it; fixed with a type guard at the
   function boundary so every invalid input surfaces as `WatchlistError`.
 
+Review-fix notes (Codex review of 26b3a878a; both findings verified real and
+fixed at root in this PR):
+
+- **Topic duplicate check compared untrimmed names while `Topic` stored
+  stripped ones** (check/store mismatch class): " ticket-deflection "
+  slipped past "ticket-deflection", stored as an identical name, and
+  `score_post` would double-count that topic's weight. Fixed by normalizing
+  once before the duplicate check so validation, dedupe, and storage all see
+  one value; class-proofed with the cited case plus unseen
+  whitespace/case/newline variants.
+- **Subreddit name regex used `match()` with a `$` anchor**, which tolerates
+  a trailing newline: "SaaS\n" passed validation, then
+  `subreddit_weight("SaaS")` missed and a future poller would fetch an
+  invalid subreddit. Fixed with `fullmatch()`; class-proofed with
+  trailing/leading/internal newline and carriage-return probes.
+
 ## Deferred
 
 - S2 SQLite store (candidates/tracked_threads/replies/purge_log; PRAGMA
@@ -187,10 +203,10 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_reddit_checks.yml` | 31 |
 | `atlas_reddit/__init__.py` | 9 |
-| `atlas_reddit/config.py` | 267 |
+| `atlas_reddit/config.py` | 276 |
 | `atlas_reddit/scoring.py` | 104 |
 | `atlas_reddit/watchlist.sample.toml` | 115 |
-| `plans/PR-Reddit-Listening-Config-Scoring.md` | 174 |
-| `tests/test_atlas_reddit_config.py` | 305 |
+| `plans/PR-Reddit-Listening-Config-Scoring.md` | 212 |
+| `tests/test_atlas_reddit_config.py` | 365 |
 | `tests/test_atlas_reddit_scoring.py` | 263 |
-| **Total** | **1268** |
+| **Total** | **1375** |

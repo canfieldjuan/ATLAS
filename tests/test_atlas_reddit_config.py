@@ -211,6 +211,66 @@ def test_duplicate_topic_names_rejected() -> None:
         parse_watchlist(raw)
 
 
+@pytest.mark.parametrize(
+    "variant",
+    [
+        " ticket-deflection ",  # Codex-cited case
+        "\tticket-deflection",
+        "TICKET-DEFLECTION  ",
+        "  Ticket-Deflection\t",
+        "ticket-deflection\n",
+    ],
+)
+def test_topic_duplicate_check_normalizes_whitespace_and_case(variant: str) -> None:
+    """Class fix for the check/store mismatch: the duplicate check must
+    compare the same normalized value that gets stored, or a curation
+    typo silently double-counts the topic's weight in score_post."""
+    raw = _valid_raw()
+    raw["topics"][1]["name"] = variant
+    with pytest.raises(WatchlistError, match="duplicate topic"):
+        parse_watchlist(raw)
+
+
+def test_topic_name_stored_stripped() -> None:
+    raw = _valid_raw()
+    raw["topics"][0]["name"] = "  spaced-name\t"
+    watchlist = parse_watchlist(raw)
+    assert watchlist.topics[0].name == "spaced-name"
+
+
+@pytest.mark.parametrize("name", [None, "", "   ", 42, ["x"]])
+def test_topic_name_invalid(name: object) -> None:
+    raw = _valid_raw()
+    if name is None:
+        del raw["topics"][0]["name"]
+    else:
+        raw["topics"][0]["name"] = name
+    with pytest.raises(WatchlistError, match="name"):
+        parse_watchlist(raw)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "SaaS\n",  # Codex-cited case: "$" would match before the final newline
+        "abc\n",
+        "a1b\n",
+        "\nSaaS",
+        "Sa\naS",
+        "SaaS\n\n",
+        "helpdesk\r",
+    ],
+)
+def test_subreddit_name_with_newline_or_cr_rejected(name: str) -> None:
+    """Class fix for the anchor trap: fullmatch leaves no position where
+    a stray newline survives validation and then breaks
+    subreddit_weight() lookups or a future poller's subreddit fetch."""
+    raw = _valid_raw()
+    raw["subreddits"][0]["name"] = name
+    with pytest.raises(WatchlistError, match="name"):
+        parse_watchlist(raw)
+
+
 @pytest.mark.parametrize("signals", [[""], [42], ["dup", "DUP"], "how do you"])
 def test_help_signals_invalid(signals: object) -> None:
     raw = _valid_raw()
