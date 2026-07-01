@@ -1,0 +1,115 @@
+# Sample watchlist for the read-only Reddit listening tool (Resolution Audit).
+#
+# Copy to data/atlas_reddit/watchlist.toml (the gitignored default path,
+# configurable via ATLAS_REDDIT_WATCHLIST_PATH) and edit locally. This
+# committed sample is illustrative only.
+#
+# Semantics (see atlas_reddit/scoring.py):
+# - A post scores 0 unless at least one topic phrase matches; bonuses only
+#   amplify topical posts.
+# - Matching is case-insensitive on word boundaries. There is no stemming:
+#   add plural/variant forms as their own phrases ("repeat ticket" and
+#   "repeat tickets" are two entries).
+# - Weights are multipliers: subreddit weight scales the whole post score;
+#   topic weight is the topic's contribution when any of its phrases match.
+
+version = 1
+
+# Bonus added once when any help signal matches an already-topical post.
+help_signal_bonus = 0.25
+# Bonus added once when an already-topical post contains a question mark.
+question_bonus = 0.5
+
+help_signals = [
+    "how do you",
+    "how do people",
+    "what do you use",
+    "any recommendations",
+    "is there a tool",
+    "am i missing something",
+    "advice",
+]
+
+[[subreddits]]
+name = "CustomerSuccess"
+weight = 1.0
+
+[[subreddits]]
+name = "CustomerService"
+weight = 0.9
+
+[[subreddits]]
+name = "SaaS"
+weight = 0.8
+
+[[subreddits]]
+name = "helpdesk"
+weight = 0.8
+
+[[subreddits]]
+name = "Zendesk"
+weight = 0.7
+
+[[topics]]
+name = "ticket-deflection"
+weight = 1.0
+phrases = [
+    "ticket deflection",
+    "deflect tickets",
+    "deflection rate",
+    "self-service rate",
+]
+
+[[topics]]
+name = "repeat-tickets"
+weight = 1.0
+phrases = [
+    "same question",
+    "same questions",
+    "repeat ticket",
+    "repeat tickets",
+    "keep asking",
+    "asked again and again",
+]
+
+[[topics]]
+name = "cost-per-resolution"
+weight = 0.9
+phrases = [
+    "cost per ticket",
+    "cost per resolution",
+    "support costs",
+    "cost of support",
+]
+
+[[topics]]
+name = "help-center-gaps"
+weight = 0.8
+phrases = [
+    "help center",
+    "knowledge base",
+    "kb article",
+    "kb articles",
+    "self service",
+    "self-service",
+]
+
+[[topics]]
+name = "support-volume"
+weight = 0.8
+phrases = [
+    "ticket volume",
+    "ticket backlog",
+    "drowning in tickets",
+    "flooded with tickets",
+]
+
+[[topics]]
+name = "resolution-quality"
+weight = 0.9
+phrases = [
+    "first contact resolution",
+    "resolution rate",
+    "unresolved tickets",
+    "reopened tickets",
+]

@@ -1,0 +1,31 @@
+name: Atlas Reddit Listening Checks
+
+on:
+  pull_request:
+    paths:
+      - "atlas_reddit/**"
+      - "tests/test_atlas_reddit_*.py"
+      - ".github/workflows/atlas_reddit_checks.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  atlas-reddit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python -m pip install --quiet pytest pytest-asyncio pyyaml pydantic-settings
+
+      # Glob, not an explicit list, so future tests/test_atlas_reddit_*.py
+      # files enroll automatically (avoids the per-test-list enrollment trap).
+      - name: Run atlas_reddit unit tests
+        run: python -m pytest tests/test_atlas_reddit_*.py -q
