@@ -376,3 +376,12 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ATLAS_REDDIT_WATCHLIST_PATH", "/tmp/custom.toml")
     settings = RedditListeningSettings(_env_file=None)
     assert settings.watchlist_path == Path("/tmp/custom.toml")
+
+
+def test_settings_db_path_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ATLAS_REDDIT_DB_PATH", raising=False)
+    assert RedditListeningSettings(_env_file=None).db_path == Path(
+        "data/atlas_reddit/listening.db"
+    )
+    monkeypatch.setenv("ATLAS_REDDIT_DB_PATH", "/tmp/custom.db")
+    assert RedditListeningSettings(_env_file=None).db_path == Path("/tmp/custom.db")
