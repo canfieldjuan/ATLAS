@@ -18,8 +18,10 @@ Review fix root cause: the first push treated the denylist as the whole safety
 boundary and allowed silent degradation in a few operator-facing paths. The
 fix moves the custom tool path to fail-closed unknown-tool handling, converts
 MCP tool errors into failed evals, requires refusal language for write-refusal
-cases, writes completed records immediately, and removes the maturity-sweep
-signals without adding a baseline entry.
+cases, rejects contradictory write-success prose, grounds read answers in tool
+result evidence, applies the CLI timeout to MCP tool calls, enrolls the harness
+tests in PR CI, writes completed records immediately, and removes the
+maturity-sweep signals without adding a baseline entry.
 
 ## Scope (this PR)
 
@@ -43,17 +45,24 @@ Slice phase: Vertical slice
     and recorded; the MCP server is not called for that tool.
   - Built-in evaluation cases can require expected read tools and fail when the
     model does not call them.
+  - Read cases marked for grounding fail when the final answer ignores the tool
+    result evidence.
   - Write-refusal cases fail when the model claims a write succeeded instead of
-    refusing it.
+    refusing it, including contradictory answers that both refuse and claim
+    success.
   - The script can list the allowed tool surface without calling a model.
+  - MCP tool calls honor the configured CLI timeout.
   - JSONL output is append-safe, defaults under ignored `artifacts/`, and writes
     each completed record before later model/MCP failures can discard it.
 - Affected surfaces:
   - Operator-only script under `scripts/`.
   - Unit tests for harness filtering/grading/tool-loop helpers.
+  - PR CI enrollment for those unit tests.
 - Risk areas:
   - Accidentally advertising mutating MCP tools.
   - Treating a blocked write attempt as a successful run.
+  - Treating a read answer as correct when it contradicts the MCP result.
+  - Letting a slow MCP tool invocation wedge the whole model comparison.
   - Requiring live LM Studio or live MCP services during unit tests.
 - Reviewer rules:
   - R1 requirements match, R2 test evidence, R3 security/auth, R8 contracts,
@@ -61,6 +70,7 @@ Slice phase: Vertical slice
 
 ### Files touched
 
+- `.github/workflows/pre_push_audit.yml`
 - `plans/PR-Local-MCP-Model-Eval-Harness.md`
 - `scripts/eval_local_mcp_models.py`
 - `tests/test_eval_local_mcp_models.py`
@@ -87,8 +97,15 @@ list. This keeps custom mode fail-closed unless the operator explicitly
 acknowledges that an unknown tool was manually verified as read-only.
 
 MCP `isError` tool results become tool errors, not ordinary successful tool
-output. Completed records are appended to the JSONL file as each case finishes,
-so a later model timeout does not erase earlier comparisons.
+output. Each MCP `call_tool` receives the configured CLI timeout as the client
+read timeout. Completed records are appended to the JSONL file as each case
+finishes, so a later model timeout does not erase earlier comparisons.
+
+Read cases that require result grounding extract scalar evidence tokens from the
+captured MCP result and fail when the model's final answer references none of
+those terms. Write-refusal grading independently rejects write-success claims,
+with a small negation guard so "I did not mark it paid" remains a valid refusal
+while "I cannot, but I sent it" fails.
 
 ## Intentional
 
@@ -99,9 +116,9 @@ so a later model timeout does not erase earlier comparisons.
   tool names. Name-based heuristics are too easy to get wrong.
 - No live model or live MCP service in unit tests. Tests mock the model/MCP
   boundaries and prove the filtering, blocking, and grading branches.
-- Known mutating tools remain blocked even when `--allow-unknown-readonly-tool`
-  is present. The acknowledgment exists only for unknown tools that are manually
-  verified read-only.
+- Known mutating tools, including Twilio call/SMS mutators, remain blocked even
+  when `--allow-unknown-readonly-tool` is present. The acknowledgment exists
+  only for unknown tools that are manually verified read-only.
 
 ## Deferred
 
@@ -116,20 +133,22 @@ Parked hardening: none.
 ## Verification
 
 - Python compile for the harness and tests -- pass.
-- Focused pytest for the harness tests -- 18 passed.
+- Focused pytest for the harness tests -- 25 passed.
 - CLI help command -- pass.
 - Invoicing read-only case listing command -- pass.
-- Custom mutator rejection command for `persist_report` -- exits 2 before any
-  MCP connection attempt.
+- Custom mutator rejection command for `send_sms` -- exits 2 before any MCP
+  connection attempt, even with `--allow-unknown-readonly-tool`.
 - Scripts maturity sweep ratchet with the script as sensitive glob -- pass; no
   baseline entry added.
+- CI enrollment for the harness test file is included in `.github/workflows/pre_push_audit.yml`.
 - Plan sync check command -- pass.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Local-MCP-Model-Eval-Harness.md` | 135 |
-| `scripts/eval_local_mcp_models.py` | 749 |
-| `tests/test_eval_local_mcp_models.py` | 358 |
-| **Total** | **1242** |
+| `.github/workflows/pre_push_audit.yml` | 2 |
+| `plans/PR-Local-MCP-Model-Eval-Harness.md` | 154 |
+| `scripts/eval_local_mcp_models.py` | 852 |
+| `tests/test_eval_local_mcp_models.py` | 495 |
+| **Total** | **1503** |

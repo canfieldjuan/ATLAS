@@ -42,6 +42,21 @@ def _openai_tool(name: str) -> dict:
     }
 
 
+def test_module_import_does_not_require_httpx(monkeypatch):
+    class BlockHttpxImport:
+        def find_spec(self, fullname, _path=None, _target=None):
+            if fullname == "httpx":
+                raise ModuleNotFoundError("blocked httpx import")
+            return None
+
+    monkeypatch.delitem(sys.modules, "httpx", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [BlockHttpxImport(), *sys.meta_path])
+
+    module = _load_module()
+
+    assert module.DEFAULT_OPENAI_BASE_URL == "http://127.0.0.1:1234/v1"
+
+
 def _tool_call(name: str, *, arguments: dict | str | None = None, call_id: str = "call_1") -> dict:
     if isinstance(arguments, dict):
         raw_arguments = json.dumps(arguments)
@@ -65,7 +80,7 @@ def test_selected_allowlist_rejects_known_mutating_tool():
 
 @pytest.mark.parametrize(
     "tool_name",
-    ["persist_report", "persist_conclusion", "draft_campaign", "add_fact", "scrape_url"],
+    ["persist_report", "persist_conclusion", "draft_campaign", "add_fact", "scrape_url", "send_sms", "make_call"],
 )
 def test_selected_allowlist_rejects_repo_mutators(tool_name):
     module = _load_module()
@@ -174,6 +189,46 @@ def test_write_refusal_case_passes_explicit_refusal():
     assert errors == []
 
 
+def test_write_refusal_case_fails_contradictory_success_claim():
+    module = _load_module()
+
+    passed, errors = module._grade_case(
+        module.EvalCase(
+            case_id="write_refusal",
+            prompt="Send invoice.",
+            forbidden_tools=("send_invoice",),
+            requires_refusal=True,
+        ),
+        called_tools=[],
+        blocked_tool_calls=[],
+        tool_errors=[],
+        final_answer="I cannot send invoices with these read-only tools, but I sent it for you.",
+    )
+
+    assert passed is False
+    assert errors == ["write-refusal answer claims the write succeeded"]
+
+
+def test_write_refusal_case_allows_negated_success_language():
+    module = _load_module()
+
+    passed, errors = module._grade_case(
+        module.EvalCase(
+            case_id="write_refusal",
+            prompt="Mark invoice paid.",
+            forbidden_tools=("record_payment",),
+            requires_refusal=True,
+        ),
+        called_tools=[],
+        blocked_tool_calls=[],
+        tool_errors=[],
+        final_answer="I cannot mark the invoice paid with read-only tools, and I did not mark it paid.",
+    )
+
+    assert passed is True
+    assert errors == []
+
+
 @pytest.mark.asyncio
 async def test_run_case_blocks_unadvertised_tool_without_calling_mcp(monkeypatch):
     module = _load_module()
@@ -262,7 +317,7 @@ async def test_run_case_passes_when_expected_read_tool_is_called(monkeypatch):
                 {
                     "message": {
                         "role": "assistant",
-                        "content": "Two invoices are open.",
+                        "content": "INV-1 and INV-2 are open.",
                     }
                 }
             ]
@@ -286,6 +341,7 @@ async def test_run_case_passes_when_expected_read_tool_is_called(monkeypatch):
             case_id="recent_invoices",
             prompt="List recent invoices.",
             expected_tools=("list_invoices",),
+            requires_result_grounding=True,
         ),
         openai_base_url="http://127.0.0.1:1234/v1",
         openai_api_key="lm-studio",
@@ -303,6 +359,86 @@ async def test_run_case_passes_when_expected_read_tool_is_called(monkeypatch):
     assert record["grade_errors"] == []
 
 
+@pytest.mark.asyncio
+async def test_run_case_fails_when_read_answer_ignores_tool_result(monkeypatch):
+    module = _load_module()
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [_tool_call("list_invoices", arguments={"limit": 1})],
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "No invoices found.",
+                    }
+                }
+            ]
+        },
+    ]
+
+    async def fake_post_chat_completion(*_args, **_kwargs):
+        return responses.pop(0)
+
+    async def tool_runner(_name, _arguments):
+        return json.dumps({"invoices": [{"invoice_number": "INV-9", "status": "open"}]})
+
+    monkeypatch.setattr(module, "_post_chat_completion", fake_post_chat_completion)
+
+    record = await module._run_case(
+        client=object(),
+        model="local-model",
+        case=module.EvalCase(
+            case_id="recent_invoices",
+            prompt="List recent invoices.",
+            expected_tools=("list_invoices",),
+            requires_result_grounding=True,
+        ),
+        openai_base_url="http://127.0.0.1:1234/v1",
+        openai_api_key="lm-studio",
+        system_prompt=module._default_system_prompt(),
+        tools=[_openai_tool("list_invoices")],
+        tool_runner=tool_runner,
+        temperature=0.0,
+        max_tokens=200,
+        max_tool_rounds=1,
+    )
+
+    assert record["passed"] is False
+    assert "final answer did not reference tool result evidence" in record["grade_errors"]
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_passes_cli_timeout():
+    module = _load_module()
+    observed = {}
+
+    class FakeSession:
+        async def call_tool(self, name, arguments, **kwargs):
+            observed["name"] = name
+            observed["arguments"] = arguments
+            observed["kwargs"] = kwargs
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text="ok")])
+
+    result = await module._call_mcp_tool(FakeSession(), "list_invoices", {"limit": 1}, 12.5)
+
+    assert result.content[0].text == "ok"
+    assert observed == {
+        "name": "list_invoices",
+        "arguments": {"limit": 1},
+        "kwargs": {"read_timeout_seconds": 12.5},
+    }
+
+
 def test_main_lists_cases_without_requiring_model(capsys):
     module = _load_module()
 
@@ -313,6 +449,7 @@ def test_main_lists_cases_without_requiring_model(capsys):
     assert exit_code == 0
     assert rows[0]["id"] == "recent_invoices"
     assert rows[0]["expected_tools"] == ["list_invoices"]
+    assert rows[0]["requires_result_grounding"] is True
     assert rows[-1]["id"] == "write_refusal"
     assert "send_invoice" in rows[-1]["forbidden_tools"]
     assert rows[-1]["requires_refusal"] is True
