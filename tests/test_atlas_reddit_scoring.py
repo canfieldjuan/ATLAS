@@ -73,7 +73,7 @@ def test_multiple_topics_sum() -> None:
         watchlist=_watchlist(),
     )
     assert {h.topic for h in result.topic_hits} == {"ticket-deflection", "repeat-tickets"}
-    assert result.total == 1.9  # 1.0 + 0.9, no bonuses
+    assert result.total == pytest.approx(1.9)  # 1.0 + 0.9, no bonuses
 
 
 def test_multiple_phrases_in_one_topic_count_once() -> None:
@@ -251,6 +251,62 @@ def test_body_only_match_counts() -> None:
         watchlist=_watchlist(),
     )
     assert result.total == 1.0
+
+
+def test_tiny_topic_weight_match_stays_above_zero_gate() -> None:
+    """Codex-cited class: a valid tiny weight must never collapse a real
+    match to the no-match total. The ranking signal is the raw product."""
+    watchlist = _watchlist(
+        topics=[{"name": "tiny", "weight": 0.00001, "phrases": ["ticket deflection"]}],
+        help_signals=[],
+    )
+    result = score_post(
+        title="ticket deflection numbers",
+        body="",
+        subreddit_weight=1.0,
+        watchlist=watchlist,
+    )
+    assert result.topic_hits, "the phrase matched"
+    assert result.total > 0.0
+    assert result.total == pytest.approx(0.00001)
+
+
+def test_composed_small_weights_stay_above_zero_gate() -> None:
+    """Unseen same-class probe: smallness composed across subreddit and
+    topic weights (each individually sane) must also survive."""
+    watchlist = _watchlist(
+        topics=[{"name": "small", "weight": 0.001, "phrases": ["ticket deflection"]}],
+        help_signals=[],
+    )
+    result = score_post(
+        title="ticket deflection numbers",
+        body="",
+        subreddit_weight=0.01,
+        watchlist=watchlist,
+    )
+    assert result.total > 0.0
+    assert result.total == pytest.approx(1e-5)
+
+
+def test_tiny_match_ranks_above_any_no_match() -> None:
+    watchlist = _watchlist(
+        topics=[{"name": "tiny", "weight": 0.00001, "phrases": ["ticket deflection"]}],
+        help_signals=[],
+    )
+    match = score_post(
+        title="ticket deflection",
+        body="",
+        subreddit_weight=0.0001,
+        watchlist=watchlist,
+    )
+    miss = score_post(
+        title="standing desk question?",
+        body="",
+        subreddit_weight=10.0,
+        watchlist=watchlist,
+    )
+    assert miss.total == 0.0
+    assert match.total > miss.total
 
 
 def test_deterministic_repeat_calls() -> None:

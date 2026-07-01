@@ -105,8 +105,9 @@ subreddit_weight, watchlist) -> ScoreBreakdown`. Phrases compile to
 `title\nbody`. If no topic matches, the result is 0.0 and bonuses are not
 evaluated. Otherwise: `total = subreddit_weight * (sum(topic weights with a
 hit) + help_signal_bonus if any signal hit + question_bonus if '?' present)`,
-rounded to 4 places. The breakdown carries matched topics/phrases so the S3
-digest can show why a thread surfaced.
+kept as the raw float (no rounding: quantizing the ranking value collapsed
+valid tiny weights to 0.0). The breakdown carries matched topics/phrases so
+the S3 digest can show why a thread surfaced.
 
 ## Intentional
 
@@ -163,6 +164,16 @@ fixed at root in this PR):
   `subreddit_weight("SaaS")` missed and a future poller would fetch an
   invalid subreddit. Fixed with `fullmatch()`; class-proofed with
   trailing/leading/internal newline and carriage-return probes.
+- **`round(total, 4)` collapsed valid tiny-weight matches to 0.0** (Codex
+  wave 2 on the fix commit): weight 0.00001 passes validation (> 0) but the
+  rounded total became indistinguishable from the zero-gate no-match,
+  silently suppressing curated topics. Root cause: cosmetic quantization
+  baked into the ranking computation, not the validation floor -- tightening
+  validation was rejected as a symptom patch because composed small products
+  (subreddit 0.01 x topic 0.001) would still collapse. Fixed by removing the
+  rounding; the exact-equality test assertions it papered over moved to
+  pytest.approx. Class-proofed with the cited tiny weight, an unseen
+  composed-smallness probe, and a tiny-match-outranks-any-no-match property.
 
 ## Deferred
 
@@ -204,9 +215,9 @@ Parked hardening: none.
 | `.github/workflows/atlas_reddit_checks.yml` | 31 |
 | `atlas_reddit/__init__.py` | 9 |
 | `atlas_reddit/config.py` | 276 |
-| `atlas_reddit/scoring.py` | 104 |
+| `atlas_reddit/scoring.py` | 107 |
 | `atlas_reddit/watchlist.sample.toml` | 115 |
-| `plans/PR-Reddit-Listening-Config-Scoring.md` | 212 |
+| `plans/PR-Reddit-Listening-Config-Scoring.md` | 223 |
 | `tests/test_atlas_reddit_config.py` | 365 |
-| `tests/test_atlas_reddit_scoring.py` | 263 |
-| **Total** | **1375** |
+| `tests/test_atlas_reddit_scoring.py` | 319 |
+| **Total** | **1445** |

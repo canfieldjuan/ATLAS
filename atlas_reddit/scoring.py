@@ -93,9 +93,12 @@ def score_post(
     question_bonus = watchlist.question_bonus if "?" in title or "?" in body else 0.0
 
     base = sum(hit.weight for hit in topic_hits)
+    # The raw product is the ranking signal; no rounding. Quantizing here
+    # (an earlier round(total, 4)) collapsed valid tiny weights to 0.0,
+    # making a real match indistinguishable from the zero-gate no-match.
     total = subreddit_weight * (base + help_bonus + question_bonus)
     return ScoreBreakdown(
-        total=round(total, 4),
+        total=total,
         subreddit_weight=subreddit_weight,
         topic_hits=tuple(topic_hits),
         help_signal_hits=help_hits,
