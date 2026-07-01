@@ -1119,6 +1119,10 @@ PR independently). The full contract lives in `AGENTS.md`; the highlights:
   reproduces the builder's verification commands; doesn't trust claims.
 - **No "while I was here" cleanups.** Plan and implementation ship together;
   off-scope changes go to a follow-up slice (added to *Deferred*).
+- **Approved multi-slice arcs continue automatically.** After an owned PR
+  merges through the green/reconciled/no-conflicts gate, tear down, sync from
+  `origin/main`, update `SESSION_STATE.local.md`, and start the next explicitly
+  approved slice in the same arc. Otherwise stop for the operator.
 
 When extending a Claude Code session in this repo, **read `AGENTS.md` first**
 if the task is a non-trivial PR. For one-off scratch / exploration, the

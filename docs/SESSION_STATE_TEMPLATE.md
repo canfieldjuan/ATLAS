@@ -26,7 +26,7 @@ Branch: <branch or none>
 Plan: plans/PR-<Slice>.md
 Expected head SHA: <sha or none>
 Ownership lane: <lane from plan>
-Allowed actions: inspect | update | merge-on-operator-signal | none
+Allowed actions: inspect | update | merge-on-operator-signal | merge-and-continue-approved-arc | none
 
 ## PRs This Session May Touch
 
@@ -49,7 +49,7 @@ Dirty state expected: yes | no
 
 ## Last Safe Action
 
-<One sentence: e.g. "Opened #1234 and stopped; waiting for operator signal.">
+<One sentence: e.g. "Opened #1234 and stopped; waiting for operator signal." or "Merged #1234, tore down worktree, synced origin/main, starting next approved arc slice.">
 
 ## PR Fix Mode (active fix loop)
 
@@ -76,6 +76,10 @@ Do-NOT-redo: <paths ruled out, checks already green, dead ends>
       merging.
 - [ ] Treat every other open PR as "must not touch" unless the operator
       explicitly reassigns it.
+- [ ] If `Allowed actions` is `merge-and-continue-approved-arc`, confirm the
+      next slice is explicitly listed in the approved arc, the lane is
+      unchanged, the prior PR merged through the gate, teardown is complete,
+      and the new branch/worktree starts from fresh `origin/main`.
 ```
 
 ## Ownership Rule

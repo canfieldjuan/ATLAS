@@ -53,7 +53,14 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >      opening a sandboxed file path.
 >
 > 6. **Context discipline (keeps the session from compacting mid-work):**
->    - After opening or updating a PR, **stop** — do not poll CI or wait for review (AGENTS.md §3c). Report the PR URL + the local checks you already ran, then hand back to the operator; resume only on the operator's signal.
+>    - After opening or updating a PR, follow the loop approved for the current
+>      lane. Default Atlas behavior: **stop** after reporting the PR URL + local
+>      checks, then resume only on the operator's signal. Approved autonomous
+>      multi-slice arcs are the exception: poll/wait as documented, handle CI and
+>      review, resolve fixed threads, merge only through the owned-PR gate, tear
+>      down, sync from `origin/main`, and continue directly to the next approved
+>      slice in the same arc. Do not infer this permission from topic proximity;
+>      it must be explicit in the issue/session state.
 >    - During iteration, read **targeted ranges** of large files (e.g. `control_surfaces.py` is ~1.4k lines), not whole files; and run the **single relevant test file**, not the full suite. Run the full `run_extracted_pipeline_checks.sh` gauntlet **once**, right before pushing — not on every change.
 >    - For bounded read-only scouting/checking, prefer a lightweight Spark subagent when available; keep judgment, edit-target reads, Git/GitHub mutations, and final synthesis in main.
 >    - Before pushing, use `scripts/push_pr.sh` as the single local-review entry
@@ -61,9 +68,13 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >      run `push_pr.sh`; the wrapper/hook path is responsible for exactly one
 >      mechanical local review. Manual local review is for triage when you are
 >      not pushing yet.
->    - Keep the session short. If you've been alive across several PRs, expect to compact soon; finish the current slice, then let the operator restart you fresh with this bootstrap rather than running on.
+>    - Keep the session short. If the current lane does not have an approved
+>      autonomous multi-slice loop, finish the current slice, then let the
+>      operator restart you fresh with this bootstrap rather than running on. If
+>      the approved arc says to continue, update `SESSION_STATE.local.md` at each
+>      slice boundary so compaction does not blur ownership.
 >
-> 7. **Teardown on merge (AGENTS.md §1g):** when your PR merges, tear down its worktree and branch the same session — **worktree first, then branch** (`git worktree remove <dir>` then `git branch -D <branch>`; deleting a branch still checked out in a worktree fails). `origin/main` is the only source of truth; local branches/worktrees are disposable. Leftover branches/worktrees drift behind main and turn into stale dirty state that mirrors already-landed PRs. Never `git clean -f` without a `git clean -nd` dry-run first — untracked secret files (`.env.bak-*`, `*.production.env`) live in the tree and a blanket clean deletes them.
+> 7. **Teardown on merge (AGENTS.md §1g / §1h):** when your PR merges, tear down its worktree and branch the same session — **worktree first, then branch** (`git worktree remove <dir>` then `git branch -D <branch>`; deleting a branch still checked out in a worktree fails). `origin/main` is the only source of truth; local branches/worktrees are disposable. Leftover branches/worktrees drift behind main and turn into stale dirty state that mirrors already-landed PRs. Never `git clean -f` without a `git clean -nd` dry-run first — untracked secret files (`.env.bak-*`, `*.production.env`) live in the tree and a blanket clean deletes them. If this is an approved multi-slice arc, sync from current `origin/main` after teardown and start the next approved slice immediately; otherwise stop for the operator.
 
 ---
 

@@ -14,10 +14,10 @@ that lets the reviewer give the builder a clean LGTM.
 
 **New or restarted builder sessions: read `docs/SESSION_BOOTSTRAP.md`
 first.** It carries the get-up-to-speed checklist, the recurring-lapse
-list, and the context-discipline rules (stop after opening a PR; read
-narrow / run scoped tests during iteration) that keep a session from
-compacting mid-work. A session that has drifted post-compaction gets the
-redirect prompt in that file.
+list, and the context-discipline rules (normal stop points, approved
+multi-slice continuation, narrow reads, and scoped tests) that keep a
+session from compacting mid-work. A session that has drifted
+post-compaction gets the redirect prompt in that file.
 
 ---
 
@@ -138,6 +138,30 @@ Cleanup safety: never run `git clean -f` without a `git clean -nd`
 dry-run first, and read the list. Untracked secret files live in the
 tree (`.env.bak-*`, `*.production.env`, gitignored per the env section)
 and a blanket clean — especially with `-x` — deletes them.
+
+### 1h. Approved multi-slice continuation
+
+If the current lane has an approved multi-slice arc, the builder does
+not stop for a separate approval after merging each slice. After the
+owned PR passes the merge gate, merges, tears down, and completes any
+allowed housekeeping, the builder immediately starts the next approved
+slice in that same arc from fresh `origin/main`.
+
+The continuation gate is strict:
+
+1. The just-merged PR was owned by this session and merged through the
+   approved green/reconciled/no-comments/no-conflicts gate.
+2. The worktree and branch for the merged slice were torn down, or any
+   documented fallback housekeeping was folded into the next slice.
+3. `origin/main` was fetched/synced before creating the next slice.
+4. The next slice is explicitly listed in the approved arc and stays in
+   the same ownership lane.
+5. `SESSION_STATE.local.md` is updated for the new slice before edits.
+
+Stop and ask instead if the next work is outside the approved arc, the
+lane changes, repo state is dirty/conflicted, another session owns the
+next slice, or the prior merge exposed a blocker that changes the next
+slice's scope.
 
 ---
 
@@ -377,12 +401,18 @@ but silently ignoring them recreates the diff-only review gap.
 GitHub Actions still runs the same wrapper after the PR opens. Treat CI
 as the final enforcement layer, not the first reviewer.
 
-After opening or updating a PR, the builder does **not** wait for CI,
-automated review, or human review comments. Report the PR URL, the
-local verification already run, and any immediately visible PR status,
-then stop. The operator will tell the builder when checks are green or
-when review comments are ready to inspect. Only resume PR inspection,
-comment handling, or merge decisions after that operator signal.
+After opening or updating a PR, use the PR loop approved for the current
+lane. The default Atlas loop is: report the PR URL, local verification,
+and immediately visible PR status, then stop for the operator to signal
+CI/review readiness. For an approved autonomous multi-slice arc, use the
+arc's documented loop instead: wait/poll as approved, handle CI and
+review comments, resolve fixed threads, merge only through the approved
+owned-PR gate, tear down, sync from `origin/main`, and continue directly
+to the next approved slice in the same arc.
+
+Do not invent continuation rights from topic proximity. Automatic
+continuation requires an explicit approved arc and a matching
+`SESSION_STATE.local.md` ownership lane.
 
 ### 3d. Thin-slice and hardening triage
 
