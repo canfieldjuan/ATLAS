@@ -77,6 +77,13 @@ class RedditListeningSettings(BaseSettings):
             "data/ tree."
         ),
     )
+    digest_dir: Path = Field(
+        default=Path("data/atlas_reddit/digests"),
+        description=(
+            "Directory for daily Markdown digests (YYYY-MM-DD.md). "
+            "Defaults under the gitignored data/ tree."
+        ),
+    )
 
 
 class WatchlistError(ValueError):
