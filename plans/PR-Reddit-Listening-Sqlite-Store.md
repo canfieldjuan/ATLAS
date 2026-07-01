@@ -143,6 +143,30 @@ compliance audit trail already in the schema.
   4860540364) because direct main pushes are forbidden; kept as its own
   commit so the S2 code review is not polluted by the plans/ move.
 
+Review-fix notes (Codex wave 1 on 9d84228ce; all three verified real and
+fixed at root in this PR):
+
+- **SQLite TEXT PRIMARY KEY does not imply NOT NULL** (P2): a None id could
+  insert anonymous rows that replays cannot dedupe and lookups cannot find.
+  Root cause: relying on the PK to imply NOT NULL (a SQLite-specific trap).
+  Fixed in the DDL (explicit NOT NULL on all three id PKs) plus API-level
+  non-empty-string id validation, which also rejects the unseen class case
+  the schema cannot catch: the empty string. Schema stays version 1 -- it is
+  unreleased (no store file exists outside test tmp dirs), so this is a
+  pre-release DDL correction, not a migration.
+- **INSERT OR IGNORE masked every integrity failure as a replay** (P1,
+  silent data loss): a malformed reply (NULL created_utc, unknown thread)
+  returned False as if it were a duplicate. Root cause: blanket conflict
+  suppression where only duplicate-key suppression was intended. Fixed with
+  a narrow ON CONFLICT(reply_id) DO NOTHING; both sides probed (true replay
+  still returns False; integrity violations raise).
+- **Replies could reference untracked threads** (P2): orphan rows drift
+  outside the tracked-thread lifecycle that S5/S6 drive. Root cause: missing
+  referential constraint. Fixed with a foreign key to
+  tracked_threads(thread_id) (foreign_keys pragma already ON per
+  connection); tests register threads before replies, mirroring the real S5
+  discovery order.
+
 ## Deferred
 
 - S3 Markdown digest + `python -m atlas_reddit` CLI (first consumer of
@@ -162,14 +186,17 @@ Parked hardening: none.
 
 - pytest on `tests/test_atlas_reddit_store.py`,
   `tests/test_atlas_reddit_config.py`, and
-  `tests/test_atlas_reddit_scoring.py`: 144 passed (S1 suite unchanged plus
+  `tests/test_atlas_reddit_scoring.py`: 148 passed (S1 suite unchanged plus
   the store suite: schema create/reopen/fail-closed-version, replay
   preservation probes, dual-layer enum enforcement, unknown-id fail-closed
   mutations, replayed reply ignores, dormant preservation, set-union merge,
   injection-shaped input, unicode roundtrip, inclusive boundary + stable
   tiebreak, purge-log validation both sides, db_path setting default and
-  override). This line is the single verification-count source; the PR body
-  mirrors it.
+  override; wave-1 class probes: None and empty-string ids across all four
+  write paths, NULL-PK schema-layer rejection, malformed-reply-raises vs
+  true-replay-False both sides, untracked-thread FK rejection). 148 passed
+  after the wave-1 review fixes. This line is the single verification-count
+  source; the PR body mirrors it.
 - ASCII byte-scan on the four changed Python files: clean.
 - python `scripts/sync_pr_plan.py` on this plan: Files touched + diff table
   regenerated from the real diff.
@@ -180,10 +207,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_reddit/config.py` | 8 |
-| `atlas_reddit/store.py` | 478 |
+| `atlas_reddit/store.py` | 500 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Sqlite-Store.md` | 176 |
+| `plans/PR-Reddit-Listening-Sqlite-Store.md` | 216 |
 | `plans/archive/PR-Reddit-Listening-Config-Scoring.md` | 0 |
 | `tests/test_atlas_reddit_config.py` | 9 |
-| `tests/test_atlas_reddit_store.py` | 377 |
-| **Total** | **1051** |
+| `tests/test_atlas_reddit_store.py` | 483 |
+| **Total** | **1219** |

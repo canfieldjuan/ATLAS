@@ -292,6 +292,11 @@ def _add_reply(store: ListeningStore, reply_id: str = "t1_r1", **overrides: obje
         is_reply_to_me=True,
     )
     kwargs.update(overrides)
+    # Replies reference a registered tracked thread (FK); mirror the real
+    # S5 flow where threads are discovered before their replies.
+    store.upsert_tracked_thread(
+        thread_id=str(kwargs["thread_id"]), my_comment_ids=(), checked_at=0
+    )
     return store.insert_reply(**kwargs)
 
 
@@ -336,6 +341,7 @@ def test_reply_filters_thread_and_to_me(store: ListeningStore) -> None:
 
 
 def test_reply_boolean_check_constraint(store: ListeningStore) -> None:
+    store.upsert_tracked_thread(thread_id="t3_x", my_comment_ids=(), checked_at=0)
     with pytest.raises(sqlite3.IntegrityError):
         store._conn.execute(
             """
@@ -344,6 +350,106 @@ def test_reply_boolean_check_constraint(store: ListeningStore) -> None:
             ) VALUES ('t1_bad', 't3_x', 1, 2, 0)
             """
         )
+
+
+# -- id and integrity fail-closed probes (Codex wave-1 class fixes) ----------
+
+
+def test_null_and_empty_ids_rejected_at_api(store: ListeningStore) -> None:
+    """Cited class (None) plus the unseen second case (empty string, which
+    would satisfy NOT NULL while still being a corrupt id)."""
+    for bad_id in (None, ""):
+        with pytest.raises(StoreError, match="post_id"):
+            _add_candidate(store, post_id=bad_id)  # type: ignore[arg-type]
+        with pytest.raises(StoreError, match="thread_id"):
+            store.upsert_tracked_thread(
+                thread_id=bad_id, my_comment_ids=(), checked_at=0  # type: ignore[arg-type]
+            )
+        with pytest.raises(StoreError, match="reply_id"):
+            store.insert_reply(
+                reply_id=bad_id,  # type: ignore[arg-type]
+                thread_id="t3_thread",
+                parent_id=None,
+                author=None,
+                body="x",
+                created_utc=1,
+                is_reply_to_me=False,
+            )
+        with pytest.raises(StoreError, match="item_id"):
+            store.record_purge(
+                item_id=bad_id,  # type: ignore[arg-type]
+                item_type="candidate",
+                deleted_detected_at=1,
+                purged_at=2,
+                reason="r",
+            )
+    assert store.list_candidates() == []
+    assert store.list_tracked_threads(include_dormant=True) == []
+    assert store.list_replies() == []
+    assert store.list_purge_log() == []
+
+
+def test_null_primary_key_rejected_by_schema(store: ListeningStore) -> None:
+    """Second enforcement layer: SQLite TEXT PRIMARY KEY does not imply
+    NOT NULL, so the DDL declares it explicitly; raw SQL cannot insert an
+    anonymous row either."""
+    with pytest.raises(sqlite3.IntegrityError):
+        store._conn.execute(
+            """
+            INSERT INTO candidates (
+                post_id, subreddit, title, url, created_utc,
+                keyword_score, final_score, first_seen, last_seen
+            ) VALUES (NULL, 's', 't', 'u', 1, 1.0, 1.0, 1, 1)
+            """
+        )
+
+
+def test_malformed_reply_raises_instead_of_masking_as_replay(store: ListeningStore) -> None:
+    """The P1 both-sides probe: a genuine replay reports False, while an
+    integrity violation raises instead of silently dropping the reply."""
+    assert _add_reply(store) is True
+    assert _add_reply(store) is False  # true replay
+    with pytest.raises(sqlite3.IntegrityError):
+        store.insert_reply(
+            reply_id="t1_broken",
+            thread_id="t3_thread",
+            parent_id=None,
+            author=None,
+            body="x",
+            created_utc=None,  # type: ignore[arg-type]  # NOT NULL violation
+            is_reply_to_me=True,
+        )
+    assert len(store.list_replies()) == 1  # nothing silently dropped or added
+
+
+def test_reply_for_untracked_thread_rejected(store: ListeningStore) -> None:
+    """Foreign key: orphan replies cannot drift outside the tracked-thread
+    lifecycle."""
+    with pytest.raises(sqlite3.IntegrityError):
+        store.insert_reply(
+            reply_id="t1_orphan",
+            thread_id="t3_never_registered",
+            parent_id=None,
+            author=None,
+            body="x",
+            created_utc=1,
+            is_reply_to_me=True,
+        )
+    store.upsert_tracked_thread(
+        thread_id="t3_never_registered", my_comment_ids=(), checked_at=0
+    )
+    assert (
+        store.insert_reply(
+            reply_id="t1_orphan",
+            thread_id="t3_never_registered",
+            parent_id=None,
+            author=None,
+            body="x",
+            created_utc=1,
+            is_reply_to_me=True,
+        )
+        is True
+    )
 
 
 # -- purge log --------------------------------------------------------------

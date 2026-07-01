@@ -18,7 +18,9 @@ Design rules:
   boundary, so it enters as data instead of being read inside the store;
   tests stay deterministic without mocking.
 - Writes are idempotent where ingestion can replay: candidate upserts
-  preserve ``first_seen`` and ``status``; reply inserts ignore replays.
+  preserve ``first_seen`` and ``status``; reply inserts ignore only
+  duplicate ``reply_id`` replays -- any other integrity violation raises
+  instead of being masked as a replay.
 - State mutations fail closed: an unknown id or status raises
   :class:`StoreError` instead of silently doing nothing, and the schema
   double-enforces enums via CHECK constraints.
@@ -40,7 +42,7 @@ PURGE_ITEM_TYPES = ("candidate", "reply", "thread")
 
 _SCHEMA_DDL = """
 CREATE TABLE candidates (
-    post_id TEXT PRIMARY KEY,
+    post_id TEXT PRIMARY KEY NOT NULL,
     subreddit TEXT NOT NULL,
     title TEXT NOT NULL,
     url TEXT NOT NULL,
@@ -59,20 +61,21 @@ CREATE TABLE candidates (
 CREATE INDEX idx_candidates_status_score
     ON candidates (status, final_score DESC);
 CREATE TABLE tracked_threads (
-    thread_id TEXT PRIMARY KEY,
+    thread_id TEXT PRIMARY KEY NOT NULL,
     my_comment_ids TEXT NOT NULL DEFAULT '[]',
     last_checked INTEGER,
     dormant INTEGER NOT NULL DEFAULT 0 CHECK (dormant IN (0, 1))
 );
 CREATE TABLE replies (
-    reply_id TEXT PRIMARY KEY,
+    reply_id TEXT PRIMARY KEY NOT NULL,
     thread_id TEXT NOT NULL,
     parent_id TEXT,
     author TEXT,
     body TEXT NOT NULL DEFAULT '',
     created_utc INTEGER NOT NULL,
     is_reply_to_me INTEGER NOT NULL CHECK (is_reply_to_me IN (0, 1)),
-    seen INTEGER NOT NULL DEFAULT 0 CHECK (seen IN (0, 1))
+    seen INTEGER NOT NULL DEFAULT 0 CHECK (seen IN (0, 1)),
+    FOREIGN KEY (thread_id) REFERENCES tracked_threads (thread_id)
 );
 CREATE INDEX idx_replies_thread ON replies (thread_id, seen);
 CREATE TABLE purge_log (
@@ -90,6 +93,16 @@ CREATE TABLE purge_log (
 class StoreError(RuntimeError):
     """Raised on invalid store operations (unknown ids, bad enums,
     incompatible schema versions)."""
+
+
+def _require_id(value: object, *, field: str) -> str:
+    """Fail closed on malformed external ids. SQLite TEXT PRIMARY KEY does
+    not imply NOT NULL (the DDL adds it explicitly), and an empty string
+    would satisfy NOT NULL while still being a corrupt id -- both are
+    rejected here before any SQL runs."""
+    if not isinstance(value, str) or not value:
+        raise StoreError(f"{field} must be a non-empty string, got {value!r}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -195,6 +208,7 @@ class ListeningStore:
     ) -> None:
         """Insert or refresh a candidate. Replay-safe: on conflict the
         volatile fields update and ``first_seen``/``status`` are preserved."""
+        _require_id(post_id, field="post_id")
         with self._conn:
             self._conn.execute(
                 """
@@ -292,6 +306,7 @@ class ListeningStore:
         """Insert or refresh a tracked thread. Comment ids are merged as a
         set union (replays and re-discoveries never drop known ids);
         ``dormant`` is preserved on conflict."""
+        _require_id(thread_id, field="thread_id")
         existing = self._conn.execute(
             "SELECT my_comment_ids FROM tracked_threads WHERE thread_id = ?",
             (thread_id,),
@@ -343,15 +358,21 @@ class ListeningStore:
         created_utc: int,
         is_reply_to_me: bool,
     ) -> bool:
-        """Insert a reply; replays are ignored. Returns True when the row
-        was actually inserted, False on a replayed duplicate."""
+        """Insert a reply. Returns True when the row was inserted, False
+        on a replayed duplicate ``reply_id``. The conflict target is
+        deliberately narrow: NOT NULL/CHECK/foreign-key violations raise
+        (sqlite3.IntegrityError) instead of being masked as replays, and a
+        reply must reference a registered tracked thread."""
+        _require_id(reply_id, field="reply_id")
+        _require_id(thread_id, field="thread_id")
         with self._conn:
             cursor = self._conn.execute(
                 """
-                INSERT OR IGNORE INTO replies (
+                INSERT INTO replies (
                     reply_id, thread_id, parent_id, author, body,
                     created_utc, is_reply_to_me
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(reply_id) DO NOTHING
                 """,
                 (
                     reply_id,
@@ -407,6 +428,7 @@ class ListeningStore:
         purged_at: int,
         reason: str,
     ) -> None:
+        _require_id(item_id, field="item_id")
         if item_type not in PURGE_ITEM_TYPES:
             raise StoreError(
                 f"invalid purge item_type {item_type!r}; allowed: {PURGE_ITEM_TYPES}"
