@@ -271,6 +271,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list-cases", action="store_true", help="Print selected cases and exit.")
     parser.add_argument("--list-tools", action="store_true", help="List allowed MCP tools and exit.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
+    parser.add_argument("--summarize", type=Path, help="Summarize an existing eval JSONL file and exit.")
+    parser.add_argument(
+        "--summary-output",
+        type=Path,
+        help="Where to write --summarize JSON. Defaults next to the JSONL file.",
+    )
     parser.add_argument("--system-prompt", default=_default_system_prompt())
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=800)
@@ -773,6 +779,119 @@ def _write_jsonl(path: Path, records: Sequence[Mapping[str, Any]]) -> None:
         raise RuntimeError(f"could not write eval results to {path}: {exc}") from exc
 
 
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise RuntimeError(f"could not read eval results from {path}: {exc}") from exc
+    for line_no, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}:{line_no} invalid JSONL record: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise ValueError(f"{path}:{line_no} JSONL record must be an object")
+        records.append(raw)
+    return records
+
+
+def _safe_string_list(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        return []
+    return [str(item) for item in value if str(item or "").strip()]
+
+
+def _blocked_tool_names(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        return []
+    names: list[str] = []
+    for item in value:
+        if isinstance(item, Mapping):
+            name = str(item.get("name") or "").strip()
+            if name:
+                names.append(name)
+    return names
+
+
+def _summarize_eval_records(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    models: dict[str, dict[str, Any]] = {}
+    blocked_total = 0
+    tool_error_total = 0
+
+    for record in records:
+        model = str(record.get("model") or "<unknown>")
+        model_summary = models.setdefault(
+            model,
+            {
+                "total_cases": 0,
+                "passed_cases": 0,
+                "failed_cases": 0,
+                "advertised_tools": [],
+                "case_results": [],
+            },
+        )
+        passed = bool(record.get("passed"))
+        called_tools = _safe_string_list(record.get("called_tools"))
+        blocked_tools = _blocked_tool_names(record.get("blocked_tool_calls"))
+        tool_errors = [_preview(error, 240) for error in _safe_string_list(record.get("tool_errors"))]
+        grade_errors = _safe_string_list(record.get("grade_errors"))
+        advertised_tools = set(model_summary["advertised_tools"])
+        advertised_tools.update(_safe_string_list(record.get("advertised_tools")))
+
+        model_summary["total_cases"] += 1
+        if passed:
+            model_summary["passed_cases"] += 1
+        else:
+            model_summary["failed_cases"] += 1
+        model_summary["advertised_tools"] = sorted(advertised_tools)
+        model_summary["case_results"].append(
+            {
+                "case_id": str(record.get("case_id") or "<unknown>"),
+                "passed": passed,
+                "called_tools": called_tools,
+                "blocked_tools": blocked_tools,
+                "tool_errors": tool_errors,
+                "grade_errors": grade_errors,
+            }
+        )
+        blocked_total += len(blocked_tools)
+        tool_error_total += len(tool_errors)
+
+    return {
+        "schema_version": "local_mcp_eval_summary.v1",
+        "record_count": len(records),
+        "model_count": len(models),
+        "all_passed": all(record.get("passed") is True for record in records) if records else False,
+        "blocked_tool_attempt_count": blocked_total,
+        "tool_error_count": tool_error_total,
+        "models": dict(sorted(models.items())),
+    }
+
+
+def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"could not write eval summary to {path}: {exc}") from exc
+
+
+def _default_summary_output(path: Path) -> Path:
+    if path.suffix:
+        return path.with_suffix(".summary.json")
+    return path.with_name(path.name + ".summary.json")
+
+
+def _summarize_jsonl(path: Path, output_path: Path | None = None) -> tuple[Path, dict[str, Any]]:
+    summary = _summarize_eval_records(_read_jsonl(path))
+    destination = output_path or _default_summary_output(path)
+    _write_json(destination, summary)
+    return destination, summary
+
+
 async def _print_allowed_tools(args: argparse.Namespace) -> int:
     allowlist = _selected_allowlist(
         args.preset,
@@ -795,6 +914,18 @@ async def _print_allowed_tools(args: argparse.Namespace) -> int:
 def _main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.summarize:
+        try:
+            destination, summary = _summarize_jsonl(args.summarize, args.summary_output)
+        except (RuntimeError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(
+            f"Wrote eval summary to {destination} "
+            f"({summary['record_count']} records, all_passed={summary['all_passed']})"
+        )
+        return 0
+
     try:
         args.mcp_token = args.mcp_token if args.mcp_token is not None else _default_mcp_token()
         if not args.mcp_url:

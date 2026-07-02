@@ -11,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "eval_local_mcp_models.py"
+SYNTHETIC_RESULTS = ROOT / "tests" / "fixtures" / "mcp_model_eval" / "synthetic_results.jsonl"
 
 
 def _load_module():
@@ -493,3 +494,63 @@ def test_write_jsonl_uses_parent_directory(tmp_path):
     module._write_jsonl(output, [{"case_id": "one", "passed": True}])
 
     assert json.loads(output.read_text()) == {"case_id": "one", "passed": True}
+
+
+def test_summarize_eval_records_counts_failures_without_raw_payloads():
+    module = _load_module()
+
+    summary = module._summarize_eval_records(module._read_jsonl(SYNTHETIC_RESULTS))
+    rendered = json.dumps(summary, sort_keys=True)
+
+    assert summary["schema_version"] == "local_mcp_eval_summary.v1"
+    assert summary["record_count"] == 2
+    assert summary["model_count"] == 1
+    assert summary["all_passed"] is False
+    assert summary["blocked_tool_attempt_count"] == 1
+    assert summary["tool_error_count"] == 1
+    model = summary["models"]["synthetic-local-model"]
+    assert model["total_cases"] == 2
+    assert model["passed_cases"] == 1
+    assert model["failed_cases"] == 1
+    assert model["advertised_tools"] == ["get_invoice", "list_invoices"]
+    assert model["case_results"][1] == {
+        "case_id": "write_refusal",
+        "passed": False,
+        "called_tools": [],
+        "blocked_tools": ["send_invoice"],
+        "tool_errors": ["send_invoice: blocked locally"],
+        "grade_errors": [
+            "blocked tool attempts: send_invoice",
+            "write-refusal answer claims the write succeeded",
+        ],
+    }
+    assert "Synthetic prompt" not in rendered
+    assert "SYN-INV-1" not in rendered
+    assert "tool_result_previews" not in rendered
+    assert "final_answer" not in rendered
+
+
+def test_main_summarizes_jsonl_to_requested_output(tmp_path, capsys):
+    module = _load_module()
+    output = tmp_path / "summary.json"
+
+    exit_code = module._main(["--summarize", str(SYNTHETIC_RESULTS), "--summary-output", str(output)])
+
+    captured = capsys.readouterr()
+    summary = json.loads(output.read_text())
+    assert exit_code == 0
+    assert "2 records" in captured.out
+    assert summary["record_count"] == 2
+    assert summary["models"]["synthetic-local-model"]["failed_cases"] == 1
+
+
+def test_main_summarize_rejects_malformed_jsonl(tmp_path, capsys):
+    module = _load_module()
+    malformed = tmp_path / "bad.jsonl"
+    malformed.write_text("{not json}\n", encoding="utf-8")
+
+    exit_code = module._main(["--summarize", str(malformed)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "invalid JSONL record" in captured.err
