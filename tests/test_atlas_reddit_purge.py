@@ -329,6 +329,94 @@ def test_absent_from_info_response_is_missing(monkeypatch: pytest.MonkeyPatch) -
     assert "missing" in gone["t3_vanished"]
 
 
+# -- wave-2 class probes: kinds, atomicity, artifacts, tombstones ----------------
+
+
+def test_wrong_kind_fullname_per_table_retained(store: ListeningStore) -> None:
+    """Wave-2 class: the shape guard must validate the KIND per table --
+    a t2_ user id in candidates or a t3_ post id in replies cannot be
+    liveness-checked for that table and must be retained + surfaced."""
+    _seed_candidate(store, "t2_useridx")  # wrong kind for candidates
+    _seed_reply(store, "t3_postidx")      # wrong kind for replies
+    source = FakeDeletionSource()
+    stats = _purge(store, source)
+    assert len(stats.errors) == 2
+    assert store.get_candidate("t2_useridx") is not None
+    assert {r.reply_id for r in store.list_replies()} == {"t3_postidx"}
+    assert source.batches == []  # nothing checkable was sent
+
+
+def test_purge_item_is_atomic_no_log_without_delete(store: ListeningStore) -> None:
+    """Wave-2 class: the audit record exists IFF the content row was
+    deleted -- one store transaction, probed from both directions."""
+    _seed_candidate(store, "t3_gone")
+    assert store.purge_item(
+        "t3_gone", "candidate", deleted_detected_at=NOW, purged_at=NOW, reason="r"
+    ) is True
+    assert store.get_candidate("t3_gone") is None
+    assert len(store.list_purge_log()) == 1
+    # Second call: no row to delete -> False AND no second log entry.
+    assert store.purge_item(
+        "t3_gone", "candidate", deleted_detected_at=NOW, purged_at=NOW, reason="r"
+    ) is False
+    assert len(store.list_purge_log()) == 1
+
+
+def test_purged_ids_are_tombstones_for_reingestion(store: ListeningStore) -> None:
+    """Wave-2 class: Reddit can keep returning removed items in listings;
+    the write boundary refuses tombstoned ids so purged content never
+    resurrects and never generates repeat purge cycles."""
+    _seed_candidate(store, "t3_gone")
+    _seed_reply(store, "t1_gone")
+    _purge(store, FakeDeletionSource(gone={
+        "t3_gone": "content shows [removed]",
+        "t1_gone": "content shows [deleted]",
+    }))
+    # Re-ingestion attempts (a later poll/track pass).
+    _seed_candidate(store, "t3_gone")
+    assert store.get_candidate("t3_gone") is None  # refused
+    assert store.insert_reply(
+        reply_id="t1_gone", thread_id="t3_thread", parent_id="t1_mine",
+        author="other", body="back again", created_utc=NOW,
+        is_reply_to_me=True,
+    ) is False
+    assert store.list_replies() == []
+    assert len(store.list_purge_log()) == 2  # no repeat purge entries
+
+
+def test_digest_artifacts_removed_when_content_purged(
+    store: ListeningStore, tmp_path: Path
+) -> None:
+    """Wave-2 class: rendered digests are local storage too -- a purge
+    that removed content also removes prior digest files (regenerable
+    projections that may carry the purged content)."""
+    digest_dir = tmp_path / "digests"
+    digest_dir.mkdir()
+    (digest_dir / "2026-07-01.md").write_text("old digest with Post t3_gone", encoding="utf-8")
+    _seed_candidate(store, "t3_gone")
+    stats = _purge(
+        store,
+        FakeDeletionSource(gone={"t3_gone": "content shows [deleted]"}),
+        digest_dir=digest_dir,
+    )
+    assert stats.digests_removed == 1
+    assert list(digest_dir.glob("*.md")) == []
+
+
+def test_digest_artifacts_kept_when_nothing_purged(
+    store: ListeningStore, tmp_path: Path
+) -> None:
+    """Second side: a pass that purges nothing proves the store consistent
+    with the artifacts -- they stay."""
+    digest_dir = tmp_path / "digests"
+    digest_dir.mkdir()
+    (digest_dir / "2026-07-01.md").write_text("clean digest", encoding="utf-8")
+    _seed_candidate(store, "t3_live")
+    stats = _purge(store, FakeDeletionSource(), digest_dir=digest_dir)
+    assert stats.digests_removed == 0
+    assert len(list(digest_dir.glob("*.md"))) == 1
+
+
 # -- deletion source auth ---------------------------------------------------------
 
 

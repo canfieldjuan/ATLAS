@@ -305,6 +305,10 @@ class ListeningStore:
         _require_int(observed_at, field="observed_at")
         _require_finite_number(keyword_score, field="keyword_score")
         _require_finite_number(final_score, field="final_score")
+        if self.is_purged(post_id):
+            # Tombstone: purged content must never resurrect, even when
+            # Reddit keeps returning the removed item in listings.
+            return
         with self._conn:
             self._conn.execute(
                 """
@@ -500,6 +504,8 @@ class ListeningStore:
         _require_id(thread_id, field="thread_id")
         _require_int(created_utc, field="created_utc")
         _require_bool(is_reply_to_me, field="is_reply_to_me")
+        if self.is_purged(reply_id):
+            return False  # tombstoned: purged content must never resurrect
         with self._conn:
             cursor = self._conn.execute(
                 """
@@ -554,26 +560,55 @@ class ListeningStore:
 
     # -- purge (deletion compliance, S6) -------------------------------------
 
-    def purge_candidate(self, post_id: str) -> bool:
-        """Delete a stored candidate row (third-party content). Returns
-        True when a row was actually removed. The caller records the
-        purge_log entry; this method only removes the content."""
-        _require_id(post_id, field="post_id")
+    def purge_item(
+        self,
+        item_id: str,
+        item_type: str,
+        *,
+        deleted_detected_at: int,
+        purged_at: int,
+        reason: str,
+    ) -> bool:
+        """Atomically delete one stored content row AND record the audit
+        entry in a single transaction: the compliance contract must never
+        end up with content deleted but no record (or vice versa), even
+        under an I/O error or interrupt between the two writes. Returns
+        True when a row was actually removed; no row means no log entry."""
+        _require_id(item_id, field="item_id")
+        _require_int(deleted_detected_at, field="deleted_detected_at")
+        _require_int(purged_at, field="purged_at")
+        if item_type == "candidate":
+            table, key = "candidates", "post_id"
+        elif item_type == "reply":
+            table, key = "replies", "reply_id"
+        else:
+            raise StoreError(
+                f"invalid purge item_type {item_type!r}; allowed: ('candidate', 'reply')"
+            )
         with self._conn:
             cursor = self._conn.execute(
-                "DELETE FROM candidates WHERE post_id = ?", (post_id,)
+                f"DELETE FROM {table} WHERE {key} = ?", (item_id,)
             )
-        return cursor.rowcount == 1
+            if cursor.rowcount != 1:
+                return False
+            self._conn.execute(
+                """
+                INSERT INTO purge_log (
+                    item_id, item_type, deleted_detected_at, purged_at, reason
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (item_id, item_type, deleted_detected_at, purged_at, reason),
+            )
+        return True
 
-    def purge_reply(self, reply_id: str) -> bool:
-        """Delete a stored reply row (third-party content). Returns True
-        when a row was actually removed."""
-        _require_id(reply_id, field="reply_id")
-        with self._conn:
-            cursor = self._conn.execute(
-                "DELETE FROM replies WHERE reply_id = ?", (reply_id,)
-            )
-        return cursor.rowcount == 1
+    def is_purged(self, item_id: str) -> bool:
+        """Tombstone check: has this id ever been purged? Ingestion paths
+        consult this so re-listed removed content cannot resurrect."""
+        _require_id(item_id, field="item_id")
+        row = self._conn.execute(
+            "SELECT 1 FROM purge_log WHERE item_id = ? LIMIT 1", (item_id,)
+        ).fetchone()
+        return row is not None
 
     # -- purge log ----------------------------------------------------------
 

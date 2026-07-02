@@ -192,6 +192,15 @@ def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
         default=defaults.pace_seconds,
         help=f"Sleep between check batches (default: {defaults.pace_seconds}s)",
     )
+    purge.add_argument(
+        "--digest-dir",
+        type=Path,
+        default=defaults.digest_dir,
+        help=(
+            "Digest directory; rendered digests are removed when content "
+            f"was purged (default: {defaults.digest_dir})"
+        ),
+    )
 
     mark = subparsers.add_parser(
         "mark-read", help="Mark one reply as seen (drops it from the digest)."
@@ -334,13 +343,15 @@ def main(argv: list[str] | None = None) -> int:
                     source,
                     now=int(datetime.now(tz=timezone.utc).timestamp()),
                     pace_seconds=args.pace_seconds,
+                    digest_dir=args.digest_dir,
                 )
         except (StoreError, RedditAuthError, OSError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(
             f"checked={stats.checked} purged_candidates={stats.purged_candidates} "
-            f"purged_replies={stats.purged_replies} errors={len(stats.errors)}"
+            f"purged_replies={stats.purged_replies} "
+            f"digests_removed={stats.digests_removed} errors={len(stats.errors)}"
         )
         for line in stats.errors:
             print(f"warning: {line}", file=sys.stderr)

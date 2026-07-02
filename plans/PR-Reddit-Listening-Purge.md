@@ -151,6 +151,30 @@ fixed at root in this PR):
   content deleted since the last pass. Fixed: purge runs before digest
   in the documented flow, with the reason stated inline.
 
+Review-fix notes (Codex wave 2 on d10f32587; all four verified real and
+fixed at root in this PR):
+
+- **The shape guard admitted wrong-KIND fullnames** (t2_ user ids in
+  candidates would still be purged as missing). Root cause: the wave-1
+  guard validated "is a fullname" but not "is the right kind for its
+  table". Fixed per table (candidates t3_, replies t1_); wrong-kind rows
+  are retained and surfaced.
+- **Delete and audit log were separate transactions**: an I/O error or
+  interrupt between them deletes content with no record. Root cause:
+  action and audit in different transactions. Fixed with an atomic
+  store.purge_item (single transaction; the log entry exists IFF the row
+  was deleted; probed from both directions).
+- **Rendered digest files retained purged content indefinitely**: local
+  compliance covers artifacts, not just rows. Fixed: a pass that purged
+  content also removes existing digest files (regenerable projections of
+  the now-clean store); a zero-purge pass -- which proves store and
+  artifacts consistent -- leaves them. Both sides probed.
+- **Purged ids could resurrect via re-ingestion**: Reddit keeps returning
+  removed items in listings, and ingestion never consulted the log.
+  Root cause: purge_log was audit-only. Fixed: it now tombstones --
+  upsert_candidate and insert_reply refuse previously purged ids, ending
+  the re-ingest/re-purge cycle.
+
 ## Deferred
 
 - Scheduling (cron/autonomous task) for poll/track/digest/purge: beyond
@@ -169,15 +193,18 @@ Parked hardening: none.
   `tests/test_atlas_reddit_tracker.py`, `tests/test_atlas_reddit_poller.py`,
   `tests/test_atlas_reddit_digest.py`, `tests/test_atlas_reddit_store.py`,
   `tests/test_atlas_reddit_config.py`, and
-  `tests/test_atlas_reddit_scoring.py`: 305 passed (both-sides deletion
+  `tests/test_atlas_reddit_scoring.py`: 310 passed (both-sides deletion
   probes, digest disappearance end-to-end, replay idempotence with no
   duplicate log entries, 100-item batching with n-1 pacing, failed-batch
   containment with continued purging, tracked-thread retention,
   read-scope floor, read-only surface, CLI no-creds and pace-ceiling
   exits; wave-1 probes: malformed-id retained-not-missing, REAL producer
   mapping stores fullnames via stub praw, removed-body-with-author gone,
-  author-deleted-content-intact live, absent-from-info missing). This
-  line is the single verification-count source; the PR body mirrors it.
+  author-deleted-content-intact live, absent-from-info missing; wave-2
+  probes: wrong-kind-per-table retained, purge_item atomicity both
+  directions, tombstoned re-ingestion refused on both write paths,
+  digest artifacts removed-when-purged/kept-when-clean). This line is
+  the single verification-count source; the PR body mirrors it.
 - ASCII byte-scan on the five changed Python files: clean.
 - python `scripts/sync_pr_plan.py` on this plan: tables regenerated from
   the real diff.
@@ -187,13 +214,13 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_reddit/__main__.py` | 51 |
-| `atlas_reddit/purge.py` | 98 |
+| `atlas_reddit/__main__.py` | 62 |
+| `atlas_reddit/purge.py` | 121 |
 | `atlas_reddit/reddit_client.py` | 76 |
-| `atlas_reddit/store.py` | 23 |
+| `atlas_reddit/store.py` | 58 |
 | `docs/REDDIT_LISTENING_SETUP_RUNBOOK.md` | 9 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Purge.md` | 199 |
+| `plans/PR-Reddit-Listening-Purge.md` | 226 |
 | `plans/archive/PR-Reddit-Listening-Reply-Tracker.md` | 0 |
-| `tests/test_atlas_reddit_purge.py` | 392 |
-| **Total** | **851** |
+| `tests/test_atlas_reddit_purge.py` | 480 |
+| **Total** | **1035** |
