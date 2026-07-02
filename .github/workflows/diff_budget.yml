@@ -1,0 +1,33 @@
+name: Diff Budget
+
+# The AGENTS.md 400 LOC soft cap, enforced mechanically (#1934 / #1943):
+# added lines over budget fail unless the body carries an explicit
+# "Diff-budget override: <reason>" line. `edited` is included because the
+# fix path IS a body edit; see plans/PR-Diff-Budget-Gate.md.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  diff-budget:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Diff budget check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/check_diff_budget.py \
+            --pr "${{ github.event.pull_request.number }}"
