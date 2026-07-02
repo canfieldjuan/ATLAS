@@ -47,6 +47,8 @@ _MAX_BONUS = 5.0
 MAX_FRESHNESS_HOURS = 720
 MAX_PER_SUBREDDIT_LIMIT = 100
 MAX_PACE_SECONDS = 60.0
+MAX_HISTORY_LIMIT = 100
+MAX_DORMANT_AFTER_HOURS = 8760
 
 _ALLOWED_TOP_KEYS = {
     "version",
@@ -137,6 +139,21 @@ class RedditListeningSettings(BaseSettings):
         default=0.5,
         ge=0.0,
         description="Minimum final score for a post to be stored as a candidate.",
+    )
+    history_limit: int = Field(
+        default=50,
+        ge=1,
+        le=MAX_HISTORY_LIMIT,
+        description="Own recent comments/submissions fetched per tracking pass.",
+    )
+    dormant_after_hours: int = Field(
+        default=168,
+        ge=1,
+        le=MAX_DORMANT_AFTER_HOURS,
+        description=(
+            "A tracked thread goes dormant when its newest known activity "
+            "is older than this quiet window (default one week)."
+        ),
     )
 
 

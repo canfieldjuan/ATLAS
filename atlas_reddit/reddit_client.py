@@ -71,6 +71,46 @@ class ListingSource(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class OwnActivity:
+    """One of the operator's own recent comments or submissions."""
+
+    item_id: str
+    thread_id: str
+    created_utc: int
+
+
+@dataclass(frozen=True)
+class ThreadReply:
+    """A reply observed on a tracked thread."""
+
+    reply_id: str
+    thread_id: str
+    parent_id: str | None
+    author: str | None
+    body: str
+    created_utc: int
+    is_reply_to_me: bool
+
+
+class HistorySource(Protocol):
+    """The transport boundary the reply tracker consumes (S5). Tests
+    provide a fake; production provides :class:`PrawHistorySource`."""
+
+    def fetch_my_recent_comments(self, *, limit: int) -> list[OwnActivity]:
+        ...
+
+    def fetch_my_recent_submissions(self, *, limit: int) -> list[OwnActivity]:
+        ...
+
+    def fetch_thread_replies(
+        self, thread_id: str, *, my_comment_ids: frozenset[str]
+    ) -> list[ThreadReply]:
+        """Replies relevant to the operator on one thread: direct replies
+        to their comments plus top-level comments on their submissions."""
+        ...
+
+
 def validate_scopes(
     granted: Iterable[str],
     *,
@@ -174,3 +214,103 @@ class PrawListingSource:
                 )
             )
         return posts
+
+
+class PrawHistorySource:
+    """Production HistorySource over PRAW. Read-only by construction;
+    requires the full read/identity/history floor because own-activity
+    discovery needs identity+history and reply reads need read."""
+
+    _REQUIRED = frozenset({"read", "identity", "history"})
+
+    def __init__(self, settings: RedditListeningSettings) -> None:
+        client_id = settings.client_id
+        client_secret = settings.client_secret.get_secret_value()
+        refresh_token = settings.refresh_token.get_secret_value()
+        if not (client_id and client_secret and refresh_token and settings.username):
+            raise RedditAuthError(
+                "missing Reddit credentials: set ATLAS_REDDIT_CLIENT_ID, "
+                "ATLAS_REDDIT_CLIENT_SECRET, ATLAS_REDDIT_REFRESH_TOKEN, and "
+                "ATLAS_REDDIT_USERNAME (see docs/REDDIT_LISTENING_SETUP_RUNBOOK.md)"
+            )
+        user_agent = build_user_agent(settings.username)
+
+        try:
+            import praw  # lazy: tests fake the transport and never need it
+        except ImportError as exc:
+            raise RedditAuthError(
+                "praw is not installed; run pip install -r requirements.txt"
+            ) from exc
+
+        try:
+            self._reddit = praw.Reddit(
+                client_id=client_id,
+                client_secret=client_secret,
+                refresh_token=refresh_token,
+                user_agent=user_agent,
+                check_for_updates=False,
+            )
+            granted = self._reddit.auth.scopes()
+        except Exception as exc:
+            raise RedditAuthError(f"Reddit authentication failed: {exc}") from exc
+        self._scopes = validate_scopes(granted, required=self._REQUIRED)
+        try:
+            self._me = self._reddit.user.me()
+        except Exception as exc:
+            raise RedditAuthError(f"Reddit identity lookup failed: {exc}") from exc
+
+    def granted_scopes(self) -> frozenset[str]:
+        return self._scopes
+
+    def fetch_my_recent_comments(self, *, limit: int) -> list[OwnActivity]:
+        items: list[OwnActivity] = []
+        for comment in self._me.comments.new(limit=limit):
+            items.append(
+                OwnActivity(
+                    item_id=comment.fullname,
+                    thread_id=comment.link_id,
+                    created_utc=int(comment.created_utc),
+                )
+            )
+        return items
+
+    def fetch_my_recent_submissions(self, *, limit: int) -> list[OwnActivity]:
+        items: list[OwnActivity] = []
+        for submission in self._me.submissions.new(limit=limit):
+            items.append(
+                OwnActivity(
+                    item_id=submission.fullname,
+                    thread_id=submission.fullname,
+                    created_utc=int(submission.created_utc),
+                )
+            )
+        return items
+
+    def fetch_thread_replies(
+        self, thread_id: str, *, my_comment_ids: frozenset[str]
+    ) -> list[ThreadReply]:
+        submission = self._reddit.submission(id=thread_id.removeprefix("t3_"))
+        submission.comments.replace_more(limit=0)
+        replies: list[ThreadReply] = []
+        my_name = getattr(self._me, "name", None)
+        for comment in submission.comments.list():
+            author = getattr(comment.author, "name", None)
+            if my_name and author == my_name:
+                continue  # own comments are not replies to surface
+            parent = comment.parent_id
+            direct_to_me = parent in my_comment_ids
+            top_level_on_my_post = parent == thread_id
+            if not (direct_to_me or top_level_on_my_post):
+                continue
+            replies.append(
+                ThreadReply(
+                    reply_id=comment.fullname,
+                    thread_id=thread_id,
+                    parent_id=parent,
+                    author=author,
+                    body=comment.body or "",
+                    created_utc=int(comment.created_utc),
+                    is_reply_to_me=True,
+                )
+            )
+        return replies
