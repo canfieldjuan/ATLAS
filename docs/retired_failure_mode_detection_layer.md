@@ -21,9 +21,14 @@ blocking guard from real data.
   runs before PR open/update and invokes the pre-push audit wrapper,
   extracted-test enrollment, PR/session drift, cross-layer caller hints,
   plan/code consistency, and whitespace checks.
-- `.github/workflows/pre_push_audit.yml` runs that same bundle on every PR and on
-  pushes to `main`, so a cheap detector added near this seam gets PR and merge
-  coverage without touching product-specific workflows.
+- `.github/workflows/pre_push_audit.yml` runs that same bundle on every PR, so a
+  cheap detector added near this seam gets PR coverage without touching
+  product-specific workflows. The workflow also triggers on pushes to `main`,
+  but that path is not usable for detection as-is: the wrapper diffs from
+  `merge-base HEAD origin/main`, and after checkout of the pushed `main`
+  commit `origin/main` is that same commit, so the changed-file and plan-diff
+  signatures see an empty diff. Main-push detection must pass an explicit
+  non-HEAD base such as the push event's `before` SHA (`github.event.before`).
 - `scripts/pre_push_audit.sh` is the lower-level wrapper for plan shape, plan
   files touched, plan diff-size, MCP docs, extracted manifest sync, and ASCII
   policy.
@@ -50,8 +55,13 @@ blocking guard from real data.
 
 Add a detector script, for example `scripts/detect_retired_failure_modes.py`, and
 call it from `.github/workflows/pre_push_audit.yml` after `bash
-scripts/local_pr_review.sh`. The step should use `continue-on-error: true` and
-write Markdown to `$GITHUB_STEP_SUMMARY`.
+scripts/local_pr_review.sh`. The step should use `continue-on-error: true`,
+write Markdown to `$GITHUB_STEP_SUMMARY`, and carry an explicit status
+condition such as `if: ${{ always() }}` (or `success() || failure()`).
+Without one, GitHub Actions applies the default `success()` condition and
+skips the detector whenever the review bundle step fails -- which is exactly
+when a recurrence signal is most likely. The alternative is to run the
+detector inside the bundle script itself so it cannot be skipped.
 
 Local developers can run the same script through `scripts/local_pr_review.sh`, but
 its exit code should be ignored or normalized to zero so it cannot block.
@@ -97,9 +107,13 @@ as `retired_failure_mode_signals.json`. The JSON should include:
 
 ### Hook
 
-Use the same detector script, but run it in a dedicated GitHub Action step with
-`pull-requests: write` permission. The step posts or updates one sticky PR comment
-bounded by markers such as:
+Use the same detector script, but run it in a dedicated GitHub Action step. A
+sticky timeline comment is created through the issue-comments API (every pull
+request is also an issue), so the workflow must grant `issues: write`;
+`pull-requests: write` alone covers review-comment and PR-mutation endpoints,
+not timeline comments. Grant `issues: write` for this variant, or switch to PR
+review comments under `pull-requests: write`. The step posts or updates one
+sticky PR comment bounded by markers such as:
 
 ```markdown
 <!-- retired-failure-mode-detector:start -->

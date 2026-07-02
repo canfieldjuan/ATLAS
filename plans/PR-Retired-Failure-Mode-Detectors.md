@@ -55,15 +55,24 @@ Parked hardening: none.
 
 ## Verification
 
-- Sync plan helper completed against `HEAD~1`.
-- Sync plan check completed against `HEAD~1`.
-- Local PR review helper completed against `HEAD~1` with environment warnings
-  noted in the final report.
+Commands run from the repo root on this branch rebased onto `origin/main`:
+
+- `bash scripts/local_pr_review.sh --current-pr-body-file <pr-body.md>` -- the
+  full CI review bundle (pre-push audit wrapper covering MCP docs, extracted
+  manifest sync, plan shape, plan files touched, plan diff size, and ASCII
+  policy; extracted pipeline CI enrollment; cross-session PR drift; cross-layer
+  caller hints; plan/code consistency; `git diff --check`). Result: all checks
+  PASS, 0 failed. The open-PR overlap probe reports `skipped (gh not found)`
+  in this environment; the same probe runs fully in CI where `gh` is available.
+- `python scripts/check_diff_budget.py --additions 354 --body-file
+  <pr-body.md>` -- offline mode with the added-line count from
+  `git diff origin/main --numstat`; within the 400 budget, no override marker
+  needed. Result: PASS.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/retired_failure_mode_detection_layer.md` | 262 |
-| `plans/PR-Retired-Failure-Mode-Detectors.md` | 69 |
-| **Total** | **331** |
+| `docs/retired_failure_mode_detection_layer.md` | 276 |
+| `plans/PR-Retired-Failure-Mode-Detectors.md` | 78 |
+| **Total** | **354** |
