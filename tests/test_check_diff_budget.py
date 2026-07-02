@@ -80,12 +80,26 @@ class TestOverBudgetWithOverride:
             "diff-budget override: reason here",
             "**Diff-budget override:** reason here",
             "- Diff-budget override: reason here",
-            "> Diff budget override: reason here",
         ],
     )
     def test_marker_format_variants_accepted(self, line):
         code, _ = mod.evaluate(500, line, BUDGET)
         assert code == 0
+
+    def test_blockquoted_marker_is_not_a_decision(self):
+        # a quote is quoting text (e.g. the gate's failure message)
+        code, _ = mod.evaluate(500, "> Diff-budget override: real-looking", BUDGET)
+        assert code == 1
+
+    def test_blockquoted_fence_marker_is_ignored(self):
+        body = "> ```\n> Diff-budget override: quoted example\n> ```\n"
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 1
+
+    def test_list_nested_fence_marker_is_ignored(self):
+        body = "- ```\n  Diff-budget override: listed example\n- ```\n"
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 1
 
     def test_marker_must_be_line_anchored(self):
         # mid-sentence mention must not count as a marker
@@ -132,8 +146,10 @@ class TestFencedMarkers:
         code, _ = mod.evaluate(900, "   Diff-budget override: real reason", BUDGET)
         assert code == 0
 
-    @pytest.mark.parametrize("reason", ["TODO.", "n/a.", "(tbd)",
-                                        "<why this slice is genuinely indivisible>."])
+    @pytest.mark.parametrize("reason", ["TODO.", "n/a.", "(tbd)", "TODO -",
+                                        "n/a -",
+                                        "<why this slice is genuinely indivisible>.",
+                                        "<why this slice is genuinely indivisible> --"])
     def test_punctuated_placeholder_reasons_fail(self, reason):
         code, _ = mod.evaluate(500, f"Diff-budget override: {reason}", BUDGET)
         assert code == 1
@@ -151,6 +167,12 @@ class TestFetchGuards:
     def test_missing_or_non_numeric_additions_raises(self, monkeypatch, payload):
         monkeypatch.setattr(mod, "_gh", lambda args, gh: payload)
         with pytest.raises(RuntimeError, match="additions"):
+            mod.fetch_pr(1, "owner/repo", "gh")
+
+    @pytest.mark.parametrize("payload", ["[]", '"str"', "3"])
+    def test_non_object_json_root_raises(self, monkeypatch, payload):
+        monkeypatch.setattr(mod, "_gh", lambda args, gh: payload)
+        with pytest.raises(RuntimeError, match="non-object"):
             mod.fetch_pr(1, "owner/repo", "gh")
 
 

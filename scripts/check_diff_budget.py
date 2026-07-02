@@ -28,9 +28,11 @@ DEFAULT_BUDGET = 400
 # The override must be an explicit line-anchored marker, not prose that
 # happens to mention the budget. The reason is everything after the colon.
 # At most 3 leading spaces: 4+ (or a tab) is a Markdown indented code block,
-# i.e. documentation of the syntax, not a decision.
+# i.e. documentation of the syntax, not a decision. Blockquoted (">") lines
+# never count either -- a quote is quoting text, not making a decision --
+# which also kills every quoted-fence evasion at the definition.
 OVERRIDE_RE = re.compile(
-    r"^ {0,3}(?:[-*>]\s*)?\**diff[ -]?budget\s+override\**\s*:\s*(?P<reason>.*)$",
+    r"^ {0,3}(?:[-*]\s*)?\**diff[ -]?budget\s+override\**\s*:\s*(?P<reason>.*)$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -42,9 +44,12 @@ PLACEHOLDER_REASON_RE = re.compile(
 )
 
 # Fenced code blocks (``` or ~~~) are documentation, not decisions: a marker
-# inside a fence (e.g. this gate's own syntax example) must not count.
-FENCE_RE = re.compile(r"^[ \t]*(?:```|~~~).*?(?:^[ \t]*(?:```|~~~)[ \t]*$|\Z)",
-                      re.MULTILINE | re.DOTALL)
+# inside a fence (e.g. this gate's own syntax example) must not count. Fence
+# lines may carry blockquote/list prefixes (fences nested in quotes/lists).
+FENCE_RE = re.compile(
+    r"^[ \t>*+-]*(?:```|~~~).*?(?:^[ \t>*+-]*(?:```|~~~)[ \t]*$|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
 
 
 def find_override_reason(body: str) -> str | None:
@@ -64,7 +69,7 @@ def find_override_reason(body: str) -> str | None:
         reason = match.group("reason").strip().strip("*").strip()
         # Classify on a punctuation-normalized form so "TODO." or
         # "<template>." cannot dodge the placeholder check via a stray dot.
-        trimmed = reason.strip(" \t.*_~`'\"!?,;:()[]{}")
+        trimmed = reason.strip(" \t.*_~`'\"!?,;:()[]{}-/\u2013\u2014")
         if PLACEHOLDER_REASON_RE.fullmatch(trimmed):
             continue
         if not re.search(r"[A-Za-z0-9]", trimmed):
@@ -121,6 +126,8 @@ def fetch_pr(pr: int, repo: str, gh: str) -> tuple[int, str]:
         data = json.loads(out)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"gh returned non-JSON output: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"gh returned non-object JSON root: {type(data).__name__}")
     additions = data.get("additions")
     if not isinstance(additions, int) or isinstance(additions, bool):
         # Fail closed: a missing/null count must be a retryable error (exit 2),
