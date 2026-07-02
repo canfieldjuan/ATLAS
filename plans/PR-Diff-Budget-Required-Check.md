@@ -24,8 +24,9 @@ Slice phase: Vertical slice
    missing-context failure ordering.
 3. `docs/SECURITY_GUARDRAILS.md` -- the branch-protection sentence names
    `diff-budget`.
-4. Housekeeping: archive the merged `plans/PR-Diff-Budget-Gate.md` and
-   regenerate `plans/INDEX.md` (arc convention: rides the next slice).
+4. Housekeeping: archive the merged diff-budget gate plan to
+   `plans/archive/PR-Diff-Budget-Gate.md` and regenerate `plans/INDEX.md`
+   (arc convention: rides the next slice).
 
 ### Review Contract
 
@@ -33,7 +34,7 @@ Slice phase: Vertical slice
   payload or present only as a legacy/unpinned context; passes when pinned
   to the GitHub Actions app; docs test asserts the doc names the gitleaks
   checks (unchanged) and the doc paragraph now lists diff-budget.
-- Reviewer rules triggered: R10 (gate predicate expectation change),
+- Reviewer rules triggered: R2, R10 (gate predicate expectation change),
   R12 (tests already enrolled via test_security_guardrails_workflow.py in
   the pre-push-audit list).
 
