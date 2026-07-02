@@ -37,7 +37,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 CANDIDATE_STATUSES = ("new", "seen", "dismissed", "responded")
 PURGE_ITEM_TYPES = ("candidate", "reply", "thread")
@@ -243,28 +243,59 @@ class ListeningStore:
                 self._conn.executescript(_SCHEMA_DDL)
                 self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
-        if version == 1:
-            # v1 -> v2 (S5): tracked_threads gains the own-submission flag
-            # (top-level replies are only "to me" on my own posts) and a
-            # persisted last_activity timestamp (history-window eviction
-            # must not read as inactivity). Additive, backfilled from
-            # stored replies; no data is dropped.
+        if 1 <= version < SCHEMA_VERSION:
+            # Migrations apply as a sequential ladder so any older version
+            # reaches the current one in a single open.
             with self._conn:
-                self._conn.execute(
-                    "ALTER TABLE tracked_threads ADD COLUMN is_own_submission "
-                    "INTEGER NOT NULL DEFAULT 0 CHECK (is_own_submission IN (0, 1))"
-                )
-                self._conn.execute(
-                    "ALTER TABLE tracked_threads ADD COLUMN last_activity INTEGER"
-                )
-                self._conn.execute(
-                    """
-                    UPDATE tracked_threads SET last_activity = (
-                        SELECT MAX(created_utc) FROM replies
-                        WHERE replies.thread_id = tracked_threads.thread_id
+                if version < 2:
+                    # v1 -> v2 (S5): tracked_threads gains the
+                    # own-submission flag (top-level replies are only "to
+                    # me" on my own posts) and a persisted last_activity
+                    # timestamp (history-window eviction must not read as
+                    # inactivity). Additive, backfilled from stored
+                    # replies; no data is dropped.
+                    self._conn.execute(
+                        "ALTER TABLE tracked_threads ADD COLUMN is_own_submission "
+                        "INTEGER NOT NULL DEFAULT 0 CHECK (is_own_submission IN (0, 1))"
                     )
-                    """
-                )
+                    self._conn.execute(
+                        "ALTER TABLE tracked_threads ADD COLUMN last_activity INTEGER"
+                    )
+                    self._conn.execute(
+                        """
+                        UPDATE tracked_threads SET last_activity = (
+                            SELECT MAX(created_utc) FROM replies
+                            WHERE replies.thread_id = tracked_threads.thread_id
+                        )
+                        """
+                    )
+                if version < 3:
+                    # v2 -> v3 (S6): the poller switched candidate ids from
+                    # bare submission ids to fullnames (t3_...). Legacy
+                    # bare base36 ids are canonicalized so upgraded stores
+                    # do not duplicate posts or strand rows the purge
+                    # guard would flag as malformed forever. A bare row
+                    # whose fullname twin already exists is dropped (the
+                    # twin is fresher); true junk ids stay for the purge
+                    # guard to surface.
+                    self._conn.execute(
+                        """
+                        DELETE FROM candidates
+                        WHERE post_id NOT GLOB 't3_*'
+                          AND post_id NOT GLOB '*[^a-z0-9]*'
+                          AND EXISTS (
+                            SELECT 1 FROM candidates c2
+                            WHERE c2.post_id = 't3_' || candidates.post_id
+                          )
+                        """
+                    )
+                    self._conn.execute(
+                        """
+                        UPDATE candidates SET post_id = 't3_' || post_id
+                        WHERE post_id NOT GLOB 't3_*'
+                          AND post_id NOT GLOB '*[^a-z0-9]*'
+                        """
+                    )
                 self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         # Fail closed on schemas this code does not know how to read --
@@ -305,6 +336,10 @@ class ListeningStore:
         _require_int(observed_at, field="observed_at")
         _require_finite_number(keyword_score, field="keyword_score")
         _require_finite_number(final_score, field="final_score")
+        if self.is_purged(post_id):
+            # Tombstone: purged content must never resurrect, even when
+            # Reddit keeps returning the removed item in listings.
+            return
         with self._conn:
             self._conn.execute(
                 """
@@ -500,6 +535,8 @@ class ListeningStore:
         _require_id(thread_id, field="thread_id")
         _require_int(created_utc, field="created_utc")
         _require_bool(is_reply_to_me, field="is_reply_to_me")
+        if self.is_purged(reply_id):
+            return False  # tombstoned: purged content must never resurrect
         with self._conn:
             cursor = self._conn.execute(
                 """
@@ -551,6 +588,58 @@ class ListeningStore:
         query += " ORDER BY created_utc ASC, reply_id ASC"
         rows = self._conn.execute(query, params).fetchall()
         return [_reply_from_row(row) for row in rows]
+
+    # -- purge (deletion compliance, S6) -------------------------------------
+
+    def purge_item(
+        self,
+        item_id: str,
+        item_type: str,
+        *,
+        deleted_detected_at: int,
+        purged_at: int,
+        reason: str,
+    ) -> bool:
+        """Atomically delete one stored content row AND record the audit
+        entry in a single transaction: the compliance contract must never
+        end up with content deleted but no record (or vice versa), even
+        under an I/O error or interrupt between the two writes. Returns
+        True when a row was actually removed; no row means no log entry."""
+        _require_id(item_id, field="item_id")
+        _require_int(deleted_detected_at, field="deleted_detected_at")
+        _require_int(purged_at, field="purged_at")
+        if item_type == "candidate":
+            table, key = "candidates", "post_id"
+        elif item_type == "reply":
+            table, key = "replies", "reply_id"
+        else:
+            raise StoreError(
+                f"invalid purge item_type {item_type!r}; allowed: ('candidate', 'reply')"
+            )
+        with self._conn:
+            cursor = self._conn.execute(
+                f"DELETE FROM {table} WHERE {key} = ?", (item_id,)
+            )
+            if cursor.rowcount != 1:
+                return False
+            self._conn.execute(
+                """
+                INSERT INTO purge_log (
+                    item_id, item_type, deleted_detected_at, purged_at, reason
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (item_id, item_type, deleted_detected_at, purged_at, reason),
+            )
+        return True
+
+    def is_purged(self, item_id: str) -> bool:
+        """Tombstone check: has this id ever been purged? Ingestion paths
+        consult this so re-listed removed content cannot resurrect."""
+        _require_id(item_id, field="item_id")
+        row = self._conn.execute(
+            "SELECT 1 FROM purge_log WHERE item_id = ? LIMIT 1", (item_id,)
+        ).fetchone()
+        return row is not None
 
     # -- purge log ----------------------------------------------------------
 

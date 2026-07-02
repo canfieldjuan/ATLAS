@@ -28,9 +28,15 @@ from .config import (
     load_watchlist,
 )
 from .digest import write_digest
-from .reddit_client import PrawHistorySource, PrawListingSource, RedditAuthError
+from .reddit_client import (
+    PrawDeletionSource,
+    PrawHistorySource,
+    PrawListingSource,
+    RedditAuthError,
+)
 from .poller import poll_once
 from .tracker import track_once
+from .purge import purge_once
 from .store import ListeningStore, StoreError
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -169,6 +175,33 @@ def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
         help=f"Sleep between thread fetches (default: {defaults.pace_seconds}s)",
     )
 
+    purge = subparsers.add_parser(
+        "purge",
+        help="Deletion-compliance pass: drop stored content that is "
+        "deleted/removed/missing on Reddit (run at least every 48h).",
+    )
+    purge.add_argument(
+        "--db",
+        type=Path,
+        default=defaults.db_path,
+        help=f"SQLite state file (default: {defaults.db_path})",
+    )
+    purge.add_argument(
+        "--pace-seconds",
+        type=_finite_float,
+        default=defaults.pace_seconds,
+        help=f"Sleep between check batches (default: {defaults.pace_seconds}s)",
+    )
+    purge.add_argument(
+        "--digest-dir",
+        type=Path,
+        default=defaults.digest_dir,
+        help=(
+            "Digest directory; digest files older than the latest purge "
+            f"are removed (default: {defaults.digest_dir})"
+        ),
+    )
+
     mark = subparsers.add_parser(
         "mark-read", help="Mark one reply as seen (drops it from the digest)."
     )
@@ -292,6 +325,33 @@ def main(argv: list[str] | None = None) -> int:
             f"woken={stats.threads_woken} dormant={stats.threads_marked_dormant} "
             f"new_replies={stats.replies_new} replayed={stats.replies_replayed} "
             f"errors={len(stats.errors)}"
+        )
+        for line in stats.errors:
+            print(f"warning: {line}", file=sys.stderr)
+        return 0 if not stats.errors else 1
+
+    if args.command == "purge":
+        if not 0 <= args.pace_seconds <= MAX_PACE_SECONDS:
+            parser.error(
+                f"--pace-seconds must be 0..{MAX_PACE_SECONDS}, got {args.pace_seconds}"
+            )
+        try:
+            source = PrawDeletionSource(settings)
+            with ListeningStore(args.db) as store:
+                stats = purge_once(
+                    store,
+                    source,
+                    now=int(datetime.now(tz=timezone.utc).timestamp()),
+                    pace_seconds=args.pace_seconds,
+                    digest_dir=args.digest_dir,
+                )
+        except (StoreError, RedditAuthError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"checked={stats.checked} purged_candidates={stats.purged_candidates} "
+            f"purged_replies={stats.purged_replies} "
+            f"digests_removed={stats.digests_removed} errors={len(stats.errors)}"
         )
         for line in stats.errors:
             print(f"warning: {line}", file=sys.stderr)

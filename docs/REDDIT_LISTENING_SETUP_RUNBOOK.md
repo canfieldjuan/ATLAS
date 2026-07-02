@@ -88,9 +88,17 @@ ATLAS_REDDIT_USERNAME=your_reddit_username
 mkdir -p data/atlas_reddit
 cp atlas_reddit/watchlist.sample.toml data/atlas_reddit/watchlist.toml
 # edit the watchlist, then:
-python -m atlas_reddit poll     # one polite read-only pass
-python -m atlas_reddit digest   # render today's digest
+python -m atlas_reddit poll     # radar: newest posts from the watchlist
+python -m atlas_reddit track    # reply tracker: own threads + new replies
+python -m atlas_reddit purge    # deletion-compliance pass BEFORE digest...
+python -m atlas_reddit digest   # ...so it never surfaces content deleted
+                                # on Reddit since the last purge
 ```
+
+Deletion compliance: run `purge` at least every 48 hours while any stored
+content exists. It re-checks every stored post and reply in batched reads
+(100 per request); content that is deleted/removed/missing on Reddit is
+dropped locally and recorded in `purge_log` with the detection reason.
 
 The first `poll` run proves the auth boundary end to end: if the token
 carries any scope beyond identity/history/read (or the wildcard `*`), the
