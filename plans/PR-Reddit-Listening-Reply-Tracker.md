@@ -92,6 +92,7 @@ Slice phase: Vertical slice
 - `atlas_reddit/__main__.py`
 - `atlas_reddit/config.py`
 - `atlas_reddit/reddit_client.py`
+- `atlas_reddit/store.py`
 - `atlas_reddit/tracker.py`
 - `plans/INDEX.md`
 - `plans/PR-Reddit-Listening-Reply-Tracker.md`
@@ -147,6 +148,47 @@ submission (top-level responses), and skips the operator's own comments.
 - **Housekeeping commit in this branch**: authorized fold-in (#1934
   comment 4860540364).
 
+Review-fix notes (Codex wave 1 on a70bfd2b9; all five verified real and
+fixed at root in this PR):
+
+- **P1: top-level comments treated as replies-to-me on threads discovered
+  from my comments on OTHER people's posts** -- digest pollution from
+  strangers' unrelated top-level comments. Root cause: the own-submission
+  signal was lost between discovery and reply extraction because the
+  store never persisted it. Fixed structurally with schema v2:
+  tracked_threads gains a sticky is_own_submission flag (once my post,
+  always my post), the tracker passes it as include_top_level, and the
+  client applies the top-level rule only when set. Probed both ways plus
+  stickiness.
+- **replace_more(limit=0) silently DISCARDED deep replies** behind
+  MoreComments placeholders (PRAW-documented semantics). Root cause:
+  wrong expansion strategy for the reply-tracking contract. Fixed by
+  fetching direct replies from the operator's own comment ids
+  (comment.refresh() per comment -- precise and bounded by the operator's
+  comment count) and scanning top-level responses only on own submissions
+  with a bounded MoreComments budget (named trade-off for mega-threads).
+- **History fetch failures escaped everything** (prawcore transport errors
+  after auth bypass both track_once and the CLI catch). Root cause:
+  pass-level transport failures had no containment. Fixed like per-thread
+  errors: recorded in stats, and polling of existing threads continues.
+- **History-window eviction read as inactivity**: a busy account's recent
+  thread scrolling out of the fetch window went dormant, violating the
+  quiet-window contract. Root cause: activity timestamps were not
+  persisted; eviction was conflated with inactivity. Fixed in schema v2:
+  a persisted last_activity high-water mark (monotonic
+  record_thread_activity), advanced at discovery and on every new reply,
+  backfilled from stored replies during migration.
+- **Failed reply fetches skipped dormancy aging**: dead/private threads
+  were retried forever -- defeating the lifecycle for exactly the error
+  cases the isolation tolerates. Root cause: the error path bypassed the
+  lifecycle. Fixed: dormancy is evaluated on EVERY path from the
+  persisted high-water mark.
+
+The v1 -> v2 migration is additive (two columns + reply-derived
+backfill), exercised by a real migration test that builds a v1 database
+with the original DDL, opens it, and proves columns, backfill, and data
+survival.
+
 ## Deferred
 
 - S6 deletion-compliance purge job (last arc slice; purge_log ready).
@@ -161,13 +203,16 @@ Parked hardening: none.
 - pytest on `tests/test_atlas_reddit_tracker.py` plus the existing
   `tests/test_atlas_reddit_poller.py`, `tests/test_atlas_reddit_digest.py`,
   `tests/test_atlas_reddit_store.py`, `tests/test_atlas_reddit_config.py`,
-  and `tests/test_atlas_reddit_scoring.py`: 281 passed (discovery from
+  and `tests/test_atlas_reddit_scoring.py`: 287 passed (discovery from
   comments+submissions, union-merge rediscovery, replay-safe replies,
   digest warm-section end-to-end through the real writer, per-thread
   error isolation, n-1 pacing, dormancy both sides incl. stale-reply and
   stale-rediscovery probes, dormant-not-polled, wake-then-poll, scope
   floor for the history source, read-only public surface, CLI
-  no-creds/knob-ceilings/mark-read happy+unknown). This line is the
+  no-creds/knob-ceilings/mark-read happy+unknown; wave-1 probes:
+  top-level gating both ways + sticky flag, history-failure containment
+  with continued polling, eviction-not-inactivity, error-path aging, and
+  the real v1->v2 migration with backfill). This line is the
   single verification-count source; the PR body mirrors it.
 - ASCII byte-scan on the five changed Python files: clean.
 - python `scripts/sync_pr_plan.py` on this plan: tables regenerated from
@@ -180,10 +225,11 @@ Parked hardening: none.
 |---|---:|
 | `atlas_reddit/__main__.py` | 92 |
 | `atlas_reddit/config.py` | 17 |
-| `atlas_reddit/reddit_client.py` | 140 |
-| `atlas_reddit/tracker.py` | 140 |
+| `atlas_reddit/reddit_client.py` | 168 |
+| `atlas_reddit/store.py` | 72 |
+| `atlas_reddit/tracker.py` | 163 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Reply-Tracker.md` | 174 |
+| `plans/PR-Reddit-Listening-Reply-Tracker.md` | 233 |
 | `plans/archive/PR-Reddit-Listening-Praw-Poller.md` | 0 |
-| `tests/test_atlas_reddit_tracker.py` | 361 |
-| **Total** | **927** |
+| `tests/test_atlas_reddit_tracker.py` | 502 |
+| **Total** | **1250** |

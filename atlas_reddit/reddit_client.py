@@ -104,10 +104,15 @@ class HistorySource(Protocol):
         ...
 
     def fetch_thread_replies(
-        self, thread_id: str, *, my_comment_ids: frozenset[str]
+        self,
+        thread_id: str,
+        *,
+        my_comment_ids: frozenset[str],
+        include_top_level: bool,
     ) -> list[ThreadReply]:
         """Replies relevant to the operator on one thread: direct replies
-        to their comments plus top-level comments on their submissions."""
+        to their comments, plus top-level comments only when the thread is
+        the operator's own submission (include_top_level)."""
         ...
 
 
@@ -287,21 +292,30 @@ class PrawHistorySource:
         return items
 
     def fetch_thread_replies(
-        self, thread_id: str, *, my_comment_ids: frozenset[str]
+        self,
+        thread_id: str,
+        *,
+        my_comment_ids: frozenset[str],
+        include_top_level: bool,
     ) -> list[ThreadReply]:
-        submission = self._reddit.submission(id=thread_id.removeprefix("t3_"))
-        submission.comments.replace_more(limit=0)
-        replies: list[ThreadReply] = []
+        """Direct replies come from refreshing each of the operator's own
+        comments (precise and bounded by the operator's comment count --
+        replace_more(limit=0) would silently DISCARD deep replies hidden
+        behind MoreComments placeholders). Top-level responses are scanned
+        only when the thread is the operator's own submission, with a
+        bounded MoreComments budget (a single-user post rarely exceeds it;
+        the budget is a named trade-off, not an accident)."""
         my_name = getattr(self._me, "name", None)
-        for comment in submission.comments.list():
+        replies: list[ThreadReply] = []
+        seen_ids: set[str] = set()
+
+        def _admit(comment, parent: str) -> None:
             author = getattr(comment.author, "name", None)
             if my_name and author == my_name:
-                continue  # own comments are not replies to surface
-            parent = comment.parent_id
-            direct_to_me = parent in my_comment_ids
-            top_level_on_my_post = parent == thread_id
-            if not (direct_to_me or top_level_on_my_post):
-                continue
+                return  # own comments are not replies to surface
+            if comment.fullname in seen_ids:
+                return
+            seen_ids.add(comment.fullname)
             replies.append(
                 ThreadReply(
                     reply_id=comment.fullname,
@@ -313,4 +327,18 @@ class PrawHistorySource:
                     is_reply_to_me=True,
                 )
             )
+
+        for comment_fullname in sorted(my_comment_ids):
+            own = self._reddit.comment(id=comment_fullname.removeprefix("t1_"))
+            own.refresh()
+            own.replies.replace_more(limit=None)  # one comment's children only
+            for child in own.replies:
+                _admit(child, comment_fullname)
+
+        if include_top_level:
+            submission = self._reddit.submission(id=thread_id.removeprefix("t3_"))
+            submission.comments.replace_more(limit=16)
+            for top in submission.comments:
+                _admit(top, thread_id)
+
         return replies

@@ -64,6 +64,7 @@ class FakeHistorySource:
         self.replies_by_thread = replies_by_thread or {}
         self.error_on = error_on or set()
         self.reply_calls: list[str] = []
+        self.top_level_flags: dict[str, bool] = {}
 
     def fetch_my_recent_comments(self, *, limit: int) -> list[OwnActivity]:
         return self.comments[:limit]
@@ -71,8 +72,11 @@ class FakeHistorySource:
     def fetch_my_recent_submissions(self, *, limit: int) -> list[OwnActivity]:
         return self.submissions[:limit]
 
-    def fetch_thread_replies(self, thread_id: str, *, my_comment_ids: frozenset[str]):
+    def fetch_thread_replies(
+        self, thread_id: str, *, my_comment_ids: frozenset[str], include_top_level: bool
+    ):
         self.reply_calls.append(thread_id)
+        self.top_level_flags[thread_id] = include_top_level
         if thread_id in self.error_on:
             raise ConnectionError("boom")
         return self.replies_by_thread.get(thread_id, [])
@@ -359,3 +363,140 @@ def test_cli_mark_read_unknown_reply_exits_cleanly(
     code = main(["mark-read", "t1_missing", "--db", str(tmp_path / "x.db")])
     assert code == 2
     assert "unknown reply" in capsys.readouterr().err
+
+
+# -- wave-1 class probes (P1 gating, activity persistence, error aging) ---------
+
+
+def test_top_level_flag_gated_by_own_submission(store: ListeningStore) -> None:
+    """P1 class: top-level comments are replies-to-me ONLY on my own
+    submissions; comment-discovered threads must not receive them."""
+    source = FakeHistorySource(
+        comments=[_comment("t1_a", "t3_theirs")],
+        submissions=[_submission("t3_mine")],
+    )
+    _track(store, source)
+    assert source.top_level_flags["t3_theirs"] is False
+    assert source.top_level_flags["t3_mine"] is True
+
+
+def test_own_submission_flag_is_sticky(store: ListeningStore) -> None:
+    """Once a thread is known to be my post, a later comment-only
+    rediscovery must not demote it (top-level replies would vanish)."""
+    _track(store, FakeHistorySource(submissions=[_submission("t3_mine")]))
+    source = FakeHistorySource(comments=[_comment("t1_late", "t3_mine")])
+    _track(store, source)
+    thread = store.list_tracked_threads()[0]
+    assert thread.is_own_submission is True
+    assert source.top_level_flags["t3_mine"] is True
+
+
+def test_history_fetch_failure_contained_and_polling_continues(
+    store: ListeningStore,
+) -> None:
+    """Transport failures at the pass level are contained like per-thread
+    errors: recorded, and existing active threads still get polled."""
+
+    class ExplodingHistorySource(FakeHistorySource):
+        def fetch_my_recent_comments(self, *, limit: int):
+            raise ConnectionError("rate limited")
+
+        def fetch_my_recent_submissions(self, *, limit: int):
+            raise ConnectionError("rate limited")
+
+    store.upsert_tracked_thread(thread_id="t3_known", my_comment_ids=("t1_k",), checked_at=0)
+    store.record_thread_activity("t3_known", NOW - 3600)
+    source = ExplodingHistorySource()
+    stats = _track(store, source)
+    assert len(stats.errors) == 2
+    assert source.reply_calls == ["t3_known"]  # polling continued
+    assert store.list_tracked_threads()[0].dormant is False
+
+
+def test_history_window_eviction_is_not_inactivity(store: ListeningStore) -> None:
+    """Wave-1 class: a busy account pushes a recent thread out of the
+    history window; the persisted high-water mark keeps it active."""
+    _track(store, FakeHistorySource(comments=[_comment("t1_a", "t3_busy", age_hours=2)]))
+    # Next pass: the thread is absent from history entirely.
+    stats = _track(store, FakeHistorySource())
+    assert stats.threads_marked_dormant == 0
+    thread = store.list_tracked_threads()[0]
+    assert thread.dormant is False
+    assert thread.last_activity == NOW - 2 * 3600
+
+
+def test_failed_fetch_still_ages_out_stale_threads(store: ListeningStore) -> None:
+    """Wave-1 class: a dead/private thread with stale activity must not be
+    retried forever -- dormancy is evaluated on the error path too.
+    Setup uses store primitives so the thread is ACTIVE with stale
+    persisted activity (a tracking pass would already have slept it)."""
+    store.upsert_tracked_thread(thread_id="t3_dead", my_comment_ids=("t1_a",), checked_at=0)
+    store.record_thread_activity("t3_dead", NOW - (WEEK + 24) * 3600)
+    source = FakeHistorySource(error_on={"t3_dead"})
+    stats = _track(store, source)
+    assert len(stats.errors) == 1
+    assert stats.threads_marked_dormant == 1
+    assert store.list_tracked_threads(include_dormant=True)[0].dormant is True
+
+
+def test_v1_store_migrates_to_v2_preserving_data(tmp_path: Path) -> None:
+    """Real migration probe: a database created with the v1 DDL opens,
+    gains the new columns with correct backfill, and loses nothing."""
+    import sqlite3
+
+    db = tmp_path / "v1.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE candidates (
+            post_id TEXT PRIMARY KEY NOT NULL, subreddit TEXT NOT NULL,
+            title TEXT NOT NULL, url TEXT NOT NULL, author TEXT,
+            created_utc INTEGER NOT NULL, reddit_score INTEGER NOT NULL DEFAULT 0,
+            num_comments INTEGER NOT NULL DEFAULT 0, keyword_score REAL NOT NULL,
+            final_score REAL NOT NULL, matched_topics TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'new'
+                CHECK (status IN ('new', 'seen', 'dismissed', 'responded')),
+            first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL
+        );
+        CREATE TABLE tracked_threads (
+            thread_id TEXT PRIMARY KEY NOT NULL,
+            my_comment_ids TEXT NOT NULL DEFAULT '[]',
+            last_checked INTEGER,
+            dormant INTEGER NOT NULL DEFAULT 0 CHECK (dormant IN (0, 1))
+        );
+        CREATE TABLE replies (
+            reply_id TEXT PRIMARY KEY NOT NULL, thread_id TEXT NOT NULL,
+            parent_id TEXT, author TEXT, body TEXT NOT NULL DEFAULT '',
+            created_utc INTEGER NOT NULL,
+            is_reply_to_me INTEGER NOT NULL CHECK (is_reply_to_me IN (0, 1)),
+            seen INTEGER NOT NULL DEFAULT 0 CHECK (seen IN (0, 1)),
+            FOREIGN KEY (thread_id) REFERENCES tracked_threads (thread_id)
+        );
+        CREATE TABLE purge_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, item_id TEXT NOT NULL,
+            item_type TEXT NOT NULL
+                CHECK (item_type IN ('candidate', 'reply', 'thread')),
+            deleted_detected_at INTEGER NOT NULL, purged_at INTEGER NOT NULL,
+            reason TEXT NOT NULL
+        );
+        INSERT INTO tracked_threads (thread_id, my_comment_ids, last_checked, dormant)
+        VALUES ('t3_old', '["t1_a"]', 100, 0);
+        INSERT INTO replies (reply_id, thread_id, parent_id, author, body,
+                             created_utc, is_reply_to_me)
+        VALUES ('t1_r', 't3_old', 't1_a', 'x', 'hello', 12345, 1);
+        PRAGMA user_version = 1;
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    with ListeningStore(db) as migrated:
+        thread = migrated.list_tracked_threads()[0]
+        assert thread.thread_id == "t3_old"
+        assert thread.my_comment_ids == ("t1_a",)
+        assert thread.is_own_submission is False  # additive default
+        assert thread.last_activity == 12345  # backfilled from replies
+        assert migrated.list_replies()[0].reply_id == "t1_r"
+    conn = sqlite3.connect(db)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    conn.close()

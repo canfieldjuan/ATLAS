@@ -37,7 +37,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 CANDIDATE_STATUSES = ("new", "seen", "dismissed", "responded")
 PURGE_ITEM_TYPES = ("candidate", "reply", "thread")
@@ -66,7 +66,10 @@ CREATE TABLE tracked_threads (
     thread_id TEXT PRIMARY KEY NOT NULL,
     my_comment_ids TEXT NOT NULL DEFAULT '[]',
     last_checked INTEGER,
-    dormant INTEGER NOT NULL DEFAULT 0 CHECK (dormant IN (0, 1))
+    dormant INTEGER NOT NULL DEFAULT 0 CHECK (dormant IN (0, 1)),
+    is_own_submission INTEGER NOT NULL DEFAULT 0
+        CHECK (is_own_submission IN (0, 1)),
+    last_activity INTEGER
 );
 CREATE TABLE replies (
     reply_id TEXT PRIMARY KEY NOT NULL,
@@ -174,6 +177,8 @@ class TrackedThread:
     my_comment_ids: tuple[str, ...]
     last_checked: int | None
     dormant: bool
+    is_own_submission: bool
+    last_activity: int | None
 
 
 @dataclass(frozen=True)
@@ -236,6 +241,30 @@ class ListeningStore:
         if version == 0:
             with self._conn:
                 self._conn.executescript(_SCHEMA_DDL)
+                self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            return
+        if version == 1:
+            # v1 -> v2 (S5): tracked_threads gains the own-submission flag
+            # (top-level replies are only "to me" on my own posts) and a
+            # persisted last_activity timestamp (history-window eviction
+            # must not read as inactivity). Additive, backfilled from
+            # stored replies; no data is dropped.
+            with self._conn:
+                self._conn.execute(
+                    "ALTER TABLE tracked_threads ADD COLUMN is_own_submission "
+                    "INTEGER NOT NULL DEFAULT 0 CHECK (is_own_submission IN (0, 1))"
+                )
+                self._conn.execute(
+                    "ALTER TABLE tracked_threads ADD COLUMN last_activity INTEGER"
+                )
+                self._conn.execute(
+                    """
+                    UPDATE tracked_threads SET last_activity = (
+                        SELECT MAX(created_utc) FROM replies
+                        WHERE replies.thread_id = tracked_threads.thread_id
+                    )
+                    """
+                )
                 self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         # Fail closed on schemas this code does not know how to read --
@@ -376,12 +405,15 @@ class ListeningStore:
         thread_id: str,
         my_comment_ids: tuple[str, ...],
         checked_at: int,
+        is_own_submission: bool = False,
     ) -> None:
         """Insert or refresh a tracked thread. Comment ids are merged as a
         set union (replays and re-discoveries never drop known ids);
-        ``dormant`` is preserved on conflict."""
+        ``dormant`` is preserved on conflict; ``is_own_submission`` is
+        sticky once true (a thread that is my post stays my post)."""
         _require_id(thread_id, field="thread_id")
         _require_int(checked_at, field="checked_at")
+        _require_bool(is_own_submission, field="is_own_submission")
         incoming = _require_comment_ids(my_comment_ids)
         existing = self._conn.execute(
             "SELECT my_comment_ids FROM tracked_threads WHERE thread_id = ?",
@@ -395,14 +427,38 @@ class ListeningStore:
         with self._conn:
             self._conn.execute(
                 """
-                INSERT INTO tracked_threads (thread_id, my_comment_ids, last_checked)
-                VALUES (?, ?, ?)
+                INSERT INTO tracked_threads (
+                    thread_id, my_comment_ids, last_checked, is_own_submission
+                )
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(thread_id) DO UPDATE SET
                     my_comment_ids = excluded.my_comment_ids,
-                    last_checked = excluded.last_checked
+                    last_checked = excluded.last_checked,
+                    is_own_submission = MAX(
+                        tracked_threads.is_own_submission,
+                        excluded.is_own_submission
+                    )
                 """,
-                (thread_id, json.dumps(merged), checked_at),
+                (thread_id, json.dumps(merged), checked_at,
+                 1 if is_own_submission else 0),
             )
+
+    def record_thread_activity(self, thread_id: str, activity_at: int) -> None:
+        """Advance a thread's last-known-activity timestamp (monotonic:
+        stale values cannot move it backwards). Unknown ids fail closed."""
+        _require_id(thread_id, field="thread_id")
+        _require_int(activity_at, field="activity_at")
+        with self._conn:
+            cursor = self._conn.execute(
+                """
+                UPDATE tracked_threads
+                SET last_activity = MAX(COALESCE(last_activity, 0), ?)
+                WHERE thread_id = ?
+                """,
+                (activity_at, thread_id),
+            )
+        if cursor.rowcount == 0:
+            raise StoreError(f"unknown tracked thread: {thread_id!r}")
 
     def set_thread_dormant(self, thread_id: str, dormant: bool) -> None:
         _require_bool(dormant, field="dormant")
@@ -565,6 +621,8 @@ def _thread_from_row(row: sqlite3.Row) -> TrackedThread:
         my_comment_ids=tuple(json.loads(row["my_comment_ids"])),
         last_checked=row["last_checked"],
         dormant=bool(row["dormant"]),
+        is_own_submission=bool(row["is_own_submission"]),
+        last_activity=row["last_activity"],
     )
 
 

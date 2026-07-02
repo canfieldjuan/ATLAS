@@ -14,11 +14,12 @@ Lifecycle:
 2. Reply fetch: ACTIVE threads only, paced politely. Replies insert
    replay-safe (duplicate reply ids are ignored; integrity violations
    raise); unseen state drives the digest's warm-replies section.
-3. Dormancy: after fetching, a thread goes dormant when its newest known
-   activity (own activity seen this pass or newest stored reply) is
-   older than the quiet window -- and also when no activity timestamp is
-   known at all, which happens exactly when the operator's engagement
-   has aged out of the recent-history window.
+3. Dormancy: after fetching (on every path, including fetch errors, so
+   dead threads still age out), a thread goes dormant when its persisted
+   activity high-water mark -- advanced by own activity at discovery and
+   by every new reply -- is older than the quiet window. Persistence
+   means a busy account whose engagement scrolls out of the
+   recent-history window is never mistaken for inactive.
 """
 
 from __future__ import annotations
@@ -57,10 +58,22 @@ def track_once(
     stats = TrackStats()
     cutoff = now - dormant_after_hours * 3600
 
-    comments = source.fetch_my_recent_comments(limit=history_limit)
-    submissions = source.fetch_my_recent_submissions(limit=history_limit)
+    # History fetch failures are transport failures at the pass level:
+    # contained like per-thread errors (recorded, not raised), and the
+    # pass continues -- existing tracked threads can still be polled.
+    try:
+        comments = source.fetch_my_recent_comments(limit=history_limit)
+    except Exception as exc:  # noqa: BLE001
+        stats.errors.append(f"history comments fetch: {exc}")
+        comments = []
+    try:
+        submissions = source.fetch_my_recent_submissions(limit=history_limit)
+    except Exception as exc:  # noqa: BLE001
+        stats.errors.append(f"history submissions fetch: {exc}")
+        submissions = []
 
     fresh_activity: dict[str, int] = {}
+    own_submission_threads: set[str] = set()
     comment_ids_by_thread: dict[str, list[str]] = {}
     for activity in [*comments, *submissions]:
         fresh_activity[activity.thread_id] = max(
@@ -70,6 +83,8 @@ def track_once(
             comment_ids_by_thread.setdefault(activity.thread_id, []).append(
                 activity.item_id
             )
+        elif activity.item_id == activity.thread_id:
+            own_submission_threads.add(activity.thread_id)
 
     known_before = {
         thread.thread_id
@@ -86,7 +101,11 @@ def track_once(
             thread_id=thread_id,
             my_comment_ids=tuple(comment_ids_by_thread.get(thread_id, ())),
             checked_at=now,
+            is_own_submission=thread_id in own_submission_threads,
         )
+        # Persist the activity high-water mark so history-window eviction
+        # on a busy account never reads as inactivity later.
+        store.record_thread_activity(thread_id, newest)
         if thread_id not in known_before:
             stats.threads_discovered += 1
         # Rediscovery with activity inside the quiet window is the wake
@@ -102,12 +121,14 @@ def track_once(
         stats.threads_checked += 1
         try:
             replies = source.fetch_thread_replies(
-                thread.thread_id, my_comment_ids=frozenset(thread.my_comment_ids)
+                thread.thread_id,
+                my_comment_ids=frozenset(thread.my_comment_ids),
+                include_top_level=thread.is_own_submission,
             )
         except Exception as exc:  # noqa: BLE001 -- one bad thread must not
             # abort the pass; the error is surfaced, not swallowed.
             stats.errors.append(f"{thread.thread_id}: {exc}")
-            continue
+            replies = []
         for reply in replies:
             inserted = store.insert_reply(
                 reply_id=reply.reply_id,
@@ -120,20 +141,22 @@ def track_once(
             )
             if inserted:
                 stats.replies_new += 1
+                store.record_thread_activity(reply.thread_id, reply.created_utc)
             else:
                 stats.replies_replayed += 1
 
-        newest_reply = max(
-            (r.created_utc for r in store.list_replies(thread_id=thread.thread_id)),
-            default=None,
+        # Dormancy is evaluated on EVERY path -- including fetch errors --
+        # from the persisted high-water mark, so a dead/private thread
+        # still ages out instead of being retried forever, and a busy
+        # account's history-window eviction never reads as inactivity.
+        current = next(
+            (
+                row
+                for row in store.list_tracked_threads(include_dormant=True)
+                if row.thread_id == thread.thread_id
+            ),
         )
-        newest_known = max(
-            value
-            for value in (newest_reply, fresh_activity.get(thread.thread_id))
-            if value is not None
-        ) if (newest_reply is not None or thread.thread_id in fresh_activity) else None
-
-        if newest_known is None or newest_known < cutoff:
+        if current.last_activity is None or current.last_activity < cutoff:
             store.set_thread_dormant(thread.thread_id, True)
             stats.threads_marked_dormant += 1
 
