@@ -125,6 +125,32 @@ beats none, and the failure stays visible via exit 1.
 - **Housekeeping commit in this branch**: authorized fold-in (#1934
   comment 4860540364).
 
+Review-fix notes (Codex wave 1 on a6ad25736; all three verified real and
+fixed at root in this PR):
+
+- **P1: candidates stored bare submission ids while info() requires
+  fullnames** -- on first real use every live candidate would have been
+  classified missing and mass-purged. Root cause: inconsistent id
+  formats across the pipeline (replies/threads stored fullnames,
+  candidates did not), invisible to the purge tests because the fakes
+  seeded fullname-shaped ids -- fixture-vs-producer drift. Fixed at the
+  producer (the S4 poller mapping now stores submission.fullname; no
+  live data exists, creds were never minted) PLUS a defensive purge-side
+  shape guard: ids that are not valid fullnames are surfaced as errors
+  and RETAINED -- fail-closed must never extend to "our own data shape
+  is wrong". Probed at both layers, including a stub-praw test of the
+  REAL producer mapping (the probe that would have caught this).
+- **Removed comments with a surviving author classified live**: mod
+  removal can keep the author object while the body shows [removed].
+  Root cause: classification coupled to the author instead of the
+  content state. Fixed: body/selftext markers and removed_by_category
+  decide, author-independent; the second side is probed too
+  (account-deleted author with intact content is NOT deleted content
+  and stays).
+- **Runbook ordered digest before purge**, so a digest could surface
+  content deleted since the last pass. Fixed: purge runs before digest
+  in the documented flow, with the reason stated inline.
+
 ## Deferred
 
 - Scheduling (cron/autonomous task) for poll/track/digest/purge: beyond
@@ -143,13 +169,15 @@ Parked hardening: none.
   `tests/test_atlas_reddit_tracker.py`, `tests/test_atlas_reddit_poller.py`,
   `tests/test_atlas_reddit_digest.py`, `tests/test_atlas_reddit_store.py`,
   `tests/test_atlas_reddit_config.py`, and
-  `tests/test_atlas_reddit_scoring.py`: 300 passed (both-sides deletion
+  `tests/test_atlas_reddit_scoring.py`: 305 passed (both-sides deletion
   probes, digest disappearance end-to-end, replay idempotence with no
   duplicate log entries, 100-item batching with n-1 pacing, failed-batch
   containment with continued purging, tracked-thread retention,
   read-scope floor, read-only surface, CLI no-creds and pace-ceiling
-  exits). This line is the single verification-count source; the PR body
-  mirrors it.
+  exits; wave-1 probes: malformed-id retained-not-missing, REAL producer
+  mapping stores fullnames via stub praw, removed-body-with-author gone,
+  author-deleted-content-intact live, absent-from-info missing). This
+  line is the single verification-count source; the PR body mirrors it.
 - ASCII byte-scan on the five changed Python files: clean.
 - python `scripts/sync_pr_plan.py` on this plan: tables regenerated from
   the real diff.
@@ -160,12 +188,12 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_reddit/__main__.py` | 51 |
-| `atlas_reddit/purge.py` | 84 |
-| `atlas_reddit/reddit_client.py` | 68 |
+| `atlas_reddit/purge.py` | 98 |
+| `atlas_reddit/reddit_client.py` | 76 |
 | `atlas_reddit/store.py` | 23 |
-| `docs/REDDIT_LISTENING_SETUP_RUNBOOK.md` | 6 |
+| `docs/REDDIT_LISTENING_SETUP_RUNBOOK.md` | 9 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Purge.md` | 154 |
+| `plans/PR-Reddit-Listening-Purge.md` | 199 |
 | `plans/archive/PR-Reddit-Listening-Reply-Tracker.md` | 0 |
-| `tests/test_atlas_reddit_purge.py` | 249 |
-| **Total** | **638** |
+| `tests/test_atlas_reddit_purge.py` | 392 |
+| **Total** | **851** |

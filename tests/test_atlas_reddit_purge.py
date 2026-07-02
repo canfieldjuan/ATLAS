@@ -186,6 +186,149 @@ def test_tracked_thread_rows_are_retained(store: ListeningStore) -> None:
     assert len(store.list_tracked_threads(include_dormant=True)) == 1
 
 
+# -- wave-1 class probes: id-format consistency, classification, shape guard ---
+
+
+def test_malformed_stored_id_is_error_never_missing(store: ListeningStore) -> None:
+    """P1 class, defensive layer: an id that is not a Reddit fullname
+    cannot be liveness-checked -- it must be surfaced as an error and the
+    row RETAINED, never classified as missing and deleted."""
+    _seed_candidate(store, "abc123")  # bare id, not a fullname
+    _seed_candidate(store, "t3_good")
+    source = FakeDeletionSource()
+    stats = _purge(store, source)
+    assert len(stats.errors) == 1
+    assert "abc123" in stats.errors[0]
+    assert store.get_candidate("abc123") is not None  # retained
+    assert all("abc123" not in batch for batch in source.batches)
+    assert any("t3_good" in batch for batch in source.batches)
+
+
+def _stub_praw_with(monkeypatch: pytest.MonkeyPatch, *, submissions=None, info_items=None):
+    """Fake the praw MODULE (the transport boundary) to exercise the REAL
+    Praw* source mappings without praw installed."""
+    import sys
+    import types
+
+    class _Auth:
+        def scopes(self):
+            return ["read", "identity", "history"]
+
+    class _Subreddit:
+        def __init__(self, items):
+            self._items = items
+
+        def new(self, *, limit):
+            return iter(self._items[:limit])
+
+    class _Reddit:
+        def __init__(self, **kwargs):
+            self.auth = _Auth()
+
+        def subreddit(self, name):
+            return _Subreddit(submissions or [])
+
+        def info(self, *, fullnames):
+            return iter(info_items or [])
+
+    stub = types.ModuleType("praw")
+    stub.Reddit = _Reddit
+    monkeypatch.setitem(sys.modules, "praw", stub)
+
+
+def _creds(monkeypatch: pytest.MonkeyPatch):
+    from atlas_reddit.config import RedditListeningSettings
+
+    monkeypatch.setenv("ATLAS_REDDIT_CLIENT_ID", "cid")
+    monkeypatch.setenv("ATLAS_REDDIT_CLIENT_SECRET", "cs")
+    monkeypatch.setenv("ATLAS_REDDIT_REFRESH_TOKEN", "rt")
+    monkeypatch.setenv("ATLAS_REDDIT_USERNAME", "juan_c")
+    return RedditListeningSettings(_env_file=None)
+
+
+def test_real_poller_mapping_stores_fullnames(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P1 root probe: the REAL producer mapping must store fullnames so
+    stored ids feed straight into reddit.info(). This is the
+    fixture-vs-producer drift the fakes alone could not catch."""
+    import types
+
+    from atlas_reddit.reddit_client import PrawListingSource
+
+    submission = types.SimpleNamespace(
+        id="abc123",
+        fullname="t3_abc123",
+        title="t",
+        permalink="/r/x/comments/abc123/t/",
+        author=types.SimpleNamespace(name="a"),
+        created_utc=1.0,
+        score=1,
+        num_comments=0,
+        is_self=True,
+        selftext="body",
+    )
+    _stub_praw_with(monkeypatch, submissions=[submission])
+    source = PrawListingSource(_creds(monkeypatch))
+    posts = source.fetch_new("x", limit=10)
+    assert posts[0].post_id == "t3_abc123"  # fullname, not the bare id
+
+
+def _info_item(fullname: str, *, body=None, selftext=None, author="someone",
+               removed_by_category=None):
+    import types
+
+    item = types.SimpleNamespace(
+        fullname=fullname,
+        author=types.SimpleNamespace(name=author) if author else None,
+        removed_by_category=removed_by_category,
+    )
+    if body is not None:
+        item.body = body
+    else:
+        item.selftext = selftext or ""
+    return item
+
+
+def test_removed_body_with_author_still_present_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wave-1 class: mod-removed comments can keep their author while the
+    body shows [removed] -- classification keys on CONTENT state."""
+    from atlas_reddit.reddit_client import PrawDeletionSource
+
+    _stub_praw_with(
+        monkeypatch,
+        info_items=[_info_item("t1_x", body="[removed]", author="still_here")],
+    )
+    source = PrawDeletionSource(_creds(monkeypatch))
+    gone = source.fetch_gone_items(["t1_x"])
+    assert gone == {"t1_x": "content shows [removed]"}
+
+
+def test_author_deleted_but_content_intact_is_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Second side: an account-deleted author with intact content is NOT
+    deleted content -- the reply stays."""
+    from atlas_reddit.reddit_client import PrawDeletionSource
+
+    _stub_praw_with(
+        monkeypatch,
+        info_items=[_info_item("t1_x", body="real words remain", author=None)],
+    )
+    source = PrawDeletionSource(_creds(monkeypatch))
+    assert source.fetch_gone_items(["t1_x"]) == {}
+
+
+def test_absent_from_info_response_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from atlas_reddit.reddit_client import PrawDeletionSource
+
+    _stub_praw_with(monkeypatch, info_items=[])
+    source = PrawDeletionSource(_creds(monkeypatch))
+    gone = source.fetch_gone_items(["t3_vanished"])
+    assert "t3_vanished" in gone
+    assert "missing" in gone["t3_vanished"]
+
+
 # -- deletion source auth ---------------------------------------------------------
 
 

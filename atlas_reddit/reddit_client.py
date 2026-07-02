@@ -216,7 +216,10 @@ class PrawListingSource:
             author = getattr(submission.author, "name", None)
             posts.append(
                 ListingPost(
-                    post_id=submission.id,
+                    # Fullname (t3_...), not the bare id: every stored id in
+                    # this package is a fullname so the purge job can feed
+                    # them straight into reddit.info(fullnames=...).
+                    post_id=submission.fullname,
                     subreddit=subreddit,
                     title=submission.title or "",
                     url=f"https://www.reddit.com{submission.permalink}",
@@ -399,11 +402,14 @@ class PrawDeletionSource:
                                 for name in fullnames}
         for item in self._reddit.info(fullnames=list(fullnames)):
             name = item.fullname
-            author = getattr(item.author, "name", None)
             text = getattr(item, "body", None)
             if text is None:
                 text = getattr(item, "selftext", "") or ""
-            if author is None and text in ("[deleted]", "[removed]"):
+            # Classification keys on the CONTENT state, independent of the
+            # author object: mod-removed comments can keep their author
+            # while the body shows [removed], and an account-deleted
+            # author with intact content is NOT deleted content.
+            if text in ("[deleted]", "[removed]"):
                 gone[name] = f"content shows {text}"
             elif getattr(item, "removed_by_category", None):
                 gone[name] = f"removed ({item.removed_by_category})"

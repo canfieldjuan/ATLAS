@@ -17,6 +17,7 @@ they are retained.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -25,6 +26,11 @@ from .reddit_client import DeletionSource
 from .store import ListeningStore
 
 BATCH_SIZE = 100  # reddit info() accepts up to 100 fullnames per request
+
+# Every stored id must be a Reddit fullname (t1_/t3_ + base36). An id
+# that is not cannot be checked via info() -- and MUST NOT be treated as
+# missing: never delete on a data-shape mismatch.
+_FULLNAME_RE = re.compile(r"^t[1-6]_[a-z0-9]+$")
 
 
 @dataclass
@@ -48,7 +54,15 @@ def purge_once(
 
     candidates = {c.post_id for c in store.list_candidates()}
     replies = {r.reply_id for r in store.list_replies()}
-    all_items = sorted(candidates | replies)
+    malformed = sorted(
+        item for item in candidates | replies if not _FULLNAME_RE.match(item)
+    )
+    for item in malformed:
+        stats.errors.append(
+            f"{item}: not a Reddit fullname; cannot verify liveness -- "
+            "row retained (never delete on a data-shape mismatch)"
+        )
+    all_items = sorted((candidates | replies) - set(malformed))
 
     batches = [
         all_items[i : i + BATCH_SIZE] for i in range(0, len(all_items), BATCH_SIZE)
