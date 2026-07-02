@@ -255,7 +255,13 @@ def test_user_agent_matches_reddit_required_format() -> None:
     )
 
 
-@pytest.mark.parametrize("bad", ["", "ab", "a" * 21, "has space", "semi;colon", None])
+@pytest.mark.parametrize(
+    "bad",
+    ["", "ab", "a" * 21, "has space", "semi;colon", None,
+     # $-anchor trap: match() would accept a trailing newline and put it
+     # inside the User-Agent header (header-injection shape).
+     "juan_c\n"],
+)
 def test_invalid_username_rejected(bad: object) -> None:
     with pytest.raises(RedditAuthError, match="USERNAME"):
         build_user_agent(bad)  # type: ignore[arg-type]

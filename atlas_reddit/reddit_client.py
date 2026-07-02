@@ -28,8 +28,9 @@ docs/REDDIT_LISTENING_SETUP_RUNBOOK.md):
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
-from typing import Iterable, Protocol
+from typing import Callable, Iterable, Protocol
 
 from . import __version__
 from .config import RedditListeningSettings
@@ -37,6 +38,12 @@ from .config import RedditListeningSettings
 # The full read-only grant set for this tool. Anything beyond these --
 # including the '*' wildcard a password-grant token carries -- is refused.
 ALLOWED_SCOPES = frozenset({"identity", "history", "read"})
+
+# The one deletion reason that is API absence rather than a confirmed
+# deletion state. The purge job purges on it (fail-closed) but must not
+# tombstone on it: a silent-partial info() response would otherwise make
+# a transient miss irreversible.
+MISSING_REASON = "missing (not returned by the API)"
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,20}$")
 
@@ -159,8 +166,11 @@ def validate_scopes(
 
 def build_user_agent(username: str) -> str:
     """Descriptive UA in the format Reddit's API rules require:
-    ``<platform>:<app ID>:<version> (by /u/<username>)``."""
-    if not _USERNAME_RE.match(username or ""):
+    ``<platform>:<app ID>:<version> (by /u/<username>)``. fullmatch, not
+    match: the ``$`` anchor accepts a trailing newline, which would put
+    a newline inside the User-Agent header (config.py avoids the same
+    trap for subreddit names)."""
+    if not _USERNAME_RE.fullmatch(username or ""):
         raise RedditAuthError(
             f"ATLAS_REDDIT_USERNAME must match {_USERNAME_RE.pattern}, got {username!r}"
         )
@@ -240,8 +250,23 @@ class PrawHistorySource:
     discovery needs identity+history and reply reads need read."""
 
     _REQUIRED = frozenset({"read", "identity", "history"})
+    # MoreComments expansion budget for one own-comment's reply tree.
+    # limit=None is an unbounded request burst inside a single thread
+    # (invisible to the tracker's per-thread pace ceiling); limit=0
+    # silently DISCARDS direct children hidden behind placeholders.
+    # A bounded budget is the same named trade-off as the top-level
+    # scan below.
+    _OWN_REPLY_MORE_BUDGET = 16
 
-    def __init__(self, settings: RedditListeningSettings) -> None:
+    def __init__(
+        self,
+        settings: RedditListeningSettings,
+        *,
+        pace_seconds: float = 0.0,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._pace_seconds = pace_seconds
+        self._sleep = sleep
         client_id = settings.client_id
         client_secret = settings.client_secret.get_secret_value()
         refresh_token = settings.refresh_token.get_secret_value()
@@ -312,12 +337,13 @@ class PrawHistorySource:
         include_top_level: bool,
     ) -> list[ThreadReply]:
         """Direct replies come from refreshing each of the operator's own
-        comments (precise and bounded by the operator's comment count --
-        replace_more(limit=0) would silently DISCARD deep replies hidden
-        behind MoreComments placeholders). Top-level responses are scanned
-        only when the thread is the operator's own submission, with a
-        bounded MoreComments budget (a single-user post rarely exceeds it;
-        the budget is a named trade-off, not an accident)."""
+        comments (precise and bounded by the operator's comment count),
+        with n-1 pacing between refreshes so one busy thread cannot burst
+        past the pace ceiling the tracker applies between threads.
+        Top-level responses are scanned only when the thread is the
+        operator's own submission. Both scans use a bounded MoreComments
+        budget (a single-user post rarely exceeds it; the budget is a
+        named trade-off, not an accident)."""
         my_name = getattr(self._me, "name", None)
         replies: list[ThreadReply] = []
         seen_ids: set[str] = set()
@@ -341,10 +367,12 @@ class PrawHistorySource:
                 )
             )
 
-        for comment_fullname in sorted(my_comment_ids):
+        for index, comment_fullname in enumerate(sorted(my_comment_ids)):
+            if index and self._pace_seconds > 0:
+                self._sleep(self._pace_seconds)
             own = self._reddit.comment(id=comment_fullname.removeprefix("t1_"))
             own.refresh()
-            own.replies.replace_more(limit=None)  # one comment's children only
+            own.replies.replace_more(limit=self._OWN_REPLY_MORE_BUDGET)
             for child in own.replies:
                 _admit(child, comment_fullname)
 
@@ -398,8 +426,7 @@ class PrawDeletionSource:
         return self._scopes
 
     def fetch_gone_items(self, fullnames: list[str]) -> dict[str, str]:
-        gone: dict[str, str] = {name: "missing (not returned by the API)"
-                                for name in fullnames}
+        gone: dict[str, str] = {name: MISSING_REASON for name in fullnames}
         for item in self._reddit.info(fullnames=list(fullnames)):
             name = item.fullname
             text = getattr(item, "body", None)

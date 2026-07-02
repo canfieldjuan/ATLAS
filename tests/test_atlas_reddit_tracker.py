@@ -482,6 +482,8 @@ def test_v1_store_migrates_to_current_preserving_data(tmp_path: Path) -> None:
         );
         INSERT INTO tracked_threads (thread_id, my_comment_ids, last_checked, dormant)
         VALUES ('t3_old', '["t1_a"]', 100, 0);
+        INSERT INTO tracked_threads (thread_id, my_comment_ids, last_checked, dormant)
+        VALUES ('t3_lonely', '[]', 200, 0);
         INSERT INTO replies (reply_id, thread_id, parent_id, author, body,
                              created_utc, is_reply_to_me)
         VALUES ('t1_r', 't3_old', 't1_a', 'x', 'hello', 12345, 1);
@@ -492,12 +494,131 @@ def test_v1_store_migrates_to_current_preserving_data(tmp_path: Path) -> None:
     conn.close()
 
     with ListeningStore(db) as migrated:
-        thread = migrated.list_tracked_threads()[0]
-        assert thread.thread_id == "t3_old"
+        threads = {t.thread_id: t for t in migrated.list_tracked_threads()}
+        thread = threads["t3_old"]
         assert thread.my_comment_ids == ("t1_a",)
         assert thread.is_own_submission is False  # additive default
         assert thread.last_activity == 12345  # backfilled from replies
+        # A no-reply v1 thread must not backfill to NULL (which the
+        # tracker reads as immediate dormancy): it falls back to
+        # last_checked.
+        assert threads["t3_lonely"].last_activity == 200
         assert migrated.list_replies()[0].reply_id == "t1_r"
     conn = sqlite3.connect(db)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
     conn.close()
+
+
+# -- hardening: vanished thread mid-pass ----------------------------------------
+
+
+class _VanishingStore(ListeningStore):
+    """Simulates a concurrent purge: tracked rows disappear between the
+    active listing and the per-thread dormancy re-read."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self._vanish = False
+
+    def list_tracked_threads(self, include_dormant: bool = False):
+        rows = super().list_tracked_threads(include_dormant=include_dormant)
+        if self._vanish and include_dormant:
+            return []
+        if not include_dormant:
+            self._vanish = True  # active listing done; vanish afterwards
+        return rows
+
+
+def test_thread_vanishing_mid_pass_is_contained(tmp_path: Path) -> None:
+    """Hardening (#1940/#1941 audits): the per-thread re-read used a
+    bare next() -- a row deleted underneath the pass (concurrent purge,
+    future delete path) was an uncaught StopIteration. It must surface
+    as a per-thread error while the pass completes."""
+    with _VanishingStore(tmp_path / "v.db") as store:
+        for thread_id in ("t3_one", "t3_two"):
+            store.upsert_tracked_thread(
+                thread_id=thread_id, my_comment_ids=("t1_a",), checked_at=NOW
+            )
+            store.record_thread_activity(thread_id, NOW)
+        stats = _track(store, FakeHistorySource())
+        assert stats.threads_checked == 2  # the pass completed
+        assert len(stats.errors) == 2
+        assert all("disappeared" in error for error in stats.errors)
+        assert stats.threads_marked_dormant == 0
+
+
+# -- hardening: bounded own-reply expansion + intra-thread pacing ----------------
+
+
+def _stub_history_praw(monkeypatch: pytest.MonkeyPatch, own_comments: dict):
+    """Stub the praw MODULE so the REAL PrawHistorySource reply path runs:
+    constructor, scope probe, per-own-comment refresh/replace_more."""
+    import sys
+    import types
+
+    limits: list[object] = []
+
+    class _Replies(list):
+        def replace_more(self, *, limit: object) -> list:
+            limits.append(limit)
+            return []
+
+    def _child(fullname: str) -> object:
+        return types.SimpleNamespace(
+            fullname=fullname,
+            author=types.SimpleNamespace(name="other_user"),
+            body="a reply",
+            created_utc=NOW,
+        )
+
+    class _OwnComment:
+        def __init__(self, children: list[str]) -> None:
+            self.replies = _Replies(_child(c) for c in children)
+
+        def refresh(self) -> None:
+            pass
+
+    class _Reddit:
+        def __init__(self, **kwargs: object) -> None:
+            self.auth = types.SimpleNamespace(
+                scopes=lambda: ["read", "identity", "history"]
+            )
+            self.user = types.SimpleNamespace(
+                me=lambda: types.SimpleNamespace(name="juan_c")
+            )
+
+        def comment(self, id: str):  # noqa: A002 -- praw's own kwarg name
+            return _OwnComment(own_comments[f"t1_{id}"])
+
+    stub = types.ModuleType("praw")
+    stub.Reddit = _Reddit
+    monkeypatch.setitem(sys.modules, "praw", stub)
+    return limits
+
+
+def test_own_reply_expansion_is_bounded_and_paced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hardening (#1940 audit): replace_more(limit=None) was an unbounded
+    request burst inside one thread, invisible to the tracker's pace
+    ceiling. The real source must use the named budget and sleep between
+    own-comment refreshes (n-1: none before the first)."""
+    from atlas_reddit.config import RedditListeningSettings
+
+    monkeypatch.setenv("ATLAS_REDDIT_CLIENT_ID", "cid")
+    monkeypatch.setenv("ATLAS_REDDIT_CLIENT_SECRET", "csecret")
+    monkeypatch.setenv("ATLAS_REDDIT_REFRESH_TOKEN", "rtoken")
+    monkeypatch.setenv("ATLAS_REDDIT_USERNAME", "juan_c")
+    limits = _stub_history_praw(
+        monkeypatch, {"t1_a": ["t1_child1"], "t1_b": ["t1_child2"]}
+    )
+    sleeper = RecordingSleep()
+    source = PrawHistorySource(
+        RedditListeningSettings(_env_file=None), pace_seconds=2.0, sleep=sleeper
+    )
+    replies = source.fetch_thread_replies(
+        "t3_x", my_comment_ids=frozenset({"t1_a", "t1_b"}), include_top_level=False
+    )
+    assert {r.reply_id for r in replies} == {"t1_child1", "t1_child2"}
+    assert limits == [PrawHistorySource._OWN_REPLY_MORE_BUDGET] * 2  # never None
+    assert sleeper.calls == [2.0]  # one sleep between two refreshes

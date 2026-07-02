@@ -155,7 +155,17 @@ def track_once(
                 for row in store.list_tracked_threads(include_dormant=True)
                 if row.thread_id == thread.thread_id
             ),
+            None,
         )
+        if current is None:
+            # The row vanished under us (concurrent purge or a future
+            # delete path). Surface it and keep the pass going rather
+            # than dying on an uncaught StopIteration.
+            stats.errors.append(
+                f"{thread.thread_id}: tracked thread disappeared during the "
+                "pass; dormancy evaluation skipped"
+            )
+            continue
         if current.last_activity is None or current.last_activity < cutoff:
             store.set_thread_dormant(thread.thread_id, True)
             stats.threads_marked_dormant += 1

@@ -37,7 +37,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 CANDIDATE_STATUSES = ("new", "seen", "dismissed", "responded")
 PURGE_ITEM_TYPES = ("candidate", "reply", "thread")
@@ -90,7 +90,8 @@ CREATE TABLE purge_log (
         CHECK (item_type IN ('candidate', 'reply', 'thread')),
     deleted_detected_at INTEGER NOT NULL,
     purged_at INTEGER NOT NULL,
-    reason TEXT NOT NULL
+    reason TEXT NOT NULL,
+    tombstone INTEGER NOT NULL DEFAULT 1 CHECK (tombstone IN (0, 1))
 );
 """
 
@@ -200,6 +201,7 @@ class PurgeRecord:
     deleted_detected_at: int
     purged_at: int
     reason: str
+    tombstone: bool
 
 
 class ListeningStore:
@@ -261,11 +263,17 @@ class ListeningStore:
                     self._conn.execute(
                         "ALTER TABLE tracked_threads ADD COLUMN last_activity INTEGER"
                     )
+                    # COALESCE with last_checked: a no-reply v1 thread must
+                    # not backfill to NULL, which the tracker would read as
+                    # immediate (spurious) dormancy.
                     self._conn.execute(
                         """
-                        UPDATE tracked_threads SET last_activity = (
-                            SELECT MAX(created_utc) FROM replies
-                            WHERE replies.thread_id = tracked_threads.thread_id
+                        UPDATE tracked_threads SET last_activity = COALESCE(
+                            (
+                                SELECT MAX(created_utc) FROM replies
+                                WHERE replies.thread_id = tracked_threads.thread_id
+                            ),
+                            last_checked
                         )
                         """
                     )
@@ -295,6 +303,16 @@ class ListeningStore:
                         WHERE post_id NOT GLOB 't3_*'
                           AND post_id NOT GLOB '*[^a-z0-9]*'
                         """
+                    )
+                if version < 4:
+                    # v3 -> v4 (hardening): purge_log gains the tombstone
+                    # flag so API-absence purges stop being irreversible.
+                    # Existing rows backfill to 1 (keep refusing
+                    # re-ingestion) -- conservative in the direction the
+                    # tombstone already enforced.
+                    self._conn.execute(
+                        "ALTER TABLE purge_log ADD COLUMN tombstone INTEGER "
+                        "NOT NULL DEFAULT 1 CHECK (tombstone IN (0, 1))"
                     )
                 self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
@@ -599,12 +617,18 @@ class ListeningStore:
         deleted_detected_at: int,
         purged_at: int,
         reason: str,
+        tombstone: bool = True,
     ) -> bool:
         """Atomically delete one stored content row AND record the audit
         entry in a single transaction: the compliance contract must never
         end up with content deleted but no record (or vice versa), even
         under an I/O error or interrupt between the two writes. Returns
-        True when a row was actually removed; no row means no log entry."""
+        True when a row was actually removed; no row means no log entry.
+
+        ``tombstone=False`` records the purge without blocking future
+        re-ingestion: used when the deletion evidence is API absence
+        rather than a confirmed deleted/removed state, so a transient
+        silent-partial response never becomes irreversible."""
         _require_id(item_id, field="item_id")
         _require_int(deleted_detected_at, field="deleted_detected_at")
         _require_int(purged_at, field="purged_at")
@@ -625,19 +649,25 @@ class ListeningStore:
             self._conn.execute(
                 """
                 INSERT INTO purge_log (
-                    item_id, item_type, deleted_detected_at, purged_at, reason
-                ) VALUES (?, ?, ?, ?, ?)
+                    item_id, item_type, deleted_detected_at, purged_at,
+                    reason, tombstone
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (item_id, item_type, deleted_detected_at, purged_at, reason),
+                (item_id, item_type, deleted_detected_at, purged_at, reason,
+                 1 if tombstone else 0),
             )
         return True
 
     def is_purged(self, item_id: str) -> bool:
-        """Tombstone check: has this id ever been purged? Ingestion paths
-        consult this so re-listed removed content cannot resurrect."""
+        """Tombstone check: was this id ever purged on CONFIRMED deletion
+        evidence? Ingestion paths consult this so re-listed removed
+        content cannot resurrect. Non-tombstone purges (API absence) do
+        not block re-ingestion."""
         _require_id(item_id, field="item_id")
         row = self._conn.execute(
-            "SELECT 1 FROM purge_log WHERE item_id = ? LIMIT 1", (item_id,)
+            "SELECT 1 FROM purge_log WHERE item_id = ? AND tombstone = 1 "
+            "LIMIT 1",
+            (item_id,),
         ).fetchone()
         return row is not None
 
@@ -651,6 +681,7 @@ class ListeningStore:
         deleted_detected_at: int,
         purged_at: int,
         reason: str,
+        tombstone: bool = True,
     ) -> None:
         _require_id(item_id, field="item_id")
         _require_int(deleted_detected_at, field="deleted_detected_at")
@@ -663,10 +694,12 @@ class ListeningStore:
             self._conn.execute(
                 """
                 INSERT INTO purge_log (
-                    item_id, item_type, deleted_detected_at, purged_at, reason
-                ) VALUES (?, ?, ?, ?, ?)
+                    item_id, item_type, deleted_detected_at, purged_at,
+                    reason, tombstone
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (item_id, item_type, deleted_detected_at, purged_at, reason),
+                (item_id, item_type, deleted_detected_at, purged_at, reason,
+                 1 if tombstone else 0),
             )
 
     def list_purge_log(self) -> list[PurgeRecord]:
@@ -680,6 +713,7 @@ class ListeningStore:
                 deleted_detected_at=row["deleted_detected_at"],
                 purged_at=row["purged_at"],
                 reason=row["reason"],
+                tombstone=bool(row["tombstone"]),
             )
             for row in rows
         ]
