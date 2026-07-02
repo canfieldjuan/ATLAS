@@ -133,7 +133,7 @@ def test_branch_protection_workflow_ref_guard_precedes_admin_read_token() -> Non
 def test_required_status_check_audit_accepts_contexts_and_checks_shapes() -> None:
     checker = _load_required_status_script()
     payload = {
-        "contexts": ["live-reconciliation"],
+        "contexts": ["live-reconciliation", "diff-budget"],
         "checks": [
             {"context": "Gitleaks PR secret scan"},
             {"context": "Gitleaks baseline growth guard"},
@@ -148,11 +148,13 @@ def test_required_status_check_audit_accepts_github_actions_source() -> None:
     payload = {
         "contexts": [
             "live-reconciliation",
+            "diff-budget",
             "Gitleaks PR secret scan",
             "Gitleaks baseline growth guard",
         ],
         "checks": [
             {"context": "live-reconciliation", "app_id": checker.GITHUB_ACTIONS_APP_ID},
+            {"context": "diff-budget", "app_id": checker.GITHUB_ACTIONS_APP_ID},
             {"context": "Gitleaks PR secret scan", "app_id": checker.GITHUB_ACTIONS_APP_ID},
             {"context": "Gitleaks baseline growth guard", "app_id": checker.GITHUB_ACTIONS_APP_ID},
         ],
@@ -166,6 +168,7 @@ def test_required_status_check_audit_rejects_legacy_only_contexts() -> None:
     payload = {
         "contexts": [
             "live-reconciliation",
+            "diff-budget",
             "Gitleaks PR secret scan",
             "Gitleaks baseline growth guard",
         ],
@@ -175,6 +178,7 @@ def test_required_status_check_audit_rejects_legacy_only_contexts() -> None:
 
     assert [failure.context for failure in failures] == [
         "live-reconciliation",
+        "diff-budget",
         "Gitleaks PR secret scan",
         "Gitleaks baseline growth guard",
     ]
@@ -186,6 +190,7 @@ def test_required_status_check_audit_rejects_wrong_check_source() -> None:
     payload = {
         "checks": [
             {"context": "live-reconciliation", "app_id": checker.GITHUB_ACTIONS_APP_ID},
+            {"context": "diff-budget", "app_id": checker.GITHUB_ACTIONS_APP_ID},
             {"context": "Gitleaks PR secret scan", "app_id": -1},
             {"context": "Gitleaks baseline growth guard", "app_id": None},
         ],
@@ -210,6 +215,7 @@ def test_required_status_check_audit_fails_when_gitleaks_context_missing() -> No
     }
 
     assert checker.missing_required_contexts(payload) == [
+        "diff-budget",
         "Gitleaks PR secret scan",
         "Gitleaks baseline growth guard",
     ]

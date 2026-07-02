@@ -1,6 +1,6 @@
 # Plan archive index
 
-1267 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1268 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -910,6 +910,7 @@
 - [PR-Dev-Workflow-Open-PR-Stdin-Wrapper](archive/PR-Dev-Workflow-Open-PR-Stdin-Wrapper.md) - lane: dev-workflow/pr-friction | phase: Workflow/process
 - [PR-Dev-Workflow-PR-Prep](archive/PR-Dev-Workflow-PR-Prep.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
 - [PR-Dev-Workflow-Plan-Scaffold](archive/PR-Dev-Workflow-Plan-Scaffold.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
+- [PR-Diff-Budget-Gate](archive/PR-Diff-Budget-Gate.md) - lane: Workflow/process | phase: Vertical slice
 - [PR-Docs-Preserve-Product-Audit-Notes](archive/PR-Docs-Preserve-Product-Audit-Notes.md) - lane: docs/product-history-preservation | phase: Workflow/process
 - [PR-ESLint-10-Web-Batch](archive/PR-ESLint-10-Web-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-Evaluator-Pattern-Precision-Contract](archive/PR-Evaluator-Pattern-Precision-Contract.md) - lane: workflow/process | phase: Workflow/process
