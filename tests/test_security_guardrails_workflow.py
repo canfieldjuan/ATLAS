@@ -97,6 +97,7 @@ def test_security_guardrails_docs_name_required_gitleaks_checks() -> None:
 
     assert "`Gitleaks PR secret scan`" in text
     assert "`Gitleaks baseline growth guard`" in text
+    assert "`diff-budget`" in text
     assert "`Branch Protection Required Checks` workflow" in text
 
 
