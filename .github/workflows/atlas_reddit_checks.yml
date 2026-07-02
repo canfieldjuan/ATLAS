@@ -5,6 +5,7 @@ on:
     paths:
       - "atlas_reddit/**"
       - "tests/test_atlas_reddit_*.py"
+      - "tests/atlas_reddit_fixtures.py"
       - ".github/workflows/atlas_reddit_checks.yml"
 
 permissions:
