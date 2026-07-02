@@ -552,6 +552,29 @@ class ListeningStore:
         rows = self._conn.execute(query, params).fetchall()
         return [_reply_from_row(row) for row in rows]
 
+    # -- purge (deletion compliance, S6) -------------------------------------
+
+    def purge_candidate(self, post_id: str) -> bool:
+        """Delete a stored candidate row (third-party content). Returns
+        True when a row was actually removed. The caller records the
+        purge_log entry; this method only removes the content."""
+        _require_id(post_id, field="post_id")
+        with self._conn:
+            cursor = self._conn.execute(
+                "DELETE FROM candidates WHERE post_id = ?", (post_id,)
+            )
+        return cursor.rowcount == 1
+
+    def purge_reply(self, reply_id: str) -> bool:
+        """Delete a stored reply row (third-party content). Returns True
+        when a row was actually removed."""
+        _require_id(reply_id, field="reply_id")
+        with self._conn:
+            cursor = self._conn.execute(
+                "DELETE FROM replies WHERE reply_id = ?", (reply_id,)
+            )
+        return cursor.rowcount == 1
+
     # -- purge log ----------------------------------------------------------
 
     def record_purge(

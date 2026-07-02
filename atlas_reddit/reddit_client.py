@@ -93,6 +93,16 @@ class ThreadReply:
     is_reply_to_me: bool
 
 
+class DeletionSource(Protocol):
+    """The transport boundary the purge job consumes (S6). Given stored
+    item fullnames, report which still carry live third-party content."""
+
+    def fetch_gone_items(self, fullnames: list[str]) -> dict[str, str]:
+        """Return {fullname: reason} for items that are deleted, removed,
+        or missing entirely. Present-and-live items are omitted."""
+        ...
+
+
 class HistorySource(Protocol):
     """The transport boundary the reply tracker consumes (S5). Tests
     provide a fake; production provides :class:`PrawHistorySource`."""
@@ -342,3 +352,61 @@ class PrawHistorySource:
                 _admit(top, thread_id)
 
         return replies
+
+
+class PrawDeletionSource:
+    """Production DeletionSource over PRAW's batched info() endpoint
+    (up to 100 fullnames per request -- one read for a whole batch).
+    Read-only by construction; requires only the read scope."""
+
+    _REQUIRED = frozenset({"read"})
+
+    def __init__(self, settings: RedditListeningSettings) -> None:
+        client_id = settings.client_id
+        client_secret = settings.client_secret.get_secret_value()
+        refresh_token = settings.refresh_token.get_secret_value()
+        if not (client_id and client_secret and refresh_token and settings.username):
+            raise RedditAuthError(
+                "missing Reddit credentials: set ATLAS_REDDIT_CLIENT_ID, "
+                "ATLAS_REDDIT_CLIENT_SECRET, ATLAS_REDDIT_REFRESH_TOKEN, and "
+                "ATLAS_REDDIT_USERNAME (see docs/REDDIT_LISTENING_SETUP_RUNBOOK.md)"
+            )
+        user_agent = build_user_agent(settings.username)
+        try:
+            import praw  # lazy: tests fake the transport and never need it
+        except ImportError as exc:
+            raise RedditAuthError(
+                "praw is not installed; run pip install -r requirements.txt"
+            ) from exc
+        try:
+            self._reddit = praw.Reddit(
+                client_id=client_id,
+                client_secret=client_secret,
+                refresh_token=refresh_token,
+                user_agent=user_agent,
+                check_for_updates=False,
+            )
+            granted = self._reddit.auth.scopes()
+        except Exception as exc:
+            raise RedditAuthError(f"Reddit authentication failed: {exc}") from exc
+        self._scopes = validate_scopes(granted, required=self._REQUIRED)
+
+    def granted_scopes(self) -> frozenset[str]:
+        return self._scopes
+
+    def fetch_gone_items(self, fullnames: list[str]) -> dict[str, str]:
+        gone: dict[str, str] = {name: "missing (not returned by the API)"
+                                for name in fullnames}
+        for item in self._reddit.info(fullnames=list(fullnames)):
+            name = item.fullname
+            author = getattr(item.author, "name", None)
+            text = getattr(item, "body", None)
+            if text is None:
+                text = getattr(item, "selftext", "") or ""
+            if author is None and text in ("[deleted]", "[removed]"):
+                gone[name] = f"content shows {text}"
+            elif getattr(item, "removed_by_category", None):
+                gone[name] = f"removed ({item.removed_by_category})"
+            else:
+                gone.pop(name, None)  # present and live
+        return gone
