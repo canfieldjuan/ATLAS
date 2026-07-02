@@ -187,6 +187,10 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(
                 f"--pace-seconds must be 0..{MAX_PACE_SECONDS}, got {args.pace_seconds}"
             )
+        if args.min_score < 0:
+            # Same contract as the poll_min_score setting (ge=0): a CLI
+            # override must not broaden what gets stored vs the env path.
+            parser.error(f"--min-score must be >= 0, got {args.min_score}")
         try:
             watchlist = load_watchlist(args.watchlist)
             source = PrawListingSource(settings)

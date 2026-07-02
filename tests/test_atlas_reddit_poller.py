@@ -464,6 +464,9 @@ def test_cli_poll_missing_watchlist_exits_cleanly(
         ("--limit-per-subreddit", "1000"),
         ("--freshness-hours", "721"),
         ("--pace-seconds", "61"),
+        # Wave-2: the floor knob joins the same shared-contract class.
+        ("--min-score", "-1"),
+        ("--min-score", "-0.5"),
     ],
 )
 def test_cli_poll_rejects_nonsense_knobs(tmp_path: Path, flag: str, value: str) -> None:

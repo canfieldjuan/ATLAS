@@ -200,6 +200,16 @@ fixed at root in this PR):
   with a required-scopes floor (default read; future sources pass their
   own), probed on both sides.
 
+Review-fix note (Codex wave 2 on e4b61e0a6; verified real, fixed at root):
+
+- **poll --min-score bypassed the ge=0 settings contract** (P2): the same
+  two-entry-path class as the wave-1 ceiling bypass, on the one knob the
+  fix missed. Behaviorally mild (the poller's zero-gate already drops
+  non-positive totals) but a real contract bypass; the CLI now enforces
+  the same floor, probed with negative values. The digest --min-score has
+  no settings twin, so no contract exists to bypass there (named, not
+  silently skipped).
+
 ## Deferred
 
 - Live-credential smoke: operator runs the runbook (app registration +
@@ -220,7 +230,7 @@ Parked hardening: none.
 - pytest on `tests/test_atlas_reddit_poller.py` plus the existing
   `tests/test_atlas_reddit_digest.py`, `tests/test_atlas_reddit_store.py`,
   `tests/test_atlas_reddit_config.py`, and
-  `tests/test_atlas_reddit_scoring.py`: 255 passed (scope guard both
+  `tests/test_atlas_reddit_scoring.py`: 257 passed (scope guard both
   sides incl. wildcard and empty; missing-creds-before-praw-import;
   read-only public surface; package-wide forbidden-write static probe;
   UA format + invalid usernames; poller admit/skip counters; inclusive
@@ -241,14 +251,14 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_reddit/__main__.py` | 102 |
+| `atlas_reddit/__main__.py` | 106 |
 | `atlas_reddit/config.py` | 56 |
 | `atlas_reddit/poller.py` | 97 |
 | `atlas_reddit/reddit_client.py` | 176 |
 | `docs/REDDIT_LISTENING_SETUP_RUNBOOK.md` | 114 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Praw-Poller.md` | 254 |
+| `plans/PR-Reddit-Listening-Praw-Poller.md` | 264 |
 | `plans/archive/PR-Reddit-Listening-Digest.md` | 0 |
 | `requirements.txt` | 1 |
-| `tests/test_atlas_reddit_poller.py` | 510 |
-| **Total** | **1313** |
+| `tests/test_atlas_reddit_poller.py` | 513 |
+| **Total** | **1330** |
