@@ -4,9 +4,15 @@ name: Diff Budget
 # added lines over budget fail unless the body carries an explicit
 # "Diff-budget override: <reason>" line. `edited` is included because the
 # fix path IS a body edit; see plans/PR-Diff-Budget-Gate.md.
+#
+# Trusted-base execution (#1944 waiver 18): `pull_request_target` resolves
+# this workflow file from the BASE branch and the checkout below pins the
+# base SHA, so a PR editing this gate (script or workflow) is still judged
+# by main's version. The job runs base-ref code only; never add a step
+# here that executes PR-ref content.
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
@@ -15,10 +21,14 @@ permissions:
 
 jobs:
   diff-budget:
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Checkout trusted base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0

@@ -18,8 +18,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import re
+import subprocess
 import sys
-from typing import Sequence
+from typing import Callable, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,8 +51,46 @@ def is_dependabot_author(author: str | None) -> bool:
     return author.strip() in DEPENDABOT_AUTHORS
 
 
-def audit_pr_body(body: str, *, root: Path = ROOT) -> list[str]:
+def resolve_git_ref(ref: str, *, repo_root: Path = ROOT) -> bool:
+    """True when ``ref`` resolves to a commit in the local repo. The
+    trusted-base workflow fetches the PR head before auditing; an
+    unresolvable ref is an infrastructure failure, never a silent pass."""
+    proc = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+    )
+    return proc.returncode == 0
+
+
+def plan_exists_at_ref(ref: str, *, repo_root: Path = ROOT) -> Callable[[str], bool]:
+    """Plan-doc existence checker against a git ref (the fetched PR head).
+    Trusted-base gate runs execute this script from the BASE checkout, but a
+    new plan doc arrives WITH the PR -- so existence is asked of the PR head
+    ref by inspection (git cat-file), never by executing PR code."""
+
+    def _exists(plan: str) -> bool:
+        proc = subprocess.run(
+            ["git", "cat-file", "-e", f"{ref}:{plan}"],
+            cwd=repo_root,
+            capture_output=True,
+        )
+        return proc.returncode == 0
+
+    return _exists
+
+
+def audit_pr_body(
+    body: str,
+    *,
+    root: Path = ROOT,
+    plan_exists: Callable[[str], bool] | None = None,
+) -> list[str]:
     """Return a list of contract failures (empty means the body passes)."""
+
+    if plan_exists is None:
+        def plan_exists(plan: str) -> bool:
+            return (root / plan).is_file()
 
     failures: list[str] = []
     lines = body.splitlines()
@@ -65,8 +104,7 @@ def audit_pr_body(body: str, *, root: Path = ROOT) -> list[str]:
             "first non-empty line must be 'Plan: plans/PR-<Slice-Name>.md'"
         )
     else:
-        plan_path = root / plan_match.group("plan")
-        if not plan_path.is_file():
+        if not plan_exists(plan_match.group("plan")):
             failures.append(
                 f"plan doc named in the PR body does not exist: {plan_match.group('plan')}"
             )
@@ -118,6 +156,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="",
         help="GitHub PR author login; Dependabot PRs are exempt",
     )
+    parser.add_argument(
+        "--plan-git-ref",
+        default="",
+        help=(
+            "check plan-doc existence against this git ref (the fetched PR "
+            "head) instead of the working tree -- for trusted-base gate runs"
+        ),
+    )
     parser.add_argument("body_file", help="path to a file holding the PR body")
     args = parser.parse_args(argv)
 
@@ -131,7 +177,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("pr body audit: PASS (Dependabot PR body exempt)")
         return 0
 
-    failures = audit_pr_body(body)
+    plan_exists = None
+    if args.plan_git_ref:
+        if not resolve_git_ref(args.plan_git_ref):
+            print(
+                f"pr body audit: plan ref not resolvable: {args.plan_git_ref} "
+                "(fetch the PR head before auditing)",
+                file=sys.stderr,
+            )
+            return 2  # infrastructure failure -- never a silent pass
+        plan_exists = plan_exists_at_ref(args.plan_git_ref)
+
+    failures = audit_pr_body(body, plan_exists=plan_exists)
     if failures:
         print("pr body audit: FAIL (AGENTS.md section 1b contract)")
         for failure in failures:

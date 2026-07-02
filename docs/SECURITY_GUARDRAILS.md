@@ -46,6 +46,19 @@ Current blocking posture: new unbaselined secrets block PRs; Semgrep, Trivy,
 Checkov, pip-audit, and OSV are advisory/report-only until their adoption
 backlogs are triaged and ratcheted.
 
+The same trusted-base execution pattern covers the PR meta-gates
+(#1944 waiver 18): `diff-budget`, `live-reconciliation`, and
+`pr-body-contract` run on `pull_request_target` with a checkout pinned to
+the base SHA, so a PR that edits a gate script or gate workflow is still
+judged by `main`'s version. These jobs run base-ref code only and must
+never gain a step that executes PR-ref content -- `pr-body-contract`
+inspects the fetched PR head purely as git data (`git cat-file`) to see
+the plan doc the PR brings with it. Residual PR-ref surface, by design:
+`pre-push-audit` and the maturity sweeps operate on the PR tree and need a
+scripts-from-base split in a follow-up slice, and `live-reconciliation`'s
+review-event triggers resolve the workflow file PR-side (every push/edit
+still produces a trusted run).
+
 Branch protection for `main` requires `live-reconciliation`, `diff-budget`
 (the AGENTS.md diff-budget gate), `Gitleaks PR secret scan`, and
 `Gitleaks baseline growth guard`. The
