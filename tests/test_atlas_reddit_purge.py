@@ -470,6 +470,47 @@ def test_failed_digest_cleanup_retries_on_next_pass(
     assert list(digest_dir.glob("*.md")) == []
 
 
+def test_same_second_digest_is_still_removed(
+    store: ListeningStore, tmp_path: Path
+) -> None:
+    """Wave-4 class: purged_at is an integer second, mtimes are
+    fractional -- a digest rendered in the same wall-clock second as the
+    purge must still be treated as predating it."""
+    digest_dir = tmp_path / "digests"
+    _write_digest_file(digest_dir, "2026-07-01.md", mtime=NOW)  # same second
+    import os
+    os.utime(digest_dir / "2026-07-01.md", (NOW + 0.8, NOW + 0.8))
+    _seed_candidate(store, "t3_gone")
+    stats = _purge(
+        store,
+        FakeDeletionSource(gone={"t3_gone": "content shows [deleted]"}),
+        digest_dir=digest_dir,
+    )
+    assert stats.digests_removed == 1
+    assert list(digest_dir.glob("*.md")) == []
+
+
+def test_unrelated_markdown_is_never_deleted(
+    store: ListeningStore, tmp_path: Path
+) -> None:
+    """Wave-4 class: a misconfigured digest dir containing unrelated
+    Markdown must not lose data -- only the tool's own YYYY-MM-DD.md
+    artifacts are eligible for cleanup."""
+    digest_dir = tmp_path / "digests"
+    _write_digest_file(digest_dir, "2026-07-01.md", mtime=NOW - 86400)
+    _write_digest_file(digest_dir, "notes.md", mtime=NOW - 86400, body="my notes")
+    _write_digest_file(digest_dir, "2026-13-99.txt.md", mtime=NOW - 86400, body="odd")
+    _seed_candidate(store, "t3_gone")
+    stats = _purge(
+        store,
+        FakeDeletionSource(gone={"t3_gone": "content shows [deleted]"}),
+        digest_dir=digest_dir,
+    )
+    assert stats.digests_removed == 1  # only the generated artifact
+    remaining = {a.name for a in digest_dir.glob("*.md")}
+    assert remaining == {"notes.md", "2026-13-99.txt.md"}
+
+
 def test_cross_table_id_twin_is_not_shielded(store: ListeningStore) -> None:
     """Wave-3 class: a corrupt reply holding a t3_ id must not shield the
     legitimate candidate with the same id from purging."""

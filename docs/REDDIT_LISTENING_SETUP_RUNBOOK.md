@@ -88,10 +88,11 @@ ATLAS_REDDIT_USERNAME=your_reddit_username
 mkdir -p data/atlas_reddit
 cp atlas_reddit/watchlist.sample.toml data/atlas_reddit/watchlist.toml
 # edit the watchlist, then:
-python -m atlas_reddit poll     # one polite read-only pass
-python -m atlas_reddit purge    # deletion-compliance pass FIRST...
-python -m atlas_reddit digest   # ...so the digest never surfaces content
-                                # deleted on Reddit since the last purge
+python -m atlas_reddit poll     # radar: newest posts from the watchlist
+python -m atlas_reddit track    # reply tracker: own threads + new replies
+python -m atlas_reddit purge    # deletion-compliance pass BEFORE digest...
+python -m atlas_reddit digest   # ...so it never surfaces content deleted
+                                # on Reddit since the last purge
 ```
 
 Deletion compliance: run `purge` at least every 48 hours while any stored

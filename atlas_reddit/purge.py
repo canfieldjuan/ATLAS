@@ -38,6 +38,12 @@ _KIND_RE = {
     "reply": re.compile(r"^t1_[a-z0-9]+$"),
 }
 
+# Only the tool's own generated artifacts (YYYY-MM-DD.md from
+# write_digest) are ever eligible for cleanup: a misconfigured
+# --digest-dir pointing at a shared folder must not cost unrelated
+# Markdown files.
+_DIGEST_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
+
 
 @dataclass
 class PurgeStats:
@@ -121,9 +127,19 @@ def purge_once(
         log = store.list_purge_log()
         if log:
             latest_purge = max(record.purged_at for record in log)
+            # purged_at is an integer second while mtimes are fractional:
+            # a digest rendered in the SAME second as the purge (mtime
+            # 1000.8 vs purge 1000) must still be treated as predating
+            # it, so the cutoff is the start of the NEXT second. A digest
+            # genuinely rendered later within that same second is also
+            # removed -- conservative in the compliance direction, and
+            # lossless because digests are regenerable.
+            cutoff = latest_purge + 1
             for artifact in sorted(digest_dir.glob("*.md")):
+                if not _DIGEST_NAME_RE.match(artifact.name):
+                    continue  # not one of our generated artifacts
                 try:
-                    if artifact.stat().st_mtime < latest_purge:
+                    if artifact.stat().st_mtime < cutoff:
                         artifact.unlink()
                         stats.digests_removed += 1
                 except OSError as exc:
