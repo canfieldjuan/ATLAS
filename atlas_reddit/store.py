@@ -32,6 +32,7 @@ Design rules:
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -306,6 +307,12 @@ class ListeningStore:
         if status is not None and status not in CANDIDATE_STATUSES:
             raise StoreError(
                 f"invalid candidate status {status!r}; allowed: {CANDIDATE_STATUSES}"
+            )
+        # sqlite3 binds NaN as NULL, which silently empties the filter;
+        # reject non-finite floors here so every caller fails loudly.
+        if min_final_score is not None and not math.isfinite(min_final_score):
+            raise StoreError(
+                f"min_final_score must be finite, got {min_final_score!r}"
             )
         query = "SELECT * FROM candidates"
         clauses: list[str] = []

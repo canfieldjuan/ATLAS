@@ -85,6 +85,7 @@ Slice phase: Vertical slice
 - `atlas_reddit/__main__.py`
 - `atlas_reddit/config.py`
 - `atlas_reddit/digest.py`
+- `atlas_reddit/store.py`
 - `plans/INDEX.md`
 - `plans/PR-Reddit-Listening-Digest.md`
 - `plans/archive/PR-Reddit-Listening-Sqlite-Store.md`
@@ -138,6 +139,28 @@ stderr; success prints the written path and returns 0.
 - **Housekeeping commit in this branch**: authorized fold-in (#1934 comment
   4860540364); kept as its own commit to keep the S3 code diff clean.
 
+Review-fix notes (Codex wave 1 on 96b6499d4; all three verified real and
+fixed at root in this PR):
+
+- **Only the title was sanitized; URL, subreddit, topics, and thread ids
+  interpolated raw** (P2): a hostile URL or topic could still break links
+  or forge headings despite the slice's injection contract. Root cause:
+  sanitization applied ad hoc per field instead of at every interpolation
+  of external data. Fixed by sanitizing all fields at the render boundary,
+  with URL-appropriate handling (control chars stripped, link-breaking
+  punctuation percent-encoded, linkified only for http/https -- other
+  schemes render as plain text).
+- **OSError escaped the CLI error contract** (P2): --digest-dir at an
+  existing file or unwritable path produced a traceback instead of the
+  documented exit-2-with-stderr behavior. Root cause: the operator-error
+  contract was implemented for only one error family. Fixed by adding
+  OSError to the same handler.
+- **--min-score nan/inf accepted** (P2): sqlite3 binds NaN as NULL, which
+  silently empties the radar. Fixed at the shared root -- the store itself
+  rejects non-finite filters for every caller -- plus a friendly argparse
+  usage error at the CLI, the same two-layer posture as the id/enum
+  guards. Both layers probed.
+
 ## Deferred
 
 - S4 PRAW read-only poller (doc-verify auth path FIRST; read/identity/
@@ -156,13 +179,16 @@ Parked hardening: none.
 
 - pytest on `tests/test_atlas_reddit_digest.py` plus the existing
   `tests/test_atlas_reddit_store.py`, `tests/test_atlas_reddit_config.py`,
-  and `tests/test_atlas_reddit_scoring.py`: 188 passed (renderer
+  and `tests/test_atlas_reddit_scoring.py`: 197 passed (renderer
   populated/empty/deterministic, ranked-with-why, hostile-title link
   breakout escaped, newline heading-injection collapsed, long-body excerpt,
   dated-file write, same-day overwrite, status-filter exclusion, limit +
   inclusive min-score, seen-reply exclusion, CLI end-to-end on a real
   store, malformed dates, non-positive limits, unknown/missing commands,
-  newer-schema fail-closed through the CLI with stderr message). This line
+  newer-schema fail-closed through the CLI with stderr message; wave-1
+  probes: hostile URL percent-encoding, non-http scheme not linkified,
+  hostile subreddit/topic/thread-id sanitization, output-path OSError exit
+  2, non-finite min-score rejected at CLI and store layers). This line
   is the single verification-count source; the PR body mirrors it.
 - ASCII byte-scan on the four changed Python files: clean.
 - Live demo: `python -m atlas_reddit` digest against a scratch store wrote
@@ -176,11 +202,12 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_reddit/__main__.py` | 108 |
+| `atlas_reddit/__main__.py` | 123 |
 | `atlas_reddit/config.py` | 7 |
-| `atlas_reddit/digest.py` | 120 |
+| `atlas_reddit/digest.py` | 145 |
+| `atlas_reddit/store.py` | 7 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Digest.md` | 172 |
+| `plans/PR-Reddit-Listening-Digest.md` | 211 |
 | `plans/archive/PR-Reddit-Listening-Sqlite-Store.md` | 0 |
-| `tests/test_atlas_reddit_digest.py` | 322 |
-| **Total** | **732** |
+| `tests/test_atlas_reddit_digest.py` | 434 |
+| **Total** | **930** |

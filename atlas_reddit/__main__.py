@@ -9,6 +9,7 @@ dates and timestamps as data.
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 from datetime import datetime, timezone
@@ -31,6 +32,18 @@ def _valid_date(value: str) -> str:
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"invalid date {value!r}: {exc}") from exc
     return value
+
+
+def _finite_float(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid float {value!r}") from exc
+    if not math.isfinite(number):
+        raise argparse.ArgumentTypeError(
+            f"--min-score must be finite, got {value!r}"
+        )
+    return number
 
 
 def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
@@ -69,7 +82,7 @@ def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
     )
     digest.add_argument(
         "--min-score",
-        type=float,
+        type=_finite_float,
         default=None,
         help="Minimum final score for radar candidates (default: no floor)",
     )
@@ -94,7 +107,9 @@ def main(argv: list[str] | None = None) -> int:
                     limit=args.limit,
                     min_final_score=args.min_score,
                 )
-        except StoreError as exc:
+        except (StoreError, OSError) as exc:
+            # One operator-error contract: bad state OR bad output path
+            # both report cleanly on stderr with exit 2, never a traceback.
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(path)

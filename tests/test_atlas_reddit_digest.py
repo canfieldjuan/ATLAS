@@ -151,6 +151,118 @@ def test_render_is_deterministic(store: ListeningStore) -> None:
     assert first == second
 
 
+# -- wave-1 class probes: every external field sanitized; error contracts
+
+
+def test_hostile_url_percent_encoded_in_link(store: ListeningStore) -> None:
+    """Cited class: sanitization must cover every interpolated field, not
+    just the title. A ')' in the URL would terminate the link early."""
+    _seed_candidate(
+        store, "t3_url", url="https://reddit.com/r/x/a)b\n## forged"
+    )
+    content = render_digest(
+        candidates=store.list_candidates(status="new"), replies=[], generated_on=DATE
+    )
+    assert "(https://reddit.com/r/x/a%29b##%20forged" in content or ")b" not in content
+    assert "\n## forged" not in content
+
+
+def test_non_http_url_not_linkified(store: ListeningStore) -> None:
+    _seed_candidate(store, "t3_js", url="javascript:alert(1)")
+    content = render_digest(
+        candidates=store.list_candidates(status="new"), replies=[], generated_on=DATE
+    )
+    assert "javascript:" not in content
+    assert "(no valid link)" in content
+
+
+def test_hostile_subreddit_and_topics_sanitized(store: ListeningStore) -> None:
+    _seed_candidate(
+        store,
+        "t3_meta",
+        subreddit="abc",
+        matched_topics=("evil](http://x)", "ok-topic"),
+    )
+    content = render_digest(
+        candidates=store.list_candidates(status="new"), replies=[], generated_on=DATE
+    )
+    assert "evil](http://x)" not in content
+    assert "evil\\]\\(http://x\\)" in content
+
+
+def test_hostile_thread_id_sanitized_in_replies(store: ListeningStore) -> None:
+    store.upsert_tracked_thread(
+        thread_id="t3_x](http://evil)", my_comment_ids=(), checked_at=0
+    )
+    store.insert_reply(
+        reply_id="t1_h",
+        thread_id="t3_x](http://evil)",
+        parent_id=None,
+        author="a",
+        body="hi",
+        created_utc=1,
+        is_reply_to_me=True,
+    )
+    content = render_digest(
+        candidates=[],
+        replies=store.list_replies(only_unseen=True),
+        generated_on=DATE,
+    )
+    assert "t3_x](http://evil)" not in content
+    assert "t3_x\\]\\(http://evil\\)" in content
+
+
+def test_cli_output_path_failure_exits_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Cited class: OSError joins the CLI's operator-error contract (exit 2
+    + stderr message), never a traceback."""
+    blocker = tmp_path / "digests"
+    blocker.write_text("i am a file, not a directory", encoding="utf-8")
+    code = main(
+        [
+            "digest",
+            "--db",
+            str(tmp_path / "listening.db"),
+            "--digest-dir",
+            str(blocker),
+            "--date",
+            DATE,
+        ]
+    )
+    assert code == 2
+    assert "error:" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+def test_cli_rejects_non_finite_min_score(tmp_path: Path, bad: str) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "digest",
+                "--db",
+                str(tmp_path / "x.db"),
+                "--digest-dir",
+                str(tmp_path / "d"),
+                "--date",
+                DATE,
+                "--min-score",
+                bad,
+            ]
+        )
+    assert excinfo.value.code == 2
+
+
+def test_store_rejects_non_finite_score_filter(store: ListeningStore) -> None:
+    """Root-layer guard: sqlite3 binds NaN as NULL which silently empties
+    the filter, so the store itself fails loudly for every caller."""
+    from atlas_reddit.store import StoreError
+
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(StoreError, match="finite"):
+            store.list_candidates(min_final_score=bad)
+
+
 # -- write_digest -------------------------------------------------------------
 
 

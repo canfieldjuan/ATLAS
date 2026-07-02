@@ -10,10 +10,12 @@ Two layers:
   ``<digest_dir>/YYYY-MM-DD.md``. Re-running the same day overwrites the
   file, so regeneration is idempotent.
 
-Titles and bodies are external Reddit text: they are escaped before
-being placed inside Markdown link syntax so a hostile title like
-``](http://evil)`` cannot break out of its link, and newlines are
-collapsed so one post cannot forge digest structure.
+Every rendered field that originates outside this tool (title, body,
+author, URL, subreddit, topic names, thread ids) is sanitized at the
+render boundary: inline text is whitespace-collapsed and
+link-metachar-escaped, and link destinations are percent-encoded and
+linkified only for http(s) URLs -- so a hostile value in any field can
+neither break out of its link nor forge digest structure.
 """
 
 from __future__ import annotations
@@ -28,12 +30,28 @@ _EXCERPT_LENGTH = 140
 
 _MD_ESCAPE = str.maketrans({"[": "\\[", "]": "\\]", "(": "\\(", ")": "\\)"})
 
+# Characters that terminate or corrupt a Markdown link destination.
+_URL_UNSAFE = {"(": "%28", ")": "%29", " ": "%20", "<": "%3C", ">": "%3E"}
+
 
 def _sanitize_inline(text: str) -> str:
     """Collapse whitespace/newlines and escape Markdown link metachars so
     external Reddit text cannot forge digest structure."""
     collapsed = re.sub(r"\s+", " ", text).strip()
     return collapsed.translate(_MD_ESCAPE)
+
+
+def _sanitize_url(url: str) -> str | None:
+    """Return a Markdown-link-safe destination, or None when the value is
+    not a plain http(s) URL (the caller then renders text without a
+    link). Control characters and link-breaking punctuation are
+    percent-encoded rather than trusted."""
+    cleaned = "".join(
+        _URL_UNSAFE.get(ch, ch) for ch in url if ch.isprintable() and ch not in "\r\n\t"
+    ).strip()
+    if not cleaned.lower().startswith(("http://", "https://")):
+        return None
+    return cleaned
 
 
 def _utc_date(unix_ts: int) -> str:
@@ -61,10 +79,16 @@ def render_digest(
     if candidates:
         for rank, candidate in enumerate(candidates, start=1):
             title = _sanitize_inline(candidate.title)
-            topics = ", ".join(candidate.matched_topics) if candidate.matched_topics else "none"
+            subreddit = _sanitize_inline(candidate.subreddit)
+            topics = (
+                ", ".join(_sanitize_inline(topic) for topic in candidate.matched_topics)
+                if candidate.matched_topics
+                else "none"
+            )
+            url = _sanitize_url(candidate.url)
+            headline = f"**[{title}]({url})**" if url else f"**{title}** (no valid link)"
             lines.append(
-                f"{rank}. **[{title}]({candidate.url})** -- "
-                f"r/{candidate.subreddit} -- score {candidate.final_score:g}"
+                f"{rank}. {headline} -- r/{subreddit} -- score {candidate.final_score:g}"
             )
             lines.append(
                 f"   topics: {topics} | posted: {_utc_date(candidate.created_utc)} "
@@ -79,9 +103,10 @@ def render_digest(
     if replies:
         for reply in replies:
             author = _sanitize_inline(reply.author) if reply.author else "unknown"
+            thread = _sanitize_inline(reply.thread_id)
             target = "you" if reply.is_reply_to_me else "the thread"
             lines.append(
-                f"- {author} replied to {target} on thread {reply.thread_id} "
+                f"- {author} replied to {target} on thread {thread} "
                 f"({_utc_date(reply.created_utc)}): \"{_excerpt(reply.body)}\""
             )
     else:
