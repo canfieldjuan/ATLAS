@@ -43,13 +43,43 @@ PLACEHOLDER_REASON_RE = re.compile(
     r"^(?:todo|tbd|n/?a|\.+|-+|<[^<>]*>)?$", re.IGNORECASE
 )
 
-# Fenced code blocks (``` or ~~~) are documentation, not decisions: a marker
-# inside a fence (e.g. this gate's own syntax example) must not count. Fence
-# lines may carry blockquote/list prefixes (fences nested in quotes/lists).
-FENCE_RE = re.compile(
-    r"^[ \t>*+-]*(?:```|~~~).*?(?:^[ \t>*+-]*(?:```|~~~)[ \t]*$|\Z)",
-    re.MULTILINE | re.DOTALL,
+# HTML comments are invisible in the rendered PR body: a marker hidden there
+# would be a decision no reviewer can see, so it must not count either.
+HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+
+# Fenced code blocks are documentation, not decisions. This is a line scanner
+# implementing the actual CommonMark rule -- not a regex approximation, which
+# review waves kept finding corners of (fence length, delimiter identity,
+# quote/list/ordered prefixes). A fence opens on 3+ backticks or tildes after
+# any quote/list prefix and closes only on >= that many of the SAME delimiter
+# with nothing after it; everything inside is dropped, and an unclosed fence
+# drops the rest of the body (fail closed: a malformed body cannot smuggle or
+# accidentally grant an override).
+_FENCE_LINE_RE = re.compile(
+    r"^[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*(?P<fence>`{3,}|~{3,})(?P<rest>.*)$"
 )
+
+
+def _strip_fenced_blocks(body: str) -> str:
+    out: list[str] = []
+    fence_char = ""
+    fence_len = 0
+    for line in body.splitlines():
+        match = _FENCE_LINE_RE.match(line)
+        if not fence_char:
+            if match:
+                fence = match.group("fence")
+                fence_char, fence_len = fence[:1], len(fence)
+            else:
+                out.append(line)
+        elif (
+            match
+            and match.group("fence")[:1] == fence_char
+            and len(match.group("fence")) >= fence_len
+            and not match.group("rest").strip()
+        ):
+            fence_char, fence_len = "", 0
+    return "\n".join(out)
 
 
 def find_override_reason(body: str) -> str | None:
@@ -62,7 +92,7 @@ def find_override_reason(body: str) -> str | None:
     Substantive requires at least one alphanumeric character -- bare
     punctuation ("!!!") is a placeholder, not a justification.
     """
-    text = FENCE_RE.sub("", body or "")
+    text = _strip_fenced_blocks(HTML_COMMENT_RE.sub("", body or ""))
     found: str | None = None
     for match in OVERRIDE_RE.finditer(text):
         found = ""

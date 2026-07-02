@@ -101,6 +101,50 @@ class TestOverBudgetWithOverride:
         code, _ = mod.evaluate(900, body, BUDGET)
         assert code == 1
 
+    def test_html_comment_hidden_marker_is_ignored(self):
+        # invisible in the rendered body = a decision no reviewer can see
+        body = "<!--\nDiff-budget override: hidden reason\n-->\n"
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 1
+
+    def test_real_marker_after_html_comment_still_honored(self):
+        body = ("<!-- reviewed -->\n"
+                "Diff-budget override: visible reasoned decision")
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 0
+
+    def test_four_backtick_fence_containing_triple_is_one_block(self):
+        # inner ``` must not close a ```` fence (delimiter length tracked)
+        body = ("````\nexample\n```\nDiff-budget override: still inside\n````\n")
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 1
+
+    def test_real_marker_after_four_backtick_sample_still_honored(self):
+        body = ("````\n```\n````\n"
+                "Diff-budget override: real decision after the sample")
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 0
+
+    def test_ordered_list_fence_marker_is_ignored(self):
+        body = "1. ```\n   Diff-budget override: example syntax only\n   ```\n"
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 1
+
+    def test_tilde_fence_not_closed_by_backticks(self):
+        body = "~~~\n```\nDiff-budget override: inside tilde fence\n~~~\n"
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 1
+
+    def test_fake_close_with_trailing_text_stays_inside_fence(self):
+        body = "```\n``` not a real close\nDiff-budget override: hidden\n```\n"
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 1
+
+    def test_unclosed_fence_fails_closed(self):
+        body = "```\nDiff-budget override: after unclosed fence"
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 1
+
     def test_marker_must_be_line_anchored(self):
         # mid-sentence mention must not count as a marker
         body = "we discussed a diff-budget override: maybe later"

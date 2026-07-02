@@ -64,7 +64,7 @@ simple total proves too blunt. Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_check_diff_budget.py -q` -- 53 passed
+- `python -m pytest tests/test_check_diff_budget.py -q` -- 61 passed
   (incl. review-wave probes: fenced/indented/blockquoted/list-nested
   code markers ignored, <=3-space real marker honored, blockquoted
   markers never count, copied template / punctuation-only / punctuated
@@ -78,7 +78,7 @@ simple total proves too blunt. Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| **Total** | **~520** |
+| **Total** | **~570** |
 
 The initial slice shipped at exactly 400. The Codex+Copilot wave-1 fixes (fence
 stripping, fail-closed additions, template/punctuation rejection, any-match
