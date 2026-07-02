@@ -25,10 +25,12 @@ Slice phase: Vertical slice
 ### Review Contract
 
 - Acceptance: <= 400 passes; > 400 without marker fails naming count and
-  fix; reasoned override passes echoing the reason; placeholders fail;
-  gh failure exits 2. No existing file touched. Decision core is pure;
-  the gh subprocess is untested, same split as the sibling gate.
-- Reviewer rules triggered: R2, R10 (new gate predicate / evaluator).
+  fix; reasoned override passes echoing the reason; placeholders, copied
+  <templates>, and fenced examples fail; gh failure or missing additions
+  exits 2. One existing file touched: pre_push_audit.yml (CI enrollment).
+  Decision core is pure; the gh subprocess fetch is guarded and tested.
+- Reviewer rules triggered: R2, R10 (new gate predicate / evaluator),
+  R12 (tests enrolled in the pre-push-audit PR workflow).
 
 ### Files touched
 
@@ -36,6 +38,7 @@ Slice phase: Vertical slice
 - `scripts/check_diff_budget.py`
 - `tests/test_check_diff_budget.py`
 - `.github/workflows/diff_budget.yml`
+- `.github/workflows/pre_push_audit.yml`
 
 ## Mechanism
 
@@ -61,7 +64,10 @@ simple total proves too blunt. Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_check_diff_budget.py -q` -- 29 passed.
+- `python -m pytest tests/test_check_diff_budget.py -q` -- 39 passed
+  (incl. review-wave probes: fenced-marker ignored both ways, copied
+  template + punctuation-only rejected, early placeholder does not
+  shadow a later real reason, missing/non-numeric additions raise).
 - Offline smokes: 200 -> exit 0; 900 -> exit 1 with instructions.
 - ASCII scan clean; maturity-sweep ratchet green.
 
@@ -69,6 +75,12 @@ simple total proves too blunt. Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| **Total** | **~400** |
+| **Total** | **~475** |
 
-The budget gate ships under its own budget, no override.
+The initial slice shipped at exactly 400. The Codex+Copilot wave-1 fixes (fence
+stripping, fail-closed additions, template/punctuation rejection, any-match
+marker scan, CI enrollment) and their mandated regression tests pushed it
+over; the PR body carries a
+reasoned Diff-budget override -- the mechanism working as designed on its
+own PR, with both paths (fenced example ignored, real marker honored)
+exercised live.

@@ -33,23 +33,39 @@ OVERRIDE_RE = re.compile(
 )
 
 # Reasons that do not count as justification: empty, whitespace, bare
-# punctuation, or classic placeholders.
-PLACEHOLDER_REASON_RE = re.compile(r"^(?:todo|tbd|n/?a|\.+|-+)?$", re.IGNORECASE)
+# punctuation, classic placeholders, or a copied <template> from the gate's
+# own failure message / docs.
+PLACEHOLDER_REASON_RE = re.compile(
+    r"^(?:todo|tbd|n/?a|\.+|-+|<[^<>]*>)?$", re.IGNORECASE
+)
+
+# Fenced code blocks (``` or ~~~) are documentation, not decisions: a marker
+# inside a fence (e.g. this gate's own syntax example) must not count.
+FENCE_RE = re.compile(r"^[ \t]*(?:```|~~~).*?(?:^[ \t]*(?:```|~~~)[ \t]*$|\Z)",
+                      re.MULTILINE | re.DOTALL)
 
 
 def find_override_reason(body: str) -> str | None:
-    """Return the override reason string, or None when no marker line exists.
+    """Return the first substantive override reason, or None when no marker
+    line exists at all.
 
-    An empty/placeholder reason returns "" so callers can distinguish
-    marker-missing (None) from marker-without-reason ("").
+    Every marker line is considered (an early placeholder must not shadow a
+    later real reason). A marker present but never substantive returns "" so
+    callers can distinguish marker-missing (None) from reason-missing ("").
+    Substantive requires at least one alphanumeric character -- bare
+    punctuation ("!!!") is a placeholder, not a justification.
     """
-    match = OVERRIDE_RE.search(body or "")
-    if match is None:
-        return None
-    reason = match.group("reason").strip().strip("*").strip()
-    if PLACEHOLDER_REASON_RE.fullmatch(reason):
-        return ""
-    return reason
+    text = FENCE_RE.sub("", body or "")
+    found: str | None = None
+    for match in OVERRIDE_RE.finditer(text):
+        found = ""
+        reason = match.group("reason").strip().strip("*").strip()
+        if PLACEHOLDER_REASON_RE.fullmatch(reason):
+            continue
+        if not re.search(r"[A-Za-z0-9]", reason):
+            continue
+        return reason
+    return found
 
 
 def evaluate(additions: int, body: str, budget: int) -> tuple[int, list[str]]:
@@ -100,7 +116,12 @@ def fetch_pr(pr: int, repo: str, gh: str) -> tuple[int, str]:
         data = json.loads(out)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"gh returned non-JSON output: {exc}") from exc
-    return int(data.get("additions") or 0), str(data.get("body") or "")
+    additions = data.get("additions")
+    if not isinstance(additions, int) or isinstance(additions, bool):
+        # Fail closed: a missing/null count must be a retryable error (exit 2),
+        # never a silent zero that passes an over-budget PR.
+        raise RuntimeError(f"gh response missing numeric 'additions': {additions!r}")
+    return additions, str(data.get("body") or "")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

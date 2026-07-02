@@ -10,6 +10,7 @@ _SPEC = importlib.util.spec_from_file_location(
     "check_diff_budget",
     Path(__file__).resolve().parent.parent / "scripts" / "check_diff_budget.py",
 )
+assert _SPEC is not None and _SPEC.loader is not None, "gate script not found"
 mod = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(mod)
 
@@ -51,7 +52,9 @@ class TestOverBudgetWithoutOverride:
         code, _ = mod.evaluate(900, body, BUDGET)
         assert code == 1
 
-    @pytest.mark.parametrize("reason", ["", "   ", "TODO", "tbd", "n/a", ".", "--"])
+    @pytest.mark.parametrize(
+        "reason", ["", "   ", "TODO", "tbd", "n/a", ".", "--", "!!!", "???"]
+    )
     def test_placeholder_reasons_fail(self, reason):
         body = f"Diff-budget override: {reason}"
         code, messages = mod.evaluate(500, body, BUDGET)
@@ -91,10 +94,47 @@ class TestOverBudgetWithOverride:
         assert code == 1
 
 
+class TestFencedMarkers:
+    def test_marker_inside_code_fence_is_ignored(self):
+        # documenting the syntax (this gate's own PR body does) is not a decision
+        body = "## Mechanism\n```\nDiff-budget override: <substantive reason>\n```\n"
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 1
+
+    def test_real_marker_outside_fence_still_honored(self):
+        body = ("```\nDiff-budget override: fenced example\n```\n"
+                "Diff-budget override: review-fix wave is indivisible from the gate")
+        code, messages = mod.evaluate(900, body, BUDGET)
+        assert code == 0
+        assert any("indivisible" in m for m in messages)
+
+    @pytest.mark.parametrize("reason", ["<why this slice is genuinely indivisible>",
+                                        "<substantive reason>"])
+    def test_copied_template_reason_fails(self, reason):
+        code, messages = mod.evaluate(500, f"Diff-budget override: {reason}", BUDGET)
+        assert code == 1
+        assert any("no real" in m for m in messages)
+
+    def test_early_placeholder_does_not_shadow_later_real_reason(self):
+        body = ("Diff-budget override: TODO\n"
+                "Diff-budget override: guard code plus mandated regression tests")
+        code, messages = mod.evaluate(900, body, BUDGET)
+        assert code == 0
+        assert any("mandated regression" in m for m in messages)
+
+
 class TestFetchGuards:
     def test_non_json_gh_output_raises_runtime_error(self, monkeypatch):
         monkeypatch.setattr(mod, "_gh", lambda args, gh: "not json at all")
         with pytest.raises(RuntimeError, match="non-JSON"):
+            mod.fetch_pr(1, "owner/repo", "gh")
+
+    @pytest.mark.parametrize("payload", ['{"body": "x"}',
+                                         '{"additions": null, "body": "x"}',
+                                         '{"additions": "9", "body": "x"}'])
+    def test_missing_or_non_numeric_additions_raises(self, monkeypatch, payload):
+        monkeypatch.setattr(mod, "_gh", lambda args, gh: payload)
+        with pytest.raises(RuntimeError, match="additions"):
             mod.fetch_pr(1, "owner/repo", "gh")
 
 
