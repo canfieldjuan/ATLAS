@@ -220,7 +220,9 @@ or scope misses because all labels and ledger rows share the `retired:` namespac
 Run a scheduled or manual workflow that scans recently merged PRs and open PRs,
 then writes detector results to an artifact or a checked-in/generated ledger such
 as `docs/audits/retired_failure_mode_detector_log.md`. It does not run on the PR
-critical path at all.
+critical path at all. The artifact option works under read-only defaults; the
+checked-in ledger option commits back to the repository, which requires
+`contents: write` -- under read-only defaults it computes signals it cannot persist.
 
 ### Coverage and signatures
 
@@ -244,7 +246,8 @@ Record a Markdown or JSON ledger with stable fields:
 
 - `detected_at`
 - `pr`
-- `merge_sha`
+- `head_sha` (the PR head that was scanned; present for open and merged PRs)
+- `merge_sha` (merge-only; empty for open-PR rows)
 - `mode`
 - `confidence`
 - `evidence`
@@ -270,13 +273,10 @@ Record a Markdown or JSON ledger with stable fields:
 
 Do not build a guard yet. First choose where the team wants the signal to live:
 
-1. If the priority is cheapest signal with almost no workflow churn, choose the
-   advisory CI summary/artifact.
-2. If the priority is reviewer actionability, choose the sticky PR comment.
-3. If the priority is tracking model/vendor regressions over time, choose labels
-   plus an issue ledger.
-4. If the priority is zero critical-path impact, choose the scheduled/offline
-   ledger.
+1. Cheapest signal with near-zero workflow churn: the advisory CI summary/artifact.
+2. Reviewer actionability: the sticky PR comment.
+3. Tracking model/vendor regressions over time: labels plus an issue ledger.
+4. Zero critical-path impact: the scheduled/offline ledger.
 
 The first implementation should keep the detector script pure and output JSON so
 any of the recording backends can be swapped later without rewriting signatures.
