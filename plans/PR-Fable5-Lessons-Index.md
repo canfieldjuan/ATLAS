@@ -15,7 +15,7 @@ brief). The doc's standing rule forbids adding prose-only lessons.
 
 ## Scope (this PR)
 
-Ownership lane: Workflow/process
+Ownership lane: workflow/arc-lessons-index
 Slice phase: Workflow/process
 
 1. `docs/fable5_pr_1935_1941_review_lessons.md` -- the lessons index:
