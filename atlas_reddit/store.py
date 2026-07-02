@@ -200,7 +200,13 @@ class ListeningStore:
         self._conn.close()
 
     def _ensure_schema(self) -> None:
-        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        try:
+            version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        except sqlite3.Error as exc:
+            # A corrupt or non-SQLite file is a store-open failure and
+            # belongs to this class's StoreError contract, not a raw
+            # sqlite3 traceback for every caller to re-handle.
+            raise StoreError(f"cannot open store at {self._path}: {exc}") from exc
         if version == SCHEMA_VERSION:
             return
         if version == 0:

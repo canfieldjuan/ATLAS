@@ -28,7 +28,13 @@ from .store import Candidate, ListeningStore, Reply
 
 _EXCERPT_LENGTH = 140
 
-_MD_ESCAPE = str.maketrans({"[": "\\[", "]": "\\]", "(": "\\(", ")": "\\)"})
+# The backslash is escaped too: without it, input like "\\]" would pair
+# its own backslash with the sanitizer's inserted one and leave the
+# bracket active. str.translate maps each source char independently in a
+# single pass, so ordering cannot double-escape.
+_MD_ESCAPE = str.maketrans(
+    {"\\": "\\\\", "[": "\\[", "]": "\\]", "(": "\\(", ")": "\\)"}
+)
 
 # Characters that terminate or corrupt a Markdown link destination.
 _URL_UNSAFE = {"(": "%28", ")": "%29", " ": "%20", "<": "%3C", ">": "%3E"}

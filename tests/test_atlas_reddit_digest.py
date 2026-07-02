@@ -263,6 +263,44 @@ def test_store_rejects_non_finite_score_filter(store: ListeningStore) -> None:
             store.list_candidates(min_final_score=bad)
 
 
+def test_backslash_cannot_defeat_the_escaper(store: ListeningStore) -> None:
+    """Wave-2 class: input like 'evil\\](x' would otherwise render as an
+    escaped backslash followed by a LIVE bracket."""
+    _seed_candidate(store, "t3_bs", title="evil\\](http://x) pwn")
+    content = render_digest(
+        candidates=store.list_candidates(status="new"), replies=[], generated_on=DATE
+    )
+    assert "\\\\\\]" in content  # escaped backslash + escaped bracket
+    assert "\\](http" not in content.replace("\\\\", "")
+
+
+def test_corrupt_db_file_fails_closed_at_store_and_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Wave-2 class: a non-SQLite --db is a store-open failure inside the
+    StoreError contract, surfaced by the CLI as exit 2, never a traceback."""
+    from atlas_reddit.store import StoreError
+
+    fake_db = tmp_path / "not_a.db"
+    fake_db.write_text("this is not sqlite", encoding="utf-8")
+    with pytest.raises(StoreError, match="cannot open store"):
+        ListeningStore(fake_db)
+
+    code = main(
+        [
+            "digest",
+            "--db",
+            str(fake_db),
+            "--digest-dir",
+            str(tmp_path / "d"),
+            "--date",
+            DATE,
+        ]
+    )
+    assert code == 2
+    assert "cannot open store" in capsys.readouterr().err
+
+
 # -- write_digest -------------------------------------------------------------
 
 

@@ -161,6 +161,22 @@ fixed at root in this PR):
   usage error at the CLI, the same two-layer posture as the id/enum
   guards. Both layers probed.
 
+Review-fix notes (Codex wave 2 on b839bea34; both verified real and fixed
+at root in this PR):
+
+- **Corrupt/non-SQLite --db raised raw sqlite3.DatabaseError past the CLI
+  contract** (P2). Root cause one level above Codex's either/or: the
+  store's own contract says invalid store operations raise StoreError, so
+  a corrupt file is a store-open failure -- the store now wraps
+  sqlite3.Error at open, the CLI needs no new catch, and every future
+  caller inherits the behavior. Probed at both layers.
+- **A literal backslash before a Markdown delimiter defeated the escaper**
+  (P2): input like a backslash-bracket pair rendered as escaped-backslash
+  plus LIVE bracket. Root cause: escaping metacharacters without escaping
+  the escape character itself. Fixed by adding the backslash to the
+  translation table -- str.translate's single-pass independent mapping
+  makes double-escaping impossible by construction.
+
 ## Deferred
 
 - S4 PRAW read-only poller (doc-verify auth path FIRST; read/identity/
@@ -179,7 +195,7 @@ Parked hardening: none.
 
 - pytest on `tests/test_atlas_reddit_digest.py` plus the existing
   `tests/test_atlas_reddit_store.py`, `tests/test_atlas_reddit_config.py`,
-  and `tests/test_atlas_reddit_scoring.py`: 197 passed (renderer
+  and `tests/test_atlas_reddit_scoring.py`: 199 passed (renderer
   populated/empty/deterministic, ranked-with-why, hostile-title link
   breakout escaped, newline heading-injection collapsed, long-body excerpt,
   dated-file write, same-day overwrite, status-filter exclusion, limit +
@@ -188,7 +204,9 @@ Parked hardening: none.
   newer-schema fail-closed through the CLI with stderr message; wave-1
   probes: hostile URL percent-encoding, non-http scheme not linkified,
   hostile subreddit/topic/thread-id sanitization, output-path OSError exit
-  2, non-finite min-score rejected at CLI and store layers). This line
+  2, non-finite min-score rejected at CLI and store layers; wave-2 probes:
+  backslash-pairing escape defeat, corrupt-db fail-closed at store and
+  CLI). This line
   is the single verification-count source; the PR body mirrors it.
 - ASCII byte-scan on the four changed Python files: clean.
 - Live demo: `python -m atlas_reddit` digest against a scratch store wrote
@@ -204,10 +222,10 @@ Parked hardening: none.
 |---|---:|
 | `atlas_reddit/__main__.py` | 123 |
 | `atlas_reddit/config.py` | 7 |
-| `atlas_reddit/digest.py` | 145 |
-| `atlas_reddit/store.py` | 7 |
+| `atlas_reddit/digest.py` | 151 |
+| `atlas_reddit/store.py` | 15 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Digest.md` | 211 |
+| `plans/PR-Reddit-Listening-Digest.md` | 231 |
 | `plans/archive/PR-Reddit-Listening-Sqlite-Store.md` | 0 |
-| `tests/test_atlas_reddit_digest.py` | 434 |
-| **Total** | **930** |
+| `tests/test_atlas_reddit_digest.py` | 472 |
+| **Total** | **1002** |
