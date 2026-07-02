@@ -384,15 +384,24 @@ def test_purged_ids_are_tombstones_for_reingestion(store: ListeningStore) -> Non
     assert len(store.list_purge_log()) == 2  # no repeat purge entries
 
 
-def test_digest_artifacts_removed_when_content_purged(
+def _write_digest_file(digest_dir: Path, name: str, *, mtime: int, body: str = "digest") -> Path:
+    import os
+
+    digest_dir.mkdir(exist_ok=True)
+    artifact = digest_dir / name
+    artifact.write_text(body, encoding="utf-8")
+    os.utime(artifact, (mtime, mtime))
+    return artifact
+
+
+def test_digest_artifacts_older_than_latest_purge_removed(
     store: ListeningStore, tmp_path: Path
 ) -> None:
-    """Wave-2 class: rendered digests are local storage too -- a purge
-    that removed content also removes prior digest files (regenerable
-    projections that may carry the purged content)."""
+    """Wave-2/3 class: any digest file predating the newest purge may
+    carry purged content and is removed from PERSISTED state."""
     digest_dir = tmp_path / "digests"
-    digest_dir.mkdir()
-    (digest_dir / "2026-07-01.md").write_text("old digest with Post t3_gone", encoding="utf-8")
+    _write_digest_file(digest_dir, "2026-07-01.md", mtime=NOW - 86400,
+                       body="old digest with Post t3_gone")
     _seed_candidate(store, "t3_gone")
     stats = _purge(
         store,
@@ -403,18 +412,75 @@ def test_digest_artifacts_removed_when_content_purged(
     assert list(digest_dir.glob("*.md")) == []
 
 
-def test_digest_artifacts_kept_when_nothing_purged(
+def test_digest_artifacts_kept_when_no_purge_log(
     store: ListeningStore, tmp_path: Path
 ) -> None:
-    """Second side: a pass that purges nothing proves the store consistent
-    with the artifacts -- they stay."""
+    """Second side: with no purge history the artifacts are provably
+    consistent with the store -- they stay."""
     digest_dir = tmp_path / "digests"
-    digest_dir.mkdir()
-    (digest_dir / "2026-07-01.md").write_text("clean digest", encoding="utf-8")
+    _write_digest_file(digest_dir, "2026-07-01.md", mtime=NOW - 86400)
     _seed_candidate(store, "t3_live")
     stats = _purge(store, FakeDeletionSource(), digest_dir=digest_dir)
     assert stats.digests_removed == 0
     assert len(list(digest_dir.glob("*.md"))) == 1
+
+
+def test_fresh_digest_rendered_after_purge_is_kept(
+    store: ListeningStore, tmp_path: Path
+) -> None:
+    """A digest re-rendered AFTER the latest purge reflects the clean
+    store and must survive later zero-purge passes."""
+    digest_dir = tmp_path / "digests"
+    _seed_candidate(store, "t3_gone")
+    _purge(store, FakeDeletionSource(gone={"t3_gone": "content shows [deleted]"}))
+    _write_digest_file(digest_dir, "2026-07-02.md", mtime=NOW + 3600,
+                       body="fresh post-purge digest")
+    stats = _purge(store, FakeDeletionSource(), digest_dir=digest_dir)
+    assert stats.digests_removed == 0
+    assert len(list(digest_dir.glob("*.md"))) == 1
+
+
+def test_failed_digest_cleanup_retries_on_next_pass(
+    store: ListeningStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wave-3 class: a failed unlink is surfaced and -- because the
+    invariant reads persisted purge state -- retried on the next pass."""
+    digest_dir = tmp_path / "digests"
+    _write_digest_file(digest_dir, "2026-07-01.md", mtime=NOW - 86400)
+    _seed_candidate(store, "t3_gone")
+
+    real_unlink = Path.unlink
+
+    def failing_unlink(self, *args, **kwargs):
+        raise OSError("transient filesystem error")
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    stats = _purge(
+        store,
+        FakeDeletionSource(gone={"t3_gone": "content shows [deleted]"}),
+        digest_dir=digest_dir,
+    )
+    assert stats.digests_removed == 0
+    assert any("digest cleanup" in error for error in stats.errors)
+    assert len(list(digest_dir.glob("*.md"))) == 1  # file survived the failure
+
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    stats2 = _purge(store, FakeDeletionSource(), digest_dir=digest_dir)
+    assert stats2.digests_removed == 1  # retried from persisted state
+    assert list(digest_dir.glob("*.md")) == []
+
+
+def test_cross_table_id_twin_is_not_shielded(store: ListeningStore) -> None:
+    """Wave-3 class: a corrupt reply holding a t3_ id must not shield the
+    legitimate candidate with the same id from purging."""
+    _seed_candidate(store, "t3_x")
+    _seed_reply(store, "t3_x")  # wrong kind for replies (corrupt row)
+    source = FakeDeletionSource(gone={"t3_x": "content shows [deleted]"})
+    stats = _purge(store, source)
+    assert len(stats.errors) == 1  # the corrupt reply is surfaced
+    assert stats.purged_candidates == 1  # the twin candidate still purges
+    assert store.get_candidate("t3_x") is None
+    assert {r.reply_id for r in store.list_replies()} == {"t3_x"}  # retained
 
 
 # -- deletion source auth ---------------------------------------------------------

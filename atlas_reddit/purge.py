@@ -57,27 +57,28 @@ def purge_once(
     sleep: Callable[[float], None] = time.sleep,
     digest_dir: Path | None = None,
 ) -> PurgeStats:
-    """One deletion-compliance pass over everything stored. When content
-    was purged and ``digest_dir`` is provided, previously rendered digest
-    files are removed too (they are regenerable projections that may
-    contain the purged content); a pass that purges nothing leaves them."""
+    """One deletion-compliance pass over everything stored. When
+    ``digest_dir`` is provided, digest files whose mtime predates the
+    newest purge_log entry are removed too (regenerable projections that
+    may carry purged content); the check runs from persisted state, so a
+    failed removal is retried on the next pass, and digests rendered
+    after the latest purge are kept."""
     stats = PurgeStats()
 
     candidates = {c.post_id for c in store.list_candidates()}
     replies = {r.reply_id for r in store.list_replies()}
-    malformed = sorted(
-        item
-        for kind, items in (("candidate", candidates), ("reply", replies))
-        for item in items
-        if not _KIND_RE[kind].match(item)
-    )
+    # Validity is scoped PER TABLE: a corrupt reply holding a t3_ id must
+    # not shield a legitimate candidate with the same id from purging.
+    valid_candidates = {i for i in candidates if _KIND_RE["candidate"].match(i)}
+    valid_replies = {i for i in replies if _KIND_RE["reply"].match(i)}
+    malformed = sorted((candidates - valid_candidates) | (replies - valid_replies))
     for item in malformed:
         stats.errors.append(
             f"{item}: not a Reddit fullname of the right kind for its table; "
             "cannot verify liveness -- row retained (never delete on a "
             "data-shape mismatch)"
         )
-    all_items = sorted((candidates | replies) - set(malformed))
+    all_items = sorted(valid_candidates | valid_replies)
 
     batches = [
         all_items[i : i + BATCH_SIZE] for i in range(0, len(all_items), BATCH_SIZE)
@@ -94,7 +95,7 @@ def purge_once(
             stats.errors.append(f"batch {index + 1}/{len(batches)}: {exc}")
             continue
         for item_id, reason in sorted(gone.items()):
-            item_type = "candidate" if item_id in candidates else "reply"
+            item_type = "candidate" if item_id in valid_candidates else "reply"
             # Atomic delete+log in one store transaction: no content ever
             # disappears without its audit record.
             if store.purge_item(
@@ -109,13 +110,23 @@ def purge_once(
                 else:
                     stats.purged_replies += 1
 
-    if digest_dir is not None and (stats.purged_candidates or stats.purged_replies):
-        # Rendered digests are local storage too: files written before the
-        # deletion may still carry the purged content. They are pure
-        # projections, so removal is lossless -- re-render from the clean
-        # store afterwards.
-        for artifact in sorted(digest_dir.glob("*.md")):
-            artifact.unlink()
-            stats.digests_removed += 1
+    if digest_dir is not None:
+        # Artifact cleanup is idempotent from PERSISTED state, not this
+        # pass's transient counters: any digest file whose mtime predates
+        # the newest purge_log entry may carry purged content and is
+        # removed (digests are regenerable projections). A failed unlink
+        # is surfaced and -- because the invariant is persistent --
+        # retried naturally on the next pass. Fresh digests rendered
+        # after the latest purge are kept.
+        log = store.list_purge_log()
+        if log:
+            latest_purge = max(record.purged_at for record in log)
+            for artifact in sorted(digest_dir.glob("*.md")):
+                try:
+                    if artifact.stat().st_mtime < latest_purge:
+                        artifact.unlink()
+                        stats.digests_removed += 1
+                except OSError as exc:
+                    stats.errors.append(f"digest cleanup {artifact.name}: {exc}")
 
     return stats

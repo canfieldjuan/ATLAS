@@ -175,6 +175,24 @@ fixed at root in this PR):
   upsert_candidate and insert_reply refuse previously purged ids, ending
   the re-ingest/re-purge cycle.
 
+Review-fix notes (Codex wave 3 on 34273cd75; both verified real and fixed
+at root in this PR):
+
+- **Union-level malformed subtraction shielded cross-table id twins**: a
+  corrupt reply holding a t3_ id suppressed the legitimate candidate with
+  the same id from ever being purged. Root cause: flattening ids into a
+  union loses table scoping -- the same flattening behind the wave-2 kind
+  bug, one level up. Valid sets now stay per-table end-to-end; probed
+  with the twin scenario (candidate purges, corrupt reply retained).
+- **Digest cleanup was keyed to a transient signal** (rows purged this
+  pass): a failed unlink would never retry once the rows were committed.
+  Root cause: artifact cleanup not derived from persisted state. Fixed:
+  any digest file whose mtime predates the newest purge_log entry is
+  removed; per-file failures are surfaced and retried naturally on the
+  next pass; digests rendered after the latest purge are kept. Probed
+  with a transient-failure-then-retry sequence and the fresh-digest
+  survival case.
+
 ## Deferred
 
 - Scheduling (cron/autonomous task) for poll/track/digest/purge: beyond
@@ -193,7 +211,7 @@ Parked hardening: none.
   `tests/test_atlas_reddit_tracker.py`, `tests/test_atlas_reddit_poller.py`,
   `tests/test_atlas_reddit_digest.py`, `tests/test_atlas_reddit_store.py`,
   `tests/test_atlas_reddit_config.py`, and
-  `tests/test_atlas_reddit_scoring.py`: 310 passed (both-sides deletion
+  `tests/test_atlas_reddit_scoring.py`: 313 passed (both-sides deletion
   probes, digest disappearance end-to-end, replay idempotence with no
   duplicate log entries, 100-item batching with n-1 pacing, failed-batch
   containment with continued purging, tracked-thread retention,
@@ -203,8 +221,10 @@ Parked hardening: none.
   author-deleted-content-intact live, absent-from-info missing; wave-2
   probes: wrong-kind-per-table retained, purge_item atomicity both
   directions, tombstoned re-ingestion refused on both write paths,
-  digest artifacts removed-when-purged/kept-when-clean). This line is
-  the single verification-count source; the PR body mirrors it.
+  digest artifacts removed-from-persisted-state/kept-when-clean; wave-3
+  probes: cross-table twin not shielded, unlink-failure retry, fresh
+  post-purge digest survival). This line is the single verification-count
+  source; the PR body mirrors it.
 - ASCII byte-scan on the five changed Python files: clean.
 - python `scripts/sync_pr_plan.py` on this plan: tables regenerated from
   the real diff.
@@ -215,12 +235,12 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_reddit/__main__.py` | 62 |
-| `atlas_reddit/purge.py` | 121 |
+| `atlas_reddit/purge.py` | 132 |
 | `atlas_reddit/reddit_client.py` | 76 |
 | `atlas_reddit/store.py` | 58 |
 | `docs/REDDIT_LISTENING_SETUP_RUNBOOK.md` | 9 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Purge.md` | 226 |
+| `plans/PR-Reddit-Listening-Purge.md` | 246 |
 | `plans/archive/PR-Reddit-Listening-Reply-Tracker.md` | 0 |
-| `tests/test_atlas_reddit_purge.py` | 480 |
-| **Total** | **1035** |
+| `tests/test_atlas_reddit_purge.py` | 546 |
+| **Total** | **1132** |

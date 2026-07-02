@@ -197,8 +197,8 @@ def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
         type=Path,
         default=defaults.digest_dir,
         help=(
-            "Digest directory; rendered digests are removed when content "
-            f"was purged (default: {defaults.digest_dir})"
+            "Digest directory; digest files older than the latest purge "
+            f"are removed (default: {defaults.digest_dir})"
         ),
     )
 
