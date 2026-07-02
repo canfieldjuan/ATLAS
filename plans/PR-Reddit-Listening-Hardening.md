@@ -6,7 +6,7 @@ The #1934 arc ended with the operator's post-merge audits on #1940 (S5)
 and #1941 (S6) parking six LOW-severity hardening items for a dedicated
 follow-up PR ("fold ... into the existing hardening PR ... That list is
 now 6 items"). The list deduplicates to five distinct fixes (the
-`tracker.py:152` guard was flagged on both audits). None broke the arc's
+`atlas_reddit/tracker.py` StopIteration guard was flagged on both audits). None broke the arc's
 real flow, so per HARDENING.md discipline they were parked, not fixed
 inline; this slice drains them. All five were re-verified against
 current `main` before planning -- none has been fixed since.
@@ -19,7 +19,7 @@ Slice phase: Production hardening
 1. **User-Agent anchor trap** (#1940 item 4): `build_user_agent` uses
    `_USERNAME_RE.match()` whose `$` anchor accepts a trailing newline,
    letting a newline into the UA header (header-injection shape).
-   `config.py` already uses `fullmatch` for the same trap on subreddit
+   `atlas_reddit/config.py` already uses `fullmatch` for the same trap on subreddit
    names. Fix: `fullmatch` + the trailing-newline negative probe.
 2. **Intra-thread request burst** (#1940 item 1):
    `PrawHistorySource.fetch_thread_replies` runs refresh +
@@ -70,9 +70,10 @@ Slice phase: Production hardening
         re-ingestion stays refused. Both probed through the real store.
   - [ ] v3 store with existing purge_log rows opens at v4 with
         `tombstone=1` backfilled (still refuses re-ingestion).
-- Affected surfaces: `atlas_reddit/reddit_client.py`, `tracker.py`,
-  `store.py` (schema v4 + migration ladder), `purge.py`,
-  `__main__.py` (pace wiring); tests.
+- Affected surfaces: `atlas_reddit/reddit_client.py`, `atlas_reddit/tracker.py`,
+  `atlas_reddit/store.py` (schema v4 + migration ladder),
+  `atlas_reddit/purge.py`, `atlas_reddit/__main__.py` (pace wiring);
+  tests.
 - Risk areas: deletion/tombstone semantics (both directions probed);
   schema migration (ladder probed from v1 and v3).
 - Reviewer rules triggered: R1, R2 (deletion-adjacent guard changes:
@@ -101,7 +102,7 @@ The tombstone gate is the only design-level change. `fetch_gone_items`
 already distinguishes confirmed deletion (content markers,
 `removed_by_category`) from API absence; that distinction now travels
 to the store: `purge_item(..., tombstone=...)` writes the flag,
-`is_purged` consults only `tombstone=1` rows, and `purge.py` derives
+`is_purged` consults only `tombstone=1` rows, and `atlas_reddit/purge.py` derives
 the flag by comparing the reason against the shared
 `MISSING_REASON` constant exported by `reddit_client`. Everything else
 is a local guard: `fullmatch`, a bounded budget plus n-1 pacing inside
@@ -140,8 +141,8 @@ Parked hardening: none.
 ## Verification
 
 - pytest on `tests/test_atlas_reddit_purge.py`,
-  `tests/test_atlas_reddit_store.py`, `tests/test_atlas_reddit_tracker.py`,
-  plus the untouched `tests/test_atlas_reddit_poller.py`,
+  `tests/test_atlas_reddit_tracker.py`, `tests/test_atlas_reddit_poller.py`,
+  plus the untouched `tests/test_atlas_reddit_store.py`,
   `tests/test_atlas_reddit_digest.py`, `tests/test_atlas_reddit_config.py`,
   and `tests/test_atlas_reddit_scoring.py` -- full-suite count reported
   in the PR body (new probes: UA trailing-newline negative; bounded
