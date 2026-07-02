@@ -1,6 +1,6 @@
 # Plan archive index
 
-1265 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1266 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -1177,6 +1177,7 @@
 - [PR-Reasoning-Phrase-Metadata-Utility](archive/PR-Reasoning-Phrase-Metadata-Utility.md)
 - [PR-Reddit-Listening-Config-Scoring](archive/PR-Reddit-Listening-Config-Scoring.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Digest](archive/PR-Reddit-Listening-Digest.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
+- [PR-Reddit-Listening-Praw-Poller](archive/PR-Reddit-Listening-Praw-Poller.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Sqlite-Store](archive/PR-Reddit-Listening-Sqlite-Store.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Refresh-CLAUDE-Md](archive/PR-Refresh-CLAUDE-Md.md)
 - [PR-Remove-Query-Token-Auth](archive/PR-Remove-Query-Token-Auth.md) - lane: security/hardening-1656 | phase: Production hardening
