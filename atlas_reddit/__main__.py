@@ -15,8 +15,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import RedditListeningSettings
+from .config import RedditListeningSettings, WatchlistError, load_watchlist
 from .digest import write_digest
+from .reddit_client import PrawListingSource, RedditAuthError
+from .poller import poll_once
 from .store import ListeningStore, StoreError
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -86,6 +88,46 @@ def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
         default=None,
         help="Minimum final score for radar candidates (default: no floor)",
     )
+
+    poll = subparsers.add_parser(
+        "poll", help="One read-only polling pass over the watchlist."
+    )
+    poll.add_argument(
+        "--db",
+        type=Path,
+        default=defaults.db_path,
+        help=f"SQLite state file (default: {defaults.db_path})",
+    )
+    poll.add_argument(
+        "--watchlist",
+        type=Path,
+        default=defaults.watchlist_path,
+        help=f"Watchlist TOML (default: {defaults.watchlist_path})",
+    )
+    poll.add_argument(
+        "--limit-per-subreddit",
+        type=int,
+        default=defaults.per_subreddit_limit,
+        help=f"Newest posts fetched per subreddit (default: {defaults.per_subreddit_limit})",
+    )
+    poll.add_argument(
+        "--freshness-hours",
+        type=int,
+        default=defaults.freshness_hours,
+        help=f"Admit posts younger than this (default: {defaults.freshness_hours}h)",
+    )
+    poll.add_argument(
+        "--min-score",
+        type=_finite_float,
+        default=defaults.poll_min_score,
+        help=f"Store candidates at or above this score (default: {defaults.poll_min_score})",
+    )
+    poll.add_argument(
+        "--pace-seconds",
+        type=_finite_float,
+        default=defaults.pace_seconds,
+        help=f"Sleep between subreddit fetches (default: {defaults.pace_seconds}s)",
+    )
     return parser
 
 
@@ -114,6 +156,43 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(path)
         return 0
+
+    if args.command == "poll":
+        if args.limit_per_subreddit < 1:
+            parser.error(
+                f"--limit-per-subreddit must be at least 1, got {args.limit_per_subreddit}"
+            )
+        if args.freshness_hours < 1:
+            parser.error(
+                f"--freshness-hours must be at least 1, got {args.freshness_hours}"
+            )
+        if args.pace_seconds < 0:
+            parser.error(f"--pace-seconds must be >= 0, got {args.pace_seconds}")
+        try:
+            watchlist = load_watchlist(args.watchlist)
+            source = PrawListingSource(settings)
+            with ListeningStore(args.db) as store:
+                stats = poll_once(
+                    store,
+                    watchlist,
+                    source,
+                    now=int(datetime.now(tz=timezone.utc).timestamp()),
+                    freshness_hours=args.freshness_hours,
+                    per_subreddit_limit=args.limit_per_subreddit,
+                    min_final_score=args.min_score,
+                    pace_seconds=args.pace_seconds,
+                )
+        except (StoreError, WatchlistError, RedditAuthError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"fetched={stats.fetched} admitted={stats.admitted} "
+            f"not_text={stats.skipped_not_text} stale={stats.skipped_stale} "
+            f"below_floor={stats.skipped_below_floor} errors={len(stats.errors)}"
+        )
+        for line in stats.errors:
+            print(f"warning: {line}", file=sys.stderr)
+        return 0 if not stats.errors else 1
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return 2  # pragma: no cover

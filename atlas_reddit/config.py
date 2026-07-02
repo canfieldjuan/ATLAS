@@ -22,7 +22,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILES = (".env", ".env.local")
@@ -83,6 +83,52 @@ class RedditListeningSettings(BaseSettings):
             "Directory for daily Markdown digests (YYYY-MM-DD.md). "
             "Defaults under the gitignored data/ tree."
         ),
+    )
+    client_id: str = Field(
+        default="",
+        description="Reddit script-app client id (env only, never committed).",
+    )
+    client_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description="Reddit script-app client secret (env only).",
+    )
+    refresh_token: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Scoped refresh token minted once via the documented "
+            "authorization-code flow with scopes identity/history/read "
+            "only (docs/REDDIT_LISTENING_SETUP_RUNBOOK.md)."
+        ),
+    )
+    username: str = Field(
+        default="",
+        description="Reddit username for the descriptive User-Agent.",
+    )
+    freshness_hours: int = Field(
+        default=48,
+        ge=1,
+        le=720,
+        description="Radar admits posts younger than this many hours.",
+    )
+    per_subreddit_limit: int = Field(
+        default=50,
+        ge=1,
+        le=100,
+        description="Newest submissions fetched per subreddit per pass.",
+    )
+    pace_seconds: float = Field(
+        default=2.0,
+        ge=0.0,
+        le=60.0,
+        description=(
+            "Polite sleep between subreddit fetches (Reddit allows 60 "
+            "requests/min for OAuth clients; this keeps a wide margin)."
+        ),
+    )
+    poll_min_score: float = Field(
+        default=0.5,
+        ge=0.0,
+        description="Minimum final score for a post to be stored as a candidate.",
     )
 
 

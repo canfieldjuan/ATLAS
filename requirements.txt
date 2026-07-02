@@ -90,3 +90,4 @@ fpdf2>=2.8.0
 
 # Blog rendering (admin + autonomous tasks)
 markdown>=3.5
+praw>=7.8.1  # atlas_reddit read-only listening tool (S4, #1934); lazy-imported, tests never need it
