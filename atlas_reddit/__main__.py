@@ -18,7 +18,9 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from .config import (
+    MAX_DORMANT_AFTER_HOURS,
     MAX_FRESHNESS_HOURS,
+    MAX_HISTORY_LIMIT,
     MAX_PACE_SECONDS,
     MAX_PER_SUBREDDIT_LIMIT,
     RedditListeningSettings,
@@ -26,8 +28,9 @@ from .config import (
     load_watchlist,
 )
 from .digest import write_digest
-from .reddit_client import PrawListingSource, RedditAuthError
+from .reddit_client import PrawHistorySource, PrawListingSource, RedditAuthError
 from .poller import poll_once
+from .tracker import track_once
 from .store import ListeningStore, StoreError
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -137,6 +140,45 @@ def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
         default=defaults.pace_seconds,
         help=f"Sleep between subreddit fetches (default: {defaults.pace_seconds}s)",
     )
+
+    track = subparsers.add_parser(
+        "track", help="One read-only reply-tracking pass over own threads."
+    )
+    track.add_argument(
+        "--db",
+        type=Path,
+        default=defaults.db_path,
+        help=f"SQLite state file (default: {defaults.db_path})",
+    )
+    track.add_argument(
+        "--history-limit",
+        type=int,
+        default=defaults.history_limit,
+        help=f"Own recent items fetched (default: {defaults.history_limit})",
+    )
+    track.add_argument(
+        "--dormant-after-hours",
+        type=int,
+        default=defaults.dormant_after_hours,
+        help=f"Quiet window before a thread sleeps (default: {defaults.dormant_after_hours}h)",
+    )
+    track.add_argument(
+        "--pace-seconds",
+        type=_finite_float,
+        default=defaults.pace_seconds,
+        help=f"Sleep between thread fetches (default: {defaults.pace_seconds}s)",
+    )
+
+    mark = subparsers.add_parser(
+        "mark-read", help="Mark one reply as seen (drops it from the digest)."
+    )
+    mark.add_argument("reply_id", help="Reply id, e.g. t1_abc123")
+    mark.add_argument(
+        "--db",
+        type=Path,
+        default=defaults.db_path,
+        help=f"SQLite state file (default: {defaults.db_path})",
+    )
     return parser
 
 
@@ -216,6 +258,54 @@ def main(argv: list[str] | None = None) -> int:
         for line in stats.errors:
             print(f"warning: {line}", file=sys.stderr)
         return 0 if not stats.errors else 1
+
+    if args.command == "track":
+        if not 1 <= args.history_limit <= MAX_HISTORY_LIMIT:
+            parser.error(
+                f"--history-limit must be 1..{MAX_HISTORY_LIMIT}, got {args.history_limit}"
+            )
+        if not 1 <= args.dormant_after_hours <= MAX_DORMANT_AFTER_HOURS:
+            parser.error(
+                f"--dormant-after-hours must be 1..{MAX_DORMANT_AFTER_HOURS}, "
+                f"got {args.dormant_after_hours}"
+            )
+        if not 0 <= args.pace_seconds <= MAX_PACE_SECONDS:
+            parser.error(
+                f"--pace-seconds must be 0..{MAX_PACE_SECONDS}, got {args.pace_seconds}"
+            )
+        try:
+            source = PrawHistorySource(settings)
+            with ListeningStore(args.db) as store:
+                stats = track_once(
+                    store,
+                    source,
+                    now=int(datetime.now(tz=timezone.utc).timestamp()),
+                    history_limit=args.history_limit,
+                    dormant_after_hours=args.dormant_after_hours,
+                    pace_seconds=args.pace_seconds,
+                )
+        except (StoreError, RedditAuthError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"discovered={stats.threads_discovered} checked={stats.threads_checked} "
+            f"woken={stats.threads_woken} dormant={stats.threads_marked_dormant} "
+            f"new_replies={stats.replies_new} replayed={stats.replies_replayed} "
+            f"errors={len(stats.errors)}"
+        )
+        for line in stats.errors:
+            print(f"warning: {line}", file=sys.stderr)
+        return 0 if not stats.errors else 1
+
+    if args.command == "mark-read":
+        try:
+            with ListeningStore(args.db) as store:
+                store.mark_reply_seen(args.reply_id)
+        except (StoreError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"marked seen: {args.reply_id}")
+        return 0
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return 2  # pragma: no cover
