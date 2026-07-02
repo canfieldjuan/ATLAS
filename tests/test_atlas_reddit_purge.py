@@ -384,12 +384,15 @@ def test_purged_ids_are_tombstones_for_reingestion(store: ListeningStore) -> Non
     assert len(store.list_purge_log()) == 2  # no repeat purge entries
 
 
-def _write_digest_file(digest_dir: Path, name: str, *, mtime: int, body: str = "digest") -> Path:
+def _write_digest_file(digest_dir: Path, name: str, *, mtime: int,
+                       body: str | None = None) -> Path:
+    """Write a marker-bearing artifact exactly as write_digest would."""
     import os
 
     digest_dir.mkdir(exist_ok=True)
     artifact = digest_dir / name
-    artifact.write_text(body, encoding="utf-8")
+    content = body if body is not None else f"# Reddit Listening Digest -- {name[:-3]}\n\ndigest"
+    artifact.write_text(content, encoding="utf-8")
     os.utime(artifact, (mtime, mtime))
     return artifact
 
@@ -401,7 +404,7 @@ def test_digest_artifacts_older_than_latest_purge_removed(
     carry purged content and is removed from PERSISTED state."""
     digest_dir = tmp_path / "digests"
     _write_digest_file(digest_dir, "2026-07-01.md", mtime=NOW - 86400,
-                       body="old digest with Post t3_gone")
+                       body="# Reddit Listening Digest -- 2026-07-01\n\nold digest with Post t3_gone")
     _seed_candidate(store, "t3_gone")
     stats = _purge(
         store,
@@ -434,7 +437,7 @@ def test_fresh_digest_rendered_after_purge_is_kept(
     _seed_candidate(store, "t3_gone")
     _purge(store, FakeDeletionSource(gone={"t3_gone": "content shows [deleted]"}))
     _write_digest_file(digest_dir, "2026-07-02.md", mtime=NOW + 3600,
-                       body="fresh post-purge digest")
+                       body="# Reddit Listening Digest -- 2026-07-02\n\nfresh post-purge digest")
     stats = _purge(store, FakeDeletionSource(), digest_dir=digest_dir)
     assert stats.digests_removed == 0
     assert len(list(digest_dir.glob("*.md"))) == 1
@@ -500,15 +503,20 @@ def test_unrelated_markdown_is_never_deleted(
     _write_digest_file(digest_dir, "2026-07-01.md", mtime=NOW - 86400)
     _write_digest_file(digest_dir, "notes.md", mtime=NOW - 86400, body="my notes")
     _write_digest_file(digest_dir, "2026-13-99.txt.md", mtime=NOW - 86400, body="odd")
+    # Wave-6 class: a date-NAMED file that this tool did not render (no
+    # marker) must survive too -- a shared daily-notes folder is exactly
+    # this shape.
+    _write_digest_file(digest_dir, "2026-06-30.md", mtime=NOW - 86400,
+                       body="my daily note, not a digest")
     _seed_candidate(store, "t3_gone")
     stats = _purge(
         store,
         FakeDeletionSource(gone={"t3_gone": "content shows [deleted]"}),
         digest_dir=digest_dir,
     )
-    assert stats.digests_removed == 1  # only the generated artifact
+    assert stats.digests_removed == 1  # only the marker-bearing artifact
     remaining = {a.name for a in digest_dir.glob("*.md")}
-    assert remaining == {"notes.md", "2026-13-99.txt.md"}
+    assert remaining == {"notes.md", "2026-13-99.txt.md", "2026-06-30.md"}
 
 
 def test_v2_bare_candidate_ids_canonicalize_to_fullnames(tmp_path: Path) -> None:

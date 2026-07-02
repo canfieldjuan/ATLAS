@@ -224,6 +224,16 @@ Review-fix note (Codex wave 5 on d5f3852a9; verified real, fixed at root):
   ladder now applies sequentially (v1 stores reach v3 in one open),
   probed end-to-end from both a v1 and a simulated v2 database.
 
+Review-fix note (Codex wave 6 on 18d34a433; verified real, fixed at root):
+
+- **A date-NAMED file in a shared folder is still not provably ours**:
+  the wave-4 name-pattern guard would delete an unrelated 2026-07-01.md
+  daily note. Fixed with a second independent check that needs no new
+  machinery: every write_digest artifact already starts with the
+  render marker (the digest heading), verified against the REAL renderer
+  output; cleanup requires name pattern AND marker, so date-named
+  impostors survive (probed).
+
 ## Deferred
 
 - Scheduling (cron/autonomous task) for poll/track/digest/purge: beyond
@@ -257,8 +267,9 @@ Parked hardening: none.
   post-purge digest survival; wave-4 probes: same-second fractional-mtime
   removal, unrelated-markdown never deleted; wave-5 probe: v2 bare-id
   canonicalization incl. twin-drop and junk retention, v1 ladder to
-  current). This line is the single verification-count source; the PR
-  body mirrors it.
+  current; wave-6 probe: date-named impostor without the render marker
+  survives cleanup). This line is the single verification-count source;
+  the PR body mirrors it.
 - ASCII byte-scan on the five changed Python files: clean.
 - python `scripts/sync_pr_plan.py` on this plan: tables regenerated from
   the real diff.
@@ -269,13 +280,13 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_reddit/__main__.py` | 62 |
-| `atlas_reddit/purge.py` | 148 |
+| `atlas_reddit/purge.py` | 156 |
 | `atlas_reddit/reddit_client.py` | 76 |
 | `atlas_reddit/store.py` | 131 |
 | `docs/REDDIT_LISTENING_SETUP_RUNBOOK.md` | 12 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Purge.md` | 279 |
+| `plans/PR-Reddit-Listening-Purge.md` | 292 |
 | `plans/archive/PR-Reddit-Listening-Reply-Tracker.md` | 0 |
-| `tests/test_atlas_reddit_purge.py` | 621 |
+| `tests/test_atlas_reddit_purge.py` | 629 |
 | `tests/test_atlas_reddit_tracker.py` | 7 |
-| **Total** | **1339** |
+| **Total** | **1368** |

@@ -38,11 +38,14 @@ _KIND_RE = {
     "reply": re.compile(r"^t1_[a-z0-9]+$"),
 }
 
-# Only the tool's own generated artifacts (YYYY-MM-DD.md from
-# write_digest) are ever eligible for cleanup: a misconfigured
-# --digest-dir pointing at a shared folder must not cost unrelated
-# Markdown files.
+# Only the tool's own generated artifacts are ever eligible for
+# cleanup: a misconfigured --digest-dir pointing at a shared folder
+# must not cost unrelated Markdown files. Two independent checks: the
+# generated filename shape (YYYY-MM-DD.md) AND the render marker every
+# write_digest artifact starts with -- a date-named note in a shared
+# daily-notes folder fails the marker and survives.
 _DIGEST_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
+_DIGEST_MARKER = "# Reddit Listening Digest -- "
 
 
 @dataclass
@@ -139,9 +142,14 @@ def purge_once(
                 if not _DIGEST_NAME_RE.match(artifact.name):
                     continue  # not one of our generated artifacts
                 try:
-                    if artifact.stat().st_mtime < cutoff:
-                        artifact.unlink()
-                        stats.digests_removed += 1
+                    if artifact.stat().st_mtime >= cutoff:
+                        continue
+                    with artifact.open("r", encoding="utf-8", errors="replace") as fh:
+                        first_line = fh.readline()
+                    if not first_line.startswith(_DIGEST_MARKER):
+                        continue  # date-named but not rendered by this tool
+                    artifact.unlink()
+                    stats.digests_removed += 1
                 except OSError as exc:
                     stats.errors.append(f"digest cleanup {artifact.name}: {exc}")
 
