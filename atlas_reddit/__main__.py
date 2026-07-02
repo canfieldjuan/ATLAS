@@ -15,7 +15,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import RedditListeningSettings, WatchlistError, load_watchlist
+from pydantic import ValidationError
+
+from .config import (
+    MAX_FRESHNESS_HOURS,
+    MAX_PACE_SECONDS,
+    MAX_PER_SUBREDDIT_LIMIT,
+    RedditListeningSettings,
+    WatchlistError,
+    load_watchlist,
+)
 from .digest import write_digest
 from .reddit_client import PrawListingSource, RedditAuthError
 from .poller import poll_once
@@ -132,7 +141,13 @@ def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    settings = RedditListeningSettings()
+    try:
+        settings = RedditListeningSettings()
+    except ValidationError as exc:
+        # An env typo (ATLAS_REDDIT_FRESHNESS_HOURS=abc) is an operator
+        # error for EVERY command, not a traceback.
+        print(f"error: invalid ATLAS_REDDIT_* environment: {exc}", file=sys.stderr)
+        return 2
     parser = _build_parser(settings)
     args = parser.parse_args(argv)
 
@@ -158,16 +173,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "poll":
-        if args.limit_per_subreddit < 1:
+        if not 1 <= args.limit_per_subreddit <= MAX_PER_SUBREDDIT_LIMIT:
             parser.error(
-                f"--limit-per-subreddit must be at least 1, got {args.limit_per_subreddit}"
+                f"--limit-per-subreddit must be 1..{MAX_PER_SUBREDDIT_LIMIT}, "
+                f"got {args.limit_per_subreddit}"
             )
-        if args.freshness_hours < 1:
+        if not 1 <= args.freshness_hours <= MAX_FRESHNESS_HOURS:
             parser.error(
-                f"--freshness-hours must be at least 1, got {args.freshness_hours}"
+                f"--freshness-hours must be 1..{MAX_FRESHNESS_HOURS}, "
+                f"got {args.freshness_hours}"
             )
-        if args.pace_seconds < 0:
-            parser.error(f"--pace-seconds must be >= 0, got {args.pace_seconds}")
+        if not 0 <= args.pace_seconds <= MAX_PACE_SECONDS:
+            parser.error(
+                f"--pace-seconds must be 0..{MAX_PACE_SECONDS}, got {args.pace_seconds}"
+            )
         try:
             watchlist = load_watchlist(args.watchlist)
             source = PrawListingSource(settings)

@@ -40,6 +40,14 @@ _SUBREDDIT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_]{2,20}")
 _MAX_WEIGHT = 10.0
 _MAX_BONUS = 5.0
 
+# Poller knob ceilings: single source of truth for the settings fields'
+# le= bounds AND the CLI override checks, so the two entry paths cannot
+# drift (a CLI value above the cap would multiply PRAW's paginated
+# requests and violate the verified request-budget posture).
+MAX_FRESHNESS_HOURS = 720
+MAX_PER_SUBREDDIT_LIMIT = 100
+MAX_PACE_SECONDS = 60.0
+
 _ALLOWED_TOP_KEYS = {
     "version",
     "subreddits",
@@ -107,19 +115,19 @@ class RedditListeningSettings(BaseSettings):
     freshness_hours: int = Field(
         default=48,
         ge=1,
-        le=720,
+        le=MAX_FRESHNESS_HOURS,
         description="Radar admits posts younger than this many hours.",
     )
     per_subreddit_limit: int = Field(
         default=50,
         ge=1,
-        le=100,
+        le=MAX_PER_SUBREDDIT_LIMIT,
         description="Newest submissions fetched per subreddit per pass.",
     )
     pace_seconds: float = Field(
         default=2.0,
         ge=0.0,
-        le=60.0,
+        le=MAX_PACE_SECONDS,
         description=(
             "Polite sleep between subreddit fetches (Reddit allows 60 "
             "requests/min for OAuth clients; this keeps a wide margin)."

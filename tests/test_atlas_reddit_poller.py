@@ -150,6 +150,101 @@ def test_missing_credentials_fail_before_praw_import(monkeypatch: pytest.MonkeyP
         PrawListingSource(RedditListeningSettings(_env_file=None))
 
 
+@pytest.mark.parametrize(
+    "granted",
+    [["identity"], ["history"], ["identity", "history"]],
+)
+def test_missing_read_scope_fails_closed(granted: list[str]) -> None:
+    """Wave-1 class: the guard must validate the floor, not only the
+    ceiling -- a token without read would fail on every fetch downstream
+    instead of failing here."""
+    with pytest.raises(RedditAuthError, match="missing required"):
+        validate_scopes(granted)
+
+
+def test_required_override_for_future_sources() -> None:
+    validate_scopes(["identity", "history", "read"],
+                    required=frozenset({"read", "history"}))
+    with pytest.raises(RedditAuthError, match="missing required"):
+        validate_scopes(["read"], required=frozenset({"read", "history"}))
+
+
+def _full_creds_settings(monkeypatch: pytest.MonkeyPatch):
+    from atlas_reddit.config import RedditListeningSettings
+
+    monkeypatch.setenv("ATLAS_REDDIT_CLIENT_ID", "cid")
+    monkeypatch.setenv("ATLAS_REDDIT_CLIENT_SECRET", "csecret")
+    monkeypatch.setenv("ATLAS_REDDIT_REFRESH_TOKEN", "rtoken")
+    monkeypatch.setenv("ATLAS_REDDIT_USERNAME", "juan_c")
+    return RedditListeningSettings(_env_file=None)
+
+
+def test_praw_absent_maps_to_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """praw is deliberately not installed for this suite: with full creds
+    the lazy import itself must surface through the error contract."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "praw", None)  # ensure import fails
+    settings = _full_creds_settings(monkeypatch)
+    with pytest.raises(RedditAuthError, match="praw is not installed|Reddit authentication failed"):
+        PrawListingSource(settings)
+
+
+class _StubAuth:
+    def __init__(self, scopes):
+        self._scopes = scopes
+
+    def scopes(self):
+        return self._scopes
+
+
+class _StubReddit:
+    def __init__(self, *, fail=None, scopes=("read",), **kwargs):
+        if fail:
+            raise fail
+        self.auth = _StubAuth(list(scopes))
+
+
+def _install_stub_praw(monkeypatch: pytest.MonkeyPatch, **reddit_kwargs):
+    """Fake the praw MODULE -- the external transport boundary -- so the
+    real PrawListingSource constructor path is exercised without praw."""
+    import sys
+    import types
+
+    stub = types.ModuleType("praw")
+    stub.Reddit = lambda **kwargs: _StubReddit(**reddit_kwargs)
+    monkeypatch.setitem(sys.modules, "praw", stub)
+
+
+def test_invalid_grant_maps_to_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wave-1 cited class: prawcore-style failures during construction or
+    the scope probe surface as RedditAuthError, never raw tracebacks."""
+    _install_stub_praw(monkeypatch, fail=RuntimeError("invalid_grant error processing request"))
+    settings = _full_creds_settings(monkeypatch)
+    with pytest.raises(RedditAuthError, match="Reddit authentication failed.*invalid_grant"):
+        PrawListingSource(settings)
+
+
+def test_wildcard_token_refused_through_real_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard engages on the real constructor path, not just as a pure
+    function: a password-grant wildcard token is refused at startup."""
+    _install_stub_praw(monkeypatch, scopes=("*",))
+    settings = _full_creds_settings(monkeypatch)
+    with pytest.raises(RedditAuthError, match="exceed the read-only contract"):
+        PrawListingSource(settings)
+
+
+def test_scoped_token_accepted_through_real_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_stub_praw(monkeypatch, scopes=("identity", "history", "read"))
+    settings = _full_creds_settings(monkeypatch)
+    source = PrawListingSource(settings)
+    assert source.granted_scopes() == frozenset({"identity", "history", "read"})
+
+
 # -- user agent ---------------------------------------------------------------
 
 
@@ -358,7 +453,18 @@ def test_cli_poll_missing_watchlist_exits_cleanly(
 
 @pytest.mark.parametrize(
     "flag,value",
-    [("--limit-per-subreddit", "0"), ("--freshness-hours", "0"), ("--pace-seconds", "-1")],
+    [
+        ("--limit-per-subreddit", "0"),
+        ("--freshness-hours", "0"),
+        ("--pace-seconds", "-1"),
+        # Wave-1 class: CLI overrides must honor the same ceilings as the
+        # typed settings fields (a 1000-post listing multiplies PRAW's
+        # paginated requests past the verified budget posture).
+        ("--limit-per-subreddit", "101"),
+        ("--limit-per-subreddit", "1000"),
+        ("--freshness-hours", "721"),
+        ("--pace-seconds", "61"),
+    ],
 )
 def test_cli_poll_rejects_nonsense_knobs(tmp_path: Path, flag: str, value: str) -> None:
     from atlas_reddit.__main__ import main
@@ -376,3 +482,29 @@ def test_cli_poll_rejects_nonsense_knobs(tmp_path: Path, flag: str, value: str) 
             ]
         )
     assert excinfo.value.code == 2
+
+
+@pytest.mark.parametrize("bad", ["abc", "0", "-5"])
+def test_env_typo_is_operator_error_for_every_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, bad: str
+) -> None:
+    """Wave-1 class: settings construction joins the exit-2 contract --
+    a poller env typo must not traceback even for the digest command."""
+    from atlas_reddit.__main__ import main
+
+    monkeypatch.setenv("ATLAS_REDDIT_FRESHNESS_HOURS", bad)
+    code = main(
+        [
+            "digest",
+            "--db",
+            str(tmp_path / "listening.db"),
+            "--digest-dir",
+            str(tmp_path / "d"),
+            "--date",
+            "2026-07-01",
+        ]
+    )
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "invalid ATLAS_REDDIT_" in err
+    assert "Traceback" not in err

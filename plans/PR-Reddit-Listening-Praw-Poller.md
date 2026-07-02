@@ -172,6 +172,34 @@ them and exits 1 if any subreddit failed, 2 on operator errors.
 - **Housekeeping commit in this branch**: authorized fold-in (#1934
   comment 4860540364); kept separate to keep the S4 code diff clean.
 
+Review-fix notes (Codex wave 1 on 2c5c56cf0; all four verified real and
+fixed at root in this PR):
+
+- **PRAW/prawcore failures escaped the CLI contract** (P2): invalid or
+  expired credentials raise from praw.Reddit()/auth.scopes() as prawcore
+  exceptions (invalid_grant) that only RedditAuthError was catching.
+  Root cause: the auth boundary's contract is RedditAuthError, so the
+  whole praw-touching block (including the lazy import itself) now maps
+  into it. Probed via a stubbed praw module -- the external transport
+  boundary -- exercising the REAL constructor path (invalid_grant,
+  wildcard-token refusal, scoped-token acceptance, praw-absent).
+- **CLI overrides bypassed the settings ceilings** (P2): the knob had two
+  entry paths with different validation; a --limit-per-subreddit typo
+  above 100 would multiply PRAW's paginated requests past the verified
+  budget. Root cause: bounds defined only on the typed fields. Fixed with
+  shared MAX_* constants consumed by BOTH the pydantic le= bounds and the
+  CLI checks -- applied to all three capped knobs, not just the cited one.
+- **Eager settings construction threw pydantic tracebacks** (P2): an env
+  typo like ATLAS_REDDIT_FRESHNESS_HOURS=abc broke every command incl.
+  digest. Root cause: settings construction is operator-input surface
+  sitting outside the operator-error contract; it now maps to exit 2
+  with a clean message.
+- **The scope guard validated only the ceiling** (P2, the best catch): a
+  token missing read passed the subset check and would fail on every
+  fetch downstream. Root cause: one-sided boundary validation. Fixed
+  with a required-scopes floor (default read; future sources pass their
+  own), probed on both sides.
+
 ## Deferred
 
 - Live-credential smoke: operator runs the runbook (app registration +
@@ -192,14 +220,17 @@ Parked hardening: none.
 - pytest on `tests/test_atlas_reddit_poller.py` plus the existing
   `tests/test_atlas_reddit_digest.py`, `tests/test_atlas_reddit_store.py`,
   `tests/test_atlas_reddit_config.py`, and
-  `tests/test_atlas_reddit_scoring.py`: 240 passed (scope guard both
+  `tests/test_atlas_reddit_scoring.py`: 255 passed (scope guard both
   sides incl. wildcard and empty; missing-creds-before-praw-import;
   read-only public surface; package-wide forbidden-write static probe;
   UA format + invalid usernames; poller admit/skip counters; inclusive
   freshness and floor boundaries; n-1 pacing and zero-pace; failing
   subreddit isolation; triage-state preservation across re-polls through
   the real store; per-subreddit fetch limit; CLI no-creds / missing
-  watchlist / nonsense knobs). This line is the single
+  watchlist / nonsense knobs; wave-1 probes: missing-read floor both
+  sides, required-override, stubbed-praw constructor paths, CLI ceiling
+  rejections, env-typo operator errors for every command). This line is
+  the single
   verification-count source; the PR body mirrors it.
 - ASCII byte-scan on the five changed Python files: clean.
 - python `scripts/sync_pr_plan.py` on this plan: tables regenerated from
@@ -210,14 +241,14 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_reddit/__main__.py` | 81 |
-| `atlas_reddit/config.py` | 48 |
+| `atlas_reddit/__main__.py` | 102 |
+| `atlas_reddit/config.py` | 56 |
 | `atlas_reddit/poller.py` | 97 |
-| `atlas_reddit/reddit_client.py` | 150 |
+| `atlas_reddit/reddit_client.py` | 176 |
 | `docs/REDDIT_LISTENING_SETUP_RUNBOOK.md` | 114 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Praw-Poller.md` | 204 |
+| `plans/PR-Reddit-Listening-Praw-Poller.md` | 254 |
 | `plans/archive/PR-Reddit-Listening-Digest.md` | 0 |
 | `requirements.txt` | 1 |
-| `tests/test_atlas_reddit_poller.py` | 378 |
-| **Total** | **1076** |
+| `tests/test_atlas_reddit_poller.py` | 510 |
+| **Total** | **1313** |

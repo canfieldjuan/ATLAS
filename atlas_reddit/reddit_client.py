@@ -71,10 +71,16 @@ class ListingSource(Protocol):
         ...
 
 
-def validate_scopes(granted: Iterable[str]) -> frozenset[str]:
-    """Fail closed unless the granted scopes are a non-empty subset of
-    the read-only set. The wildcard '*' (all scopes) is treated as the
-    superset it is, not as convenience."""
+def validate_scopes(
+    granted: Iterable[str],
+    *,
+    required: frozenset[str] = frozenset({"read"}),
+) -> frozenset[str]:
+    """Fail closed on BOTH sides of the boundary: the grants must not
+    exceed the read-only ceiling (the wildcard '*' is treated as the
+    superset it is), and they must include the floor the caller needs --
+    a token missing ``read`` would pass a subset-only check and then
+    fail on every listing fetch downstream instead of failing here."""
     scopes = frozenset(granted)
     if not scopes:
         raise RedditAuthError("token carries no scopes; expected a subset of "
@@ -85,6 +91,13 @@ def validate_scopes(granted: Iterable[str]) -> frozenset[str]:
             "token grants exceed the read-only contract: "
             f"unexpected scopes {sorted(excess)}; allowed: {sorted(ALLOWED_SCOPES)}. "
             "Mint a scoped refresh token per docs/REDDIT_LISTENING_SETUP_RUNBOOK.md"
+        )
+    missing = required - scopes
+    if missing:
+        raise RedditAuthError(
+            f"token is missing required scopes {sorted(missing)} "
+            f"(granted: {sorted(scopes)}). Mint a scoped refresh token per "
+            "docs/REDDIT_LISTENING_SETUP_RUNBOOK.md"
         )
     return scopes
 
@@ -115,16 +128,29 @@ class PrawListingSource:
             )
         user_agent = build_user_agent(settings.username)
 
-        import praw  # lazy: tests fake the transport and never need it
+        try:
+            import praw  # lazy: tests fake the transport and never need it
+        except ImportError as exc:
+            raise RedditAuthError(
+                "praw is not installed; run pip install -r requirements.txt"
+            ) from exc
 
-        self._reddit = praw.Reddit(
-            client_id=client_id,
-            client_secret=client_secret,
-            refresh_token=refresh_token,
-            user_agent=user_agent,
-            check_for_updates=False,
-        )
-        self._scopes = validate_scopes(self._reddit.auth.scopes())
+        # The whole praw-touching block maps into this class's error
+        # contract: invalid/expired credentials surface from the
+        # constructor or the scope probe as prawcore exceptions
+        # (e.g. invalid_grant), never as raw tracebacks.
+        try:
+            self._reddit = praw.Reddit(
+                client_id=client_id,
+                client_secret=client_secret,
+                refresh_token=refresh_token,
+                user_agent=user_agent,
+                check_for_updates=False,
+            )
+            granted = self._reddit.auth.scopes()
+        except Exception as exc:
+            raise RedditAuthError(f"Reddit authentication failed: {exc}") from exc
+        self._scopes = validate_scopes(granted)
 
     def granted_scopes(self) -> frozenset[str]:
         return self._scopes
