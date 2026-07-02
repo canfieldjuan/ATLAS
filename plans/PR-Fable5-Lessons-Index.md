@@ -65,12 +65,17 @@ negatives-presence check; the repo-wide trusted-base workflow slice
 
 ## Verification
 
-- Every ENFORCED/INVESTIGATION row's artifact verified present on main
-  with ls: `.github/workflows/diff_budget.yml`,
+- Every ENFORCED/INVESTIGATION row's artifact verified present on main:
+  `.github/workflows/diff_budget.yml`,
   `scripts/check_diff_budget.py`,
   `scripts/check_required_status_checks.py`,
   `scripts/check_ai_reconciliation_live.py`, and
-  `docs/retired_failure_mode_detection_layer.md`.
+  `docs/retired_failure_mode_detection_layer.md`. Reproduce from the repo
+  root with (all five listed on one line):
+  ls .github/workflows/diff_budget.yml scripts/check_diff_budget.py
+  scripts/check_required_status_checks.py
+  scripts/check_ai_reconciliation_live.py
+  docs/retired_failure_mode_detection_layer.md
 - `python scripts/archive_plans.py index` -- INDEX regenerated.
 - Documentation-only: no runtime tests required (no .py changes).
 
