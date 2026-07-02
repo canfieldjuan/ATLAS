@@ -11,6 +11,16 @@ pressure, longer arcs, ambiguous plans, or newer model behavior. This slice
 captures candidate detector architectures before any implementation guard is
 chosen.
 
+Root cause of the rejection (this is a fix-type slice replacing a rejected
+artifact): the prior note was the wrong artifact type, not merely too short.
+It restated guardrails as prose for a future model to voluntarily follow --
+the compliance mechanism the review arc had already shown to fail -- and was
+scoped to one model arc's lessons instead of the durable question the operator
+asked: where should a persistent recurrence-detection layer live. This brief
+fixes that root by delivering the investigation itself (seams, signatures,
+architectures, tradeoffs) rather than rewording the lessons list, which would
+have treated the symptom.
+
 ## Scope (this PR)
 
 Ownership lane: Workflow/process
@@ -26,6 +36,36 @@ Slice phase: Workflow/process
 
 - `docs/retired_failure_mode_detection_layer.md`
 - `plans/PR-Retired-Failure-Mode-Detectors.md`
+
+### Review Contract
+
+Acceptance criteria (reviewer checks one-by-one):
+
+1. The brief presents at least two candidate detector architectures, each with
+   hook, coverage/signatures, maintenance cost, false-positive profile,
+   recording format, and what it does not catch -- without choosing a winner.
+2. Every existing repo hook the brief cites (`scripts/local_pr_review.sh`,
+   `.github/workflows/pre_push_audit.yml`, `scripts/pre_push_audit.sh`,
+   `scripts/audit_pr_session_drift.py`, `scripts/audit_cross_layer_callers.py`)
+   exists at those paths and is described accurately, including the
+   empty-diff limitation of the push-to-main path.
+3. Where an architecture requires GitHub Actions permissions or status
+   conditions beyond the current read-only workflow defaults, the brief names
+   them explicitly (`if: always()`-style condition; `issues: write`;
+   `pull-requests: write`).
+4. The diff contains only the two files named in Files touched; no runtime,
+   gate, or workflow behavior changes.
+
+Affected surfaces: `docs/` and `plans/` only; no runtime code, no CI
+workflows, no gate scripts.
+
+Risk areas: a future implementer treating descriptive claims about CI seams as
+verified behavior; the brief mitigates by flagging seam limitations inline
+(empty-diff main-push path, permission requirements, skip-on-failure default).
+
+Reviewer rule IDs triggered: none of the path-glob rows in
+`docs/REVIEWER_RULES.md` match a docs-only diff; R14 (checked-out PR-head,
+codebase-backed verification) applies as it does to all reviewer verdicts.
 
 ## Mechanism
 
@@ -64,7 +104,7 @@ Commands run from the repo root on this branch rebased onto `origin/main`:
   caller hints; plan/code consistency; `git diff --check`). Result: all checks
   PASS, 0 failed. The open-PR overlap probe reports `skipped (gh not found)`
   in this environment; the same probe runs fully in CI where `gh` is available.
-- `python scripts/check_diff_budget.py --additions 354 --body-file
+- `python scripts/check_diff_budget.py --additions 400 --body-file
   <pr-body.md>` -- offline mode with the added-line count from
   `git diff origin/main --numstat`; within the 400 budget, no override marker
   needed. Result: PASS.
@@ -73,6 +113,6 @@ Commands run from the repo root on this branch rebased onto `origin/main`:
 
 | File | LOC |
 |---|---:|
-| `docs/retired_failure_mode_detection_layer.md` | 276 |
-| `plans/PR-Retired-Failure-Mode-Detectors.md` | 78 |
-| **Total** | **354** |
+| `docs/retired_failure_mode_detection_layer.md` | 282 |
+| `plans/PR-Retired-Failure-Mode-Detectors.md` | 118 |
+| **Total** | **400** |

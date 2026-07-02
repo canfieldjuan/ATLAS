@@ -177,6 +177,12 @@ In parallel, append or update a central issue comment or issue body section that
 acts as a ledger of detector events. The workflow exits zero even if labels or
 issue updates fail.
 
+This variant needs raised workflow permissions: `pull-requests: write` to apply
+PR labels and `issues: write` to mutate the ledger issue comment/body. The
+existing pre-push workflow is read-only (`contents: read`,
+`pull-requests: read`), so implementing this variant under those defaults would
+exit zero while silently recording no labels and no ledger entries.
+
 ### Coverage and signatures
 
 This architecture can use all signatures from Architecture 1. Its advantage is
