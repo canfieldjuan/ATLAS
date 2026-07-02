@@ -122,6 +122,22 @@ class TestFencedMarkers:
         assert code == 0
         assert any("mandated regression" in m for m in messages)
 
+    def test_indented_code_block_marker_is_ignored(self):
+        # 4-space Markdown code block: documentation, not a decision
+        body = "Example:\n\n    Diff-budget override: example syntax only\n"
+        code, _ = mod.evaluate(900, body, BUDGET)
+        assert code == 1
+
+    def test_up_to_three_leading_spaces_still_counts(self):
+        code, _ = mod.evaluate(900, "   Diff-budget override: real reason", BUDGET)
+        assert code == 0
+
+    @pytest.mark.parametrize("reason", ["TODO.", "n/a.", "(tbd)",
+                                        "<why this slice is genuinely indivisible>."])
+    def test_punctuated_placeholder_reasons_fail(self, reason):
+        code, _ = mod.evaluate(500, f"Diff-budget override: {reason}", BUDGET)
+        assert code == 1
+
 
 class TestFetchGuards:
     def test_non_json_gh_output_raises_runtime_error(self, monkeypatch):

@@ -27,8 +27,10 @@ DEFAULT_BUDGET = 400
 
 # The override must be an explicit line-anchored marker, not prose that
 # happens to mention the budget. The reason is everything after the colon.
+# At most 3 leading spaces: 4+ (or a tab) is a Markdown indented code block,
+# i.e. documentation of the syntax, not a decision.
 OVERRIDE_RE = re.compile(
-    r"^\s*(?:[-*>]\s*)?\**diff[ -]?budget\s+override\**\s*:\s*(?P<reason>.*)$",
+    r"^ {0,3}(?:[-*>]\s*)?\**diff[ -]?budget\s+override\**\s*:\s*(?P<reason>.*)$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -60,9 +62,12 @@ def find_override_reason(body: str) -> str | None:
     for match in OVERRIDE_RE.finditer(text):
         found = ""
         reason = match.group("reason").strip().strip("*").strip()
-        if PLACEHOLDER_REASON_RE.fullmatch(reason):
+        # Classify on a punctuation-normalized form so "TODO." or
+        # "<template>." cannot dodge the placeholder check via a stray dot.
+        trimmed = reason.strip(" \t.*_~`'\"!?,;:()[]{}")
+        if PLACEHOLDER_REASON_RE.fullmatch(trimmed):
             continue
-        if not re.search(r"[A-Za-z0-9]", reason):
+        if not re.search(r"[A-Za-z0-9]", trimmed):
             continue
         return reason
     return found
