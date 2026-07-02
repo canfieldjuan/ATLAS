@@ -12,6 +12,7 @@ from typing import Any, NamedTuple, Sequence
 GITHUB_ACTIONS_APP_ID = 15368
 DEFAULT_REQUIRED_CONTEXTS = (
     "live-reconciliation",
+    "diff-budget",
     "Gitleaks PR secret scan",
     "Gitleaks baseline growth guard",
 )

@@ -46,8 +46,9 @@ Current blocking posture: new unbaselined secrets block PRs; Semgrep, Trivy,
 Checkov, pip-audit, and OSV are advisory/report-only until their adoption
 backlogs are triaged and ratcheted.
 
-Branch protection for `main` requires `live-reconciliation`,
-`Gitleaks PR secret scan`, and `Gitleaks baseline growth guard`. The
+Branch protection for `main` requires `live-reconciliation`, `diff-budget`
+(the AGENTS.md diff-budget gate), `Gitleaks PR secret scan`, and
+`Gitleaks baseline growth guard`. The
 `Branch Protection Required Checks` workflow audits that live repository
 setting on a weekly/manual cadence and on trusted `main` updates touching the
 branch-protection checker, the security workflows, or security guardrail docs
