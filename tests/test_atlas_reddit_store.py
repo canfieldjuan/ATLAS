@@ -405,19 +405,29 @@ def test_null_primary_key_rejected_by_schema(store: ListeningStore) -> None:
 
 
 def test_malformed_reply_raises_instead_of_masking_as_replay(store: ListeningStore) -> None:
-    """The P1 both-sides probe: a genuine replay reports False, while an
-    integrity violation raises instead of silently dropping the reply."""
+    """The P1 both-sides probe: a genuine replay reports False, while a
+    malformed row raises instead of silently dropping the reply. Both
+    enforcement layers probed: the API guard (StoreError on a None
+    timestamp) and the schema NOT NULL (IntegrityError on raw SQL)."""
     assert _add_reply(store) is True
     assert _add_reply(store) is False  # true replay
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(StoreError, match="created_utc"):
         store.insert_reply(
             reply_id="t1_broken",
             thread_id="t3_thread",
             parent_id=None,
             author=None,
             body="x",
-            created_utc=None,  # type: ignore[arg-type]  # NOT NULL violation
+            created_utc=None,  # type: ignore[arg-type]
             is_reply_to_me=True,
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        store._conn.execute(
+            """
+            INSERT INTO replies (
+                reply_id, thread_id, created_utc, is_reply_to_me
+            ) VALUES ('t1_raw', 't3_thread', NULL, 1)
+            """
         )
     assert len(store.list_replies()) == 1  # nothing silently dropped or added
 
@@ -534,6 +544,53 @@ def test_equal_time_replay_still_applies(store: ListeningStore) -> None:
     assert row is not None
     assert row.reddit_score == 60
     assert row.last_seen == 200
+
+
+@pytest.mark.parametrize(
+    ("field", "bad"),
+    [
+        ("num_comments", "2\n## forged"),
+        ("reddit_score", "1\n# forged"),
+        ("created_utc", "yesterday"),
+        ("observed_at", True),
+        ("keyword_score", "high"),
+        ("final_score", float("nan")),
+        ("final_score", "3.0"),
+    ],
+)
+def test_non_numeric_candidate_metrics_rejected(
+    store: ListeningStore, field: str, bad: object
+) -> None:
+    """Wave-3 class: SQLite type affinity accepts text in INTEGER/REAL
+    columns, which would forge digest headings or crash formatters; the
+    write boundary rejects non-numeric metrics for every caller."""
+    with pytest.raises(StoreError, match=field):
+        _add_candidate(store, **{field: bad})
+    assert store.list_candidates() == []
+
+
+def test_non_int_timestamps_rejected_across_write_paths(store: ListeningStore) -> None:
+    store.upsert_tracked_thread(thread_id="t3_ok", my_comment_ids=(), checked_at=1)
+    with pytest.raises(StoreError, match="checked_at"):
+        store.upsert_tracked_thread(thread_id="t3_ok", my_comment_ids=(), checked_at="now")  # type: ignore[arg-type]
+    with pytest.raises(StoreError, match="created_utc"):
+        store.insert_reply(
+            reply_id="t1_x",
+            thread_id="t3_ok",
+            parent_id=None,
+            author=None,
+            body="x",
+            created_utc="1o0",  # type: ignore[arg-type]
+            is_reply_to_me=True,
+        )
+    with pytest.raises(StoreError, match="purged_at"):
+        store.record_purge(
+            item_id="x",
+            item_type="candidate",
+            deleted_detected_at=1,
+            purged_at=None,  # type: ignore[arg-type]
+            reason="r",
+        )
 
 
 # -- purge log --------------------------------------------------------------

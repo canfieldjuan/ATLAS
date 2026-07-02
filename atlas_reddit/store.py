@@ -107,6 +107,24 @@ def _require_id(value: object, *, field: str) -> str:
     return value
 
 
+def _require_int(value: object, *, field: str) -> int:
+    """Fail closed on non-int numerics. SQLite type affinity stores text
+    in INTEGER columns at runtime, which would flow into rendered output
+    or crash formatters downstream."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise StoreError(f"{field} must be an int, got {value!r}")
+    return value
+
+
+def _require_finite_number(value: object, *, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise StoreError(f"{field} must be a number, got {value!r}")
+    number = float(value)
+    if not math.isfinite(number):
+        raise StoreError(f"{field} must be finite, got {value!r}")
+    return number
+
+
 def _require_bool(value: object, *, field: str) -> bool:
     """Fail closed on non-bool flags. Truthiness coercion would turn a
     malformed parser value like "false" or None into valid persisted
@@ -185,9 +203,15 @@ class ListeningStore:
     def __init__(self, path: Path) -> None:
         self._path = path
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(path)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            # The whole open path is wrapped, not just the schema probe:
+            # connect() itself raises (e.g. path is a directory) before
+            # _ensure_schema could translate anything.
+            self._conn = sqlite3.connect(path)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA foreign_keys = ON")
+        except sqlite3.Error as exc:
+            raise StoreError(f"cannot open store at {path}: {exc}") from exc
         self._ensure_schema()
 
     def __enter__(self) -> "ListeningStore":
@@ -246,6 +270,12 @@ class ListeningStore:
         nothing, so replayed old polling windows can never regress fresher
         state."""
         _require_id(post_id, field="post_id")
+        _require_int(created_utc, field="created_utc")
+        _require_int(reddit_score, field="reddit_score")
+        _require_int(num_comments, field="num_comments")
+        _require_int(observed_at, field="observed_at")
+        _require_finite_number(keyword_score, field="keyword_score")
+        _require_finite_number(final_score, field="final_score")
         with self._conn:
             self._conn.execute(
                 """
@@ -351,6 +381,7 @@ class ListeningStore:
         set union (replays and re-discoveries never drop known ids);
         ``dormant`` is preserved on conflict."""
         _require_id(thread_id, field="thread_id")
+        _require_int(checked_at, field="checked_at")
         incoming = _require_comment_ids(my_comment_ids)
         existing = self._conn.execute(
             "SELECT my_comment_ids FROM tracked_threads WHERE thread_id = ?",
@@ -411,6 +442,7 @@ class ListeningStore:
         reply must reference a registered tracked thread."""
         _require_id(reply_id, field="reply_id")
         _require_id(thread_id, field="thread_id")
+        _require_int(created_utc, field="created_utc")
         _require_bool(is_reply_to_me, field="is_reply_to_me")
         with self._conn:
             cursor = self._conn.execute(
@@ -476,6 +508,8 @@ class ListeningStore:
         reason: str,
     ) -> None:
         _require_id(item_id, field="item_id")
+        _require_int(deleted_detected_at, field="deleted_detected_at")
+        _require_int(purged_at, field="purged_at")
         if item_type not in PURGE_ITEM_TYPES:
             raise StoreError(
                 f"invalid purge item_type {item_type!r}; allowed: {PURGE_ITEM_TYPES}"

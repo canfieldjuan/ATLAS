@@ -37,7 +37,7 @@ _MD_ESCAPE = str.maketrans(
 )
 
 # Characters that terminate or corrupt a Markdown link destination.
-_URL_UNSAFE = {"(": "%28", ")": "%29", " ": "%20", "<": "%3C", ">": "%3E"}
+_URL_UNSAFE = {"(": "%28", ")": "%29", " ": "%20", "<": "%3C", ">": "%3E", "\\": "%5C"}
 
 
 def _sanitize_inline(text: str) -> str:

@@ -90,6 +90,7 @@ Slice phase: Vertical slice
 - `plans/PR-Reddit-Listening-Digest.md`
 - `plans/archive/PR-Reddit-Listening-Sqlite-Store.md`
 - `tests/test_atlas_reddit_digest.py`
+- `tests/test_atlas_reddit_store.py`
 
 ## Mechanism
 
@@ -177,6 +178,26 @@ at root in this PR):
   translation table -- str.translate's single-pass independent mapping
   makes double-escaping impossible by construction.
 
+Review-fix notes (Codex wave 3 on 4a87afcf1; all three verified real and
+fixed at root in this PR):
+
+- **connect-time sqlite failures escaped the StoreError contract** (P2,
+  e.g. --db at a directory): the wave-2 wrap covered only the schema
+  probe, not connect() itself -- a symptom-site fix. The whole open path
+  now wraps; probed at store and CLI layers.
+- **URL destinations missed the backslash** (P2): the wave-2 escape-char
+  fix covered the inline surface only -- exactly the per-surface sanitizer
+  drift risk. Backslash now percent-encodes (%5C) in URL destinations.
+- **String-typed numeric metrics passed SQLite's type affinity into the
+  renderer** (P2): forged headings via num_comments/reddit_score, and a
+  string final_score crashed the :g formatter. True root: the store's
+  write boundary was type-loose on numerics, same class as its id/bool
+  guards. Fixed with int/finite-number guards across ALL numeric write
+  params (metrics, scores, and every timestamp on candidates, replies,
+  threads, and purge log), not just the two cited fields. The prior
+  malformed-reply dual-layer probe was updated accordingly (API guard
+  StoreError + schema NOT NULL IntegrityError both probed).
+
 ## Deferred
 
 - S4 PRAW read-only poller (doc-verify auth path FIRST; read/identity/
@@ -195,7 +216,7 @@ Parked hardening: none.
 
 - pytest on `tests/test_atlas_reddit_digest.py` plus the existing
   `tests/test_atlas_reddit_store.py`, `tests/test_atlas_reddit_config.py`,
-  and `tests/test_atlas_reddit_scoring.py`: 199 passed (renderer
+  and `tests/test_atlas_reddit_scoring.py`: 209 passed (renderer
   populated/empty/deterministic, ranked-with-why, hostile-title link
   breakout escaped, newline heading-injection collapsed, long-body excerpt,
   dated-file write, same-day overwrite, status-filter exclusion, limit +
@@ -206,7 +227,9 @@ Parked hardening: none.
   hostile subreddit/topic/thread-id sanitization, output-path OSError exit
   2, non-finite min-score rejected at CLI and store layers; wave-2 probes:
   backslash-pairing escape defeat, corrupt-db fail-closed at store and
-  CLI). This line
+  CLI; wave-3 probes: db-path-at-directory both layers, trailing-backslash
+  URL, parametrized non-numeric metrics rejected at the write boundary,
+  non-int timestamps across all write paths). This line
   is the single verification-count source; the PR body mirrors it.
 - ASCII byte-scan on the four changed Python files: clean.
 - Live demo: `python -m atlas_reddit` digest against a scratch store wrote
@@ -223,9 +246,10 @@ Parked hardening: none.
 | `atlas_reddit/__main__.py` | 123 |
 | `atlas_reddit/config.py` | 7 |
 | `atlas_reddit/digest.py` | 151 |
-| `atlas_reddit/store.py` | 15 |
+| `atlas_reddit/store.py` | 55 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Digest.md` | 231 |
+| `plans/PR-Reddit-Listening-Digest.md` | 255 |
 | `plans/archive/PR-Reddit-Listening-Sqlite-Store.md` | 0 |
-| `tests/test_atlas_reddit_digest.py` | 472 |
-| **Total** | **1002** |
+| `tests/test_atlas_reddit_digest.py` | 498 |
+| `tests/test_atlas_reddit_store.py` | 65 |
+| **Total** | **1157** |

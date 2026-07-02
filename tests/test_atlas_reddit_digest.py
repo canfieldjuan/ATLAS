@@ -301,6 +301,32 @@ def test_corrupt_db_file_fails_closed_at_store_and_cli(
     assert "cannot open store" in capsys.readouterr().err
 
 
+def test_db_path_at_directory_fails_closed(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """Wave-3 class: connect-time sqlite failures (db path is a directory)
+    join the StoreError contract; CLI exits 2, never a traceback."""
+    from atlas_reddit.store import StoreError
+
+    directory = tmp_path / "iamadir.db"
+    directory.mkdir()
+    with pytest.raises(StoreError, match="cannot open store"):
+        ListeningStore(directory)
+    code = main(
+        ["digest", "--db", str(directory), "--digest-dir", str(tmp_path / "d"), "--date", DATE]
+    )
+    assert code == 2
+    assert "cannot open store" in capsys.readouterr().err
+
+
+def test_trailing_backslash_url_cannot_escape_link(store: ListeningStore) -> None:
+    """Wave-3 class: the URL surface missed the escape char the inline
+    surface already handles."""
+    _seed_candidate(store, "t3_bsu", url="https://example.com/path\\")
+    content = render_digest(
+        candidates=store.list_candidates(status="new"), replies=[], generated_on=DATE
+    )
+    assert "(https://example.com/path%5C)" in content
+
+
 # -- write_digest -------------------------------------------------------------
 
 
