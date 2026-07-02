@@ -439,9 +439,10 @@ def test_failed_fetch_still_ages_out_stale_threads(store: ListeningStore) -> Non
     assert store.list_tracked_threads(include_dormant=True)[0].dormant is True
 
 
-def test_v1_store_migrates_to_v2_preserving_data(tmp_path: Path) -> None:
+def test_v1_store_migrates_to_current_preserving_data(tmp_path: Path) -> None:
     """Real migration probe: a database created with the v1 DDL opens,
-    gains the new columns with correct backfill, and loses nothing."""
+    walks the full migration ladder to the current version, gains the new
+    columns with correct backfill, and loses nothing."""
     import sqlite3
 
     db = tmp_path / "v1.db"
@@ -498,5 +499,5 @@ def test_v1_store_migrates_to_v2_preserving_data(tmp_path: Path) -> None:
         assert thread.last_activity == 12345  # backfilled from replies
         assert migrated.list_replies()[0].reply_id == "t1_r"
     conn = sqlite3.connect(db)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
     conn.close()

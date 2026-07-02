@@ -511,6 +511,40 @@ def test_unrelated_markdown_is_never_deleted(
     assert remaining == {"notes.md", "2026-13-99.txt.md"}
 
 
+def test_v2_bare_candidate_ids_canonicalize_to_fullnames(tmp_path: Path) -> None:
+    """Wave-5 class: stores written by the pre-fullname poller key
+    candidates by bare submission ids; the v3 migration canonicalizes
+    them so upgrades neither duplicate posts nor strand rows the purge
+    guard would flag forever. Junk ids stay for the guard."""
+    import sqlite3
+
+    db = tmp_path / "v2.db"
+    with ListeningStore(db) as store:  # creates current schema
+        _seed_candidate(store, "t3_existing")
+    conn = sqlite3.connect(db)
+    # Simulate a legacy store: bare ids + a bare twin of an existing
+    # fullname + junk, then wind the version back to 2.
+    for legacy_id in ("abc123", "existing", "JUNK ID!"):
+        conn.execute(
+            """
+            INSERT INTO candidates (
+                post_id, subreddit, title, url, created_utc,
+                keyword_score, final_score, first_seen, last_seen
+            ) VALUES (?, 's', 't', 'u', 1, 1.0, 1.0, 1, 1)
+            """,
+            (legacy_id,),
+        )
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+    with ListeningStore(db) as migrated:
+        ids = {c.post_id for c in migrated.list_candidates()}
+    # abc123 -> t3_abc123; bare "existing" dropped (fullname twin wins);
+    # junk retained untouched for the purge guard to surface.
+    assert ids == {"t3_existing", "t3_abc123", "JUNK ID!"}
+
+
 def test_cross_table_id_twin_is_not_shielded(store: ListeningStore) -> None:
     """Wave-3 class: a corrupt reply holding a t3_ id must not shield the
     legitimate candidate with the same id from purging."""

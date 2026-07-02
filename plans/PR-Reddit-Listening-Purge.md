@@ -89,6 +89,7 @@ Slice phase: Production hardening
 - `plans/PR-Reddit-Listening-Purge.md`
 - `plans/archive/PR-Reddit-Listening-Reply-Tracker.md`
 - `tests/test_atlas_reddit_purge.py`
+- `tests/test_atlas_reddit_tracker.py`
 
 ## Mechanism
 
@@ -209,6 +210,20 @@ fixed at root in this PR):
 - **The runbook's daily sequence omitted track**, silently starving the
   S5 warm-replies feature. Fixed: poll -> track -> purge -> digest.
 
+Review-fix note (Codex wave 5 on d5f3852a9; verified real, fixed at root):
+
+- **The fullname switch orphaned legacy bare-id candidate rows** on the
+  upgrade path: a store written by the merged pre-fullname poller would
+  duplicate posts, keep rendering the stale bare-id row, and the purge
+  guard would flag it malformed forever instead of purging it. No such
+  live store exists (credentials were never minted), but the merged code
+  could have produced one, so the fix is a real schema v3 migration:
+  bare base36 candidate ids canonicalize to t3_ fullnames; a bare row
+  whose fullname twin already exists is dropped (the twin is fresher);
+  true junk ids stay for the purge guard to surface. The migration
+  ladder now applies sequentially (v1 stores reach v3 in one open),
+  probed end-to-end from both a v1 and a simulated v2 database.
+
 ## Deferred
 
 - Scheduling (cron/autonomous task) for poll/track/digest/purge: beyond
@@ -227,7 +242,7 @@ Parked hardening: none.
   `tests/test_atlas_reddit_tracker.py`, `tests/test_atlas_reddit_poller.py`,
   `tests/test_atlas_reddit_digest.py`, `tests/test_atlas_reddit_store.py`,
   `tests/test_atlas_reddit_config.py`, and
-  `tests/test_atlas_reddit_scoring.py`: 315 passed (both-sides deletion
+  `tests/test_atlas_reddit_scoring.py`: 316 passed (both-sides deletion
   probes, digest disappearance end-to-end, replay idempotence with no
   duplicate log entries, 100-item batching with n-1 pacing, failed-batch
   containment with continued purging, tracked-thread retention,
@@ -240,8 +255,10 @@ Parked hardening: none.
   digest artifacts removed-from-persisted-state/kept-when-clean; wave-3
   probes: cross-table twin not shielded, unlink-failure retry, fresh
   post-purge digest survival; wave-4 probes: same-second fractional-mtime
-  removal, unrelated-markdown never deleted). This line is the single
-  verification-count source; the PR body mirrors it.
+  removal, unrelated-markdown never deleted; wave-5 probe: v2 bare-id
+  canonicalization incl. twin-drop and junk retention, v1 ladder to
+  current). This line is the single verification-count source; the PR
+  body mirrors it.
 - ASCII byte-scan on the five changed Python files: clean.
 - python `scripts/sync_pr_plan.py` on this plan: tables regenerated from
   the real diff.
@@ -254,10 +271,11 @@ Parked hardening: none.
 | `atlas_reddit/__main__.py` | 62 |
 | `atlas_reddit/purge.py` | 148 |
 | `atlas_reddit/reddit_client.py` | 76 |
-| `atlas_reddit/store.py` | 58 |
+| `atlas_reddit/store.py` | 131 |
 | `docs/REDDIT_LISTENING_SETUP_RUNBOOK.md` | 12 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Purge.md` | 263 |
+| `plans/PR-Reddit-Listening-Purge.md` | 279 |
 | `plans/archive/PR-Reddit-Listening-Reply-Tracker.md` | 0 |
-| `tests/test_atlas_reddit_purge.py` | 587 |
-| **Total** | **1209** |
+| `tests/test_atlas_reddit_purge.py` | 621 |
+| `tests/test_atlas_reddit_tracker.py` | 7 |
+| **Total** | **1339** |

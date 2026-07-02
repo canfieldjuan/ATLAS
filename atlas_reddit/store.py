@@ -37,7 +37,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 CANDIDATE_STATUSES = ("new", "seen", "dismissed", "responded")
 PURGE_ITEM_TYPES = ("candidate", "reply", "thread")
@@ -243,28 +243,59 @@ class ListeningStore:
                 self._conn.executescript(_SCHEMA_DDL)
                 self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
-        if version == 1:
-            # v1 -> v2 (S5): tracked_threads gains the own-submission flag
-            # (top-level replies are only "to me" on my own posts) and a
-            # persisted last_activity timestamp (history-window eviction
-            # must not read as inactivity). Additive, backfilled from
-            # stored replies; no data is dropped.
+        if 1 <= version < SCHEMA_VERSION:
+            # Migrations apply as a sequential ladder so any older version
+            # reaches the current one in a single open.
             with self._conn:
-                self._conn.execute(
-                    "ALTER TABLE tracked_threads ADD COLUMN is_own_submission "
-                    "INTEGER NOT NULL DEFAULT 0 CHECK (is_own_submission IN (0, 1))"
-                )
-                self._conn.execute(
-                    "ALTER TABLE tracked_threads ADD COLUMN last_activity INTEGER"
-                )
-                self._conn.execute(
-                    """
-                    UPDATE tracked_threads SET last_activity = (
-                        SELECT MAX(created_utc) FROM replies
-                        WHERE replies.thread_id = tracked_threads.thread_id
+                if version < 2:
+                    # v1 -> v2 (S5): tracked_threads gains the
+                    # own-submission flag (top-level replies are only "to
+                    # me" on my own posts) and a persisted last_activity
+                    # timestamp (history-window eviction must not read as
+                    # inactivity). Additive, backfilled from stored
+                    # replies; no data is dropped.
+                    self._conn.execute(
+                        "ALTER TABLE tracked_threads ADD COLUMN is_own_submission "
+                        "INTEGER NOT NULL DEFAULT 0 CHECK (is_own_submission IN (0, 1))"
                     )
-                    """
-                )
+                    self._conn.execute(
+                        "ALTER TABLE tracked_threads ADD COLUMN last_activity INTEGER"
+                    )
+                    self._conn.execute(
+                        """
+                        UPDATE tracked_threads SET last_activity = (
+                            SELECT MAX(created_utc) FROM replies
+                            WHERE replies.thread_id = tracked_threads.thread_id
+                        )
+                        """
+                    )
+                if version < 3:
+                    # v2 -> v3 (S6): the poller switched candidate ids from
+                    # bare submission ids to fullnames (t3_...). Legacy
+                    # bare base36 ids are canonicalized so upgraded stores
+                    # do not duplicate posts or strand rows the purge
+                    # guard would flag as malformed forever. A bare row
+                    # whose fullname twin already exists is dropped (the
+                    # twin is fresher); true junk ids stay for the purge
+                    # guard to surface.
+                    self._conn.execute(
+                        """
+                        DELETE FROM candidates
+                        WHERE post_id NOT GLOB 't3_*'
+                          AND post_id NOT GLOB '*[^a-z0-9]*'
+                          AND EXISTS (
+                            SELECT 1 FROM candidates c2
+                            WHERE c2.post_id = 't3_' || candidates.post_id
+                          )
+                        """
+                    )
+                    self._conn.execute(
+                        """
+                        UPDATE candidates SET post_id = 't3_' || post_id
+                        WHERE post_id NOT GLOB 't3_*'
+                          AND post_id NOT GLOB '*[^a-z0-9]*'
+                        """
+                    )
                 self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         # Fail closed on schemas this code does not know how to read --
