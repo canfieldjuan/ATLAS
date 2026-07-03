@@ -194,6 +194,25 @@ fixed at root in this PR):
   value (must contain a digit). A dedicated second-side probe suite pins
   six redaction/absence phrasings as clean.
 
+Review-fix notes (Codex wave 3 on 3997c5baa; all 8 verified real and
+fixed at root in this PR):
+
+- **Two envelope-contract holes**: a stale parse_error beside a valid
+  prediction silently graded as passing (the contract pairs parse_error
+  with null; now exactly-one is enforced at load), and an ABSENT
+  prediction key was conflated with explicit null (absent = malformed
+  envelope, exit 2; null = model failure, graded). Both probed.
+- **Five more phrasings widened**: percent-first deflection ("deflect
+  40% of tickets"), object-first cost ranking ("rank tickets by cost"),
+  embedding-clustering verb forms (either order), first-person promo
+  ("my tool", "I built", "our app"), hash-form identifiers ("ticket
+  #12345"). Each in the parametrized table.
+- **Compact phone numbers with the second side preserved**: bare
+  10-digit runs are indistinguishable from epoch timestamps, so the
+  compact branch fires only behind a contact cue ("call/text/reach ...
+  5551234567"); two epoch-shaped phrasings are pinned clean in the
+  redaction/absence probe suite.
+
 ## Deferred
 
 - S2 fit contract + prompt builder; S3 runtime guard (+ parity test);
@@ -209,10 +228,10 @@ Parked hardening: none.
 ## Verification
 
 - `.venv/bin/python -m pytest tests/test_atlas_reddit_fit_eval.py -q`:
-  80 passed (every rule family, every shape-rejection code, corpus
+  97 passed (every rule family, every shape-rejection code, corpus
   both-sides contract, CLI exits, privacy, purity).
 - Full package suite `.venv/bin/python -m pytest
-  tests/test_atlas_reddit_*.py -q`: 413 passed (no-write probe and
+  tests/test_atlas_reddit_*.py -q`: 430 passed (no-write probe and
   fixture-fidelity stay green over the new modules).
 - Reachability (real entrypoint, observable result):
   `python scripts/evaluate_atlas_reddit_fit.py --cases
@@ -228,12 +247,12 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_reddit_checks.yml` | 2 |
-| `atlas_reddit/fit_eval.py` | 415 |
-| `atlas_reddit/fit_rules.py` | 320 |
-| `plans/PR-Reddit-Fit-Eval-Harness.md` | 239 |
+| `atlas_reddit/fit_eval.py` | 430 |
+| `atlas_reddit/fit_rules.py` | 331 |
+| `plans/PR-Reddit-Fit-Eval-Harness.md` | 258 |
 | `scripts/evaluate_atlas_reddit_fit.py` | 15 |
 | `tests/fixtures/atlas_reddit_fit_eval/cases.jsonl` | 16 |
 | `tests/fixtures/atlas_reddit_fit_eval/predictions_fail.jsonl` | 16 |
 | `tests/fixtures/atlas_reddit_fit_eval/predictions_pass.jsonl` | 16 |
-| `tests/test_atlas_reddit_fit_eval.py` | 428 |
-| **Total** | **1467** |
+| `tests/test_atlas_reddit_fit_eval.py` | 472 |
+| **Total** | **1556** |

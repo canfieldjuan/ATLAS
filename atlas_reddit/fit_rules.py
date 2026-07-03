@@ -94,6 +94,8 @@ CLAIM_RULES: tuple[FitRule, ...] = (
             r"guarantee[ds]?\b[^.]{0,60}\b(?:reduction|deflection|fewer tickets)"
             r"|(?:cut|reduce|deflect)\w*\s+(?:your |their |the )?(?:support )?"
             r"ticket(?:s| volume)?\s+by\s+\d+"
+            r"|(?:cut|reduce|deflect)\w*\s+\d+\s?%\s+of\s+"
+            r"(?:your\s+|their\s+|the\s+)?(?:support\s+)?tickets"
             r"|\d+\s?%\s+(?:fewer|less)\s+(?:support\s+)?tickets"
         ),
         message="Never guarantee or quantify ticket reduction or deflection.",
@@ -173,12 +175,19 @@ CLAIM_RULES: tuple[FitRule, ...] = (
     ),
     FitRule(
         code="SEMANTIC_CLUSTERING",
-        pattern=r"semantic(?:ally)?\s+cluster\w*|embedding[- ]based\s+cluster\w*",
+        pattern=(
+            r"semantic(?:ally)?\s+cluster\w*|embedding[- ]based\s+cluster\w*"
+            r"|cluster\w*\b[^.]{0,30}\bembeddings?\b"
+            r"|embeddings?\b[^.]{0,30}\bcluster\w*"
+        ),
         message="Never claim semantic or embedding-based clustering.",
     ),
     FitRule(
         code="COST_RANKING",
-        pattern=r"rank(?:s|ed|ing)?\s+by\s+cost|cost[- ]rank\w*|support\s+cost\s+ranking",
+        pattern=(
+            r"rank(?:s|ed|ing)?\s+(?:\w+\s+){0,2}by\s+cost"
+            r"|cost[- ]rank\w*|support\s+cost\s+ranking"
+        ),
         message="Never claim cost ranking without imported cost data.",
     ),
     FitRule(
@@ -194,8 +203,8 @@ CLAIM_RULES: tuple[FitRule, ...] = (
     FitRule(
         code="SELF_PROMO_PITCH",
         pattern=(
-            r"\bour\s+(?:tool|product|platform|audit|service)\b"
-            r"|\bwe\s+built\b|check\s+out\s+(?:our|my)"
+            r"\b(?:our|my)\s+(?:tool|product|platform|audit|service|app)\b"
+            r"|\b(?:we|i)\s+built\b|check\s+out\s+(?:our|my)"
             r"|\bsign\s+up\b|free\s+trial|book\s+a\s+(?:demo|call)"
         ),
         message="Never pitch: no product mentions, trials, demos, or sign-ups.",
@@ -242,6 +251,8 @@ PII_RULES: tuple[FitRule, ...] = (
         code="PII_PHONE",
         pattern=(
             r"(?<![\d.])(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?![\d.])"
+            r"|(?:call|phone|text|dial|reach)(?:\s+\S+){0,3}\s+"
+            r"(?<![\d.])\+?1?\d{10}(?![\d.])"
         ),
         message="Never echo phone numbers from the thread.",
     ),
@@ -269,7 +280,7 @@ PII_RULES: tuple[FitRule, ...] = (
         code="PII_IDENTIFIER",
         pattern=(
             r"(?:account|order|case|ticket|invoice|ref(?:erence)?)\s*"
-            r"(?:number|no\.?|#|id)\s*[:\s]\s*"
+            r"(?:(?:number|no\.?|id)\s*[:\s]|#)\s*"
             r"(?=[A-Za-z0-9-]*\d)[A-Za-z0-9-]{4,}"
         ),
         message="Never echo account, order, or ticket identifiers.",

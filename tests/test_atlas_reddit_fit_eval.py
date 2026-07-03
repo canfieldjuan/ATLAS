@@ -103,6 +103,19 @@ def test_catalogue_partitions_into_three_families() -> None:
         ("hosted uploads handle 50,000 rows", "UNBOUNDED_HOSTED_UPLOADS"),
         ("native Shopify integration", "LIVE_HELPDESK_INTEGRATION"),
         ("connect Zendesk and import everything", "LIVE_HELPDESK_INTEGRATION"),
+        ("deflect 40% of tickets", "GUARANTEED_DEFLECTION"),
+        ("reduce 25% of support tickets", "GUARANTEED_DEFLECTION"),
+        ("rank tickets by cost", "COST_RANKING"),
+        ("rank issues by cost per resolution", "COST_RANKING"),
+        ("cluster similar tickets with embeddings", "SEMANTIC_CLUSTERING"),
+        ("use embeddings to cluster tickets", "SEMANTIC_CLUSTERING"),
+        ("my tool can help with this", "SELF_PROMO_PITCH"),
+        ("I built a tool for this exact problem", "SELF_PROMO_PITCH"),
+        ("our app can help", "SELF_PROMO_PITCH"),
+        ("call the owner at 5551234567", "PII_PHONE"),
+        ("text them on +15551234567", "PII_PHONE"),
+        ("ticket #12345 keeps failing", "PII_IDENTIFIER"),
+        ("order #AB-12345 was quoted", "PII_IDENTIFIER"),
     ],
 )
 def test_each_rule_family_fires(text: str, code: str) -> None:
@@ -118,6 +131,8 @@ def test_each_rule_family_fires(text: str, code: str) -> None:
         "ticket id missing from most rows",
         "order number: unavailable in the sample",
         "account id redacted before upload",
+        "the thread was created around 1751500000 and got traction",
+        "roughly 1800000000 rows were mentioned as an exaggeration",
     ],
 )
 def test_redaction_and_absence_speak_stays_clean(text: str) -> None:
@@ -415,6 +430,35 @@ def test_term_miss_codes_are_positional_not_raw_text() -> None:
     failing = {c.name: c.codes for c in result.checks if not c.passed}
     assert set(failing["reason_grounded"]) == {"reason_term_0", "reason_term_1"}
     assert "repeat" not in failing["reason_grounded"]
+
+
+def test_missing_prediction_key_is_structural(tmp_path: Path) -> None:
+    """An ABSENT prediction key is a malformed envelope (exit-2 class),
+    never conflated with an explicit null (model failure, graded)."""
+    envelope = {
+        "case_id": "obvious_fit_broken_help_center",
+        "model_id": "m",
+        "prompt_version": "fit.v1",
+        "parse_error": None,
+    }
+    bad = tmp_path / "p.jsonl"
+    bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="missing the prediction key"):
+        load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
+
+
+def test_parse_error_beside_valid_prediction_is_structural(tmp_path: Path) -> None:
+    envelope = {
+        "case_id": "obvious_fit_broken_help_center",
+        "prediction": _prediction(),
+        "model_id": "m",
+        "prompt_version": "fit.v1",
+        "parse_error": "model_returned_prose",
+    }
+    bad = tmp_path / "p.jsonl"
+    bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="exactly one"):
+        load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
 
 
 # -- purity ---------------------------------------------------------------------

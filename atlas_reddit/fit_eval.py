@@ -182,12 +182,27 @@ def load_predictions(path: Path, case_ids: frozenset[str]) -> dict[str, dict]:
             raise FitEvalError(f"{path}: duplicate prediction for {case_id!r}")
         if case_id not in case_ids:
             raise FitEvalError(f"{path}: prediction for unknown case {case_id!r}")
-        prediction = record.get("prediction")
+        if "prediction" not in record:
+            # An absent key is a malformed ENVELOPE (emitter/schema bug,
+            # exit 2), distinct from an explicit null (model failure,
+            # graded as a case FAIL).
+            raise FitEvalError(
+                f"{path}: {case_id!r} envelope is missing the prediction key"
+            )
+        prediction = record["prediction"]
         if prediction is not None and not isinstance(prediction, dict):
             raise FitEvalError(
                 f"{path}: {case_id!r} prediction must be an object or null"
             )
         parse_error = record.get("parse_error")
+        if parse_error is not None and prediction is not None:
+            # The contract pairs parse_error with a null prediction; a
+            # stale code beside a valid prediction is an emitter bug that
+            # must not silently grade as a passing case.
+            raise FitEvalError(
+                f"{path}: {case_id!r} carries both a prediction and a "
+                "parse_error; the envelope contract allows exactly one"
+            )
         if parse_error is not None and parse_error not in PARSE_ERROR_CODES:
             # Closed taxonomy, not just a shape check: a code-SHAPED string
             # (e.g. customer_jane_doe) can smuggle content into summaries.
