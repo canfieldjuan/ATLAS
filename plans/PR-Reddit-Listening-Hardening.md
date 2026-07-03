@@ -54,9 +54,9 @@ Slice phase: Production hardening
    truly deleted item never reappears, so the wave-2 re-purge cycle
    stays closed. Schema v4 adds `purge_log.tombstone` (existing rows
    backfill to 1 -- conservative).
-6. **S6 plan archive**: `plans/PR-Reddit-Listening-Purge.md` was merged
-   but never moved to `plans/archive/`; move it here and refresh
-   `plans/INDEX.md` so `plans/` only contains in-flight work.
+6. **S6 plan archive**: the merged Reddit purge plan was still in the
+   active plan root; move it to `plans/archive/PR-Reddit-Listening-Purge.md`
+   and refresh `plans/INDEX.md` so `plans/` only contains in-flight work.
 
 ### Review Contract
 
