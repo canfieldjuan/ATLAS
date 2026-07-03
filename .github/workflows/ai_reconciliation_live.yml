@@ -11,11 +11,13 @@ name: AI Reconciliation (live)
 # check"), and re-runs when a bot comment lands after the PR opens.
 #
 # Trusted-base execution (#1944 waiver 18): `pull_request_target` resolves
-# this workflow from the BASE branch and the checkout pins the base SHA, so
-# a PR editing this gate is still judged by main's version. The review-event
-# triggers still resolve the workflow file PR-side, but every push/edit also
-# produces a trusted run. The job runs base-ref code only; never add a step
-# that executes PR-ref content.
+# this workflow from the BASE branch and both jobs pin their checkout to the
+# base SHA, so a PR editing this gate is still judged by main's version. The
+# required `live-reconciliation` context comes from the target-only job
+# (audited guard shape in scripts/audit_workflow_security_posture.py); the
+# review-events job re-runs the same base-ref script when bot comments land
+# and reports under its own advisory context. Neither job may ever gain a
+# step that executes PR-ref content.
 
 on:
   # `edited` is included so that when a reviewer fixes a failed check by editing
@@ -32,6 +34,29 @@ permissions:
 
 jobs:
   live-reconciliation:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Live AI-reconciliation check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/check_ai_reconciliation_live.py \
+            --pr "${{ github.event.pull_request.number }}"
+
+  live-reconciliation-review-events:
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

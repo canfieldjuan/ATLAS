@@ -376,3 +376,71 @@ jobs:
     findings = auditor.audit_workflow(workflow)
 
     assert findings == []
+
+
+def _trusted_gate_workflow(job: str) -> str:
+    return f"""
+name: Gate
+on:
+  pull_request_target:
+jobs:
+  {job}:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{{{ github.event.pull_request.base.sha }}}}
+"""
+
+
+def test_converted_meta_gates_pull_request_target_is_allowed(tmp_path: Path) -> None:
+    auditor = load_auditor()
+    for name, job in (
+        ("diff_budget.yml", "diff-budget"),
+        ("ai_reconciliation_live.yml", "live-reconciliation"),
+        ("pr_body_contract.yml", "pr-body-contract"),
+    ):
+        workflow = _write_workflow(tmp_path, name, _trusted_gate_workflow(job))
+        findings = auditor.audit_workflow(workflow)
+        assert not [f for f in findings if f.level == "ERROR"], (name, findings)
+        assert any("allowed pull_request_target" in f.detail for f in findings)
+
+
+def test_allowlisted_gate_without_guard_shape_is_still_error(tmp_path: Path) -> None:
+    """Allowlisting is necessary but not sufficient: an allowlisted gate
+    that drops the if-guard or the pinned base-SHA checkout fails."""
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "diff_budget.yml",
+        """
+name: Gate
+on:
+  pull_request_target:
+jobs:
+  diff-budget:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+""",
+    )
+    findings = auditor.audit_workflow(workflow)
+    assert any(
+        f.level == "ERROR" and "trusted-base guard shape" in f.detail
+        for f in findings
+    )
+
+
+def test_gate_job_name_in_wrong_file_is_error(tmp_path: Path) -> None:
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path, "impostor.yml", _trusted_gate_workflow("diff-budget")
+    )
+    findings = auditor.audit_workflow(workflow)
+    assert any(
+        f.level == "ERROR" and "trusted-base guard shape" in f.detail
+        for f in findings
+    )

@@ -14,6 +14,13 @@ slice applies that existing pattern to the three API-driven gates
 (diff-budget, live-reconciliation, pr-body-contract); patching just one gate
 or re-describing the risk in docs would treat the symptom.
 
+Diff-budget overage (484 added lines vs the 400 cap): the workflow posture
+audit ITSELF gates pull_request_target adoption behind its allowlist plus
+guard-shape check, so the three workflow conversions, the allowlist
+expansion, its failure-branch tests, and the review-events job split are one
+indivisible slice -- shipping the workflows without the allowlist leaves CI
+red; shipping the allowlist without the workflows allowlists nothing.
+
 ## Scope (this PR)
 
 Ownership lane: Workflow/process
@@ -33,7 +40,14 @@ Slice phase: Vertical slice
 3. `tests/test_audit_pr_body.py`: failure-branch fixtures for the new mode
    (plan present at ref, missing at ref, unresolvable ref, callable
    injection).
-4. `docs/SECURITY_GUARDRAILS.md`: document which gates run trusted-base and
+4. `scripts/audit_workflow_security_posture.py`: the pull_request_target
+   allowlist generalizes from the single Gitleaks-guard tuple to the four
+   audited gate jobs -- allowlisting is necessary but not sufficient; each
+   entry must still match the guard shape (if-guard + SHA-pinned base-SHA
+   checkout). live-reconciliation splits into the required target-only job
+   plus an advisory review-events job (same base-ref script) so bot-comment
+   re-runs survive the guard shape.
+5. `docs/SECURITY_GUARDRAILS.md`: document which gates run trusted-base and
    the residual PR-ref surface (named below).
 
 ### Files touched
@@ -42,7 +56,9 @@ Slice phase: Vertical slice
 - `.github/workflows/ai_reconciliation_live.yml`
 - `.github/workflows/pr_body_contract.yml`
 - `scripts/audit_pr_body.py`
+- `scripts/audit_workflow_security_posture.py`
 - `tests/test_audit_pr_body.py`
+- `tests/test_audit_workflow_security_posture.py`
 - `docs/SECURITY_GUARDRAILS.md`
 - `plans/PR-Trusted-Base-Gate-Execution.md`
 
@@ -61,7 +77,11 @@ Acceptance criteria (reviewer checks one-by-one):
    exits 2 (infra), never 0.
 4. The default (no flag) filesystem behavior is byte-for-byte unchanged --
    local usage and the pre-push bundle are unaffected.
-5. `python -m pytest tests/test_audit_pr_body.py -q` passes, including the
+5. The posture audit passes with the three gates reported as allowed
+   guard-shaped jobs, and an allowlisted gate that drops the if-guard or
+   the pinned checkout still errors (tested).
+6. `python -m pytest tests/test_audit_pr_body.py
+   tests/test_audit_workflow_security_posture.py -q` passes, including the
    new failure branches.
 
 Affected surfaces: three gate workflows, one gate script + its tests, one
@@ -120,11 +140,14 @@ Parked hardening: none.
 
 Commands run from the repo root:
 
-- `python -m pytest tests/test_audit_pr_body.py -q` -- pass count recorded
-  in the PR body, including the new `--plan-git-ref` failure branches.
+- `python -m pytest tests/test_audit_pr_body.py
+  tests/test_audit_workflow_security_posture.py -q` -- pass count recorded
+  in the PR body, including the new failure branches on both scripts.
+- `python scripts/audit_workflow_security_posture.py .github/workflows` --
+  passed; the three converted gates report as allowed guard-shaped jobs.
 - `bash scripts/local_pr_review.sh --current-pr-body-file <pr-body.md>` --
   all checks PASS.
-- `python scripts/check_diff_budget.py --additions 353 --body-file
+- `python scripts/check_diff_budget.py --additions 484 --body-file
   <pr-body.md>` -- within the 400 budget.
 - Post-merge, first PR: confirm the three checks report from
   `pull_request_target` runs (workflow run event visible in the check-run
@@ -134,9 +157,11 @@ Commands run from the repo root:
 
 | File | LOC (added) |
 |---|---:|
-| workflows (3) | 58 |
+| workflows (3) | 83 |
 | `scripts/audit_pr_body.py` | 62 |
+| `scripts/audit_workflow_security_posture.py` | 13 |
 | `tests/test_audit_pr_body.py` | 78 |
+| `tests/test_audit_workflow_security_posture.py` | 68 |
 | `docs/SECURITY_GUARDRAILS.md` | 13 |
-| `plans/PR-Trusted-Base-Gate-Execution.md` | 142 |
-| **Total** | **353** |
+| `plans/PR-Trusted-Base-Gate-Execution.md` | 167 |
+| **Total** | **484** |
