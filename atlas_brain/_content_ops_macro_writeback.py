@@ -9,13 +9,18 @@ from typing import Any
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.faq_macro_writeback import MacroPublishProvider
 from extracted_content_pipeline.faq_macro_writeback_postgres import (
+    PostgresFAQMacroPublishAttemptRepository,
     PostgresFAQMacroWritebackMappingRepository,
+)
+from extracted_content_pipeline.faq_macro_writeback_publish import (
+    FAQMacroWritebackPublishService,
 )
 from extracted_content_pipeline.faq_macro_writeback_zendesk import (
     ZendeskMacroCredentials,
     ZendeskMacroCredentialsProvider,
     ZendeskMacroPublishProvider,
 )
+from extracted_content_pipeline.ticket_faq_postgres import PostgresTicketFAQRepository
 
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
@@ -85,6 +90,39 @@ async def build_content_ops_macro_publish_provider(
     )
 
 
+async def build_content_ops_faq_macro_publish_service(
+    *,
+    pool_provider: PoolProvider,
+    config_provider: ConfigProvider | None = None,
+) -> FAQMacroWritebackPublishService | None:
+    """Build the host FAQ macro publish service for paid Resolution Audit reports.
+
+    Composes the existing macro-writeback building blocks (tenant-scoped FAQ
+    repository, the host Zendesk publish provider, and the attempt-history
+    repository) so paid-report publishing reuses the same credential handling,
+    idempotency mappings, and attempt records as the Generated Asset Review
+    path. Returns None when the database pool or publish provider is
+    unavailable so callers fail closed.
+    """
+
+    pool = await _maybe_await(pool_provider())
+    if pool is None:
+        return None
+    if getattr(pool, "is_initialized", True) is False:
+        return None
+    provider = await build_content_ops_macro_publish_provider(
+        pool_provider=lambda: pool,
+        config_provider=config_provider,
+    )
+    if provider is None:
+        return None
+    return FAQMacroWritebackPublishService(
+        faq_repository=PostgresTicketFAQRepository(pool=pool),
+        provider=provider,
+        attempt_repository=PostgresFAQMacroPublishAttemptRepository(pool),
+    )
+
+
 def zendesk_macro_credentials_from_config(
     config: Any,
 ) -> ZendeskMacroCredentials | None:
@@ -134,6 +172,7 @@ def _has_tenant_markers(scope: TenantScope) -> bool:
 __all__ = [
     "ConfigZendeskMacroCredentialsProvider",
     "TenantZendeskMacroCredentialsProvider",
+    "build_content_ops_faq_macro_publish_service",
     "build_content_ops_macro_publish_provider",
     "zendesk_macro_credentials_from_config",
 ]

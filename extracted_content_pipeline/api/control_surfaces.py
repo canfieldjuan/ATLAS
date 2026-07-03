@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 try:
     from fastapi import APIRouter, Body, File, Form, HTTPException, Path as PathParam, Query, Request, UploadFile
@@ -85,6 +85,7 @@ from ..faq_deflection_report import (
     deflection_report_model_contract_shape,
     scrub_deflection_report_payload,
 )
+from ..faq_macro_writeback_publish import FAQMacroWritebackPublishService
 from ..landing_page_input_contract import landing_page_seo_geo_aeo_input_contracts
 from ..ingestion_diagnostics import inspect_ingestion_file, inspect_ingestion_rows
 from ..landing_page_repair_contract import (
@@ -132,6 +133,10 @@ PoolProvider = Callable[[], Any | Awaitable[Any]]
 DeflectionReportStoreProvider = Callable[
     [],
     DeflectionReportArtifactStore | Awaitable[DeflectionReportArtifactStore],
+]
+FAQMacroPublishServiceProvider = Callable[
+    [],
+    FAQMacroWritebackPublishService | Awaitable[FAQMacroWritebackPublishService],
 ]
 ImportAdmissionProvider = Callable[[], Any | Awaitable[Any]]
 CachePolicyDefaultProvider = Callable[
@@ -791,6 +796,7 @@ def create_content_ops_control_surface_router(
     llm_provider: LLMProvider | None = None,
     input_provider: InputProvider | None = None,
     deflection_report_store_provider: DeflectionReportStoreProvider | None = None,
+    faq_macro_publish_service_provider: FAQMacroPublishServiceProvider | None = None,
     opportunity_import_pool_provider: PoolProvider | None = None,
     usage_pool_provider: PoolProvider | None = None,
     usage_dependencies: Sequence[Any] | None = None,
@@ -972,6 +978,52 @@ def create_content_ops_control_surface_router(
                 detail="Deflection report model is not available.",
             )
         return model
+
+    @router.post(
+        "/deflection-reports/{request_id}/publish-macros",
+        dependencies=public_deflection_dependencies,
+    )
+    async def publish_deflection_report_macros(
+        request_id: str = PathParam(..., min_length=1, max_length=200),
+    ) -> dict[str, Any]:
+        store = await _resolve_deflection_report_store(deflection_report_store_provider)
+        scope = await _resolve_scope(scope_provider)
+        tenant = TenantScope(
+            account_id=_required_scope_account_id(scope),
+            user_id=getattr(scope, "user_id", None) if scope is not None else None,
+            allowed_vendors=getattr(scope, "allowed_vendors", ()) if scope is not None else (),
+            roles=getattr(scope, "roles", ()) if scope is not None else (),
+        )
+        record = await store.get_artifact_record(
+            account_id=tenant.account_id,
+            request_id=request_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="Deflection report not found.")
+        if not record.paid:
+            raise HTTPException(status_code=403, detail="Deflection report is locked.")
+        faq_id = _deflection_report_saved_faq_id(record.artifact)
+        if not faq_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Resolution Audit FAQ draft is not available for macro writeback.",
+            )
+        service = await _resolve_faq_macro_publish_service(
+            faq_macro_publish_service_provider
+        )
+        summary = await service.publish_faq_draft(faq_id, scope=tenant)
+        if not summary.found:
+            raise HTTPException(
+                status_code=409,
+                detail="Resolution Audit FAQ draft is not available for macro writeback.",
+            )
+        return {
+            "account_id": tenant.account_id,
+            "request_id": request_id,
+            "faq_id": faq_id,
+            "asset": "faq_markdown",
+            **summary.as_dict(),
+        }
 
     @router.get(
         "/deflection-reports/{request_id}/delta",
@@ -3546,6 +3598,57 @@ async def _resolve_deflection_report_store(
             detail="Content Ops deflection report store is unavailable.",
         )
     return store
+
+
+async def _resolve_faq_macro_publish_service(
+    provider: FAQMacroPublishServiceProvider | None,
+) -> FAQMacroWritebackPublishService:
+    if provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail="FAQ macro publish provider unavailable",
+        )
+    try:
+        service = await _resolve_provider(provider)
+    except Exception as exc:
+        logger.warning(
+            "Content Ops FAQ macro publish service provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="FAQ macro publish provider unavailable",
+        ) from exc
+    if service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="FAQ macro publish provider unavailable",
+        )
+    return service
+
+
+def _deflection_report_saved_faq_id(artifact: Mapping[str, Any] | None) -> str:
+    if not isinstance(artifact, Mapping):
+        return ""
+    faq_result = artifact.get("faq_result")
+    if not isinstance(faq_result, Mapping):
+        return ""
+    saved_ids = faq_result.get("saved_ids")
+    if isinstance(saved_ids, (str, bytes, bytearray)):
+        candidates: Sequence[Any] = (saved_ids,)
+    elif isinstance(saved_ids, Sequence):
+        candidates = saved_ids
+    else:
+        return ""
+    for item in candidates:
+        candidate = _clean(item)
+        if not candidate:
+            continue
+        try:
+            return str(UUID(candidate))
+        except ValueError:
+            continue
+    return ""
 
 
 async def _execute_usage_summary(
