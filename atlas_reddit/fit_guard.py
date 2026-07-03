@@ -20,15 +20,45 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .fit import FitDecision
-from .fit_rules import ALL_RULE_CODES, scan_fit_text
+from .fit_rules import scan_fit_text
 
 # Policy: in v1 EVERY catalogue family blocks. Advisory is deliberately
 # empty -- unsupported-outcome claims, pitch/reply posture, and PII echo
 # all make the text unusable as advice, and a flagged-but-rendered
-# "advisory" state would put the unsafe text on the digest anyway. The
-# set exists (rather than being implied) so the parity test fails loudly
-# when a future rule needs a real classification decision.
-BLOCKING_CODES: frozenset[str] = frozenset(ALL_RULE_CODES)
+# "advisory" state would put the unsafe text on the digest anyway.
+#
+# The codes are ENUMERATED LITERALLY, never derived from the catalogue:
+# a derived set would auto-classify any future rule as blocking and the
+# parity test could never fail. With the literal list, adding a rule
+# upstream breaks BLOCKING | ADVISORY == ALL_RULE_CODES and CI forces an
+# explicit classification decision here.
+BLOCKING_CODES: frozenset[str] = frozenset(
+    {
+        # claim families
+        "GUARANTEED_DEFLECTION",
+        "TICKET_REDUCTION_PROMISE",
+        "ROI_SAVINGS",
+        "RETENTION_CHURN_OUTCOME",
+        "RANKING_SEO_OUTCOME",
+        "FIX_RESOLVE_PROMISE",
+        "AUTO_PUBLISH",
+        "LIVE_HELPDESK_INTEGRATION",
+        "SEMANTIC_CLUSTERING",
+        "COST_RANKING",
+        "UNBOUNDED_HOSTED_UPLOADS",
+        "SELF_PROMO_PITCH",
+        # posture families
+        "REPLY_DRAFT",
+        "WRITE_ACTION_POSTURE",
+        # PII families
+        "PII_EMAIL",
+        "PII_PHONE",
+        "PII_SSN",
+        "PII_PAYMENT_CARD",
+        "PII_PERSON_NAME",
+        "PII_IDENTIFIER",
+    }
+)
 ADVISORY_CODES: frozenset[str] = frozenset()
 
 

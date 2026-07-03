@@ -93,6 +93,17 @@ parity; runtime callers pass nothing.
   decides, the store enforces guard_ok=0 rows carry empty reason/angle.
   Named here so the S4 reviewer sees the pairing.
 
+Review-fix note (Codex wave 1 on 7a7aea5bc; verified real, fixed at
+root):
+
+- **Deriving BLOCKING_CODES from ALL_RULE_CODES nullified the parity
+  test**: a new rule would auto-classify as blocking at import time and
+  the union check could never fail -- defeating exactly the property the
+  test claimed to enforce. Fixed: the policy is now ENUMERATED LITERALLY
+  (all 20 current codes), so a catalogue addition breaks the union and
+  CI forces the explicit block/advisory decision. The parity test is
+  unchanged -- it now does real work.
+
 ## Deferred
 
 - S4 store v5 + manual import (persists GuardDecision codes;
@@ -119,9 +130,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_reddit/fit_guard.py` | 60 |
+| `atlas_reddit/fit_guard.py` | 90 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Fit-Guard.md` | 118 |
+| `plans/PR-Reddit-Fit-Guard.md` | 138 |
 | `plans/archive/PR-Reddit-Fit-Contract.md` | 0 |
 | `tests/test_atlas_reddit_fit_guard.py` | 157 |
-| **Total** | **338** |
+| **Total** | **388** |
