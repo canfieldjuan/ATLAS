@@ -7,6 +7,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "detect_retired_failure_modes.py"
@@ -270,3 +272,12 @@ def test_cli_writes_json_and_exits_zero_when_signal_found(tmp_path: Path) -> Non
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert MOD.MODE_TEST_WEAKENING in modes(payload)
     assert "advisory signal" in result.stdout
+
+
+def test_git_error_path_raises_runtime_error(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    write(repo, "README.md", "base\n")
+    commit_all(repo, "base")
+
+    with pytest.raises(RuntimeError, match="missing-ref"):
+        MOD.merge_base("missing-ref", cwd=repo)

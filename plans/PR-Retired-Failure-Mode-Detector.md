@@ -96,5 +96,5 @@ Parked hardening: none.
 |---|---:|
 | `plans/PR-Retired-Failure-Mode-Detector.md` | 100 |
 | `scripts/detect_retired_failure_modes.py` | 387 |
-| `tests/test_detect_retired_failure_modes.py` | 272 |
-| **Total** | **759** |
+| `tests/test_detect_retired_failure_modes.py` | 283 |
+| **Total** | **770** |

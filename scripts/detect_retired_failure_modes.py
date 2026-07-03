@@ -114,10 +114,10 @@ def file_at(ref: str, path: str, *, cwd: Path) -> str:
 
 
 def read_worktree(path: str, *, cwd: Path) -> str:
-    try:
-        return (cwd / path).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    target = cwd / path
+    if not target.is_file():
         return ""
+    return target.read_text(encoding="utf-8", errors="replace")
 
 
 def is_plan_path(path: str) -> bool:
