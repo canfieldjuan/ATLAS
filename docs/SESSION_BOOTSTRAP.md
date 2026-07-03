@@ -28,6 +28,7 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >    - **Per-tenant credentials fail closed:** an unprovisioned tenant must not silently borrow shared/global credentials.
 >    - **CI is truth:** "passed locally" ≠ green. Run the test the way CI does and check `gh pr checks` is green before claiming done.
 >    - **Tests must be meaningful, not just green:** for logic changes, a trivial happy-path test is not enough. Add negative/edge/malformed/sparse/varied-input coverage proportional to risk, or explicitly name why it is deferred.
+>    - **New surfaces need reachability proof:** if a slice adds a runtime, workflow, UI, report, billing, delivery, or public contract surface, exercise the real entrypoint and assert an observable result. A unit-tested helper is not enough to prove the surface is wired.
 >    - **Fixtures must match real producer output**, not hand-crafted shapes.
 >    - **The PR body's stated safety claim must be *enforced in code*, not just named.**
 >    - **Content Ops live model route:** generated-content validation must use the configured cloud/OpenRouter route (currently Claude via OpenRouter), not local Ollama/qwen. For live smokes, set `EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA=false` so a missing cloud route fails closed instead of silently falling back to a local model.
