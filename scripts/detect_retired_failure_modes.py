@@ -79,6 +79,10 @@ def head_sha(*, cwd: Path) -> str:
     return git(["rev-parse", "HEAD"], cwd=cwd).strip()
 
 
+def repo_root(*, cwd: Path) -> Path:
+    return Path(git(["rev-parse", "--show-toplevel"], cwd=cwd).strip())
+
+
 def changed_paths(base: str, *, cwd: Path) -> tuple[str, ...]:
     output = git(["diff", "--name-only", f"{base}...HEAD"], cwd=cwd)
     return tuple(line for line in output.splitlines() if line.strip())
@@ -322,18 +326,19 @@ def detect_symptom_patching(base: str, paths: Sequence[str], *, cwd: Path) -> li
 
 
 def build_report(base_ref: str, *, cwd: Path) -> dict[str, object]:
-    base = merge_base(base_ref, cwd=cwd)
-    paths = changed_paths(base, cwd=cwd)
+    root = repo_root(cwd=cwd)
+    base = merge_base(base_ref, cwd=root)
+    paths = changed_paths(base, cwd=root)
     signals: list[Signal] = []
-    signals.extend(detect_plan_weakening(base, paths, cwd=cwd))
-    signals.extend(detect_test_weakening(base, paths, cwd=cwd))
-    signals.extend(detect_scope_drift(base, paths, cwd=cwd))
-    signals.extend(detect_symptom_patching(base, paths, cwd=cwd))
+    signals.extend(detect_plan_weakening(base, paths, cwd=root))
+    signals.extend(detect_test_weakening(base, paths, cwd=root))
+    signals.extend(detect_scope_drift(base, paths, cwd=root))
+    signals.extend(detect_symptom_patching(base, paths, cwd=root))
     return {
         "schema_version": SCHEMA_VERSION,
-        "run_id": f"{head_sha(cwd=cwd)[:12]}:{base_ref}",
+        "run_id": f"{head_sha(cwd=root)[:12]}:{base_ref}",
         "base_ref": base_ref,
-        "head_sha": head_sha(cwd=cwd),
+        "head_sha": head_sha(cwd=root),
         "signal_type": "retired_failure_recurrence",
         "detector_version": DETECTOR_VERSION,
         "signals": [asdict(signal) for signal in signals],

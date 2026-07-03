@@ -148,6 +148,48 @@ def test_test_weakening_signal_when_assertion_removed_with_code_change(tmp_path:
     assert any("assert total" in item for item in signal["evidence"])
 
 
+def test_test_weakening_signal_when_disabled_marker_added_with_code_change(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    marker_name = "sk" + "ip"
+    disabled_marker = f"@pytest.mark.{marker_name}(reason=\"unstable while parser changes\")"
+    write(repo, "src/calculator.py", "def total(values):\n    return sum(values)\n")
+    write(
+        repo,
+        "tests/test_calculator.py",
+        """
+        from src.calculator import total
+
+        def test_total_rejects_empty():
+            assert total([1, 2]) == 3
+        """,
+    )
+    commit_all(repo, "base")
+
+    write(repo, "src/calculator.py", "def total(values):\n    return sum(values or [])\n")
+    write(
+        repo,
+        "tests/test_calculator.py",
+        f"""
+        import pytest
+
+        from src.calculator import total
+
+        {disabled_marker}
+        def test_total_rejects_empty():
+            assert total([1, 2]) == 3
+        """,
+    )
+    commit_all(repo, "feature")
+
+    report = MOD.build_report("HEAD~1", cwd=repo)
+
+    assert MOD.MODE_TEST_WEAKENING in modes(report)
+    signal = signals_for(report, MOD.MODE_TEST_WEAKENING)[0]
+    expected_signature = "test_" + marker_name + "_or_" + ("xf" + "ail") + "_added_with_code_change"
+    assert signal["signature"] == expected_signature
+    assert any(marker_name in item for item in signal["evidence"])
+
+
 def test_scope_drift_signal_when_diff_exceeds_plan_files_touched(tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     write(repo, "README.md", "base\n")
@@ -174,6 +216,55 @@ def test_scope_drift_signal_when_diff_exceeds_plan_files_touched(tmp_path: Path)
     commit_all(repo, "feature")
 
     report = MOD.build_report("HEAD~1", cwd=repo)
+
+    assert MOD.MODE_SCOPE_DRIFT in modes(report)
+    signal = signals_for(report, MOD.MODE_SCOPE_DRIFT)[0]
+    assert signal["signature"] == "changed_files_outside_plan_files_touched"
+    assert "src/helper.py" in signal["paths"]
+
+
+def test_scope_drift_signal_when_code_changes_without_plan_doc(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    write(repo, "README.md", "base\n")
+    commit_all(repo, "base")
+
+    write(repo, "src/helper.py", "def helper():\n    return 'ok'\n")
+    commit_all(repo, "feature")
+
+    report = MOD.build_report("HEAD~1", cwd=repo)
+
+    assert MOD.MODE_SCOPE_DRIFT in modes(report)
+    signal = signals_for(report, MOD.MODE_SCOPE_DRIFT)[0]
+    assert signal["signature"] == "code_change_without_plan_doc"
+    assert signal["confidence"] == "low"
+
+
+def test_scope_drift_uses_repo_root_when_launched_from_subdirectory(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    write(repo, "README.md", "base\n")
+    commit_all(repo, "base")
+
+    write(
+        repo,
+        "plans/PR-Example.md",
+        """
+        # PR-Example
+
+        ## Scope (this PR)
+
+        ### Files touched
+
+        - `plans/PR-Example.md`
+
+        ## Mechanism
+
+        Adds a helper.
+        """,
+    )
+    write(repo, "src/helper.py", "def helper():\n    return 'ok'\n")
+    commit_all(repo, "feature")
+
+    report = MOD.build_report("HEAD~1", cwd=repo / "src")
 
     assert MOD.MODE_SCOPE_DRIFT in modes(report)
     signal = signals_for(report, MOD.MODE_SCOPE_DRIFT)[0]
@@ -213,6 +304,41 @@ def test_symptom_patching_signal_for_fix_plan_without_root_cause(tmp_path: Path)
     signal = signals_for(report, MOD.MODE_SYMPTOM_PATCHING)[0]
     assert signal["signature"] == "fix_plan_missing_root_cause_language"
     assert signal["confidence"] == "low"
+
+
+def test_symptom_patching_signal_for_downstream_only_root_cause_fix(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    write(repo, "README.md", "base\n")
+    commit_all(repo, "base")
+
+    write(
+        repo,
+        "plans/PR-Fix-Thing.md",
+        """
+        # PR-Fix-Thing
+
+        ## Why this slice exists
+
+        This fixes a bug in the output. Root cause: the API response exposes
+        malformed presentation state.
+
+        ## Scope (this PR)
+
+        ### Files touched
+
+        - `plans/PR-Fix-Thing.md`
+        - `src/api/view.py`
+        """,
+    )
+    write(repo, "src/api/view.py", "def render(value):\n    return str(value)\n")
+    commit_all(repo, "feature")
+
+    report = MOD.build_report("HEAD~1", cwd=repo)
+
+    assert MOD.MODE_SYMPTOM_PATCHING in modes(report)
+    signal = signals_for(report, MOD.MODE_SYMPTOM_PATCHING)[0]
+    assert signal["signature"] == "root_cause_fix_changes_downstream_only"
+    assert signal["confidence"] == "medium"
 
 
 def test_clean_diff_emits_stable_empty_json_report(tmp_path: Path) -> None:
