@@ -100,6 +100,7 @@ run_check "MCP port assignments" python "$script_root/scripts/audit_mcp_port_ass
 run_check "MCP tool-name inventories" python "$script_root/scripts/audit_mcp_tool_names_match_docs.py"
 run_check "Extracted manifest sync" python "$script_root/scripts/audit_extracted_manifests.py"
 run_check "UI test:* CI enrollment" python "$script_root/scripts/audit_ui_test_enrollment.py"
+run_check "PR watcher safety" python "$script_root/scripts/audit_pr_watcher_safety.py" --repo-root "$repo_root"
 
 committed=$(
     git diff --name-only --diff-filter=AM "$base"...HEAD -- 'plans/PR-*.md' 2>/dev/null || true

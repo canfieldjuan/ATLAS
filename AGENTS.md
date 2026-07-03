@@ -396,28 +396,42 @@ long-running/autonomous arc (for example a Fable-style builder session, a
 multi-slice feature arc, or "continue through the approved slices"), the builder
 must keep the PR moving instead of halting until the operator notices CI.
 
+For long-running coding tasks, first record which builder surface owns the PR:
+
+- **Claude Code native mode:** use Claude Code's PR subscription/review
+  reactivity plus its 30-minute polling. Record that as the push/review-event
+  hook and timer/polling path in `SESSION_STATE.local.md`. Do not require a
+  local systemd `atlas-pr-watch` timer for Claude Code unless the operator
+  explicitly asks for the local watcher too.
+- **Codex/local CLI mode:** a desktop notification or `atlas-pr-watch` run does
+  not wake an agent by itself. True autonomous resume requires an external wake
+  bridge that starts or resumes a Codex run with the watcher state and a prompt
+  to read `SESSION_STATE.local.md`, rerun merge guards, and act only on the
+  owned PR. Without that bridge, the local watcher is a read-only state producer
+  for the next active agent.
+
 For long-running coding tasks, after each PR open or push:
 
 1. Subscribe the session to its owned PR in `SESSION_STATE.local.md`. Record the
    PR number, branch, head SHA, checks URL, review/reconciliation URL or
-   commands, the timer hook name, next timer wake time, and the exact action to
-   take when checks turn green or comments appear. If the operator grants
-   standing merge authorization for the arc, record the authorization source and
-   scheduled-ready-only merge condition there too.
-2. Install or run **two external wake hooks** for the owned PR:
-   - a push/review-event hook that wakes immediately when a new push, review
-     thread, review event, or reconciliation event arrives;
-   - a timer hook that wakes every **30 minutes** to check whether CI is green
-     and the PR is mergeable.
-   If the current environment cannot provide a concrete push/review-event hook,
-   record that gap in `SESSION_STATE.local.md`, keep the 30-minute timer hook
-   armed as the autonomous fallback, and do not claim immediate review-event
-   wake-up coverage for the session. The push/review-event hook must not reuse
-   the scheduled green-confirmation command in a way that can grant merge
-   permission, and an operator-only notification is not a builder wake hook.
-3. The timer hook must be a webhook/systemd/cron-style wakeup that exits fast
-   after recording state. Do not keep an in-chat `sleep` loop or active polling
-   process alive just to wait for green CI.
+   commands, builder surface, wake bridge or native subscription path,
+   ready-state handoff command, polling cadence, next wake/poll time, and the
+   exact action to take when checks turn green or comments appear. If the
+   operator grants standing merge authorization for the active builder, record
+   the authorization source and scheduled-ready-only merge condition there too.
+   The watcher process itself never receives merge authority.
+2. Configure the wake path for that builder surface:
+   - in Claude Code native mode, subscribe to the owned PR and poll every
+     **30 minutes** using Claude Code's native behavior;
+   - in Codex/local CLI mode, use an external wake bridge if one exists; if no
+     bridge exists, record `Wake bridge: unavailable` and treat
+     `atlas-pr-watch` output as a handoff for the next active agent only.
+   A push/review-event hook must not reuse the scheduled green-confirmation
+   command in a way that can grant merge permission, and an operator-only
+   notification is not a builder wake hook.
+3. Any local watcher/timer must exit fast after recording state. Do not keep an
+   in-chat `sleep` loop or active polling process alive just to wait for green
+   CI.
 4. On each wake, refresh the PR head, CI/check status, review-thread status,
    live reconciliation, and merge-conflict state before deciding anything.
 5. If checks are red or review comments are actionable, summarize the current
@@ -428,23 +442,30 @@ For long-running coding tasks, after each PR open or push:
    wake time in `SESSION_STATE.local.md`; do not ask the operator to babysit
    green and do not burn compute by waiting inside the chat turn.
 7. Push/review-event wakes are attention-only. Even if a push/review-event wake
-   observes green checks, record readiness and wait for the 30-minute timer to
-   report the scheduled green confirmation before merging.
-8. If the 30-minute timer wake reports all required checks green, all
+   observes green checks, record readiness and wait for the scheduled 30-minute
+   Claude poll or Codex/local wake-bridge confirmation before merging.
+8. If the scheduled poll/wake reports all required checks green, all
    review/reconciliation gates clean, and merge-conflict/mergeability state
-   clean, follow the merge rules for the current arc. If the operator has not
-   authorized autonomous merge for this arc, report readiness and wait.
+   clean, the active builder follows the merge rules for the current arc. In
+   Codex/local watcher mode, first surface that state with
+   `scripts/report_pr_watcher_state.py`. If the operator has not authorized the
+   active builder to merge for this arc, report readiness and wait.
 9. After merge, tear down only the owned worktree/branch, archive the plan as
    required, sync from `origin/main`, and continue to the next approved slice
    if the arc says to continue. The merge itself is the signal to pick up the
    next slice; do not start the next slice before the owned PR is merged or
    explicitly released by the operator.
 
-The watcher state is mandatory compaction handoff data. A restarted or compacted
-long-running session reads `SESSION_STATE.local.md` before doing anything else
-and resumes the watcher from the recorded PR state. Do not start a new slice
-while the owned PR watcher still has unresolved CI, review, reconciliation, or
-merge state.
+The watcher/subscription state is mandatory compaction handoff data. A
+restarted or compacted long-running session reads `SESSION_STATE.local.md`
+before doing anything else and resumes from the recorded PR state. Do not start
+a new slice while the owned PR still has unresolved CI, review, reconciliation,
+or merge state.
+
+Watcher safety is enforced by `scripts/audit_pr_watcher_safety.py` in local
+review. Local watcher executables and configs are status-only: truthy
+auto-merge config, PR merge commands, delete-branch merge cleanup, or equivalent
+merge behavior in watcher infrastructure is a blocking workflow defect.
 
 ### 3d. Thin-slice and hardening triage
 
