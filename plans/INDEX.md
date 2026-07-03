@@ -1178,6 +1178,7 @@
 - [PR-Reasoning-Core-Reflection-Port-Adapter-2026-05-17](archive/PR-Reasoning-Core-Reflection-Port-Adapter-2026-05-17.md)
 - [PR-Reasoning-Enrichment-Pack-Split](archive/PR-Reasoning-Enrichment-Pack-Split.md)
 - [PR-Reasoning-Phrase-Metadata-Utility](archive/PR-Reasoning-Phrase-Metadata-Utility.md)
+- [PR-Reddit-Fit-Eval-Harness](archive/PR-Reddit-Fit-Eval-Harness.md) - lane: content-ops/reddit-listening/fit-eval | phase: Robust testing
 - [PR-Reddit-Listening-Config-Scoring](archive/PR-Reddit-Listening-Config-Scoring.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Digest](archive/PR-Reddit-Listening-Digest.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Hardening](archive/PR-Reddit-Listening-Hardening.md) - lane: content-ops/reddit-listening/hardening | phase: Production hardening
