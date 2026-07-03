@@ -150,6 +150,24 @@ Review-fix note (Codex wave 3; verified real, fixed at root):
   helper fails the gate; aliased from-import satisfies it). All ratchet
   gates re-run: zero regressions.
 
+Review-fix notes (Codex wave 4; all three verified real, fixed at
+root):
+
+- **Dangling `pytest.raises(X)` statements counted as assertions**: the
+  call builds a context manager and asserts nothing. The AST check now
+  accepts a raises-API call only in an asserting position -- a with-item
+  or the callable form (>= 2 args). Probed both sides.
+- **Stub test files escaped as coverage**: a matched test file with zero
+  collected tests returned no finding at all. It now emits NO_TEST_FILE
+  ("matched test file(s) contain no tests"). Blast radius measured: the
+  only baselined modules with zero-test matched files are 7 __init__.py
+  files, which test scoring already excludes -- zero repricing.
+- **Row 5 claimed the full adversarial-quality lesson**: the gate proves
+  negatives EXIST; whether they probe the exact boundaries the lesson
+  names is the review contract's job (R2). Row 5 now reads "ENFORCED for
+  negatives PRESENCE; adversarial QUALITY review-owned" -- this is the
+  gate's threat-model boundary written into the index itself.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -184,9 +202,9 @@ Parked hardening: none.
 | `plans/INDEX.md` | 2 |
 | `plans/PR-Negatives-Presence-Gate.md` | 130 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 60 |
-| `tests/test_maturity_sweep.py` | 280 |
-| **Total** | **~520** |
+| `scripts/maturity_sweep.py` | 80 |
+| `tests/test_maturity_sweep.py` | 380 |
+| **Total** | **~650** |
 
 Over the 400 soft cap after two review-fix waves; the PR body
 carries the diff-budget override.

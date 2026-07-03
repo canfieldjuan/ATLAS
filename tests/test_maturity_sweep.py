@@ -775,3 +775,100 @@ def test_local_raises_helper_name_does_not_satisfy_the_gate(tmp_path: Path) -> N
         "--min-score", "99",
         "--sensitive-glob", "**/purge_guard.py",
     ]) == 0
+
+
+def test_dangling_raises_statement_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-4: a dangling `pytest.raises(X)` statement builds a
+    context manager and asserts nothing; only the with-context or the
+    callable form counts."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest\n"
+        "import purge_guard\n\n"
+        "def test_one():\n"
+        "    pytest.raises(ValueError)\n"
+        "    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: the callable form asserts and satisfies the gate.
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest\n"
+        "import purge_guard\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_rejects():\n"
+        "    pytest.raises(ValueError, purge_guard.enforce, -1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+
+def test_stub_test_file_counts_as_testless(tmp_path: Path) -> None:
+    """Codex wave-4: a matched test file with zero collected tests is a
+    placeholder, not coverage -- the sensitive zero-tolerance gate treats
+    it as testless."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "billing_hook.py",
+           "def charge(amount):\n"
+           "    if amount <= 0:\n"
+           "        raise ValueError('non-positive')\n"
+           "    return amount\n")
+    _write(tests / "test_billing_hook.py",
+           "import billing_hook\n\nHELPER = billing_hook.charge\n")
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+    ]) == 0
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/billing_hook.py",
+    ]) == 1

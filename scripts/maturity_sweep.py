@@ -520,13 +520,25 @@ def _has_raises_assertion(source):
     # `from pytest import raises` (or an alias of it) -- a local helper
     # or fixture named raises must not satisfy a blocking gate.
     pytest_raises_names = set()
+    with_item_calls = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "pytest":
             for alias in node.names:
                 if alias.name == "raises":
                     pytest_raises_names.add(alias.asname or alias.name)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                with_item_calls.add(id(item.context_expr))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
+            continue
+        # A raises API call only ASSERTS when used as a with-context
+        # (`with pytest.raises(X):`) or in the callable form with the
+        # function argument (`pytest.raises(X, fn, ...)`). A dangling
+        # `pytest.raises(X)` statement builds a context manager and
+        # asserts nothing.
+        asserts_something = id(node) in with_item_calls or len(node.args) >= 2
+        if not asserts_something:
             continue
         func = node.func
         if isinstance(func, ast.Attribute):
@@ -561,6 +573,11 @@ def score_tests(module_stem, test_sources, all_test_text):
     test_defs = re.findall(r"def\s+(test_\w+)", src)
     total = len(test_defs)
     if total == 0:
+        # A matched test file with zero collected tests is a placeholder,
+        # not coverage: the module is effectively testless and must not
+        # slip past the sensitive zero-tolerance gate on a stub file.
+        findings.append(Finding("NO_TEST_FILE", 0,
+                                "matched test file(s) contain no tests"))
         return findings
 
     negatives = sum(
