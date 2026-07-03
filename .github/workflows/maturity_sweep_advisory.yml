@@ -130,7 +130,12 @@ jobs:
       # --noconftest: the repo-level tests/conftest.py imports pytest_asyncio
       # and app dependencies; these tests are self-contained stdlib by design.
       - name: Sweep unit tests (blocking)
-        run: python -m pytest tests/test_maturity_sweep.py --noconftest -q
+        run: |
+          python -m pytest \
+            tests/test_maturity_sweep.py \
+            tests/test_detect_retired_failure_modes.py \
+            --noconftest \
+            -q
 
       # The sweep itself is stdlib-only.
       - name: Maturity sweep (advisory, non-blocking)
