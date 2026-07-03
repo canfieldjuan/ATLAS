@@ -215,6 +215,13 @@ def load_predictions(path: Path, case_ids: frozenset[str]) -> dict[str, dict]:
                 f"{path}: {case_id!r} carries both a prediction and a "
                 "parse_error; the envelope contract allows exactly one"
             )
+        if prediction is None and parse_error is None:
+            # The contract pairs a null prediction with a closed parse-error
+            # code; omitting it is an emitter/schema regression that must
+            # not hide among graded model failures.
+            raise FitEvalError(
+                f"{path}: {case_id!r} null prediction requires a parse_error code"
+            )
         if parse_error is not None and parse_error not in PARSE_ERROR_CODES:
             # Closed taxonomy, not just a shape check: a code-SHAPED string
             # (e.g. customer_jane_doe) can smuggle content into summaries.
@@ -297,9 +304,8 @@ def _grade_case(case: EvalCase, envelope: dict | None) -> list[CaseCheck]:
 
     prediction = envelope.get("prediction")
     if prediction is None:
-        parse_error = envelope.get("parse_error")
-        code = str(parse_error) if parse_error else "model_output_missing"
-        _add("model_output_parses", False, (code,))
+        # load_predictions guarantees a closed-taxonomy code here.
+        _add("model_output_parses", False, (envelope["parse_error"],))
         return checks
     problems = check_prediction_shape(prediction)
     if problems:

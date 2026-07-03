@@ -197,9 +197,12 @@ CLAIM_RULES: tuple[FitRule, ...] = (
         code="UNBOUNDED_HOSTED_UPLOADS",
         pattern=(
             r"unlimited\s+(?:ticket|upload|row)s?"
-            r"|(?:50,?000|fifty\s+thousand)\s+"
-            r"(?:hosted|synchronous|tickets?|rows?|ticket\s+exports?|uploads?)"
-            r"|hosted\s+uploads?\b[^.]{0,40}\b(?:50,?000|fifty\s+thousand)"
+            r"|(?:50,?000|fifty\s+thousand)\s+(?:hosted|synchronous)\b"
+            r"|(?:hosted|synchronous)\s+uploads?\b[^.]{0,40}"
+            r"\b(?:50,?000|fifty\s+thousand)"
+            r"|(?:handle|process|support)s?\s+(?:up\s+to\s+)?"
+            r"(?:50,?000|fifty\s+thousand)\s+"
+            r"(?:tickets?|rows?|uploads?|ticket\s+exports?)"
         ),
         message="Never claim unbounded or 50k hosted uploads.",
     ),
@@ -257,7 +260,8 @@ PII_RULES: tuple[FitRule, ...] = (
     FitRule(
         code="PII_PHONE",
         pattern=(
-            r"(?<![\d.])(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?![\d.])"
+            r"(?<![\d.])(?:\+?1[\s.-]?)?"
+            r"(?:\(\d{3}\)[\s.-]?|\d{3}[\s.-])\d{3}[\s.-]\d{4}(?![\d.])"
             r"|(?:call|phone|text|dial|reach|cell|mobile|number)"
             r"(?:\s+\S+){0,3}\s+"
             r"(?<![\d.])\+?1?\d{10}(?![\d.])"
@@ -295,8 +299,8 @@ PII_RULES: tuple[FitRule, ...] = (
         code="PII_IDENTIFIER",
         pattern=(
             r"(?:account|order|case|ticket|invoice|ref(?:erence)?)\s*"
-            r"(?:(?:number|no\.?|id)\s*[:\s]|#)\s*"
-            r"(?=[A-Za-z0-9-]*\d)[A-Za-z0-9-]{4,}"
+            r"(?:(?:number|no\.?|id)\s*[:\s]\s*|#\s*|\s)"
+            r"(?=[A-Za-z0-9-]*\d)[A-Za-z0-9-]{4,}\b"
         ),
         message="Never echo account, order, or ticket identifiers.",
     ),

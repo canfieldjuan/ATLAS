@@ -127,6 +127,10 @@ def test_catalogue_partitions_into_three_families() -> None:
         ("leave a comment asking for details", "WRITE_ACTION_POSTURE"),
         ("support lead Jane Doe tracks repeat questions", "PII_PERSON_NAME"),
         ("the user Jane Doe is stuck at setup", "PII_PERSON_NAME"),
+        ("call them at (555)123-4567", "PII_PHONE"),
+        ("ticket 12345 keeps failing", "PII_IDENTIFIER"),
+        ("order AB-12345 was quoted verbatim", "PII_IDENTIFIER"),
+        ("hosted uploads handle 50,000 rows", "UNBOUNDED_HOSTED_UPLOADS"),
     ],
 )
 def test_each_rule_family_fires(text: str, code: str) -> None:
@@ -146,6 +150,9 @@ def test_each_rule_family_fires(text: str, code: str) -> None:
         "roughly 1800000000 rows were mentioned as an exaggeration",
         "audit the storefront integration wording on their site",
         "the customer Success Team owns triage",
+        "They exported 50,000 rows from their helpdesk last month",
+        "a backlog of 50,000 tickets built up over the year",
+        "ticket volume doubled but ticket id missing from most rows",
     ],
 )
 def test_redaction_and_absence_speak_stays_clean(text: str) -> None:
@@ -497,6 +504,22 @@ def test_empty_grounding_term_fails_closed(tmp_path: Path) -> None:
     bad.write_text(json.dumps(record) + "\n", encoding="utf-8")
     with pytest.raises(FitEvalError, match="empty term"):
         load_cases(bad)
+
+
+def test_null_prediction_without_parse_error_is_structural(tmp_path: Path) -> None:
+    """The envelope contract PAIRS null predictions with a closed code;
+    omission is an emitter regression (exit-2 class), not model behavior."""
+    envelope = {
+        "case_id": "obvious_fit_broken_help_center",
+        "prediction": None,
+        "model_id": "m",
+        "prompt_version": "fit.v1",
+        "parse_error": None,
+    }
+    bad = tmp_path / "p.jsonl"
+    bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="requires a parse_error code"):
+        load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
 
 
 # -- purity ---------------------------------------------------------------------
