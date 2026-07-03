@@ -49,6 +49,9 @@ MAX_PER_SUBREDDIT_LIMIT = 100
 MAX_PACE_SECONDS = 60.0
 MAX_HISTORY_LIMIT = 100
 MAX_DORMANT_AFTER_HOURS = 8760
+MAX_FIT_MAX_CALLS_PER_RUN = 500
+MAX_FIT_TIMEOUT_SECONDS = 120.0
+FIT_BACKENDS = ("off", "openrouter", "local")
 
 _ALLOWED_TOP_KEYS = {
     "version",
@@ -154,6 +157,49 @@ class RedditListeningSettings(BaseSettings):
             "A tracked thread goes dormant when its newest known activity "
             "is older than this quiet window (default one week)."
         ),
+    )
+    fit_backend: str = Field(
+        default="off",
+        description=(
+            "LLM fit-judge backend: 'off' (no model calls), 'openrouter', "
+            "or 'local' (LM Studio / any OpenAI-compatible localhost server)."
+        ),
+    )
+    fit_base_url: str = Field(
+        default="",
+        description="OpenAI-compatible base URL, e.g. https://openrouter.ai/api/v1.",
+    )
+    fit_model: str = Field(
+        default="",
+        description="Model id/slug passed to the backend.",
+    )
+    fit_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Bearer key for the fit backend. Required for 'openrouter'; a "
+            "local backend may leave it blank. NEVER the B2B/global "
+            "OpenRouter key -- this is its own namespace."
+        ),
+    )
+    fit_max_calls_per_run: int = Field(
+        default=25,
+        ge=0,
+        le=MAX_FIT_MAX_CALLS_PER_RUN,
+        description="Hard cap on model calls per judge-fit run (cost guard).",
+    )
+    fit_min_score: float = Field(
+        default=1.0,
+        ge=0.0,
+        description=(
+            "Only candidates at/above this final score are sent to the "
+            "model -- the deterministic keyword gate runs first."
+        ),
+    )
+    fit_timeout_seconds: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=MAX_FIT_TIMEOUT_SECONDS,
+        description="Per-call HTTP timeout for the fit backend.",
     )
 
 
