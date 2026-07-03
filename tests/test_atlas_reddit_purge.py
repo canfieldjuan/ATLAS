@@ -19,7 +19,7 @@ from atlas_reddit.reddit_client import (
     RedditAuthError,
     validate_scopes,
 )
-from atlas_reddit.store import ListeningStore, StoreError
+from atlas_reddit.store import SCHEMA_VERSION, ListeningStore, StoreError
 from tests.atlas_reddit_fixtures import fake_reply, fake_submission, seed_candidates, seed_replies
 
 NOW = 1_751_600_000
@@ -661,7 +661,7 @@ def test_v3_store_gains_tombstone_backfilled_conservative(tmp_path: Path) -> Non
         _seed_candidate(migrated, "t3_old")
         assert migrated.get_candidate("t3_old") is None  # still refused
     conn = sqlite3.connect(db)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     conn.close()
 
 

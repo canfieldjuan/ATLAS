@@ -95,10 +95,38 @@ python -m atlas_reddit digest   # ...so it never surfaces content deleted
                                 # on Reddit since the last purge
 ```
 
+Own profile (all your posts in one place, read individually):
+
+```bash
+python -m atlas_reddit profile        # sync own posts from your profile listing
+python -m atlas_reddit posts          # list synced own posts (offline)
+python -m atlas_reddit posts --subreddit SaaS
+python -m atlas_reddit post t3_abc123 # one post + its tracked replies (offline)
+```
+
+`profile` reads your own submission listing with the same
+identity/history/read scopes `track` already uses -- no new credentials.
+It fetches the newest posts up to Reddit's listing ceiling (~1000, the
+most the API returns for a profile), so the local mirror holds all
+reachable own posts. `posts` and `post` read only local state (`posts`
+lists every synced post by default). Reply collection stays `track`'s
+job, and the two surfaces have different reach: `track` discovers own
+submissions through its recent-history window (`--history-limit`, capped
+at 100), so `post` shows tracked replies only for submissions `track` has
+already picked up. Older profile-synced posts still list and open, but
+show no tracked replies until they fall within a `track` pass; profile
+sync deliberately does not enqueue them for tracking (it does not write
+`tracked_threads` -- that table's lifecycle is the tracker's alone).
+
 Deletion compliance: run `purge` at least every 48 hours while any stored
-content exists. It re-checks every stored post and reply in batched reads
-(100 per request); content that is deleted/removed/missing on Reddit is
-dropped locally and recorded in `purge_log` with the detection reason.
+content exists. It re-checks every stored radar candidate and tracked
+reply in batched reads (100 per request); third-party content that is
+deleted/removed/missing on Reddit is dropped locally and recorded in
+`purge_log` with the detection reason. Your own profile-synced posts
+(`own_posts`) are your own words, not third-party content, so they are
+retained across `purge` and are outside the 48h deletion-compliance
+guarantee; a post you delete on Reddit stays in your local mirror until
+you drop it yourself.
 
 The first `poll` run proves the auth boundary end to end: if the token
 carries any scope beyond identity/history/read (or the wildcard `*`), the

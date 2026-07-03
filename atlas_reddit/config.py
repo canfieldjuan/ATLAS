@@ -49,6 +49,12 @@ MAX_PER_SUBREDDIT_LIMIT = 100
 MAX_PACE_SECONDS = 60.0
 MAX_HISTORY_LIMIT = 100
 MAX_DORMANT_AFTER_HOURS = 8760
+# Profile sync fetches the operator's OWN submission listing (one listing,
+# run occasionally), so it is not bound by the per-subreddit radar's tight
+# request budget. Reddit's listing API returns at most ~1000 newest items
+# per listing regardless, so 1000 is the real ceiling for "all my posts":
+# PRAW paginates there in batches of 100 within this single command.
+MAX_PROFILE_LIMIT = 1000
 
 _ALLOWED_TOP_KEYS = {
     "version",
@@ -145,6 +151,15 @@ class RedditListeningSettings(BaseSettings):
         ge=1,
         le=MAX_HISTORY_LIMIT,
         description="Own recent comments/submissions fetched per tracking pass.",
+    )
+    profile_limit: int = Field(
+        default=MAX_PROFILE_LIMIT,
+        ge=1,
+        le=MAX_PROFILE_LIMIT,
+        description=(
+            "Own posts fetched per profile sync. Defaults to Reddit's "
+            "listing ceiling so the profile mirror holds all reachable posts."
+        ),
     )
     dormant_after_hours: int = Field(
         default=168,

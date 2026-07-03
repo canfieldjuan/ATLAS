@@ -31,6 +31,7 @@ from unittest import mock
 
 from atlas_reddit.config import SubredditEntry, Topic, Watchlist
 from atlas_reddit.poller import poll_once
+from atlas_reddit.profile import sync_profile_once
 from atlas_reddit.store import ListeningStore
 from atlas_reddit.tracker import track_once
 
@@ -74,10 +75,13 @@ def fake_submission(
     score: int = 5,
     num_comments: int = 1,
     is_self: bool = True,
+    subreddit: str = "CustomerSuccess",
 ):
     """A praw-shaped submission. The default title carries the probe
     phrase the seeding watchlist matches on; override it and admission
-    fails loudly in :func:`seed_candidates` rather than silently."""
+    fails loudly in :func:`seed_candidates` rather than silently. The
+    ``subreddit`` attribute mirrors praw's lazy Subreddit object (the
+    profile producer reads its ``display_name``)."""
     _require_bare_id(bare_id)
     return types.SimpleNamespace(
         id=bare_id,
@@ -90,6 +94,7 @@ def fake_submission(
         num_comments=num_comments,
         is_self=is_self,
         selftext=selftext,
+        subreddit=types.SimpleNamespace(display_name=subreddit),
     )
 
 
@@ -158,18 +163,22 @@ def real_listing_source(submissions):
 
 
 @contextmanager
-def real_history_source(*, own_comments=(), replies_by_parent=None):
+def real_history_source(*, own_comments=(), own_submissions=(), replies_by_parent=None):
     """Yield a REAL PrawHistorySource: own-history listings and per-own-
     comment reply children flow through the production admission code
-    (including the removeprefix('t1_') refresh lookup). Own submissions
-    are deferred to the tracker-test conversion slice."""
+    (including the removeprefix('t1_') refresh lookup). ``own_submissions``
+    are praw-shaped submissions (from :func:`fake_submission`) served by
+    the same listing the profile producer and the tracker read."""
     children = {k: list(v) for k, v in (replies_by_parent or {}).items()}
+    submissions = list(own_submissions)
     me = types.SimpleNamespace(
         name=_USERNAME,
         comments=types.SimpleNamespace(
             new=lambda *, limit: iter(list(own_comments)[:limit])
         ),
-        submissions=types.SimpleNamespace(new=lambda *, limit: iter(())),
+        submissions=types.SimpleNamespace(
+            new=lambda *, limit: iter(submissions[:limit])
+        ),
     )
 
     class _Replies(list):
@@ -195,6 +204,32 @@ def real_history_source(*, own_comments=(), replies_by_parent=None):
         from atlas_reddit.reddit_client import PrawHistorySource
 
         yield PrawHistorySource(settings)
+
+
+def seed_own_posts(
+    store: ListeningStore,
+    submissions,
+    *,
+    now: int,
+) -> list[str]:
+    """Store own-post rows through the REAL pipeline (producer mapping over
+    the profile listing + sync_profile_once). Returns the producer-emitted
+    post ids, in input order. Asserts every fixture was synced -- a
+    silently dropped fixture is a factory misuse, not a soft no-op."""
+    items = list(submissions)
+    with real_history_source(own_submissions=items) as source:
+        produced = [
+            post.post_id
+            for post in source.fetch_my_posts(limit=max(len(items), 1))
+        ]
+        stats = sync_profile_once(
+            store, source, now=now, limit=max(len(items), 1)
+        )
+    assert stats.fetched == len(items), (
+        f"factory fixtures must never be silently dropped: fetched "
+        f"{stats.fetched} of {len(items)} ({stats})"
+    )
+    return produced
 
 
 def seed_candidates(

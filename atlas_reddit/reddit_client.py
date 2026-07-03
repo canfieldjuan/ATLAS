@@ -100,6 +100,18 @@ class ThreadReply:
     is_reply_to_me: bool
 
 
+class ProfileSource(Protocol):
+    """The transport boundary the profile watcher consumes. The operator's
+    profile listing is the one feed that carries every post they made and
+    the subreddit each landed in. Tests provide a fake; production
+    provides :class:`PrawHistorySource` (same scopes, richer mapping than
+    its skinny reply-discovery listings)."""
+
+    def fetch_my_posts(self, *, limit: int) -> list[ListingPost]:
+        """Return the operator's newest submissions across subreddits."""
+        ...
+
+
 class DeletionSource(Protocol):
     """The transport boundary the purge job consumes (S6). Given stored
     item fullnames, report which still carry live third-party content."""
@@ -328,6 +340,31 @@ class PrawHistorySource:
                 )
             )
         return items
+
+    def fetch_my_posts(self, *, limit: int) -> list[ListingPost]:
+        """The profile watcher's rich mapping over the same own-submission
+        listing the tracker reads skinny ids from. The subreddit comes off
+        each submission (a profile listing spans subreddits, unlike
+        ``fetch_new`` where the caller names one)."""
+        posts: list[ListingPost] = []
+        for submission in self._me.submissions.new(limit=limit):
+            author = getattr(submission.author, "name", None)
+            subreddit = getattr(submission.subreddit, "display_name", "") or ""
+            posts.append(
+                ListingPost(
+                    post_id=submission.fullname,
+                    subreddit=subreddit,
+                    title=submission.title or "",
+                    url=f"https://www.reddit.com{submission.permalink}",
+                    author=author,
+                    created_utc=int(submission.created_utc),
+                    score=int(submission.score),
+                    num_comments=int(submission.num_comments),
+                    is_self=bool(submission.is_self),
+                    selftext=submission.selftext or "",
+                )
+            )
+        return posts
 
     def fetch_thread_replies(
         self,

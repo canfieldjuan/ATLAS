@@ -19,7 +19,7 @@ from atlas_reddit.reddit_client import (
     ThreadReply,
     validate_scopes,
 )
-from atlas_reddit.store import ListeningStore
+from atlas_reddit.store import SCHEMA_VERSION, ListeningStore
 from atlas_reddit.tracker import track_once
 
 NOW = 1_751_500_000
@@ -290,6 +290,7 @@ def test_history_source_read_only_public_surface() -> None:
     assert public == {
         "fetch_my_recent_comments",
         "fetch_my_recent_submissions",
+        "fetch_my_posts",
         "fetch_thread_replies",
         "granted_scopes",
     }
@@ -504,8 +505,9 @@ def test_v1_store_migrates_to_current_preserving_data(tmp_path: Path) -> None:
         # last_checked.
         assert threads["t3_lonely"].last_activity == 200
         assert migrated.list_replies()[0].reply_id == "t1_r"
+        assert migrated.list_own_posts() == []  # v4 -> v5 rung: table exists
     conn = sqlite3.connect(db)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     conn.close()
 
 

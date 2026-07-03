@@ -23,11 +23,13 @@ from .config import (
     MAX_HISTORY_LIMIT,
     MAX_PACE_SECONDS,
     MAX_PER_SUBREDDIT_LIMIT,
+    MAX_PROFILE_LIMIT,
     RedditListeningSettings,
     WatchlistError,
     load_watchlist,
 )
 from .digest import write_digest
+from .profile import sync_profile_once
 from .reddit_client import (
     PrawDeletionSource,
     PrawHistorySource,
@@ -52,6 +54,17 @@ def _valid_date(value: str) -> str:
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"invalid date {value!r}: {exc}") from exc
     return value
+
+
+def _utc_date(timestamp: int) -> str:
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).date().isoformat()
+
+
+def _as_submission_fullname(value: str) -> str:
+    """Operator ergonomics: accept a bare submission id or its fullname.
+    Every stored id is a fullname, so a bare id is prefixed, never used
+    as-is."""
+    return value if value.startswith("t3_") else f"t3_{value}"
 
 
 def _finite_float(value: str) -> float:
@@ -207,6 +220,58 @@ def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
     )
     mark.add_argument("reply_id", help="Reply id, e.g. t1_abc123")
     mark.add_argument(
+        "--db",
+        type=Path,
+        default=defaults.db_path,
+        help=f"SQLite state file (default: {defaults.db_path})",
+    )
+
+    profile = subparsers.add_parser(
+        "profile",
+        help="Sync own posts from the profile listing into local state.",
+    )
+    profile.add_argument(
+        "--db",
+        type=Path,
+        default=defaults.db_path,
+        help=f"SQLite state file (default: {defaults.db_path})",
+    )
+    profile.add_argument(
+        "--limit",
+        type=int,
+        default=defaults.profile_limit,
+        help=f"Newest own posts fetched (default: {defaults.profile_limit})",
+    )
+
+    posts = subparsers.add_parser(
+        "posts", help="List synced own posts from local state (offline)."
+    )
+    posts.add_argument(
+        "--db",
+        type=Path,
+        default=defaults.db_path,
+        help=f"SQLite state file (default: {defaults.db_path})",
+    )
+    posts.add_argument(
+        "--subreddit",
+        default=None,
+        help="Only posts in this subreddit (default: all)",
+    )
+    posts.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum posts listed (default: all synced posts)",
+    )
+
+    post = subparsers.add_parser(
+        "post",
+        help="Show one synced own post with its tracked replies (offline).",
+    )
+    post.add_argument(
+        "post_id", help="Post id, bare (abc123) or fullname (t3_abc123)"
+    )
+    post.add_argument(
         "--db",
         type=Path,
         default=defaults.db_path,
@@ -368,6 +433,92 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(f"marked seen: {args.reply_id}")
+        return 0
+
+    if args.command == "profile":
+        if not 1 <= args.limit <= MAX_PROFILE_LIMIT:
+            parser.error(
+                f"--limit must be 1..{MAX_PROFILE_LIMIT}, got {args.limit}"
+            )
+        try:
+            source = PrawHistorySource(settings)
+            with ListeningStore(args.db) as store:
+                stats = sync_profile_once(
+                    store,
+                    source,
+                    now=int(datetime.now(tz=timezone.utc).timestamp()),
+                    limit=args.limit,
+                )
+        except (StoreError, RedditAuthError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"fetched={stats.fetched} new={stats.new} "
+            f"refreshed={stats.refreshed} errors={len(stats.errors)}"
+        )
+        for line in stats.errors:
+            print(f"warning: {line}", file=sys.stderr)
+        return 0 if not stats.errors else 1
+
+    if args.command == "posts":
+        # Default is no cap (list every synced post) so "all your posts in
+        # one place" is literal; --limit only narrows, and must be >= 1.
+        if args.limit is not None and args.limit < 1:
+            parser.error(f"--limit must be at least 1, got {args.limit}")
+        try:
+            with ListeningStore(args.db) as store:
+                rows = store.list_own_posts(
+                    subreddit=args.subreddit, limit=args.limit
+                )
+        except (StoreError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if not rows:
+            print("no synced posts (run: python -m atlas_reddit profile)")
+            return 0
+        for row in rows:
+            day = _utc_date(row.created_utc)
+            print(
+                f"{day}  r/{row.subreddit}  score={row.reddit_score} "
+                f"comments={row.num_comments}  {row.post_id}  {row.title}"
+            )
+        return 0
+
+    if args.command == "post":
+        post_id = _as_submission_fullname(args.post_id)
+        try:
+            with ListeningStore(args.db) as store:
+                row = store.get_own_post(post_id)
+                replies = (
+                    store.list_replies(thread_id=post_id) if row else []
+                )
+        except (StoreError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if row is None:
+            print(
+                f"error: unknown own post: {post_id} "
+                "(run: python -m atlas_reddit profile)",
+                file=sys.stderr,
+            )
+            return 2
+        print(f"{row.title}")
+        print(
+            f"r/{row.subreddit}  {_utc_date(row.created_utc)}  "
+            f"score={row.reddit_score}  comments={row.num_comments}  {row.post_id}"
+        )
+        print(row.url)
+        if row.selftext:
+            print()
+            print(row.selftext)
+        print()
+        if not replies:
+            print("no tracked replies (run: python -m atlas_reddit track)")
+        for reply in replies:
+            marker = " " if reply.seen else "*"
+            author = reply.author or "[unknown]"
+            print(f"{marker} {reply.reply_id}  {author}  {_utc_date(reply.created_utc)}")
+            print(f"  {reply.body}")
         return 0
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover

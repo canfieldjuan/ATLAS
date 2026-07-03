@@ -6,6 +6,8 @@ dependencies, no network, no ORM. One store file (default
 
 - ``candidates``: scored radar posts with a review status
   (new/seen/dismissed/responded).
+- ``own_posts``: the operator's own submissions synced from their profile
+  listing -- the "one place where all my posts live" surface.
 - ``tracked_threads``: threads Juan participated in (reply tracker).
 - ``replies``: replies observed on tracked threads, with seen state.
 - ``purge_log``: the deletion-compliance audit trail. The purge *fields*
@@ -37,7 +39,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 CANDIDATE_STATUSES = ("new", "seen", "dismissed", "responded")
 PURGE_ITEM_TYPES = ("candidate", "reply", "thread")
@@ -94,6 +96,32 @@ CREATE TABLE purge_log (
     tombstone INTEGER NOT NULL DEFAULT 1 CHECK (tombstone IN (0, 1))
 );
 """
+
+# Shared between the fresh-store DDL and the v3 -> v4 migration rung so the
+# two paths cannot drift. IF NOT EXISTS keeps the migration rung idempotent
+# against a store that already carries own_posts with a stale version stamp
+# (an interrupted upgrade, or a version wound back for testing); own_posts
+# is new in v4, so a present copy always has this exact shape -- there is no
+# legacy shape for IF NOT EXISTS to mask.
+_OWN_POSTS_DDL = """
+CREATE TABLE IF NOT EXISTS own_posts (
+    post_id TEXT PRIMARY KEY NOT NULL,
+    subreddit TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    created_utc INTEGER NOT NULL,
+    reddit_score INTEGER NOT NULL DEFAULT 0,
+    num_comments INTEGER NOT NULL DEFAULT 0,
+    selftext TEXT NOT NULL DEFAULT '',
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_own_posts_created ON own_posts (created_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_own_posts_subreddit
+    ON own_posts (subreddit, created_utc DESC);
+"""
+
+_SCHEMA_DDL = _SCHEMA_DDL + _OWN_POSTS_DDL
 
 
 class StoreError(RuntimeError):
@@ -168,6 +196,20 @@ class Candidate:
     final_score: float
     matched_topics: tuple[str, ...]
     status: str
+    first_seen: int
+    last_seen: int
+
+
+@dataclass(frozen=True)
+class OwnPost:
+    post_id: str
+    subreddit: str
+    title: str
+    url: str
+    created_utc: int
+    reddit_score: int
+    num_comments: int
+    selftext: str
     first_seen: int
     last_seen: int
 
@@ -314,6 +356,10 @@ class ListeningStore:
                         "ALTER TABLE purge_log ADD COLUMN tombstone INTEGER "
                         "NOT NULL DEFAULT 1 CHECK (tombstone IN (0, 1))"
                     )
+                if version < 5:
+                    # v4 -> v5: the own-profile watcher gains its own
+                    # table. Purely additive; existing rows untouched.
+                    self._conn.executescript(_OWN_POSTS_DDL)
                 self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         # Fail closed on schemas this code does not know how to read --
@@ -449,6 +495,95 @@ class ListeningStore:
             params.append(limit)
         rows = self._conn.execute(query, params).fetchall()
         return [_candidate_from_row(row) for row in rows]
+
+    # -- own posts (profile watcher) ---------------------------------------
+
+    def upsert_own_post(
+        self,
+        *,
+        post_id: str,
+        subreddit: str,
+        title: str,
+        url: str,
+        created_utc: int,
+        reddit_score: int,
+        num_comments: int,
+        selftext: str,
+        observed_at: int,
+    ) -> bool:
+        """Insert or refresh one of the operator's own posts. Replay-safe
+        the same two ways as candidates: on conflict the volatile fields
+        update while ``first_seen`` is preserved, and a stale
+        (out-of-order) observation updates nothing. Returns True when the
+        post was newly inserted, False on a refresh or a stale replay."""
+        _require_id(post_id, field="post_id")
+        _require_int(created_utc, field="created_utc")
+        _require_int(reddit_score, field="reddit_score")
+        _require_int(num_comments, field="num_comments")
+        _require_int(observed_at, field="observed_at")
+        existed = (
+            self._conn.execute(
+                "SELECT 1 FROM own_posts WHERE post_id = ?", (post_id,)
+            ).fetchone()
+            is not None
+        )
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO own_posts (
+                    post_id, subreddit, title, url, created_utc,
+                    reddit_score, num_comments, selftext, first_seen, last_seen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(post_id) DO UPDATE SET
+                    subreddit = excluded.subreddit,
+                    title = excluded.title,
+                    url = excluded.url,
+                    reddit_score = excluded.reddit_score,
+                    num_comments = excluded.num_comments,
+                    selftext = excluded.selftext,
+                    last_seen = excluded.last_seen
+                WHERE excluded.last_seen >= own_posts.last_seen
+                """,
+                (
+                    post_id,
+                    subreddit,
+                    title,
+                    url,
+                    created_utc,
+                    reddit_score,
+                    num_comments,
+                    selftext,
+                    observed_at,
+                    observed_at,
+                ),
+            )
+        return not existed
+
+    def get_own_post(self, post_id: str) -> OwnPost | None:
+        row = self._conn.execute(
+            "SELECT * FROM own_posts WHERE post_id = ?", (post_id,)
+        ).fetchone()
+        return _own_post_from_row(row) if row else None
+
+    def list_own_posts(
+        self,
+        *,
+        subreddit: str | None = None,
+        limit: int | None = None,
+    ) -> list[OwnPost]:
+        query = "SELECT * FROM own_posts"
+        params: list[object] = []
+        if subreddit is not None:
+            # Case-insensitive: subreddit names are case-preserving but
+            # case-insensitive on Reddit, and the operator types them.
+            query += " WHERE subreddit = ? COLLATE NOCASE"
+            params.append(subreddit)
+        query += " ORDER BY created_utc DESC, post_id ASC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = self._conn.execute(query, params).fetchall()
+        return [_own_post_from_row(row) for row in rows]
 
     # -- tracked threads --------------------------------------------------
 
@@ -738,6 +873,21 @@ def _candidate_from_row(row: sqlite3.Row) -> Candidate:
         final_score=row["final_score"],
         matched_topics=tuple(json.loads(row["matched_topics"])),
         status=row["status"],
+        first_seen=row["first_seen"],
+        last_seen=row["last_seen"],
+    )
+
+
+def _own_post_from_row(row: sqlite3.Row) -> OwnPost:
+    return OwnPost(
+        post_id=row["post_id"],
+        subreddit=row["subreddit"],
+        title=row["title"],
+        url=row["url"],
+        created_utc=row["created_utc"],
+        reddit_score=row["reddit_score"],
+        num_comments=row["num_comments"],
+        selftext=row["selftext"],
         first_seen=row["first_seen"],
         last_seen=row["last_seen"],
     )
