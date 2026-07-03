@@ -37,6 +37,7 @@ reviewer reviews against it. No contract, nothing to check against.
   - [ ] Behavior A works
   - [ ] Edge case B handled
   - [ ] Existing behavior C unchanged
+- Reachability proof: real entrypoint + observable output/state, or N/A with reason
 - Affected surfaces: API / DB / auth / frontend / jobs / config / observability / third-party
 - Risk areas: data-loss / security / backcompat / performance / concurrency / migration
 - Reviewer rules triggered: R1, R2, ... (see path triggers below)
@@ -53,8 +54,10 @@ The contract is optional for one-off scratch, mandatory for non-trivial PRs
 The code satisfies the Review Contract's acceptance criteria, solves the stated
 problem (not a different one), and contains no unrelated changes.
 **Block if:** an acceptance criterion is unimplemented; the implementation
-solves a different problem; the PR includes scope creep or "while I was here"
-cleanups beyond the slice's contract.
+solves a different problem; a newly introduced surface claimed as wired is not
+reachable through its real entrypoint; a deferred or N/A reachability decision
+lacks a reason or named follow-up; the PR includes scope creep or "while I was
+here" cleanups beyond the slice's contract.
 
 ### R2 - Test evidence
 Every meaningful behavior change has a test, or a documented reason it cannot.
@@ -64,6 +67,13 @@ instead of behavior; tests cover only a trivial happy path while realistic
 negative, edge, malformed, sparse, or varied-input cases remain unexercised.
 For detectors/validators/gates, the failure branch is proven to fire
 (`AGENTS.md` 3i), not just the happy path.
+
+For any new runtime, workflow, UI, report, billing, delivery, or public
+contract surface, unit-only tests are not enough by themselves. The PR needs a
+thin reachability proof: exercise the real entrypoint and assert an observable
+output, persisted state, rendered UI, emitted artifact, queued job, or gate
+result. Unit-only proof is acceptable when the PR introduces no new reachable
+surface, or when the plan explicitly defers wiring and names the follow-up.
 
 ### R3 - Security and authorization
 Any user input, permission check, token, secret, file upload, webhook, or admin
@@ -136,7 +146,8 @@ The change is safe to ship incrementally and is actually exercised by CI.
 path; deployment order matters but is undocumented; monitoring is missing for a
 high-risk change; **a new or renamed test is not wired into the CI workflow that
 runs it** (adding a `test:*` script does not make CI run it - the matching
-`run:` step ships in the same PR).
+`run:` step ships in the same PR); a new CI/prod surface is declared but no
+real route, workflow, job, or delivery path is enrolled to exercise it.
 
 ### R13 - Fix the class, not the example
 Review findings that identify a defect class must be fixed at the class level,

@@ -1,6 +1,6 @@
 # Plan archive index
 
-1269 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1270 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -1263,6 +1263,7 @@
 - [PR-Support-Ticket-Smoke-Draft-Export-Ids](archive/PR-Support-Ticket-Smoke-Draft-Export-Ids.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Support-Ticket-Source-Context-Live-Validation](archive/PR-Support-Ticket-Source-Context-Live-Validation.md) - lane: content-ops/support-ticket-input-provider | phase: functional validation
 - [PR-Track-Preflight-Dotenv-Fix](archive/PR-Track-Preflight-Dotenv-Fix.md) - lane: content-ops/deflection-tracking | phase: workflow/process
+- [PR-Trusted-Base-Pre-Push-Audit](archive/PR-Trusted-Base-Pre-Push-Audit.md) - lane: workflow/process | phase: Vertical slice
 - [PR-TypeScript-Major-Batch](archive/PR-TypeScript-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-UI-Test-Enrollment-Audit](archive/PR-UI-Test-Enrollment-Audit.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
 - [PR-Video-Stream-Processor-Python-3-13-Base-Image](archive/PR-Video-Stream-Processor-Python-3-13-Base-Image.md) - lane: video-processing/stream-worker-runtime | phase: Production hardening

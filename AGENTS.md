@@ -45,6 +45,10 @@ Contract` subsection): acceptance criteria the reviewer checks one-by-one,
 affected surfaces, risk areas, and the reviewer rule IDs the changed paths
 trigger. The builder codes against it; the reviewer reviews against it. See
 `docs/REVIEWER_RULES.md` for the rule pack and the path-to-rule trigger table.
+For any new runtime, workflow, UI, report, billing, delivery, or public
+contract surface, the Review Contract must also name the reachability proof:
+the real entrypoint exercised and the observable output/state/artifact/job/gate
+result that proves the surface is wired.
 
 ### 1b. PR body
 
@@ -407,7 +411,9 @@ update the plan and PR body before review.
 For a `Vertical slice`, build the thinnest end-to-end version that
 exercises the real flow. A slice is done only when the builder
 demonstrates the behavior with a concrete test, script, artifact, or
-command output.
+command output. When the slice introduces a new reachable surface, that proof
+must go through the real entrypoint and assert an observable effect, not only a
+unit-tested helper.
 
 Only fix inline what the slice cannot function without. Required
 inline fixes include:
@@ -465,6 +471,13 @@ failure branches, and representative real-world fixtures. If the slice
 intentionally ships only happy-path coverage, the plan's `Intentional`
 or `Deferred` section must say why that is acceptable and what will
 cover the missing cases.
+
+Reachability is part of test quality. For a new runtime, workflow, UI, report,
+billing, delivery, or public contract surface, include a thin smoke proof that
+uses the real entrypoint and observes a result: a route response, rendered UI,
+generated artifact, persisted row, queued job, sent/queued delivery, or gate
+result. Unit-only proof is fine for pure helpers/refactors that add no new
+surface, or when the plan explicitly defers wiring and names the follow-up.
 
 **CI enrollment is part of test authoring — same PR.** A test only
 protects the codebase if CI runs it. The Atlas Intel UI workflow
