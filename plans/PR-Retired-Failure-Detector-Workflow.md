@@ -23,6 +23,8 @@ Slice phase: Workflow/process
 3. Add workflow contract tests for advisory behavior, artifact upload, and
    PR/test enrollment.
 4. Enroll the workflow contract tests in the existing maturity-sweep PR command.
+5. Clarify the long-running task watcher wording in `AGENTS.md` so it describes
+   external wake hooks instead of an active in-chat polling loop.
 
 ### Review Contract
 
@@ -33,7 +35,7 @@ Slice phase: Workflow/process
   - [ ] Detector signals stay advisory: there is no signal-count failure step.
   - [ ] The new workflow contract test is enrolled in PR CI.
 - Affected surfaces: GitHub Actions workflow / advisory detector automation /
-  workflow contract tests.
+  workflow contract tests / agent operating instructions.
 - Risk areas: PR-code execution posture, artifact drift, accidental hard gate.
 - Reviewer rules triggered: R2, R10, R12, R14.
 
@@ -41,6 +43,7 @@ Slice phase: Workflow/process
 
 - `.github/workflows/maturity_sweep_advisory.yml`
 - `.github/workflows/retired_failure_detector.yml`
+- `AGENTS.md`
 - `plans/PR-Retired-Failure-Detector-Workflow.md`
 - `tests/test_retired_failure_detector_workflow.py`
 
@@ -69,8 +72,9 @@ fixtures so workflow drift is caught on PRs.
 
 - No GitHub issue comment, sticky PR comment, label, or disposition write is
   added here.
-- No 30-minute watcher/timer is added here. That belongs to the separate
-  long-running PR watcher operating model, not this detector workflow.
+- No watcher executable or timer unit is added here. This PR only clarifies the
+  long-running PR watcher wording: push/review events wake immediately, while a
+  30-minute timer hook wakes briefly for merge-readiness checks and exits.
 - No `pull_request_target` is used; this workflow needs no secrets and should
   not run with trusted-base token posture.
 
@@ -97,6 +101,7 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/maturity_sweep_advisory.yml` | 1 |
 | `.github/workflows/retired_failure_detector.yml` | 50 |
-| `plans/PR-Retired-Failure-Detector-Workflow.md` | 102 |
-| `tests/test_retired_failure_detector_workflow.py` | 85 |
-| **Total** | **238** |
+| `AGENTS.md` | 37 |
+| `plans/PR-Retired-Failure-Detector-Workflow.md` | 107 |
+| `tests/test_retired_failure_detector_workflow.py` | 51 |
+| **Total** | **246** |
