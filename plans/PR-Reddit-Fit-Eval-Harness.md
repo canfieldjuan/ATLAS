@@ -138,6 +138,41 @@ local MCP eval harness.
   S2 swaps it for the real parser and the harness must stay green -- that
   swap is the proof the ruler measures the runtime contract.
 
+Review-fix notes (Codex wave 1 on 031b37bea; all 12 verified real and
+fixed at root in this PR):
+
+- **Six rule patterns under-matched common phrasings** (verb-form
+  integrations "integrates with Zendesk"; unqualified "reduce support
+  tickets"; verb-first "reduce churn"/"improve retention"; possessive
+  "save your team 10 hours"; tool-as-subject "the tool will solve";
+  verb-form "improve/boost SEO"). Root cause: patterns transcribed from
+  long-form marketing copy, not tuned for short advisory text. All six
+  widened; every new phrasing added to the parametrized rule table.
+- **Concatenating reason+angle blinded start-anchored rules to the
+  angle** (a "Hey OP..." angle passed no_reply_draft). Class fix: reason
+  and angle are scanned SEPARATELY and findings merged -- any future
+  anchored rule works on both fields; probed with an angle-start greeting.
+- **parse_error flowed into summaries unsanitized** -- free text (which
+  can carry model output or PII) would bypass the privacy stripping.
+  Fixed at the load boundary: parse_error must be a snake_case code or
+  the file fails closed (an emitter contract violation is tooling, exit
+  2); probed with a PII-bearing parse_error.
+- **Unhashable risk_flags crashed set() before grading** -- model garbage
+  must GRADE, never crash. Element type-check precedes dedup; probed with
+  a dict-valued flag.
+- **Raw grounding/forbidden terms leaked into summary codes** -- a future
+  candidate-specific term would defeat the privacy rule. Term checks now
+  emit POSITIONAL codes (reason_term_i / angle_term_i / forbidden_term_i,
+  index into the public fixture lists -- lossless for debugging, zero
+  text in summaries).
+- **expects_codes compared as subset, not exact set** -- rule overreach
+  under an already-failing check was invisible, contradicting the
+  documented contract. Now exact-set equality; fixtures reconciled to
+  measured truth (one correct new overlap: quantified cuts fire both
+  GUARANTEED_DEFLECTION and TICKET_REDUCTION_PROMISE).
+- **Fixtures directory missing from CI paths** -- corpus-only PRs would
+  have skipped the contract tests. Added to the workflow paths list.
+
 ## Deferred
 
 - S2 fit contract + prompt builder; S3 runtime guard (+ parity test);
@@ -153,10 +188,10 @@ Parked hardening: none.
 ## Verification
 
 - `.venv/bin/python -m pytest tests/test_atlas_reddit_fit_eval.py -q`:
-  52 passed (every rule family, every shape-rejection code, corpus
+  65 passed (every rule family, every shape-rejection code, corpus
   both-sides contract, CLI exits, privacy, purity).
 - Full package suite `.venv/bin/python -m pytest
-  tests/test_atlas_reddit_*.py -q`: 385 passed (no-write probe and
+  tests/test_atlas_reddit_*.py -q`: 398 passed (no-write probe and
   fixture-fidelity stay green over the new modules).
 - Reachability (real entrypoint, observable result):
   `python scripts/evaluate_atlas_reddit_fit.py --cases
@@ -171,13 +206,13 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_reddit_checks.yml` | 1 |
-| `atlas_reddit/fit_eval.py` | 389 |
-| `atlas_reddit/fit_rules.py` | 287 |
-| `plans/PR-Reddit-Fit-Eval-Harness.md` | 166 |
+| `.github/workflows/atlas_reddit_checks.yml` | 2 |
+| `atlas_reddit/fit_eval.py` | 419 |
+| `atlas_reddit/fit_rules.py` | 293 |
+| `plans/PR-Reddit-Fit-Eval-Harness.md` | 218 |
 | `scripts/evaluate_atlas_reddit_fit.py` | 15 |
 | `tests/fixtures/atlas_reddit_fit_eval/cases.jsonl` | 16 |
 | `tests/fixtures/atlas_reddit_fit_eval/predictions_fail.jsonl` | 16 |
 | `tests/fixtures/atlas_reddit_fit_eval/predictions_pass.jsonl` | 16 |
-| `tests/test_atlas_reddit_fit_eval.py` | 322 |
-| **Total** | **1228** |
+| `tests/test_atlas_reddit_fit_eval.py` | 393 |
+| **Total** | **1388** |

@@ -77,6 +77,15 @@ def test_catalogue_partitions_into_three_families() -> None:
         ("we rank by cost per ticket", "COST_RANKING"),
         ("unlimited uploads on every plan", "UNBOUNDED_HOSTED_UPLOADS"),
         ("our tool handles this and has a free trial", "SELF_PROMO_PITCH"),
+        ("it integrates with Zendesk", "LIVE_HELPDESK_INTEGRATION"),
+        ("this can reduce support tickets", "TICKET_REDUCTION_PROMISE"),
+        ("this will reduce churn", "RETENTION_CHURN_OUTCOME"),
+        ("improve retention across the base", "RETENTION_CHURN_OUTCOME"),
+        ("save your team 10 hours", "ROI_SAVINGS"),
+        ("the tool will solve their problem", "FIX_RESOLVE_PROMISE"),
+        ("it can resolve the issue", "FIX_RESOLVE_PROMISE"),
+        ("improve SEO for the docs", "RANKING_SEO_OUTCOME"),
+        ("boost their seo standing", "RANKING_SEO_OUTCOME"),
         ("Hey OP, here is what worked for us", "REPLY_DRAFT"),
         ("I'd say you should start with the docs", "REPLY_DRAFT"),
         ("feel free to DM me anytime", "REPLY_DRAFT"),
@@ -181,8 +190,10 @@ def test_fail_corpus_fires_exactly_the_declared_checks_and_codes() -> None:
         got = failing.get(case_id, {})
         assert set(got) == set(envelope["expects_failing_checks"]), case_id
         got_codes = {code for codes in got.values() for code in codes}
-        for code in envelope["expects_codes"]:
-            assert code in got_codes, f"{case_id}: expected code {code}"
+        assert got_codes == set(envelope["expects_codes"]), (
+            f"{case_id}: expected exactly {sorted(envelope['expects_codes'])}, "
+            f"got {sorted(got_codes)}"
+        )
 
 
 def test_corpus_covers_all_eight_categories_twice() -> None:
@@ -309,6 +320,66 @@ def test_summary_counts_match_result() -> None:
     assert summary["case_count"] == 16
     assert summary["passed"] + summary["failed"] == 16
     assert all(not check["passed"] for check in summary["checks"])
+
+
+# -- wave-1 class probes -----------------------------------------------------
+
+
+def test_free_text_parse_error_fails_closed(tmp_path: Path) -> None:
+    """parse_error flows into summary codes: free text (which can carry
+    model output or PII) is rejected at load as an emitter contract bug."""
+    envelope = {
+        "case_id": "obvious_fit_broken_help_center",
+        "prediction": None,
+        "model_id": "m",
+        "prompt_version": "fit.v1",
+        "parse_error": "model said: email jane.doe@example.com",
+    }
+    bad = tmp_path / "p.jsonl"
+    bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="parse_error must be a snake_case"):
+        load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
+
+
+def test_unhashable_risk_flags_grade_instead_of_crashing() -> None:
+    problems = check_prediction_shape(
+        _prediction(risk_flags=[{"code": "pii_risk"}])
+    )
+    assert "risk_flags_invalid" in problems
+
+
+def test_reply_greeting_at_angle_start_fires() -> None:
+    """Reason and angle are scanned SEPARATELY: a greeting opening the
+    angle must fire even though it is mid-string in any concatenation."""
+    cases = load_cases(CASES)
+    case = cases[0]
+    envelope = {
+        "case_id": case.case_id,
+        "prediction": _prediction(
+            reason="They describe repeat questions despite documentation.",
+            angle="Hey OP, you might look at the ticket history evidence first.",
+        ),
+    }
+    result = evaluate_predictions((case,), {case.case_id: envelope})
+    failing = {c.name: c.codes for c in result.checks if not c.passed}
+    assert "no_reply_draft" in failing
+    assert "REPLY_DRAFT" in failing["no_reply_draft"]
+
+
+def test_term_miss_codes_are_positional_not_raw_text() -> None:
+    cases = load_cases(CASES)
+    case = cases[0]  # requires reason terms ["repeat", "documentation"]
+    envelope = {
+        "case_id": case.case_id,
+        "prediction": _prediction(
+            reason="A completely ungrounded explanation.",
+            angle="Ask about the ticket history evidence.",
+        ),
+    }
+    result = evaluate_predictions((case,), {case.case_id: envelope})
+    failing = {c.name: c.codes for c in result.checks if not c.passed}
+    assert set(failing["reason_grounded"]) == {"reason_term_0", "reason_term_1"}
+    assert "repeat" not in failing["reason_grounded"]
 
 
 # -- purity ---------------------------------------------------------------------

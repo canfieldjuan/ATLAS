@@ -37,6 +37,10 @@ SUMMARY_SCHEMA_VERSION = "atlas_reddit_fit_eval_summary.v1"
 
 _PREDICTION_KEYS = frozenset({"verdict", "reason", "angle", "risk_flags"})
 _WHITESPACE_RE = re.compile(r"\s+")
+# parse_error values flow into check codes and summaries, so they must be
+# stable machine codes -- never free text, which could carry model output
+# or PII past the privacy stripping.
+_PARSE_ERROR_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class FitEvalError(Exception):
@@ -186,6 +190,15 @@ def load_predictions(path: Path, case_ids: frozenset[str]) -> dict[str, dict]:
             raise FitEvalError(
                 f"{path}: {case_id!r} prediction must be an object or null"
             )
+        parse_error = record.get("parse_error")
+        if parse_error is not None and (
+            not isinstance(parse_error, str)
+            or not _PARSE_ERROR_CODE_RE.match(parse_error)
+        ):
+            raise FitEvalError(
+                f"{path}: {case_id!r} parse_error must be a snake_case code "
+                "(free text could leak model output into summaries)"
+            )
         envelopes[case_id] = record
     return envelopes
 
@@ -227,6 +240,10 @@ def check_prediction_shape(prediction: dict) -> tuple[str, ...]:
     if "risk_flags" in prediction:
         if not isinstance(flags, list):
             problems.append("risk_flags_invalid")
+        elif any(not isinstance(flag, str) for flag in flags):
+            # Non-string elements are model garbage too: grade the case,
+            # never crash on an unhashable value before dedup.
+            problems.append("risk_flags_invalid")
         else:
             if any(flag not in FIT_RISK_FLAGS for flag in flags):
                 problems.append("risk_flag_unknown")
@@ -235,10 +252,13 @@ def check_prediction_shape(prediction: dict) -> tuple[str, ...]:
     return tuple(problems)
 
 
-def _advisory_text(prediction: dict) -> str:
+def _advisory_fields(prediction: dict) -> tuple[str, str]:
+    """Reason and angle, collapsed, as SEPARATE strings: concatenating them
+    would blind every start-anchored rule (e.g. reply greetings) to the
+    angle, which is exactly where reply drafts appear."""
     reason = prediction.get("reason") or ""
     angle = prediction.get("angle") or ""
-    return _collapse(f"{reason} {angle}")
+    return _collapse(str(reason)), _collapse(str(angle))
 
 
 def _grade_case(case: EvalCase, envelope: dict | None) -> list[CaseCheck]:
@@ -271,29 +291,39 @@ def _grade_case(case: EvalCase, envelope: dict | None) -> list[CaseCheck]:
         () if verdict in case.expected_verdicts else (f"verdict_{verdict}",),
     )
 
-    reason = _collapse(prediction["reason"]).lower()
+    reason_text, angle_text = _advisory_fields(prediction)
+    reason = reason_text.lower()
+    angle = angle_text.lower()
+
+    # Term checks emit POSITIONAL codes (index into the case's public
+    # fixture lists), never the raw term text: a candidate-specific term
+    # in a future fixture must not leak into the privacy-stripped summary.
     missing_reason = tuple(
-        term for term in case.required_reason_terms if term.lower() not in reason
+        f"reason_term_{index}"
+        for index, term in enumerate(case.required_reason_terms)
+        if term.lower() not in reason
     )
     _add("reason_grounded", not missing_reason, missing_reason)
 
-    angle_raw = prediction.get("angle")
-    angle = _collapse(angle_raw).lower() if isinstance(angle_raw, str) else ""
     if angle and case.required_angle_terms:
         missing_angle = tuple(
-            term for term in case.required_angle_terms if term.lower() not in angle
+            f"angle_term_{index}"
+            for index, term in enumerate(case.required_angle_terms)
+            if term.lower() not in angle
         )
         _add("angle_grounded", not missing_angle, missing_angle)
 
-    advisory = _advisory_text(prediction)
-    lowered = advisory.lower()
+    combined = f"{reason} {angle}"
     hit_terms = tuple(
-        term for term in case.forbidden_terms if term.lower() in lowered
+        f"forbidden_term_{index}"
+        for index, term in enumerate(case.forbidden_terms)
+        if term.lower() in combined
     )
     _add("no_forbidden_terms", not hit_terms, hit_terms)
 
-    findings = scan_fit_text(
-        advisory, pii_allowlist=frozenset(case.pii_allowlist)
+    allowlist = frozenset(case.pii_allowlist)
+    findings = scan_fit_text(reason_text, pii_allowlist=allowlist) + scan_fit_text(
+        angle_text, pii_allowlist=allowlist
     )
     claim_codes = tuple(
         sorted({f.code for f in findings if f.code in CLAIM_CODES})

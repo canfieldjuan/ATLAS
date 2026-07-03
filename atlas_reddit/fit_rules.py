@@ -88,8 +88,8 @@ CLAIM_RULES: tuple[FitRule, ...] = (
             r"ticket(?:s| volume)?\s+(?:will|would)\s+(?:drop|fall|shrink|decrease)"
             r"|prevent(?:s|ed)?\s+(?:future\s+)?tickets"
             r"|queue\s+will\s+shrink"
-            r"|(?:deflect|reduce)\s+(?:your|their)\s+(?:support\s+)?"
-            r"(?:tickets?|volume|load)"
+            r"|(?:deflect|reduce|cut|lower)s?\s+(?:your\s+|their\s+|the\s+)?"
+            r"(?:support\s+)?(?:tickets?(?:\s+volume)?|volume|load)"
         ),
         message="Never promise support volume will drop, even unquantified.",
     ),
@@ -98,7 +98,8 @@ CLAIM_RULES: tuple[FitRule, ...] = (
         pattern=(
             r"\bROI\b|return on investment"
             r"|(?:cost|time)\s+savings?|hours?\s+saved"
-            r"|save\s+(?:them|you|teams?)\s+(?:time|money|hours)"
+            r"|save\s+(?:them|you|your\s+team|the\s+team|teams?)\s+"
+            r"(?:\d+\s+)?(?:time|money|hours)"
             r"|capacity\s+gains?|free\s+up\s+(?:the\s+)?(?:team|agents|capacity)"
         ),
         message="Never claim ROI, cost/time savings, or capacity gains.",
@@ -107,6 +108,8 @@ CLAIM_RULES: tuple[FitRule, ...] = (
         code="RETENTION_CHURN_OUTCOME",
         pattern=(
             r"churn\s+(?:less|will\s+drop|reduction)"
+            r"|(?:reduce|cut|lower)s?\s+churn"
+            r"|(?:improve|boost)s?\s+(?:their\s+|your\s+)?retention"
             r"|retention\s+(?:improves?|will\s+improve)"
             r"|more\s+likely\s+to\s+(?:stay|renew)"
             r"|stop\s+cancell?ations"
@@ -118,6 +121,7 @@ CLAIM_RULES: tuple[FitRule, ...] = (
         pattern=(
             r"rank\s+(?:higher|better|first)|search\s+ranking"
             r"|seo\s+(?:win|boost|improvement)"
+            r"|(?:improve|boost)s?\s+(?:their\s+|your\s+)?seo\b"
             r"|top\s+of\s+(?:google|search)"
         ),
         message="Never claim search-ranking or SEO outcomes.",
@@ -125,7 +129,8 @@ CLAIM_RULES: tuple[FitRule, ...] = (
     FitRule(
         code="FIX_RESOLVE_PROMISE",
         pattern=(
-            r"\bwe\s+(?:can|will|could)\s+(?:fix|resolve|solve|handle|eliminate)\b"
+            r"\b(?:we|it|(?:the|this|our)\s+tool)\s+(?:can|will|could)\s+"
+            r"(?:fix|resolve|solve|handle|eliminate)\b"
             r"|this\s+(?:can|will)\s+be\s+(?:fixed|resolved|solved)\s+"
             r"(?:by|with)\s+(?:our|the\s+tool)"
         ),
@@ -142,7 +147,8 @@ CLAIM_RULES: tuple[FitRule, ...] = (
     FitRule(
         code="LIVE_HELPDESK_INTEGRATION",
         pattern=(
-            r"(?:connect(?:s|ed)?\s+(?:to|with)|(?:native\s+)?integration\s+with)\s+"
+            r"(?:connect(?:s|ed)?\s+(?:to|with)"
+            r"|(?:native\s+)?integrat(?:es?|ed|ion)\s+with)\s+"
             + _HELPDESK_PLATFORMS
         ),
         message="Never claim live help-desk integrations.",
