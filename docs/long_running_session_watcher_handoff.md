@@ -257,3 +257,16 @@ authorized the builder to merge after a scheduled green confirmation. The
 watcher still did not merge; it only produced the `ready_for_human_merge`
 snapshot. The builder then re-ran the ownership/head/check/thread guards,
 merged, disabled the timer, and tore down the worktree.
+
+## Pattern Reports
+
+For a long-running arc that spans multiple PRs, use
+`docs/long_running_agent_monitoring_spec.md` at merge checkpoints or arc close
+to record what the watcher and review loop learned: PR cycle time,
+red-to-green loops, pushes per PR, recurring CI failures, review finding
+classes, stale branch count, unresolved thread count, and codification
+decisions.
+
+The pattern report is evidence, not authority. It can propose AGENTS updates,
+audits, tests, or watcher changes for repeated failure classes, but it does not
+merge PRs or change the scheduled-ready-only merge rule.

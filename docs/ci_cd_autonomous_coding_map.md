@@ -176,6 +176,20 @@ The practical result is less token burn: agents spend less time re-orienting,
 humans spend less time asking "is it green yet?", and reviewers spend more time
 on judgment instead of bookkeeping.
 
+## Monitoring And Pattern Drift
+
+The long-running loop also needs a way to remember what it learned after a PR
+merges. `docs/long_running_agent_monitoring_spec.md` defines the per-arc report
+shape for PR cycle time, red-to-green loops, pushes per PR, recurring CI
+failures, review finding classes, stale branch count, unresolved thread count,
+and codification decisions.
+
+That reporting layer is read-only. It uses current GitHub state, watcher JSON,
+plan docs, PR bodies, local audit output, and maturity sweep baselines to decide
+which repeated failures should become AGENTS rules, audit scripts, tests, or
+watcher changes. It does not replace the scheduled green-confirmation watcher or
+the AGENTS merge guards.
+
 ## S1 Boundaries
 
 This slice deliberately does not change workflows, branch protection, required
