@@ -113,3 +113,6 @@ requirements.freeze.bak
 .env*.local
 .playwright-mcp/
 *.png
+
+# Read-only audit scratch (fixtures, sweeps, profiling) — not shipped
+_audit_scratch/
