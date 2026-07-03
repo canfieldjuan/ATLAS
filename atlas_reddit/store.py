@@ -32,15 +32,22 @@ Design rules:
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 CANDIDATE_STATUSES = ("new", "seen", "dismissed", "responded")
 PURGE_ITEM_TYPES = ("candidate", "reply", "thread")
+FIT_REVIEW_VERDICTS = ("yes", "maybe", "no")
+FIT_REVIEW_SOURCES = ("manual", "model")
+# Bounded body persisted for the fit pass (S4/#1931). Third-party post
+# text at rest is deliberately capped and covered by the purge/tombstone
+# path, exactly like replies.body.
+MAX_BODY_EXCERPT_CHARS = 2000
 
 _SCHEMA_DDL = """
 CREATE TABLE candidates (
@@ -57,6 +64,7 @@ CREATE TABLE candidates (
     matched_topics TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'new'
         CHECK (status IN ('new', 'seen', 'dismissed', 'responded')),
+    body_excerpt TEXT NOT NULL DEFAULT '',
     first_seen INTEGER NOT NULL,
     last_seen INTEGER NOT NULL
 );
@@ -93,6 +101,22 @@ CREATE TABLE purge_log (
     reason TEXT NOT NULL,
     tombstone INTEGER NOT NULL DEFAULT 1 CHECK (tombstone IN (0, 1))
 );
+CREATE TABLE candidate_fit_reviews (
+    post_id TEXT PRIMARY KEY NOT NULL
+        REFERENCES candidates (post_id) ON DELETE CASCADE,
+    verdict TEXT NOT NULL CHECK (verdict IN ('yes', 'maybe', 'no')),
+    reason TEXT NOT NULL DEFAULT '',
+    angle TEXT NOT NULL DEFAULT '',
+    risk_flags TEXT NOT NULL DEFAULT '[]',
+    guard_ok INTEGER NOT NULL CHECK (guard_ok IN (0, 1)),
+    guard_codes TEXT NOT NULL DEFAULT '[]',
+    source TEXT NOT NULL CHECK (source IN ('manual', 'model')),
+    model_id TEXT NOT NULL DEFAULT '',
+    prompt_version TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    reviewed_at INTEGER NOT NULL,
+    CHECK (guard_ok = 1 OR (reason = '' AND angle = ''))
+);
 """
 
 
@@ -127,6 +151,18 @@ def _require_finite_number(value: object, *, field: str) -> float:
     if not math.isfinite(number):
         raise StoreError(f"{field} must be finite, got {value!r}")
     return number
+
+
+def _require_str_tuple(value: object, *, field: str) -> tuple[str, ...]:
+    """Fail closed on non-string-sequence metadata (risk flags, guard
+    codes, id lists). A dict or bytes would json-serialize into corrupt
+    persisted state."""
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise StoreError(f"{field} must be a list/tuple of strings, got {value!r}")
+    for item in value:
+        if not isinstance(item, str):
+            raise StoreError(f"{field} must contain only strings, got {item!r}")
+    return tuple(value)
 
 
 def _require_bool(value: object, *, field: str) -> bool:
@@ -168,8 +204,30 @@ class Candidate:
     final_score: float
     matched_topics: tuple[str, ...]
     status: str
+    body_excerpt: str
     first_seen: int
     last_seen: int
+
+
+@dataclass(frozen=True)
+class FitReview:
+    """One persisted advisory fit judgment (S4, #1931). ``angle`` is None
+    for a 'no' verdict or a guard-rejected (redacted) row; ``guard_ok``
+    False means the guard blocked the output, so reason/angle are stored
+    empty -- an audit trail without unsafe text at rest."""
+
+    post_id: str
+    verdict: str
+    reason: str
+    angle: str | None
+    risk_flags: tuple[str, ...]
+    guard_ok: bool
+    guard_codes: tuple[str, ...]
+    source: str
+    model_id: str
+    prompt_version: str
+    input_hash: str
+    reviewed_at: int
 
 
 @dataclass(frozen=True)
@@ -314,6 +372,37 @@ class ListeningStore:
                         "ALTER TABLE purge_log ADD COLUMN tombstone INTEGER "
                         "NOT NULL DEFAULT 1 CHECK (tombstone IN (0, 1))"
                     )
+                if version < 5:
+                    # v4 -> v5 (S4/#1931): the fit pass persists a bounded
+                    # post body (candidates.body_excerpt, additive default
+                    # empty) and its advisory verdicts in a side table.
+                    # The FK is ON DELETE CASCADE so a purge of a reviewed
+                    # candidate removes its review in the same transaction
+                    # -- deletion compliance extends to fit output for free.
+                    self._conn.execute(
+                        "ALTER TABLE candidates ADD COLUMN body_excerpt "
+                        "TEXT NOT NULL DEFAULT ''"
+                    )
+                    self._conn.execute(
+                        """
+                        CREATE TABLE candidate_fit_reviews (
+                            post_id TEXT PRIMARY KEY NOT NULL
+                                REFERENCES candidates (post_id) ON DELETE CASCADE,
+                            verdict TEXT NOT NULL CHECK (verdict IN ('yes', 'maybe', 'no')),
+                            reason TEXT NOT NULL DEFAULT '',
+                            angle TEXT NOT NULL DEFAULT '',
+                            risk_flags TEXT NOT NULL DEFAULT '[]',
+                            guard_ok INTEGER NOT NULL CHECK (guard_ok IN (0, 1)),
+                            guard_codes TEXT NOT NULL DEFAULT '[]',
+                            source TEXT NOT NULL CHECK (source IN ('manual', 'model')),
+                            model_id TEXT NOT NULL DEFAULT '',
+                            prompt_version TEXT NOT NULL,
+                            input_hash TEXT NOT NULL,
+                            reviewed_at INTEGER NOT NULL,
+                            CHECK (guard_ok = 1 OR (reason = '' AND angle = ''))
+                        )
+                        """
+                    )
                 self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         # Fail closed on schemas this code does not know how to read --
@@ -340,6 +429,7 @@ class ListeningStore:
         final_score: float,
         matched_topics: tuple[str, ...],
         observed_at: int,
+        body_excerpt: str = "",
     ) -> None:
         """Insert or refresh a candidate. Replay-safe two ways: on conflict
         the volatile fields update while ``first_seen``/``status`` are
@@ -364,8 +454,8 @@ class ListeningStore:
                 INSERT INTO candidates (
                     post_id, subreddit, title, url, author, created_utc,
                     reddit_score, num_comments, keyword_score, final_score,
-                    matched_topics, first_seen, last_seen
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    matched_topics, body_excerpt, first_seen, last_seen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(post_id) DO UPDATE SET
                     subreddit = excluded.subreddit,
                     title = excluded.title,
@@ -376,6 +466,7 @@ class ListeningStore:
                     keyword_score = excluded.keyword_score,
                     final_score = excluded.final_score,
                     matched_topics = excluded.matched_topics,
+                    body_excerpt = excluded.body_excerpt,
                     last_seen = excluded.last_seen
                 WHERE excluded.last_seen >= candidates.last_seen
                 """,
@@ -391,6 +482,7 @@ class ListeningStore:
                     keyword_score,
                     final_score,
                     json.dumps(list(matched_topics)),
+                    body_excerpt,
                     observed_at,
                     observed_at,
                 ),
@@ -449,6 +541,119 @@ class ListeningStore:
             params.append(limit)
         rows = self._conn.execute(query, params).fetchall()
         return [_candidate_from_row(row) for row in rows]
+
+    # -- fit reviews (S4, #1931) ------------------------------------------
+
+    def upsert_fit_review(
+        self,
+        *,
+        post_id: str,
+        verdict: str,
+        reason: str,
+        angle: str | None,
+        risk_flags: tuple[str, ...],
+        guard_ok: bool,
+        guard_codes: tuple[str, ...],
+        source: str,
+        model_id: str,
+        prompt_version: str,
+        input_hash: str,
+        reviewed_at: int,
+    ) -> None:
+        """Insert or replace the fit review for one candidate. Fails closed
+        on unknown enums; a guard-rejected row is persisted flagged but with
+        reason/angle REDACTED to empty -- the guard that caught unsafe text
+        must never park it in SQLite. Requires an existing candidate (the FK
+        enforces it); the review dies with its candidate on purge (CASCADE)."""
+        _require_id(post_id, field="post_id")
+        _require_id(prompt_version, field="prompt_version")
+        _require_id(input_hash, field="input_hash")
+        _require_int(reviewed_at, field="reviewed_at")
+        _require_bool(guard_ok, field="guard_ok")
+        if verdict not in FIT_REVIEW_VERDICTS:
+            raise StoreError(
+                f"invalid fit verdict {verdict!r}; allowed: {FIT_REVIEW_VERDICTS}"
+            )
+        if source not in FIT_REVIEW_SOURCES:
+            raise StoreError(
+                f"invalid fit source {source!r}; allowed: {FIT_REVIEW_SOURCES}"
+            )
+        flags = _require_str_tuple(risk_flags, field="risk_flags")
+        codes = _require_str_tuple(guard_codes, field="guard_codes")
+        if guard_ok:
+            stored_reason = reason if isinstance(reason, str) else ""
+            stored_angle = angle if isinstance(angle, str) else ""
+        else:
+            # Redaction: blocked output keeps codes + provenance, no text.
+            stored_reason = ""
+            stored_angle = ""
+        try:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO candidate_fit_reviews (
+                        post_id, verdict, reason, angle, risk_flags, guard_ok,
+                        guard_codes, source, model_id, prompt_version, input_hash,
+                        reviewed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(post_id) DO UPDATE SET
+                        verdict = excluded.verdict,
+                        reason = excluded.reason,
+                        angle = excluded.angle,
+                        risk_flags = excluded.risk_flags,
+                        guard_ok = excluded.guard_ok,
+                        guard_codes = excluded.guard_codes,
+                        source = excluded.source,
+                        model_id = excluded.model_id,
+                        prompt_version = excluded.prompt_version,
+                        input_hash = excluded.input_hash,
+                        reviewed_at = excluded.reviewed_at
+                    """,
+                    (
+                        post_id, verdict, stored_reason, stored_angle,
+                        json.dumps(list(flags)), 1 if guard_ok else 0,
+                        json.dumps(list(codes)), source, model_id, prompt_version,
+                    input_hash, reviewed_at,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            # The FK rejects a review whose candidate does not exist; keep
+            # the store's uniform StoreError contract so callers (and the
+            # CLI error family) do not see a raw sqlite3 exception.
+            raise StoreError(
+                f"cannot persist fit review for unknown candidate {post_id!r}: {exc}"
+            ) from exc
+
+    def get_fit_review(self, post_id: str) -> FitReview | None:
+        row = self._conn.execute(
+            "SELECT * FROM candidate_fit_reviews WHERE post_id = ?", (post_id,)
+        ).fetchone()
+        return _fit_review_from_row(row) if row else None
+
+    def list_fit_reviews(
+        self,
+        post_ids: tuple[str, ...] | None = None,
+        *,
+        only_guard_ok: bool = False,
+    ) -> dict[str, FitReview]:
+        """Fit reviews keyed by post_id. ``post_ids`` filters to a subset
+        (the digest passes the candidates it is rendering); ``only_guard_ok``
+        excludes blocked rows (the digest renders passing reviews only)."""
+        query = "SELECT * FROM candidate_fit_reviews"
+        clauses: list[str] = []
+        params: list[object] = []
+        if only_guard_ok:
+            clauses.append("guard_ok = 1")
+        if post_ids is not None:
+            ids = _require_str_tuple(post_ids, field="post_ids")
+            if not ids:
+                return {}
+            clauses.append(f"post_id IN ({','.join('?' for _ in ids)})")
+            params.extend(ids)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        rows = self._conn.execute(query, params).fetchall()
+        return {row["post_id"]: _fit_review_from_row(row) for row in rows}
 
     # -- tracked threads --------------------------------------------------
 
@@ -724,6 +929,47 @@ class ListeningStore:
         ]
 
 
+def fit_input_hash(
+    *,
+    post_id: str,
+    subreddit: str,
+    title: str,
+    body_excerpt: str,
+    matched_topics: tuple[str, ...],
+) -> str:
+    """Stable sha256 over the exact prompt-input fields, so a fit review can
+    be detected as stale when the inputs behind it change."""
+    payload = json.dumps(
+        {
+            "post_id": post_id,
+            "subreddit": subreddit,
+            "title": title,
+            "body_excerpt": body_excerpt,
+            "matched_topics": list(matched_topics),
+        },
+        sort_keys=True,
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(payload.encode("ascii")).hexdigest()
+
+
+def _fit_review_from_row(row: sqlite3.Row) -> FitReview:
+    return FitReview(
+        post_id=row["post_id"],
+        verdict=row["verdict"],
+        reason=row["reason"],
+        angle=row["angle"] or None,
+        risk_flags=tuple(json.loads(row["risk_flags"])),
+        guard_ok=bool(row["guard_ok"]),
+        guard_codes=tuple(json.loads(row["guard_codes"])),
+        source=row["source"],
+        model_id=row["model_id"],
+        prompt_version=row["prompt_version"],
+        input_hash=row["input_hash"],
+        reviewed_at=row["reviewed_at"],
+    )
+
+
 def _candidate_from_row(row: sqlite3.Row) -> Candidate:
     return Candidate(
         post_id=row["post_id"],
@@ -738,6 +984,7 @@ def _candidate_from_row(row: sqlite3.Row) -> Candidate:
         final_score=row["final_score"],
         matched_topics=tuple(json.loads(row["matched_topics"])),
         status=row["status"],
+        body_excerpt=row["body_excerpt"],
         first_seen=row["first_seen"],
         last_seen=row["last_seen"],
     )

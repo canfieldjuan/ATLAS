@@ -620,8 +620,11 @@ def test_v2_bare_candidate_ids_canonicalize_to_fullnames(tmp_path: Path) -> None
             """,
             (legacy_id,),
         )
-    # A faithful v2 store predates the v4 tombstone column too.
+    # A faithful v2 store predates the v4 tombstone column and the v5 fit
+    # additions (candidates.body_excerpt + the candidate_fit_reviews table).
     conn.execute("ALTER TABLE purge_log DROP COLUMN tombstone")
+    conn.execute("DROP TABLE candidate_fit_reviews")
+    conn.execute("ALTER TABLE candidates DROP COLUMN body_excerpt")
     conn.execute("PRAGMA user_version = 2")
     conn.commit()
     conn.close()
@@ -648,8 +651,11 @@ def test_v3_store_gains_tombstone_backfilled_conservative(tmp_path: Path) -> Non
             reason="content shows [deleted]",
         )
     conn = sqlite3.connect(db)
-    # Simulate a faithful v3 store: no tombstone column, version 3.
+    # Simulate a faithful v3 store: no tombstone column and no v5 fit
+    # additions (body_excerpt column + candidate_fit_reviews table).
     conn.execute("ALTER TABLE purge_log DROP COLUMN tombstone")
+    conn.execute("DROP TABLE candidate_fit_reviews")
+    conn.execute("ALTER TABLE candidates DROP COLUMN body_excerpt")
     conn.execute("PRAGMA user_version = 3")
     conn.commit()
     conn.close()
@@ -661,7 +667,7 @@ def test_v3_store_gains_tombstone_backfilled_conservative(tmp_path: Path) -> Non
         _seed_candidate(migrated, "t3_old")
         assert migrated.get_candidate("t3_old") is None  # still refused
     conn = sqlite3.connect(db)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
     conn.close()
 
 
