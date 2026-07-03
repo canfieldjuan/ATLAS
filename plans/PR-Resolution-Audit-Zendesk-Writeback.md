@@ -20,7 +20,7 @@ publish endpoint that resolves the saved FAQ draft id from the persisted
 Resolution Audit artifact and publishes through the existing
 `FAQMacroWritebackPublishService`.
 
-This slice is over the 400 LOC soft cap (1035 total) because the vertical
+This slice is over the 400 LOC soft cap (1173 total) because the vertical
 slice ships the route, host wiring, and both-sides tests in one reviewable
 unit: ~148 LOC of production code, with the remainder being this plan doc
 and tests proving the paid/locked/missing/cross-tenant/stale-id/
@@ -173,12 +173,12 @@ Parked hardening: none.
 | `atlas_brain/api/__init__.py` | 4 |
 | `extracted_content_pipeline/api/control_surfaces.py` | 112 |
 | `extracted_content_pipeline/faq_macro_writeback.py` | 1 |
-| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 17 |
+| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 52 |
 | `extracted_content_pipeline/ticket_faq_ports.py` | 9 |
 | `extracted_content_pipeline/ticket_faq_postgres.py` | 11 |
-| `plans/PR-Resolution-Audit-Zendesk-Writeback.md` | 178 |
+| `plans/PR-Resolution-Audit-Zendesk-Writeback.md` | 184 |
 | `tests/test_atlas_content_ops_macro_writeback.py` | 70 |
 | `tests/test_extracted_content_deflection_submit.py` | 362 |
-| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 136 |
+| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 233 |
 | `tests/test_extracted_ticket_faq_postgres.py` | 96 |
-| **Total** | **1035** |
+| **Total** | **1173** |

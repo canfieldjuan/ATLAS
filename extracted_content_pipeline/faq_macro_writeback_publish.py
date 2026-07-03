@@ -130,46 +130,75 @@ class FAQMacroWritebackPublishService:
         if draft is None:
             return FAQMacroPublishSummary(faq_id=cleaned_id, found=False)
 
-        if approve_draft and _clean(draft.status) == DRAFT_FAQ_STATUS:
-            # An explicit tenant publish action (paid Resolution Audit) is the
-            # approval for a generated draft. Only the exact 'draft' status is
-            # promoted, and the promotion is compare-and-set on the stored
-            # status so a concurrent review decision (for example a reject
-            # landing after get_draft) wins and the publish fails closed.
-            approved = await self.faq_repository.update_status(
-                cleaned_id,
-                APPROVED_FAQ_STATUS,
-                scope=scope,
-                expected_status=DRAFT_FAQ_STATUS,
-            )
-            if approved:
-                draft = replace(draft, status=APPROVED_FAQ_STATUS)
+        # An explicit tenant publish action (paid Resolution Audit) is the
+        # approval for a generated draft. Only the exact 'draft' status is
+        # promotable; a 'published' draft is retryable through the provider's
+        # idempotent mapping; rejected/archived drafts are never revived.
+        current_status = _clean(draft.status)
+        promote = approve_draft and current_status == DRAFT_FAQ_STATUS
+        retry_published = (
+            approve_draft and current_status == _clean(self.published_status)
+        )
+        preview_draft = (
+            replace(draft, status=APPROVED_FAQ_STATUS)
+            if promote or retry_published
+            else draft
+        )
 
-        preview = build_macro_writeback_preview([draft])
+        # Eligibility is decided BEFORE any status write so a draft with no
+        # publishable macros is never approved (which would also surface it in
+        # the approved-filtered FAQ search projection as a side effect).
+        preview = build_macro_writeback_preview([preview_draft])
         if not preview.macros:
             summary = _summary(
                 faq_id=cleaned_id,
                 found=True,
-                draft_status=_clean(draft.status),
+                draft_status=current_status,
                 preview=preview,
                 results=(),
             )
             await self._record_attempt(summary, scope=scope)
             return summary
 
+        if promote:
+            # Compare-and-set on the stored status: a concurrent review
+            # decision (for example a reject landing after get_draft) wins
+            # and the publish fails closed as draft_not_approved.
+            approved = await self.faq_repository.update_status(
+                cleaned_id,
+                APPROVED_FAQ_STATUS,
+                scope=scope,
+                expected_status=DRAFT_FAQ_STATUS,
+            )
+            if not approved:
+                lost_preview = build_macro_writeback_preview([draft])
+                summary = _summary(
+                    faq_id=cleaned_id,
+                    found=True,
+                    draft_status=current_status,
+                    preview=lost_preview,
+                    results=(),
+                )
+                await self._record_attempt(summary, scope=scope)
+                return summary
+
         results = tuple(await self.provider.publish(preview.macros, scope=scope))
         summary = _summary(
             faq_id=cleaned_id,
             found=True,
-            draft_status=_clean(draft.status),
+            draft_status=_clean(preview_draft.status),
             preview=preview,
             results=results,
         )
         if _should_mark_published(summary):
+            # Also compare-and-set: if a review decision landed while the
+            # external publish was in flight, that decision is preserved
+            # rather than overwritten by the publish bookkeeping.
             status_updated = await self.faq_repository.update_status(
                 cleaned_id,
                 self.published_status,
                 scope=scope,
+                expected_status=APPROVED_FAQ_STATUS,
             )
             summary = replace(summary, draft_status_updated=status_updated)
         await self._record_attempt(summary, scope=scope)
