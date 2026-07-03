@@ -79,7 +79,8 @@ Use this order for a new repo:
    - Start with low-dependency checks: dirty tree, plan exists, files touched
      match diff, diff size, PR body marker, and `git diff --check`.
 4. Add PR body validation.
-   - Use trusted-base code if the PR can edit the validator.
+   - Use trusted-base workflow wiring and validator code if the PR can edit
+     either surface.
 5. Add review reconciliation.
    - Fail when the body claims automated-review findings are fixed or waived
      while unresolved bot threads still exist.
@@ -182,10 +183,12 @@ A repo is ready for long-running autonomous coding when a new builder can:
 6. receive review or CI feedback;
 7. fix the upstream cause;
 8. reconcile the PR body with live review state;
-9. merge only after green checks, clean ownership state, expected head SHA,
-   clean worktree, clean review threads, clean reconciliation, and clean
+9. merge only with explicit operator approval or recorded standing merge
+   authorization, and after green checks, clean ownership state, expected head
+   SHA, clean worktree, clean review threads, clean reconciliation, and clean
    mergeability;
-10. tear down the worktree and continue the next approved slice.
+10. shut down the completed PR's watcher/timer, tear down the worktree, and
+    continue the next approved slice.
 
 If any step depends on tribal knowledge, add it to the repo contract before
 scaling the loop.

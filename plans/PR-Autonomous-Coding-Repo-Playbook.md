@@ -93,10 +93,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `docs/autonomous_coding_repo_playbook.md` | 191 |
+| `docs/autonomous_coding_repo_playbook.md` | 194 |
 | `docs/ci_cd_autonomous_coding_map.md` | 7 |
 | `docs/long_running_session_watcher_handoff.md` | 7 |
 | `plans/INDEX.md` | 3 |
 | `plans/PR-Autonomous-Coding-Repo-Playbook.md` | 102 |
 | `plans/archive/PR-Long-Running-Monitoring-Spec.md` | 0 |
-| **Total** | **310** |
+| **Total** | **313** |
