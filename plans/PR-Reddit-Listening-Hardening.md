@@ -51,6 +51,9 @@ Slice phase: Production hardening
    truly deleted item never reappears, so the wave-2 re-purge cycle
    stays closed. Schema v4 adds `purge_log.tombstone` (existing rows
    backfill to 1 -- conservative).
+6. Housekeeping (arc convention: rides the next slice): archive the
+   merged S6 purge plan to `plans/archive/PR-Reddit-Listening-Purge.md`
+   and regenerate `plans/INDEX.md`.
 
 ### Review Contract
 
@@ -91,7 +94,9 @@ Slice phase: Production hardening
 - `atlas_reddit/reddit_client.py`
 - `atlas_reddit/store.py`
 - `atlas_reddit/tracker.py`
+- `plans/INDEX.md`
 - `plans/PR-Reddit-Listening-Hardening.md`
+- `plans/archive/PR-Reddit-Listening-Purge.md`
 - `tests/test_atlas_reddit_poller.py`
 - `tests/test_atlas_reddit_purge.py`
 - `tests/test_atlas_reddit_tracker.py`
@@ -162,11 +167,13 @@ Parked hardening: none.
 | `atlas_reddit/reddit_client.py` | 42 |
 | `atlas_reddit/store.py` | 49 |
 | `atlas_reddit/tracker.py` | 10 |
-| `plans/PR-Reddit-Listening-Hardening.md` | 174 |
+| `plans/INDEX.md` | 2 |
+| `plans/PR-Reddit-Listening-Hardening.md` | 180 |
+| `plans/archive/PR-Reddit-Listening-Purge.md` | 0 |
 | `tests/test_atlas_reddit_poller.py` | 7 |
-| `tests/test_atlas_reddit_purge.py` | 54 |
+| `tests/test_atlas_reddit_purge.py` | 65 |
 | `tests/test_atlas_reddit_tracker.py` | 124 |
-| **Total** | **~472** |
+| **Total** | **~487** |
 
 Over the 400 soft cap: the plan doc plus mandated both-sides probes on
 deletion-adjacent changes dominate; splitting five one-audit items into
