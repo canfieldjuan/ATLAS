@@ -118,7 +118,9 @@ Shared parser core: `_load_csv_dict_rows_result` (`campaign_customer_data.py:470
   `is_private`/`is_internal` (not in its passthrough whitelist `:177-187`), so on
   the support-ticket-upload path the flag is **stripped before** the downstream
   filter can act -> a top-level private ticket leaks. (Per-comment privacy IS
-  honored: `_comment_text` drops `public is False`, `:681-682`.) -> Slice 2 (PII/privacy).
+  handled narrowly: `_comment_text` returns empty only when a comment mapping has
+  `public is False` (`:680-684`) -- it does not check `is_private`/`is_internal` on
+  comments.) -> Slice 2 (PII/privacy).
 
 ## 0.3 Clustering (the real report path)
 
@@ -200,12 +202,14 @@ vs prose `_support_tax_section:4034`); per-item cost in >=4 places, and
 - `deflection.v1` projection (`_snapshot_report_model_projection:2833`): per-section
   `snapshot_safe_fields` allowlist. `question_details` exposes rank/question/
   evidence-status/scope but NOT `answer`/`steps` (except a single-item teaser).
-- **Delivery artifacts (corrected):** the delivery email, hosted page, and PDF read
-  the persisted `report_model`; **the MCP fetch/search path reads the stored
-  snapshot** (`snapshot = dict(record.snapshot)`,
-  `atlas_brain/mcp/content_ops_deflection_readonly_server.py:181`; search `:134`),
-  not the report_model. So it is not accurate that every artifact reads the shared
-  report_model. -> Slice 5.
+- **Delivery artifacts (corrected):** the delivery email and PDF read the persisted
+  `report_model` (backend); **the MCP fetch/search path reads the stored snapshot**
+  (`snapshot = dict(record.snapshot)`,
+  `atlas_brain/mcp/content_ops_deflection_readonly_server.py:181`; search `:134`);
+  the **hosted result page is served by the portfolio-ui frontend loading the stored
+  artifact** via a `portfolio-ui/api/content-ops/deflection/...` route (exact fetch
+  path -> Slice 5). So it is not accurate that every artifact reads the shared
+  `report_model`. -> Slice 5.
 
 ## 0.6 Verification / scorecard -- coverage and gaps
 
@@ -228,7 +232,9 @@ gated by either verifier at runtime. -> Slice 5 & SUMMARY.
 
 ## 0.7 Dead / orphaned code
 
-- `faq_deflection_report.py:3046` `render_deflection_report` -- dead, zero callers.
+- `faq_deflection_report.py:3046` `render_deflection_report` -- no in-repo call
+  sites, but exported in `__all__` (`:5570`), so it is external API surface, not
+  strictly dead. Superseded internally by `render_deflection_report_model`.
 - `campaign_customer_data.py:1258` `_validate_csv_column_consistency`,
   `:726 _csv_header_index` -- 0 references.
 - `support_ticket_input_package.py:890 _all_rows_have_dates`,
@@ -257,7 +263,7 @@ gated by either verifier at runtime. -> Slice 5 & SUMMARY.
 | Order-dependence vs "deterministic positioning" claim | `ticket_faq_markdown.py:2372`, `support_ticket_clustering.py:556` | 2 |
 | Private-row flag stripped in `_normalize_ticket_row` before the downstream filter | `support_ticket_input_package.py:530` | 2 |
 | Whole-file-into-RAM on Path B; metrics double-computed | `api/control_surfaces.py:2806`; `:3208`/`:4034` | 3 |
-| Embedding booster maybe OFF in production (host factory toggle gates it) | `atlas_brain/_content_ops_infrastructure.py:186` (`build_content_ops_faq_embedding_port`) | 2, 3 |
+| Embedding booster runs only if the FAQ service was built with `config.embedding_port`; deflection dispatch (`content_ops_execution.py:1055`) calls `service.generate()` without forwarding one | `_content_ops_services.py` | 2, 3 |
 | Scorecard: no totals reconciliation, no verbatim check, not at runtime, not on snapshot | `:1781` | 5, SUMMARY |
 | MCP fetch reads stored snapshot, not report_model | `content_ops_deflection_readonly_server.py:181` | 5 |
 | Cost = flat $13.50, no handle-time, hardcoded benchmark | `:51` | 5, 6 |

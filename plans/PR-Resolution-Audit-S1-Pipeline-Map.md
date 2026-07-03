@@ -75,6 +75,6 @@ in this slice -- that is Slice 2 (#1958).
 | File | LOC |
 |---|---:|
 | `.gitignore` | 3 |
-| `docs/audits/resolution-audit-csv/PIPELINE_MAP.md` | 266 |
+| `docs/audits/resolution-audit-csv/PIPELINE_MAP.md` | 272 |
 | `plans/PR-Resolution-Audit-S1-Pipeline-Map.md` | 80 |
-| **Total** | **349** |
+| **Total** | **355** |
