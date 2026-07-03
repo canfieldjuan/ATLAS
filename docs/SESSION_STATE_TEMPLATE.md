@@ -26,7 +26,12 @@ Branch: <branch or none>
 Plan: plans/PR-<Slice>.md
 Expected head SHA: <sha or none>
 Ownership lane: <lane from plan>
-Allowed actions: inspect | update | merge-on-operator-signal | none
+Allowed actions: inspect | update | merge-on-operator-signal | merge-after-scheduled-ready-guarded | none
+Standing merge authorization: <none | authorized by <operator/source> for <arc>; scheduled-ready-only>
+Push/review-event hook: <name and trigger | unavailable | none>
+Timer hook: <systemd/cron/webhook name | none>
+Next timer wake: <timestamp or none>
+Last watcher state: <state/details or none>
 
 ## PRs This Session May Touch
 
@@ -74,6 +79,12 @@ Do-NOT-redo: <paths ruled out, checks already green, dead ends>
 - [ ] Confirm the current PR is listed under "Owned Active PR" or "PRs This
       Session May Touch" before inspecting comments, pushing updates, or
       merging.
+- [ ] Confirm `Push/review-event hook`, `Timer hook`, `Next timer wake`, and
+      `Last watcher state` reflect the current long-running setup before
+      relying on autonomous wake-ups.
+- [ ] Confirm `Standing merge authorization` is explicit before merging on a
+      scheduled `ready_for_human_merge` wake; do not infer it from watcher
+      state.
 - [ ] Treat every other open PR as "must not touch" unless the operator
       explicitly reassigns it.
 ```

@@ -401,12 +401,20 @@ For long-running coding tasks, after each PR open or push:
 1. Subscribe the session to its owned PR in `SESSION_STATE.local.md`. Record the
    PR number, branch, head SHA, checks URL, review/reconciliation URL or
    commands, the timer hook name, next timer wake time, and the exact action to
-   take when checks turn green or comments appear.
+   take when checks turn green or comments appear. If the operator grants
+   standing merge authorization for the arc, record the authorization source and
+   scheduled-ready-only merge condition there too.
 2. Install or run **two external wake hooks** for the owned PR:
    - a push/review-event hook that wakes immediately when a new push, review
      thread, review event, or reconciliation event arrives;
    - a timer hook that wakes every **30 minutes** to check whether CI is green
      and the PR is mergeable.
+   If the current environment cannot provide a concrete push/review-event hook,
+   record that gap in `SESSION_STATE.local.md`, keep the 30-minute timer hook
+   armed as the autonomous fallback, and do not claim immediate review-event
+   wake-up coverage for the session. The push/review-event hook must not reuse
+   the scheduled green-confirmation command in a way that can grant merge
+   permission, and an operator-only notification is not a builder wake hook.
 3. The timer hook must be a webhook/systemd/cron-style wakeup that exits fast
    after recording state. Do not keep an in-chat `sleep` loop or active polling
    process alive just to wait for green CI.
@@ -419,10 +427,14 @@ For long-running coding tasks, after each PR open or push:
 6. If checks are still pending, record the last observed status and next timer
    wake time in `SESSION_STATE.local.md`; do not ask the operator to babysit
    green and do not burn compute by waiting inside the chat turn.
-7. If all required checks are green and all review/reconciliation gates are
+7. Push/review-event wakes are attention-only. Even if a push/review-event wake
+   observes green checks, record readiness and wait for the 30-minute timer to
+   report the scheduled green confirmation before merging.
+8. If the 30-minute timer wake reports all required checks green, all
+   review/reconciliation gates clean, and merge-conflict/mergeability state
    clean, follow the merge rules for the current arc. If the operator has not
    authorized autonomous merge for this arc, report readiness and wait.
-8. After merge, tear down only the owned worktree/branch, archive the plan as
+9. After merge, tear down only the owned worktree/branch, archive the plan as
    required, sync from `origin/main`, and continue to the next approved slice
    if the arc says to continue. The merge itself is the signal to pick up the
    next slice; do not start the next slice before the owned PR is merged or
