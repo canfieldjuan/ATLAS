@@ -233,7 +233,9 @@ gated by either verifier at runtime. -> Slice 5 & SUMMARY.
   `:726 _csv_header_index` -- 0 references.
 - `support_ticket_input_package.py:890 _all_rows_have_dates`,
   `:949 _parse_ticket_source_date` -- 0 references.
-- `campaign_source_adapters.py:537 load_source_rows_from_file` -- test-only.
+- `campaign_source_adapters.py:537 load_source_rows_from_file` -- exported public
+  helper (`__all__` `:1473`), test-exercised; the internal API path uses
+  `load_source_rows_with_warnings_from_file`. Public surface, not a dead orphan.
 - **NOT orphaned (corrected):** `campaign_customer_data.py:376
   FileIntelligenceRepository` is a documented host-facing customer-file adapter
   (exported in `__all__`, documented in `extracted_content_pipeline/README.md:114`
@@ -252,10 +254,10 @@ gated by either verifier at runtime. -> Slice 5 & SUMMARY.
 | Headerless CSV first-row-as-data accepted; short rows padded | `campaign_customer_data.py:746/:541` | 2 |
 | Resolution-scoped single-source groups can render with count 1 | `ticket_faq_markdown.py:846` | 2 |
 | Publishable gate is PII, not spam -> junk can be the representative | `:2659` | 2, 5 |
-| Order-dependence vs "deterministic positioning" claim | `:2372`, `clustering:556` | 2 |
+| Order-dependence vs "deterministic positioning" claim | `ticket_faq_markdown.py:2372`, `support_ticket_clustering.py:556` | 2 |
 | Private-row flag stripped in `_normalize_ticket_row` before the downstream filter | `support_ticket_input_package.py:530` | 2 |
 | Whole-file-into-RAM on Path B; metrics double-computed | `api/control_surfaces.py:2806`; `:3208`/`:4034` | 3 |
-| Embedding booster maybe OFF in production | `content_ops_execution.py:1066` | 2, 3 |
+| Embedding booster maybe OFF in production (host factory toggle gates it) | `atlas_brain/_content_ops_infrastructure.py:186` (`build_content_ops_faq_embedding_port`) | 2, 3 |
 | Scorecard: no totals reconciliation, no verbatim check, not at runtime, not on snapshot | `:1781` | 5, SUMMARY |
 | MCP fetch reads stored snapshot, not report_model | `content_ops_deflection_readonly_server.py:181` | 5 |
 | Cost = flat $13.50, no handle-time, hardcoded benchmark | `:51` | 5, 6 |
