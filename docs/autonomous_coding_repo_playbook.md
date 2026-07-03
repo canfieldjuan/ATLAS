@@ -82,6 +82,8 @@ Use this order for a new repo:
 5. Add review reconciliation.
    - Fail when the body claims automated-review findings are fixed or waived
      while unresolved bot threads still exist.
+   - Run this from trusted-base code when the PR can edit the workflow or
+     reconciliation script.
 6. Add secret scanning.
    - Keep this required before other quality gates.
 7. Add package-specific CI.
@@ -93,8 +95,10 @@ Use this order for a new repo:
    - Keep it local and ignored. Store owned PR, expected head, standing merge
      authorization, hooks, and last watcher state.
 10. Add watcher/timer support if long-running autonomous work is needed.
-    - It may report readiness only, or merge with explicit standing
-      authorization. In either case, closed PR watchers must shut down.
+    - The watcher reports readiness only. Any standing-authorized merge happens
+      in the builder/operator guard step after ownership, head, thread,
+      reconciliation, mergeability, and worktree checks.
+    - Closed PR watchers must shut down.
 11. Add monitoring reports after several PRs.
     - Use the pattern report to decide which repeated misses become audits,
       tests, or stronger rules.
@@ -177,7 +181,9 @@ A repo is ready for long-running autonomous coding when a new builder can:
 6. receive review or CI feedback;
 7. fix the upstream cause;
 8. reconcile the PR body with live review state;
-9. merge only after green checks and clean ownership state;
+9. merge only after green checks, clean ownership state, expected head SHA,
+   clean worktree, clean review threads, clean reconciliation, and clean
+   mergeability;
 10. tear down the worktree and continue the next approved slice.
 
 If any step depends on tribal knowledge, add it to the repo contract before
