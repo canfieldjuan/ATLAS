@@ -2729,7 +2729,6 @@ from fastapi import HTTPException  # noqa: E402
 
 from extracted_content_pipeline.faq_macro_writeback import (  # noqa: E402
     MacroPublishResult,
-    SupportMacroDraft,
 )
 from extracted_content_pipeline.faq_macro_writeback_publish import (  # noqa: E402
     FAQMacroWritebackPublishService,
@@ -3083,3 +3082,47 @@ async def test_publish_macros_already_approved_draft_still_publishes() -> None:
     assert payload["published_count"] == 1
     # no redundant approve transition for an already-approved draft
     assert [(c["status"]) for c in repo.update_calls] == ["published"]
+
+
+async def test_publish_macros_partial_generated_draft_publishes_nothing() -> None:
+    # A paid report whose generated FAQ is only partially publishable must not
+    # promote the draft or publish; the route surfaces ok:false with no writes.
+    store = await _paid_report_store()
+    repo = _PublishFAQRepo(_publish_draft(status="draft"))
+    repo.draft = TicketFAQDraft(
+        id=_PUBLISH_FAQ_ID,
+        target_id="ticket-faq-report",
+        target_mode="support_ticket_faq",
+        title="Resolution Audit FAQ draft",
+        markdown="# Resolution Audit FAQ draft",
+        items=(
+            {
+                "faq_item_id": "faq-item-1",
+                "topic": "billing",
+                "question": "Why was I charged twice?",
+                "resolution_text": "Open Billing and compare settled charges.",
+                "answer_evidence_status": "resolution_evidence",
+            },
+            {
+                "faq_item_id": "faq-item-2",
+                "question": "How do I export a report?",
+                "answer": "Customers mention exports.",
+                "answer_evidence_status": "draft_needs_review",
+            },
+        ),
+        source_count=2,
+        ticket_source_count=2,
+        status="draft",
+    )
+    repo.stored_status = "draft"
+    boundary = _ZendeskBoundaryFake()
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=boundary)
+    router = _publish_router(store, lambda: service)
+
+    payload = await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert payload["ok"] is False
+    assert payload["published_count"] == 0
+    assert boundary.calls == []
+    assert repo.update_calls == []
+    assert repo.stored_status == "draft"

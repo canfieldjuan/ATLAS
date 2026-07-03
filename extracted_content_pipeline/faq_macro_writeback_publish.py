@@ -37,6 +37,7 @@ class FAQMacroPublishSummary:
     failed_count: int = 0
     pending_reconcile_count: int = 0
     draft_status_updated: bool = False
+    status_conflict: bool = False
     skipped: Sequence[JsonDict] = field(default_factory=tuple)
     results: Sequence[JsonDict] = field(default_factory=tuple)
 
@@ -49,6 +50,7 @@ class FAQMacroPublishSummary:
             and self.failed_count == 0
             and self.pending_reconcile_count == 0
             and self.publishable_count == self.published_count + self.updated_count
+            and not self.status_conflict
         )
 
     def as_dict(self) -> JsonDict:
@@ -130,40 +132,67 @@ class FAQMacroWritebackPublishService:
         if draft is None:
             return FAQMacroPublishSummary(faq_id=cleaned_id, found=False)
 
-        # An explicit tenant publish action (paid Resolution Audit) is the
-        # approval for a generated draft. Only the exact 'draft' status is
-        # promotable; a 'published' draft is retryable through the provider's
-        # idempotent mapping; rejected/archived drafts are never revived.
-        current_status = _clean(draft.status)
-        promote = approve_draft and current_status == DRAFT_FAQ_STATUS
-        retry_published = (
-            approve_draft and current_status == _clean(self.published_status)
+        # A paid Resolution Audit publish is the approval for a *generated*
+        # draft. Only the exact 'draft' status is promotable; an already
+        # 'published' draft is a retry through the provider's idempotent
+        # mapping; rejected/archived/expired are never revived. Every other
+        # path keeps the standard "must already be approved" behavior.
+        observed_status = _clean(draft.status)
+        promote = approve_draft and observed_status == DRAFT_FAQ_STATUS
+        published_retry = (
+            approve_draft and observed_status == _clean(self.published_status)
         )
-        preview_draft = (
-            replace(draft, status=APPROVED_FAQ_STATUS)
-            if promote or retry_published
-            else draft
+        already_approved = observed_status == APPROVED_FAQ_STATUS
+        publishable_now = already_approved or promote or published_retry
+
+        # The status the row will hold when we decide whether to mark it
+        # published: a real promotion reaches 'approved'; a published retry
+        # stays 'published' so it is never re-marked; anything else keeps its
+        # observed status (and therefore cannot be marked published).
+        effective_status = (
+            APPROVED_FAQ_STATUS if (already_approved or promote) else observed_status
+        )
+        # Publishing requires approved semantics, so evaluate per-item
+        # eligibility as if approved on any path that is allowed to publish.
+        eligibility_status = (
+            APPROVED_FAQ_STATUS if publishable_now else observed_status
+        )
+        preview = build_macro_writeback_preview(
+            [replace(draft, status=eligibility_status)]
         )
 
-        # Eligibility is decided BEFORE any status write so a draft with no
-        # publishable macros is never approved (which would also surface it in
-        # the approved-filtered FAQ search projection as a side effect).
-        preview = build_macro_writeback_preview([preview_draft])
-        if not preview.macros:
-            summary = _summary(
-                faq_id=cleaned_id,
-                found=True,
-                draft_status=current_status,
-                preview=preview,
-                results=(),
+        # A generated draft is auto-approved only when it is *fully*
+        # publishable, so a partial or empty generated draft is never promoted
+        # into the approved-filtered FAQ search projection. Already-approved
+        # drafts still publish their publishable subset below.
+        if promote and (preview.publishable_count == 0 or preview.skipped_count > 0):
+            return await self._finish(
+                _summary(
+                    faq_id=cleaned_id,
+                    found=True,
+                    draft_status=observed_status,
+                    preview=preview,
+                    results=(),
+                ),
+                scope=scope,
             )
-            await self._record_attempt(summary, scope=scope)
-            return summary
+
+        if not preview.macros:
+            return await self._finish(
+                _summary(
+                    faq_id=cleaned_id,
+                    found=True,
+                    draft_status=observed_status,
+                    preview=preview,
+                    results=(),
+                ),
+                scope=scope,
+            )
 
         if promote:
             # Compare-and-set on the stored status: a concurrent review
-            # decision (for example a reject landing after get_draft) wins
-            # and the publish fails closed as draft_not_approved.
+            # decision (a reject landing after get_draft) wins and the publish
+            # fails closed without ever touching the provider.
             approved = await self.faq_repository.update_status(
                 cleaned_id,
                 APPROVED_FAQ_STATUS,
@@ -171,36 +200,50 @@ class FAQMacroWritebackPublishService:
                 expected_status=DRAFT_FAQ_STATUS,
             )
             if not approved:
-                lost_preview = build_macro_writeback_preview([draft])
-                summary = _summary(
-                    faq_id=cleaned_id,
-                    found=True,
-                    draft_status=current_status,
-                    preview=lost_preview,
-                    results=(),
+                return await self._finish(
+                    _summary(
+                        faq_id=cleaned_id,
+                        found=True,
+                        draft_status=observed_status,
+                        preview=build_macro_writeback_preview([draft]),
+                        results=(),
+                    ),
+                    scope=scope,
                 )
-                await self._record_attempt(summary, scope=scope)
-                return summary
 
         results = tuple(await self.provider.publish(preview.macros, scope=scope))
         summary = _summary(
             faq_id=cleaned_id,
             found=True,
-            draft_status=_clean(preview_draft.status),
+            draft_status=effective_status,
             preview=preview,
             results=results,
         )
         if _should_mark_published(summary):
-            # Also compare-and-set: if a review decision landed while the
-            # external publish was in flight, that decision is preserved
-            # rather than overwritten by the publish bookkeeping.
-            status_updated = await self.faq_repository.update_status(
+            # Compare-and-set again: if a review decision landed while the
+            # external publish was in flight, that decision wins. The macro was
+            # published externally, but the row was not marked, so the caller
+            # must see a conflict rather than a clean success.
+            marked = await self.faq_repository.update_status(
                 cleaned_id,
                 self.published_status,
                 scope=scope,
                 expected_status=APPROVED_FAQ_STATUS,
             )
-            summary = replace(summary, draft_status_updated=status_updated)
+            summary = replace(
+                summary,
+                draft_status_updated=marked,
+                status_conflict=not marked,
+            )
+        return await self._finish(summary, scope=scope)
+
+    async def _finish(
+        self,
+        summary: FAQMacroPublishSummary,
+        *,
+        scope: TenantScope,
+    ) -> FAQMacroPublishSummary:
+        """Record the attempt for every return path, then return the summary."""
         await self._record_attempt(summary, scope=scope)
         return summary
 

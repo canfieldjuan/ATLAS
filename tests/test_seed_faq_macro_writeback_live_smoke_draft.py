@@ -50,6 +50,7 @@ class _FAQRepo:
         status: str,
         *,
         scope: TenantScope,
+        expected_status: str | None = None,
     ) -> bool:
         self.update_calls.append({
             "faq_id": faq_id,

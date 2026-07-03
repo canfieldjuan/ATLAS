@@ -20,7 +20,7 @@ publish endpoint that resolves the saved FAQ draft id from the persisted
 Resolution Audit artifact and publishes through the existing
 `FAQMacroWritebackPublishService`.
 
-This slice is over the 400 LOC soft cap (1173 total) because the vertical
+This slice is over the 400 LOC soft cap (1383 total) because the vertical
 slice ships the route, host wiring, and both-sides tests in one reviewable
 unit: ~148 LOC of production code, with the remainder being this plan doc
 and tests proving the paid/locked/missing/cross-tenant/stale-id/
@@ -80,10 +80,15 @@ Slice phase: Vertical slice
 - `extracted_content_pipeline/ticket_faq_ports.py`
 - `extracted_content_pipeline/ticket_faq_postgres.py`
 - `plans/PR-Resolution-Audit-Zendesk-Writeback.md`
+- `tests/test_atlas_content_ops_generated_assets_api.py`
 - `tests/test_atlas_content_ops_macro_writeback.py`
+- `tests/test_content_ops_faq_macro_writeback_flow.py`
+- `tests/test_extracted_content_asset_api.py`
 - `tests/test_extracted_content_deflection_submit.py`
 - `tests/test_extracted_ticket_faq_macro_writeback_publish.py`
 - `tests/test_extracted_ticket_faq_postgres.py`
+- `tests/test_faq_macro_writeback_live_zendesk_smoke.py`
+- `tests/test_seed_faq_macro_writeback_live_smoke_draft.py`
 
 ## Mechanism
 
@@ -173,12 +178,17 @@ Parked hardening: none.
 | `atlas_brain/api/__init__.py` | 4 |
 | `extracted_content_pipeline/api/control_surfaces.py` | 112 |
 | `extracted_content_pipeline/faq_macro_writeback.py` | 1 |
-| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 52 |
+| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 113 |
 | `extracted_content_pipeline/ticket_faq_ports.py` | 9 |
 | `extracted_content_pipeline/ticket_faq_postgres.py` | 11 |
-| `plans/PR-Resolution-Audit-Zendesk-Writeback.md` | 184 |
+| `plans/PR-Resolution-Audit-Zendesk-Writeback.md` | 192 |
+| `tests/test_atlas_content_ops_generated_assets_api.py` | 1 |
 | `tests/test_atlas_content_ops_macro_writeback.py` | 70 |
-| `tests/test_extracted_content_deflection_submit.py` | 362 |
-| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 233 |
+| `tests/test_content_ops_faq_macro_writeback_flow.py` | 1 |
+| `tests/test_extracted_content_asset_api.py` | 10 |
+| `tests/test_extracted_content_deflection_submit.py` | 405 |
+| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 317 |
 | `tests/test_extracted_ticket_faq_postgres.py` | 96 |
-| **Total** | **1173** |
+| `tests/test_faq_macro_writeback_live_zendesk_smoke.py` | 1 |
+| `tests/test_seed_faq_macro_writeback_live_smoke_draft.py` | 1 |
+| **Total** | **1383** |
