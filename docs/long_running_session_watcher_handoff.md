@@ -53,6 +53,8 @@ These files are local machine infrastructure, not committed repo files:
 | `~/.config/systemd/user/atlas-pr-watch@.timer` | User systemd timer template, every 30 minutes |
 | `~/.config/atlas-pr-watchers/<session-id>.env` | One config per builder session |
 | `~/.local/state/atlas-pr-watchers/<session-id>.json` | Latest machine-readable watcher status |
+| `~/.local/state/atlas-pr-watchers/<session-id>.wake.json` | Latest Codex wake-bridge handoff metadata |
+| `~/.local/state/atlas-pr-watchers/<session-id>.wake.md` | Pasteable/resumable Codex wake prompt |
 | `~/.local/state/atlas-pr-watchers/<session-id>.log` | Append-only watcher log |
 
 If `~/.local/bin/atlas-pr-watch` is missing, stop and ask the operator. Do not
@@ -79,6 +81,51 @@ provided an integration. Use this concrete contract:
 
 The unavailable state is safe but not immediate. Do not describe that session as
 having quick review-event wake-up coverage.
+
+## Codex Wake Bridge
+
+The watcher records state; it does not wake Codex by itself. Use
+`scripts/codex_wake_bridge.py` to convert an existing watcher snapshot into a
+resumable handoff:
+
+```bash
+python scripts/codex_wake_bridge.py "${SESSION_ID}" --source scheduled
+```
+
+The bridge reads the watcher config and JSON state, then writes:
+
+```text
+~/.local/state/atlas-pr-watchers/${SESSION_ID}.wake.json
+~/.local/state/atlas-pr-watchers/${SESSION_ID}.wake.md
+```
+
+The Markdown file is the prompt for a resumed or `codex exec` run. By default
+the bridge only writes handoff files. To launch a local command, pass
+`--run-command` explicitly, or add a quoted `CODEX_WAKE_COMMAND` line to that
+session's watcher config:
+
+```bash
+CODEX_WAKE_COMMAND="codex exec -C <repo-dir> -"
+```
+
+The command receives the generated prompt on stdin. The prompt text is not
+interpolated into a shell command.
+
+Wake-source rules:
+
+- `--source event` is attention-only. It can wake Codex to inspect review
+  activity or a new push, but it must not merge, even if the watcher snapshot is
+  green.
+- `--source scheduled` may classify `ready_for_human_merge` as
+  `scheduled-ready`, which is only permission to run the AGENTS merge guards.
+  The resumed builder still needs explicit standing merge authorization in
+  `SESSION_STATE.local.md` before merging.
+- Pending states write a handoff but do not run the optional command by default.
+  Do not replace the watcher timer with an in-chat polling loop.
+
+This gives the two-hook shape without making the watcher merge-capable: event
+hooks can call the bridge with `--source event`; the 30-minute green-confirmation
+timer can call it with `--source scheduled`.
 
 ## Safety Rules
 
@@ -135,13 +182,53 @@ HEAD_SHA="<current PR head SHA>"
 POLL_MINUTES="30"
 AUTO_MERGE="0"
 NOTIFY="1"
+# Optional, quoted. Leave unset for write-only handoff.
+# CODEX_WAKE_COMMAND="codex exec -C <absolute repo or worktree path> -"
 EOF
 ```
 
-Run one manual poll first:
+Install the bridge wrapper and systemd drop-in. The wrapper reads `REPO_DIR`
+from the session config each time it runs, so one systemd template can safely
+serve multiple sessions without baking one worktree path into every timer.
 
 ```bash
-~/.local/bin/atlas-pr-watch "${SESSION_ID}"
+cat > ~/.local/bin/atlas-pr-watch-and-wake <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+session_id="${1:?watcher session id required}"
+config="${HOME}/.config/atlas-pr-watchers/${session_id}.env"
+
+if [ ! -f "$config" ]; then
+  echo "watcher config not found: $config" >&2
+  exit 2
+fi
+
+# shellcheck disable=SC1090
+source "$config"
+
+if [ -z "${REPO_DIR:-}" ] || [ ! -d "$REPO_DIR" ]; then
+  echo "invalid REPO_DIR for ${session_id}: ${REPO_DIR:-}" >&2
+  exit 2
+fi
+
+~/.local/bin/atlas-pr-watch "${session_id}"
+cd "$REPO_DIR"
+python scripts/codex_wake_bridge.py "${session_id}" --source scheduled
+EOF
+chmod +x ~/.local/bin/atlas-pr-watch-and-wake
+
+mkdir -p ~/.config/systemd/user/atlas-pr-watch@.service.d
+cat > ~/.config/systemd/user/atlas-pr-watch@.service.d/wake-bridge.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=%h/.local/bin/atlas-pr-watch-and-wake %i
+EOF
+```
+
+Run one manual poll through the same wrapper the timer will use:
+
+```bash
+~/.local/bin/atlas-pr-watch-and-wake "${SESSION_ID}"
 ```
 
 Enable the 30-minute timer:
@@ -197,6 +284,11 @@ New rules to follow:
 - Fill the SESSION_STATE.local.md hook fields: `Push/review-event hook`, `Timer hook`, `Next timer wake`, `Last watcher state`, and `Standing merge authorization`.
 - Record the push/review-event hook in SESSION_STATE.local.md only when it wakes the builder session. If no concrete external bridge wakes the builder, write `Push/review-event hook: unavailable`; the scheduled watcher is then the autonomous fallback and the session does not have immediate review-event wake-up coverage.
 - Do not use the scheduled atlas-pr-watch command as the push/review-event bridge unless it has a source-aware event mode that cannot produce merge permission.
+- Use `python scripts/codex_wake_bridge.py "${SESSION_ID}" --source event`
+  for push/review-event bridges and
+  `python scripts/codex_wake_bridge.py "${SESSION_ID}" --source scheduled`
+  after scheduled watcher polls that should wake Codex. Event wakes are always
+  attention-only; scheduled-ready wakes still require live AGENTS guards.
 - The watcher must poll every 30 minutes and must use AUTO_MERGE="0".
 - No auto-merge in the watcher. When the watcher reports ready_for_human_merge, report readiness and wait for the operator unless this specific arc has explicit standing merge authorization.
 - With standing merge authorization recorded in SESSION_STATE.local.md, merge only after a scheduled watcher wake-up reports ready_for_human_merge and the current AGENTS pre-merge guards pass, including review-thread status and merge-conflict/mergeability state.
@@ -231,8 +323,43 @@ HEAD_SHA="<current PR head SHA>"
 POLL_MINUTES="30"
 AUTO_MERGE="0"
 NOTIFY="1"
+# Optional, quoted. Leave unset for write-only handoff.
+# CODEX_WAKE_COMMAND="codex exec -C <absolute repo or worktree path> -"
 EOF
-~/.local/bin/atlas-pr-watch "${SESSION_ID}"
+
+cat > ~/.local/bin/atlas-pr-watch-and-wake <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+session_id="${1:?watcher session id required}"
+config="${HOME}/.config/atlas-pr-watchers/${session_id}.env"
+
+if [ ! -f "$config" ]; then
+  echo "watcher config not found: $config" >&2
+  exit 2
+fi
+
+# shellcheck disable=SC1090
+source "$config"
+
+if [ -z "${REPO_DIR:-}" ] || [ ! -d "$REPO_DIR" ]; then
+  echo "invalid REPO_DIR for ${session_id}: ${REPO_DIR:-}" >&2
+  exit 2
+fi
+
+~/.local/bin/atlas-pr-watch "${session_id}"
+cd "$REPO_DIR"
+python scripts/codex_wake_bridge.py "${session_id}" --source scheduled
+EOF
+chmod +x ~/.local/bin/atlas-pr-watch-and-wake
+
+mkdir -p ~/.config/systemd/user/atlas-pr-watch@.service.d
+cat > ~/.config/systemd/user/atlas-pr-watch@.service.d/wake-bridge.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=%h/.local/bin/atlas-pr-watch-and-wake %i
+EOF
+
+~/.local/bin/atlas-pr-watch-and-wake "${SESSION_ID}"
 systemctl --user daemon-reload
 systemctl --user enable --now "atlas-pr-watch@${SESSION_ID}.timer"
 ```
