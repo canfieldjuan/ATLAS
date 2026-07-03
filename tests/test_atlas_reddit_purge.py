@@ -20,6 +20,7 @@ from atlas_reddit.reddit_client import (
     validate_scopes,
 )
 from atlas_reddit.store import ListeningStore
+from tests.atlas_reddit_fixtures import fake_reply, fake_submission, seed_candidates, seed_replies
 
 NOW = 1_751_600_000
 
@@ -53,6 +54,22 @@ def store(tmp_path: Path):
 
 
 def _seed_candidate(store: ListeningStore, post_id: str) -> None:
+    """Producer-fidelity seeding: the row is written by the REAL pipeline
+    (fixture factory), so a test cannot seed a shape the producer never
+    emits -- the given id must be exactly what the producer makes of it."""
+    bare = post_id.removeprefix("t3_")
+    [produced] = seed_candidates(
+        store, [fake_submission(bare)], now=NOW - 3600
+    )
+    assert produced == post_id, (
+        f"{post_id!r} is not a producer-emitted id (producer made {produced!r})"
+    )
+
+
+def _seed_raw_candidate(store: ListeningStore, post_id: str) -> None:
+    """Direct store write, bypassing the producer. ONLY for simulating
+    corrupt rows the pipeline could never create (the never-delete-on-
+    data-shape-mismatch branch needs real bad rows)."""
     store.upsert_candidate(
         post_id=post_id,
         subreddit="CustomerSuccess",
@@ -70,6 +87,22 @@ def _seed_candidate(store: ListeningStore, post_id: str) -> None:
 
 
 def _seed_reply(store: ListeningStore, reply_id: str, thread_id: str = "t3_thread") -> None:
+    """Producer-fidelity seeding via the REAL tracker; same contract as
+    :func:`_seed_candidate`."""
+    [produced] = seed_replies(
+        store,
+        [fake_reply(reply_id.removeprefix("t1_"))],
+        now=NOW - 3600,
+        thread_bare_id=thread_id.removeprefix("t3_"),
+    )
+    assert produced == reply_id, (
+        f"{reply_id!r} is not a producer-emitted id (producer made {produced!r})"
+    )
+
+
+def _seed_raw_reply(store: ListeningStore, reply_id: str, thread_id: str = "t3_thread") -> None:
+    """Direct store write, bypassing the producer. ONLY for corrupt-row
+    simulation (see :func:`_seed_raw_candidate`)."""
     store.upsert_tracked_thread(thread_id=thread_id, my_comment_ids=("t1_mine",), checked_at=0)
     store.insert_reply(
         reply_id=reply_id,
@@ -198,7 +231,7 @@ def test_malformed_stored_id_is_error_never_missing(store: ListeningStore) -> No
     """P1 class, defensive layer: an id that is not a Reddit fullname
     cannot be liveness-checked -- it must be surfaced as an error and the
     row RETAINED, never classified as missing and deleted."""
-    _seed_candidate(store, "abc123")  # bare id, not a fullname
+    _seed_raw_candidate(store, "abc123")  # bare id, not a fullname
     _seed_candidate(store, "t3_good")
     source = FakeDeletionSource()
     stats = _purge(store, source)
@@ -341,8 +374,8 @@ def test_wrong_kind_fullname_per_table_retained(store: ListeningStore) -> None:
     """Wave-2 class: the shape guard must validate the KIND per table --
     a t2_ user id in candidates or a t3_ post id in replies cannot be
     liveness-checked for that table and must be retained + surfaced."""
-    _seed_candidate(store, "t2_useridx")  # wrong kind for candidates
-    _seed_reply(store, "t3_postidx")      # wrong kind for replies
+    _seed_raw_candidate(store, "t2_useridx")  # wrong kind for candidates
+    _seed_raw_reply(store, "t3_postidx")      # wrong kind for replies
     source = FakeDeletionSource()
     stats = _purge(store, source)
     assert len(stats.errors) == 2
@@ -616,7 +649,7 @@ def test_cross_table_id_twin_is_not_shielded(store: ListeningStore) -> None:
     """Wave-3 class: a corrupt reply holding a t3_ id must not shield the
     legitimate candidate with the same id from purging."""
     _seed_candidate(store, "t3_x")
-    _seed_reply(store, "t3_x")  # wrong kind for replies (corrupt row)
+    _seed_raw_reply(store, "t3_x")  # wrong kind for replies (corrupt row)
     source = FakeDeletionSource(gone={"t3_x": "content shows [deleted]"})
     stats = _purge(store, source)
     assert len(stats.errors) == 1  # the corrupt reply is surfaced

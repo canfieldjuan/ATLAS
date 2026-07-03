@@ -1,7 +1,13 @@
 name: PR Body Contract
 
+# Trusted-base execution (#1944 waiver 18): `pull_request_target` resolves
+# this workflow from the BASE branch and the checkout pins the base SHA, so
+# a PR editing this gate is still judged by main's version. The plan doc a
+# body names arrives WITH the PR, so its existence is asked of the fetched
+# PR head ref by inspection (git cat-file) -- PR content is never executed.
+
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited, reopened, synchronize]
 
 permissions:
@@ -9,10 +15,23 @@ permissions:
 
 jobs:
   pr-body-contract:
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Checkout trusted base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Fetch PR head for plan-doc inspection
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}"
 
       - name: Write PR body to file
         env:
@@ -22,4 +41,9 @@ jobs:
       - name: Audit PR body against AGENTS.md section 1b
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-        run: python3 scripts/audit_pr_body.py --pr-author "$PR_AUTHOR" /tmp/pr_body.md
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 scripts/audit_pr_body.py \
+            --pr-author "$PR_AUTHOR" \
+            --plan-git-ref "refs/remotes/origin/pr-${PR_NUMBER}" \
+            /tmp/pr_body.md
