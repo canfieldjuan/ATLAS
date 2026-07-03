@@ -494,3 +494,101 @@ def test_update_baseline_accepts_new_sensitive_finding(tmp_path: Path) -> None:
         "--min-score", "99",
         "--sensitive-glob", "**/billing_paid.py",
     ]) == 0
+
+
+def _write_happy_only_tests(tests: Path, module_stem: str) -> None:
+    """A test file with enough tests to trip NO_RAISES_TESTS (>= 3) and
+    zero raises assertions."""
+    _write(
+        tests / ("test_%s.py" % module_stem),
+        "import %s\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n" % module_stem,
+    )
+
+
+def test_new_sensitive_module_without_raises_tests_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Negatives-presence gate (#1934 arc lesson 5): a NEW module on a
+    sensitive path whose tests never assert that anything raises must
+    fail the ratchet outright -- min-score cannot save it, and the same
+    file off the sensitive globs still passes (the gate is scoped, not
+    repo-wide noise)."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write_happy_only_tests(tests, "purge_guard")
+
+    # Off the sensitive globs: score is far below min-score, passes.
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+    ]) == 0
+    # On the sensitive globs: zero tolerance, fails regardless of score.
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+    out = capsys.readouterr().out
+    assert "sensitive-path NO_RAISES_TESTS" in out
+
+
+def test_new_sensitive_module_with_raises_tests_passes(tmp_path: Path) -> None:
+    """Second side: the same new sensitive-path module whose tests DO
+    assert a raise sails through the zero-tolerance gate."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest\n"
+        "import purge_guard\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_rejects_bad_input():\n"
+        "    with pytest.raises(ValueError):\n"
+        "        raise ValueError('boundary probe')\n",
+    )
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
