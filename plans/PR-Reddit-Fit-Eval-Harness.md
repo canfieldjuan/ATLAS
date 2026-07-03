@@ -173,6 +173,27 @@ fixed at root in this PR):
 - **Fixtures directory missing from CI paths** -- corpus-only PRs would
   have skipped the contract tests. Added to the workflow paths list.
 
+Review-fix notes (Codex wave 2 on a202c9c74; all 8 verified real and
+fixed at root in this PR):
+
+- **parse_error needed a CLOSED taxonomy, not a shape check**: a
+  code-shaped string (customer_jane_doe) smuggles content past privacy
+  stripping exactly like free text. `PARSE_ERROR_CODES` frozenset now
+  lives in fit_rules (shared with the future S5 emitter); load rejects
+  anything outside it; probed with free text AND code-shaped values.
+- **Five more under-matched phrasings** (bare "this can fix"; "I would
+  reply/respond"; possessive auto-publish targets; 50k rows/exports +
+  hosted-first order; platform-first/no-preposition integrations) --
+  widened, each in the parametrized table.
+- **Two FALSE-POSITIVE classes on the PII detectors** (the guard's
+  second error direction): IGNORECASE made the capitalized-name detector
+  match "their name is not relevant"; the identifier rule flagged
+  "ticket id missing". Person-name is now case-sensitive (FitRule gains
+  a case_sensitive field; the cue stays case-insensitive via an inline
+  group) with redaction/absence rejects; identifiers require an ID-shaped
+  value (must contain a digit). A dedicated second-side probe suite pins
+  six redaction/absence phrasings as clean.
+
 ## Deferred
 
 - S2 fit contract + prompt builder; S3 runtime guard (+ parity test);
@@ -188,10 +209,10 @@ Parked hardening: none.
 ## Verification
 
 - `.venv/bin/python -m pytest tests/test_atlas_reddit_fit_eval.py -q`:
-  65 passed (every rule family, every shape-rejection code, corpus
+  80 passed (every rule family, every shape-rejection code, corpus
   both-sides contract, CLI exits, privacy, purity).
 - Full package suite `.venv/bin/python -m pytest
-  tests/test_atlas_reddit_*.py -q`: 398 passed (no-write probe and
+  tests/test_atlas_reddit_*.py -q`: 413 passed (no-write probe and
   fixture-fidelity stay green over the new modules).
 - Reachability (real entrypoint, observable result):
   `python scripts/evaluate_atlas_reddit_fit.py --cases
@@ -207,12 +228,12 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_reddit_checks.yml` | 2 |
-| `atlas_reddit/fit_eval.py` | 419 |
-| `atlas_reddit/fit_rules.py` | 293 |
-| `plans/PR-Reddit-Fit-Eval-Harness.md` | 218 |
+| `atlas_reddit/fit_eval.py` | 415 |
+| `atlas_reddit/fit_rules.py` | 320 |
+| `plans/PR-Reddit-Fit-Eval-Harness.md` | 239 |
 | `scripts/evaluate_atlas_reddit_fit.py` | 15 |
 | `tests/fixtures/atlas_reddit_fit_eval/cases.jsonl` | 16 |
 | `tests/fixtures/atlas_reddit_fit_eval/predictions_fail.jsonl` | 16 |
 | `tests/fixtures/atlas_reddit_fit_eval/predictions_pass.jsonl` | 16 |
-| `tests/test_atlas_reddit_fit_eval.py` | 393 |
-| **Total** | **1388** |
+| `tests/test_atlas_reddit_fit_eval.py` | 428 |
+| **Total** | **1467** |

@@ -96,10 +96,34 @@ def test_catalogue_partitions_into_three_families() -> None:
         ("card 4111 1111 1111 1111 was quoted", "PII_PAYMENT_CARD"),
         ("the customer name is Jane Doe", "PII_PERSON_NAME"),
         ("order number: AB-12345 keeps failing", "PII_IDENTIFIER"),
+        ("this can fix their problem", "FIX_RESOLVE_PROMISE"),
+        ("I would reply with a short answer", "REPLY_DRAFT"),
+        ("I'd respond with the docs link", "REPLY_DRAFT"),
+        ("publishes directly to your knowledge base", "AUTO_PUBLISH"),
+        ("hosted uploads handle 50,000 rows", "UNBOUNDED_HOSTED_UPLOADS"),
+        ("native Shopify integration", "LIVE_HELPDESK_INTEGRATION"),
+        ("connect Zendesk and import everything", "LIVE_HELPDESK_INTEGRATION"),
     ],
 )
 def test_each_rule_family_fires(text: str, code: str) -> None:
     assert code in {finding.code for finding in scan_fit_text(text)}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "their name is not relevant to the fit question",
+        "the customer name is redacted in the export",
+        "Customer name is Redacted per policy",
+        "ticket id missing from most rows",
+        "order number: unavailable in the sample",
+        "account id redacted before upload",
+    ],
+)
+def test_redaction_and_absence_speak_stays_clean(text: str) -> None:
+    """The PII detectors' SECOND side: privacy-preserving language about
+    names/ids being absent or redacted must never grade as a PII echo."""
+    assert scan_fit_text(text) == ()
 
 
 def test_clean_advisory_text_passes_the_whole_catalogue() -> None:
@@ -325,19 +349,30 @@ def test_summary_counts_match_result() -> None:
 # -- wave-1 class probes -----------------------------------------------------
 
 
-def test_free_text_parse_error_fails_closed(tmp_path: Path) -> None:
-    """parse_error flows into summary codes: free text (which can carry
-    model output or PII) is rejected at load as an emitter contract bug."""
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "model said: email jane.doe@example.com",  # free text
+        "customer_jane_doe",  # code-SHAPED but outside the closed taxonomy
+        "order_abc1234",
+    ],
+)
+def test_non_taxonomy_parse_error_fails_closed(
+    tmp_path: Path, bad_value: str
+) -> None:
+    """parse_error flows into summary codes: anything outside the CLOSED
+    taxonomy is rejected at load -- a code-shaped string can smuggle
+    content past privacy stripping just as well as free text."""
     envelope = {
         "case_id": "obvious_fit_broken_help_center",
         "prediction": None,
         "model_id": "m",
         "prompt_version": "fit.v1",
-        "parse_error": "model said: email jane.doe@example.com",
+        "parse_error": bad_value,
     }
     bad = tmp_path / "p.jsonl"
     bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
-    with pytest.raises(FitEvalError, match="parse_error must be a snake_case"):
+    with pytest.raises(FitEvalError, match="closed"):
         load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
 
 

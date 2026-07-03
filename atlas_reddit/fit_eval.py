@@ -24,6 +24,7 @@ from pathlib import Path
 
 from .fit_rules import (
     CLAIM_CODES,
+    PARSE_ERROR_CODES,
     FIT_RISK_FLAGS,
     FIT_VERDICTS,
     MAX_FIT_ANGLE_CHARS,
@@ -37,10 +38,6 @@ SUMMARY_SCHEMA_VERSION = "atlas_reddit_fit_eval_summary.v1"
 
 _PREDICTION_KEYS = frozenset({"verdict", "reason", "angle", "risk_flags"})
 _WHITESPACE_RE = re.compile(r"\s+")
-# parse_error values flow into check codes and summaries, so they must be
-# stable machine codes -- never free text, which could carry model output
-# or PII past the privacy stripping.
-_PARSE_ERROR_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class FitEvalError(Exception):
@@ -191,13 +188,12 @@ def load_predictions(path: Path, case_ids: frozenset[str]) -> dict[str, dict]:
                 f"{path}: {case_id!r} prediction must be an object or null"
             )
         parse_error = record.get("parse_error")
-        if parse_error is not None and (
-            not isinstance(parse_error, str)
-            or not _PARSE_ERROR_CODE_RE.match(parse_error)
-        ):
+        if parse_error is not None and parse_error not in PARSE_ERROR_CODES:
+            # Closed taxonomy, not just a shape check: a code-SHAPED string
+            # (e.g. customer_jane_doe) can smuggle content into summaries.
             raise FitEvalError(
-                f"{path}: {case_id!r} parse_error must be a snake_case code "
-                "(free text could leak model output into summaries)"
+                f"{path}: {case_id!r} parse_error must be one of the closed "
+                f"parse-error codes (got a value outside PARSE_ERROR_CODES)"
             )
         envelopes[case_id] = record
     return envelopes

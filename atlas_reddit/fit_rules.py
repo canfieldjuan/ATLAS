@@ -39,6 +39,21 @@ FIT_RISK_FLAGS: tuple[str, ...] = (
 MAX_FIT_REASON_CHARS = 280
 MAX_FIT_ANGLE_CHARS = 280
 
+# Closed parse-error taxonomy for prediction envelopes. Emitters (the S5
+# client, S6 runner) may ONLY use these codes; the harness rejects
+# anything else at load, because envelope codes flow into summaries and a
+# free-form "code" can smuggle model output or PII past privacy stripping.
+PARSE_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "model_returned_prose",
+        "model_output_invalid_json",
+        "model_output_schema_mismatch",
+        "model_empty_response",
+        "model_timeout",
+        "model_http_error",
+    }
+)
+
 
 @dataclass(frozen=True)
 class FitRule:
@@ -48,6 +63,7 @@ class FitRule:
     code: str
     pattern: str
     message: str
+    case_sensitive: bool = False
 
 
 @dataclass(frozen=True)
@@ -129,8 +145,8 @@ CLAIM_RULES: tuple[FitRule, ...] = (
     FitRule(
         code="FIX_RESOLVE_PROMISE",
         pattern=(
-            r"\b(?:we|it|(?:the|this|our)\s+tool)\s+(?:can|will|could)\s+"
-            r"(?:fix|resolve|solve|handle|eliminate)\b"
+            r"\b(?:we|it|this|that|(?:the|this|our)\s+tool)\s+"
+            r"(?:can|will|could)\s+(?:fix|resolve|solve|handle|eliminate)\b"
             r"|this\s+(?:can|will)\s+be\s+(?:fixed|resolved|solved)\s+"
             r"(?:by|with)\s+(?:our|the\s+tool)"
         ),
@@ -140,16 +156,18 @@ CLAIM_RULES: tuple[FitRule, ...] = (
         code="AUTO_PUBLISH",
         pattern=(
             r"auto[- ]?publish|automatically\s+publish(?:es)?"
-            r"|publish(?:es)?\s+directly\s+to\s+(?:the\s+)?" + _HELP_TARGET
+            r"|publish(?:es)?\s+directly\s+to\s+(?:the\s+|your\s+|their\s+)?"
+            + _HELP_TARGET
         ),
         message="Never claim automatic help-center or knowledge-base publishing.",
     ),
     FitRule(
         code="LIVE_HELPDESK_INTEGRATION",
         pattern=(
-            r"(?:connect(?:s|ed)?\s+(?:to|with)"
-            r"|(?:native\s+)?integrat(?:es?|ed|ion)\s+with)\s+"
+            r"(?:connect(?:s|ed)?\s+(?:to\s+|with\s+)?"
+            r"|(?:native\s+)?integrat(?:es?|ed|ion)\s+with\s+)"
             + _HELPDESK_PLATFORMS
+            + r"|(?:native\s+)?" + _HELPDESK_PLATFORMS + r"\s+integration"
         ),
         message="Never claim live help-desk integrations.",
     ),
@@ -167,7 +185,9 @@ CLAIM_RULES: tuple[FitRule, ...] = (
         code="UNBOUNDED_HOSTED_UPLOADS",
         pattern=(
             r"unlimited\s+(?:ticket|upload|row)s?"
-            r"|(?:50,?000|fifty\s+thousand)\s+(?:hosted|synchronous|tickets)"
+            r"|(?:50,?000|fifty\s+thousand)\s+"
+            r"(?:hosted|synchronous|tickets?|rows?|ticket\s+exports?|uploads?)"
+            r"|hosted\s+uploads?\b[^.]{0,40}\b(?:50,?000|fifty\s+thousand)"
         ),
         message="Never claim unbounded or 50k hosted uploads.",
     ),
@@ -190,7 +210,8 @@ POSTURE_RULES: tuple[FitRule, ...] = (
         code="REPLY_DRAFT",
         pattern=(
             r"^(?:hey|hi|hello)\s+(?:op|there|everyone|u/)"
-            r"|\bi(?:'d|\s+would)\s+(?:post|comment|write|say|start\s+by\s+saying)\b"
+            r"|\bi(?:'d|\s+would)\s+(?:post|comment|write|say|reply|respond"
+            r"|start\s+by\s+saying)\b"
             r"|feel\s+free\s+to\s+(?:dm|pm|reach\s+out)"
             r"|\b(?:dm|pm)\s+(?:me|us)\b|reach\s+out\s+to\s+(?:me|us)"
             r"|happy\s+to\s+(?:chat|help\s+directly|connect)"
@@ -237,16 +258,19 @@ PII_RULES: tuple[FitRule, ...] = (
     FitRule(
         code="PII_PERSON_NAME",
         pattern=(
-            r"(?:customer|user|client|their|his|her)\s+name\s+is\s+"
+            r"(?i:(?:customer|user|client|their|his|her)\s+name\s+is\s+)"
+            r"(?!(?:Redacted|Unknown|Not|Unavailable|Withheld|Missing|Private)\b)"
             r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
         ),
         message="Never echo personal names surfaced in the thread.",
+        case_sensitive=True,
     ),
     FitRule(
         code="PII_IDENTIFIER",
         pattern=(
             r"(?:account|order|case|ticket|invoice|ref(?:erence)?)\s*"
-            r"(?:number|no\.?|#|id)\s*[:\s]\s*[A-Za-z0-9-]{4,}"
+            r"(?:number|no\.?|#|id)\s*[:\s]\s*"
+            r"(?=[A-Za-z0-9-]*\d)[A-Za-z0-9-]{4,}"
         ),
         message="Never echo account, order, or ticket identifiers.",
     ),
@@ -262,10 +286,13 @@ ALL_RULE_CODES: frozenset[str] = frozenset(rule.code for rule in RULES)
 
 @lru_cache(maxsize=1)
 def _compiled() -> tuple[tuple[FitRule, re.Pattern[str]], ...]:
-    return tuple(
-        (rule, re.compile(rule.pattern, re.IGNORECASE | re.MULTILINE))
-        for rule in RULES
-    )
+    compiled = []
+    for rule in RULES:
+        flags = re.MULTILINE
+        if not rule.case_sensitive:
+            flags |= re.IGNORECASE
+        compiled.append((rule, re.compile(rule.pattern, flags)))
+    return tuple(compiled)
 
 
 def scan_fit_text(
