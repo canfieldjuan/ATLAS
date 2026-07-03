@@ -14,7 +14,7 @@ slice applies that existing pattern to the three API-driven gates
 (diff-budget, live-reconciliation, pr-body-contract); patching just one gate
 or re-describing the risk in docs would treat the symptom.
 
-Diff-budget overage (589 added lines vs the 400 cap): the workflow posture
+Diff-budget overage (593 added lines vs the 400 cap): the workflow posture
 audit ITSELF gates pull_request_target adoption behind its allowlist plus
 guard-shape check, so the three workflow conversions, the allowlist
 expansion, its failure-branch tests, and the review-events job split are one
@@ -159,7 +159,7 @@ Commands run from the repo root:
   passed; the three converted gates report as allowed guard-shaped jobs.
 - `bash scripts/local_pr_review.sh --current-pr-body-file <pr-body.md>` --
   all checks PASS.
-- `python scripts/check_diff_budget.py --additions 589 --body-file
+- `python scripts/check_diff_budget.py --additions 593 --body-file
   <pr-body.md>` -- within the 400 budget.
 - Post-merge, first PR: confirm the three checks report from
   `pull_request_target` runs (workflow run event visible in the check-run
@@ -170,10 +170,10 @@ Commands run from the repo root:
 | File | LOC (added) |
 |---|---:|
 | workflows (4) | 129 |
-| `scripts/audit_pr_body.py` | 74 |
+| `scripts/audit_pr_body.py` | 78 |
 | `scripts/audit_workflow_security_posture.py` | 13 |
 | `tests/test_audit_pr_body.py` | 110 |
 | `tests/test_audit_workflow_security_posture.py` | 68 |
 | `docs/SECURITY_GUARDRAILS.md` | 16 |
 | `plans/PR-Trusted-Base-Gate-Execution.md` | 179 |
-| **Total** | **589** |
+| **Total** | **593** |

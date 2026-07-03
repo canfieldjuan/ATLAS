@@ -51,42 +51,46 @@ def is_dependabot_author(author: str | None) -> bool:
     return author.strip() in DEPENDABOT_AUTHORS
 
 
+def _git_read(args: list[str], *, repo_root: Path) -> tuple[int, bytes]:
+    """Run a read-only git command. A missing or broken git binary is an
+    infrastructure condition surfaced as a nonzero code (fail-closed for
+    every caller), never a traceback."""
+    try:
+        proc = subprocess.run(
+            ["git", *args], cwd=repo_root, capture_output=True
+        )
+    except OSError:
+        return 1, b""
+    return proc.returncode, proc.stdout
+
+
 def resolve_git_ref(ref: str, *, repo_root: Path = ROOT) -> bool:
     """True when ``ref`` resolves to a commit in the local repo. The
     trusted-base workflow fetches the PR head before auditing; an
     unresolvable ref is an infrastructure failure, never a silent pass."""
-    proc = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
-        cwd=repo_root,
-        capture_output=True,
+    code, _ = _git_read(
+        ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        repo_root=repo_root,
     )
-    return proc.returncode == 0
+    return code == 0
 
 
 def plan_exists_at_ref(ref: str, *, repo_root: Path = ROOT) -> Callable[[str], bool]:
     """Plan-doc existence checker against a git ref (the fetched PR head).
     Trusted-base gate runs execute this script from the BASE checkout, but a
     new plan doc arrives WITH the PR -- so existence is asked of the PR head
-    ref by inspection (git cat-file), never by executing PR code."""
+    ref by inspection (git ls-tree), never by executing PR code."""
 
     def _exists(plan: str) -> bool:
-        # ls-tree mode, not cat-file existence: the entry must be a
-        # REGULAR-FILE blob. cat-file -e also accepts a tree at the path
-        # (plans/PR-Foo.md/child) and cat-file -t reports symlinks as
-        # blobs (mode 120000, possibly dangling) -- neither is a plan
-        # doc. Requiring mode 100644/100755 mirrors the working-tree
+        # ls-tree lines are "<mode> <type> <sha>\t<path>". The entry must
+        # be a REGULAR-FILE blob: a tree at the path (plans/PR-Foo.md/child)
+        # or a symlink (mode 120000, possibly dangling) is not a plan doc.
+        # Requiring the 100644/100755 blob prefix mirrors the working-tree
         # default's is_file().
-        proc = subprocess.run(
-            ["git", "ls-tree", ref, "--", plan],
-            cwd=repo_root,
-            capture_output=True,
-        )
-        fields = proc.stdout.split()
-        return (
-            proc.returncode == 0
-            and len(fields) >= 2
-            and fields[0] in (b"100644", b"100755")
-            and fields[1] == b"blob"
+        code, out = _git_read(["ls-tree", ref, "--", plan], repo_root=repo_root)
+        line = out.strip()
+        return code == 0 and (
+            line.startswith(b"100644 blob") or line.startswith(b"100755 blob")
         )
 
     return _exists
