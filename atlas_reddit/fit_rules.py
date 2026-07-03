@@ -79,8 +79,9 @@ class FitFinding:
 
 _HELP_TARGET = r"(?:help[- ]?cent(?:er|re)|knowledge[- ]?base|docs? site|documentation)"
 _HELPDESK_PLATFORMS = (
-    r"(?:zendesk|intercom|gorgias|freshdesk|help ?scout|salesforce(?: service cloud)?"
-    r"|hubspot(?: service hub)?|shopify|front|jira(?: service management)?)"
+    r"\b(?:zendesk|intercom|gorgias|freshdesk|help ?scout"
+    r"|salesforce(?: service cloud)?|hubspot(?: service hub)?|shopify|front"
+    r"|jira(?: service management)?)\b"
 )
 
 # Outcome/product-truth families. Uploaded or discussed support-ticket data
@@ -108,6 +109,8 @@ CLAIM_RULES: tuple[FitRule, ...] = (
             r"|queue\s+will\s+shrink"
             r"|(?:deflect|reduce|cut|lower)s?\s+(?:your\s+|their\s+|the\s+)?"
             r"(?:support\s+)?(?:tickets?(?:\s+volume)?|volume|load)"
+            r"|answers?\b[^.]{0,30}\b(?:before|without)\s+"
+            r"(?:customers?\s+)?open(?:ing)?\s+(?:a\s+)?tickets?"
         ),
         message="Never promise support volume will drop, even unquantified.",
     ),
@@ -204,7 +207,9 @@ CLAIM_RULES: tuple[FitRule, ...] = (
         code="SELF_PROMO_PITCH",
         pattern=(
             r"\b(?:our|my)\s+(?:tool|product|platform|audit|service|app)\b"
-            r"|\b(?:we|i)\s+built\b|check\s+out\s+(?:our|my)"
+            r"|\b(?:we|i)\s+(?:built|have|offer)\s+a\s+"
+            r"(?:tool|product|service|platform|app)\b"
+            r"|\b(?:we|i)\s+built\b|\bmy\s+company\b|check\s+out\s+(?:our|my)"
             r"|\bsign\s+up\b|free\s+trial|book\s+a\s+(?:demo|call)"
         ),
         message="Never pitch: no product mentions, trials, demos, or sign-ups.",
@@ -231,6 +236,8 @@ POSTURE_RULES: tuple[FitRule, ...] = (
         code="WRITE_ACTION_POSTURE",
         pattern=(
             r"post\s+this\s+(?:as\s+a\s+)?(?:comment|reply)"
+            r"|\b(?:reply|respond)\s+to\s+the\s+(?:thread|post|op)\b"
+            r"|leave\s+a\s+comment"
             r"|i\s+(?:will|would|can)\s+(?:comment|post|respond)\s+(?:on|to)\b"
             r"|\b(?:upvote|downvote)\b"
             r"|schedule\s+(?:a\s+)?(?:post|comment|follow[- ]?up)"
@@ -251,7 +258,8 @@ PII_RULES: tuple[FitRule, ...] = (
         code="PII_PHONE",
         pattern=(
             r"(?<![\d.])(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?![\d.])"
-            r"|(?:call|phone|text|dial|reach)(?:\s+\S+){0,3}\s+"
+            r"|(?:call|phone|text|dial|reach|cell|mobile|number)"
+            r"(?:\s+\S+){0,3}\s+"
             r"(?<![\d.])\+?1?\d{10}(?![\d.])"
         ),
         message="Never echo phone numbers from the thread.",
@@ -272,6 +280,13 @@ PII_RULES: tuple[FitRule, ...] = (
             r"(?i:(?:customer|user|client|their|his|her)\s+name\s+is\s+)"
             r"(?!(?:Redacted|Unknown|Not|Unavailable|Withheld|Missing|Private)\b)"
             r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
+            r"|(?i:(?:support\s+lead|team\s+lead|agent|manager|rep|owner"
+            r"|founder|user|customer|client|colleague|employee)\s+)"
+            r"(?!(?:Success|Team|Support|Service|Experience|Operations"
+            r"|Redacted|Unknown)\b)"
+            r"[A-Z][a-z]+\s+"
+            r"(?!(?:Success|Team|Support|Service|Experience|Operations)\b)"
+            r"[A-Z][a-z]+"
         ),
         message="Never echo personal names surfaced in the thread.",
         case_sensitive=True,

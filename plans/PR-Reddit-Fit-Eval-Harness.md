@@ -213,6 +213,26 @@ fixed at root in this PR):
   5551234567"); two epoch-shaped phrasings are pinned clean in the
   redaction/absence probe suite.
 
+Review-fix notes (Codex wave 4 on 89758871f; all 8 verified real and
+fixed at root in this PR):
+
+- **Non-string parse_error crashed the frozenset membership test**
+  (TypeError before the exit-2 handler) -- type-checked first; probed
+  with a dict value.
+- **Empty grounding terms graded vacuously** ("" is a substring of
+  everything) -- fixture load rejects empty/whitespace terms; probed.
+- **Bare `front` in the platform list false-positived on
+  "storefront integration"** (second side) -- platform names now carry
+  word boundaries; pinned clean.
+- **Role-prefixed name echoes missed** ("support lead Jane Doe") -- a
+  second case-sensitive full-name branch with org-word rejects on both
+  tokens ("customer Success Team" pinned clean).
+- **Four more phrasings widened**: cell/mobile-labeled compact phones
+  (my own fixture's wording), answers-before/without-tickets deflection
+  (verbatim blog-denylist language), offer-style promo ("we have a tool
+  for this", "my company"), imperative reply actions ("reply to the
+  thread", "leave a comment").
+
 ## Deferred
 
 - S2 fit contract + prompt builder; S3 runtime guard (+ parity test);
@@ -228,10 +248,10 @@ Parked hardening: none.
 ## Verification
 
 - `.venv/bin/python -m pytest tests/test_atlas_reddit_fit_eval.py -q`:
-  97 passed (every rule family, every shape-rejection code, corpus
+  112 passed (every rule family, every shape-rejection code, corpus
   both-sides contract, CLI exits, privacy, purity).
 - Full package suite `.venv/bin/python -m pytest
-  tests/test_atlas_reddit_*.py -q`: 430 passed (no-write probe and
+  tests/test_atlas_reddit_*.py -q`: 445 passed (no-write probe and
   fixture-fidelity stay green over the new modules).
 - Reachability (real entrypoint, observable result):
   `python scripts/evaluate_atlas_reddit_fit.py --cases
@@ -247,12 +267,12 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_reddit_checks.yml` | 2 |
-| `atlas_reddit/fit_eval.py` | 430 |
-| `atlas_reddit/fit_rules.py` | 331 |
-| `plans/PR-Reddit-Fit-Eval-Harness.md` | 258 |
+| `atlas_reddit/fit_eval.py` | 442 |
+| `atlas_reddit/fit_rules.py` | 346 |
+| `plans/PR-Reddit-Fit-Eval-Harness.md` | 278 |
 | `scripts/evaluate_atlas_reddit_fit.py` | 15 |
 | `tests/fixtures/atlas_reddit_fit_eval/cases.jsonl` | 16 |
 | `tests/fixtures/atlas_reddit_fit_eval/predictions_fail.jsonl` | 16 |
 | `tests/fixtures/atlas_reddit_fit_eval/predictions_pass.jsonl` | 16 |
-| `tests/test_atlas_reddit_fit_eval.py` | 472 |
-| **Total** | **1556** |
+| `tests/test_atlas_reddit_fit_eval.py` | 510 |
+| **Total** | **1641** |

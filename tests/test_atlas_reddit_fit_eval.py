@@ -116,6 +116,17 @@ def test_catalogue_partitions_into_three_families() -> None:
         ("text them on +15551234567", "PII_PHONE"),
         ("ticket #12345 keeps failing", "PII_IDENTIFIER"),
         ("order #AB-12345 was quoted", "PII_IDENTIFIER"),
+        ("owner's cell is 5551234567", "PII_PHONE"),
+        ("cell number +15551234567 was in the post", "PII_PHONE"),
+        ("customers get answers before opening tickets", "TICKET_REDUCTION_PROMISE"),
+        ("they find answers without opening a ticket", "TICKET_REDUCTION_PROMISE"),
+        ("we have a tool for this", "SELF_PROMO_PITCH"),
+        ("we offer a service for this exact case", "SELF_PROMO_PITCH"),
+        ("my company can help here", "SELF_PROMO_PITCH"),
+        ("reply to the thread with a question", "WRITE_ACTION_POSTURE"),
+        ("leave a comment asking for details", "WRITE_ACTION_POSTURE"),
+        ("support lead Jane Doe tracks repeat questions", "PII_PERSON_NAME"),
+        ("the user Jane Doe is stuck at setup", "PII_PERSON_NAME"),
     ],
 )
 def test_each_rule_family_fires(text: str, code: str) -> None:
@@ -133,6 +144,8 @@ def test_each_rule_family_fires(text: str, code: str) -> None:
         "account id redacted before upload",
         "the thread was created around 1751500000 and got traction",
         "roughly 1800000000 rows were mentioned as an exaggeration",
+        "audit the storefront integration wording on their site",
+        "the customer Success Team owns triage",
     ],
 )
 def test_redaction_and_absence_speak_stays_clean(text: str) -> None:
@@ -459,6 +472,31 @@ def test_parse_error_beside_valid_prediction_is_structural(tmp_path: Path) -> No
     bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
     with pytest.raises(FitEvalError, match="exactly one"):
         load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
+
+
+def test_unhashable_parse_error_is_structural_not_a_crash(tmp_path: Path) -> None:
+    envelope = {
+        "case_id": "obvious_fit_broken_help_center",
+        "prediction": None,
+        "model_id": "m",
+        "prompt_version": "fit.v1",
+        "parse_error": {"detail": "boom"},
+    }
+    bad = tmp_path / "p.jsonl"
+    bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="string code or null"):
+        load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
+
+
+def test_empty_grounding_term_fails_closed(tmp_path: Path) -> None:
+    """An empty term is a substring of everything: the check would pass
+    vacuously forever, so fixture load rejects it."""
+    record = json.loads(CASES.read_text(encoding="utf-8").splitlines()[0])
+    record["required_reason_terms"] = ["repeat", "  "]
+    bad = tmp_path / "cases.jsonl"
+    bad.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="empty term"):
+        load_cases(bad)
 
 
 # -- purity ---------------------------------------------------------------------

@@ -150,6 +150,12 @@ def load_cases(path: Path) -> tuple[EvalCase, ...]:
                 raise FitEvalError(
                     f"{path}: case {case_id!r} {key} must be a list of strings"
                 )
+            if any(not item.strip() for item in value):
+                # An empty term is contained in EVERY string, so the check
+                # it belongs to would pass vacuously forever -- fixture rot.
+                raise FitEvalError(
+                    f"{path}: case {case_id!r} {key} contains an empty term"
+                )
             return tuple(value)
 
         cases.append(
@@ -195,6 +201,12 @@ def load_predictions(path: Path, case_ids: frozenset[str]) -> dict[str, dict]:
                 f"{path}: {case_id!r} prediction must be an object or null"
             )
         parse_error = record.get("parse_error")
+        if parse_error is not None and not isinstance(parse_error, str):
+            # Unhashable values would crash the frozenset membership test
+            # below; a non-string parse_error is a malformed envelope.
+            raise FitEvalError(
+                f"{path}: {case_id!r} parse_error must be a string code or null"
+            )
         if parse_error is not None and prediction is not None:
             # The contract pairs parse_error with a null prediction; a
             # stale code beside a valid prediction is an emitter bug that
