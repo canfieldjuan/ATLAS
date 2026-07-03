@@ -17,8 +17,20 @@ from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
 
 
 class _FAQRepo:
-    def __init__(self, draft: TicketFAQDraft | None) -> None:
+    def __init__(
+        self,
+        draft: TicketFAQDraft | None,
+        *,
+        stored_status: str | None = None,
+    ) -> None:
         self.draft = draft
+        # The DB-authoritative status; may diverge from draft.status to model
+        # a concurrent review decision landing after get_draft.
+        self.stored_status = (
+            stored_status
+            if stored_status is not None
+            else (draft.status if draft is not None else "")
+        )
         self.get_calls: list[dict[str, object]] = []
         self.update_calls: list[dict[str, object]] = []
 
@@ -37,12 +49,16 @@ class _FAQRepo:
         status: str,
         *,
         scope: TenantScope,
+        expected_status: str | None = None,
     ) -> bool:
         self.update_calls.append({
             "faq_id": faq_id,
             "status": status,
             "scope": scope,
         })
+        if expected_status is not None and self.stored_status != expected_status:
+            return False
+        self.stored_status = status
         return True
 
 
@@ -391,7 +407,7 @@ async def test_publish_service_approve_draft_never_revives_non_draft_statuses() 
 @pytest.mark.asyncio
 async def test_publish_service_approve_draft_fails_closed_when_promotion_refused() -> None:
     class _RefusingRepo(_FAQRepo):
-        async def update_status(self, faq_id, status, *, scope):
+        async def update_status(self, faq_id, status, *, scope, expected_status=None):
             self.update_calls.append({
                 "faq_id": faq_id,
                 "status": status,
@@ -431,3 +447,30 @@ async def test_publish_service_default_still_refuses_generated_draft() -> None:
     assert summary.skipped[0]["reason"] == "draft_not_approved"
     assert provider.calls == []
     assert repo.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_publish_service_approve_draft_loses_race_to_concurrent_review() -> None:
+    # get_draft observed 'draft', but a reviewer rejected the draft before the
+    # promotion ran: the compare-and-set must lose, nothing publishes, and the
+    # concurrent decision is never overwritten.
+    repo = _FAQRepo(_draft(status="draft"), stored_status="rejected")
+    provider = _Provider(("published",))
+    attempts = _AttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+        approve_draft=True,
+    )
+
+    assert summary.ok is False
+    assert summary.published_count == 0
+    assert summary.skipped[0]["reason"] == "draft_not_approved"
+    assert provider.calls == []
+    assert repo.stored_status == "rejected"

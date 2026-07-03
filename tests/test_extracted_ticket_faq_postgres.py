@@ -569,3 +569,99 @@ async def test_backfill_ticket_faq_search_documents_skips_incomplete_projection_
     assert result.skipped_missing_key == 1
     assert result.applied_rows == 0
     assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_status_compare_and_set_guards_on_expected_status() -> None:
+    pool = _Pool()
+    pool.fetch_rows = []
+    repo = PostgresTicketFAQRepository(pool)
+
+    updated = await repo.update_status(
+        "faq-uuid-1",
+        "approved",
+        scope=TenantScope(account_id="acct-1"),
+        expected_status="draft",
+    )
+
+    assert updated is False
+    query = pool.fetch_calls[0]["query"]
+    assert "AND status = $4" in query
+    assert pool.fetch_calls[0]["args"] == ("faq-uuid-1", "approved", "acct-1", "draft")
+
+
+@pytest.mark.asyncio
+async def test_update_status_without_expected_status_keeps_unconditional_shape() -> None:
+    pool = _Pool()
+    pool.fetch_rows = []
+    repo = PostgresTicketFAQRepository(pool)
+
+    await repo.update_status(
+        "faq-uuid-1",
+        "published",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    query = pool.fetch_calls[0]["query"]
+    assert "AND status = $4" not in query
+    assert pool.fetch_calls[0]["args"] == ("faq-uuid-1", "published", "acct-1")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_update_status_compare_and_set_loses_race_against_postgres() -> None:
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("EXTRACTED_DATABASE_URL or DATABASE_URL is required")
+
+    root = Path(__file__).resolve().parents[1]
+    run_id = uuid4().hex
+    account = f"acct-faq-cas-{run_id}"
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+    repo = PostgresTicketFAQRepository(pool)
+
+    try:
+        await pool.execute(
+            (root / "atlas_brain/storage/migrations/325_ticket_faq_markdown.sql").read_text()
+        )
+        saved_ids = await repo.save_drafts(
+            [_draft()],
+            scope=TenantScope(account_id=account),
+        )
+        saved_id = saved_ids[0]
+        scope = TenantScope(account_id=account)
+
+        # Concurrent reviewer decision lands first: draft -> rejected.
+        assert await repo.update_status(saved_id, "rejected", scope=scope)
+
+        # The stale promotion (read saw 'draft') must LOSE the race.
+        promoted = await repo.update_status(
+            saved_id,
+            "approved",
+            scope=scope,
+            expected_status="draft",
+        )
+        assert promoted is False
+        current = await repo.get_draft(saved_id, scope=scope)
+        assert current is not None
+        assert current.status == "rejected"
+
+        # And the CAS succeeds when the stored status really is 'draft'.
+        assert await repo.update_status(saved_id, "draft", scope=scope)
+        promoted = await repo.update_status(
+            saved_id,
+            "approved",
+            scope=scope,
+            expected_status="draft",
+        )
+        assert promoted is True
+        current = await repo.get_draft(saved_id, scope=scope)
+        assert current is not None
+        assert current.status == "approved"
+    finally:
+        await pool.execute(
+            "DELETE FROM ticket_faq_markdown WHERE account_id = $1",
+            account,
+        )
+        await pool.close()

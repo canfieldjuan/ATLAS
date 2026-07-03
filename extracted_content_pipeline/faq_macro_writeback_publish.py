@@ -133,11 +133,14 @@ class FAQMacroWritebackPublishService:
         if approve_draft and _clean(draft.status) == DRAFT_FAQ_STATUS:
             # An explicit tenant publish action (paid Resolution Audit) is the
             # approval for a generated draft. Only the exact 'draft' status is
-            # promoted; rejected/archived/published drafts are never revived.
+            # promoted, and the promotion is compare-and-set on the stored
+            # status so a concurrent review decision (for example a reject
+            # landing after get_draft) wins and the publish fails closed.
             approved = await self.faq_repository.update_status(
                 cleaned_id,
                 APPROVED_FAQ_STATUS,
                 scope=scope,
+                expected_status=DRAFT_FAQ_STATUS,
             )
             if approved:
                 draft = replace(draft, status=APPROVED_FAQ_STATUS)

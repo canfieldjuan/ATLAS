@@ -2746,6 +2746,7 @@ _PUBLISH_ACCOUNT = "acct-portfolio-submit"
 class _PublishFAQRepo:
     def __init__(self, draft: TicketFAQDraft | None) -> None:
         self.draft = draft
+        self.stored_status = draft.status if draft is not None else ""
         self.get_calls: list[dict[str, Any]] = []
         self.update_calls: list[dict[str, Any]] = []
 
@@ -2755,8 +2756,18 @@ class _PublishFAQRepo:
             return self.draft
         return None
 
-    async def update_status(self, faq_id: str, status: str, *, scope: TenantScope) -> bool:
+    async def update_status(
+        self,
+        faq_id: str,
+        status: str,
+        *,
+        scope: TenantScope,
+        expected_status: str | None = None,
+    ) -> bool:
         self.update_calls.append({"faq_id": faq_id, "status": status, "scope": scope})
+        if expected_status is not None and self.stored_status != expected_status:
+            return False
+        self.stored_status = status
         return True
 
 

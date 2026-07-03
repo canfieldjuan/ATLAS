@@ -20,7 +20,7 @@ publish endpoint that resolves the saved FAQ draft id from the persisted
 Resolution Audit artifact and publishes through the existing
 `FAQMacroWritebackPublishService`.
 
-This slice is over the 400 LOC soft cap (850 total) because the vertical
+This slice is over the 400 LOC soft cap (1035 total) because the vertical
 slice ships the route, host wiring, and both-sides tests in one reviewable
 unit: ~148 LOC of production code, with the remainder being this plan doc
 and tests proving the paid/locked/missing/cross-tenant/stale-id/
@@ -77,10 +77,13 @@ Slice phase: Vertical slice
 - `extracted_content_pipeline/api/control_surfaces.py`
 - `extracted_content_pipeline/faq_macro_writeback.py`
 - `extracted_content_pipeline/faq_macro_writeback_publish.py`
+- `extracted_content_pipeline/ticket_faq_ports.py`
+- `extracted_content_pipeline/ticket_faq_postgres.py`
 - `plans/PR-Resolution-Audit-Zendesk-Writeback.md`
 - `tests/test_atlas_content_ops_macro_writeback.py`
 - `tests/test_extracted_content_deflection_submit.py`
 - `tests/test_extracted_ticket_faq_macro_writeback_publish.py`
+- `tests/test_extracted_ticket_faq_postgres.py`
 
 ## Mechanism
 
@@ -101,8 +104,12 @@ The route:
    -- the tenant's explicit publish action on their paid report is the
    approval for the generated draft. The opt-in only promotes the exact
    `'draft'` status (what `save_drafts` persists for real Resolution Audit
-   runs); rejected/archived/published drafts are never revived, and a refused
-   promotion falls through to the existing `draft_not_approved` skip. The
+   runs); rejected/archived/published drafts are never revived, the promotion is
+   compare-and-set on the stored status (`update_status(...,
+   expected_status='draft')` adds `AND status = $4` in Postgres) so a
+   concurrent review decision landing after `get_draft` wins and the publish
+   fails closed, and a refused promotion falls through to the existing
+   `draft_not_approved` skip. The
    default (`approve_draft=False`) keeps the AI Content Station and scheduled
    publish paths byte-for-byte unchanged;
 6. returns the existing `FAQMacroPublishSummary` payload plus `request_id`,
@@ -166,9 +173,12 @@ Parked hardening: none.
 | `atlas_brain/api/__init__.py` | 4 |
 | `extracted_content_pipeline/api/control_surfaces.py` | 112 |
 | `extracted_content_pipeline/faq_macro_writeback.py` | 1 |
-| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 14 |
-| `plans/PR-Resolution-Audit-Zendesk-Writeback.md` | 168 |
+| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 17 |
+| `extracted_content_pipeline/ticket_faq_ports.py` | 9 |
+| `extracted_content_pipeline/ticket_faq_postgres.py` | 11 |
+| `plans/PR-Resolution-Audit-Zendesk-Writeback.md` | 178 |
 | `tests/test_atlas_content_ops_macro_writeback.py` | 70 |
-| `tests/test_extracted_content_deflection_submit.py` | 351 |
-| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 91 |
-| **Total** | **850** |
+| `tests/test_extracted_content_deflection_submit.py` | 362 |
+| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 136 |
+| `tests/test_extracted_ticket_faq_postgres.py` | 96 |
+| **Total** | **1035** |
