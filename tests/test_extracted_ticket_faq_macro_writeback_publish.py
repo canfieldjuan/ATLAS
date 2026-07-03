@@ -764,3 +764,91 @@ async def test_publish_service_partial_generated_draft_reports_observed_skip_sta
     assert repo.update_calls == []
     # every skipped item reports the real observed status, not 'approved'
     assert all(item["draft_status"] == "draft" for item in summary.skipped)
+
+
+@pytest.mark.asyncio
+async def test_publish_service_promotion_race_already_published_is_idempotent() -> None:
+    # Two approve_draft publishes race while the row is still 'draft': the
+    # first promotes and fully publishes before the second reaches the
+    # promotion CAS. The second loses the draft->approved CAS, re-reads
+    # 'published', and must republish idempotently (no mark, no conflict),
+    # reporting success rather than failure.
+    repo = _FAQRepo(_draft(status="draft"), stored_status="published")
+    provider = _Provider(("updated",))
+    attempts = _AttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+        approve_draft=True,
+    )
+
+    assert summary.ok is True
+    assert summary.status_conflict is False
+    assert len(provider.calls) == 1          # republished idempotently
+    assert summary.draft_status == "published"
+    assert summary.draft_status_updated is False  # no re-mark
+    assert len(attempts.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_publish_service_promotion_race_concurrently_approved_publishes_and_marks() -> None:
+    # A concurrent request approved the draft (draft->approved) before this one
+    # reached the promotion CAS. The CAS miss re-reads 'approved', so this
+    # request publishes and marks as approved rather than reporting a conflict.
+    repo = _FAQRepo(_draft(status="draft"), stored_status="approved")
+    provider = _Provider(("published",))
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+        approve_draft=True,
+    )
+
+    assert summary.ok is True
+    assert summary.status_conflict is False
+    assert summary.published_count == 1
+    assert summary.draft_status == "approved"
+
+
+@pytest.mark.asyncio
+async def test_publish_service_provider_exception_records_failed_attempt() -> None:
+    # If the provider raises (for example a tenant credential lookup error
+    # outside its per-macro catch) after promotion, the exception must not
+    # bypass attempt history: the service records a durable failed attempt and
+    # does not propagate the exception.
+    repo = _FAQRepo(_draft(status="approved"))
+    attempts = _AttemptRepo()
+
+    class _RaisingProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def publish(self, macros, *, scope):
+            self.calls += 1
+            raise RuntimeError("zendesk credential lookup failed")
+
+    provider = _RaisingProvider()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert provider.calls == 1
+    assert summary.ok is False
+    assert summary.failed_count == 1
+    assert "provider_error" in summary.results[0]["error"]
+    assert len(attempts.calls) == 1          # durable failed attempt recorded
+    assert summary.draft_status_updated is False

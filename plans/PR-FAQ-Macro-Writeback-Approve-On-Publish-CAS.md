@@ -98,13 +98,17 @@ semantics:
    caller sees a conflict, not a false success.
 
 The port gains an optional `expected_status`; the Postgres adapter adds
-`AND status = $N` only when provided. A compare-and-set *miss* is
-disambiguated by re-reading the stored status: an already-`published` row is
-an idempotent success, a review-decided row (reject/archive) is a real
-conflict. A `published` draft is an idempotent retry for every caller, not
-only `approve_draft=True`. `status_conflict` is persisted to the append-only
-attempt history (migration adds the column). Every in-repo fake used with the
-service accepts the optional argument.
+`AND status = $N` only when provided. Every status transition (promotion and
+the publish-mark) goes through one `_transition_status` compare-and-set helper
+that re-reads the row on a miss, so every write site classifies a race
+identically: an already-`published` row is an idempotent success (republish,
+no re-mark), an already-`approved` row was approved concurrently (publish and
+mark), and a review-decided row (reject/archive) is a real conflict. The
+provider call is wrapped so a raised exception records a durable failed
+attempt instead of leaving a promoted-but-unpublished draft with no trace. A
+`published` draft is an idempotent retry for every caller. `status_conflict`
+is persisted to the append-only attempt history (migration adds the column).
+Every in-repo fake accepts the optional argument.
 
 ## Intentional
 
@@ -141,17 +145,17 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/faq_macro_writeback.py` | 1 |
 | `extracted_content_pipeline/faq_macro_writeback_postgres.py` | 8 |
-| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 145 |
+| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 187 |
 | `extracted_content_pipeline/storage/migrations/335_ticket_faq_macro_publish_attempt_conflict.sql` | 8 |
 | `extracted_content_pipeline/ticket_faq_ports.py` | 9 |
 | `extracted_content_pipeline/ticket_faq_postgres.py` | 11 |
-| `plans/PR-FAQ-Macro-Writeback-Approve-On-Publish-CAS.md` | 151 |
+| `plans/PR-FAQ-Macro-Writeback-Approve-On-Publish-CAS.md` | 161 |
 | `tests/test_atlas_content_ops_generated_assets_api.py` | 1 |
 | `tests/test_content_ops_faq_macro_writeback_flow.py` | 1 |
 | `tests/test_extracted_content_asset_api.py` | 12 |
 | `tests/test_extracted_ticket_faq_macro_writeback_postgres.py` | 4 |
-| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 428 |
+| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 516 |
 | `tests/test_extracted_ticket_faq_postgres.py` | 101 |
 | `tests/test_faq_macro_writeback_live_zendesk_smoke.py` | 1 |
 | `tests/test_seed_faq_macro_writeback_live_smoke_draft.py` | 1 |
-| **Total** | **882** |
+| **Total** | **1022** |
