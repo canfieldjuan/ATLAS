@@ -1,6 +1,6 @@
 # Plan archive index
 
-1270 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1272 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -1177,6 +1177,7 @@
 - [PR-Reasoning-Core-Reflection-Port-Adapter-2026-05-17](archive/PR-Reasoning-Core-Reflection-Port-Adapter-2026-05-17.md)
 - [PR-Reasoning-Enrichment-Pack-Split](archive/PR-Reasoning-Enrichment-Pack-Split.md)
 - [PR-Reasoning-Phrase-Metadata-Utility](archive/PR-Reasoning-Phrase-Metadata-Utility.md)
+- [PR-Reddit-Fit-Eval-Harness](archive/PR-Reddit-Fit-Eval-Harness.md) - lane: content-ops/reddit-listening/fit-eval | phase: Robust testing
 - [PR-Reddit-Listening-Config-Scoring](archive/PR-Reddit-Listening-Config-Scoring.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Digest](archive/PR-Reddit-Listening-Digest.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Praw-Poller](archive/PR-Reddit-Listening-Praw-Poller.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
