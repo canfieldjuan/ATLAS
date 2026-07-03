@@ -49,3 +49,4 @@ def test_workflow_contract_test_is_enrolled_in_maturity_sweep_pr_ci() -> None:
     workflow = MATURITY_WORKFLOW.read_text(encoding="utf-8")
 
     assert "tests/test_retired_failure_detector_workflow.py" in workflow
+    assert '- ".github/workflows/retired_failure_detector.yml"' in workflow

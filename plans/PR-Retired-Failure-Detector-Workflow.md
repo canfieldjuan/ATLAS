@@ -95,13 +95,21 @@ Parked hardening: none.
 - `python scripts/detect_retired_failure_modes.py --base origin/main --json-out /tmp/retired-signals-s2.json` — exited 0 and emitted zero signals for this planned diff.
 - `git diff --check` — passed.
 
+## Review fixes
+
+- Codex P1: removed the PyYAML import from the workflow contract test so the
+  maturity-sweep job can run it after installing only pytest.
+- Codex P2: added `.github/workflows/retired_failure_detector.yml` to the
+  maturity-sweep PR and main-push path filters, with a contract assertion, so
+  detector-workflow-only edits still run the detector workflow test.
+
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/maturity_sweep_advisory.yml` | 1 |
+| `.github/workflows/maturity_sweep_advisory.yml` | 3 |
 | `.github/workflows/retired_failure_detector.yml` | 50 |
 | `AGENTS.md` | 37 |
 | `plans/PR-Retired-Failure-Detector-Workflow.md` | 107 |
-| `tests/test_retired_failure_detector_workflow.py` | 51 |
-| **Total** | **246** |
+| `tests/test_retired_failure_detector_workflow.py` | 52 |
+| **Total** | **249** |
