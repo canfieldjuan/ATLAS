@@ -625,6 +625,11 @@ async def test_update_status_compare_and_set_loses_race_against_postgres() -> No
         await pool.execute(
             (root / "atlas_brain/storage/migrations/325_ticket_faq_markdown.sql").read_text()
         )
+        # update_status also refreshes the search projection, so the
+        # search-documents table must exist for the compare-and-set path.
+        await pool.execute(
+            (root / "atlas_brain/storage/migrations/327_ticket_faq_search_documents.sql").read_text()
+        )
         saved_ids = await repo.save_drafts(
             [_draft()],
             scope=TenantScope(account_id=account),

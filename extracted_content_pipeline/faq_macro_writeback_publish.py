@@ -76,6 +76,7 @@ class FAQMacroPublishAttempt:
     failed_count: int = 0
     pending_reconcile_count: int = 0
     draft_status_updated: bool = False
+    status_conflict: bool = False
     skipped: Sequence[JsonDict] = field(default_factory=tuple)
     results: Sequence[JsonDict] = field(default_factory=tuple)
     created_at: str = ""
@@ -133,15 +134,15 @@ class FAQMacroWritebackPublishService:
             return FAQMacroPublishSummary(faq_id=cleaned_id, found=False)
 
         # A paid Resolution Audit publish is the approval for a *generated*
-        # draft. Only the exact 'draft' status is promotable; an already
-        # 'published' draft is a retry through the provider's idempotent
-        # mapping; rejected/archived/expired are never revived. Every other
-        # path keeps the standard "must already be approved" behavior.
+        # draft, so only the exact 'draft' status is promotable, and only
+        # behind approve_draft. An already 'published' draft is an idempotent
+        # retry through the provider's mapping for *every* caller (a lost
+        # response or a second click must not fail closed), so it is not gated
+        # on approve_draft. rejected/archived/expired are never revived; every
+        # other path keeps the standard "must already be approved" behavior.
         observed_status = _clean(draft.status)
         promote = approve_draft and observed_status == DRAFT_FAQ_STATUS
-        published_retry = (
-            approve_draft and observed_status == _clean(self.published_status)
-        )
+        published_retry = observed_status == _clean(self.published_status)
         already_approved = observed_status == APPROVED_FAQ_STATUS
         publishable_now = already_approved or promote or published_retry
 
@@ -200,13 +201,20 @@ class FAQMacroWritebackPublishService:
                 expected_status=DRAFT_FAQ_STATUS,
             )
             if not approved:
+                # The row is no longer 'draft': a concurrent review decision
+                # (reject/approve/publish) changed it after get_draft. Surface a
+                # conflict so a real race is distinguishable from an ordinary
+                # unapproved draft rather than looking like plain ineligibility.
                 return await self._finish(
-                    _summary(
-                        faq_id=cleaned_id,
-                        found=True,
-                        draft_status=observed_status,
-                        preview=build_macro_writeback_preview([draft]),
-                        results=(),
+                    replace(
+                        _summary(
+                            faq_id=cleaned_id,
+                            found=True,
+                            draft_status=observed_status,
+                            preview=build_macro_writeback_preview([draft]),
+                            results=(),
+                        ),
+                        status_conflict=True,
                     ),
                     scope=scope,
                 )
@@ -220,22 +228,37 @@ class FAQMacroWritebackPublishService:
             results=results,
         )
         if _should_mark_published(summary):
-            # Compare-and-set again: if a review decision landed while the
-            # external publish was in flight, that decision wins. The macro was
-            # published externally, but the row was not marked, so the caller
-            # must see a conflict rather than a clean success.
+            # Compare-and-set the mark. A miss has two causes that must not be
+            # conflated: another publish already marked the row 'published'
+            # (idempotent success -- a duplicate click/retry must report ok),
+            # or a review decision changed it to reject/archive mid-flight (a
+            # real conflict: the macro is published externally but the row is
+            # not, so the caller must see a conflict, not a clean success).
             marked = await self.faq_repository.update_status(
                 cleaned_id,
                 self.published_status,
                 scope=scope,
                 expected_status=APPROVED_FAQ_STATUS,
             )
-            summary = replace(
-                summary,
-                draft_status_updated=marked,
-                status_conflict=not marked,
-            )
+            if marked:
+                summary = replace(summary, draft_status_updated=True)
+            elif await self._reread_status(cleaned_id, scope=scope) == _clean(
+                self.published_status
+            ):
+                # Terminal state already reached by a concurrent publish.
+                summary = replace(summary, draft_status_updated=False)
+            else:
+                summary = replace(
+                    summary,
+                    draft_status_updated=False,
+                    status_conflict=True,
+                )
         return await self._finish(summary, scope=scope)
+
+    async def _reread_status(self, faq_id: str, *, scope: TenantScope) -> str:
+        """Re-read the stored draft status to classify a compare-and-set miss."""
+        draft = await self.faq_repository.get_draft(faq_id, scope=scope)
+        return _clean(draft.status) if draft is not None else ""
 
     async def _finish(
         self,
@@ -290,7 +313,14 @@ def _summary(
         updated_count=sum(1 for result in results if result.status == "updated"),
         failed_count=failed_count,
         pending_reconcile_count=pending_reconcile_count,
-        skipped=tuple(item.as_dict() for item in preview.skipped),
+        # The preview evaluates item-level skip reasons under approved
+        # semantics, but the reported per-item status must be the row's real
+        # (summary) status so a refused/partial draft never claims 'approved'
+        # while the summary says 'draft'.
+        skipped=tuple(
+            {**item.as_dict(), "draft_status": draft_status}
+            for item in preview.skipped
+        ),
         results=tuple(result.as_dict() for result in results),
     )
 

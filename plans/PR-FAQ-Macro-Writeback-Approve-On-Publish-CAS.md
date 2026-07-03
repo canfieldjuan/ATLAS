@@ -58,18 +58,21 @@ Slice phase: Vertical slice
   projection side effect of an approval.
 - Risk areas: concurrency (TOCTOU on status), backward compatibility of the
   widened port, the never-revive contract, idempotent retries.
-- Reviewer rules triggered: R1, R2, R6, R10.
+- Reviewer rules triggered: R1, R2, R4, R6, R10.
 
 ### Files touched
 
 - `extracted_content_pipeline/faq_macro_writeback.py`
+- `extracted_content_pipeline/faq_macro_writeback_postgres.py`
 - `extracted_content_pipeline/faq_macro_writeback_publish.py`
+- `extracted_content_pipeline/storage/migrations/335_ticket_faq_macro_publish_attempt_conflict.sql`
 - `extracted_content_pipeline/ticket_faq_ports.py`
 - `extracted_content_pipeline/ticket_faq_postgres.py`
 - `plans/PR-FAQ-Macro-Writeback-Approve-On-Publish-CAS.md`
 - `tests/test_atlas_content_ops_generated_assets_api.py`
 - `tests/test_content_ops_faq_macro_writeback_flow.py`
 - `tests/test_extracted_content_asset_api.py`
+- `tests/test_extracted_ticket_faq_macro_writeback_postgres.py`
 - `tests/test_extracted_ticket_faq_macro_writeback_publish.py`
 - `tests/test_extracted_ticket_faq_postgres.py`
 - `tests/test_faq_macro_writeback_live_zendesk_smoke.py`
@@ -95,8 +98,13 @@ semantics:
    caller sees a conflict, not a false success.
 
 The port gains an optional `expected_status`; the Postgres adapter adds
-`AND status = $N` only when provided. Every in-repo fake used with the service
-accepts the optional argument.
+`AND status = $N` only when provided. A compare-and-set *miss* is
+disambiguated by re-reading the stored status: an already-`published` row is
+an idempotent success, a review-decided row (reject/archive) is a real
+conflict. A `published` draft is an idempotent retry for every caller, not
+only `approve_draft=True`. `status_conflict` is persisted to the append-only
+attempt history (migration adds the column). Every in-repo fake used with the
+service accepts the optional argument.
 
 ## Intentional
 
@@ -132,15 +140,18 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `extracted_content_pipeline/faq_macro_writeback.py` | 1 |
-| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 113 |
+| `extracted_content_pipeline/faq_macro_writeback_postgres.py` | 8 |
+| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 145 |
+| `extracted_content_pipeline/storage/migrations/335_ticket_faq_macro_publish_attempt_conflict.sql` | 8 |
 | `extracted_content_pipeline/ticket_faq_ports.py` | 9 |
 | `extracted_content_pipeline/ticket_faq_postgres.py` | 11 |
-| `plans/PR-FAQ-Macro-Writeback-Approve-On-Publish-CAS.md` | 146 |
+| `plans/PR-FAQ-Macro-Writeback-Approve-On-Publish-CAS.md` | 151 |
 | `tests/test_atlas_content_ops_generated_assets_api.py` | 1 |
 | `tests/test_content_ops_faq_macro_writeback_flow.py` | 1 |
-| `tests/test_extracted_content_asset_api.py` | 10 |
-| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 317 |
-| `tests/test_extracted_ticket_faq_postgres.py` | 96 |
+| `tests/test_extracted_content_asset_api.py` | 12 |
+| `tests/test_extracted_ticket_faq_macro_writeback_postgres.py` | 4 |
+| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 428 |
+| `tests/test_extracted_ticket_faq_postgres.py` | 101 |
 | `tests/test_faq_macro_writeback_live_zendesk_smoke.py` | 1 |
 | `tests/test_seed_faq_macro_writeback_live_smoke_draft.py` | 1 |
-| **Total** | **707** |
+| **Total** | **882** |
