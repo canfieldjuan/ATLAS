@@ -16,6 +16,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
+      - ".github/workflows/retired_failure_detector.yml"
       - "scripts/maturity_sweep.py"
       - "scripts/**"
       - "tests/**"
@@ -65,6 +66,7 @@ on:
       - main
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
+      - ".github/workflows/retired_failure_detector.yml"
       - "scripts/maturity_sweep.py"
       - "scripts/**"
       - "tests/**"
@@ -134,6 +136,7 @@ jobs:
           python -m pytest \
             tests/test_maturity_sweep.py \
             tests/test_detect_retired_failure_modes.py \
+            tests/test_retired_failure_detector_workflow.py \
             --noconftest \
             -q
 
