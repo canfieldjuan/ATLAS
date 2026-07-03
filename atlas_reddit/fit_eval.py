@@ -22,13 +22,11 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .fit import fit_decision_problems
+from .fit_rules import FIT_VERDICTS
 from .fit_rules import (
     CLAIM_CODES,
     PARSE_ERROR_CODES,
-    FIT_RISK_FLAGS,
-    FIT_VERDICTS,
-    MAX_FIT_ANGLE_CHARS,
-    MAX_FIT_REASON_CHARS,
     PII_CODES,
     POSTURE_CODES,
     scan_fit_text,
@@ -234,52 +232,13 @@ def load_predictions(path: Path, case_ids: frozenset[str]) -> dict[str, dict]:
 
 
 def check_prediction_shape(prediction: dict) -> tuple[str, ...]:
-    """Deterministic strict-shape validation of the model-output object.
+    """Strict-shape validation of the model-output object.
 
-    S1-local twin of the S2 parser: same constants, same rejection classes,
-    machine-readable snake codes. S2 swaps this for the real parser and the
-    harness must stay green through it.
+    Delegates to the REAL parser core in atlas_reddit.fit (S2): the
+    harness grades exactly what the runtime parser enforces, so the
+    ruler and the contract cannot drift.
     """
-    problems: list[str] = []
-    keys = set(prediction)
-    if keys - _PREDICTION_KEYS:
-        problems.append("unknown_keys")
-    if _PREDICTION_KEYS - keys:
-        problems.append("missing_keys")
-    verdict = prediction.get("verdict")
-    if "verdict" in prediction and verdict not in FIT_VERDICTS:
-        problems.append("verdict_invalid")
-    reason = prediction.get("reason")
-    if "reason" in prediction:
-        if not isinstance(reason, str) or not _collapse(reason):
-            problems.append("reason_missing")
-        elif len(_collapse(reason)) > MAX_FIT_REASON_CHARS:
-            problems.append("reason_too_long")
-    angle = prediction.get("angle")
-    if "angle" in prediction and "verdict" in prediction and verdict in FIT_VERDICTS:
-        if verdict in ("yes", "maybe"):
-            if not isinstance(angle, str) or not _collapse(angle):
-                problems.append("angle_required")
-            elif len(_collapse(angle)) > MAX_FIT_ANGLE_CHARS:
-                problems.append("angle_too_long")
-        else:  # verdict == "no": advisory text on a rejected thread is
-            # exactly where pitch language leaks; require null/empty.
-            if angle is not None and _collapse(str(angle)):
-                problems.append("angle_forbidden_for_no")
-    flags = prediction.get("risk_flags")
-    if "risk_flags" in prediction:
-        if not isinstance(flags, list):
-            problems.append("risk_flags_invalid")
-        elif any(not isinstance(flag, str) for flag in flags):
-            # Non-string elements are model garbage too: grade the case,
-            # never crash on an unhashable value before dedup.
-            problems.append("risk_flags_invalid")
-        else:
-            if any(flag not in FIT_RISK_FLAGS for flag in flags):
-                problems.append("risk_flag_unknown")
-            if len(set(flags)) != len(flags):
-                problems.append("risk_flag_duplicate")
-    return tuple(problems)
+    return fit_decision_problems(prediction)
 
 
 def _advisory_fields(prediction: dict) -> tuple[str, str]:
