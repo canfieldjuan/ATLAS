@@ -134,6 +134,7 @@ jobs:
           python -m pytest \
             tests/test_maturity_sweep.py \
             tests/test_detect_retired_failure_modes.py \
+            tests/test_retired_failure_detector_workflow.py \
             --noconftest \
             -q
 

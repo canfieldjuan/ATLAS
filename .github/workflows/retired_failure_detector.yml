@@ -1,0 +1,50 @@
+name: Retired Failure Detector
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  retired-failure-detector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Resolve base ref
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          base_ref="${PR_BASE_REF:-main}"
+          git fetch --no-tags origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}"
+          printf 'base_ref=%s\n' "${base_ref}" >> "$GITHUB_ENV"
+
+      - name: Run retired failure detector
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/retired-failure-detector
+          python scripts/detect_retired_failure_modes.py \
+            --base "origin/${base_ref}" \
+            --json-out artifacts/retired-failure-detector/retired-failure-signals.json
+
+      - name: Upload retired failure detector artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: retired-failure-detector-signals-${{ github.run_id }}
+          path: artifacts/retired-failure-detector
+          if-no-files-found: error
+          retention-days: 14
