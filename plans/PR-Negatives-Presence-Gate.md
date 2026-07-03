@@ -233,6 +233,40 @@ the cosmetic-evasion move this plan itself rejects. The refreshed
 pre-existing drift entries (a deleted script removed, an existing
 sub-min-score script added).
 
+Review-fix notes (Codex wave 8; 4 fixed at root, 1 waived on the
+written threat model):
+
+- **FIXED -- the test counter was a text regex**: commented-out
+  `def test_*` lines made a placeholder file look non-stub, dodging
+  NO_TEST_FILE. `_collect_test_defs` now counts real def/async-def AST
+  nodes; unparseable sources contribute no runnable tests (fail closed,
+  matching the raises detector). Probed (comment-only stub fails).
+- **FIXED -- any `self.assertRaises*` prefix matched**: a fabricated
+  `self.assertRaisesLater(...)` helper satisfied the signal. Only the
+  exact unittest APIs count now (assertRaises, assertRaisesRegex,
+  assertRaisesRegexp). Probed both sides.
+- **FIXED -- the literal pytest name was seeded without an import**:
+  `with pytest.raises(...)` counted even in a file that never imports
+  pytest (it would NameError). The name is now added only from a real
+  `import pytest` binding. Probed (importless file fails; the existing
+  import-carrying probes still pass).
+- **FIXED -- the with-form skipped arity validation**: `with
+  self.assertRaisesRegex(ValueError):` (missing the regex) errors
+  before asserting but still counted. With-items now need everything
+  but the callable (per-API arity minus one). Probed both sides.
+- **WAIVED -- an imported `raises` shadowed by a local fake still
+  counts**: importing the real API and then redefining it as a
+  non-asserting fake is deliberate evasion, not haste -- tracking
+  effective bindings is data-flow analysis a static presence gate does
+  not claim (same boundary as the skipped-test waiver). The review
+  contract owns adversarial evasion.
+
+The fail-closed counter handler tripped SWALLOWED_EXCEPT on the
+scripts lane again (the gate caught itself, second time); accepted
+through the documented `--update-baseline` path as deliberate policy.
+The refreshed baseline also absorbs new-from-main script entries after
+the drift merge.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -245,7 +279,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_maturity_sweep.py -q` -- 37 passed
+- `python -m pytest tests/test_maturity_sweep.py -q` -- 41 passed
   (23 pre-existing + both-sides probes for every review-fix wave:
   no-raises sensitive module fails with the
   `sensitive-path NO_RAISES_TESTS` reason and passes off-glob;
@@ -271,9 +305,9 @@ Parked hardening: none.
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
 | `plans/INDEX.md` | 1 |
-| `plans/PR-Negatives-Presence-Gate.md` | 279 |
+| `plans/PR-Negatives-Presence-Gate.md` | 313 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 105 |
-| `tests/maturity_sweep/baseline_scripts.json` | 17 |
-| `tests/test_maturity_sweep.py` | 679 |
-| **Total** | **1087** |
+| `scripts/maturity_sweep.py` | 134 |
+| `tests/maturity_sweep/baseline_scripts.json` | 29 |
+| `tests/test_maturity_sweep.py` | 859 |
+| **Total** | **1342** |

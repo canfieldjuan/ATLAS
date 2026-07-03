@@ -523,7 +523,7 @@ def _has_raises_assertion(source):
     # same way, so a real `pt.raises(...)` assertion is not misreported
     # as absent.
     pytest_raises_names = set()
-    pytest_module_names = {"pytest"}
+    pytest_module_names = set()
     with_item_calls = set()
     testcase_calls = set()
     for node in ast.walk(tree):
@@ -566,7 +566,8 @@ def _has_raises_assertion(source):
         # the unittest receivers self/cls.
         callable_form_args = None
         if isinstance(func, ast.Attribute):
-            if (func.attr.startswith("assertRaises")
+            if (func.attr in ("assertRaises", "assertRaisesRegex",
+                              "assertRaisesRegexp")
                     and isinstance(func.value, ast.Name)
                     and func.value.id in ("self", "cls")
                     and id(node) in testcase_calls):
@@ -582,10 +583,36 @@ def _has_raises_assertion(source):
             continue
         # A raises API call only ASSERTS as a with-context (`with
         # pytest.raises(X):`) or in the callable form; a dangling
-        # statement builds a context manager and asserts nothing.
-        if id(node) in with_item_calls or len(node.args) >= callable_form_args:
+        # statement builds a context manager and asserts nothing. The
+        # with-form still needs everything but the callable (exception
+        # for raises/assertRaises, exception + regex for
+        # assertRaisesRegex*) -- `with self.assertRaises():` errors
+        # before asserting.
+        if id(node) in with_item_calls:
+            if len(node.args) >= callable_form_args - 1:
+                return True
+        elif len(node.args) >= callable_form_args:
             return True
     return False
+
+
+def _collect_test_defs(matched):
+    """Test names from real def/async-def AST nodes across the matched
+    sources. The old text regex also counted `def test_*` inside comments
+    and strings, so a placeholder file with commented-out tests looked
+    non-stub and dodged NO_TEST_FILE. Unparseable sources contribute no
+    runnable tests (fail closed, matching _has_raises_assertion)."""
+    names = []
+    for source in matched:
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name.startswith("test_")):
+                names.append(node.name)
+    return names
 
 
 def score_tests(module_stem, test_sources, all_test_text):
@@ -602,7 +629,7 @@ def score_tests(module_stem, test_sources, all_test_text):
                                     "no test file and module not referenced by any test"))
         return findings
 
-    test_defs = re.findall(r"def\s+(test_\w+)", src)
+    test_defs = _collect_test_defs(matched)
     total = len(test_defs)
     if total == 0:
         # A matched test file with zero collected tests is a placeholder,

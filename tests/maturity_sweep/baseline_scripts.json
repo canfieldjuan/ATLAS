@@ -932,6 +932,12 @@
     },
     "score": 18
   },
+  "scripts/detect_retired_failure_modes.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1
+    },
+    "score": 1
+  },
   "scripts/download_mcauley_dataset.py": {
     "counts": {
       "NO_TEST_FILE": 1,
@@ -963,6 +969,12 @@
       "WEAK_CONTRACT": 3
     },
     "score": 29
+  },
+  "scripts/evaluate_atlas_reddit_fit.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
   },
   "scripts/evaluate_csv_admission_threshold_evidence.py": {
     "counts": {
@@ -1157,11 +1169,11 @@
   "scripts/maturity_sweep.py": {
     "counts": {
       "HEURISTIC_COMMENT": 5,
-      "SWALLOWED_EXCEPT": 4,
+      "SWALLOWED_EXCEPT": 5,
       "UNGUARDED_INDEX": 14,
       "WEAK_CONTRACT": 28
     },
-    "score": 33
+    "score": 38
   },
   "scripts/maturity_sweep_file_lane.py": {
     "counts": {
