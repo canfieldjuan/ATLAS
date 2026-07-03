@@ -60,7 +60,11 @@ workflow file PR-side, so the required `live-reconciliation` context is fed
 only by `pull_request_target` runs; the default-branch
 `ai_reconciliation_review_retrigger.yml` follow-up re-runs the latest
 trusted target run whenever a review event lands, keeping the required
-context fresh through trusted code.
+context fresh through trusted code. One adversarial residual is accepted
+and tracked: a PR that deletes the review-event triggers from the live
+workflow suppresses the follow-up chain entirely (no event model exists
+that delivers trusted code on review events); the fallback is a scheduled
+trusted sweep, parked in plans/PR-Trusted-Base-Gate-Execution.md.
 
 Branch protection for `main` requires `live-reconciliation`, `diff-budget`
 (the AGENTS.md diff-budget gate), `Gitleaks PR secret scan`, and
