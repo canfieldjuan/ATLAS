@@ -1,0 +1,533 @@
+"""Fit evaluation harness tests (v2 S1, #1931).
+
+The harness is pure -- no external boundary exists, so nothing is faked:
+real rule catalogue, real fixture files, real CLI main() in-process. The
+shipped fixture corpus is itself under test: every fail-file envelope
+declares the exact checks and codes it must fire, and this suite enforces
+that contract so the corpus cannot silently rot.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from atlas_reddit.fit_eval import (
+    FitEvalError,
+    check_prediction_shape,
+    evaluate_predictions,
+    load_cases,
+    load_predictions,
+    main,
+    summarize_result,
+)
+from atlas_reddit.fit_rules import (
+    ALL_RULE_CODES,
+    CLAIM_CODES,
+    PII_CODES,
+    POSTURE_CODES,
+    RULES,
+    scan_fit_text,
+)
+
+FIXTURES = Path(__file__).parent / "fixtures" / "atlas_reddit_fit_eval"
+CASES = FIXTURES / "cases.jsonl"
+PASS_FILE = FIXTURES / "predictions_pass.jsonl"
+FAIL_FILE = FIXTURES / "predictions_fail.jsonl"
+
+
+def _prediction(**overrides) -> dict:
+    base = {
+        "verdict": "yes",
+        "reason": "They describe repeated support questions.",
+        "angle": "Ask what their ticket evidence shows.",
+        "risk_flags": [],
+    }
+    base.update(overrides)
+    return base
+
+
+# -- rule catalogue ---------------------------------------------------------
+
+
+def test_catalogue_partitions_into_three_families() -> None:
+    assert CLAIM_CODES | POSTURE_CODES | PII_CODES == ALL_RULE_CODES
+    assert not (CLAIM_CODES & POSTURE_CODES)
+    assert not (CLAIM_CODES & PII_CODES)
+    assert not (POSTURE_CODES & PII_CODES)
+    assert len({rule.code for rule in RULES}) == len(RULES)
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [
+        ("we guarantee a 40% reduction in tickets", "GUARANTEED_DEFLECTION"),
+        ("cut their support tickets by 30", "GUARANTEED_DEFLECTION"),
+        ("ticket volume will drop once this ships", "TICKET_REDUCTION_PROMISE"),
+        ("clear ROI within a quarter", "ROI_SAVINGS"),
+        ("hours saved every single week", "ROI_SAVINGS"),
+        ("customers will churn less after this", "RETENTION_CHURN_OUTCOME"),
+        ("you will rank higher on search", "RANKING_SEO_OUTCOME"),
+        ("we can fix this for them", "FIX_RESOLVE_PROMISE"),
+        ("it can auto-publish to the help center", "AUTO_PUBLISH"),
+        ("we connect to Zendesk out of the box", "LIVE_HELPDESK_INTEGRATION"),
+        ("semantic clustering groups the tickets", "SEMANTIC_CLUSTERING"),
+        ("we rank by cost per ticket", "COST_RANKING"),
+        ("unlimited uploads on every plan", "UNBOUNDED_HOSTED_UPLOADS"),
+        ("our tool handles this and has a free trial", "SELF_PROMO_PITCH"),
+        ("it integrates with Zendesk", "LIVE_HELPDESK_INTEGRATION"),
+        ("this can reduce support tickets", "TICKET_REDUCTION_PROMISE"),
+        ("this will reduce churn", "RETENTION_CHURN_OUTCOME"),
+        ("improve retention across the base", "RETENTION_CHURN_OUTCOME"),
+        ("save your team 10 hours", "ROI_SAVINGS"),
+        ("the tool will solve their problem", "FIX_RESOLVE_PROMISE"),
+        ("it can resolve the issue", "FIX_RESOLVE_PROMISE"),
+        ("improve SEO for the docs", "RANKING_SEO_OUTCOME"),
+        ("boost their seo standing", "RANKING_SEO_OUTCOME"),
+        ("Hey OP, here is what worked for us", "REPLY_DRAFT"),
+        ("I'd say you should start with the docs", "REPLY_DRAFT"),
+        ("feel free to DM me anytime", "REPLY_DRAFT"),
+        ("post this as a comment on the thread", "WRITE_ACTION_POSTURE"),
+        ("reach her at jane.doe@example.com", "PII_EMAIL"),
+        ("call them on (555) 123-4567", "PII_PHONE"),
+        ("SSN 123-45-6789 appears in the ticket", "PII_SSN"),
+        ("card 4111 1111 1111 1111 was quoted", "PII_PAYMENT_CARD"),
+        ("the customer name is Jane Doe", "PII_PERSON_NAME"),
+        ("order number: AB-12345 keeps failing", "PII_IDENTIFIER"),
+        ("this can fix their problem", "FIX_RESOLVE_PROMISE"),
+        ("I would reply with a short answer", "REPLY_DRAFT"),
+        ("I'd respond with the docs link", "REPLY_DRAFT"),
+        ("publishes directly to your knowledge base", "AUTO_PUBLISH"),
+        ("hosted uploads handle 50,000 rows", "UNBOUNDED_HOSTED_UPLOADS"),
+        ("native Shopify integration", "LIVE_HELPDESK_INTEGRATION"),
+        ("connect Zendesk and import everything", "LIVE_HELPDESK_INTEGRATION"),
+        ("deflect 40% of tickets", "GUARANTEED_DEFLECTION"),
+        ("reduce 25% of support tickets", "GUARANTEED_DEFLECTION"),
+        ("rank tickets by cost", "COST_RANKING"),
+        ("rank issues by cost per resolution", "COST_RANKING"),
+        ("cluster similar tickets with embeddings", "SEMANTIC_CLUSTERING"),
+        ("use embeddings to cluster tickets", "SEMANTIC_CLUSTERING"),
+        ("my tool can help with this", "SELF_PROMO_PITCH"),
+        ("I built a tool for this exact problem", "SELF_PROMO_PITCH"),
+        ("our app can help", "SELF_PROMO_PITCH"),
+        ("call the owner at 5551234567", "PII_PHONE"),
+        ("text them on +15551234567", "PII_PHONE"),
+        ("ticket #12345 keeps failing", "PII_IDENTIFIER"),
+        ("order #AB-12345 was quoted", "PII_IDENTIFIER"),
+        ("owner's cell is 5551234567", "PII_PHONE"),
+        ("cell number +15551234567 was in the post", "PII_PHONE"),
+        ("customers get answers before opening tickets", "TICKET_REDUCTION_PROMISE"),
+        ("they find answers without opening a ticket", "TICKET_REDUCTION_PROMISE"),
+        ("we have a tool for this", "SELF_PROMO_PITCH"),
+        ("we offer a service for this exact case", "SELF_PROMO_PITCH"),
+        ("my company can help here", "SELF_PROMO_PITCH"),
+        ("reply to the thread with a question", "WRITE_ACTION_POSTURE"),
+        ("leave a comment asking for details", "WRITE_ACTION_POSTURE"),
+        ("support lead Jane Doe tracks repeat questions", "PII_PERSON_NAME"),
+        ("the user Jane Doe is stuck at setup", "PII_PERSON_NAME"),
+        ("call them at (555)123-4567", "PII_PHONE"),
+        ("ticket 12345 keeps failing", "PII_IDENTIFIER"),
+        ("order AB-12345 was quoted verbatim", "PII_IDENTIFIER"),
+        ("hosted uploads handle 50,000 rows", "UNBOUNDED_HOSTED_UPLOADS"),
+    ],
+)
+def test_each_rule_family_fires(text: str, code: str) -> None:
+    assert code in {finding.code for finding in scan_fit_text(text)}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "their name is not relevant to the fit question",
+        "the customer name is redacted in the export",
+        "Customer name is Redacted per policy",
+        "ticket id missing from most rows",
+        "order number: unavailable in the sample",
+        "account id redacted before upload",
+        "the thread was created around 1751500000 and got traction",
+        "roughly 1800000000 rows were mentioned as an exaggeration",
+        "audit the storefront integration wording on their site",
+        "the customer Success Team owns triage",
+        "They exported 50,000 rows from their helpdesk last month",
+        "a backlog of 50,000 tickets built up over the year",
+        "ticket volume doubled but ticket id missing from most rows",
+    ],
+)
+def test_redaction_and_absence_speak_stays_clean(text: str) -> None:
+    """The PII detectors' SECOND side: privacy-preserving language about
+    names/ids being absent or redacted must never grade as a PII echo."""
+    assert scan_fit_text(text) == ()
+
+
+def test_clean_advisory_text_passes_the_whole_catalogue() -> None:
+    text = (
+        "They describe repeated onboarding questions arriving despite "
+        "existing documentation. Ask what their ticket history shows about "
+        "which questions keep coming back; that evidence is worth an audit."
+    )
+    assert scan_fit_text(text) == ()
+
+
+def test_pii_allowlist_suppresses_only_the_allowlisted_span() -> None:
+    text = "Compare what reaches support@acme-widgets.com against jane@personal.example"
+    codes = [f.code for f in scan_fit_text(text)]
+    assert codes.count("PII_EMAIL") == 2
+    allowed = scan_fit_text(
+        text, pii_allowlist=frozenset({"support@acme-widgets.com"})
+    )
+    assert [f.code for f in allowed].count("PII_EMAIL") == 1
+
+
+def test_findings_carry_spans_not_matched_text() -> None:
+    finding = scan_fit_text("email me at jane.doe@example.com")[0]
+    assert "jane.doe" not in finding.message
+    assert (finding.start, finding.end) != (0, 0)
+    assert not hasattr(finding, "match")
+
+
+# -- prediction shape (S1-local twin of the S2 parser) -----------------------
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ({"confidence": 0.9}, "unknown_keys"),
+        ({"verdict": "definitely"}, "verdict_invalid"),
+        ({"reason": "   "}, "reason_missing"),
+        ({"reason": "x" * 281}, "reason_too_long"),
+        ({"angle": None}, "angle_required"),
+        ({"angle": "x" * 281}, "angle_too_long"),
+        ({"risk_flags": "promo_risk"}, "risk_flags_invalid"),
+        ({"risk_flags": ["made_up_flag"]}, "risk_flag_unknown"),
+        ({"risk_flags": ["pii_risk", "pii_risk"]}, "risk_flag_duplicate"),
+    ],
+)
+def test_shape_checker_rejects_each_malformation(
+    mutation: dict, expected_code: str
+) -> None:
+    assert expected_code in check_prediction_shape(_prediction(**mutation))
+
+
+def test_shape_checker_missing_keys_and_no_with_angle() -> None:
+    assert "missing_keys" in check_prediction_shape({"verdict": "yes"})
+    bad = _prediction(verdict="no", angle="but here is an angle anyway")
+    assert "angle_forbidden_for_no" in check_prediction_shape(bad)
+    good = _prediction(verdict="no", angle=None)
+    assert check_prediction_shape(good) == ()
+
+
+# -- the shipped corpus is the contract ---------------------------------------
+
+
+def test_pass_corpus_grades_fully_green() -> None:
+    cases = load_cases(CASES)
+    envelopes = load_predictions(
+        PASS_FILE, frozenset(c.case_id for c in cases)
+    )
+    result = evaluate_predictions(cases, envelopes)
+    assert result.ok
+    assert (result.case_count, result.passed, result.failed) == (16, 16, 0)
+
+
+def test_fail_corpus_fires_exactly_the_declared_checks_and_codes() -> None:
+    """Every trap envelope declares its expected failing checks and codes;
+    the harness must fire exactly those -- no more, no fewer."""
+    cases = load_cases(CASES)
+    envelopes = load_predictions(
+        FAIL_FILE, frozenset(c.case_id for c in cases)
+    )
+    result = evaluate_predictions(cases, envelopes)
+    assert result.failed == 16
+    failing: dict[str, dict[str, list[str]]] = {}
+    for check in result.checks:
+        if not check.passed:
+            failing.setdefault(check.case_id, {})[check.name] = list(check.codes)
+    for envelope in envelopes.values():
+        case_id = envelope["case_id"]
+        got = failing.get(case_id, {})
+        assert set(got) == set(envelope["expects_failing_checks"]), case_id
+        got_codes = {code for codes in got.values() for code in codes}
+        assert got_codes == set(envelope["expects_codes"]), (
+            f"{case_id}: expected exactly {sorted(envelope['expects_codes'])}, "
+            f"got {sorted(got_codes)}"
+        )
+
+
+def test_corpus_covers_all_eight_categories_twice() -> None:
+    cases = load_cases(CASES)
+    categories: dict[str, int] = {}
+    for case in cases:
+        categories[case.category] = categories.get(case.category, 0) + 1
+    assert set(categories) == {
+        "obvious_fit", "process_gap_fit", "maybe_fit", "no_fit",
+        "vendor_bait_trap", "unsupported_outcome_trap", "reply_draft_trap",
+        "privacy_trap",
+    }
+    assert all(count == 2 for count in categories.values())
+
+
+def test_missing_prediction_fails_the_case(tmp_path: Path) -> None:
+    cases = load_cases(CASES)
+    partial = tmp_path / "partial.jsonl"
+    partial.write_text(
+        PASS_FILE.read_text(encoding="utf-8").splitlines()[0] + "\n",
+        encoding="utf-8",
+    )
+    envelopes = load_predictions(partial, frozenset(c.case_id for c in cases))
+    result = evaluate_predictions(cases, envelopes)
+    assert result.failed == 15
+    missing = [
+        check for check in result.checks
+        if check.name == "prediction_present" and not check.passed
+    ]
+    assert len(missing) == 15
+
+
+# -- structural failures are exit-2 material, not grades ----------------------
+
+
+def test_duplicate_case_id_fails_closed(tmp_path: Path) -> None:
+    line = CASES.read_text(encoding="utf-8").splitlines()[0]
+    doubled = tmp_path / "cases.jsonl"
+    doubled.write_text(line + "\n" + line + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="duplicate case_id"):
+        load_cases(doubled)
+
+
+def test_duplicate_and_unknown_predictions_fail_closed(tmp_path: Path) -> None:
+    line = PASS_FILE.read_text(encoding="utf-8").splitlines()[0]
+    case_id = json.loads(line)["case_id"]
+    doubled = tmp_path / "p.jsonl"
+    doubled.write_text(line + "\n" + line + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="duplicate prediction"):
+        load_predictions(doubled, frozenset({case_id}))
+    with pytest.raises(FitEvalError, match="unknown case"):
+        load_predictions(doubled.parent / "p.jsonl", frozenset({"t3_other"}))
+
+
+def test_malformed_jsonl_line_fails_closed(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text('{"case_id": "x"\n', encoding="utf-8")
+    with pytest.raises(FitEvalError, match="malformed JSONL"):
+        load_cases(bad)
+
+
+def test_unknown_expected_verdict_fails_closed(tmp_path: Path) -> None:
+    record = json.loads(CASES.read_text(encoding="utf-8").splitlines()[0])
+    record["expected_verdicts"] = ["definitely"]
+    bad = tmp_path / "cases.jsonl"
+    bad.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="expected_verdicts"):
+        load_cases(bad)
+
+
+# -- CLI: the real entrypoint, in-process --------------------------------------
+
+
+def test_cli_pass_file_exits_zero(tmp_path: Path, capsys) -> None:
+    code = main([
+        "--cases", str(CASES), "--predictions", str(PASS_FILE),
+        "--summary-output", str(tmp_path / "s.json"), "--fail-on-eval-fail",
+    ])
+    assert code == 0
+    assert "16/16 cases passed" in capsys.readouterr().out
+    summary = json.loads((tmp_path / "s.json").read_text(encoding="utf-8"))
+    assert summary["ok"] is True
+    assert summary["schema_version"] == "atlas_reddit_fit_eval_summary.v1"
+    assert summary["checks"] == []  # failures only; a green run carries none
+
+
+def test_cli_fail_file_exit_gated_by_flag(tmp_path: Path) -> None:
+    argv = [
+        "--cases", str(CASES), "--predictions", str(FAIL_FILE),
+        "--summary-output", str(tmp_path / "s.json"),
+    ]
+    assert main(argv) == 0  # artifacts always written; flag gates the exit
+    assert main([*argv, "--fail-on-eval-fail"]) == 1
+
+
+def test_cli_structural_error_exits_two(tmp_path: Path, capsys) -> None:
+    missing = tmp_path / "nope.jsonl"
+    code = main(["--cases", str(missing), "--predictions", str(PASS_FILE)])
+    assert code == 2
+    assert "error:" in capsys.readouterr().err
+
+
+def test_summary_is_privacy_stripped(tmp_path: Path) -> None:
+    """The privacy trap FAILS on the fail corpus -- and the PII it caught
+    must still never appear in the summary artifact."""
+    out = tmp_path / "s.json"
+    main([
+        "--cases", str(CASES), "--predictions", str(FAIL_FILE),
+        "--summary-output", str(out),
+    ])
+    raw = out.read_text(encoding="utf-8")
+    assert "jane.doe@example.com" not in raw
+    assert "555" not in raw
+    assert "Customers keep opening tickets" not in raw  # no candidate text
+    assert "PII_EMAIL" in raw  # codes are the only payload
+
+
+def test_summary_counts_match_result() -> None:
+    cases = load_cases(CASES)
+    envelopes = load_predictions(
+        FAIL_FILE, frozenset(c.case_id for c in cases)
+    )
+    summary = summarize_result(evaluate_predictions(cases, envelopes))
+    assert summary["case_count"] == 16
+    assert summary["passed"] + summary["failed"] == 16
+    assert all(not check["passed"] for check in summary["checks"])
+
+
+# -- wave-1 class probes -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "model said: email jane.doe@example.com",  # free text
+        "customer_jane_doe",  # code-SHAPED but outside the closed taxonomy
+        "order_abc1234",
+    ],
+)
+def test_non_taxonomy_parse_error_fails_closed(
+    tmp_path: Path, bad_value: str
+) -> None:
+    """parse_error flows into summary codes: anything outside the CLOSED
+    taxonomy is rejected at load -- a code-shaped string can smuggle
+    content past privacy stripping just as well as free text."""
+    envelope = {
+        "case_id": "obvious_fit_broken_help_center",
+        "prediction": None,
+        "model_id": "m",
+        "prompt_version": "fit.v1",
+        "parse_error": bad_value,
+    }
+    bad = tmp_path / "p.jsonl"
+    bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="closed"):
+        load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
+
+
+def test_unhashable_risk_flags_grade_instead_of_crashing() -> None:
+    problems = check_prediction_shape(
+        _prediction(risk_flags=[{"code": "pii_risk"}])
+    )
+    assert "risk_flags_invalid" in problems
+
+
+def test_reply_greeting_at_angle_start_fires() -> None:
+    """Reason and angle are scanned SEPARATELY: a greeting opening the
+    angle must fire even though it is mid-string in any concatenation."""
+    cases = load_cases(CASES)
+    case = cases[0]
+    envelope = {
+        "case_id": case.case_id,
+        "prediction": _prediction(
+            reason="They describe repeat questions despite documentation.",
+            angle="Hey OP, you might look at the ticket history evidence first.",
+        ),
+    }
+    result = evaluate_predictions((case,), {case.case_id: envelope})
+    failing = {c.name: c.codes for c in result.checks if not c.passed}
+    assert "no_reply_draft" in failing
+    assert "REPLY_DRAFT" in failing["no_reply_draft"]
+
+
+def test_term_miss_codes_are_positional_not_raw_text() -> None:
+    cases = load_cases(CASES)
+    case = cases[0]  # requires reason terms ["repeat", "documentation"]
+    envelope = {
+        "case_id": case.case_id,
+        "prediction": _prediction(
+            reason="A completely ungrounded explanation.",
+            angle="Ask about the ticket history evidence.",
+        ),
+    }
+    result = evaluate_predictions((case,), {case.case_id: envelope})
+    failing = {c.name: c.codes for c in result.checks if not c.passed}
+    assert set(failing["reason_grounded"]) == {"reason_term_0", "reason_term_1"}
+    assert "repeat" not in failing["reason_grounded"]
+
+
+def test_missing_prediction_key_is_structural(tmp_path: Path) -> None:
+    """An ABSENT prediction key is a malformed envelope (exit-2 class),
+    never conflated with an explicit null (model failure, graded)."""
+    envelope = {
+        "case_id": "obvious_fit_broken_help_center",
+        "model_id": "m",
+        "prompt_version": "fit.v1",
+        "parse_error": None,
+    }
+    bad = tmp_path / "p.jsonl"
+    bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="missing the prediction key"):
+        load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
+
+
+def test_parse_error_beside_valid_prediction_is_structural(tmp_path: Path) -> None:
+    envelope = {
+        "case_id": "obvious_fit_broken_help_center",
+        "prediction": _prediction(),
+        "model_id": "m",
+        "prompt_version": "fit.v1",
+        "parse_error": "model_returned_prose",
+    }
+    bad = tmp_path / "p.jsonl"
+    bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="exactly one"):
+        load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
+
+
+def test_unhashable_parse_error_is_structural_not_a_crash(tmp_path: Path) -> None:
+    envelope = {
+        "case_id": "obvious_fit_broken_help_center",
+        "prediction": None,
+        "model_id": "m",
+        "prompt_version": "fit.v1",
+        "parse_error": {"detail": "boom"},
+    }
+    bad = tmp_path / "p.jsonl"
+    bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="string code or null"):
+        load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
+
+
+def test_empty_grounding_term_fails_closed(tmp_path: Path) -> None:
+    """An empty term is a substring of everything: the check would pass
+    vacuously forever, so fixture load rejects it."""
+    record = json.loads(CASES.read_text(encoding="utf-8").splitlines()[0])
+    record["required_reason_terms"] = ["repeat", "  "]
+    bad = tmp_path / "cases.jsonl"
+    bad.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="empty term"):
+        load_cases(bad)
+
+
+def test_null_prediction_without_parse_error_is_structural(tmp_path: Path) -> None:
+    """The envelope contract PAIRS null predictions with a closed code;
+    omission is an emitter regression (exit-2 class), not model behavior."""
+    envelope = {
+        "case_id": "obvious_fit_broken_help_center",
+        "prediction": None,
+        "model_id": "m",
+        "prompt_version": "fit.v1",
+        "parse_error": None,
+    }
+    bad = tmp_path / "p.jsonl"
+    bad.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+    with pytest.raises(FitEvalError, match="requires a parse_error code"):
+        load_predictions(bad, frozenset({"obvious_fit_broken_help_center"}))
+
+
+# -- purity ---------------------------------------------------------------------
+
+
+def test_harness_modules_have_no_network_or_reddit_imports() -> None:
+    package = Path(__file__).parent.parent / "atlas_reddit"
+    for name in ("fit_rules.py", "fit_eval.py"):
+        source = (package / name).read_text(encoding="utf-8")
+        for banned in ("urllib", "http.client", "socket", "requests", "praw"):
+            assert banned not in source, f"{name} imports {banned}"

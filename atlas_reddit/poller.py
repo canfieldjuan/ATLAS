@@ -14,6 +14,7 @@ dismissed thread.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -21,7 +22,17 @@ from typing import Callable
 from .config import Watchlist
 from .reddit_client import ListingSource
 from .scoring import score_post
-from .store import ListeningStore
+from .store import MAX_BODY_EXCERPT_CHARS, ListeningStore
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _body_excerpt(text: str) -> str:
+    """Bounded, whitespace-collapsed post body for the fit pass. Third-
+    party text at rest is deliberately capped; the purge/tombstone path
+    covers it exactly like replies.body."""
+    collapsed = _WHITESPACE_RE.sub(" ", text or "").strip()
+    return collapsed[:MAX_BODY_EXCERPT_CHARS]
 
 
 @dataclass
@@ -91,6 +102,7 @@ def poll_once(
                 final_score=breakdown.total,
                 matched_topics=tuple(hit.topic for hit in breakdown.topic_hits),
                 observed_at=now,
+                body_excerpt=_body_excerpt(post.selftext),
             )
             stats.admitted += 1
 
