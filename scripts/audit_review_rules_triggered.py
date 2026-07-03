@@ -22,7 +22,10 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _audit_repo_root import audit_repo_root
+
+REPO_ROOT = audit_repo_root(__file__)
 DEFAULT_RULES_DOC = "docs/REVIEWER_RULES.md"
 
 TRIGGER_HEADING_RE = re.compile(r"^\s*#+\s*Path-based rule triggers\b", re.IGNORECASE)

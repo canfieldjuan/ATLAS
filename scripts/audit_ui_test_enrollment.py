@@ -21,7 +21,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _audit_repo_root import audit_repo_root
+
+REPO_ROOT = audit_repo_root(__file__)
 WORKFLOWS_SUBDIR = Path(".github") / "workflows"
 
 # Match an explicit `npm run test:<name>` invocation. Names use letters, digits,

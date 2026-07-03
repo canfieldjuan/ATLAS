@@ -17,7 +17,10 @@ import json
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _audit_repo_root import audit_repo_root
+
+REPO_ROOT = audit_repo_root(__file__)
 
 
 def _validate_path(

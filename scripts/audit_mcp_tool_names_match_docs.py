@@ -7,7 +7,10 @@ import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _audit_repo_root import audit_repo_root
+
+REPO_ROOT = audit_repo_root(__file__)
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 MCP_DIR = REPO_ROOT / "atlas_brain" / "mcp"
 
