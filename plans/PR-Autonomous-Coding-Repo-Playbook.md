@@ -51,6 +51,7 @@ Slice phase: Workflow/process
 - `docs/autonomous_coding_repo_playbook.md`
 - `docs/ci_cd_autonomous_coding_map.md`
 - `docs/long_running_session_watcher_handoff.md`
+- `plans/INDEX.md`
 - `plans/PR-Autonomous-Coding-Repo-Playbook.md`
 - `plans/archive/PR-Long-Running-Monitoring-Spec.md`
 
@@ -84,6 +85,7 @@ Parked hardening: none.
 ## Verification
 
 - `grep -RInP "[^\x00-\x7F]" docs/autonomous_coding_repo_playbook.md docs/ci_cd_autonomous_coding_map.md docs/long_running_session_watcher_handoff.md plans/PR-Autonomous-Coding-Repo-Playbook.md || true` - passed, no non-ASCII output.
+- `python scripts/archive_plans.py index` - passed, rebuilt `plans/INDEX.md` with the archived monitoring-spec plan.
 - `python scripts/sync_pr_plan.py plans/PR-Autonomous-Coding-Repo-Playbook.md --check` - passed.
 - `git diff --check` - passed.
 
@@ -94,6 +96,7 @@ Parked hardening: none.
 | `docs/autonomous_coding_repo_playbook.md` | 184 |
 | `docs/ci_cd_autonomous_coding_map.md` | 7 |
 | `docs/long_running_session_watcher_handoff.md` | 7 |
-| `plans/PR-Autonomous-Coding-Repo-Playbook.md` | 99 |
+| `plans/INDEX.md` | 3 |
+| `plans/PR-Autonomous-Coding-Repo-Playbook.md` | 102 |
 | `plans/archive/PR-Long-Running-Monitoring-Spec.md` | 0 |
-| **Total** | **297** |
+| **Total** | **303** |
