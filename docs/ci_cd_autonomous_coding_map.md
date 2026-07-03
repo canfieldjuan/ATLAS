@@ -36,6 +36,7 @@ issue / operator request
      and never authorizes merge
   -> live AI reconciliation
   -> scheduled watcher confirms green
+  -> Codex wake bridge turns watcher state into a resumable guarded prompt
   -> merge only when owned PR is clean and the arc has explicit merge authorization
   -> worktree teardown + plan archive
   -> next approved slice
@@ -169,6 +170,8 @@ artifact:
   event wakes wait for scheduled confirmation.
 - Long-running scheduled watchers remove operator babysitting while preserving
   ownership and merge-safety rules.
+- `scripts/codex_wake_bridge.py` connects watcher snapshots to Codex resume
+  prompts without giving the watcher GitHub write or merge authority.
 - Head-SHA pins catch unexpected remote branch movement before a builder can
   overwrite or merge another actor's push.
 
