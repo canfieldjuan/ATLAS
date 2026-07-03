@@ -308,3 +308,19 @@ def test_cli_unresolvable_plan_ref_is_infra_failure_exit_2() -> None:
     )
     assert proc.returncode == 2
     assert "not resolvable" in proc.stderr
+
+
+def test_plan_path_that_is_a_tree_at_ref_is_not_a_plan_doc(tmp_path: Path) -> None:
+    """cat-file -e would accept a TREE at the plan path (a PR shipping
+    plans/PR-Example.md/child); only a blob counts as a plan doc."""
+    repo = tmp_path / "repo"
+    nested = repo / "plans" / "PR-Example.md"
+    nested.mkdir(parents=True)
+    (nested / "child").write_text("not a plan doc\n", encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "seed")
+    exists = audit_pr_body_module.plan_exists_at_ref("HEAD", repo_root=repo)
+    assert exists("plans/PR-Example.md") is False
+    failures = audit_pr_body(_valid_body(), plan_exists=exists)
+    assert any("does not exist" in failure for failure in failures)

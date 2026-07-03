@@ -70,12 +70,16 @@ def plan_exists_at_ref(ref: str, *, repo_root: Path = ROOT) -> Callable[[str], b
     ref by inspection (git cat-file), never by executing PR code."""
 
     def _exists(plan: str) -> bool:
+        # -t, not -e: the object at the path must be a BLOB. cat-file -e
+        # also succeeds for a tree (plans/PR-Foo.md/child in the head
+        # makes plans/PR-Foo.md a directory), which is not a plan doc --
+        # this mirrors the working-tree default's is_file().
         proc = subprocess.run(
-            ["git", "cat-file", "-e", f"{ref}:{plan}"],
+            ["git", "cat-file", "-t", f"{ref}:{plan}"],
             cwd=repo_root,
             capture_output=True,
         )
-        return proc.returncode == 0
+        return proc.returncode == 0 and proc.stdout.strip() == b"blob"
 
     return _exists
 
