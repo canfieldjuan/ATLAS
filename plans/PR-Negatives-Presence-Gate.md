@@ -112,6 +112,35 @@ Review-fix notes (Codex wave 1; all three verified real, fixed at root):
   gap logged on #1942 -- extending trusted-base execution to the sweep
   workflows is a named follow-up slice, not smuggled in here.
 
+Review-fix notes (Codex wave 2; 2 fixed at root, 3 waived on the
+written threat model):
+
+- **FIXED -- arbitrary `.raises()` helpers satisfied the signal**: the
+  AST check now accepts only the real assertion APIs
+  (`pytest.raises(...)`, bare `raises(...)` from-import,
+  `assertRaises*`). An aliased `import pytest as pt` is deliberately
+  missed -- the gate errs toward demanding the standard idiom. Probed
+  with a `client.raises()` helper. All ratchet gates re-run: zero
+  regressions.
+- **FIXED -- row 4 overstated fixture-fidelity enforcement**: the
+  factory is opt-in outside the converted purge/tracker suites; row 4
+  now scoped honestly with the residual (static seeding probe) logged
+  on #1942.
+- **WAIVED -- raises in skipped/unreachable tests count**: this is a
+  static presence gate against honest-but-hasty authors; a skipped
+  negative test is still an authored negative probe. Proving
+  collection/execution is dynamic-coverage territory owned by the
+  review contract, not a source scanner.
+- **WAIVED -- sparse test files (1-2 tests, no raises) emit neither
+  finding**: lowering the >= 3 emission threshold reprices 32 baselined
+  modules across every lane (measured), which is a baseline-repricing
+  slice of its own -- logged on #1942, not smuggled into this diff.
+- **WAIVED -- a module merely mentioned by an unrelated test suppresses
+  `NO_TEST_FILE`**: the stem matcher is heuristic by design; removing
+  the mentioned-fallback sprays `NO_TEST_FILE` across legitimately
+  indirectly-tested modules repo-wide. Named residual, tracked with the
+  sparse-threshold item on #1942.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -146,8 +175,9 @@ Parked hardening: none.
 | `plans/INDEX.md` | 2 |
 | `plans/PR-Negatives-Presence-Gate.md` | 130 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 40 |
-| `tests/test_maturity_sweep.py` | 185 |
-| **Total** | **~365** |
+| `scripts/maturity_sweep.py` | 50 |
+| `tests/test_maturity_sweep.py` | 225 |
+| **Total** | **~445** |
 
-Under the 400 cap; no override needed.
+Over the 400 soft cap after two review-fix waves; the PR body
+carries the diff-budget override.

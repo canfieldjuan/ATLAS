@@ -675,3 +675,44 @@ def test_new_testless_sensitive_module_fails(
     ]) == 1
     out = capsys.readouterr().out
     assert "sensitive-path NO_TEST_FILE" in out
+
+
+def test_unrelated_raises_helper_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-2: only the real assertion APIs count -- an arbitrary
+    helper call named raises() (e.g. client.raises()) must not suppress
+    the blocking signal."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "class _Client:\n"
+        "    def raises(self):\n"
+        "        return 0\n\n"
+        "def test_one():\n    assert _Client().raises() == 0\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n",
+    )
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1

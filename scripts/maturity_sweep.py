@@ -520,11 +520,18 @@ def _has_raises_assertion(source):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if isinstance(func, ast.Attribute) and (
-            func.attr == "raises" or func.attr.startswith("assertRaises")
-        ):
-            return True
-        if isinstance(func, ast.Name) and func.id == "raises":
+        if isinstance(func, ast.Attribute):
+            # Only the real assertion APIs: pytest.raises(...) and
+            # unittest's self.assertRaises*(...). An arbitrary
+            # `client.raises()` helper must not satisfy a blocking gate.
+            if func.attr.startswith("assertRaises"):
+                return True
+            if (func.attr == "raises"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "pytest"):
+                return True
+        elif isinstance(func, ast.Name) and func.id == "raises":
+            # `from pytest import raises` style.
             return True
     return False
 
