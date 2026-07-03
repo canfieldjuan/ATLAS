@@ -15,7 +15,18 @@ import yaml
 
 WORKFLOW_GLOBS = ("*.yml", "*.yaml")
 PINNED_REF_RE = re.compile(r"^[0-9a-f]{40}$")
-ALLOWED_PULL_REQUEST_TARGET_JOB = ("gitleaks_baseline_growth_guard.yml", "gitleaks-baseline-guard")
+# The ONLY jobs allowed to run on pull_request_target, each of which must
+# also match the trusted-base guard shape below (event-name if-guard +
+# SHA-pinned checkout of the base SHA). Gate adoption is an audited,
+# explicit decision -- see plans/PR-Trusted-Base-Gate-Execution.md.
+ALLOWED_PULL_REQUEST_TARGET_JOBS = frozenset(
+    {
+        ("gitleaks_baseline_growth_guard.yml", "gitleaks-baseline-guard"),
+        ("diff_budget.yml", "diff-budget"),
+        ("ai_reconciliation_live.yml", "live-reconciliation"),
+        ("pr_body_contract.yml", "pr-body-contract"),
+    }
+)
 ALLOWED_ID_TOKEN_JOB = ("claude.yml", "claude")
 CLAUDE_OWNER_GATE = "github.actor == github.repository_owner"
 
@@ -82,7 +93,7 @@ def _job_runs_on_pull_request_target(job: dict[str, Any]) -> bool:
 
 
 def _is_allowed_pull_request_target_job(path: Path, job_name: str, job: dict[str, Any]) -> bool:
-    if (path.name, job_name) != ALLOWED_PULL_REQUEST_TARGET_JOB:
+    if (path.name, job_name) not in ALLOWED_PULL_REQUEST_TARGET_JOBS:
         return False
     if job.get("if") != "github.event_name == 'pull_request_target'":
         return False
