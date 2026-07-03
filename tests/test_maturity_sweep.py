@@ -716,3 +716,62 @@ def test_unrelated_raises_helper_does_not_satisfy_the_gate(tmp_path: Path) -> No
         "--min-score", "99",
         "--sensitive-glob", "**/purge_guard.py",
     ]) == 1
+
+
+def test_local_raises_helper_name_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-3: a bare raises(...) call only counts when the name is
+    bound by `from pytest import raises` (or an alias). A local helper or
+    fixture named raises must not suppress the blocking signal; the real
+    from-import (aliased or not) still does."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    module_src = ("def enforce(value):\n"
+                  "    if value < 0:\n"
+                  "        raise ValueError('negative')\n"
+                  "    return value\n")
+    _write(lane / "purge_guard.py", module_src)
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "def raises(exc):\n"
+        "    return exc\n\n"
+        "def test_one():\n    assert raises(ValueError) is ValueError\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: the real from-import, aliased, still satisfies it.
+    _write(
+        tests / "test_purge_guard.py",
+        "from pytest import raises as expect_raises\n"
+        "import purge_guard\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_rejects():\n"
+        "    with expect_raises(ValueError):\n"
+        "        purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0

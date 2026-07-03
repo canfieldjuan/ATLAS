@@ -141,6 +141,15 @@ written threat model):
   indirectly-tested modules repo-wide. Named residual, tracked with the
   sparse-threshold item on #1942.
 
+Review-fix note (Codex wave 3; verified real, fixed at root):
+
+- **Bare `raises(...)` accepted without an import check**: a local
+  helper or fixture named `raises` suppressed the blocking signal. The
+  AST check now collects the names bound by `from pytest import raises`
+  (including aliases) and accepts only those. Probed both sides (local
+  helper fails the gate; aliased from-import satisfies it). All ratchet
+  gates re-run: zero regressions.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -175,9 +184,9 @@ Parked hardening: none.
 | `plans/INDEX.md` | 2 |
 | `plans/PR-Negatives-Presence-Gate.md` | 130 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 50 |
-| `tests/test_maturity_sweep.py` | 225 |
-| **Total** | **~445** |
+| `scripts/maturity_sweep.py` | 60 |
+| `tests/test_maturity_sweep.py` | 280 |
+| **Total** | **~520** |
 
 Over the 400 soft cap after two review-fix waves; the PR body
 carries the diff-budget override.

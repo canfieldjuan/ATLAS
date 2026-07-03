@@ -516,6 +516,15 @@ def _has_raises_assertion(source):
         tree = ast.parse(source)
     except SyntaxError:
         return bool(re.search(r"pytest\.raises|assertRaises|with raises", source))
+    # Bare raises(...) only counts when the name is actually bound by
+    # `from pytest import raises` (or an alias of it) -- a local helper
+    # or fixture named raises must not satisfy a blocking gate.
+    pytest_raises_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "pytest":
+            for alias in node.names:
+                if alias.name == "raises":
+                    pytest_raises_names.add(alias.asname or alias.name)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -530,8 +539,7 @@ def _has_raises_assertion(source):
                     and isinstance(func.value, ast.Name)
                     and func.value.id == "pytest"):
                 return True
-        elif isinstance(func, ast.Name) and func.id == "raises":
-            # `from pytest import raises` style.
+        elif isinstance(func, ast.Name) and func.id in pytest_raises_names:
             return True
     return False
 
