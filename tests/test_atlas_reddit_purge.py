@@ -13,7 +13,12 @@ from pathlib import Path
 import pytest
 
 from atlas_reddit.purge import BATCH_SIZE, purge_once
-from atlas_reddit.reddit_client import PrawDeletionSource, RedditAuthError, validate_scopes
+from atlas_reddit.reddit_client import (
+    MISSING_REASON,
+    PrawDeletionSource,
+    RedditAuthError,
+    validate_scopes,
+)
 from atlas_reddit.store import ListeningStore
 
 NOW = 1_751_600_000
@@ -98,7 +103,7 @@ def test_live_items_survive_and_gone_items_are_actually_deleted(
     source = FakeDeletionSource(
         gone={
             "t3_gone": "content shows [deleted]",
-            "t1_gone": "missing (not returned by the API)",
+            "t1_gone": MISSING_REASON,
         }
     )
     stats = _purge(store, source)
@@ -181,7 +186,7 @@ def test_tracked_thread_rows_are_retained(store: ListeningStore) -> None:
     """Thread rows hold only ids (ours), no third-party content: the purge
     never touches them even when every reply on the thread is purged."""
     _seed_reply(store, "t1_gone")
-    _purge(store, FakeDeletionSource(gone={"t1_gone": "missing (not returned by the API)"}))
+    _purge(store, FakeDeletionSource(gone={"t1_gone": MISSING_REASON}))
     assert store.list_replies() == []
     assert len(store.list_tracked_threads(include_dormant=True)) == 1
 
@@ -394,7 +399,7 @@ def test_missing_purge_is_not_a_tombstone(store: ListeningStore) -> None:
     deleted items never reappear, so the re-purge cycle stays closed."""
     _seed_candidate(store, "t3_ghost")
     _purge(store, FakeDeletionSource(
-        gone={"t3_ghost": "missing (not returned by the API)"}
+        gone={"t3_ghost": MISSING_REASON}
     ))
     assert store.get_candidate("t3_ghost") is None  # purged: fail-closed
     record = store.list_purge_log()[0]
