@@ -27,6 +27,9 @@ Slice phase: Workflow/process
    and 7 of `docs/fable5_pr_1935_1941_review_lessons.md` flip to
    ENFORCED naming their gates -- 5 by this slice, 4 landed via #1947,
    7 landed via #1949/#1950; neither PR updated the index.
+3. Housekeeping (arc convention: rides the next slice): archive the
+   merged #1948 plan to `plans/archive/PR-Reddit-Listening-Hardening.md`
+   and regenerate `plans/INDEX.md`.
 
 ### Review Contract
 
@@ -53,7 +56,9 @@ Slice phase: Workflow/process
 ### Files touched
 
 - `docs/fable5_pr_1935_1941_review_lessons.md`
+- `plans/INDEX.md`
 - `plans/PR-Negatives-Presence-Gate.md`
+- `plans/archive/PR-Reddit-Listening-Hardening.md`
 - `scripts/maturity_sweep.py`
 - `tests/test_maturity_sweep.py`
 
@@ -111,9 +116,11 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
-| `plans/PR-Negatives-Presence-Gate.md` | 120 |
+| `plans/INDEX.md` | 2 |
+| `plans/PR-Negatives-Presence-Gate.md` | 130 |
+| `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
 | `scripts/maturity_sweep.py` | 7 |
 | `tests/test_maturity_sweep.py` | 100 |
-| **Total** | **~233** |
+| **Total** | **~245** |
 
 Under the 400 cap; no override needed.
