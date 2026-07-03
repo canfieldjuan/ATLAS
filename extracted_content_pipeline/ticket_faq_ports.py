@@ -77,8 +77,15 @@ class TicketFAQRepository(Protocol):
         status: str,
         *,
         scope: TenantScope,
+        expected_status: str | None = None,
     ) -> bool:
-        """Update a draft status and return True on hit."""
+        """Update a draft status and return True on hit.
+
+        When ``expected_status`` is provided the update is compare-and-set:
+        it only applies while the stored status still equals
+        ``expected_status``, so a concurrent status change wins and the
+        caller sees False.
+        """
 
     async def update_statuses(
         self,

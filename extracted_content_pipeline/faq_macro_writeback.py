@@ -12,6 +12,7 @@ from .ticket_faq_ports import TicketFAQDraft
 
 
 APPROVED_FAQ_STATUS = "approved"
+DRAFT_FAQ_STATUS = "draft"
 RESOLUTION_EVIDENCE_STATUS = "resolution_evidence"
 
 MacroPublishStatus = Literal["dry_run", "published", "updated", "skipped", "failed"]

@@ -17,8 +17,20 @@ from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
 
 
 class _FAQRepo:
-    def __init__(self, draft: TicketFAQDraft | None) -> None:
+    def __init__(
+        self,
+        draft: TicketFAQDraft | None,
+        *,
+        stored_status: str | None = None,
+    ) -> None:
         self.draft = draft
+        # The DB-authoritative status; may diverge from draft.status to model
+        # a concurrent review decision landing after get_draft.
+        self.stored_status = (
+            stored_status
+            if stored_status is not None
+            else (draft.status if draft is not None else "")
+        )
         self.get_calls: list[dict[str, object]] = []
         self.update_calls: list[dict[str, object]] = []
 
@@ -37,12 +49,16 @@ class _FAQRepo:
         status: str,
         *,
         scope: TenantScope,
+        expected_status: str | None = None,
     ) -> bool:
         self.update_calls.append({
             "faq_id": faq_id,
             "status": status,
             "scope": scope,
         })
+        if expected_status is not None and self.stored_status != expected_status:
+            return False
+        self.stored_status = status
         return True
 
 
@@ -267,6 +283,7 @@ async def test_publish_service_reports_missing_draft_without_provider_call() -> 
         "failed_count": 0,
         "pending_reconcile_count": 0,
         "draft_status_updated": False,
+        "status_conflict": False,
         "skipped": [],
         "results": [],
         "ok": False,
@@ -340,3 +357,301 @@ async def test_publish_service_skips_attempt_history_without_account_scope() -> 
 
     assert summary.ok is True
     assert attempts.calls == []
+
+
+@pytest.mark.asyncio
+async def test_publish_service_approve_draft_promotes_generated_draft_and_publishes() -> None:
+    # Producer-real shape: save_drafts persists status='draft'; an explicit
+    # tenant publish action with approve_draft=True promotes then publishes.
+    scope = TenantScope(account_id="acct-1", user_id="user-1")
+    repo = _FAQRepo(_draft(status="draft"))
+    provider = _Provider(("published",))
+    attempts = _AttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=scope,
+        approve_draft=True,
+    )
+
+    assert summary.ok is True
+    assert summary.published_count == 1
+    assert [(c["status"]) for c in repo.update_calls] == ["approved", "published"]
+    assert provider.calls[0]["scope"] == scope
+    assert len(attempts.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_publish_service_approve_draft_never_revives_review_decisions() -> None:
+    for status in ("rejected", "archived", "expired"):
+        repo = _FAQRepo(_draft(status=status))
+        provider = _Provider(("published",))
+        service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+        summary = await service.publish_faq_draft(
+            "faq-draft-1",
+            scope=TenantScope(account_id="acct-1"),
+            approve_draft=True,
+        )
+
+        assert summary.ok is False, status
+        assert summary.published_count == 0, status
+        assert provider.calls == [], status
+        assert repo.update_calls == [], status
+
+
+@pytest.mark.asyncio
+async def test_publish_service_approve_draft_fails_closed_when_promotion_refused() -> None:
+    class _RefusingRepo(_FAQRepo):
+        async def update_status(self, faq_id, status, *, scope, expected_status=None):
+            self.update_calls.append({
+                "faq_id": faq_id,
+                "status": status,
+                "scope": scope,
+            })
+            return False
+
+    repo = _RefusingRepo(_draft(status="draft"))
+    provider = _Provider(("published",))
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+        approve_draft=True,
+    )
+
+    assert summary.ok is False
+    assert summary.skipped[0]["reason"] == "draft_not_approved"
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_publish_service_default_still_refuses_generated_draft() -> None:
+    # Without the explicit approve_draft opt-in, behavior is unchanged: the
+    # AI Content Station and scheduled paths still require prior approval.
+    repo = _FAQRepo(_draft(status="draft"))
+    provider = _Provider(("published",))
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert summary.ok is False
+    assert summary.skipped[0]["reason"] == "draft_not_approved"
+    assert provider.calls == []
+    assert repo.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_publish_service_approve_draft_loses_race_to_concurrent_review() -> None:
+    # get_draft observed 'draft', but a reviewer rejected the draft before the
+    # promotion ran: the compare-and-set must lose, nothing publishes, and the
+    # concurrent decision is never overwritten.
+    repo = _FAQRepo(_draft(status="draft"), stored_status="rejected")
+    provider = _Provider(("published",))
+    attempts = _AttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+        approve_draft=True,
+    )
+
+    assert summary.ok is False
+    assert summary.published_count == 0
+    assert summary.skipped[0]["reason"] == "draft_not_approved"
+    assert provider.calls == []
+    assert repo.stored_status == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_publish_service_approve_draft_retries_published_idempotently() -> None:
+    # Lost HTTP response / second click: the row is already 'published'.
+    # The retry must flow through the provider's idempotent mapping and
+    # succeed, without any promotion write and without demoting the row.
+    repo = _FAQRepo(_draft(status="published"))
+    provider = _Provider(("updated",))
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+        approve_draft=True,
+    )
+
+    assert summary.ok is True
+    assert len(provider.calls) == 1
+    # a published retry performs NO status write: not a draft->approved
+    # promotion, and no approved->published mark (the row is already
+    # published). draft_status reports the honest observed 'published'.
+    assert repo.update_calls == []
+    assert repo.stored_status == "published"
+    assert summary.draft_status == "published"
+    assert summary.draft_status_updated is False
+    assert summary.status_conflict is False
+
+
+@pytest.mark.asyncio
+async def test_publish_service_mark_published_loses_to_midflight_review_decision() -> None:
+    # A reject lands while the external publish is in flight: the publish
+    # bookkeeping must not overwrite the reviewer's decision.
+    repo = _FAQRepo(_draft(status="draft"))
+
+    class _RejectingMidFlightProvider:
+        def __init__(self, target: _FAQRepo) -> None:
+            self.target = target
+            self.calls: list[dict[str, object]] = []
+
+        async def publish(self, macros, *, scope):
+            self.calls.append({"macros": tuple(macros), "scope": scope})
+            # concurrent reviewer decision during the external call
+            self.target.stored_status = "rejected"
+            return tuple(
+                MacroPublishResult(
+                    macro=macro,
+                    status=cast(MacroPublishStatus, "published"),
+                    external_id="external-1",
+                )
+                for macro in macros
+            )
+
+    provider = _RejectingMidFlightProvider(repo)
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+        approve_draft=True,
+    )
+
+    # the external publish happened and is reported...
+    assert summary.published_count == 1
+    # ...but the reviewer's decision is preserved, not overwritten, and the
+    # caller sees a conflict rather than a clean success (the DB refused to
+    # mark the FAQ published).
+    assert repo.stored_status == "rejected"
+    assert summary.draft_status_updated is False
+    assert summary.status_conflict is True
+    assert summary.ok is False
+
+
+@pytest.mark.asyncio
+async def test_publish_service_never_approves_draft_with_no_publishable_macros() -> None:
+    # Eligibility is decided before any status write: a draft whose items are
+    # all non-publishable must stay 'draft' (an approval would also surface it
+    # in the approved-filtered FAQ search projection).
+    repo = _FAQRepo(_draft(
+        status="draft",
+        items=(
+            {
+                "faq_item_id": "faq-item-1",
+                "question": "How do I export a report?",
+                "answer": "Customers mention exports.",
+                "answer_evidence_status": "draft_needs_review",
+            },
+        ),
+    ))
+    provider = _Provider(("published",))
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+        approve_draft=True,
+    )
+
+    assert summary.ok is False
+    assert provider.calls == []
+    assert repo.update_calls == []
+    assert repo.stored_status == "draft"
+    # the real per-item reason is surfaced, not masked as draft_not_approved
+    assert summary.skipped[0]["reason"] == "answer_not_verified"
+
+
+@pytest.mark.asyncio
+async def test_publish_service_never_approves_partially_publishable_generated_draft() -> None:
+    # A generated draft with a mix of one publishable and one skipped item:
+    # preview.macros is non-empty, but it is NOT fully publishable, so the
+    # promotion must not fire (else the partial draft would be approved and
+    # surface in the approved-filtered FAQ search projection while ok==False).
+    repo = _FAQRepo(_draft(
+        status="draft",
+        items=(
+            {
+                "faq_item_id": "faq-item-1",
+                "question": "Why was I charged twice?",
+                "resolution_text": "Open Billing and compare settled charges.",
+                "answer_evidence_status": "resolution_evidence",
+            },
+            {
+                "faq_item_id": "faq-item-2",
+                "question": "How do I export a report?",
+                "answer": "Customers mention exports.",
+                "answer_evidence_status": "draft_needs_review",
+            },
+        ),
+    ))
+    provider = _Provider(("published",))
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+        approve_draft=True,
+    )
+
+    assert summary.ok is False
+    assert summary.skipped_count == 1
+    assert provider.calls == []          # nothing published
+    assert repo.update_calls == []       # nothing promoted
+    assert repo.stored_status == "draft"  # row untouched
+
+
+@pytest.mark.asyncio
+async def test_publish_service_already_approved_mixed_draft_still_publishes_subset() -> None:
+    # Contrast: an already-approved (human-reviewed) mixed draft keeps the
+    # existing behavior of publishing its publishable subset. The skipped item
+    # only blocks the final mark-published, not the publish itself.
+    repo = _FAQRepo(_draft(
+        status="approved",
+        items=(
+            {
+                "faq_item_id": "faq-item-1",
+                "question": "Why was I charged twice?",
+                "resolution_text": "Open Billing and compare settled charges.",
+                "answer_evidence_status": "resolution_evidence",
+            },
+            {
+                "faq_item_id": "faq-item-2",
+                "question": "How do I export a report?",
+                "answer": "Customers mention exports.",
+                "answer_evidence_status": "draft_needs_review",
+            },
+        ),
+    ))
+    provider = _Provider(("published",))
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert summary.published_count == 1   # the publishable item published
+    assert summary.skipped_count == 1
+    assert provider.calls != []
+    assert repo.update_calls == []        # skipped item blocks the mark
+    assert repo.stored_status == "approved"

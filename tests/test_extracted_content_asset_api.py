@@ -2123,7 +2123,15 @@ def test_generated_asset_router_publishes_ticket_faq_macros() -> None:
     assert get_args == ("11111111-1111-1111-1111-111111111111", "acct_1")
     update_query, update_args = pool.fetch_calls[1]
     assert "UPDATE ticket_faq_markdown" in update_query
-    assert update_args == ("11111111-1111-1111-1111-111111111111", "published", "acct_1")
+    # The publish-mark is compare-and-set on 'approved' so a concurrent review
+    # decision landing mid-publish is preserved, hence the 4th CAS-guard arg.
+    assert "AND status = $4" in update_query
+    assert update_args == (
+        "11111111-1111-1111-1111-111111111111",
+        "published",
+        "acct_1",
+        "approved",
+    )
     attempt_query, attempt_args = next(
         call for call in pool.execute_calls
         if "ticket_faq_macro_publish_attempts" in call[0]
