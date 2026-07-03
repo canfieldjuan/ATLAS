@@ -9,7 +9,10 @@ now 6 items"). The list deduplicates to five distinct fixes (the
 `atlas_reddit/tracker.py` StopIteration guard was flagged on both audits). None broke the arc's
 real flow, so per HARDENING.md discipline they were parked, not fixed
 inline; this slice drains them. All five were re-verified against
-current `main` before planning -- none has been fixed since.
+current `main` before planning -- none has been fixed since. The same
+operator pass also found the merged S6 plan still sitting in `plans/`;
+this PR carries that housekeeping move so the Reddit arc closes without
+leaving a finished plan in the in-flight queue.
 
 ## Scope (this PR)
 
@@ -51,6 +54,9 @@ Slice phase: Production hardening
    truly deleted item never reappears, so the wave-2 re-purge cycle
    stays closed. Schema v4 adds `purge_log.tombstone` (existing rows
    backfill to 1 -- conservative).
+6. **S6 plan archive**: `plans/PR-Reddit-Listening-Purge.md` was merged
+   but never moved to `plans/archive/`; move it here and refresh
+   `plans/INDEX.md` so `plans/` only contains in-flight work.
 
 ### Review Contract
 
@@ -70,10 +76,11 @@ Slice phase: Production hardening
         re-ingestion stays refused. Both probed through the real store.
   - [ ] v3 store with existing purge_log rows opens at v4 with
         `tombstone=1` backfilled (still refuses re-ingestion).
+  - [ ] S6 purge plan is archived and `plans/INDEX.md` is refreshed.
 - Affected surfaces: `atlas_reddit/reddit_client.py`, `atlas_reddit/tracker.py`,
   `atlas_reddit/store.py` (schema v4 + migration ladder),
   `atlas_reddit/purge.py`, `atlas_reddit/__main__.py` (pace wiring);
-  tests.
+  tests; S6 plan archive housekeeping.
 - Risk areas: deletion/tombstone semantics (both directions probed);
   schema migration (ladder probed from v1 and v3).
 - Reviewer rules triggered: R1, R2 (deletion-adjacent guard changes:
@@ -91,7 +98,9 @@ Slice phase: Production hardening
 - `atlas_reddit/reddit_client.py`
 - `atlas_reddit/store.py`
 - `atlas_reddit/tracker.py`
+- `plans/INDEX.md`
 - `plans/PR-Reddit-Listening-Hardening.md`
+- `plans/archive/PR-Reddit-Listening-Purge.md`
 - `tests/test_atlas_reddit_poller.py`
 - `tests/test_atlas_reddit_purge.py`
 - `tests/test_atlas_reddit_tracker.py`
@@ -157,18 +166,15 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_reddit/__main__.py` | 4 |
-| `atlas_reddit/purge.py` | 8 |
-| `atlas_reddit/reddit_client.py` | 42 |
-| `atlas_reddit/store.py` | 49 |
+| `atlas_reddit/__main__.py` | 5 |
+| `atlas_reddit/purge.py` | 10 |
+| `atlas_reddit/reddit_client.py` | 57 |
+| `atlas_reddit/store.py` | 64 |
 | `atlas_reddit/tracker.py` | 10 |
-| `plans/PR-Reddit-Listening-Hardening.md` | 174 |
-| `tests/test_atlas_reddit_poller.py` | 7 |
-| `tests/test_atlas_reddit_purge.py` | 54 |
-| `tests/test_atlas_reddit_tracker.py` | 124 |
-| **Total** | **~472** |
-
-Over the 400 soft cap: the plan doc plus mandated both-sides probes on
-deletion-adjacent changes dominate; splitting five one-audit items into
-two PRs would separate fixes from their probes for no review benefit.
-The PR body carries the explicit diff-budget override.
+| `plans/INDEX.md` | 3 |
+| `plans/PR-Reddit-Listening-Hardening.md` | 180 |
+| `plans/archive/PR-Reddit-Listening-Purge.md` | 0 |
+| `tests/test_atlas_reddit_poller.py` | 8 |
+| `tests/test_atlas_reddit_purge.py` | 65 |
+| `tests/test_atlas_reddit_tracker.py` | 127 |
+| **Total** | **529** |
