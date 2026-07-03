@@ -632,6 +632,10 @@ class ListeningStore:
         _require_id(item_id, field="item_id")
         _require_int(deleted_detected_at, field="deleted_detected_at")
         _require_int(purged_at, field="purged_at")
+        # The flag controls the deletion/re-ingest safety invariant:
+        # truthiness coercion would turn None or "false" into silently
+        # valid persisted state.
+        _require_bool(tombstone, field="tombstone")
         if item_type == "candidate":
             table, key = "candidates", "post_id"
         elif item_type == "reply":
@@ -686,6 +690,7 @@ class ListeningStore:
         _require_id(item_id, field="item_id")
         _require_int(deleted_detected_at, field="deleted_detected_at")
         _require_int(purged_at, field="purged_at")
+        _require_bool(tombstone, field="tombstone")
         if item_type not in PURGE_ITEM_TYPES:
             raise StoreError(
                 f"invalid purge item_type {item_type!r}; allowed: {PURGE_ITEM_TYPES}"

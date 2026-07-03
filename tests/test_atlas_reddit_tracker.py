@@ -590,6 +590,9 @@ def _stub_history_praw(monkeypatch: pytest.MonkeyPatch, own_comments: dict):
         def comment(self, id: str):  # noqa: A002 -- praw's own kwarg name
             return _OwnComment(own_comments[f"t1_{id}"])
 
+        def submission(self, id: str):  # noqa: A002 -- praw's own kwarg name
+            return types.SimpleNamespace(comments=_Replies([]))
+
     stub = types.ModuleType("praw")
     stub.Reddit = _Reddit
     monkeypatch.setitem(sys.modules, "praw", stub)
@@ -622,3 +625,39 @@ def test_own_reply_expansion_is_bounded_and_paced(
     assert {r.reply_id for r in replies} == {"t1_child1", "t1_child2"}
     assert limits == [PrawHistorySource._OWN_REPLY_MORE_BUDGET] * 2  # never None
     assert sleeper.calls == [2.0]  # one sleep between two refreshes
+
+
+def test_mixed_thread_paces_top_level_fetch_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex P2 on this PR: a mixed thread (own submission + own comments)
+    must pace the top-level fetch as well -- the pace ceiling covers the
+    whole thread, not just the own-comment refreshes."""
+    from atlas_reddit.config import RedditListeningSettings
+
+    monkeypatch.setenv("ATLAS_REDDIT_CLIENT_ID", "cid")
+    monkeypatch.setenv("ATLAS_REDDIT_CLIENT_SECRET", "csecret")
+    monkeypatch.setenv("ATLAS_REDDIT_REFRESH_TOKEN", "rtoken")
+    monkeypatch.setenv("ATLAS_REDDIT_USERNAME", "juan_c")
+    _stub_history_praw(monkeypatch, {"t1_a": ["t1_child1"], "t1_b": []})
+    sleeper = RecordingSleep()
+    source = PrawHistorySource(
+        RedditListeningSettings(_env_file=None), pace_seconds=2.0, sleep=sleeper
+    )
+    source.fetch_thread_replies(
+        "t3_mine", my_comment_ids=frozenset({"t1_a", "t1_b"}), include_top_level=True
+    )
+    # one sleep between the two own-comment refreshes + one before the
+    # top-level fetch
+    assert sleeper.calls == [2.0, 2.0]
+
+    # Second side: an own submission with NO own comments has no prior
+    # request in the thread -- no pacing sleep before its only fetch.
+    sleeper2 = RecordingSleep()
+    source2 = PrawHistorySource(
+        RedditListeningSettings(_env_file=None), pace_seconds=2.0, sleep=sleeper2
+    )
+    source2.fetch_thread_replies(
+        "t3_mine", my_comment_ids=frozenset(), include_top_level=True
+    )
+    assert sleeper2.calls == []

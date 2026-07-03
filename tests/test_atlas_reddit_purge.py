@@ -19,7 +19,7 @@ from atlas_reddit.reddit_client import (
     RedditAuthError,
     validate_scopes,
 )
-from atlas_reddit.store import ListeningStore
+from atlas_reddit.store import ListeningStore, StoreError
 from tests.atlas_reddit_fixtures import fake_reply, fake_submission, seed_candidates, seed_replies
 
 NOW = 1_751_600_000
@@ -422,6 +422,26 @@ def test_purged_ids_are_tombstones_for_reingestion(store: ListeningStore) -> Non
     assert len(store.list_purge_log()) == 2  # no repeat purge entries
     # Confirmed deletion states are the tombstoning kind.
     assert all(rec.tombstone for rec in store.list_purge_log())
+
+
+@pytest.mark.parametrize("bad", [None, 0, 1, "false", "true"])
+def test_non_bool_tombstone_flag_is_rejected(store: ListeningStore, bad: object) -> None:
+    """Codex P2 on this PR: the tombstone flag controls the deletion/
+    re-ingest safety invariant, so truthiness coercion (None -> not
+    tombstoning, "false" -> tombstoning) must fail closed instead."""
+    _seed_candidate(store, "t3_gone")
+    with pytest.raises(StoreError, match="tombstone"):
+        store.purge_item(
+            "t3_gone", "candidate", deleted_detected_at=NOW, purged_at=NOW,
+            reason="r", tombstone=bad,  # type: ignore[arg-type]
+        )
+    assert store.get_candidate("t3_gone") is not None  # nothing deleted
+    with pytest.raises(StoreError, match="tombstone"):
+        store.record_purge(
+            item_id="t3_x", item_type="candidate", deleted_detected_at=NOW,
+            purged_at=NOW, reason="r", tombstone=bad,  # type: ignore[arg-type]
+        )
+    assert store.list_purge_log() == []  # nothing logged
 
 
 def test_missing_purge_is_not_a_tombstone(store: ListeningStore) -> None:

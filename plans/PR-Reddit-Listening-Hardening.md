@@ -138,6 +138,20 @@ the v1->v2 backfill.
   S6 plan defers them; item 3's guard is what makes that future path
   safe to add.
 
+Review-fix notes (Codex wave 1; both verified real and fixed at root):
+
+- **Mixed-thread top-level fetch was unpaced**: an own submission with
+  own comments fired the top-level scan back-to-back with the last
+  own-comment refresh. The pace ceiling now covers the whole thread:
+  the same inter-request sleep runs before the top-level fetch when any
+  own-comment fetch preceded it. Both sides probed (mixed thread paces;
+  a no-own-comments submission has no prior request and no sleep).
+- **Non-bool tombstone flags truthiness-coerced**: None or "false" from
+  a future caller would silently flip the deletion/re-ingest invariant.
+  `purge_item` and `record_purge` now validate with the store's
+  existing `_require_bool`; probed with None/0/1/"false"/"true" against
+  both writers (nothing deleted, nothing logged).
+
 ## Deferred
 
 - Producer-shape fixture assertions (the S6 P1 class) belong to the
@@ -166,15 +180,15 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_reddit/__main__.py` | 5 |
-| `atlas_reddit/purge.py` | 10 |
-| `atlas_reddit/reddit_client.py` | 57 |
-| `atlas_reddit/store.py` | 64 |
+| `atlas_reddit/__main__.py` | 4 |
+| `atlas_reddit/purge.py` | 8 |
+| `atlas_reddit/reddit_client.py` | 48 |
+| `atlas_reddit/store.py` | 54 |
 | `atlas_reddit/tracker.py` | 10 |
-| `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Listening-Hardening.md` | 180 |
+| `plans/INDEX.md` | 2 |
+| `plans/PR-Reddit-Listening-Hardening.md` | 194 |
 | `plans/archive/PR-Reddit-Listening-Purge.md` | 0 |
-| `tests/test_atlas_reddit_poller.py` | 8 |
-| `tests/test_atlas_reddit_purge.py` | 65 |
-| `tests/test_atlas_reddit_tracker.py` | 127 |
-| **Total** | **529** |
+| `tests/test_atlas_reddit_poller.py` | 7 |
+| `tests/test_atlas_reddit_purge.py` | 83 |
+| `tests/test_atlas_reddit_tracker.py` | 163 |
+| **Total** | **~573** |

@@ -377,6 +377,12 @@ class PrawHistorySource:
                 _admit(child, comment_fullname)
 
         if include_top_level:
+            # Same inter-request pacing when own-comment fetches already
+            # ran: a mixed thread (own submission + own comments) must
+            # not fire the top-level fetch back-to-back with the last
+            # refresh -- the pace ceiling covers the WHOLE thread.
+            if my_comment_ids and self._pace_seconds > 0:
+                self._sleep(self._pace_seconds)
             submission = self._reddit.submission(id=thread_id.removeprefix("t3_"))
             submission.comments.replace_more(limit=16)
             for top in submission.comments:
