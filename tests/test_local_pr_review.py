@@ -118,6 +118,44 @@ def test_local_pr_review_runs_plans_archive_advisory_when_present(tmp_path: Path
     assert "local PR review passed" in result.stdout
 
 
+def test_local_pr_review_trusted_script_root_does_not_execute_repo_scripts(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_executable(
+        repo / "scripts" / "pre_push_audit.sh",
+        "#!/usr/bin/env bash\necho repo pre-push should not run >&2\nexit 99\n",
+    )
+    _git(repo, "add", "scripts/pre_push_audit.sh")
+    _git(repo, "commit", "-m", "hostile repo pre-push")
+
+    trusted = tmp_path / "trusted"
+    (trusted / "scripts").mkdir(parents=True)
+    _write_executable(
+        trusted / "scripts" / "local_pr_review.sh",
+        (REPO_ROOT / "scripts" / "local_pr_review.sh").read_text(encoding="utf-8"),
+    )
+    _write_executable(
+        trusted / "scripts" / "pre_push_audit.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'trusted pre-push cwd=%s\\n' \"$PWD\"\n",
+    )
+
+    result = _run(
+        tmp_path,
+        [
+            "bash",
+            str(trusted / "scripts" / "local_pr_review.sh"),
+            "--repo-root",
+            str(repo),
+            "--script-root",
+            str(trusted),
+        ],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"trusted pre-push cwd={repo}" in result.stdout
+    assert "repo pre-push should not run" not in result.stderr
+
+
 def test_local_pr_review_skips_plans_advisory_when_absent(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)

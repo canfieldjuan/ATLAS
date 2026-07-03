@@ -25,6 +25,7 @@ ALLOWED_PULL_REQUEST_TARGET_JOBS = frozenset(
         ("diff_budget.yml", "diff-budget"),
         ("ai_reconciliation_live.yml", "live-reconciliation"),
         ("pr_body_contract.yml", "pr-body-contract"),
+        ("pre_push_audit.yml", "pre-push-audit"),
     }
 )
 ALLOWED_ID_TOKEN_JOB = ("claude.yml", "claude")

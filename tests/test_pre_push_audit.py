@@ -115,6 +115,7 @@ def test_pre_push_audit_runs_shape_only_for_locally_modified_committed_plan(tmp_
 def _write_fixture_repo(repo: Path) -> None:
     (repo / "scripts").mkdir(parents=True)
     for name in (
+        "_audit_repo_root.py",
         "audit_claude_md_claims.py",
         "audit_extracted_manifests.py",
         "audit_mcp_port_assignments.py",

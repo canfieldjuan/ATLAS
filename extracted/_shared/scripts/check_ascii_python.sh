@@ -7,7 +7,7 @@ if [[ "$#" -ne 1 ]]; then
 fi
 
 PRODUCT_DIR="$1"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT_DIR="${ATLAS_AUDIT_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 cd "$ROOT_DIR"
 
 mapfile -t files < <(python - "$PRODUCT_DIR" <<'PY'

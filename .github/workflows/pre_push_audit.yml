@@ -1,7 +1,14 @@
 name: Pre-push Audit
 
+# Trusted-base execution (#1949 follow-up): PR events run this workflow from the
+# base branch and checkout the base SHA for executable code. The PR head is
+# materialized as a separate worktree and inspected as data by base-owned
+# scripts. Do not add a PR-event step that executes scripts, tests, or package
+# code from the PR worktree.
+
 on:
-  pull_request:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches:
       - main
@@ -12,24 +19,34 @@ permissions:
 
 jobs:
   pre-push-audit:
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Checkout trusted base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
 
-      - name: Resolve origin HEAD
+      - name: Materialize PR head as data
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          git remote set-head origin --auto || git remote set-head origin main
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" \
+            "pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}"
+          git worktree add "$RUNNER_TEMP/pr-tree" "refs/remotes/origin/pr-${PR_NUMBER}"
+          git -C "$RUNNER_TEMP/pr-tree" symbolic-ref "refs/remotes/origin/HEAD" "refs/remotes/origin/${BASE_REF}" || true
 
       - name: Write current PR body
-        if: github.event_name == 'pull_request'
         run: |
           python - <<'PY'
           import json
@@ -47,17 +64,49 @@ jobs:
       - name: Run local PR review bundle
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            bash scripts/local_pr_review.sh --current-pr-body-file "$RUNNER_TEMP/current-pr-body.md"
-          else
-            bash scripts/local_pr_review.sh
-          fi
+          bash scripts/local_pr_review.sh \
+            --repo-root "$RUNNER_TEMP/pr-tree" \
+            --script-root "$GITHUB_WORKSPACE" \
+            --current-pr-body-file "$RUNNER_TEMP/current-pr-body.md" \
+            "origin/${BASE_REF}"
 
       # Unit-cover the PR-review tooling itself (including the plans-archive
-      # advisory). This workflow runs the bundle above, so its fixtures belong
-      # in CI rather than only in local dev.
+      # advisory). On pull_request_target these are trusted-base tests only;
+      # the PR checkout above is data and must not be executed.
+      - name: PR-review tooling unit tests
+        run: |
+          python -m pip install --quiet pytest pytest-asyncio pyyaml
+          python -m pytest tests/test_local_pr_review.py tests/test_audit_ai_reconciliation.py tests/test_audit_review_rules_triggered.py tests/test_summarize_review_misses.py tests/test_check_ai_reconciliation_live.py tests/test_pre_push_audit_workflow.py tests/test_check_review_body_r14.py tests/test_push_pr_wrapper.py tests/test_audit_pr_body.py tests/test_check_deflection_full_report_proof_bundle.py tests/test_check_gitleaks_baseline_rotation.py tests/test_security_guardrails_workflow.py tests/test_audit_workflow_security_posture.py tests/test_claude_workflow_security.py tests/test_deflection_report_ttl_workflow.py tests/test_fix_mode_hook.py tests/test_eval_local_mcp_models.py tests/test_check_diff_budget.py -q
+
+      - name: Workflow security posture audit
+        run: python scripts/audit_workflow_security_posture.py "$RUNNER_TEMP/pr-tree/.github/workflows"
+
+  pre-push-audit-main:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Resolve origin HEAD
+        run: |
+          git remote set-head origin --auto || git remote set-head origin main
+
+      - name: Run local PR review bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/local_pr_review.sh
+
       - name: PR-review tooling unit tests
         run: |
           python -m pip install --quiet pytest pytest-asyncio pyyaml

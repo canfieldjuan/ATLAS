@@ -3,15 +3,31 @@
 
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
-
 base_ref="origin/main"
 base_ref_set=0
 allow_dirty=0
 current_pr_body_file="${ATLAS_CURRENT_PR_BODY_FILE:-}"
+repo_root=""
+script_root=""
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --repo-root)
+            if [ "$#" -lt 2 ]; then
+                echo "local_pr_review.sh: --repo-root requires a path" >&2
+                exit 2
+            fi
+            repo_root="$2"
+            shift 2
+            ;;
+        --script-root)
+            if [ "$#" -lt 2 ]; then
+                echo "local_pr_review.sh: --script-root requires a path" >&2
+                exit 2
+            fi
+            script_root="$2"
+            shift 2
+            ;;
         --allow-dirty)
             allow_dirty=1
             shift
@@ -26,11 +42,14 @@ while [ "$#" -gt 0 ]; do
             ;;
         --help|-h)
             cat <<'EOF'
-Usage: bash scripts/local_pr_review.sh [--allow-dirty] [--current-pr-body-file PATH] [base-ref]
+Usage: bash scripts/local_pr_review.sh [--allow-dirty] [--repo-root PATH] [--script-root PATH] [--current-pr-body-file PATH] [base-ref]
 
 Run the local mechanical review bundle before opening or updating a PR.
 By default, the worktree must be clean so committed-diff checks cannot
 silently ignore uncommitted edits.
+
+By default, both roots are the current checkout. Trusted CI can execute scripts
+from --script-root while inspecting --repo-root as data.
 
 When running before the GitHub PR exists, pass --current-pr-body-file
 with the PR description you plan to use. The drift audit validates that
@@ -54,6 +73,20 @@ EOF
             ;;
     esac
 done
+
+if [ -z "$repo_root" ]; then
+    repo_root="$(git rev-parse --show-toplevel)"
+fi
+repo_root="$(cd "$repo_root" && pwd)"
+
+if [ -z "$script_root" ]; then
+    script_root="$repo_root"
+fi
+script_root="$(cd "$script_root" && pwd)"
+
+cd "$repo_root"
+export ATLAS_AUDIT_REPO_ROOT="$repo_root"
+export ATLAS_AUDIT_SCRIPT_ROOT="$script_root"
 
 failures=0
 
@@ -93,19 +126,19 @@ echo
 echo "changed files:"
 git diff --name-status "$base"...HEAD || true
 
-run_check "Pre-push audit wrapper" bash scripts/pre_push_audit.sh
+run_check "Pre-push audit wrapper" bash "$script_root/scripts/pre_push_audit.sh" --repo-root "$repo_root" --script-root "$script_root"
 
-if [ -f scripts/audit_extracted_pipeline_ci_enrollment.py ]; then
+if [ -f "$script_root/scripts/audit_extracted_pipeline_ci_enrollment.py" ]; then
     run_check "Extracted pipeline CI enrollment" \
-        python scripts/audit_extracted_pipeline_ci_enrollment.py --atlas-brain-tests-from "$base_ref"
+        python "$script_root/scripts/audit_extracted_pipeline_ci_enrollment.py" --atlas-brain-tests-from "$base_ref"
 else
     echo
     echo "==> Extracted pipeline CI enrollment"
     echo "    SKIP (scripts/audit_extracted_pipeline_ci_enrollment.py not found)"
 fi
 
-if [ -f scripts/audit_pr_session_drift.py ]; then
-    drift_args=(scripts/audit_pr_session_drift.py "$base_ref" --require-current-pr-body)
+if [ -f "$script_root/scripts/audit_pr_session_drift.py" ]; then
+    drift_args=("$script_root/scripts/audit_pr_session_drift.py" "$base_ref" --require-current-pr-body)
     if [ -n "$current_pr_body_file" ]; then
         drift_args+=(--current-pr-body-file "$current_pr_body_file")
     fi
@@ -116,16 +149,16 @@ else
     echo "    SKIP (scripts/audit_pr_session_drift.py not found)"
 fi
 
-if [ -f scripts/audit_cross_layer_callers.py ]; then
-    run_check "Cross-layer caller hints" python scripts/audit_cross_layer_callers.py "$base_ref"
+if [ -f "$script_root/scripts/audit_cross_layer_callers.py" ]; then
+    run_check "Cross-layer caller hints" python "$script_root/scripts/audit_cross_layer_callers.py" "$base_ref"
 else
     echo
     echo "==> Cross-layer caller hints"
     echo "    SKIP (scripts/audit_cross_layer_callers.py not found)"
 fi
 
-if [ -f scripts/audit_ai_reconciliation.py ]; then
-    reconcile_args=(scripts/audit_ai_reconciliation.py)
+if [ -f "$script_root/scripts/audit_ai_reconciliation.py" ]; then
+    reconcile_args=("$script_root/scripts/audit_ai_reconciliation.py")
     if [ -n "$current_pr_body_file" ]; then
         reconcile_args+=(--current-pr-body-file "$current_pr_body_file")
     fi
@@ -145,13 +178,13 @@ committed_plan_docs=$(
 if [ -n "$committed_plan_docs" ]; then
     while IFS= read -r doc; do
         [ -z "$doc" ] && continue
-        if [ -f scripts/audit_plan_code_consistency.py ]; then
+        if [ -f "$script_root/scripts/audit_plan_code_consistency.py" ]; then
             run_check "Plan/code consistency: $doc" \
-                python scripts/audit_plan_code_consistency.py "$doc"
+                python "$script_root/scripts/audit_plan_code_consistency.py" "$doc"
         fi
-        if [ -f scripts/audit_review_rules_triggered.py ]; then
+        if [ -f "$script_root/scripts/audit_review_rules_triggered.py" ]; then
             run_check "Reviewer rules triggered: $doc" \
-                python scripts/audit_review_rules_triggered.py "$base_ref" --plan "$doc"
+                python "$script_root/scripts/audit_review_rules_triggered.py" "$base_ref" --plan "$doc"
         fi
     done <<< "$committed_plan_docs"
 else
@@ -167,8 +200,8 @@ run_check "git diff --check" git diff --check
 # always exits 0, and the guard keeps set -e happy if it is ever absent.
 echo
 echo "==> Plans archive backlog (advisory, non-blocking)"
-if [ -f scripts/archive_plans.py ]; then
-    python scripts/archive_plans.py check || true
+if [ -f "$script_root/scripts/archive_plans.py" ]; then
+    python "$script_root/scripts/archive_plans.py" check || true
     echo "    advisory only -- run 'python scripts/archive_plans.py archive' to archive merged plans"
 else
     echo "    SKIP (scripts/archive_plans.py not found)"
