@@ -17,7 +17,7 @@ from atlas_reddit.fit_guard import (
     GuardDecision,
     guard_fit_decision,
 )
-from atlas_reddit.fit_rules import ALL_RULE_CODES, RULES
+from atlas_reddit.fit_rules import ALL_RULE_CODES
 
 
 def _decision(reason: str, angle: str | None, verdict: str = "yes"):

@@ -12,10 +12,12 @@ Atlas has two related workflows:
 1. Ordinary interactive slices stop after the PR is opened or updated. The
    builder reports the PR URL, local checks, and current status, then waits for
    the operator signal.
-2. Explicit long-running coding tasks keep a PR watcher. The builder records
-   the owned PR in `SESSION_STATE.local.md`, polls GitHub every 30 minutes,
-   fixes red CI or actionable review comments inside the current slice, and
-   continues only when the owned PR is clean or merged.
+2. Explicit long-running coding tasks separate push/review-event attention from
+   scheduled green confirmation. A push/review-event hook is immediate only when
+   the operator environment provides an external bridge; otherwise the session
+   records that hook as unavailable and the local 30-minute watcher is the
+   autonomous fallback. The builder does not actively poll GitHub between those
+   wake-ups.
 
 The production loop is:
 
@@ -30,8 +32,11 @@ issue / operator request
   -> PR body contract
   -> GitHub Actions checks
   -> Codex/Copilot/human review
+  -> push/review-event attention wakes the builder only via external bridge/operator signal
+     and never authorizes merge
   -> live AI reconciliation
-  -> merge only when owned PR is clean
+  -> scheduled watcher confirms green
+  -> merge only when owned PR is clean and the arc has explicit merge authorization
   -> worktree teardown + plan archive
   -> next approved slice
 ```
@@ -159,12 +164,31 @@ artifact:
 - Session ownership state prevents one long-running agent from touching another
   lane's PR.
 - Fix-mode batons keep red-check loops narrow after compaction.
-- Long-running watchers remove operator babysitting while preserving ownership
-  and merge-safety rules.
+- Push/review-event signals reduce red-review latency when an operator or
+  external bridge wakes the builder, without becoming merge signals; even green
+  event wakes wait for scheduled confirmation.
+- Long-running scheduled watchers remove operator babysitting while preserving
+  ownership and merge-safety rules.
+- Head-SHA pins catch unexpected remote branch movement before a builder can
+  overwrite or merge another actor's push.
 
 The practical result is less token burn: agents spend less time re-orienting,
 humans spend less time asking "is it green yet?", and reviewers spend more time
 on judgment instead of bookkeeping.
+
+## Monitoring And Pattern Drift
+
+The long-running loop also needs a way to remember what it learned after a PR
+merges. `docs/long_running_agent_monitoring_spec.md` defines the per-arc report
+shape for PR cycle time, red-to-green loops, pushes per PR, recurring CI
+failures, review finding classes, stale branch count, unresolved thread count,
+and codification decisions.
+
+That reporting layer is read-only. It uses current GitHub state, watcher JSON,
+plan docs, PR bodies, local audit output, and maturity sweep baselines to decide
+which repeated failures should become AGENTS rules, audit scripts, tests, or
+watcher changes. It does not replace the scheduled green-confirmation watcher or
+the AGENTS merge guards.
 
 ## S1 Boundaries
 
