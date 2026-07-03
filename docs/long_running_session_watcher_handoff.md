@@ -397,3 +397,10 @@ decisions.
 The pattern report is evidence, not authority. It can propose AGENTS updates,
 audits, tests, or watcher changes for repeated failure classes, but it does not
 merge PRs or change the scheduled-ready-only merge rule.
+
+## New Repo Playbook
+
+For future repos, use `docs/autonomous_coding_repo_playbook.md` instead of
+copying Atlas wholesale. It lists the minimum portable contracts, the
+Atlas-specific pieces to avoid copying blindly, and the smaller-repo CI stack
+that preserves the same plan/review/reconciliation discipline.
