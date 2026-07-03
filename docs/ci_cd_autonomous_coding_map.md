@@ -193,6 +193,13 @@ which repeated failures should become AGENTS rules, audit scripts, tests, or
 watcher changes. It does not replace the scheduled green-confirmation watcher or
 the AGENTS merge guards.
 
+## Reusable Playbook
+
+`docs/autonomous_coding_repo_playbook.md` extracts the Atlas loop into a
+portable repo bootstrap: the minimum process contracts to copy first, which
+Atlas workflows are product-specific, what a smaller repo needs in CI, and the
+replication test for long-running autonomous coding.
+
 ## S1 Boundaries
 
 This slice deliberately does not change workflows, branch protection, required
