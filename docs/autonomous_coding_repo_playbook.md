@@ -40,8 +40,9 @@ These rules are repo-agnostic:
 - Review comments are resolved only after the fix lands and the PR body agrees
   with live thread state.
 - Long-running sessions own one lane and one active PR at a time.
-- Merges require clean CI, clean review threads, clean reconciliation, clean
-  mergeability, matching expected head SHA, and a clean owned worktree.
+- Merges require explicit operator approval or recorded standing merge
+  authorization, plus clean CI, clean review threads, clean reconciliation,
+  clean mergeability, matching expected head SHA, and a clean owned worktree.
 - Red checks and review findings are fixed at the upstream cause, not with a
   symptom patch.
 - Tests must prove behavior, including unhappy paths and edge cases.
@@ -110,9 +111,9 @@ For a small repo, use this first:
 | Layer | Required? | Purpose |
 |---|---|---|
 | PR body contract | Yes | Ensures every PR names a plan and uses the required structure. |
-| Secret scan | Yes | Blocks the highest-risk mistake early. |
+| Secret scan | Yes | Blocks the highest-risk mistake early; suppressions, baselines, and config must come from trusted-base code or an equivalent baseline-growth guard. |
 | Unit tests | Yes | Runs the repo's normal test suite. |
-| Plan/diff audit | Yes | Confirms scope, files touched, and diff budget match the plan. |
+| Plan/diff audit | Yes | Confirms scope, files touched, and diff budget match the plan; run the checker from trusted-base code when PRs can edit the audit workflow or script. |
 | Review reconciliation | Yes, if bot review is used | Prevents stale "fixed" claims. |
 | Dependency/security scan | Advisory or scheduled at first | Avoids slowing every slice before risk is known. |
 | Maturity/brittleness scan | Advisory | Surfaces pattern drift without blocking early work. |
