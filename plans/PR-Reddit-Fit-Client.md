@@ -104,6 +104,27 @@ only from `fit_api_key`; the request never sees Reddit credentials.
 - **json_object default**: strict `json_schema` is attempted only for
   OpenRouter; the S2 parser remains the authoritative gate regardless.
 
+Review-fix notes (Codex wave 1 on da8a8123c; all 3 verified real and
+fixed at root in this PR):
+
+- **Malformed usage fields could raise a raw traceback** (a non-dict usage
+  or non-numeric token from a non-compliant backend), bypassing the
+  failure taxonomy. Fixed: usage + token extraction moved inside the
+  envelope try/except -> a malformed usage is a clean FitClientError, not
+  a traceback reaching the S6 runner. Probed with string/non-numeric/list
+  usage.
+- **Reasoning models (o1/o3/o4) rejected**: fit_model is an unconstrained
+  operator setting, but the client always sent temperature + max_tokens,
+  which those models reject. Fixed: mirror the host adapter's branch --
+  reasoning models get max_completion_tokens and omit temperature; probed
+  both ways.
+- **HTTP error echoed the provider body** (up to 200 chars), which can
+  carry the submitted Reddit prompt or diagnostics -- the same PII-smuggle
+  the closed-codes discipline avoids elsewhere. Fixed: HTTP errors carry
+  status only, and the envelope-error message is opaque (exception type
+  only, never provider content). Probed that a secret body string never
+  reaches the exception.
+
 ## Deferred
 
 - S6 fit runner + digest integration: the `judge-fit` command that selects
@@ -117,11 +138,11 @@ Parked hardening: none.
 ## Verification
 
 - `.venv/bin/python -m pytest tests/test_atlas_reddit_fit_client.py -q`:
-  15 passed (fail-closed config, structured-output per backend, happy path
+  19 passed (fail-closed config, structured-output per backend, happy path
   + usage, no-Reddit-creds probe, malformed-content parse_error, HTTP and
   envelope errors, purity).
 - Full package suite `.venv/bin/python -m pytest
-  tests/test_atlas_reddit_*.py -q`: 533 passed.
+  tests/test_atlas_reddit_*.py -q`: 537 passed.
 - Reachability: `build_judge_client(settings, transport=fake).judge(msgs)`
   returns a real `FitDecision` with token usage; no network touched.
 - ASCII byte-scan on changed Python files: clean.
@@ -131,9 +152,9 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_reddit/config.py` | 46 |
-| `atlas_reddit/fit_client.py` | 195 |
+| `atlas_reddit/fit_client.py` | 207 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Fit-Client.md` | 128 |
+| `plans/PR-Reddit-Fit-Client.md` | 160 |
 | `plans/archive/PR-Reddit-Fit-Store.md` | 0 |
-| `tests/test_atlas_reddit_fit_client.py` | 251 |
-| **Total** | **623** |
+| `tests/test_atlas_reddit_fit_client.py` | 302 |
+| **Total** | **718** |

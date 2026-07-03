@@ -195,12 +195,63 @@ def test_schema_violation_content_is_parse_error() -> None:
     assert meta.parse_error == "model_output_schema_mismatch"
 
 
-def test_http_non_2xx_raises_client_error() -> None:
+def test_http_non_2xx_raises_client_error_without_echoing_body() -> None:
+    # the provider body can echo the submitted Reddit prompt or diagnostics;
+    # the error must carry status only, never that content.
+    secret_body = "error: your prompt was 'jane.doe@example.com asked about docs'"
     client = build_judge_client(
-        _settings(), transport=FakeTransport(status=429, body="rate limited")
+        _settings(), transport=FakeTransport(status=429, body=secret_body)
     )
-    with pytest.raises(FitClientError, match="HTTP 429"):
+    with pytest.raises(FitClientError, match="HTTP 429") as excinfo:
         client.judge(_MESSAGES)
+    assert "jane.doe@example.com" not in str(excinfo.value)
+    assert "prompt" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        "not-a-dict",
+        {"prompt_tokens": "lots", "completion_tokens": 5},
+        {"prompt_tokens": [1, 2], "completion_tokens": 5},
+    ],
+)
+def test_malformed_usage_is_client_error_not_traceback(usage) -> None:
+    """Valid content but a malformed usage object is a non-OpenAI-shaped
+    envelope -> clean FitClientError, never a raw AttributeError/ValueError
+    reaching the S6 runner. The message is opaque (no provider content)."""
+    body = json.dumps(
+        {
+            "choices": [{"message": {"content": json.dumps(
+                {"verdict": "yes", "reason": "r", "angle": "a", "risk_flags": []}
+            )}}],
+            "usage": usage,
+        }
+    )
+    client = build_judge_client(_settings(), transport=FakeTransport(body=body))
+    with pytest.raises(FitClientError, match="not OpenAI-shaped") as excinfo:
+        client.judge(_MESSAGES)
+    assert "lots" not in str(excinfo.value)  # opaque: no provider value echoed
+
+
+def test_reasoning_model_omits_temperature_uses_completion_tokens() -> None:
+    """o1/o3/o4 models reject temperature and use max_completion_tokens;
+    fit_model is an unconstrained operator setting, so the client adapts."""
+    transport = FakeTransport()
+    build_judge_client(
+        _settings(fit_model="openai/o1-preview"), transport=transport
+    ).judge(_MESSAGES)
+    payload = transport.calls[0]["payload"]
+    assert payload["max_completion_tokens"] == 400
+    assert "temperature" not in payload
+    assert "max_tokens" not in payload
+
+    # a normal model keeps the standard params
+    normal = FakeTransport()
+    build_judge_client(_settings(), transport=normal).judge(_MESSAGES)
+    assert normal.calls[0]["payload"]["temperature"] == 0.0
+    assert normal.calls[0]["payload"]["max_tokens"] == 400
+    assert "max_completion_tokens" not in normal.calls[0]["payload"]
 
 
 def test_non_openai_shaped_response_raises_client_error() -> None:
@@ -246,6 +297,6 @@ def test_client_has_no_atlas_brain_or_network_imports() -> None:
             absolute.add(node.module.split(".")[0])
     # only stdlib absolute imports; intra-package relative imports (level>0)
     # are the standalone package itself
-    assert absolute <= {"__future__", "json", "urllib", "dataclasses", "typing"}, absolute
+    assert absolute <= {"__future__", "json", "re", "urllib", "dataclasses", "typing"}, absolute
     assert "atlas_brain" not in absolute
     assert "requests" not in absolute and "httpx" not in absolute

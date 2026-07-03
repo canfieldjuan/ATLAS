@@ -19,6 +19,7 @@ Failure taxonomy (kept crisp for the S6 runner):
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -31,6 +32,11 @@ from .fit import FIT_OUTPUT_JSON_SCHEMA, FitDecision, FitParseError, parse_fit_d
 # (status_code, response_text). The default uses stdlib urllib; tests pass
 # a fake so no network is touched.
 Transport = Callable[[str, dict, bytes, float], "tuple[int, str]"]
+
+# Reasoning models (o1/o3/o4 families) reject temperature and use
+# max_completion_tokens instead of max_tokens -- mirror the host
+# OpenRouter adapter's dedicated branch.
+_REASONING_MODEL_RE = re.compile(r"(?:^|/)o[1-9]")
 
 
 class RedditFitConfigError(ValueError):
@@ -111,15 +117,17 @@ class OpenAICompatibleJudgeClient:
     def judge(self, messages: tuple[dict, ...]) -> tuple[FitDecision | None, FitCallMeta]:
         """Send one prompt, return the parsed decision (or None + a
         parse_error code when the model's content is malformed)."""
-        payload = json.dumps(
-            {
-                "model": self._model,
-                "messages": list(messages),
-                "temperature": 0.0,
-                "max_tokens": 400,
-                "response_format": self._response_format(),
-            }
-        ).encode("utf-8")
+        body_obj = {
+            "model": self._model,
+            "messages": list(messages),
+            "response_format": self._response_format(),
+        }
+        if _REASONING_MODEL_RE.search(self._model):
+            body_obj["max_completion_tokens"] = 400
+        else:
+            body_obj["temperature"] = 0.0
+            body_obj["max_tokens"] = 400
+        payload = json.dumps(body_obj).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -127,19 +135,23 @@ class OpenAICompatibleJudgeClient:
             f"{self._base_url}/chat/completions", headers, payload, self._timeout
         )
         if not 200 <= status < 300:
-            raise FitClientError(
-                f"fit judge HTTP {status}: {body[:200]}"
-            )
+            # Status only -- the provider body can echo the submitted prompt
+            # (Reddit thread text) or diagnostics; keep it out of records.
+            raise FitClientError(f"fit judge HTTP {status}")
         try:
             data = json.loads(body)
             content = data["choices"][0]["message"]["content"]
             usage = data.get("usage") or {}
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            input_tokens = int(usage.get("prompt_tokens") or 0)
+            output_tokens = int(usage.get("completion_tokens") or 0)
+        except (
+            json.JSONDecodeError, KeyError, IndexError, TypeError,
+            ValueError, AttributeError,
+        ) as exc:
+            # Opaque: report only the failure kind, never provider content.
             raise FitClientError(
-                f"fit judge response was not OpenAI-shaped: {exc}"
+                f"fit judge response was not OpenAI-shaped ({type(exc).__name__})"
             ) from exc
-        input_tokens = int(usage.get("prompt_tokens") or 0)
-        output_tokens = int(usage.get("completion_tokens") or 0)
         try:
             decision = parse_fit_decision(content)
         except FitParseError as exc:
