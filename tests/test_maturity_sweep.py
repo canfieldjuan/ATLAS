@@ -872,3 +872,125 @@ def test_stub_test_file_counts_as_testless(tmp_path: Path) -> None:
         "--min-score", "99",
         "--sensitive-glob", "**/billing_hook.py",
     ]) == 1
+
+def test_foreign_assert_raises_receiver_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-5: assertRaises* only counts on the unittest receivers
+    self/cls -- an unrelated helper like client.assertRaises(...) must
+    not suppress the blocking signal; the real self.assertRaises does."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "class _Client:\n"
+        "    def assertRaises(self, exc, fn):\n"
+        "        return fn\n\n"
+        "def test_one():\n"
+        "    client = _Client()\n"
+        "    client.assertRaises(ValueError, purge_guard.enforce)\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: the real unittest idiom on self satisfies the gate.
+    _write(
+        tests / "test_purge_guard.py",
+        "import unittest\n"
+        "import purge_guard\n\n"
+        "class PurgeGuardTest(unittest.TestCase):\n"
+        "    def test_one(self):\n        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_rejects(self):\n"
+        "        self.assertRaises(ValueError, purge_guard.enforce, -1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+
+def test_dangling_assert_raises_regex_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-5: self.assertRaisesRegex(Exc, "regex") with no with
+    block and no callable only builds a context object and asserts
+    nothing; the callable form with a third positional arg (or the with
+    form) still counts."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import unittest\n"
+        "import purge_guard\n\n"
+        "class PurgeGuardTest(unittest.TestCase):\n"
+        "    def test_one(self):\n"
+        "        self.assertRaisesRegex(ValueError, 'negative')\n"
+        "        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_three(self):\n        self.assertTrue(True)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: the callable form with the function argument asserts.
+    _write(
+        tests / "test_purge_guard.py",
+        "import unittest\n"
+        "import purge_guard\n\n"
+        "class PurgeGuardTest(unittest.TestCase):\n"
+        "    def test_one(self):\n        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_rejects(self):\n"
+        "        self.assertRaisesRegex(ValueError, 'negative',\n"
+        "                               purge_guard.enforce, -1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0

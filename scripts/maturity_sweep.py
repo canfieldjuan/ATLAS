@@ -532,26 +532,34 @@ def _has_raises_assertion(source):
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        # A raises API call only ASSERTS when used as a with-context
-        # (`with pytest.raises(X):`) or in the callable form with the
-        # function argument (`pytest.raises(X, fn, ...)`). A dangling
-        # `pytest.raises(X)` statement builds a context manager and
-        # asserts nothing.
-        asserts_something = id(node) in with_item_calls or len(node.args) >= 2
-        if not asserts_something:
-            continue
         func = node.func
+        # Only the real assertion APIs count, each with the number of
+        # positional args its callable (non-with) form needs before it
+        # asserts anything: pytest.raises(X, fn) and self.assertRaises(X,
+        # fn) need 2, self.assertRaisesRegex(X, regex, fn) needs 3 (with
+        # only the regex it just builds a context object). An arbitrary
+        # `client.raises()` or `client.assertRaises()` helper must not
+        # satisfy a blocking gate, so assertRaises* is accepted only on
+        # the unittest receivers self/cls.
+        callable_form_args = None
         if isinstance(func, ast.Attribute):
-            # Only the real assertion APIs: pytest.raises(...) and
-            # unittest's self.assertRaises*(...). An arbitrary
-            # `client.raises()` helper must not satisfy a blocking gate.
-            if func.attr.startswith("assertRaises"):
-                return True
-            if (func.attr == "raises"
+            if (func.attr.startswith("assertRaises")
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id in ("self", "cls")):
+                callable_form_args = (
+                    3 if func.attr.startswith("assertRaisesRegex") else 2)
+            elif (func.attr == "raises"
                     and isinstance(func.value, ast.Name)
                     and func.value.id == "pytest"):
-                return True
+                callable_form_args = 2
         elif isinstance(func, ast.Name) and func.id in pytest_raises_names:
+            callable_form_args = 2
+        if callable_form_args is None:
+            continue
+        # A raises API call only ASSERTS as a with-context (`with
+        # pytest.raises(X):`) or in the callable form; a dangling
+        # statement builds a context manager and asserts nothing.
+        if id(node) in with_item_calls or len(node.args) >= callable_form_args:
             return True
     return False
 

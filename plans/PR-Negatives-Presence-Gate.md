@@ -168,6 +168,27 @@ root):
   negatives PRESENCE; adversarial QUALITY review-owned" -- this is the
   gate's threat-model boundary written into the index itself.
 
+Review-fix notes (Codex wave 5; all four verified real, fixed at
+root):
+
+- **Any `.assertRaises*` attribute call satisfied the signal**: a helper
+  like `client.assertRaises(ValueError, fn)` suppressed the blocking
+  code. assertRaises* now counts only on the unittest receivers
+  self/cls. Probed both sides (client helper fails; real
+  `self.assertRaises` passes).
+- **Dangling `self.assertRaisesRegex(Exc, "regex")` counted**: with only
+  the regex it builds a context object and asserts nothing, but the
+  shared >= 2-args test accepted it. Each accepted API now carries its
+  own callable-form arity (assertRaisesRegex* needs 3 positional args;
+  assertRaises and pytest.raises need 2). Probed both sides.
+- **Row 5 did not name the >= 3-test emission threshold**: the sparse
+  1-2-test case is a waived residual (item 7), but the index row claimed
+  the unqualified lesson. Row 5 now names the threshold and the #1942
+  detector-fidelity follow-up in the row itself.
+- **The plan's diff-size table drifted from the actual diff**:
+  review-fix growth left the checked-in numbers stale against
+  `scripts/sync_pr_plan.py --check`. Table resynced with the helper.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -180,12 +201,18 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_maturity_sweep.py -q` -- 27 passed
-  (23 pre-existing + both-sides probes: no-raises sensitive module
-  fails with the `sensitive-path NO_RAISES_TESTS` reason and passes
-  off-glob; with-raises passes on-glob; comment/string mention of
-  pytest.raises does NOT satisfy the gate; testless sensitive module
-  fails with `sensitive-path NO_TEST_FILE` and passes off-glob).
+- `python -m pytest tests/test_maturity_sweep.py -q` -- 33 passed
+  (23 pre-existing + both-sides probes for every review-fix wave:
+  no-raises sensitive module fails with the
+  `sensitive-path NO_RAISES_TESTS` reason and passes off-glob;
+  with-raises passes on-glob; comment/string mention of pytest.raises
+  rejected; `client.raises()` and `client.assertRaises()` helpers
+  rejected while `self.assertRaises` passes; local `raises` helper
+  rejected while aliased from-import passes; dangling `pytest.raises(X)`
+  and `self.assertRaisesRegex(X, "regex")` rejected while the callable
+  forms pass; testless sensitive module fails with
+  `sensitive-path NO_TEST_FILE` and passes off-glob; stub test file
+  counts as testless).
 - All 35 blocking ratchet gates from both maturity-sweep workflows
   re-run locally against the checked-in baselines with the stricter
   detector: every gate passes (no baseline regressions).
@@ -199,12 +226,9 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
-| `plans/INDEX.md` | 2 |
-| `plans/PR-Negatives-Presence-Gate.md` | 130 |
+| `plans/INDEX.md` | 3 |
+| `plans/PR-Negatives-Presence-Gate.md` | 234 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 80 |
-| `tests/test_maturity_sweep.py` | 380 |
-| **Total** | **~650** |
-
-Over the 400 soft cap after two review-fix waves; the PR body
-carries the diff-budget override.
+| `scripts/maturity_sweep.py` | 81 |
+| `tests/test_maturity_sweep.py` | 500 |
+| **Total** | **824** |
