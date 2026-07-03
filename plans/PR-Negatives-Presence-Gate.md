@@ -267,6 +267,27 @@ through the documented `--update-baseline` path as deliberate policy.
 The refreshed baseline also absorbs new-from-main script entries after
 the drift merge.
 
+Review-fix notes (Codex wave 9; 2 fixed at root, 1 waived on the
+written threat model):
+
+- **FIXED -- keyword arguments did not count toward raises arity**:
+  `with pytest.raises(expected_exception=ValueError):` and
+  `with self.assertRaisesRegex(ValueError, expected_regex="bad"):` are
+  real runnable assertions but were misreported as absent, failing
+  honestly-tested sensitive modules. Keyword args now count toward the
+  per-API arity. Probed both keyword styles.
+- **FIXED -- nested test_* helpers counted as collected tests**: the
+  counter walked the whole AST, so a helper named test_* inside another
+  function disguised a stub file. Only module-level and class-level
+  defs count now (pytest's collection shape). Probed both sides
+  (nested-only file is a stub; class-level test methods still count).
+- **WAIVED -- a function-scoped `from pytest import raises` counts
+  file-wide**: a bare `with raises(...)` in a scope where the import is
+  unbound would NameError, but scope-accurate binding resolution is the
+  same data-flow analysis already waived for shadowing (wave 8) -- a
+  static presence gate tracks names, not scopes. The review contract
+  owns broken-by-scoping negatives, same as skipped tests.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -279,7 +300,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_maturity_sweep.py -q` -- 41 passed
+- `python -m pytest tests/test_maturity_sweep.py -q` -- 43 passed
   (23 pre-existing + both-sides probes for every review-fix wave:
   no-raises sensitive module fails with the
   `sensitive-path NO_RAISES_TESTS` reason and passes off-glob;
@@ -305,9 +326,9 @@ Parked hardening: none.
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
 | `plans/INDEX.md` | 1 |
-| `plans/PR-Negatives-Presence-Gate.md` | 313 |
+| `plans/PR-Negatives-Presence-Gate.md` | 334 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 134 |
+| `scripts/maturity_sweep.py` | 144 |
 | `tests/maturity_sweep/baseline_scripts.json` | 29 |
-| `tests/test_maturity_sweep.py` | 859 |
-| **Total** | **1342** |
+| `tests/test_maturity_sweep.py` | 977 |
+| **Total** | **1491** |

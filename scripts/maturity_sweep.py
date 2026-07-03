@@ -587,11 +587,14 @@ def _has_raises_assertion(source):
         # with-form still needs everything but the callable (exception
         # for raises/assertRaises, exception + regex for
         # assertRaisesRegex*) -- `with self.assertRaises():` errors
-        # before asserting.
+        # before asserting. Keyword args count toward arity: `with
+        # pytest.raises(expected_exception=ValueError):` is a real
+        # runnable assertion and must not be misreported as absent.
+        arg_count = len(node.args) + len(node.keywords)
         if id(node) in with_item_calls:
-            if len(node.args) >= callable_form_args - 1:
+            if arg_count >= callable_form_args - 1:
                 return True
-        elif len(node.args) >= callable_form_args:
+        elif arg_count >= callable_form_args:
             return True
     return False
 
@@ -600,15 +603,22 @@ def _collect_test_defs(matched):
     """Test names from real def/async-def AST nodes across the matched
     sources. The old text regex also counted `def test_*` inside comments
     and strings, so a placeholder file with commented-out tests looked
-    non-stub and dodged NO_TEST_FILE. Unparseable sources contribute no
-    runnable tests (fail closed, matching _has_raises_assertion)."""
+    non-stub and dodged NO_TEST_FILE. Only module-level and class-level
+    defs count -- pytest's collection shape -- so a helper named test_*
+    nested inside another function does not disguise a stub either.
+    Unparseable sources contribute no runnable tests (fail closed,
+    matching _has_raises_assertion)."""
     names = []
     for source in matched:
         try:
             tree = ast.parse(source)
         except SyntaxError:
             continue
-        for node in ast.walk(tree):
+        candidates = list(tree.body)
+        candidates.extend(
+            sub for node in tree.body if isinstance(node, ast.ClassDef)
+            for sub in node.body)
+        for node in candidates:
             if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                     and node.name.startswith("test_")):
                 names.append(node.name)
