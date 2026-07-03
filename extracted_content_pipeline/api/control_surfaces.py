@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 try:
     from fastapi import APIRouter, Body, File, Form, HTTPException, Path as PathParam, Query, Request, UploadFile
@@ -3627,6 +3627,12 @@ async def _resolve_faq_macro_publish_service(
     return service
 
 
+_SAVED_FAQ_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+    r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
 def _deflection_report_saved_faq_id(artifact: Mapping[str, Any] | None) -> str:
     if not isinstance(artifact, Mapping):
         return ""
@@ -3642,12 +3648,8 @@ def _deflection_report_saved_faq_id(artifact: Mapping[str, Any] | None) -> str:
         return ""
     for item in candidates:
         candidate = _clean(item)
-        if not candidate:
-            continue
-        try:
-            return str(UUID(candidate))
-        except ValueError:
-            continue
+        if candidate and _SAVED_FAQ_UUID_RE.fullmatch(candidate):
+            return candidate.lower()
     return ""
 
 
