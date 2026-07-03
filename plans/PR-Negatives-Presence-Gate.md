@@ -189,6 +189,18 @@ root):
   review-fix growth left the checked-in numbers stale against
   `scripts/sync_pr_plan.py --check`. Table resynced with the helper.
 
+Review-fix note (Codex wave 6; verified real, fixed at root):
+
+- **`self.assertRaises*` accepted without unittest ancestry**: a
+  pytest-style class with a non-asserting helper named assertRaises
+  suppressed the signal. The call now counts only inside a class whose
+  bases statically name a *TestCase (unittest.TestCase,
+  IsolatedAsyncioTestCase, project FooTestCase bases). A cross-file
+  base not named *TestCase is deliberately missed -- the standard-idiom
+  trade-off already named for aliased pytest imports. Blast radius
+  measured: the repo's only real self.assertRaises user inherits
+  unittest.TestCase directly -- zero repricing. Probed both sides.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -201,7 +213,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_maturity_sweep.py -q` -- 33 passed
+- `python -m pytest tests/test_maturity_sweep.py -q` -- 34 passed
   (23 pre-existing + both-sides probes for every review-fix wave:
   no-raises sensitive module fails with the
   `sensitive-path NO_RAISES_TESTS` reason and passes off-glob;
@@ -227,8 +239,8 @@ Parked hardening: none.
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Negatives-Presence-Gate.md` | 234 |
+| `plans/PR-Negatives-Presence-Gate.md` | 246 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 81 |
-| `tests/test_maturity_sweep.py` | 500 |
-| **Total** | **824** |
+| `scripts/maturity_sweep.py` | 97 |
+| `tests/test_maturity_sweep.py` | 561 |
+| **Total** | **913** |

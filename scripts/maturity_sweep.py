@@ -521,6 +521,7 @@ def _has_raises_assertion(source):
     # or fixture named raises must not satisfy a blocking gate.
     pytest_raises_names = set()
     with_item_calls = set()
+    testcase_calls = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "pytest":
             for alias in node.names:
@@ -529,6 +530,20 @@ def _has_raises_assertion(source):
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
                 with_item_calls.add(id(item.context_expr))
+        elif isinstance(node, ast.ClassDef):
+            # self.assertRaises* only means the unittest API inside a
+            # class whose ancestry is statically visible as a TestCase
+            # (unittest.TestCase, IsolatedAsyncioTestCase, project
+            # FooTestCase bases). A pytest-style class with a helper
+            # named assertRaises must not satisfy a blocking gate; a
+            # cross-file base not named *TestCase is deliberately
+            # missed -- the gate errs toward the standard idiom.
+            bases = [b.attr if isinstance(b, ast.Attribute) else b.id
+                     for b in node.bases if isinstance(b, (ast.Attribute, ast.Name))]
+            if any(name.endswith("TestCase") for name in bases):
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Call):
+                        testcase_calls.add(id(sub))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -545,7 +560,8 @@ def _has_raises_assertion(source):
         if isinstance(func, ast.Attribute):
             if (func.attr.startswith("assertRaises")
                     and isinstance(func.value, ast.Name)
-                    and func.value.id in ("self", "cls")):
+                    and func.value.id in ("self", "cls")
+                    and id(node) in testcase_calls):
                 callable_form_args = (
                     3 if func.attr.startswith("assertRaisesRegex") else 2)
             elif (func.attr == "raises"

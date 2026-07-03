@@ -994,3 +994,64 @@ def test_dangling_assert_raises_regex_does_not_satisfy_the_gate(tmp_path: Path) 
         "--min-score", "99",
         "--sensitive-glob", "**/purge_guard.py",
     ]) == 0
+
+def test_assert_raises_outside_testcase_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-6: self.assertRaises* only means the unittest API when
+    the enclosing class statically descends from a *TestCase base. A
+    pytest-style class with a non-asserting helper named assertRaises
+    must not suppress the blocking signal; the wave-5 second-side probe
+    already covers the real unittest.TestCase idiom passing."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "class TestPurgeGuard:\n"
+        "    def assertRaises(self, exc, fn):\n"
+        "        return fn\n\n"
+        "    def test_one(self):\n"
+        "        self.assertRaises(ValueError, purge_guard.enforce)\n\n"
+        "    def test_two(self):\n        assert True\n\n"
+        "    def test_three(self):\n        assert True\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: a project base class named *TestCase still counts.
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n"
+        "from helpers import ApiTestCase\n\n"
+        "class PurgeGuardTest(ApiTestCase):\n"
+        "    def test_one(self):\n        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_rejects(self):\n"
+        "        self.assertRaises(ValueError, purge_guard.enforce, -1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
