@@ -21,6 +21,19 @@ Slice phase: workflow/process
 3. Record a table of flags carried into later slices.
 4. No product code changes; gitignore `_audit_scratch/` for later empirical work.
 
+### Review Contract
+
+- Acceptance criteria:
+  - `docs/audits/resolution-audit-csv/PIPELINE_MAP.md` maps the six Phase-0 areas
+    with `file:line` anchors verified against `4f2790e6d`, and every claim is
+    accurate against the code at that commit (corrected after the first Codex
+    review).
+  - No product code is modified; `_audit_scratch/` is gitignored.
+- Affected surfaces: documentation only. No runtime, API, auth, billing,
+  delivery, webhook, or UI surface is introduced, so no reachability proof applies.
+- Rule mapping: the diff triggers no review-rule classes (no auth/token/permission,
+  no webhooks/jobs, no defect-class review comments) -- it is a read-only audit map.
+
 ### Files touched
 
 - `.gitignore`
@@ -62,6 +75,6 @@ in this slice -- that is Slice 2 (#1958).
 | File | LOC |
 |---|---:|
 | `.gitignore` | 3 |
-| `docs/audits/resolution-audit-csv/PIPELINE_MAP.md` | 182 |
-| `plans/PR-Resolution-Audit-S1-Pipeline-Map.md` | 67 |
-| **Total** | **252** |
+| `docs/audits/resolution-audit-csv/PIPELINE_MAP.md` | 264 |
+| `plans/PR-Resolution-Audit-S1-Pipeline-Map.md` | 80 |
+| **Total** | **347** |

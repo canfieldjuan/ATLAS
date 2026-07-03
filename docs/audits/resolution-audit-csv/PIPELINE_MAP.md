@@ -1,182 +1,264 @@
-# PIPELINE_MAP — Resolution Audit CSV pipeline (Phase 0)
+# PIPELINE_MAP -- Resolution Audit CSV pipeline (Phase 0)
 
-Deliverable for **Slice 1 / #1957** of the audit arc **#1956**. This is the
-read-only **map** of the actual data flow from raw CSV upload to the delivered
-Snapshot and Full Report. It is structure, not judgement: severity-rated
-defects are deferred to `FINDINGS.md` (Slices 2–3). Where the map surfaces
-something a later slice must attack empirically, it is tagged **→ Slice N**.
+Deliverable for Slice 1 / #1957 of the audit arc #1956. Read-only map of the
+actual data flow from raw CSV upload to the delivered Snapshot and Full Report.
+Structure, not judgement: severity-rated defects are deferred to FINDINGS.md
+(Slices 2-3). Where the map surfaces something a later slice must attack
+empirically, it is tagged "-> Slice N".
 
-All `file:line` anchors are under `extracted_content_pipeline/` unless prefixed
-`atlas_brain/`, verified against `origin/main` @ `4f2790e6d`.
+All file:line anchors are under `extracted_content_pipeline/` unless prefixed
+`atlas_brain/`, verified against `origin/main` @ `4f2790e6d`. (Corrected after a
+Codex review of the first draft; every claim below was re-verified against the
+code at that commit.)
 
----
+## 0.0 Headline: two clustering systems; the token-set label seeds grouping, but the billed counts are computed in ticket_faq_markdown.py
 
-## 0.0 Headline: there are TWO clustering systems, and the one named "clustering" is not where the numbers come from
+- `support_ticket_clustering.py` -- a deterministic token-set clusterer, run at
+  input-package build time. It produces preview/diagnostic counts and writes a
+  `support_ticket_cluster` **label** onto each row.
+- `ticket_faq_markdown.py` -- the report grouping that produces the `ticket_count`
+  per FAQ item that every dollar figure multiplies against. Pipeline:
+  topic-partition -> lexical sub-cluster -> optional embedding booster.
 
-This is the single most important thing to hold while reading the rest:
-
-- **`support_ticket_clustering.py`** — a deterministic **token-set** clusterer.
-  Runs at input-package build time. It only (a) produces preview/diagnostic
-  counts and (b) writes a `support_ticket_cluster` **label** onto each row that
-  later becomes the **topic seed**. Its overlap/anchor thresholds (0.6, anchor
-  logic) shape the topic **label only**; they do **not** decide repeat groups or
-  ticket counts.
-- **`ticket_faq_markdown.py`** — the **real report grouping**. Produces the
-  `ticket_count` per FAQ item that **every dollar figure is multiplied
-  against**. Pipeline: topic-partition → lexical sub-cluster → optional
-  embedding booster.
-
-Link between them: `support_ticket_input_package.py:370` runs the deterministic
-clusterer; `_public_ticket_row` (`support_ticket_input_package.py:928`) keeps
-every non-`_`-prefixed key, so `support_ticket_cluster` survives into
-`source_material` (`:434`), and `_topic()` reads it first
-(`ticket_faq_markdown.py:1200-1202`, `:1218-1225`). **The money is computed in
-`ticket_faq_markdown.py`, not in the file called `clustering`.**
-
----
+**The token-set label is NOT merely cosmetic** (corrected). `_topic()` reads the
+`support_ticket_cluster` label first (`ticket_faq_markdown.py:1200-1202`, via
+`_provided_support_ticket_cluster_topic` `:1218-1226`), and the report groups
+rows by `(topic, evidence_group_key)` **before** lexical/embedding sub-clustering
+(`:787-788`). So the label seeds the `topic` partition that gates which rows can
+group together, and therefore influences `ticket_count`. The final count math
+still lives in `ticket_faq_markdown.py`, but `support_ticket_clustering.py` is an
+upstream input to it, not an irrelevant sidecar.
 
 ## 0.1 CSV ingestion
 
-**Two real entry paths, both routed through `atlas_brain/api/control_surfaces.py`, converging on one CSV engine.**
+**Two real entry paths, both in `extracted_content_pipeline/api/control_surfaces.py`,
+converging on one CSV engine** (module path corrected -- there is no
+`atlas_brain/api/control_surfaces.py`).
 
-- **A. Paid Resolution Audit ("deflection") path** — `POST /deflection-reports/submit`
-  → `submit_deflection_report` (`control_surfaces.py:1483`). Buyer-facing.
-- **B. Generic ingestion diagnostics/import** — `POST /ingestion/files/{inspect,import}`
-  (`control_surfaces.py:1258`, `:1286`) → `ingestion_diagnostics.inspect_ingestion_file`.
+- **A. Paid Resolution Audit ("deflection") path** -- `POST /deflection-reports/submit`
+  -> `submit_deflection_report` (`api/control_surfaces.py:1483`). Buyer-facing.
+- **B. Generic ingestion diagnostics/import** -- `POST /ingestion/files/{inspect,import}`
+  (`api/control_surfaces.py:1258`, `:1286`) -> `ingestion_diagnostics.inspect_ingestion_file`.
 
-Shared parser core: **`_load_csv_dict_rows_result` (`campaign_customer_data.py:470`)**.
+Shared parser core: `_load_csv_dict_rows_result` (`campaign_customer_data.py:470`).
 
-**Path A call path (multipart CSV upload):**
-1. `control_surfaces.py:1483` `submit_deflection_report`.
-2. `:1493` `_load_deflection_submit_rows_from_request` (dispatch by content-type; blob cap `_MAX_DEFLECTION_SUBMIT_BLOB_BYTES = 50 MiB`, `:162`).
-3. `:1646` `_load_deflection_submit_upload_rows` → `tempfile.NamedTemporaryFile(suffix=".csv")` (`:1870`), **streamed to disk in 1 MiB chunks** (`:1912`).
-4. `:1886` `_parse_deflection_submit_csv_file` → `load_csv_source_rows_result_from_file` (`campaign_source_adapters.py:568`) → `_load_csv_dict_rows_result`.
-5. `:1518` `_deflection_submit_english_rows` (language filter) → `:1530` `_deflection_submit_rows_with_defaults`.
-6. `:1539` `build_support_ticket_input_package` (`support_ticket_input_package.py:301`) — normalization.
-7. `:369` `assign_support_ticket_clusters_with_diagnostics` — label annotation → `execute_generation` (`:1572`).
+**Path A call path:** `submit_deflection_report` (`api/control_surfaces.py:1483`)
+-> `_load_deflection_submit_rows_from_request` (`:1493`, blob cap 50 MiB) ->
+`_load_deflection_submit_upload_rows` (`:1646`) -> tempfile, **streamed to disk in
+1 MiB chunks** (`:1912`) -> `_parse_deflection_submit_csv_file` (`:1886`) ->
+`load_csv_source_rows_result_from_file` (`campaign_source_adapters.py:568`) ->
+`_load_csv_dict_rows_result` -> `_deflection_submit_english_rows` (`:1518`) ->
+`build_support_ticket_input_package` (`support_ticket_input_package.py:301`) ->
+`execute_generation`.
 
-**Path B** differs only in staging: `_read_bounded_upload` reads the **whole file into memory** (`control_surfaces.py:2808`, `_MAX_INGESTION_FILE_BYTES = 25 MiB`) before writing a temp file. → Slice 3 (memory).
+**Path B** reads the whole file into memory (`_read_bounded_upload`,
+`api/control_surfaces.py:2806`, cap 25 MiB) before writing a temp file. -> Slice 3 (memory).
 
 **Parser facts:**
-- Stdlib **`csv.reader`** (not `DictReader`, not pandas), dynamically-built dialect, dict rows assembled manually (`campaign_customer_data.py:493-542`). Field-size limit raised to 16 MiB (`:1227-1234`).
-- **Header mapping is name-based + fuzzy, never positional**, in two stages:
-  - Physical header-row detection by content (`_csv_header_index_and_hint`, `:731-746`) against a 45-name hint set (`_CSV_HEADER_HINTS`, `:45-90`); leading non-header rows skipped + reported (`csv_leading_rows_skipped`, `:502-507`).
-  - Field aliasing (`_normalize_ticket_row`, `support_ticket_input_package.py:530-592`) via ordered alias tuples matched on `_key()` = `re.sub(r"[^a-z0-9]+","",lower)` (`:990-991`) — so `"Ticket Subject"`/`"ticket_subject"`/`"TICKETSUBJECT"` collide.
-  - Reordered headers: fine. Duplicate headers: **last-wins** (`:542`). Missing header row: **hard reject** `csv_missing_header` (`:562-567`). Unknown columns: preserved as extra keys.
-- **Delimiter sniffed by a custom scorer** (not `csv.Sniffer`): `_CSV_DETECT_DELIMITERS = ",;\t|"` (`:22`); scored on header-hint presence + column-count consistency (`_CSV_DELIMITER_MIN_CONSISTENCY = 0.90`, `:26`); inconsistent width → `csv_inconsistent_columns` reject. → Slice 2 (adversarial structure fixtures).
+- Stdlib `csv.reader` (not `DictReader`, not pandas), dynamic dialect, dict rows
+  assembled manually (`campaign_customer_data.py:493-542`). Field-size limit 16 MiB.
+- Header mapping is name-based + fuzzy, two stages: physical header-row detection
+  (`_csv_header_index_and_hint`, `:731`) against a 45-name hint set; field aliasing
+  (`_normalize_ticket_row`, `support_ticket_input_package.py:530-592`) via ordered
+  alias tuples matched on `_key()` = `re.sub(r"[^a-z0-9]+","",lower)`.
+- **Missing-header behavior (corrected):** a headerless CSV whose first nonblank
+  row has >=2 nonempty cells is recorded as a **fallback header (no hint) and
+  ACCEPTED** (`_csv_header_index_and_hint:746`; `_CsvDelimiterCandidate.valid:189`
+  does not require a hint). `csv_missing_header` is raised **only** when no row
+  has a known hint AND no row has >=2 nonempty cells (`:485`, `:1030`, `:1052`).
+  -> Slice 2 (headerless/first-row-as-data corruption).
+- Delimiter sniffed by a custom scorer (`_CSV_DETECT_DELIMITERS = ",;\t|"`,
+  consistency floor 0.90). -> Slice 2.
 
 ## 0.2 Normalization
 
-- **HTML strip / entity decode:** `support_ticket_plain_text` (`support_ticket_clustering.py:311-330`) via `_HTMLTextExtractor` then `html.unescape` + whitespace compaction. Applied to titles/body/comments/resolution (`support_ticket_input_package.py:533`, `:546`, `:647-657`).
-- **Signature / quoted-email removal: NONE FOUND.** No trailing-signature or `>`-quoted-reply stripping. → Slice 2 (quoted-chain fixtures).
-- **Lowercasing:** ticket text is **not** lowercased for storage/output; only inside clustering tokenization (`support_ticket_tokens`, `clustering.py:341`).
-- **Dates:** `parse_support_ticket_source_date` (`support_ticket_dates.py:16-44`), stdlib only (no dateutil): ISO, then `date.fromisoformat(text[:10])`, then US formats `%m/%d/%Y|%m/%d/%y|%m-%d-%Y|%m-%d-%y`. Natural-language dates → `None`.
-- **Timezone:** naive timestamps are **not** assigned a tz; tz-aware strings keep only `.date()` (time + tz discarded, `support_ticket_dates.py:23-24`). If **any** included row lacks a parseable date, the whole dated window is disabled (`has_valid_date_window` requires `missing_count == 0`, `support_ticket_input_package.py:390-403`). → Slice 2 (mixed date formats).
-- **Deduplication: NONE.** Grep across ingestion modules returns zero `dedup|unique|distinct|seen_ids`. Duplicate tickets survive as separate rows and each counts toward `ticket_count`. → Slice 2 (dedup / determinism).
-- **Resolution field:** `resolution_text = _first_text(row, _RESOLUTION_TEXT_KEYS)` (`:544`); broad free-text aliases (`:138-161`). Treated as **free-text evidence**, HTML-cleaned + clipped to 500 chars, drives evidence tier (`:595-600`). **Absent/empty → key unset, no error, no drop**; evidence tier falls back; never gates inclusion.
-- **Status field:** `_first_text(row, _STATUS_KEYS)` (`:579`), bucketed by `_normalize_status_state` (`:817-829`) into `reopened/resolved/cancelled/open/other`; **unknown vocabulary → `"other"`** (deliberate). Handles Solved/Closed flag, macro name, or free text — all as text buckets. Never gates inclusion.
+- HTML strip / entity decode (`support_ticket_clustering.py:311-330`). No
+  signature / quoted-email removal exists. -> Slice 2.
+- Dates: stdlib only (`support_ticket_dates.py:16-44`) -- ISO, then
+  `date.fromisoformat(text[:10])`, then US formats; natural-language -> None.
+  Naive timestamps not assigned a tz; tz-aware strings keep only `.date()`.
+  If any included row lacks a parseable date, the dated window is disabled. -> Slice 2.
+- **Row-level deduplication: none**, but this does NOT mean every duplicate
+  inflates counts (corrected). `ticket_count` counts **distinct source keys**
+  (`ticket_faq_markdown.py:1339-1340,1430`), `_normalize_ticket_row` preserves a
+  stable id (`source_id = _first_text(row, _SOURCE_ID_KEYS) or f"ticket-{row_index}"`,
+  `support_ticket_input_package.py:538`), and `build_ticket_faq_markdown` de-dupes
+  repeated `(source_id, text)` evidence (`:763-767`). So duplicates that carry a
+  **stable `source_id`/`ticket_id` collapse**; inflation happens only for
+  duplicates with **missing or changed IDs** (each gets a unique `ticket-<row>` /
+  `row:<index>` key). -> Slice 2 (dedup / ID stability).
+- **Resolution field:** `resolution_text = _first_text(row, _RESOLUTION_TEXT_KEYS)`
+  (`:544`), free-text evidence, HTML-cleaned + clipped to 500. Absent/empty ->
+  key unset, no error, no drop; never gates inclusion.
+- **Status field (narrowed):** read from the status FIELD only --
+  `_STATUS_KEYS = (ticket_status, issue_status, case_status, status, ticket_state,
+  state)` (`:234-241`) -- and that field's value is bucketed by
+  `_normalize_status_state` (`:817`) into reopened/resolved/cancelled/open/other
+  (unknown -> "other"). There is **no** separate "Solved/Closed flag" or
+  macro-name parsing; a value like "solved"/"closed" is handled only when it is
+  the value of one of those status columns. Never gates inclusion.
 
-**Row drop / skip points** (silent-corruption candidates → Slice 2):
-- CSV engine: blank-only data rows silently dropped, **not counted** in `source_row_count` (`:524-525`); rows with more cells than header → **whole-file reject** (`:527-531`); `max_rows` truncation counted-but-not-appended (`:543-544`).
-- `_normalize_ticket_row`: **no usable text** (no title/body/public comments) → row dropped `ticket_row_missing_text` (`:534-536`, `:342-358`).
-- Deflection endpoint: non-English rows dropped when *some* row is language-tagged (`:2503-2514`).
-- **Nuance:** the row-level private/internal skip (`private_source_text`) lives only in `source_row_to_campaign_opportunity`, which **the paid deflection path does not call** — Path A honors only per-comment privacy (`_comment_text` drops `public is False`, `:682-683`), not a row-level `is_private`/`is_internal` flag. → Slice 2 (PII/privacy).
+**Row drop / skip points** (-> Slice 2):
+- CSV engine: blank-only rows silently dropped, not counted (`:524-525`); **long
+  rows (more cells than header) hard-reject the whole file** (`:527-531`); **short
+  rows (fewer cells) are ACCEPTED with trailing fields padded** (corrected: `value
+  = values[i] if i < len(values) else ""`); only a single-cell row containing a
+  competing delimiter invalidates the candidate. `max_rows` truncation counted-but-
+  not-appended.
+- `_normalize_ticket_row`: no usable text -> row dropped `ticket_row_missing_text`
+  (`:534-536`).
+- Deflection endpoint: non-English rows dropped when some row is language-tagged.
+- **Private-row seam (corrected).** The paid path DOES call
+  `source_rows_to_campaign_opportunities` inside `TicketFAQMarkdownService.generate`
+  (`ticket_faq_markdown.py:617`), and that path HAS a top-level private filter
+  (`source_row_to_campaign_opportunity` -> `_is_private_source_row` on
+  is_private/is_internal/public, `campaign_source_adapters.py:838-846`,`:1375`).
+  The actual gap is upstream: `_normalize_ticket_row`
+  (`support_ticket_input_package.py:530`) never reads or copies
+  `is_private`/`is_internal` (not in its passthrough whitelist `:177-187`), so on
+  the support-ticket-upload path the flag is **stripped before** the downstream
+  filter can act -> a top-level private ticket leaks. (Per-comment privacy IS
+  honored: `_comment_text` drops `public is False`, `:681-682`.) -> Slice 2 (PII/privacy).
 
 ## 0.3 Clustering (the real report path)
 
 Ordered stages in `ticket_faq_markdown.py` (entry `build_ticket_faq_markdown`, `:710`):
-- **5a Coarse partition** by `(topic, evidence_group_key)` (`:738`, keyed `:788`); topic = `_topic()` (`:1194`, reads the token-set label first); evidence key = `_evidence_group_key(resolution_text)` (`:1228`).
-- **5b Lexical sub-cluster** of degraded (`topic:*`) buckets (`_question_subclusters`, `:1026`): exact gist-frozenset match (`:1058-1066`) then prefix-filtered exact-Jaccard ≥ 1/3 (`:1067-1080`), union-find.
-- **5c Embedding booster (optional)** (`_apply_embedding_booster`, `:1097`, embed call `:1123`): mutual-nearest-neighbor cosine merge, **applied ONLY to components still singleton after 5b** (`active_indexes = [… if component_sizes[find(index)] == 1]`, `:1115-1119`).
-- **5d** sub-cluster with `< 2` distinct source keys → excluded to `non_repeat` (`:862-865`).
-- **5e** sort + `max_items` overflow → "other support issues" (`:889-904`).
-- **5f** `ticket_count = len(distinct source_ids)` (`:1430`) — **this integer drives all cost math.**
+- **5a Coarse partition** by `(topic, evidence_group_key)` (`:787-788`); topic =
+  `_topic()` (reads the token-set label first); evidence key =
+  `_evidence_group_key(resolution_text)`.
+- **5b Lexical sub-cluster** of degraded `topic:*` buckets only
+  (`_question_subclusters`, `:1026`): exact gist match then exact-Jaccard >= 1/3,
+  union-find.
+- **5c Embedding booster (optional)** applied ONLY to components still singleton
+  after 5b (`:1115-1119`). No unified semantic pass over compressed representatives.
+- **5d Singleton exclusion (narrowed):** the `<2 distinct-source` exclusion runs
+  **only inside the `topic:*` branch** (`:846-848`, `:856-860`).
+  **Resolution-scoped groups (`evidence_group_key` set -> `scope=resolution:...`)
+  bypass `_question_subclusters` entirely and can render with `ticket_count == 1`**
+  (corrected -- not every single-source group is excluded). -> Slice 2.
+- **5e** sort + `max_items` overflow -> "other support issues".
+- **5f** `ticket_count = len(distinct source_ids)` (`:1430`) -- drives all cost math.
 
-**Critical architecture answer (→ Slice 2 core):** the lexical stage does the
-**real, usually final** clustering; the embedding pass is a **leftover-singleton
-rescue**. There is **no unified semantic pass over compressed representatives**.
-This is the architecture the brief warns fragments high-volume, low-lexical-
-overlap questions and undercounts the #1 issue — Slice 2 must prove/quantify it.
+**Critical architecture answer (-> Slice 2 core):** the lexical stage does the
+real, usually final clustering; the embedding pass is a leftover-singleton rescue.
+No unified semantic pass. This is the architecture that risks fragmenting
+high-volume, low-lexical-overlap questions -- Slice 2 must prove/quantify it.
 
 **Threshold table (all hardcoded module constants unless noted):**
 
 | Threshold | Value | file:line |
-|---|---|---|
-| Token-set row cap (skip preview) | 2000 | `clustering.py:249` (param `max_token_set_rows`) |
-| Token overlap ratio | ≥ 0.6 | `clustering.py:582` |
-| Anchor token min doc-frequency | ≥ 2 | `clustering.py:671` |
+|---|---:|
+| Token-set row cap (skip preview) | 2000 | `support_ticket_clustering.py:249` (param) |
+| Token overlap ratio | >= 0.6 | `support_ticket_clustering.py:582` |
+| Anchor token min doc-frequency | >= 2 | `support_ticket_clustering.py:658-669` |
 | Sub-cluster Jaccard | 1/3 | `ticket_faq_markdown.py:977` |
 | Gist token limit | 30 | `ticket_faq_markdown.py:978` |
 | Embedding MNN cosine floor | 0.78 | `ticket_faq_markdown.py:979` |
 | Embedding MNN margin | 0.05 | `ticket_faq_markdown.py:980` |
-| Min distinct sources to keep a cluster | < 2 excluded | `ticket_faq_markdown.py:862` |
-| Repeat-ticket threshold (billed) | ticket_count ≥ 2 | `faq_deflection_report.py:4735` |
-| **Assisted-contact cost** | **$13.50** | **`faq_deflection_report.py:51`** |
+| Min distinct sources to keep a `topic:*` cluster | < 2 excluded | `ticket_faq_markdown.py:862` |
+| Repeat-ticket threshold (billed) | ticket_count >= 2 | `faq_deflection_report.py:4735` |
+| Assisted-contact cost | $13.50 | `faq_deflection_report.py:51` |
 
-→ Slice 2 runs the ±10% sweep on these.
+(Anchors corrected: the token-set constants live in `support_ticket_clustering.py`;
+there is no `clustering.py`.) -> Slice 2 runs the +/-10% sweep.
 
-- **Representative question:** `_question` (`:2367`) = **first-match-wins over group row order** for a row passing `_publishable_customer_question_text` (`:2659`); else synthesizes `"What should I do about <label>"` (`:2409`). A spam/auto-reply ticket **cannot be the displayed question** (must clear the no-PII/publishable gate) but **can be a group member and inflate `ticket_count`** → inflates every `$13.50 × count`. → Slice 2 (junk-inflation) & Slice 5 (grounding).
-- **Singletons/residuals:** report path excludes `<2`-source clusters into `non_repeat_ticket_count` (surfaced, not billed, `:862-875`); overflow → "other support issues" (`:902`). Nothing silently dropped or silently billed.
-
-**Determinism (→ Slice 2):**
-- `support_ticket_clustering.py` is **order-dependent** — anchor promotion mutates a bucket's key/label based on which row matched first (`:556-561`); same rows in a different order can yield a different anchor label.
-- Report path is mostly order-hardened (`sorted` groups `:889`, union-find `min/max` roots), **but** the representative question is first-match-wins on row order (`:2372`), and the embedding MNN float-tie comparisons (`:1148`, `:1157-1161`) are tie-fragile (stable only because the model is CPU-pinned; latent if ever GPU-backed).
+- **Representative question:** first-match-wins over group row order for a row
+  passing `_publishable_customer_question_text` (`:2659`); else synthesized.
+  **That gate checks question-shape + customer-heading PII, NOT spam/auto-reply**
+  (corrected): a junk/auto-reply row phrased as a normal question with no heading
+  PII CAN become the displayed representative -- and any group member (junk or not)
+  counts toward `ticket_count`. -> Slice 2 (junk representative + inflation) & Slice 5.
+- **Determinism (-> Slice 2):** `support_ticket_clustering.py` anchor promotion is
+  order-dependent (`:556-561`); the representative question is first-match-wins on
+  row order (`:2372`); embedding MNN float-tie comparisons are tie-fragile (stable
+  only because the model is CPU-pinned).
 
 ## 0.4 Metrics & cost math (every report number traced to source)
 
-- **volume / weighted_frequency:** `weighted_source_volume_by_group` (`ticket_faq_markdown.py:1673`) sums `max(source-weight,1)` per distinct source key; `source_row_weight` (`:1702`) reads `_SOURCE_WEIGHT_KEYS` (`source_weight, search_count, volume, frequency, …`, `:245-259`), **default 1** if absent. `opportunity_score = frequency * (1 + failure_risk_score)` (`:1536`).
-- **ticket_count:** **derived, not a CSV column** = distinct source keys per group (`:1430`).
-- **cost:** `estimated_support_cost = ticket_count * 13.50` (`_support_cost`, `faq_deflection_report.py:4888-4889`); `_ASSISTED_CONTACT_COST = 13.50` is a **hardcoded Gartner benchmark** (prose `:4049`), **not from the CSV**.
-- **handle time: DOES NOT EXIST** — repo-wide grep for `handle_time|aht|minutes_per|hourly|wage` returns nothing. Cost has no time component: flat per-contact rate × repeat count.
-- **aggregate:** `_support_cost(repeat_ticket_count)`, `repeat_ticket_count = sum(ticket_count for items with ticket_count≥2)` (`:4728-4736`).
-- **annualized (dated window):** `_support_cost(repeat_ticket_count * 365 / source_window_days)` (`:3228-3230`).
-- **run-rate (no window):** `_support_cost(repeat_ticket_count * 12)` (`:3232-3233`).
+- **weighted_frequency:** `weighted_source_volume_by_group` (`:1673`) sums
+  `max(source-weight,1)` per distinct source key; weight from `_SOURCE_WEIGHT_KEYS`,
+  default 1.
+- **ticket_count:** distinct source keys per group (`:1430`).
+- **cost:** `estimated_support_cost = ticket_count * 13.50` (`_support_cost`,
+  `faq_deflection_report.py:4888-4889`); `$13.50` hardcoded Gartner benchmark, not
+  from the CSV.
+- **handle time: does not exist** -- cost has no time component.
+- **aggregate/annualized/run-rate:** `_support_cost(repeat_ticket_count)`,
+  `* 365/window` or `* 12` (`:3228-3233`).
 
-**Double-computation (drift risk → Slice 2/5 reconciliation):**
-- Aggregate/annualized/run-rate and repeat/non-repeat counts are each computed **twice** — structured model (`_support_tax_data:3208`) vs markdown prose (`_support_tax_section:4034`) — re-derived independently. Values agree today but drift if only one branch is edited.
-- Per-item `estimated_support_cost` is computed in ≥4 places; **`_snapshot_estimated_support_cost` prefers a pre-existing numeric `item["estimated_support_cost"]`** (`:2514-2516`) while the other three always recompute — so the snapshot can surface an overridden/stale value.
+**Double-computation (drift risk -> Slice 2/5):** aggregate/annualized/run-rate and
+repeat/non-repeat counts are computed twice (structured model `_support_tax_data:3208`
+vs prose `_support_tax_section:4034`); per-item cost in >=4 places, and
+`_snapshot_estimated_support_cost` prefers a pre-existing numeric override (`:2514-2516`).
 
-## 0.5 Snapshot vs Full Report — ONE path (projection) + defensive recompute fallback
+## 0.5 Snapshot vs Full Report -- ONE path (projection) + defensive recompute fallback
 
-- Runtime entry: `FAQDeflectionReportService.generate` (`faq_deflection_report.py:1676`) → `build_deflection_report_artifact` (`:1721`). The **Full Report `report_model` is computed once**; the **Snapshot is a projection of it**.
-- `build_deflection_snapshot` (`:2625`) has two branches: **projection** (`:2642-2649`, `_build_deflection_snapshot_from_report_model`, reads already-computed sections) — taken in production; and a **recompute fallback** (`:2650-2698`) for missing/legacy models that re-derives numbers via the **same helpers** (drift-safe but redundant).
-- **`deflection.v1` projection** (`_snapshot_report_model_projection`, `:2833`): per-section allowlist — only sections with `snapshot_safe_fields` survive, only those fields. Exposed: `support_tax` counts, `ranked_questions` rows, `top_unresolved_repeats`, `question_details` (rank/question/evidence-status/scope — **NOT `answer`/`steps`**), plus a single-item teaser exposing the full `answer`+`steps` (`_teaser_full_answer`, `:4694`). Withheld for paid: all markdown, `answer`/`steps`/`evidence_quotes`/`source_ids` (except the teaser), and every section lacking `snapshot_safe_fields`.
-- **Customer-facing artifacts** all read the single persisted `report_model` (no delivery-time recompute): delivery email (`atlas_brain/content_ops_deflection_delivery.py:738/:773`), hosted page (persisted `artifact.markdown`), PDF (`atlas_brain/deflection_pdf_renderer.py:169`, reads `stored_deflection_report_model`), MCP snapshot (`atlas_brain/mcp/content_ops_deflection_readonly_server.py:149`). → Slice 5 (presentation + reconciliation).
+- Full Report `report_model` computed once (`build_deflection_report_artifact`,
+  `faq_deflection_report.py:1721`); Snapshot is a projection of it
+  (`build_deflection_snapshot:2625` projection branch `:2642-2649`; recompute
+  fallback `:2650-2698` uses the same helpers).
+- `deflection.v1` projection (`_snapshot_report_model_projection:2833`): per-section
+  `snapshot_safe_fields` allowlist. `question_details` exposes rank/question/
+  evidence-status/scope but NOT `answer`/`steps` (except a single-item teaser).
+- **Delivery artifacts (corrected):** the delivery email, hosted page, and PDF read
+  the persisted `report_model`; **the MCP fetch/search path reads the stored
+  snapshot** (`snapshot = dict(record.snapshot)`,
+  `atlas_brain/mcp/content_ops_deflection_readonly_server.py:181`; search `:134`),
+  not the report_model. So it is not accurate that every artifact reads the shared
+  report_model. -> Slice 5.
 
-## 0.6 Verification / scorecard — coverage and gaps
+## 0.6 Verification / scorecard -- coverage and gaps
 
-Two independent verifiers, **neither runs at customer-delivery runtime**:
+Two verifiers, neither runs at customer-delivery runtime:
+- **`build_deflection_full_report_qa_scorecard`** (`faq_deflection_report.py:1781`)
+  -- callers are tests + `scripts/check_deflection_full_report_*` only (zero runtime
+  callers). Checks schema/sections/keys present, evidence-export counts == model
+  counts, surface counts == model counts. **Does NOT** reconcile totals=sum-of-parts,
+  verify quotes verbatim (checks row COUNT only), or run on the snapshot.
+- **`evaluate_support_ticket_generated_content`**
+  (`support_ticket_generated_content_eval.py:607`) -- a different artifact's linter
+  (marketing landing_page/blog_post), not the deflection report/snapshot.
 
-- **(A) `build_deflection_full_report_qa_scorecard`** (`faq_deflection_report.py:1781`) + deterministic harness (`:1851`). **Callers: tests + `scripts/check_deflection_full_report_*` smoke only — zero runtime callers.** Checks: schema_version, required sections/keys present, evidence-export counts equal model counts, surface-observed counts equal model counts + caps respected. **Does NOT:** reconcile totals=sum-of-parts (no `repeat + non_repeat == source_count`, no `cost == count × rate` assertion); verify quotes verbatim (checks evidence **row count** only, never quote content); run on the **snapshot**.
-- **(B) `evaluate_support_ticket_generated_content`** (`support_ticket_generated_content_eval.py:607`) — a **different artifact's** linter (marketing landing_page/blog_post, wired at `blog_generation.py:1178`); percentages must equal source-count ratios, ≥1 cluster label must appear. Does not run on the deflection snapshot/report.
+Net: customer-facing numeric integrity (totals summing, quotes verbatim) is not
+gated by either verifier at runtime. -> Slice 5 & SUMMARY.
 
-**Net:** customer-facing numeric integrity (totals summing, quotes verbatim) is **not gated by either verifier at runtime.** → Slice 5 (scorecard visibility) & SUMMARY.
-
-- **Blind-spot handling is honest:** no grounded answer → `_no_proven_answer_detail` (`:4319`, "No proven answer yet…"); missing quotes stated not faked (`:4360-4368`). One placeholder to watch: `_publishable_answer_detail` (`:4286`) substitutes a generic "backed by evidence" sentence when a proven item's `answer` body is empty — can mask an empty-but-proven answer. → Slice 5.
-
----
+- **Blind-spot handling is honest** (`_no_proven_answer_detail:4319`); one
+  placeholder to watch (`_publishable_answer_detail:4286` substitutes a generic
+  "backed by evidence" sentence for a proven item with an empty answer body). -> Slice 5.
 
 ## 0.7 Dead / orphaned code
 
-- `faq_deflection_report.py:3046` **`render_deflection_report`** — dead, zero callers (only `__all__` export `:5570`); superseded by `render_deflection_report_model`.
-- `campaign_customer_data.py:1258` `_validate_csv_column_consistency` — 0 references.
-- `campaign_customer_data.py:726` `_csv_header_index` — 0 references (superseded by `_csv_header_index_and_hint`).
-- `support_ticket_input_package.py:890` `_all_rows_have_dates`, `:949` `_parse_ticket_source_date` — 0 references.
-- `campaign_source_adapters.py:537` `load_source_rows_from_file`, `campaign_customer_data.py:375` `FileIntelligenceRepository` — test-only, not on any product path.
-- **Effectively inert (not dead):** the token-set module's overlap/anchor thresholds feed the topic **label only**, not `ticket_count`/cost. The embedding booster is **wired but OFF** on the deflection call path — `content_ops_execution.py:1066` and `FAQDeflectionReportService.generate` (`:1698`) never forward `embedding_port`; it engages only if the service was built with `config.embedding_port` (host path, `atlas_brain/_content_ops_services.py:293/:477`, model `mixedbread-ai/mxbai-embed-large-v1`, CPU). → Slice 2 must confirm whether embeddings run in production.
+- `faq_deflection_report.py:3046` `render_deflection_report` -- dead, zero callers.
+- `campaign_customer_data.py:1258` `_validate_csv_column_consistency`,
+  `:726 _csv_header_index` -- 0 references.
+- `support_ticket_input_package.py:890 _all_rows_have_dates`,
+  `:949 _parse_ticket_source_date` -- 0 references.
+- `campaign_source_adapters.py:537 load_source_rows_from_file` -- test-only.
+- **NOT orphaned (corrected):** `campaign_customer_data.py:376
+  FileIntelligenceRepository` is a documented host-facing customer-file adapter
+  (exported in `__all__`, documented in `extracted_content_pipeline/README.md:114`
+  and `docs/standalone_productization.md:155`), not a test-only orphan.
+- **Effectively inert:** the token-set overlap/anchor thresholds shape the topic
+  label (which, per 0.0, seeds grouping). The embedding booster is wired but OFF on
+  the deflection call path unless the service was built with `config.embedding_port`.
+  -> Slice 2 must confirm whether embeddings run in production.
 
 ## 0.8 Flags carried into later slices
 
 | Flag | Where | Slice |
 |---|---|---|
-| Lexical produces FINAL clusters; embeddings only rescue singletons — fragmentation risk | `ticket_faq_markdown.py:1026/:1115` | **2 (core)** |
-| No row-level dedup; junk/dup tickets inflate `ticket_count` → `$13.50 × count` | ingestion + `:1430` | **2, 5** |
-| Order-dependence (anchor label, first-match representative, float-tie MNN) vs "deterministic positioning" claim | `clustering.py:556`, `ticket_faq_markdown.py:2372/:1148` | **2** |
-| Threshold ±10% sensitivity of top-5 | threshold table | **2** |
-| Whole-file-into-RAM on Path B; metrics double-computed | `control_surfaces.py:2808`; `:3208`/`:4034` | **3** |
-| Embedding booster maybe OFF in production | `content_ops_execution.py:1066` | **2, 3** |
-| Scorecard: no totals reconciliation, no verbatim check, not at runtime, not on snapshot | `:1781` | **5, SUMMARY** |
-| Snapshot may surface overridden/stale `estimated_support_cost` | `:2514` | **5** |
-| Cost = flat $13.50, no handle-time, hardcoded benchmark | `:51` | **5, 6** |
+| Lexical produces FINAL clusters; embeddings only rescue singletons | `ticket_faq_markdown.py:1026/:1115` | 2 (core) |
+| Missing/changed-ID duplicates inflate `ticket_count`; stable-ID dups collapse | ingestion + `:763/:1430` | 2, 5 |
+| Headerless CSV first-row-as-data accepted; short rows padded | `campaign_customer_data.py:746/:541` | 2 |
+| Resolution-scoped single-source groups can render with count 1 | `ticket_faq_markdown.py:846` | 2 |
+| Publishable gate is PII, not spam -> junk can be the representative | `:2659` | 2, 5 |
+| Order-dependence vs "deterministic positioning" claim | `:2372`, `clustering:556` | 2 |
+| Private-row flag stripped in `_normalize_ticket_row` before the downstream filter | `support_ticket_input_package.py:530` | 2 |
+| Whole-file-into-RAM on Path B; metrics double-computed | `api/control_surfaces.py:2806`; `:3208`/`:4034` | 3 |
+| Embedding booster maybe OFF in production | `content_ops_execution.py:1066` | 2, 3 |
+| Scorecard: no totals reconciliation, no verbatim check, not at runtime, not on snapshot | `:1781` | 5, SUMMARY |
+| MCP fetch reads stored snapshot, not report_model | `content_ops_deflection_readonly_server.py:181` | 5 |
+| Cost = flat $13.50, no handle-time, hardcoded benchmark | `:51` | 5, 6 |
 
-*Phase 0 map only — no product code was modified. Findings with severity are in `FINDINGS.md` (Slices 2–3).*
+*Phase 0 map only -- no product code was modified. Findings with severity are in
+FINDINGS.md (Slices 2-3).*
