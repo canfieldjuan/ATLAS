@@ -15,6 +15,8 @@ Session role: builder
 Operator-assigned lane: <one sentence>
 Current task: <one sentence>
 Spark/subagent routing: used <what/why> | considered <why main/direct was better> | not applicable
+Builder surface: Claude Code native | Codex/local CLI | other <name>
+Wake mode: Claude native PR subscription + 30-minute poll | Codex wake bridge | local watcher state-only | none
 
 ## Owned Active PR
 
@@ -26,10 +28,12 @@ Branch: <branch or none>
 Plan: plans/PR-<Slice>.md
 Expected head SHA: <sha or none>
 Ownership lane: <lane from plan>
-Allowed actions: inspect | update | merge-on-operator-signal | merge-after-scheduled-ready-guarded | none
-Standing merge authorization: <none | authorized by <operator/source> for <arc>; scheduled-ready-only>
+Allowed actions: inspect | update | report-ready | active-builder-merge-after-guarded-signal | none
+Standing merge authorization: <none | authorized active-builder merge by <operator/source> for <arc>; scheduled-ready-only; watcher merge forbidden>
 Push/review-event hook: <name and trigger | unavailable | none>
-Timer hook: <systemd/cron/webhook name | none>
+Timer/poll hook: Claude native 30-minute poll | systemd/cron/webhook name | none
+Wake bridge: Claude native subscription | <external Codex launch/resume bridge> | unavailable | none
+Ready-state handoff: scripts/report_pr_watcher_state.py | <other read-only reporter> | none
 Next timer wake: <timestamp or none>
 Last watcher state: <state/details or none>
 
@@ -79,12 +83,18 @@ Do-NOT-redo: <paths ruled out, checks already green, dead ends>
 - [ ] Confirm the current PR is listed under "Owned Active PR" or "PRs This
       Session May Touch" before inspecting comments, pushing updates, or
       merging.
-- [ ] Confirm `Push/review-event hook`, `Timer hook`, `Next timer wake`, and
-      `Last watcher state` reflect the current long-running setup before
-      relying on autonomous wake-ups.
-- [ ] Confirm `Standing merge authorization` is explicit before merging on a
-      scheduled `ready_for_human_merge` wake; do not infer it from watcher
-      state.
+- [ ] Confirm `Builder surface` and `Wake mode` match the actual session. Claude
+      Code native sessions use Claude's PR subscription and 30-minute poll;
+      Codex/local sessions need an external wake bridge for true autonomous
+      resume.
+- [ ] Confirm `Push/review-event hook`, `Timer/poll hook`, `Wake bridge`, `Next
+      timer wake`, and `Last watcher state` reflect the current long-running
+      setup before relying on autonomous wake-ups.
+- [ ] Run the ready-state handoff reporter before starting a new slice in a
+      Codex/local watcher arc.
+- [ ] Confirm `Standing merge authorization` is explicit before the active
+      builder merges on a scheduled `ready_for_human_merge` wake; do not infer
+      it from watcher state.
 - [ ] Treat every other open PR as "must not touch" unless the operator
       explicitly reassigns it.
 ```
