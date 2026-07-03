@@ -13,8 +13,13 @@ from pathlib import Path
 import pytest
 
 from atlas_reddit.purge import BATCH_SIZE, purge_once
-from atlas_reddit.reddit_client import PrawDeletionSource, RedditAuthError, validate_scopes
-from atlas_reddit.store import ListeningStore
+from atlas_reddit.reddit_client import (
+    MISSING_REASON,
+    PrawDeletionSource,
+    RedditAuthError,
+    validate_scopes,
+)
+from atlas_reddit.store import ListeningStore, StoreError
 from tests.atlas_reddit_fixtures import fake_reply, fake_submission, seed_candidates, seed_replies
 
 NOW = 1_751_600_000
@@ -131,7 +136,7 @@ def test_live_items_survive_and_gone_items_are_actually_deleted(
     source = FakeDeletionSource(
         gone={
             "t3_gone": "content shows [deleted]",
-            "t1_gone": "missing (not returned by the API)",
+            "t1_gone": MISSING_REASON,
         }
     )
     stats = _purge(store, source)
@@ -214,7 +219,7 @@ def test_tracked_thread_rows_are_retained(store: ListeningStore) -> None:
     """Thread rows hold only ids (ours), no third-party content: the purge
     never touches them even when every reply on the thread is purged."""
     _seed_reply(store, "t1_gone")
-    _purge(store, FakeDeletionSource(gone={"t1_gone": "missing (not returned by the API)"}))
+    _purge(store, FakeDeletionSource(gone={"t1_gone": MISSING_REASON}))
     assert store.list_replies() == []
     assert len(store.list_tracked_threads(include_dormant=True)) == 1
 
@@ -415,6 +420,46 @@ def test_purged_ids_are_tombstones_for_reingestion(store: ListeningStore) -> Non
     ) is False
     assert store.list_replies() == []
     assert len(store.list_purge_log()) == 2  # no repeat purge entries
+    # Confirmed deletion states are the tombstoning kind.
+    assert all(rec.tombstone for rec in store.list_purge_log())
+
+
+@pytest.mark.parametrize("bad", [None, 0, 1, "false", "true"])
+def test_non_bool_tombstone_flag_is_rejected(store: ListeningStore, bad: object) -> None:
+    """Codex P2 on this PR: the tombstone flag controls the deletion/
+    re-ingest safety invariant, so truthiness coercion (None -> not
+    tombstoning, "false" -> tombstoning) must fail closed instead."""
+    _seed_candidate(store, "t3_gone")
+    with pytest.raises(StoreError, match="tombstone"):
+        store.purge_item(
+            "t3_gone", "candidate", deleted_detected_at=NOW, purged_at=NOW,
+            reason="r", tombstone=bad,  # type: ignore[arg-type]
+        )
+    assert store.get_candidate("t3_gone") is not None  # nothing deleted
+    with pytest.raises(StoreError, match="tombstone"):
+        store.record_purge(
+            item_id="t3_x", item_type="candidate", deleted_detected_at=NOW,
+            purged_at=NOW, reason="r", tombstone=bad,  # type: ignore[arg-type]
+        )
+    assert store.list_purge_log() == []  # nothing logged
+
+
+def test_missing_purge_is_not_a_tombstone(store: ListeningStore) -> None:
+    """Hardening (#1941 audit): an item a silent-partial info() response
+    failed to return still purges (fail-closed), but must NOT tombstone --
+    a transient miss would otherwise be irreversible. If the content was
+    real and live, its next listing appearance re-ingests it; truly
+    deleted items never reappear, so the re-purge cycle stays closed."""
+    _seed_candidate(store, "t3_ghost")
+    _purge(store, FakeDeletionSource(
+        gone={"t3_ghost": MISSING_REASON}
+    ))
+    assert store.get_candidate("t3_ghost") is None  # purged: fail-closed
+    record = store.list_purge_log()[0]
+    assert record.tombstone is False
+    assert store.is_purged("t3_ghost") is False
+    _seed_candidate(store, "t3_ghost")  # transient miss: re-ingest allowed
+    assert store.get_candidate("t3_ghost") is not None
 
 
 def _write_digest_file(digest_dir: Path, name: str, *, mtime: int,
@@ -575,6 +620,8 @@ def test_v2_bare_candidate_ids_canonicalize_to_fullnames(tmp_path: Path) -> None
             """,
             (legacy_id,),
         )
+    # A faithful v2 store predates the v4 tombstone column too.
+    conn.execute("ALTER TABLE purge_log DROP COLUMN tombstone")
     conn.execute("PRAGMA user_version = 2")
     conn.commit()
     conn.close()
@@ -584,6 +631,38 @@ def test_v2_bare_candidate_ids_canonicalize_to_fullnames(tmp_path: Path) -> None
     # abc123 -> t3_abc123; bare "existing" dropped (fullname twin wins);
     # junk retained untouched for the purge guard to surface.
     assert ids == {"t3_existing", "t3_abc123", "JUNK ID!"}
+
+
+def test_v3_store_gains_tombstone_backfilled_conservative(tmp_path: Path) -> None:
+    """Hardening migration probe: a v3 store with existing purge_log rows
+    opens at v4 with tombstone backfilled to 1 -- prior purges keep
+    refusing re-ingestion (conservative in the direction the tombstone
+    already enforced)."""
+    import sqlite3
+
+    db = tmp_path / "v3.db"
+    with ListeningStore(db) as store:  # creates current schema
+        _seed_candidate(store, "t3_old")
+        store.purge_item(
+            "t3_old", "candidate", deleted_detected_at=NOW, purged_at=NOW,
+            reason="content shows [deleted]",
+        )
+    conn = sqlite3.connect(db)
+    # Simulate a faithful v3 store: no tombstone column, version 3.
+    conn.execute("ALTER TABLE purge_log DROP COLUMN tombstone")
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    conn.close()
+
+    with ListeningStore(db) as migrated:
+        record = migrated.list_purge_log()[0]
+        assert record.tombstone is True
+        assert migrated.is_purged("t3_old") is True
+        _seed_candidate(migrated, "t3_old")
+        assert migrated.get_candidate("t3_old") is None  # still refused
+    conn = sqlite3.connect(db)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    conn.close()
 
 
 def test_cross_table_id_twin_is_not_shielded(store: ListeningStore) -> None:

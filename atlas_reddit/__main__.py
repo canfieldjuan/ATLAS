@@ -307,7 +307,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"--pace-seconds must be 0..{MAX_PACE_SECONDS}, got {args.pace_seconds}"
             )
         try:
-            source = PrawHistorySource(settings)
+            # The source paces its own-comment refreshes with the same
+            # ceiling the tracker applies between threads: one busy
+            # thread must not burst past it.
+            source = PrawHistorySource(settings, pace_seconds=args.pace_seconds)
             with ListeningStore(args.db) as store:
                 stats = track_once(
                     store,

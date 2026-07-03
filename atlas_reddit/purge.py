@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .reddit_client import DeletionSource
+from .reddit_client import MISSING_REASON, DeletionSource
 from .store import ListeningStore
 
 BATCH_SIZE = 100  # reddit info() accepts up to 100 fullnames per request
@@ -106,13 +106,19 @@ def purge_once(
         for item_id, reason in sorted(gone.items()):
             item_type = "candidate" if item_id in valid_candidates else "reply"
             # Atomic delete+log in one store transaction: no content ever
-            # disappears without its audit record.
+            # disappears without its audit record. The purge itself is
+            # fail-closed either way, but only CONFIRMED deletion states
+            # tombstone: an item a silent-partial info() response failed
+            # to return may re-ingest on its next listing appearance; a
+            # truly deleted item never reappears in listings, so the
+            # re-purge cycle stays closed.
             if store.purge_item(
                 item_id,
                 item_type,
                 deleted_detected_at=now,
                 purged_at=now,
                 reason=reason,
+                tombstone=reason != MISSING_REASON,
             ):
                 if item_type == "candidate":
                     stats.purged_candidates += 1

@@ -1180,6 +1180,7 @@
 - [PR-Reddit-Listening-Config-Scoring](archive/PR-Reddit-Listening-Config-Scoring.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Digest](archive/PR-Reddit-Listening-Digest.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Praw-Poller](archive/PR-Reddit-Listening-Praw-Poller.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
+- [PR-Reddit-Listening-Purge](archive/PR-Reddit-Listening-Purge.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Production hardening
 - [PR-Reddit-Listening-Reply-Tracker](archive/PR-Reddit-Listening-Reply-Tracker.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Sqlite-Store](archive/PR-Reddit-Listening-Sqlite-Store.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Refresh-CLAUDE-Md](archive/PR-Refresh-CLAUDE-Md.md)
