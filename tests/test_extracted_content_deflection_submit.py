@@ -2807,8 +2807,11 @@ class _MustNotTouchMappingRepo:
 def _publish_draft(
     *,
     draft_id: str = _PUBLISH_FAQ_ID,
-    status: str = "approved",
+    status: str = "draft",
 ) -> TicketFAQDraft:
+    # 'draft' matches what PostgresTicketFAQRepository.save_drafts persists for
+    # real Resolution Audit runs; the route's explicit publish action promotes
+    # it (fixtures must match real producer output).
     return TicketFAQDraft(
         id=draft_id,
         target_id="ticket-faq-report",
@@ -2902,12 +2905,11 @@ async def test_publish_macros_publishes_saved_faq_for_paid_report() -> None:
     # Observable state: the draft was marked published under the tenant scope,
     # the external boundary saw exactly the tenant scope, and the attempt was
     # recorded through the real service (no call-arg fakery on the service).
-    assert repo.update_calls == [
-        {
-            "faq_id": _PUBLISH_FAQ_ID,
-            "status": "published",
-            "scope": repo.update_calls[0]["scope"],
-        }
+    assert [
+        (call["faq_id"], call["status"]) for call in repo.update_calls
+    ] == [
+        (_PUBLISH_FAQ_ID, "approved"),
+        (_PUBLISH_FAQ_ID, "published"),
     ]
     assert repo.get_calls[0]["scope"].account_id == _PUBLISH_ACCOUNT
     assert boundary.calls[0]["scope"].account_id == _PUBLISH_ACCOUNT
@@ -3024,7 +3026,9 @@ async def test_publish_macros_missing_tenant_credentials_fails_safely() -> None:
     assert payload["ok"] is False
     assert payload["published_count"] == 0
     assert "zendesk_credentials_missing" in json.dumps(payload)
-    assert repo.update_calls == []
+    # the explicit publish intent approves the generated draft, but the failed
+    # publish must never mark it published; a later retry can still publish it
+    assert [(c["status"]) for c in repo.update_calls] == ["approved"]
     assert len(attempts.calls) == 1
 
 
@@ -3036,3 +3040,35 @@ async def test_publish_macros_provider_unavailable_503_fails_closed() -> None:
         await _publish_route(router).endpoint(request_id="resolution-audit-1")
 
     assert exc.value.status_code == 503
+
+
+async def test_publish_macros_does_not_revive_rejected_draft() -> None:
+    # approve-on-publish only promotes the exact 'draft' status; a rejected
+    # draft stays rejected and nothing reaches the boundary as published.
+    store = await _paid_report_store()
+    repo = _PublishFAQRepo(_publish_draft(status="rejected"))
+    boundary = _ZendeskBoundaryFake()
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=boundary)
+    router = _publish_router(store, lambda: service)
+
+    payload = await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert payload["ok"] is False
+    assert payload["published_count"] == 0
+    assert boundary.calls == []
+    assert repo.update_calls == []
+
+
+async def test_publish_macros_already_approved_draft_still_publishes() -> None:
+    store = await _paid_report_store()
+    repo = _PublishFAQRepo(_publish_draft(status="approved"))
+    boundary = _ZendeskBoundaryFake()
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=boundary)
+    router = _publish_router(store, lambda: service)
+
+    payload = await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert payload["ok"] is True
+    assert payload["published_count"] == 1
+    # no redundant approve transition for an already-approved draft
+    assert [(c["status"]) for c in repo.update_calls] == ["published"]

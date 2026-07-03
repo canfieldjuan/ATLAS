@@ -1011,7 +1011,14 @@ def create_content_ops_control_surface_router(
         service = await _resolve_faq_macro_publish_service(
             faq_macro_publish_service_provider
         )
-        summary = await service.publish_faq_draft(faq_id, scope=tenant)
+        # The tenant's explicit publish action on their paid report is the
+        # approval for the generated draft (approve_draft only promotes the
+        # exact 'draft' status; see FAQMacroWritebackPublishService).
+        summary = await service.publish_faq_draft(
+            faq_id,
+            scope=tenant,
+            approve_draft=True,
+        )
         if not summary.found:
             raise HTTPException(
                 status_code=409,

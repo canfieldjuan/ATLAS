@@ -9,6 +9,7 @@ from typing import Protocol, Sequence
 from .campaign_ports import JsonDict, TenantScope
 from .faq_macro_writeback import (
     APPROVED_FAQ_STATUS,
+    DRAFT_FAQ_STATUS,
     MacroPublishProvider,
     MacroPublishResult,
     MacroWritebackPreview,
@@ -119,6 +120,7 @@ class FAQMacroWritebackPublishService:
         faq_id: str,
         *,
         scope: TenantScope,
+        approve_draft: bool = False,
     ) -> FAQMacroPublishSummary:
         cleaned_id = _clean(faq_id)
         if not cleaned_id:
@@ -127,6 +129,18 @@ class FAQMacroWritebackPublishService:
         draft = await self.faq_repository.get_draft(cleaned_id, scope=scope)
         if draft is None:
             return FAQMacroPublishSummary(faq_id=cleaned_id, found=False)
+
+        if approve_draft and _clean(draft.status) == DRAFT_FAQ_STATUS:
+            # An explicit tenant publish action (paid Resolution Audit) is the
+            # approval for a generated draft. Only the exact 'draft' status is
+            # promoted; rejected/archived/published drafts are never revived.
+            approved = await self.faq_repository.update_status(
+                cleaned_id,
+                APPROVED_FAQ_STATUS,
+                scope=scope,
+            )
+            if approved:
+                draft = replace(draft, status=APPROVED_FAQ_STATUS)
 
         preview = build_macro_writeback_preview([draft])
         if not preview.macros:

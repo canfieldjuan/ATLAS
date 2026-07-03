@@ -20,7 +20,7 @@ publish endpoint that resolves the saved FAQ draft id from the persisted
 Resolution Audit artifact and publishes through the existing
 `FAQMacroWritebackPublishService`.
 
-This slice is over the 400 LOC soft cap (690 total) because the vertical
+This slice is over the 400 LOC soft cap (850 total) because the vertical
 slice ships the route, host wiring, and both-sides tests in one reviewable
 unit: ~148 LOC of production code, with the remainder being this plan doc
 and tests proving the paid/locked/missing/cross-tenant/stale-id/
@@ -56,6 +56,10 @@ Slice phase: Vertical slice
         provider call.
   - [ ] Existing `faq_markdown` Generated Asset Review macro publish route
         remains unchanged.
+  - [ ] A producer-real generated draft (`status='draft'`, as
+        `save_drafts` persists) publishes through the paid route via the
+        explicit `approve_draft` promotion; non-`draft` statuses
+        (rejected/archived/published/expired) are never revived.
 - Reachability proof: route test exercises the real control-surface endpoint
   function, `InMemoryDeflectionReportArtifactStore`, a real
   `FAQMacroWritebackPublishService`, and an in-memory FAQ repository; only the
@@ -71,9 +75,12 @@ Slice phase: Vertical slice
 - `atlas_brain/_content_ops_macro_writeback.py`
 - `atlas_brain/api/__init__.py`
 - `extracted_content_pipeline/api/control_surfaces.py`
+- `extracted_content_pipeline/faq_macro_writeback.py`
+- `extracted_content_pipeline/faq_macro_writeback_publish.py`
 - `plans/PR-Resolution-Audit-Zendesk-Writeback.md`
 - `tests/test_atlas_content_ops_macro_writeback.py`
 - `tests/test_extracted_content_deflection_submit.py`
+- `tests/test_extracted_ticket_faq_macro_writeback_publish.py`
 
 ## Mechanism
 
@@ -90,7 +97,14 @@ The route:
 2. rejects missing or unpaid reports before reading the saved FAQ id;
 3. extracts the first UUID-like id from `record.artifact.faq_result.saved_ids`;
 4. resolves the publish service factory;
-5. calls `publish_faq_draft(saved_faq_id, scope=tenant)`;
+5. calls `publish_faq_draft(saved_faq_id, scope=tenant, approve_draft=True)`
+   -- the tenant's explicit publish action on their paid report is the
+   approval for the generated draft. The opt-in only promotes the exact
+   `'draft'` status (what `save_drafts` persists for real Resolution Audit
+   runs); rejected/archived/published drafts are never revived, and a refused
+   promotion falls through to the existing `draft_not_approved` skip. The
+   default (`approve_draft=False`) keeps the AI Content Station and scheduled
+   publish paths byte-for-byte unchanged;
 6. returns the existing `FAQMacroPublishSummary` payload plus `request_id`,
    `account_id`, and `faq_id`.
 
@@ -150,8 +164,11 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/_content_ops_macro_writeback.py` | 39 |
 | `atlas_brain/api/__init__.py` | 4 |
-| `extracted_content_pipeline/api/control_surfaces.py` | 105 |
-| `plans/PR-Resolution-Audit-Zendesk-Writeback.md` | 157 |
+| `extracted_content_pipeline/api/control_surfaces.py` | 112 |
+| `extracted_content_pipeline/faq_macro_writeback.py` | 1 |
+| `extracted_content_pipeline/faq_macro_writeback_publish.py` | 14 |
+| `plans/PR-Resolution-Audit-Zendesk-Writeback.md` | 168 |
 | `tests/test_atlas_content_ops_macro_writeback.py` | 70 |
-| `tests/test_extracted_content_deflection_submit.py` | 315 |
-| **Total** | **690** |
+| `tests/test_extracted_content_deflection_submit.py` | 351 |
+| `tests/test_extracted_ticket_faq_macro_writeback_publish.py` | 91 |
+| **Total** | **850** |

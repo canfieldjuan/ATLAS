@@ -340,3 +340,94 @@ async def test_publish_service_skips_attempt_history_without_account_scope() -> 
 
     assert summary.ok is True
     assert attempts.calls == []
+
+
+@pytest.mark.asyncio
+async def test_publish_service_approve_draft_promotes_generated_draft_and_publishes() -> None:
+    # Producer-real shape: save_drafts persists status='draft'; an explicit
+    # tenant publish action with approve_draft=True promotes then publishes.
+    scope = TenantScope(account_id="acct-1", user_id="user-1")
+    repo = _FAQRepo(_draft(status="draft"))
+    provider = _Provider(("published",))
+    attempts = _AttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=scope,
+        approve_draft=True,
+    )
+
+    assert summary.ok is True
+    assert summary.published_count == 1
+    assert [(c["status"]) for c in repo.update_calls] == ["approved", "published"]
+    assert provider.calls[0]["scope"] == scope
+    assert len(attempts.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_publish_service_approve_draft_never_revives_non_draft_statuses() -> None:
+    for status in ("rejected", "archived", "published", "expired"):
+        repo = _FAQRepo(_draft(status=status))
+        provider = _Provider(("published",))
+        service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+        summary = await service.publish_faq_draft(
+            "faq-draft-1",
+            scope=TenantScope(account_id="acct-1"),
+            approve_draft=True,
+        )
+
+        assert summary.ok is False, status
+        assert summary.published_count == 0, status
+        assert provider.calls == [], status
+        assert repo.update_calls == [], status
+
+
+@pytest.mark.asyncio
+async def test_publish_service_approve_draft_fails_closed_when_promotion_refused() -> None:
+    class _RefusingRepo(_FAQRepo):
+        async def update_status(self, faq_id, status, *, scope):
+            self.update_calls.append({
+                "faq_id": faq_id,
+                "status": status,
+                "scope": scope,
+            })
+            return False
+
+    repo = _RefusingRepo(_draft(status="draft"))
+    provider = _Provider(("published",))
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+        approve_draft=True,
+    )
+
+    assert summary.ok is False
+    assert summary.skipped[0]["reason"] == "draft_not_approved"
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_publish_service_default_still_refuses_generated_draft() -> None:
+    # Without the explicit approve_draft opt-in, behavior is unchanged: the
+    # AI Content Station and scheduled paths still require prior approval.
+    repo = _FAQRepo(_draft(status="draft"))
+    provider = _Provider(("published",))
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert summary.ok is False
+    assert summary.skipped[0]["reason"] == "draft_not_approved"
+    assert provider.calls == []
+    assert repo.update_calls == []
