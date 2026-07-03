@@ -592,3 +592,86 @@ def test_new_sensitive_module_with_raises_tests_passes(tmp_path: Path) -> None:
         "--min-score", "99",
         "--sensitive-glob", "**/purge_guard.py",
     ]) == 0
+
+
+def test_comment_mention_of_raises_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex P2 on this PR: the raises signal must come from a REAL
+    pytest.raises/assertRaises call, not from a comment or string that
+    mentions one -- a '# TODO: add pytest.raises' note is exactly the
+    honest-but-hasty artifact the gate exists to catch."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n"
+        "# TODO: add pytest.raises coverage\n"
+        "NOTE = 'assertRaises would be nice'\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n",
+    )
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+
+def test_new_testless_sensitive_module_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Codex P2 on this PR: a sensitive module with NO tests at all is
+    the zero-negatives case at its worst -- NO_TEST_FILE is zero
+    tolerance too, so min-score cannot save it either."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "billing_hook.py",
+           "def charge(amount):\n"
+           "    if amount <= 0:\n"
+           "        raise ValueError('non-positive')\n"
+           "    return amount\n")
+    # No test file for billing_hook anywhere.
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+    ]) == 0
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/billing_hook.py",
+    ]) == 1
+    out = capsys.readouterr().out
+    assert "sensitive-path NO_TEST_FILE" in out

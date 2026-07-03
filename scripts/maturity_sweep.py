@@ -92,12 +92,19 @@ SKIP_DIRS = {
 
 TEST_NAME_RE = re.compile(r"(^test_.+\.py$)|(.+_test\.py$)")
 # Codes that fail the ratchet on ANY new occurrence inside sensitive
-# globs. NO_RAISES_TESTS is the negatives-presence gate (#1934 arc lesson
-# 5): a guard-lane module whose test file never asserts that anything
-# raises stayed green over 8 injection holes in a single slice. The
-# name-heuristic HAPPY_PATH_TESTS deliberately stays out -- it can be
-# gamed by renaming tests and would punish adding happy-path coverage.
-SENSITIVE_ZERO_TOLERANCE = ("BARE_EXCEPT", "SWALLOWED_EXCEPT", "NO_RAISES_TESTS")
+# globs. NO_RAISES_TESTS and NO_TEST_FILE are the negatives-presence
+# gate (#1934 arc lesson 5): a guard-lane module whose tests never
+# assert that anything raises stayed green over 8 injection holes in a
+# single slice -- and a guard-lane module with NO tests at all is the
+# same failure, worse. The name-heuristic HAPPY_PATH_TESTS deliberately
+# stays out -- it can be gamed by renaming tests and would punish adding
+# happy-path coverage.
+SENSITIVE_ZERO_TOLERANCE = (
+    "BARE_EXCEPT",
+    "SWALLOWED_EXCEPT",
+    "NO_RAISES_TESTS",
+    "NO_TEST_FILE",
+)
 FIRST_PARTY_MOCK_ROOTS = (
     "atlas_brain",
     "extracted_competitive_intelligence",
@@ -498,6 +505,30 @@ def matching_test_sources(module_stem, test_sources):
             if seg_re.search(stem.lower())]
 
 
+def _has_raises_assertion(source):
+    """True when the test source contains a REAL raises assertion --
+    a pytest.raises / raises / assertRaises* call parsed from the AST.
+    A text regex would be suppressed by a comment or string that merely
+    mentions pytest.raises, which matters now that NO_RAISES_TESTS is a
+    blocking zero-tolerance code. Unparseable sources fall back to the
+    text signal rather than claiming certainty either way."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return bool(re.search(r"pytest\.raises|assertRaises|with raises", source))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and (
+            func.attr == "raises" or func.attr.startswith("assertRaises")
+        ):
+            return True
+        if isinstance(func, ast.Name) and func.id == "raises":
+            return True
+    return False
+
+
 def score_tests(module_stem, test_sources, all_test_text):
     """Returns a list of findings about test coverage quality for one module."""
     findings = []
@@ -521,7 +552,7 @@ def score_tests(module_stem, test_sources, all_test_text):
         1 for name in test_defs
         if any(h in name.lower() for h in NEGATIVE_TEST_HINTS)
     )
-    raises = bool(re.search(r"pytest\.raises|assertRaises|with raises", src))
+    raises = any(_has_raises_assertion(source) for source in matched)
 
     ratio = negatives / total
     if ratio < 0.15:

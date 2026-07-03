@@ -91,9 +91,32 @@ does the rest.
   actually had. A determined adversary can still write one trivial
   raises-test; the review contract, not this gate, owns that.
 
+Review-fix notes (Codex wave 1; all three verified real, fixed at root):
+
+- **Raises detection was a suppressible text regex**: a comment or
+  string mentioning pytest.raises satisfied the now-blocking signal --
+  exactly an honest-but-hasty artifact. `_has_raises_assertion` now
+  parses the AST for real `pytest.raises`/`raises`/`assertRaises*`
+  calls (regex fallback only for unparseable sources). Probed with a
+  comment+string-only file. All 35 CI ratchet gates re-run locally
+  against the checked-in baselines with the stricter detector: zero
+  regressions.
+- **Testless sensitive modules escaped entirely**: `NO_TEST_FILE`
+  scored below min-score, leaving the worst zero-negatives case
+  mergeable. It joins `SENSITIVE_ZERO_TOLERANCE`; probed both ways
+  (testless sensitive module fails; same module off-glob passes).
+- **Row 7 overstated trusted-base coverage**: the maturity-sweep
+  workflows still run `scripts/maturity_sweep.py` from the merge ref,
+  so a PR can weaken this very gate and self-pass. Row 7 now reads
+  "ENFORCED for the PR meta-gates; maturity sweeps TRACKED" with the
+  gap logged on #1942 -- extending trusted-base execution to the sweep
+  workflows is a named follow-up slice, not smuggled in here.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
+- Trusted-base execution for the maturity-sweep workflows (the row-7
+  residual surfaced in review; logged on #1942).
 - The row-2 reconciliation gap stays tracked on #1942 (unrelated to
   this slice; listed to show it was considered).
 
@@ -101,11 +124,15 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_maturity_sweep.py -q` -- 25 passed
-  (23 pre-existing + the new both-sides probes:
-  new-sensitive-module-without-raises fails with the
-  `sensitive-path NO_RAISES_TESTS` reason and passes off-glob;
-  with-raises passes on-glob).
+- `python -m pytest tests/test_maturity_sweep.py -q` -- 27 passed
+  (23 pre-existing + both-sides probes: no-raises sensitive module
+  fails with the `sensitive-path NO_RAISES_TESTS` reason and passes
+  off-glob; with-raises passes on-glob; comment/string mention of
+  pytest.raises does NOT satisfy the gate; testless sensitive module
+  fails with `sensitive-path NO_TEST_FILE` and passes off-glob).
+- All 35 blocking ratchet gates from both maturity-sweep workflows
+  re-run locally against the checked-in baselines with the stricter
+  detector: every gate passes (no baseline regressions).
 - ASCII byte-scan on the two changed Python files: clean.
 - Row artifacts verified on main: `tests/atlas_reddit_fixtures.py`,
   `tests/test_atlas_reddit_fixture_fidelity.py` (row 4);
@@ -119,8 +146,8 @@ Parked hardening: none.
 | `plans/INDEX.md` | 2 |
 | `plans/PR-Negatives-Presence-Gate.md` | 130 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 7 |
-| `tests/test_maturity_sweep.py` | 100 |
-| **Total** | **~245** |
+| `scripts/maturity_sweep.py` | 40 |
+| `tests/test_maturity_sweep.py` | 185 |
+| **Total** | **~365** |
 
 Under the 400 cap; no override needed.
