@@ -55,9 +55,12 @@ never gain a step that executes PR-ref content -- `pr-body-contract`
 inspects the fetched PR head purely as git data (`git cat-file`) to see
 the plan doc the PR brings with it. Residual PR-ref surface, by design:
 `pre-push-audit` and the maturity sweeps operate on the PR tree and need a
-scripts-from-base split in a follow-up slice, and `live-reconciliation`'s
-review-event triggers resolve the workflow file PR-side (every push/edit
-still produces a trusted run).
+scripts-from-base split in a follow-up slice. Review-event runs resolve the
+workflow file PR-side, so the required `live-reconciliation` context is fed
+only by `pull_request_target` runs; the default-branch
+`ai_reconciliation_review_retrigger.yml` follow-up re-runs the latest
+trusted target run whenever a review event lands, keeping the required
+context fresh through trusted code.
 
 Branch protection for `main` requires `live-reconciliation`, `diff-budget`
 (the AGENTS.md diff-budget gate), `Gitleaks PR secret scan`, and

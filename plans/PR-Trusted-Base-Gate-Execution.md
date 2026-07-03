@@ -14,7 +14,7 @@ slice applies that existing pattern to the three API-driven gates
 (diff-budget, live-reconciliation, pr-body-contract); patching just one gate
 or re-describing the risk in docs would treat the symptom.
 
-Diff-budget overage (504 added lines vs the 400 cap): the workflow posture
+Diff-budget overage (589 added lines vs the 400 cap): the workflow posture
 audit ITSELF gates pull_request_target adoption behind its allowlist plus
 guard-shape check, so the three workflow conversions, the allowlist
 expansion, its failure-branch tests, and the review-events job split are one
@@ -47,7 +47,15 @@ Slice phase: Vertical slice
    checkout). live-reconciliation splits into the required target-only job
    plus an advisory review-events job (same base-ref script) so bot-comment
    re-runs survive the guard shape.
-5. `docs/SECURITY_GUARDRAILS.md`: document which gates run trusted-base and
+5. `.github/workflows/ai_reconciliation_review_retrigger.yml` (review round
+   2): review-event runs resolve the workflow file PR-side and cannot be
+   trusted to refresh the required context, so this default-branch
+   `workflow_run` follow-up re-runs the latest `pull_request_target` run
+   for the same head SHA whenever a review event lands -- the required
+   `live-reconciliation` context stays fresh through trusted code.
+   Loop-safe: reruns arrive back with event == pull_request_target and are
+   ignored.
+6. `docs/SECURITY_GUARDRAILS.md`: document which gates run trusted-base and
    the residual PR-ref surface (named below).
 
 ### Files touched
@@ -55,6 +63,7 @@ Slice phase: Vertical slice
 - `.github/workflows/diff_budget.yml`
 - `.github/workflows/ai_reconciliation_live.yml`
 - `.github/workflows/pr_body_contract.yml`
+- `.github/workflows/ai_reconciliation_review_retrigger.yml`
 - `scripts/audit_pr_body.py`
 - `scripts/audit_workflow_security_posture.py`
 - `tests/test_audit_pr_body.py`
@@ -105,7 +114,8 @@ this merges, neither a gate script edit nor a gate workflow edit in a PR
 changes what judges that PR. diff-budget and live-reconciliation read
 everything they need from the GitHub API (additions, body, review threads)
 and need no PR tree at all. pr-body-contract additionally fetches
-`pull/<n>/head` as a named ref and asks git (`cat-file -e <ref>:<plan>`)
+`pull/<n>/head` as a named ref and asks git (`ls-tree`, requiring a
+regular-file blob -- a tree or symlink at the plan path is not a plan doc)
 whether the plan doc exists there -- inspection of untrusted content, never
 execution.
 
@@ -119,10 +129,12 @@ execution.
 - **Residual PR-ref surface, named not hidden:** pre-push-audit and the
   maturity sweeps still run PR-ref scripts -- they operate on the PR tree
   by design (diff audits, tooling pytest) and need a different treatment;
-  live-reconciliation's `pull_request_review*` triggers still resolve the
-  workflow file PR-side, but every push/edit also produces a trusted
-  `pull_request_target` run from main. Consistent with the #1944 threat
-  model: friction and a logged decision for honest-but-hasty authors, not
+  review events resolve workflow files PR-side, so the required
+  `live-reconciliation` context is fed only by trusted target runs, and
+  the default-branch review-retrigger follow-up re-runs the latest target
+  run on every review event (keeping the required context fresh without
+  ever trusting PR-side code). Consistent with the #1944 threat model:
+  friction and a logged decision for honest-but-hasty authors, not
   adversary-proofing.
 - Check names, triggers' type lists, and script invocations are otherwise
   unchanged -- this slice moves WHERE gate code comes from, not what it does.
@@ -147,7 +159,7 @@ Commands run from the repo root:
   passed; the three converted gates report as allowed guard-shaped jobs.
 - `bash scripts/local_pr_review.sh --current-pr-body-file <pr-body.md>` --
   all checks PASS.
-- `python scripts/check_diff_budget.py --additions 504 --body-file
+- `python scripts/check_diff_budget.py --additions 589 --body-file
   <pr-body.md>` -- within the 400 budget.
 - Post-merge, first PR: confirm the three checks report from
   `pull_request_target` runs (workflow run event visible in the check-run
@@ -157,11 +169,11 @@ Commands run from the repo root:
 
 | File | LOC (added) |
 |---|---:|
-| workflows (3) | 83 |
-| `scripts/audit_pr_body.py` | 67 |
+| workflows (4) | 129 |
+| `scripts/audit_pr_body.py` | 74 |
 | `scripts/audit_workflow_security_posture.py` | 13 |
-| `tests/test_audit_pr_body.py` | 93 |
+| `tests/test_audit_pr_body.py` | 110 |
 | `tests/test_audit_workflow_security_posture.py` | 68 |
-| `docs/SECURITY_GUARDRAILS.md` | 13 |
-| `plans/PR-Trusted-Base-Gate-Execution.md` | 167 |
-| **Total** | **504** |
+| `docs/SECURITY_GUARDRAILS.md` | 16 |
+| `plans/PR-Trusted-Base-Gate-Execution.md` | 179 |
+| **Total** | **589** |

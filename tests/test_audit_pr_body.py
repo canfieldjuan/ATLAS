@@ -324,3 +324,19 @@ def test_plan_path_that_is_a_tree_at_ref_is_not_a_plan_doc(tmp_path: Path) -> No
     assert exists("plans/PR-Example.md") is False
     failures = audit_pr_body(_valid_body(), plan_exists=exists)
     assert any("does not exist" in failure for failure in failures)
+
+
+def test_plan_path_that_is_a_symlink_at_ref_is_not_a_plan_doc(tmp_path: Path) -> None:
+    """cat-file -t reports symlinks as blobs (mode 120000, possibly
+    dangling); the working-tree is_file() rejects dangling symlinks, so
+    the ref checker requires a regular-file mode."""
+    import os
+
+    repo = tmp_path / "repo"
+    (repo / "plans").mkdir(parents=True)
+    os.symlink("nowhere-real.md", repo / "plans" / "PR-Example.md")
+    _git(repo, "init", "-q")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "seed")
+    exists = audit_pr_body_module.plan_exists_at_ref("HEAD", repo_root=repo)
+    assert exists("plans/PR-Example.md") is False

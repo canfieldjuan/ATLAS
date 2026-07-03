@@ -1,0 +1,46 @@
+name: AI Reconciliation (review retrigger)
+
+# Trusted follow-up for review events (#1949 review round 2). Review-event
+# workflow runs resolve their workflow file PR-side, so they cannot be
+# trusted to refresh the required `live-reconciliation` context -- but a
+# `workflow_run` workflow always executes from the DEFAULT branch. When the
+# AI Reconciliation workflow completes for a review event (the advisory
+# job), this follow-up re-runs the latest `pull_request_target` run for the
+# same head SHA, so the required context is re-evaluated by trusted base
+# code whenever a bot comment lands after the last push/body edit.
+#
+# Loop-safe: the rerun completes with event == pull_request_target, which
+# this job's `if` ignores. No checkout and no repo scripts: the inline
+# steps below are the default-branch version by construction.
+
+on:
+  workflow_run:
+    workflows: ["AI Reconciliation (live)"]
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  retrigger-required-context:
+    if: >-
+      github.event.workflow_run.event == 'pull_request_review' ||
+      github.event.workflow_run.event == 'pull_request_review_comment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Rerun latest trusted target run for this head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          run_id=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ai_reconciliation_live.yml/runs?event=pull_request_target&head_sha=${HEAD_SHA}&per_page=1" \
+            --jq '.workflow_runs[0].id // empty')
+          if [ -z "${run_id}" ]; then
+            echo "no pull_request_target run for ${HEAD_SHA}; nothing to refresh"
+            exit 0
+          fi
+          echo "re-running trusted run ${run_id} for ${HEAD_SHA}"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/rerun"
