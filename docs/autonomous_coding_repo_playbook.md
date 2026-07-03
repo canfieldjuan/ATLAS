@@ -129,8 +129,8 @@ Long-running agents need more structure than normal interactive PR work:
 
 - one worktree per active slice;
 - one watcher config per owned PR;
-- `SESSION_STATE.local.md` updated after open, push, review fix, merge, and
-  teardown;
+- one session-scoped state file updated after open, push, review fix, merge,
+  and teardown;
 - no active in-chat sleep loop for CI;
 - no merge from a push/review attention wake;
 - scheduled green confirmation before a standing-authorized merge;

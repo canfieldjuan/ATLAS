@@ -89,8 +89,11 @@ dedicated mechanical check, run locally *and* in CI.
 
 **(a) Session/PR ownership drift** — a session touching a PR that isn't its.
 `scripts/check_session_pr_ownership.py` reads a mandatory, git-ignored
-`SESSION_STATE.local.md` (owned PR, branch, head SHA, "may touch", "must not
-touch") and **fails** if the target PR isn't owned or the branch/SHA don't match.
+session-scoped state file (preferred shape
+`SESSION_STATE.<session-id>.local.md`, with `SESSION_STATE.local.md` allowed
+only for a one-session worktree) containing owned PR, branch, head SHA, "may
+touch", and "must not touch". It **fails** if the target PR isn't owned or the
+branch/SHA don't match.
 A PR in the same lane is *not* automatically owned; an abandoned-looking PR is
 *not* owned. When in doubt, stop and ask the operator.
 
@@ -135,9 +138,10 @@ The countermeasures are entirely about **context hygiene**:
 - **Read narrow, test scoped.** During iteration: read targeted line ranges of big
   files (not the whole 1.4k-line file), run the single relevant test file (not the
   suite). Run the full gauntlet **once**, right before pushing.
-- **Externalize state to disk.** `SESSION_STATE.local.md` is the session's memory
-  that *survives* a compaction — current lane, owned PR, last safe action. After
-  any compaction/restart the session re-reads it instead of guessing.
+- **Externalize state to disk.** The session-scoped state file is the session's
+  memory that *survives* a compaction — current lane, owned PR, last safe
+  action. After any compaction/restart the session re-reads it instead of
+  guessing.
 - **Two canned prompts** in `docs/SESSION_BOOTSTRAP.md`: a **bootstrap** to seed a
   fresh session fast, and a **drift redirect** to paste the moment a session shows
   post-compaction drift signals ("Stop. You likely just compacted. Do not close,
@@ -273,10 +277,11 @@ advisory inputs to a judgment session, never auto-applied.** A naive "auto-addre
 all review comments" loop is strictly dangerous.
 
 **(c) Ownership rests partly on honor-system, git-ignored state.** Two checks guard
-lane ownership: `check_session_pr_ownership.py` reads `SESSION_STATE.local.md` —
-which is **git-ignored**, so the artifact that declares "who owns this PR" is the
-one artifact no reviewer or CI run can see; and `audit_pr_session_drift.py` reads
-the **public** `Ownership lane:` from plan docs. The hole: a PR with **no plan doc**
+lane ownership: `check_session_pr_ownership.py` reads the session-scoped state
+file, which is **git-ignored**, so the artifact that declares "who owns this PR"
+is the one artifact no reviewer or CI run can see; and
+`audit_pr_session_drift.py` reads the **public** `Ownership lane:` from plan
+docs. The hole: a PR with **no plan doc**
 declares no lane and is therefore invisible to the public collision audit entirely.
 Plan-less PRs are exempt from the drift detection that makes parallel lanes safe.
 Fix (in the system's own idiom — *surface, never silently skip*, §3g): treat

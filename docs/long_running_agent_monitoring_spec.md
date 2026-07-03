@@ -71,7 +71,7 @@ or verdict when present, and whether a later push fixed or waived it.
 Local inputs:
 
 - `plans/PR-<Slice>.md` and the mirrored PR body.
-- `SESSION_STATE.local.md` for lane ownership, watcher hooks, standing
+- the session-scoped state file for lane ownership, watcher hooks, standing
   authorization, last safe action, and fix-mode baton.
 - `~/.local/state/atlas-pr-watchers/<session-id>.json` for scheduled watcher
   state.
@@ -150,7 +150,7 @@ Scope: <one-sentence lane>
 | Stale PR body claims | PR body/live-reconciliation check | Body says AI findings are fixed while current threads remain open. |
 | Unresolved AI threads | Live reconciliation or reviewer checklist | Bot/human thread remains unresolved at merge time. |
 | Branch/head drift | Session ownership guard or watcher head mismatch stop | Remote head changes unexpectedly or branch is behind base. |
-| Scope/lane drift | `SESSION_STATE.local.md` ownership rule or drift audit | Builder touches a PR or lane not assigned to the session. |
+| Scope/lane drift | Session-scoped state-file ownership rule or drift audit | Builder touches a PR or lane not assigned to the session. |
 | Push/review hook confusion | Watcher docs or event-bridge guard | Notification is recorded as a builder wake hook, or event wake is treated as merge authorization. |
 | Active polling | AGENTS/watcher rule | Builder waits in-chat for CI instead of relying on hooks. |
 

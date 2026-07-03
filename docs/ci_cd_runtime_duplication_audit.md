@@ -45,7 +45,7 @@ branch-protection required contexts.
 |---|---|
 | `pr-body-contract` | Keeps PR bodies tied to the plan contract, even though it is not in the current branch-protection required-context set. |
 | `pre-push-audit` trusted-base local review | Re-runs the local mechanical bundle from trusted base so a PR cannot weaken its own audit. |
-| `SESSION_STATE.local.md` ownership guard | Prevents long-running sessions from touching another lane's PR before review, push, comment handling, or merge. |
+| Session-scoped state file ownership guard | Prevents long-running sessions from touching another lane's PR before review, push, comment handling, or merge. |
 
 The optimization target is redundant runtime and broad triggering, not removing
 these gates.

@@ -227,10 +227,15 @@ code ship together.
 
 ### 3a.1. Session ownership map
 
-Every builder session must maintain a local `SESSION_STATE.local.md`
-at the repository root, using `docs/SESSION_STATE_TEMPLATE.md` as the
-shape. This file is ignored by git because it is volatile session
-state, but it is mandatory working context.
+Every builder session must maintain its own local session-state file at the
+repository root, using `docs/SESSION_STATE_TEMPLATE.md` as the shape. The
+preferred filename is `SESSION_STATE.<session-id>.local.md` (for example,
+`SESSION_STATE.codex-workflow-1982.local.md`). The legacy
+`SESSION_STATE.local.md` filename is allowed only when exactly one active
+session owns that worktree. These files are ignored by git because they are
+volatile session state, but one per session is mandatory working context. Set
+`ATLAS_SESSION_STATE_FILE` to the session's file path, or pass `--state-file`
+to the ownership guard, before doing PR work.
 
 Update the map:
 
@@ -251,8 +256,8 @@ PR, the builder must verify all of the following:
 1. `gh pr list --state open` has been checked in this resume window.
 2. `git log --oneline -15 origin/main` has been checked for already
    landed work.
-3. The target PR is listed in `SESSION_STATE.local.md` under "Owned
-   Active PR" or "PRs This Session May Touch".
+3. The target PR is listed in this session's state file under "Owned Active
+   PR" or "PRs This Session May Touch".
 4. The local branch and expected head SHA match the target PR when a
    merge or force-push is about to happen.
 
@@ -266,6 +271,9 @@ python scripts/check_session_pr_ownership.py \
   --head-sha <headRefOid>
 ```
 
+The guard defaults to `ATLAS_SESSION_STATE_FILE` when set, then falls back to
+`SESSION_STATE.local.md` for legacy single-session worktrees.
+
 If any check fails, stop and ask the operator. A PR in the same lane is
 not automatically owned. A PR that "looks abandoned" is not owned. A PR
 opened by another session is not owned unless the operator explicitly
@@ -273,7 +281,7 @@ reassigns it and the map is updated first.
 
 Starting a new slice is gated the same way as touching a PR. Before you
 scaffold a plan or pass `--lane` to `new_pr_plan.sh`, confirm that lane
-matches the `current lane` in `SESSION_STATE.local.md`. Opening a new PR in
+matches the `current lane` in this session's state file. Opening a new PR in
 another lane is the most common silent drift: parallel sessions are
 indistinguishable in git, so another lane's slice looks exactly like your
 own. If the slice belongs to a different lane:
@@ -400,19 +408,19 @@ For long-running coding tasks, first record which builder surface owns the PR:
 
 - **Claude Code native mode:** use Claude Code's PR subscription/review
   reactivity plus its 30-minute polling. Record that as the push/review-event
-  hook and timer/polling path in `SESSION_STATE.local.md`. Do not require a
+  hook and timer/polling path in this session's state file. Do not require a
   local systemd `atlas-pr-watch` timer for Claude Code unless the operator
   explicitly asks for the local watcher too.
 - **Codex/local CLI mode:** a desktop notification or `atlas-pr-watch` run does
   not wake an agent by itself. True autonomous resume requires an external wake
   bridge that starts or resumes a Codex run with the watcher state and a prompt
-  to read `SESSION_STATE.local.md`, rerun merge guards, and act only on the
+  to read this session's state file, rerun merge guards, and act only on the
   owned PR. Without that bridge, the local watcher is a read-only state producer
   for the next active agent.
 
 For long-running coding tasks, after each PR open or push:
 
-1. Subscribe the session to its owned PR in `SESSION_STATE.local.md`. Record the
+1. Subscribe the session to its owned PR in this session's state file. Record the
    PR number, branch, head SHA, checks URL, review/reconciliation URL or
    commands, builder surface, wake bridge or native subscription path,
    ready-state handoff command, polling cadence, next wake/poll time, and the
@@ -439,7 +447,7 @@ For long-running coding tasks, after each PR open or push:
    fixed threads, update the PR body/reconciliation record, and leave the wake
    hooks armed for the next push/review/timer event.
 6. If checks are still pending, record the last observed status and next timer
-   wake time in `SESSION_STATE.local.md`; do not ask the operator to babysit
+   wake time in this session's state file; do not ask the operator to babysit
    green and do not burn compute by waiting inside the chat turn.
 7. Push/review-event wakes are attention-only. Even if a push/review-event wake
    observes green checks, record readiness and wait for the scheduled 30-minute
@@ -457,7 +465,7 @@ For long-running coding tasks, after each PR open or push:
    explicitly released by the operator.
 
 The watcher/subscription state is mandatory compaction handoff data. A
-restarted or compacted long-running session reads `SESSION_STATE.local.md`
+restarted or compacted long-running session reads its session-state file
 before doing anything else and resumes from the recorded PR state. Do not start
 a new slice while the owned PR still has unresolved CI, review, reconciliation,
 or merge state.
@@ -799,7 +807,7 @@ A **fix loop** -- iterating on red CI or review comments on an already-open PR
 -- is where sessions burn the most time and tokens: broad exploration, edits to
 files outside the real failure source, and re-orientation after every
 compaction. Before editing in a fix loop, record a **fix baton** in
-`SESSION_STATE.local.md` (the `PR Fix Mode` block) capturing the failure source,
+this session's state file (the `PR Fix Mode` block) capturing the failure source,
 the **allowed-files set**, and a **max-files budget**.
 
 - **Stay inside the allowed set.** The allowed files are the failure source you

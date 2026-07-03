@@ -15,7 +15,7 @@ Important mode split:
 - **Codex/local CLI sessions** need a separate wake bridge for true autonomous
   resume. `atlas-pr-watch` can write watcher JSON/log state, but it cannot wake
   Codex by itself. A bridge must start or resume a Codex run with the watcher
-  state and a prompt to read `SESSION_STATE.local.md`, rerun guards, and act
+  state and a prompt to read this session's state file, rerun guards, and act
   only on the owned PR.
 - **Both modes** keep merge authority with the active builder only. A watcher,
   timer, notification, or bridge can report state; it cannot merge.
@@ -24,7 +24,7 @@ Important mode split:
 
 Long-running sessions now have two durable responsibilities:
 
-1. Keep `SESSION_STATE.local.md` current for the owned lane and PR.
+1. Keep this session's state file current for the owned lane and PR.
 2. Record the actual wake mode after each PR open or push: Claude Code native
    subscription/polling, a Codex wake bridge, or local watcher state-only.
 
@@ -42,14 +42,14 @@ allows.
 | Mode | Source | Builder action | Autonomous today? | Merge allowed? |
 |---|---|---|---|---|
 | Claude Code native | Claude Code PR subscription/review reactivity plus 30-minute polling | Claude Code resumes as the active builder, inspects only the owned PR, fixes actionable feedback, and runs merge guards when scheduled polling reports ready | Yes, when Claude Code subscription is active | Active builder only after explicit operator authorization and fresh guards |
-| Codex wake bridge | External wrapper that starts/resumes Codex with watcher state | Fresh/active Codex reads `SESSION_STATE.local.md`, runs `scripts/report_pr_watcher_state.py`, then fixes, waits, reports ready, or runs guarded merge if authorized | Only when the bridge exists | Active builder only after explicit operator authorization and fresh guards |
+| Codex wake bridge | External wrapper that starts/resumes Codex with watcher state | Fresh/active Codex reads this session's state file, runs `scripts/report_pr_watcher_state.py`, then fixes, waits, reports ready, or runs guarded merge if authorized | Only when the bridge exists | Active builder only after explicit operator authorization and fresh guards |
 | Local watcher state-only | `atlas-pr-watch@<session>.timer` writes JSON/log state every 30 minutes | No agent wakes automatically; the next active agent consumes the state with `scripts/report_pr_watcher_state.py` | No | No |
 | Operator signal | Human says "review is up", "green", or "merge" | Active builder inspects the owned PR and runs the same guards | Manual | Active builder only after explicit operator authorization and fresh guards |
 
 The push/review-event path exists to reduce red-review latency when something
 wakes the builder. It is an attention signal, not a merge signal. If no concrete
 bridge exists for Codex/local sessions, record `Wake bridge: unavailable` in
-`SESSION_STATE.local.md`; the scheduled watcher remains only a state recorder
+this session's state file; the scheduled watcher remains only a state recorder
 until an active agent consumes its output.
 
 The scheduled poll/wake is the canonical readiness signal. A push/review-event
@@ -84,7 +84,7 @@ Claude Code native subscription satisfies that path for Claude Code sessions.
 For Codex/local sessions, the hook is outside this repo unless the operator has
 provided an integration. Use this concrete contract:
 
-1. Record the hook in `SESSION_STATE.local.md` as
+1. Record the hook in this session's state file as
    `Push/review-event hook: <name and trigger>`.
 2. Configure the external bridge to start or resume the Codex/local builder
    session on new pushes, review threads, review events, and reconciliation
@@ -136,7 +136,7 @@ Wake-source rules:
 - `--source scheduled` may classify `ready_for_human_merge` as
   `scheduled-ready`, which is only permission to run the AGENTS merge guards.
   The resumed builder still needs explicit standing merge authorization in
-  `SESSION_STATE.local.md` before merging.
+  this session's state file before merging.
 - Pending states write a handoff but do not run the optional command by default.
   Do not replace the watcher timer with an in-chat polling loop.
 
@@ -192,6 +192,8 @@ Pick a stable session id:
 
 ```bash
 SESSION_ID="<lane-slug>-<pr-number>"
+SESSION_STATE_FILE="<absolute repo or worktree path>/SESSION_STATE.${SESSION_ID}.local.md"
+export ATLAS_SESSION_STATE_FILE="${SESSION_STATE_FILE}"
 ```
 
 Create the watcher config after the PR is opened or after an existing owned PR
@@ -205,7 +207,7 @@ LABEL="<human label>"
 REPO_DIR="<absolute repo or worktree path>"
 PR="<pr number>"
 REPO="canfieldjuan/ATLAS"
-SESSION_STATE="<absolute path to SESSION_STATE.local.md>"
+SESSION_STATE="<absolute path to SESSION_STATE.<session-id>.local.md>"
 HEAD_SHA="<current PR head SHA>"
 POLL_MINUTES="30"
 AUTO_MERGE="0"
@@ -302,17 +304,17 @@ Before doing anything, read:
 3. docs/SESSION_BOOTSTRAP.md
 4. docs/ci_cd_autonomous_coding_map.md
 5. docs/long_running_session_watcher_handoff.md
-6. SESSION_STATE.local.md if it exists; otherwise create it from docs/SESSION_STATE_TEMPLATE.md
+6. The session state file named by ATLAS_SESSION_STATE_FILE if it exists; otherwise create it from docs/SESSION_STATE_TEMPLATE.md
 
 New rules to follow:
-- This is a long-running session only for the lane/operator assignment named in SESSION_STATE.local.md.
-- A PR is yours only if SESSION_STATE.local.md lists it under Owned Active PR or PRs This Session May Touch.
-- Do not inspect, push to, close, merge, or modify any other open PR unless the operator explicitly reassigns it and you update SESSION_STATE.local.md first.
-- Record your builder surface in SESSION_STATE.local.md: Claude Code native, Codex/local CLI, or other.
+- This is a long-running session only for the lane/operator assignment named in this session's state file.
+- A PR is yours only if this session's state file lists it under Owned Active PR or PRs This Session May Touch.
+- Do not inspect, push to, close, merge, or modify any other open PR unless the operator explicitly reassigns it and you update this session's state file first.
+- Record your builder surface in this session's state file: Claude Code native, Codex/local CLI, or other.
 - For Claude Code native sessions, subscribe to the owned PR and use Claude Code's native review reactivity plus 30-minute polling. Do not install the local systemd watcher unless the operator explicitly asks for local watcher JSON/log state too.
 - For Codex/local CLI sessions, install or refresh a per-session watcher config at ~/.config/atlas-pr-watchers/<session-id>.env only as state production. True autonomous resume requires a separate external wake bridge that starts/resumes Codex with the watcher state.
-- Fill the SESSION_STATE.local.md hook fields: `Push/review-event hook`, `Timer/poll hook`, `Wake bridge`, `Next timer wake`, `Last watcher state`, and `Standing merge authorization`.
-- Record the push/review-event hook in SESSION_STATE.local.md only when it wakes the builder session. If no concrete external bridge wakes a Codex/local builder, write `Wake bridge: unavailable`; the scheduled watcher is state-only and the session does not have autonomous review-event wake-up coverage.
+- Fill the session state hook fields: `Push/review-event hook`, `Timer/poll hook`, `Wake bridge`, `Next timer wake`, `Last watcher state`, and `Standing merge authorization`.
+- Record the push/review-event hook in this session's state file only when it wakes the builder session. If no concrete external bridge wakes a Codex/local builder, write `Wake bridge: unavailable`; the scheduled watcher is state-only and the session does not have autonomous review-event wake-up coverage.
 - Do not use the scheduled atlas-pr-watch command as the push/review-event bridge unless it has a source-aware event mode that cannot produce merge permission.
 - Use `python scripts/codex_wake_bridge.py "${SESSION_ID}" --source event`
   for push/review-event bridges and
@@ -322,7 +324,7 @@ New rules to follow:
 - A local watcher must poll every 30 minutes and must use AUTO_MERGE="0".
 - Codex/local sessions must run `scripts/report_pr_watcher_state.py` on resume before starting the next slice in a long-running arc.
 - No auto-merge in the watcher. When the watcher reports ready_for_human_merge, the active builder reports readiness and waits for the operator unless this specific arc has explicit active-builder merge authorization.
-- With standing merge authorization recorded in SESSION_STATE.local.md, the active builder merges only after a scheduled Claude poll or Codex/local wake bridge reports ready_for_human_merge and the current AGENTS pre-merge guards pass, including review-thread status and merge-conflict/mergeability state.
+- With standing merge authorization recorded in this session's state file, the active builder merges only after a scheduled Claude poll or Codex/local wake bridge reports ready_for_human_merge and the current AGENTS pre-merge guards pass, including review-thread status and merge-conflict/mergeability state.
 - Do not merge from a push/review-event wake. If that wake observes green checks, record readiness and wait for the scheduled green-confirmation wake.
 - Do not actively poll GitHub for green CI between watcher wake-ups.
 - Review/comment events are fast attention only when the operator, Claude Code
@@ -331,13 +333,13 @@ New rules to follow:
   record `review_changed`.
 - If checks are red or review comments are actionable, fix only the owned PR, fix the upstream/root cause within the slice, push with scripts/push_pr.sh, resolve fixed review threads, update the PR body/reconciliation record when needed, and refresh the watcher head SHA.
 - If the watcher reports `attention` with `head_mismatch: true`, stop, fetch the remote head, inspect the delta, and do not force-push over another actor's commit.
-- If checks are pending, update SESSION_STATE.local.md with the current pending list and next poll time.
+- If checks are pending, update this session's state file with the current pending list and next poll time.
 - Do not start the next slice while the owned PR has unresolved CI, review, AI reconciliation, or merge state.
 
 When you resume:
 1. Run gh pr list --state open.
 2. Run git log --oneline -15 origin/main.
-3. Verify the target PR number, branch, and head SHA match SESSION_STATE.local.md.
+3. Verify the target PR number, branch, and head SHA match this session's state file.
 4. Run scripts/check_session_pr_ownership.py before any PR mutation when PR metadata is known.
 5. In Codex/local watcher mode, check the watcher status JSON and journal before deciding whether to fix, wait, or report readiness.
 
@@ -350,7 +352,7 @@ LABEL="<human label>"
 REPO_DIR="<absolute repo or worktree path>"
 PR="<pr number>"
 REPO="canfieldjuan/ATLAS"
-SESSION_STATE="<absolute path to SESSION_STATE.local.md>"
+SESSION_STATE="<absolute path to SESSION_STATE.<session-id>.local.md>"
 HEAD_SHA="<current PR head SHA>"
 POLL_MINUTES="30"
 AUTO_MERGE="0"

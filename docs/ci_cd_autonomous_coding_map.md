@@ -44,7 +44,7 @@ issue / operator request
 
 The important property is that model memory is not trusted. The durable state
 lives in the repo, PR body, CI checks, review threads, and
-`SESSION_STATE.local.md`.
+the session-scoped state file.
 
 ## Local Gates
 
