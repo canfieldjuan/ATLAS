@@ -6,6 +6,8 @@ on:
       - "atlas_reddit/**"
       - "tests/test_atlas_reddit_*.py"
       - "tests/atlas_reddit_fixtures.py"
+      - "scripts/evaluate_atlas_reddit_fit.py"
+      - "tests/fixtures/atlas_reddit_fit_eval/**"
       - ".github/workflows/atlas_reddit_checks.yml"
 
 permissions:

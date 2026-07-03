@@ -381,12 +381,51 @@ but silently ignoring them recreates the diff-only review gap.
 GitHub Actions still runs the same wrapper after the PR opens. Treat CI
 as the final enforcement layer, not the first reviewer.
 
-After opening or updating a PR, the builder does **not** wait for CI,
-automated review, or human review comments. Report the PR URL, the
-local verification already run, and any immediately visible PR status,
-then stop. The operator will tell the builder when checks are green or
-when review comments are ready to inspect. Only resume PR inspection,
-comment handling, or merge decisions after that operator signal.
+For normal interactive PR work, after opening or updating a PR, the builder
+does **not** wait for CI, automated review, or human review comments. Report
+the PR URL, the local verification already run, and any immediately visible PR
+status, then stop. The operator will tell the builder when checks are green or
+when review comments are ready to inspect. Only resume PR inspection, comment
+handling, or merge decisions after that operator signal.
+
+### 3c.1. Long-running coding task PR watcher
+
+The stop-after-open rule above applies to ordinary interactive slices. A
+**long-running coding task** is different: if the operator explicitly assigns a
+long-running/autonomous arc (for example a Fable-style builder session, a
+multi-slice feature arc, or "continue through the approved slices"), the builder
+must keep the PR moving instead of halting until the operator notices CI.
+
+For long-running coding tasks, after each PR open or push:
+
+1. Subscribe the session to its owned PR in `SESSION_STATE.local.md`. Record the
+   PR number, branch, head SHA, checks URL, review/reconciliation URL or
+   commands, next poll time, and the exact action to take when checks turn
+   green or comments appear.
+2. Install or run a lane-local watcher/poll loop that checks the owned PR every
+   **30 minutes**. It may use GitHub webhooks when available, but it must also
+   have a polling fallback; do not depend on an ephemeral chat turn staying
+   alive.
+3. On each wake, refresh the PR head, CI/check status, review-thread status,
+   live reconciliation, and merge-conflict state before deciding anything.
+4. If checks are red or review comments are actionable, summarize the current
+   blocker, fix the upstream/root cause inside the current slice, push, resolve
+   fixed threads, update the PR body/reconciliation record, and reset the
+   watcher.
+5. If checks are still pending, record the last observed status and next poll
+   time in `SESSION_STATE.local.md`; do not ask the operator to babysit green.
+6. If all required checks are green and all review/reconciliation gates are
+   clean, follow the merge rules for the current arc. If the operator has not
+   authorized autonomous merge for this arc, report readiness and wait.
+7. After merge, tear down only the owned worktree/branch, archive the plan as
+   required, sync from `origin/main`, and continue to the next approved slice
+   if the arc says to continue.
+
+The watcher state is mandatory compaction handoff data. A restarted or compacted
+long-running session reads `SESSION_STATE.local.md` before doing anything else
+and resumes the watcher from the recorded PR state. Do not start a new slice
+while the owned PR watcher still has unresolved CI, review, reconciliation, or
+merge state.
 
 ### 3d. Thin-slice and hardening triage
 

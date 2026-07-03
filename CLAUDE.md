@@ -1115,6 +1115,13 @@ PR independently). The full contract lives in `AGENTS.md`; the highlights:
 - **Open ready for review** by default. Do not open draft PRs unless the
   operator explicitly asks for a draft; automated review tools do not review
   draft PRs.
+- **Long-running coding tasks keep their own PR watcher.** Ordinary
+  interactive slices stop after opening/updating a PR and wait for the
+  operator. If the operator explicitly assigns a long-running/autonomous arc,
+  the builder records the owned PR watcher in `SESSION_STATE.local.md`, polls
+  GitHub every 30 minutes for checks/reviews/reconciliation, resumes that
+  watcher after compaction, and continues the approved slice arc instead of
+  halting until the operator notices green. See `AGENTS.md` §3c.1.
 - **Reviewer verdicts:** `BLOCKER` / `MAJOR` / `NIT` / `LGTM`. Reviewer
   reproduces the builder's verification commands; doesn't trust claims.
 - **No "while I was here" cleanups.** Plan and implementation ship together;
@@ -1389,7 +1396,12 @@ When compacting this conversation, preserve verbatim (do not summarize away):
 - The full **PR Fix Mode** baton when a fix loop is active: allowed-files set +
   max-files budget, current failing check/comment, last useful log finding, next
   exact action, and do-not-redo notes.
+- For an explicitly assigned long-running coding task, the full **PR watcher**
+  baton: owned PR number, branch, latest head SHA, last observed check/review
+  state, next 30-minute poll time, and whether autonomous merge/next-slice
+  continuation is authorized.
 
 These are the fields a post-compaction resume needs to continue a fix loop
 without re-exploring or touching files outside the declared scope (see
-`AGENTS.md` §3l). When in doubt, keep the baton and drop narrative.
+`AGENTS.md` §3l) or to resume a long-running PR watcher (see `AGENTS.md`
+§3c.1). When in doubt, keep the baton and drop narrative.
