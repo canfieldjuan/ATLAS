@@ -270,10 +270,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
-| `plans/INDEX.md` | 3 |
+| `plans/INDEX.md` | 1 |
 | `plans/PR-Negatives-Presence-Gate.md` | 279 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
 | `scripts/maturity_sweep.py` | 105 |
 | `tests/maturity_sweep/baseline_scripts.json` | 17 |
 | `tests/test_maturity_sweep.py` | 679 |
-| **Total** | **1089** |
+| **Total** | **1087** |
