@@ -60,6 +60,7 @@ Slice phase: Workflow/process
 - `plans/PR-Negatives-Presence-Gate.md`
 - `plans/archive/PR-Reddit-Listening-Hardening.md`
 - `scripts/maturity_sweep.py`
+- `tests/maturity_sweep/baseline_scripts.json`
 - `tests/test_maturity_sweep.py`
 
 ## Mechanism
@@ -201,6 +202,37 @@ Review-fix note (Codex wave 6; verified real, fixed at root):
   measured: the repo's only real self.assertRaises user inherits
   unittest.TestCase directly -- zero repricing. Probed both sides.
 
+Review-fix notes (Codex wave 7; 2 fixed at root, 1 refuted with a
+disproof):
+
+- **FIXED -- `import pytest as pt` assertions misreported as absent**:
+  the module-receiver branch only accepted the literal name pytest, so
+  a real `pt.raises(...)` failed an honestly-tested sensitive module.
+  The check now tracks `import pytest as ...` aliases the same way the
+  from-import aliases are tracked. This retires the wave-2 named
+  trade-off outright. Probed (aliased import satisfies the gate).
+- **FIXED -- unparseable matched test files failed open**: the
+  SyntaxError fallback reused the old text regex, so a comment
+  mentioning pytest.raises in a broken file suppressed the signal. A
+  source that does not parse has no runnable tests; it now fails
+  closed. Probed (syntax-error file with a comment mention fails the
+  gate).
+- **REFUTED -- async-only test files are NOT counted as testless**: the
+  `def\s+(test_\w+)` counter is unanchored, so `async def test_x`
+  already matches (verified by direct execution). A regression-locking
+  probe now pins async-only suites as counted, non-stub, and
+  raises-satisfying.
+
+The fail-closed handler tripped the sweep's own SWALLOWED_EXCEPT
+heuristic on the scripts lane (the gate caught itself). The single
+falsy return IS the deliberate fail-closed policy, not silent
+degradation, so it was accepted through the documented
+`--update-baseline` path rather than restyled to dodge the detector --
+the cosmetic-evasion move this plan itself rejects. The refreshed
+`tests/maturity_sweep/baseline_scripts.json` also reconciles two
+pre-existing drift entries (a deleted script removed, an existing
+sub-min-score script added).
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -213,7 +245,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_maturity_sweep.py -q` -- 34 passed
+- `python -m pytest tests/test_maturity_sweep.py -q` -- 37 passed
   (23 pre-existing + both-sides probes for every review-fix wave:
   no-raises sensitive module fails with the
   `sensitive-path NO_RAISES_TESTS` reason and passes off-glob;
@@ -239,8 +271,9 @@ Parked hardening: none.
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Negatives-Presence-Gate.md` | 246 |
+| `plans/PR-Negatives-Presence-Gate.md` | 279 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 97 |
-| `tests/test_maturity_sweep.py` | 561 |
-| **Total** | **913** |
+| `scripts/maturity_sweep.py` | 105 |
+| `tests/maturity_sweep/baseline_scripts.json` | 17 |
+| `tests/test_maturity_sweep.py` | 679 |
+| **Total** | **1089** |

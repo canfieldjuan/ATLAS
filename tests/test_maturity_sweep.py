@@ -1055,3 +1055,121 @@ def test_assert_raises_outside_testcase_does_not_satisfy_the_gate(tmp_path: Path
         "--min-score", "99",
         "--sensitive-glob", "**/purge_guard.py",
     ]) == 0
+
+def test_aliased_pytest_import_raises_satisfies_the_gate(tmp_path: Path) -> None:
+    """Codex wave-7: `import pytest as pt` + `with pt.raises(...)` is a
+    real assertion and must not be misreported as absent (which would
+    fail an honestly-tested sensitive module)."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest as pt\n"
+        "import purge_guard\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_rejects():\n"
+        "    with pt.raises(ValueError):\n"
+        "        purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+
+def test_unparseable_test_file_fails_closed(tmp_path: Path) -> None:
+    """Codex wave-7: a matched test file with a syntax error has no
+    runnable tests; a comment mentioning pytest.raises inside it must
+    not suppress the blocking signal (the old text-regex fallback
+    failed open)."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "# with pytest.raises(ValueError): mentioned in a comment only\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three(:\n    assert True\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+
+def test_async_only_test_file_is_not_testless(tmp_path: Path) -> None:
+    """Codex wave-7 refutation lock: the test counter is unanchored, so
+    `async def test_*` already counts -- an async-only suite must not be
+    treated as a stub file, and its raises assertion satisfies the
+    gate."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest\n"
+        "import purge_guard\n\n"
+        "async def test_one():\n    assert True\n\n"
+        "async def test_two():\n    assert True\n\n"
+        "async def test_rejects():\n"
+        "    with pytest.raises(ValueError):\n"
+        "        purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0

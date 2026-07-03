@@ -510,16 +510,20 @@ def _has_raises_assertion(source):
     a pytest.raises / raises / assertRaises* call parsed from the AST.
     A text regex would be suppressed by a comment or string that merely
     mentions pytest.raises, which matters now that NO_RAISES_TESTS is a
-    blocking zero-tolerance code. Unparseable sources fall back to the
-    text signal rather than claiming certainty either way."""
+    blocking zero-tolerance code. An unparseable source has no runnable
+    tests at all, so it fails closed rather than trusting text mentions."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
-        return bool(re.search(r"pytest\.raises|assertRaises|with raises", source))
+        return False
     # Bare raises(...) only counts when the name is actually bound by
     # `from pytest import raises` (or an alias of it) -- a local helper
-    # or fixture named raises must not satisfy a blocking gate.
+    # or fixture named raises must not satisfy a blocking gate. The
+    # module receiver form tracks `import pytest as ...` aliases the
+    # same way, so a real `pt.raises(...)` assertion is not misreported
+    # as absent.
     pytest_raises_names = set()
+    pytest_module_names = {"pytest"}
     with_item_calls = set()
     testcase_calls = set()
     for node in ast.walk(tree):
@@ -527,6 +531,10 @@ def _has_raises_assertion(source):
             for alias in node.names:
                 if alias.name == "raises":
                     pytest_raises_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "pytest":
+                    pytest_module_names.add(alias.asname or alias.name)
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
                 with_item_calls.add(id(item.context_expr))
@@ -566,7 +574,7 @@ def _has_raises_assertion(source):
                     3 if func.attr.startswith("assertRaisesRegex") else 2)
             elif (func.attr == "raises"
                     and isinstance(func.value, ast.Name)
-                    and func.value.id == "pytest"):
+                    and func.value.id in pytest_module_names):
                 callable_form_args = 2
         elif isinstance(func, ast.Name) and func.id in pytest_raises_names:
             callable_form_args = 2

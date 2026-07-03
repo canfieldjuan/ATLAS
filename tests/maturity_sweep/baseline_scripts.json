@@ -249,12 +249,6 @@
     },
     "score": 8
   },
-  "scripts/audit_ui_test_enrollment.py": {
-    "counts": {
-      "UNGUARDED_INDEX": 1
-    },
-    "score": 2
-  },
   "scripts/audit_witness_field_propagation.py": {
     "counts": {
       "NO_TEST_FILE": 1,
@@ -673,6 +667,13 @@
       "WEAK_CONTRACT": 1
     },
     "score": 1
+  },
+  "scripts/check_diff_budget.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 3,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
   },
   "scripts/check_extracted_campaign_reasoning_postgres.py": {
     "counts": {
@@ -1156,11 +1157,11 @@
   "scripts/maturity_sweep.py": {
     "counts": {
       "HEURISTIC_COMMENT": 5,
-      "SWALLOWED_EXCEPT": 3,
+      "SWALLOWED_EXCEPT": 4,
       "UNGUARDED_INDEX": 14,
       "WEAK_CONTRACT": 28
     },
-    "score": 28
+    "score": 33
   },
   "scripts/maturity_sweep_file_lane.py": {
     "counts": {
