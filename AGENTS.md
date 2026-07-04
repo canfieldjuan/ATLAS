@@ -873,6 +873,18 @@ go in the §2a template.
 
 ### 4a. Independent verification
 
+**Reconstruct the PR independently from the diff -- never review it against its
+description** (`docs/PR_RECONSTRUCTION_PROTOCOL.md`, mandatory for every review):
+(1) read the diff alone and state what it actually does, change by change, in
+your own words -- the code is ground truth, the description/commit/title are
+unverified claims; (2) from the problem alone, derive what a correct fix would
+need to touch and change, without letting the diff shape the answer; (3) report
+every gap between what the diff does, what a correct fix should do, and what the
+description claims (diff != description; diff != correct fix; diff changes
+unmentioned things); (4) cite `file:line` for every claim, sort each into
+confirmed / contradicted / could-not-determine (never confirmed without a
+citation), and lead with the gaps.
+
 Run a **challenger pass first, before reading the builder's summary** -- the
 builder's confident narrative anchors you into believing the story. In order:
 read the Review Contract, predict which files *should* change and which tests
