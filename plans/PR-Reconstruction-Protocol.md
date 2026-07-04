@@ -5,7 +5,7 @@
 Reviews that trust the PR description reproduce the author's framing and miss
 where the diff diverges from a correct fix. This codifies the independent
 reconstruction method as the mandatory review protocol so it applies to every
-reviewer -- human Claude sessions and the Codex/reconciliation gate -- and
+reviewer -- the human/Claude builder and reviewer sessions (Codex/bots are advisory inputs, not bound; the reconciliation gate is a mechanical bot-comparison) -- and
 survives compactions and new sessions. Exemplar: on #1999 a review posted a
 BLOCKER + "six blocking findings" read off the description and stale bot
 thread-titles that the head code had already resolved; reconstructing from the
@@ -74,7 +74,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | 28 |
-| `docs/PR_RECONSTRUCTION_PROTOCOL.md` | 49 |
+| `AGENTS.md` | 30 |
+| `docs/PR_RECONSTRUCTION_PROTOCOL.md` | 51 |
 | `plans/PR-Reconstruction-Protocol.md` | 80 |
-| **Total** | **157** |
+| **Total** | **161** |

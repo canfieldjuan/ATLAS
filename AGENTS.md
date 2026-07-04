@@ -881,16 +881,18 @@ go in the §2a template.
 
 **Reconstruct the PR independently from the diff -- never review it against its
 description** (`docs/PR_RECONSTRUCTION_PROTOCOL.md`, mandatory for every review).
-Build two INDEPENDENT reconstructions, then compare them:
+Build two INDEPENDENT reconstructions, then compare them. They are independent,
+not sequential: derive (2) purely from the problem, never from the diff, so the
+diff cannot anchor it (the challenger pass -- easiest if you derive it before
+opening the diff, but the binding requirement is only that the diff never shapes
+it).
 
 1. **What the diff actually does** -- read the diff alone and state it change by
    change, in your own words. The code is ground truth; the description, commit,
    and title are unverified claims.
 2. **What a correct fix should do** -- from the problem and the Review Contract
-   alone, derive which files *should* change and which tests *should* exist,
-   without letting the diff shape the answer. This is the **challenger pass**:
-   do it before the builder's confident narrative -- and ideally before the
-   diff -- anchors you into believing the story.
+   alone (the challenger pass), derive which files *should* change and which
+   tests *should* exist, never letting the diff shape the answer.
 3. **Compare** those two against what the description claims and report every
    gap: diff != description; diff != correct fix (wrong / incomplete / symptom
    patch); diff changes unmentioned things.

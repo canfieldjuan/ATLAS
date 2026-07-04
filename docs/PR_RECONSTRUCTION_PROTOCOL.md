@@ -1,10 +1,12 @@
 # PR Reconstruction Protocol
 
 Every PR review **reconstructs the PR independently from the diff**. Never
-review a PR against its description. This binds every reviewer that reads this
-contract -- human Claude sessions and the Codex/reconciliation review gate. (No
-automated CI review action exists in the repo today; when one is added, wire it
-to this protocol then.)
+review a PR against its description. This binds every reviewer session that
+reads this contract -- the human/Claude builder and reviewer sessions. External
+review bots (Codex) are advisory inputs, not bound by it; the CI reconciliation
+gate (`ai_reconciliation_live.yml`) is a mechanical bot-finding comparison, not
+a reviewer; and no automated CI review action that would follow this protocol
+exists in the repo today. When one is added, wire it to this protocol then.
 
 ## Why
 
