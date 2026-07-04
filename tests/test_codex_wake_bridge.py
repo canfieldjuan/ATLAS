@@ -120,8 +120,14 @@ def test_scheduled_ready_writes_guarded_merge_prompt(tmp_path: Path) -> None:
     assert "did not merge anything" in prompt
 
 
-def test_event_ready_is_attention_only_and_forbids_merge(tmp_path: Path) -> None:
+def test_event_ready_without_attention_is_attention_only_and_forbids_merge(tmp_path: Path) -> None:
     config_dir, state_dir, watcher_id = _write_fixture(tmp_path)
+    receiver = tmp_path / "receiver.py"
+    output = tmp_path / "prompt.txt"
+    receiver.write_text(
+        "from pathlib import Path\nimport sys\nPath(sys.argv[1]).write_text(sys.stdin.read())\n",
+        encoding="utf-8",
+    )
 
     code = bridge.main([
         watcher_id,
@@ -131,6 +137,8 @@ def test_event_ready_is_attention_only_and_forbids_merge(tmp_path: Path) -> None
         str(config_dir),
         "--state-dir",
         str(state_dir),
+        "--run-command",
+        f"{sys.executable} {receiver} {output}",
     ])
 
     assert code == 0
@@ -139,7 +147,41 @@ def test_event_ready_is_attention_only_and_forbids_merge(tmp_path: Path) -> None
     assert payload["actionable"] is True
     assert "Push/review-event attention wake" in prompt
     assert "Do not merge from this wake" in prompt
-    assert "wait for the scheduled green-confirmation wake" in prompt
+    assert output.read_text(encoding="utf-8") == prompt
+
+
+def test_event_review_change_is_attention_only_and_forbids_merge(tmp_path: Path) -> None:
+    config_dir, state_dir, watcher_id = _write_fixture(
+        tmp_path,
+        state="review_changed",
+        extra_status={"review_changed": True},
+    )
+    receiver = tmp_path / "receiver.py"
+    output = tmp_path / "prompt.txt"
+    receiver.write_text(
+        "from pathlib import Path\nimport sys\nPath(sys.argv[1]).write_text(sys.stdin.read())\n",
+        encoding="utf-8",
+    )
+
+    code = bridge.main([
+        watcher_id,
+        "--source",
+        "event",
+        "--config-dir",
+        str(config_dir),
+        "--state-dir",
+        str(state_dir),
+        "--run-command",
+        f"{sys.executable} {receiver} {output}",
+    ])
+
+    assert code == 0
+    payload, prompt = _read_handoff(state_dir, watcher_id)
+    assert payload["wake_kind"] == "event-attention"
+    assert payload["actionable"] is True
+    assert "Push/review-event attention wake" in prompt
+    assert "Do not merge from this wake" in prompt
+    assert output.read_text(encoding="utf-8") == prompt
 
 
 def test_failure_flags_override_scheduled_ready(tmp_path: Path) -> None:
@@ -246,7 +288,7 @@ def test_pending_does_not_run_optional_command_by_default(tmp_path: Path) -> Non
     assert not output.exists()
 
 
-def test_pending_event_source_still_wakes_attention_prompt(tmp_path: Path) -> None:
+def test_pending_event_source_is_attention_only_and_forbids_merge(tmp_path: Path) -> None:
     config_dir, state_dir, watcher_id = _write_fixture(tmp_path, state="pending")
     receiver = tmp_path / "receiver.py"
     output = tmp_path / "prompt.txt"
@@ -368,6 +410,25 @@ def test_rejects_watcher_ids_that_escape_watcher_dirs(tmp_path: Path, capsys) ->
 
     code = bridge.main([
         "../slice-123",
+        "--source",
+        "scheduled",
+        "--config-dir",
+        str(config_dir),
+        "--state-dir",
+        str(state_dir),
+    ])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "invalid watcher id" in captured.err
+    assert not list(state_dir.glob("*.wake.json"))
+
+
+def test_rejects_watcher_ids_with_dotdot_without_slash(tmp_path: Path, capsys) -> None:
+    config_dir, state_dir, _watcher_id = _write_fixture(tmp_path)
+
+    code = bridge.main([
+        "slice..123",
         "--source",
         "scheduled",
         "--config-dir",

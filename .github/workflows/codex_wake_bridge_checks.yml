@@ -7,8 +7,12 @@ on:
   pull_request:
     paths:
       - ".github/workflows/codex_wake_bridge_checks.yml"
+      - "scripts/audit_pr_watcher_safety.py"
       - "scripts/codex_wake_bridge.py"
+      - "scripts/install_codex_wake_bridge.py"
+      - "tests/test_audit_pr_watcher_safety.py"
       - "tests/test_codex_wake_bridge.py"
+      - "tests/test_install_codex_wake_bridge.py"
 
 jobs:
   codex-wake-bridge:
@@ -26,4 +30,8 @@ jobs:
       - name: Run wake bridge tests
         run: |
           python -m pip install --quiet pytest pytest-asyncio pyyaml
-          python -m pytest tests/test_codex_wake_bridge.py -q
+          python -m pytest \
+            tests/test_codex_wake_bridge.py \
+            tests/test_install_codex_wake_bridge.py \
+            tests/test_audit_pr_watcher_safety.py \
+            -q

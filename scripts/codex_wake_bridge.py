@@ -92,7 +92,9 @@ def classify_wake(status: dict[str, Any], *, source: str, status_error: str | No
     if state == "closed":
         return "closed"
     if source == "event":
-        return "event-attention"
+        if state in {"attention", "pending", "ready_for_human_merge", "review_changed"} or _truthy(status.get("review_changed")):
+            return "event-attention"
+        return "event-noop"
     if state == "pending" or _truthy(status.get("check_pending")):
         return "pending"
     if source == "scheduled" and state == "ready_for_human_merge":
@@ -191,6 +193,13 @@ def build_prompt(
             "- Inspect the owned PR for new pushes, review comments, review threads, or reconciliation changes.",
             "- If feedback is actionable, fix the root cause in scope, push with scripts/push_pr.sh, resolve fixed threads, and refresh the watcher head SHA.",
             "- If everything is clean, record readiness and wait for the scheduled green-confirmation wake.",
+        ])
+    elif wake_kind == "event-noop":
+        lines.extend([
+            "Push/review-event no-op wake:",
+            "- Do not merge from this wake.",
+            "- The watcher snapshot has no review/failure attention signal.",
+            "- Record the no-op handoff if useful and wait for the scheduled green-confirmation wake.",
         ])
     elif wake_kind == "pending":
         lines.extend([
@@ -297,7 +306,7 @@ def maybe_run_command(
 
 
 def _valid_watcher_id(watcher_id: str) -> bool:
-    return bool(SAFE_WATCHER_ID_RE.fullmatch(watcher_id))
+    return bool(SAFE_WATCHER_ID_RE.fullmatch(watcher_id)) and ".." not in watcher_id and not watcher_id.startswith(".")
 
 
 def _command_cwd(config: dict[str, str]) -> tuple[Path | None, str | None]:
