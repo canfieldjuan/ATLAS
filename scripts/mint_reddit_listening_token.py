@@ -27,10 +27,14 @@ import sys
 
 REDIRECT_URI = "http://localhost:8080"
 SCOPES = ["identity", "history", "read"]
-# Precedence for the app credentials: the listening namespace first, then
-# the existing B2B scraper app so a second app need not be registered.
-CLIENT_ID_KEYS = ("ATLAS_REDDIT_CLIENT_ID", "ATLAS_B2B_SCRAPE_REDDIT_CLIENT_ID")
-CLIENT_SECRET_KEYS = ("ATLAS_REDDIT_CLIENT_SECRET", "ATLAS_B2B_SCRAPE_REDDIT_CLIENT_SECRET")
+# Each source is a COMPLETE (client_id, client_secret) pair, tried in order:
+# the listening namespace first, then the existing B2B scraper app so a
+# second app need not be registered. Resolution NEVER mixes an id from one
+# app with a secret from another.
+CRED_SOURCES = (
+    ("ATLAS_REDDIT_CLIENT_ID", "ATLAS_REDDIT_CLIENT_SECRET"),
+    ("ATLAS_B2B_SCRAPE_REDDIT_CLIENT_ID", "ATLAS_B2B_SCRAPE_REDDIT_CLIENT_SECRET"),
+)
 
 
 class MintConfigError(ValueError):
@@ -54,27 +58,37 @@ def load_env(path: str = ".env") -> dict[str, str]:
     return out
 
 
-def _first_set(env: dict[str, str], keys: tuple[str, ...]) -> str:
-    for key in keys:
-        value = env.get(key, "").strip()
-        if value:
-            return value
-    return ""
+def build_cred_source(env: dict[str, str], environ: dict[str, str]) -> dict[str, str]:
+    """Merge dotenv values with exported shell ATLAS_* vars. The shell wins
+    (an explicit export overrides .env), matching pydantic Settings."""
+    source = dict(env)
+    source.update({k: v for k, v in environ.items() if k.startswith("ATLAS_")})
+    return source
 
 
 def resolve_credentials(
     env: dict[str, str], *, client_id: str = "", client_secret: str = ""
 ) -> tuple[str, str]:
-    """Resolve (client_id, client_secret): explicit args win, else the
-    listening keys, else the B2B scraper keys. Fail closed if unresolved."""
-    resolved_id = client_id.strip() or _first_set(env, CLIENT_ID_KEYS)
-    resolved_secret = client_secret.strip() or _first_set(env, CLIENT_SECRET_KEYS)
-    if not resolved_id or not resolved_secret:
+    """Resolve a COMPLETE (client_id, client_secret) pair. Explicit args win
+    (both required together); otherwise the first source that has BOTH set --
+    never an id from one app paired with a secret from another."""
+    cid, csec = client_id.strip(), client_secret.strip()
+    if cid and csec:
+        return cid, csec
+    if cid or csec:
         raise MintConfigError(
-            "no client_id/secret found; pass --client-id/--client-secret or set "
-            "ATLAS_REDDIT_CLIENT_ID/_SECRET (or the B2B scraper equivalents) in .env"
+            "pass BOTH --client-id and --client-secret together, or neither"
         )
-    return resolved_id, resolved_secret
+    for id_key, secret_key in CRED_SOURCES:
+        pair_id = env.get(id_key, "").strip()
+        pair_secret = env.get(secret_key, "").strip()
+        if pair_id and pair_secret:
+            return pair_id, pair_secret
+    raise MintConfigError(
+        "no complete client_id/secret pair found; set ATLAS_REDDIT_CLIENT_ID/_SECRET "
+        "(or the B2B scraper equivalents) in .env or the shell, or pass "
+        "--client-id/--client-secret together"
+    )
 
 
 def parse_redirect_params(request_line_data: str) -> dict[str, str]:
@@ -108,28 +122,33 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    env = load_env(args.env_file)
+    # Honor both .env and exported shell ATLAS_* vars (shell wins).
+    source = build_cred_source(load_env(args.env_file), dict(os.environ))
     try:
         client_id, client_secret = resolve_credentials(
-            env, client_id=args.client_id, client_secret=args.client_secret
+            source, client_id=args.client_id, client_secret=args.client_secret
         )
     except MintConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    if not args.username:
-        print(
-            "error: pass --username YOUR_REDDIT_USERNAME (needed for the User-Agent)",
-            file=sys.stderr,
-        )
+
+    # Reuse the production username validator (rejects trailing newlines and
+    # other invalid User-Agent shapes) instead of trusting --username raw.
+    from atlas_reddit.reddit_client import RedditAuthError, build_user_agent
+
+    try:
+        user_agent = build_user_agent(args.username)
+    except RedditAuthError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    import praw  # lazy: only the live mint needs it, keeps the module import-light
+    import praw  # lazy: only the live mint needs it
 
     reddit = praw.Reddit(
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=REDIRECT_URI,
-        user_agent=f"linux:atlas-reddit-listening:mint (by /u/{args.username})",
+        user_agent=user_agent,
     )
     state = str(random.randint(0, 65000))
     url = reddit.auth.url(duration="permanent", scopes=SCOPES, state=state)
