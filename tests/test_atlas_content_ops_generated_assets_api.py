@@ -179,6 +179,7 @@ class _MemoryLandingPageRepository:
         status: str,
         *,
         scope: TenantScope,
+        expected_status: str | None = None,
     ) -> bool:
         self.status_calls.append({
             "account_id": scope.account_id,
