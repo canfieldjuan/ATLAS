@@ -31,14 +31,16 @@ Slice phase: workflow/process
 ### Review Contract
 
 - Acceptance criteria:
-  - `FINDINGS.md` records every defect with severity, `file:line`, and a
-    reproduction; the CRITICAL findings (C1, C3, F1, F2, F7) were independently
-    re-run by the reviewer against `origin/main`.
+  - `FINDINGS.md` records every defect with severity and `file:line`; CRITICAL/HIGH
+    findings include a reproduction fixture/command. The CRITICAL findings
+    (C1, C3, F1, F2, F7) were independently re-run by the reviewer against `origin/main`.
   - No product code is modified; `_audit_scratch/` stays gitignored and out of the diff.
 - Affected surfaces: documentation only. No runtime, API, auth, billing, delivery,
   webhook, or UI surface is introduced, so no reachability proof applies.
-- Rule mapping: the diff triggers no review-rule classes (no auth/token/permission,
-  no webhooks/jobs, no defect-class review comments) -- it is a read-only audit deliverable.
+- Rule mapping: R14 (verify against the codebase, not the PR story) is universal and
+  is satisfied -- the reviewer independently re-ran the CRITICALs against `origin/main`.
+  No other rule classes (auth/token/permission, webhooks/jobs, defect-class comments)
+  are triggered by this doc-only diff.
 
 ## Mechanism
 
@@ -73,6 +75,6 @@ computed by hand. Reviewer independently reproduced the CRITICALs.
 
 | File | LOC |
 |---|---:|
-| `docs/audits/resolution-audit-csv/FINDINGS.md` | 196 |
-| `plans/PR-Resolution-Audit-S2-Parsing-Clustering.md` | 78 |
-| **Total** | **274** |
+| `docs/audits/resolution-audit-csv/FINDINGS.md` | 202 |
+| `plans/PR-Resolution-Audit-S2-Parsing-Clustering.md` | 80 |
+| **Total** | **282** |

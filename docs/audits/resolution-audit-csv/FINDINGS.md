@@ -119,11 +119,17 @@ The booster only runs inside a single topic bucket with >=2 rows
 the token-set partition already scattered into separate single-row buckets. A
 perfect semantic model cannot fix F1/F3. Repro: `run_embedding.py`.
 
-### F7 -- The deflection wrapper silently discards any per-call embedding_port [verified-by-reviewer]
-`FAQDeflectionReportService.generate(**kwargs)` does `del kwargs` (`faq_deflection_report.py:1697`)
-and never forwards `embedding_port` to `_faq_markdown.generate` (`:1698+`). Embeddings
-are structurally OFF on the customer-facing path regardless of host config.
-- Repro: `FAQDeflectionReportService(embedding_port=port).generate(...)` == `(port=None)`.
+### F7 -- The deflection wrapper discards any per-call embedding_port [verified-by-reviewer]
+`FAQDeflectionReportService.generate(**kwargs)` does `del kwargs`
+(`faq_deflection_report.py:1697`) and never forwards a per-call `embedding_port`, so
+embeddings cannot be enabled per request. They are on ONLY if the wrapped
+faq-markdown service was constructed with one via the host factory
+(`atlas_brain/_content_ops_services.py:355` `faq_embedding_port_factory` ->
+`TicketFAQMarkdownConfig(embedding_port=...)`, `:293`) -- not "structurally off
+regardless of config". And per F6, even when enabled they do not fix the
+fragmentation failure.
+- Repro: passing `embedding_port` to `generate()` == not passing it (discarded);
+  F6's WITH-embeddings control (`run_embedding.py`) changed nothing.
 
 ---
 
