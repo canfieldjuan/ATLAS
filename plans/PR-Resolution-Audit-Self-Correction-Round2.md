@@ -44,7 +44,7 @@ Slice phase: workflow/process
   - H-x12 states the `12T/365` ratio (year ~12x high, week ~4.3x low) and scopes the defect
     to the raw field, citing the hedged renderers `:4076-4083` / `:305-312`.
   - `docs/audits/resolution-audit-csv/investigations/c1_linkage_closure.py` is committed, ASCII, and re-runs to
-    `merge=0.295 / connect=0.535 / no pure-2 band`; INVESTIGATIONS C1 links it.
+    `merge=0.295 / connect=0.535 / no pure-2 band` (model revision pinned + expected output recorded so it stays reproducible); INVESTIGATIONS C1 links it.
   - The two merged plans are under `plans/archive/`; `plans/INDEX.md` rebuilt.
   - No product code modified.
 - Affected surfaces: documentation only.
@@ -76,9 +76,9 @@ artifact re-run reproduces `0.295 / 0.535 / no pure-2 band`.
 
 | File | LOC |
 |---|---:|
-| `docs/audits/resolution-audit-csv/investigations/c1_linkage_closure.py` | 62 |
+| `docs/audits/resolution-audit-csv/investigations/c1_linkage_closure.py` | 74 |
 | `docs/audits/resolution-audit-csv/INVESTIGATIONS.md` | 12 |
 | `docs/audits/resolution-audit-csv/FINDINGS.md` | 11 |
 | `plans/INDEX.md` | 3 |
 | `plans/PR-Resolution-Audit-Self-Correction-Round2.md` | 84 |
-| **Total** | **172** |
+| **Total** | **184** |

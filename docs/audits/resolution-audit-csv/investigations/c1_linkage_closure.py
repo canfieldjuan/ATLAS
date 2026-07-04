@@ -5,7 +5,16 @@ alone proves only PAIRWISE inseparability; this computes the single-linkage MST 
 bottleneck vs the inter-intent merge distance to settle single-linkage separability.
 
 Run: python docs/audits/resolution-audit-csv/investigations/c1_linkage_closure.py
-Deps: sentence-transformers, scipy (audit venv). Deterministic (fixed phrasings + model).
+Deps: sentence-transformers, scipy (audit venv). Deterministic: fixed phrasings + the model
+revision pinned below.
+
+Sealed expected output (all-MiniLM-L6-v2 @ 1110a243, reproduced by the builder + reviewer):
+    intra sim: min=0.236 max=0.919
+    inter sim: min=0.141 max=0.706
+    separation gap = -0.470
+    merge_distance   (intents join)       = 0.2945
+    connect_distance (both intents whole) = 0.5352
+    No pure-2 band at any single-linkage threshold => IMPOSSIBILITY holds; connect >= merge = True
 """
 import itertools
 import numpy as np
@@ -23,7 +32,10 @@ ORDER = ["cancel my order", "cancel order #12345", "i need to cancel a purchase"
 
 
 def main() -> None:
-    model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+    # revision pinned so the committed proof stays reproducible if the model card changes upstream
+    model = SentenceTransformer(
+        "all-MiniLM-L6-v2", device="cpu", revision="1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+    )
     labels = np.array([0] * 10 + [1] * 10)
     emb = model.encode(SUB + ORDER, normalize_embeddings=True)
     sim = emb @ emb.T
