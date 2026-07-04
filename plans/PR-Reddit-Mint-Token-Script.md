@@ -54,9 +54,10 @@ Slice phase: Workflow/process
 
 ### Files touched
 
+- `.github/workflows/atlas_reddit_checks.yml`
 - `plans/PR-Reddit-Mint-Token-Script.md`
 - `scripts/mint_reddit_listening_token.py`
-- `tests/test_mint_reddit_listening_token.py`
+- `tests/test_atlas_reddit_mint_token.py`
 
 ## Mechanism
 
@@ -87,10 +88,23 @@ which is printed with the `.env` block. The script never writes `.env`.
 
 - None.
 
+Review-fix notes (Codex wave 1; all 4 verified real, fixed at root):
+- **Credential pairs resolved atomically** -- `resolve_credentials` now
+  takes a COMPLETE (id, secret) pair per namespace; a partial config
+  (listening id + B2B secret) falls back to a complete pair or fails
+  closed, never a mismatched cross-app pair.
+- **Shell env honored** -- `build_cred_source` merges exported `ATLAS_*`
+  vars with `.env` (shell wins), so creds kept out of `.env` work.
+- **Username validated via the production `build_user_agent`** -- rejects
+  trailing newlines / invalid UA shapes instead of interpolating raw.
+- **CI-enrolled** -- test renamed to `test_atlas_reddit_mint_token.py`
+  (matches the workflow glob) + the script added to the workflow path
+  filter, so a PR touching only it runs these tests.
+
 ## Verification
 
 - `.venv/bin/python -m pytest tests/test_mint_reddit_listening_token.py -q`:
-  11 passed (load_env parse/missing; resolution precedence + B2B fallback +
+  15 passed (load_env parse/missing; resolution precedence + B2B fallback +
   blank-not-set + fail-closed; redirect-param code/state/error; CLI exit-2 on
   missing creds and missing username).
 - ASCII byte-scan on the changed files: clean.
@@ -99,7 +113,8 @@ which is printed with the `.env` block. The script never writes `.env`.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Reddit-Mint-Token-Script.md` | 100 |
-| `scripts/mint_reddit_listening_token.py` | 164 |
-| `tests/test_mint_reddit_listening_token.py` | 114 |
-| **Total** | **378** |
+| `.github/workflows/atlas_reddit_checks.yml` | 1 |
+| `plans/PR-Reddit-Mint-Token-Script.md` | 118 |
+| `scripts/mint_reddit_listening_token.py` | 193 |
+| `tests/test_atlas_reddit_mint_token.py` | 157 |
+| **Total** | **469** |
