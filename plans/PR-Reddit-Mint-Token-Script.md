@@ -90,7 +90,7 @@ which is printed with the `.env` block. The script never writes `.env`.
 ## Verification
 
 - `.venv/bin/python -m pytest tests/test_mint_reddit_listening_token.py -q`:
-  10 passed (load_env parse/missing; resolution precedence + B2B fallback +
+  11 passed (load_env parse/missing; resolution precedence + B2B fallback +
   blank-not-set + fail-closed; redirect-param code/state/error; CLI exit-2 on
   missing creds and missing username).
 - ASCII byte-scan on the changed files: clean.

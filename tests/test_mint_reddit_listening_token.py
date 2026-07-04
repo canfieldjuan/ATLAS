@@ -91,6 +91,13 @@ def test_parse_redirect_params_captures_error() -> None:
     assert mint.parse_redirect_params(line)["error"] == "access_denied"
 
 
+def test_parse_redirect_params_malformed_raises_valueerror() -> None:
+    # a request line with no query is a clean ValueError, not IndexError
+    for bad in ("GET / HTTP/1.1", "garbage", ""):
+        with pytest.raises(ValueError, match="malformed redirect"):
+            mint.parse_redirect_params(bad)
+
+
 # -- CLI fail-closed exits --------------------------------------------------
 
 

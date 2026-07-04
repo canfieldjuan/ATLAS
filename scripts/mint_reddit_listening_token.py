@@ -38,17 +38,19 @@ class MintConfigError(ValueError):
 
 
 def load_env(path: str = ".env") -> dict[str, str]:
-    """Parse a dotenv file into a dict. Missing file -> empty dict."""
+    """Parse a dotenv file into a dict. Missing or unreadable file -> {}."""
     out: dict[str, str] = {}
-    if not os.path.exists(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError:
         return out
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            out[key.strip()] = value.strip().strip('"').strip("'")
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        out[key.strip()] = value.strip().strip('"').strip("'")
     return out
 
 
@@ -77,10 +79,18 @@ def resolve_credentials(
 
 def parse_redirect_params(request_line_data: str) -> dict[str, str]:
     """Extract the query params from the raw HTTP request line Reddit's
-    redirect delivers (``GET /?code=..&state=.. HTTP/1.1``)."""
-    target = request_line_data.split(" ")[1]
-    query = target.split("?", 1)[1]
-    return dict(pair.split("=", 1) for pair in query.split("&"))
+    redirect delivers (``GET /?code=..&state=.. HTTP/1.1``). Raises
+    ValueError on a malformed line rather than IndexError."""
+    parts = request_line_data.split(" ")
+    if len(parts) < 2 or "?" not in parts[1]:
+        raise ValueError("malformed redirect request line: no query params")
+    query = parts[1].split("?", 1)[1]
+    params: dict[str, str] = {}
+    for pair in query.split("&"):
+        key, _, value = pair.partition("=")
+        if key:
+            params[key] = value
+    return params
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -133,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     server.bind(("localhost", 8080))
     server.listen(1)
     try:
-        conn = server.accept()[0]
+        conn, _addr = server.accept()
         data = conn.recv(1024).decode("utf-8")
         conn.send(b"HTTP/1.1 200 OK\r\n\r\nToken minted; you can close this tab.")
         conn.close()
