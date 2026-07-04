@@ -1672,3 +1672,62 @@ def test_assert_raises_regexp_variant_gets_regex_arity() -> None:
         "        self.assertRaisesRegexp(ValueError, 'r', go)\n"))
     assert not _raises(_unittest_body(
         "        self.assertRaisesRegexp(ValueError, go)\n"))
+
+
+# --- wave 13: callable kwargs, collected-only scope, runTest precedence,
+# --- __test__ opt-in / annotated, None callable form, inherited constructor
+
+
+def test_callable_form_forwards_extra_kwargs_to_callable() -> None:
+    # `pytest.raises(X, fn, value=-1)` calls fn(value=-1); the extra kwargs
+    # go to the callable and must not be policed as raises-API keywords.
+    assert _raises("def test_x():\n    pytest.raises(ValueError, fn, value=-1)\n")
+    assert _raises(_unittest_body(
+        "        self.assertRaises(ValueError, fn, value=-1)\n"))
+
+
+def test_raises_only_counts_inside_collected_tests() -> None:
+    # A `with pytest.raises` in an uncollected helper is not negative
+    # coverage; the same call inside a collected test is.
+    assert not MOD._has_raises_assertion(
+        "import pytest\n"
+        "def _helper():\n    with pytest.raises(ValueError):\n        go()\n"
+        "def test_a():\n    assert True\n")
+    assert MOD._has_raises_assertion(
+        "import pytest\n"
+        "def test_a():\n    with pytest.raises(ValueError):\n        go()\n")
+
+
+def test_none_exception_callable_form_does_not_assert() -> None:
+    assert not MOD._has_raises_assertion(
+        "import pytest\ndef test_x():\n    pytest.raises(None, fn)\n")
+
+
+def test_run_test_counts_only_when_sole_test_method() -> None:
+    # unittest ignores runTest once a test* method exists.
+    assert MOD._collect_test_defs([
+        "import unittest\nclass M(unittest.TestCase):\n"
+        "    def runTest(self):\n        pass\n"]) == ["runTest"]
+    assert MOD._collect_test_defs([
+        "import unittest\nclass M(unittest.TestCase):\n"
+        "    def runTest(self):\n        pass\n"
+        "    def testFoo(self):\n        pass\n"]) == ["testFoo"]
+
+
+def test_test_marker_opt_in_and_annotated_falsy_opt_out() -> None:
+    # __test__ = True collects a non-Test class; annotated / falsy __test__
+    # opts out.
+    assert MOD._collect_test_defs([
+        "class Helper:\n    __test__ = True\n"
+        "    def test_a(self):\n        pass\n"]) == ["test_a"]
+    assert MOD._collect_test_defs(
+        ["__test__: bool = False\ndef test_a():\n    pass\n"]) == []
+    assert MOD._collect_test_defs(
+        ["__test__ = 0\ndef test_a():\n    pass\n"]) == []
+
+
+def test_inherited_constructor_excludes_test_class() -> None:
+    # pytest skips a Test* class that inherits __init__ from a same-file base.
+    assert MOD._collect_test_defs([
+        "class Base:\n    def __init__(self):\n        pass\n"
+        "class TestX(Base):\n    def test_a(self):\n        pass\n"]) == []

@@ -390,6 +390,36 @@ verified counter-proof; claims checked against pytest 9):
   and `self.assertRaisesRegexp(ValueError, 'r', fn)` is accepted, both
   pinned in tests.
 
+Review-fix notes (Codex wave 13; all 7 fixed at root; the model is now a
+single shared collection pass -- `_collected_test_nodes` -- used by both
+`_has_raises_assertion` and `_collect_test_defs`):
+
+- **FIXED -- raises detection was file-wide, not per-collected-test**: a
+  `with pytest.raises(...)` in an uncollected helper or non-test method
+  counted as negative coverage. Raises now count only inside a test pytest
+  would actually collect (the shared `_collected_test_nodes` set).
+- **FIXED -- the wave-11 malformed-kwarg reject over-rejected the callable
+  form**: `pytest.raises(ValueError, fn, value=-1)` forwards `value=-1` to
+  `fn` -- a valid callable-form assertion. Keyword policing now applies only
+  to the context form (where the keywords are the raises API's own);
+  callable-form extras pass through, while a duplicated exception/regex slot
+  still fails in both forms.
+- **FIXED -- `runTest` counted unconditionally**: unittest ignores
+  `runTest` once a `test*` method exists (verified). It now counts only as
+  the sole test method.
+- **FIXED -- pytest `__test__ = True` opt-in ignored**: pytest collects a
+  non-`Test*` class marked `__test__ = True`; `_test_class_kind` now admits
+  it.
+- **FIXED -- `None` exception in the callable form counted**:
+  `pytest.raises(None, fn)` raises before asserting; the callable form now
+  rejects a literal `None` exception like the context form does.
+- **FIXED -- only literal `__test__ = False` was honored**: the marker now
+  handles annotated (`__test__: bool = False`) and any falsy constant
+  (`0`, `""`, `None`), and truthy values as opt-in.
+- **FIXED -- inherited constructors were missed**: pytest also skips a
+  `Test*` class that inherits `__init__`/`__new__` from a base defined in
+  the same file; `_defines_constructor` resolves same-file bases.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -405,7 +435,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_maturity_sweep.py -q` -- 62 passed
+- `python -m pytest tests/test_maturity_sweep.py -q` -- 68 passed
   (23 pre-existing + both-sides probes for every review-fix wave:
   no-raises sensitive module fails with the
   `sensitive-path NO_RAISES_TESTS` reason and passes off-glob;
@@ -435,9 +465,9 @@ Parked hardening: none.
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Negatives-Presence-Gate.md` | 443 |
+| `plans/PR-Negatives-Presence-Gate.md` | 473 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 273 |
+| `scripts/maturity_sweep.py` | 305 |
 | `tests/maturity_sweep/baseline_scripts.json` | 47 |
-| `tests/test_maturity_sweep.py` | 1178 |
-| **Total** | **1950** |
+| `tests/test_maturity_sweep.py` | 1237 |
+| **Total** | **2071** |

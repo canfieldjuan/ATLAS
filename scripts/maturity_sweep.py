@@ -556,8 +556,18 @@ def _has_raises_assertion(source):
                 for sub in ast.walk(node):
                     if isinstance(sub, ast.Call):
                         testcase_calls.add(id(sub))
+    # A raises assertion only counts inside a test pytest would actually
+    # collect -- a `with pytest.raises(...)` in an uncollected helper or
+    # non-test method is not negative coverage for the module.
+    allowed_call_ids = set()
+    for test_node in _collected_test_nodes(tree):
+        for sub in ast.walk(test_node):
+            if isinstance(sub, ast.Call):
+                allowed_call_ids.add(id(sub))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
+            continue
+        if id(node) not in allowed_call_ids:
             continue
         func = node.func
         # Only the real assertion APIs count, each with the number of
@@ -604,36 +614,11 @@ def _has_raises_assertion(source):
         # `with self.assertRaises(msg="n"):` do not count.
         kwargs = {kw.arg for kw in node.keywords if kw.arg}
         positional = len(node.args)
-        # A call with a keyword the API does not accept, or a duplicated
-        # slot (exception/regex given both positionally and by keyword),
-        # raises TypeError before asserting -- e.g.
-        # `pytest.raises(ValueError, bogus=1)` or
-        # `pytest.raises(ValueError, expected_exception=ValueError)`. It is
-        # a broken test, not a runnable assertion, so it fills no slot.
-        if is_pytest_raises:
-            valid_keywords = {"expected_exception", "match", "check"}
-        elif callable_form_args == 3:
-            valid_keywords = {"expected_exception", "expected_regex", "msg"}
-        else:
-            valid_keywords = {"expected_exception", "msg"}
-        if kwargs - valid_keywords:
-            continue
-        if positional >= 1 and "expected_exception" in kwargs:
-            continue
-        if callable_form_args == 3 and positional >= 2 and "expected_regex" in kwargs:
-            continue
-        # Slot-filling args: positionals plus the exception/regex keywords.
-        # Decorative keywords (pytest `match=`, unittest `msg=`) fill no
-        # slot, so `pytest.raises(X, match="m")` as a statement and
-        # `with self.assertRaises(msg="n"):` do not count.
         slot_keywords = {"expected_exception"}
         if callable_form_args == 3:  # assertRaisesRegex* also takes the regex
             slot_keywords.add("expected_regex")
-        exception_args = positional + sum(1 for k in kwargs if k in slot_keywords)
-        # pytest's match-only / check-only contexts assert without an
-        # exception type; a literal `None` exception with neither raises
-        # before the block.
-        matcher_kwargs = bool(kwargs & {"match", "check"})
+        # A literal `None` in the exception slot is not a valid exception
+        # type; the API raises before asserting either way.
         none_exception = (
             (positional >= 1 and isinstance(node.args[0], ast.Constant)
              and node.args[0].value is None)
@@ -641,26 +626,43 @@ def _has_raises_assertion(source):
                    and isinstance(kw.value, ast.Constant)
                    and kw.value.value is None
                    for kw in node.keywords))
+        # A duplicated exception/regex slot (given both positionally and by
+        # keyword) raises TypeError before asserting -- true in both forms.
+        if positional >= 1 and "expected_exception" in kwargs:
+            continue
+        if callable_form_args == 3 and positional >= 2 and "expected_regex" in kwargs:
+            continue
         if id(node) in with_item_calls:
-            # pytest.raises has match-only / check-only contexts
-            # (`with pytest.raises(match="..."):` / `check=...`) that assert
-            # SOME matching exception even without the exception type.
+            # Context form: the call's keywords ARE the raises API's own
+            # kwargs, so an unknown one (`bogus=1`) is a TypeError -- fills
+            # no slot. pytest also has match-only / check-only contexts
+            # (`with pytest.raises(match="..."):` / `check=...`).
+            if is_pytest_raises:
+                valid_keywords = {"expected_exception", "match", "check"}
+            elif callable_form_args == 3:
+                valid_keywords = {"expected_exception", "expected_regex", "msg"}
+            else:
+                valid_keywords = {"expected_exception", "msg"}
+            if kwargs - valid_keywords:
+                continue
+            matcher_kwargs = bool(kwargs & {"match", "check"})
             if is_pytest_raises and positional == 0 and matcher_kwargs:
                 return True
-            # `with pytest.raises(None):` (no matcher) raises before the
-            # block ("must specify at least one parameter to match on") --
-            # it asserts nothing.
-            if is_pytest_raises and none_exception and not matcher_kwargs:
+            # `with pytest.raises(None):` (no matcher) raises before the block.
+            if none_exception and not matcher_kwargs:
                 continue
-            # Otherwise the context form supplies the exception (+ regex)
-            # but NOT the trailing callable; `positional < callable_form_args`
+            # Otherwise the context supplies the exception (+ regex) but NOT
+            # the trailing callable; `positional < callable_form_args`
             # rejects the callable-in-with form (`with pytest.raises(X, fn):`).
+            exception_args = positional + sum(1 for k in kwargs if k in slot_keywords)
             if (exception_args >= callable_form_args - 1
                     and positional < callable_form_args):
                 return True
-        elif positional >= callable_form_args:
-            # Callable (non-with) form: the callable is a positional; a
-            # keyword never stands in for it.
+        elif positional >= callable_form_args and not none_exception:
+            # Callable (non-with) form: exception + callable [+ regex] are
+            # positional; any extra positionals/keywords are forwarded to the
+            # callable (`pytest.raises(X, fn, value=-1)`), so they are not
+            # policed. A literal `None` exception still asserts nothing.
             return True
     return False
 
@@ -673,59 +675,106 @@ def _is_pytest_function_name(name):
     return name.startswith("test_")
 
 
-def _is_unittest_method_name(name):
-    return name.startswith("test") or name == "runTest"
-
-
-def _has_test_optout(body):
-    """True when a module or class body sets `__test__ = False`, pytest's
-    opt-out marker -- pytest then collects nothing from that scope."""
+def _test_marker(body):
+    """The value of a `__test__` marker set in this module/class body, or
+    None if unset. Recognizes plain and annotated (`__test__: bool = ...`)
+    assignments; any falsy constant (`False`, `0`, `""`, `None`) is an
+    opt-out and any truthy constant is an opt-in."""
     for stmt in body:
-        if isinstance(stmt, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == "__test__"
-                for t in stmt.targets):
-            if isinstance(stmt.value, ast.Constant) and stmt.value.value is False:
-                return True
+        if isinstance(stmt, ast.Assign):
+            targets, value = stmt.targets, stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            targets, value = [stmt.target], stmt.value
+        else:
+            continue
+        if any(isinstance(t, ast.Name) and t.id == "__test__" for t in targets):
+            if isinstance(value, ast.Constant):
+                return bool(value.value)
+    return None
+
+
+def _defines_constructor(node, classes):
+    """True when the class defines `__init__`/`__new__` directly or inherits
+    one from a base defined in the same file. pytest refuses to collect a
+    `Test*` class with a constructor (direct or inherited)."""
+    if any(isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+           and m.name in ("__init__", "__new__") for m in node.body):
+        return True
+    for base in node.bases:
+        name = (base.id if isinstance(base, ast.Name)
+                else base.attr if isinstance(base, ast.Attribute) else None)
+        parent = classes.get(name) if classes else None
+        if parent is not None and parent is not node and _defines_constructor(
+                parent, {k: v for k, v in (classes or {}).items() if v is not node}):
+            return True
     return False
 
 
-def _test_class_kind(node):
-    """Classify a class for pytest collection:
+def _test_class_kind(node, classes):
+    """Classify a class for pytest collection (`classes` maps names to the
+    ClassDefs in the same module, for inherited-constructor resolution):
 
     - 'unittest': a subclass whose statically visible base ends in
       `TestCase`. unittest's loader collects its `test*` methods (incl
-      camelCase) and `runTest`, regardless of an `__init__`.
-    - 'pytest': a `Test*`-named class (pytest's `python_classes = Test*`)
-      that does NOT define `__init__`/`__new__`. pytest warns and skips a
-      `Test*` class with a constructor, so such a class collects nothing.
-    - None: not collected (a plain `class Helper`, or a `Test*` class with
-      a constructor).
+      camelCase) and `runTest`, regardless of a constructor.
+    - 'pytest': a `Test*`-named class, or any class marked `__test__ = True`
+      (pytest's opt-in), that does NOT define/inherit a constructor.
+    - None: not collected (a plain class, an opted-out class, or a
+      constructor-bearing `Test*` class).
 
     A cross-file base not named `*TestCase` is deliberately missed -- the
     gate errs toward the standard idioms."""
-    if _has_test_optout(node.body):
+    marker = _test_marker(node.body)
+    if marker is False:
         return None
     bases = [b.attr if isinstance(b, ast.Attribute) else b.id
              for b in node.bases if isinstance(b, (ast.Attribute, ast.Name))]
     if any(name.endswith("TestCase") for name in bases):
         return "unittest"
-    if node.name.startswith("Test"):
-        if any(isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
-               and m.name in ("__init__", "__new__") for m in node.body):
+    if node.name.startswith("Test") or marker is True:
+        if _defines_constructor(node, classes):
             return None
         return "pytest"
     return None
 
 
+def _collected_test_nodes(tree):
+    """The FunctionDef/AsyncFunctionDef nodes pytest would collect from this
+    module tree: module-level `test_` functions plus the test methods of a
+    collected class. A unittest `TestCase` contributes its `test*` methods
+    (incl camelCase); `runTest` counts only when it is the sole test method
+    (unittest ignores it once a `test*` method exists). A module-level
+    `__test__ = False` opts the whole file out."""
+    if _test_marker(tree.body) is False:
+        return []
+    classes = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
+    nodes = []
+    for node in tree.body:
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and _is_pytest_function_name(node.name)):
+            nodes.append(node)
+        elif isinstance(node, ast.ClassDef):
+            kind = _test_class_kind(node, classes)
+            if kind is None:
+                continue
+            methods = [m for m in node.body
+                       if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            if kind == "unittest":
+                collected = [m for m in methods if m.name.startswith("test")]
+                if not collected:
+                    collected = [m for m in methods if m.name == "runTest"]
+                nodes.extend(collected)
+            else:
+                nodes.extend(m for m in methods
+                             if _is_pytest_function_name(m.name))
+    return nodes
+
+
 def _collect_test_defs(matched):
-    """Test names from real def/async-def AST nodes across the matched
-    sources. The old text regex also counted `def test_*` inside comments
-    and strings, so a placeholder file with commented-out tests looked
-    non-stub and dodged NO_TEST_FILE. Only pytest's actual collection shape
-    counts: module-level `test_`-prefixed functions, `test_`-prefixed
-    methods of a collected pytest class, and `test*`/`runTest` methods of a
-    unittest TestCase subclass. A helper method inside an uncollected class
-    does not disguise a stub. Unparseable sources contribute no runnable
+    """Test names pytest would collect across the matched sources (see
+    _collected_test_nodes). The old text regex also counted `def test_*`
+    inside comments and strings, so a placeholder file with commented-out
+    tests dodged NO_TEST_FILE. Unparseable sources contribute no runnable
     tests (fail closed, matching _has_raises_assertion)."""
     names = []
     for source in matched:
@@ -733,24 +782,7 @@ def _collect_test_defs(matched):
             tree = ast.parse(source)
         except SyntaxError:
             continue
-        if _has_test_optout(tree.body):
-            # A module-level `__test__ = False` opts the whole file out of
-            # collection; pytest gathers no tests from it.
-            continue
-        for node in tree.body:
-            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and _is_pytest_function_name(node.name)):
-                names.append(node.name)
-            elif isinstance(node, ast.ClassDef):
-                kind = _test_class_kind(node)
-                if kind is None:
-                    continue
-                is_name = (_is_unittest_method_name if kind == "unittest"
-                           else _is_pytest_function_name)
-                for sub in node.body:
-                    if (isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
-                            and is_name(sub.name)):
-                        names.append(sub.name)
+        names.extend(n.name for n in _collected_test_nodes(tree))
     return names
 
 
