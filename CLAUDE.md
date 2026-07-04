@@ -8,8 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Atlas is a **multi-product intelligence platform** built on a single FastAPI
 backend (`atlas_brain/`), an 11-server MCP surface, six standalone Python
-packages (`extracted_*/`), and six React+Vite frontends. The headline
-products in priority order:
+packages (`extracted_*/`), and six React+Vite frontends. The table below is a
+current product inventory, not a roadmap or priority order; active issues,
+accepted plan docs, and explicit operator decisions choose what to build next.
 
 | Product | Surface | Status |
 |---|---|---|
@@ -19,15 +20,16 @@ products in priority order:
 | **Communications + CRM + Calendar + Invoicing** | MCP servers (CRM 10, Email 9, Twilio 10, Calendar 8, Invoicing 18), Postgres `contacts`/`appointments`, Gmail/IMAP/Resend, Google Calendar/CalDAV, NocoDB admin UI | **Shipped** |
 | **Knowledge graph memory** | MCP `memory_server` (15 tools), Postgres short-term + Neo4j/Graphiti long-term via `graphiti-wrapper` (port 8001) | **Shipped** |
 | **Universal scraper** | MCP `scraper_server` (5 tools), LLM-driven schema extraction, Playwright JS rendering | **Shipped** |
-| **Voice + Home Automation** | `atlas_brain/voice/`, ASR (Nemotron 0.6B, port 8081), wake-word + VAD + capture, Home Assistant + MQTT capability registry, intent dispatch | **Built but not yet routed through agent** — per `CONTEXT.md`, Pipecat pipeline + agent routing are not unified yet (P0 in `BUILD_SPEC.md`) |
+| **Voice + Home Automation** | `atlas_brain/voice/`, ASR (Nemotron 0.6B, port 8081), wake-word + VAD + capture, Home Assistant + MQTT capability registry, intent dispatch | **Built but not yet routed through agent** — historical voice-to-voice context remains in `BUILD_SPEC.md`, but current work is governed by active issues/plans and `docs/CURRENT_PRODUCT_DISCIPLINE.md` |
 | **Multi-tenant SaaS auth** | `atlas_brain/auth/` — JWT, password hashing, plan tiers | **Shipped** |
 | **Autonomous task scheduler** | `atlas_brain/autonomous/` — APScheduler-driven, 150+ task modules (B2B churn, blog gen, email digest, campaign send, invoice reminders, weekly briefings, …) | **Shipped** |
 
 The original home-automation framing (wake word "Hey Atlas" → STT → router →
 device action → TTS) is still on the roadmap and the components are in the
 tree (`atlas_brain/voice/`, `atlas_brain/capabilities/`,
-`atlas_brain/discovery/`), but the unified voice-to-agent pipeline is the
-**P0** in `BUILD_SPEC.md` — not a shipped capability today.
+`atlas_brain/discovery/`), but the unified voice-to-agent pipeline is not a
+shipped capability today. Do not treat it as the current roadmap unless an
+active issue/accepted plan says so.
 
 ### Design Principles
 1. **Extensibility First** — every component pluggable behind a typed port
@@ -178,7 +180,7 @@ ATLAS/
 ├── AUDITOR_PROMPT.md            # Cross-cutting audit prompt
 ├── CANONICAL.md                 # Which implementation is the real one
 ├── INTEGRATION_MAP.md           # What's wired to what
-├── BUILD_SPEC.md                # P0/P1/P2 priorities, definition of done
+├── BUILD_SPEC.md                # Deprecated historical context
 └── CLAUDE.md                    # (this file)
 ```
 
@@ -1049,7 +1051,7 @@ which slices have landed. See `plans/PR-Content-Ops-*.md` for plan docs.
 
 ## Planned / In-Flight Work
 
-### P0 (per `BUILD_SPEC.md`) — Voice-to-Voice agent unification
+### Historical voice-to-voice context
 
 Components built but not unified:
 - `atlas_brain/voice/` — wake word (OpenWakeWord), VAD (WebRTC), audio
@@ -1059,10 +1061,10 @@ Components built but not unified:
 
 **Gap (per `CONTEXT.md`):** The Pipecat voice pipeline does not currently
 flow through the unified Atlas Agent — voice and text APIs use different
-code paths. P0 is to consolidate behind a single agent entry point so
-both surfaces share intent routing, conversation state, and tool use.
+code paths. This is historical context, not the current product roadmap or
+definition of done.
 
-### P1 / P2 (blocked by P0)
+### Former P1 / P2 voice backlog
 
 - **P1** Home Assistant integration through unified agent (capability
   registry already exists in `atlas_brain/capabilities/`).
@@ -1088,8 +1090,11 @@ both surfaces share intent routing, conversation state, and tool use.
 - `plans/` — 65 plan docs, ~39 Content-Ops, ~8 Audit/Testing, ~5
   Caching/Optimization, ~8 B2B/Reasoning. Sorted by mtime is the rough
   current-iteration view.
-- `BUILD_SPEC.md` — P0/P1/P2 tiers + definition of done.
-- `CONTEXT.md` — known debt + session notes.
+- `docs/CURRENT_PRODUCT_DISCIPLINE.md` — vertical-first discipline,
+  hardening parking, and product-shape consent.
+- `BUILD_SPEC.md` — deprecated historical context; not current roadmap/DoD.
+- `CONTEXT.md` — historical/session notes and known debt; verify before using
+  as current product state.
 - `INTEGRATION_MAP.md` — what's actually wired to what (vs. what looks
   wired in the file tree).
 - `CANONICAL.md` — when two implementations exist, which one is real.
@@ -1135,8 +1140,9 @@ Companion docs:
 - `AUDITOR_PROMPT.md` — cross-cutting auditor prompt (canonical / integration / scope / debt)
 - `CANONICAL.md` — which implementation is the real one
 - `INTEGRATION_MAP.md` — what's wired to what
-- `BUILD_SPEC.md` — P0/P1/P2 priorities, definition of done
-- `CONTEXT.md` — session notes, known debt
+- `docs/CURRENT_PRODUCT_DISCIPLINE.md` — vertical-first discipline, hardening parking, and product-shape consent
+- `BUILD_SPEC.md` — deprecated historical context; not current roadmap/DoD
+- `CONTEXT.md` — historical/session notes and known debt; verify before using as current product state
 
 ### PR Reviews
 
