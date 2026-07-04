@@ -61,6 +61,6 @@ runs, not hand-computed. Reviewer reproduced the 2k/5k/10k scaling.
 
 | File | LOC |
 |---|---:|
-| `docs/audits/resolution-audit-csv/FINDINGS.md` | 70 |
+| `docs/audits/resolution-audit-csv/FINDINGS.md` | 76 |
 | `plans/PR-Resolution-Audit-S3-Performance.md` | 66 |
-| **Total** | **136** |
+| **Total** | **142** |
