@@ -28,11 +28,13 @@ fixed.** For the free snapshot / lead-gen, the risk is lower but the same number
 
 1. **F1 -- Fragmentation undercounts the #1 issue by ~58%.** 12 tickets that are all
    "can't log in" -> reported as 1 cluster of 5 + 7 discarded as "non-repeat"
-   ($810 annualized vs a correct ~$1,944). The token-set topic partition produces
-   FINAL buckets and embeddings cannot re-merge across them (F6). *Critical, verified.*
+   ($810 vs ~$1,944 on the dateless x12 run-rate; the ~58% undercount is basis-independent).
+   The token-set topic partition produces FINAL buckets and embeddings cannot re-merge
+   across them (F6). *Critical, verified.*
 2. **F2 -- Junk becomes the #1 recommended fix and doubles the tax.** 6 identical
    "Automatic reply: Out of Office" -> their own #1 billed cluster; annualized tax
-   $1,782 vs $810 legit-only. No spam gate. *Critical, verified.*
+   $1,782 vs $810 legit-only (x12 run-rate; the >2x ratio is basis-independent). No spam
+   gate. *Critical, verified.*
 3. **C1 -- A missing/stripped header row silently drops 20-100% of tickets**, reported
    as a healthy-looking smaller number with no error (the `>=2-cell` fallback-header
    rule consumes row 1). Non-US dates are also silently transposed to the wrong day
