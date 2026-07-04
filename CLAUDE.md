@@ -1118,7 +1118,7 @@ PR independently). The full contract lives in `AGENTS.md`; the highlights:
 - **Long-running coding tasks keep their own PR watcher.** Ordinary
   interactive slices stop after opening/updating a PR and wait for the
   operator. If the operator explicitly assigns a long-running/autonomous arc,
-  the builder records the owned PR watcher in `SESSION_STATE.local.md`, polls
+  the builder records the owned PR watcher in that session's state file, polls
   GitHub every 30 minutes for checks/reviews/reconciliation, resumes that
   watcher after compaction, and continues the approved slice arc instead of
   halting until the operator notices green. See `AGENTS.md` §3c.1.
@@ -1392,7 +1392,7 @@ Compose files for sub-services:
 When compacting this conversation, preserve verbatim (do not summarize away):
 
 - The active operator-assigned lane and the **owned active PR** (number, branch,
-  latest pushed SHA) from `SESSION_STATE.local.md`.
+  latest pushed SHA) from this session's state file.
 - The full **PR Fix Mode** baton when a fix loop is active: allowed-files set +
   max-files budget, current failing check/comment, last useful log finding, next
   exact action, and do-not-redo notes.

@@ -591,6 +591,7 @@ def _publish_attempt_row(**overrides):
         "failed_count": 0,
         "pending_reconcile_count": 0,
         "draft_status_updated": True,
+        "status_conflict": False,
         "skipped": [],
         "results": [{
             "status": "published",
@@ -2263,6 +2264,7 @@ def test_generated_asset_router_lists_faq_macro_publish_attempts() -> None:
         "failed_count": 0,
         "pending_reconcile_count": 0,
         "draft_status_updated": True,
+        "status_conflict": False,
         "skipped": [],
         "results": [{
             "status": "published",

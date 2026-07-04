@@ -1,6 +1,6 @@
 # Plan archive index
 
-1270 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1278 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -169,6 +169,7 @@
 - [PR-Brand-Voice-Strict-Mode](archive/PR-Brand-Voice-Strict-Mode.md) - lane: content-marketing/brand-voice-checks | phase: Vertical slice
 - [PR-Brand-Voice-Structured-Findings](archive/PR-Brand-Voice-Structured-Findings.md) - lane: content-marketing/brand-voice-checks | phase: Vertical slice
 - [PR-Brand-Voice-Suggested-Fixes](archive/PR-Brand-Voice-Suggested-Fixes.md) - lane: content-marketing/brand-voice-checks | phase: Vertical slice
+- [PR-CI-CD-Autonomous-Map](archive/PR-CI-CD-Autonomous-Map.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-Campaign-Channel-Legacy-Cleanup](archive/PR-Campaign-Channel-Legacy-Cleanup.md)
 - [PR-Campaign-Config-V2](archive/PR-Campaign-Config-V2.md)
 - [PR-Checker-Detection-Branch-Discipline](archive/PR-Checker-Detection-Branch-Discipline.md) - lane: workflow/process | phase: Workflow/process
@@ -1129,6 +1130,9 @@
 - [PR-Live-Provider-Circular-Import](archive/PR-Live-Provider-Circular-Import.md)
 - [PR-Live-Smoke-Saved-Draft-Export](archive/PR-Live-Smoke-Saved-Draft-Export.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Local-MCP-Model-Eval-Harness](archive/PR-Local-MCP-Model-Eval-Harness.md) - lane: mcp/local-model-evals | phase: Vertical slice
+- [PR-Long-Running-Hook-Split](archive/PR-Long-Running-Hook-Split.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
+- [PR-Long-Running-Monitoring-Spec](archive/PR-Long-Running-Monitoring-Spec.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
+- [PR-Long-Running-Watcher-Handoff](archive/PR-Long-Running-Watcher-Handoff.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-Lucide-React-Major-Batch](archive/PR-Lucide-React-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-MCP-ChatGPT-OAuth-Rollout-Runbook](archive/PR-MCP-ChatGPT-OAuth-Rollout-Runbook.md)
 - [PR-MCP-Connector-Session-Handoff](archive/PR-MCP-Connector-Session-Handoff.md)
@@ -1177,6 +1181,10 @@
 - [PR-Reasoning-Core-Reflection-Port-Adapter-2026-05-17](archive/PR-Reasoning-Core-Reflection-Port-Adapter-2026-05-17.md)
 - [PR-Reasoning-Enrichment-Pack-Split](archive/PR-Reasoning-Enrichment-Pack-Split.md)
 - [PR-Reasoning-Phrase-Metadata-Utility](archive/PR-Reasoning-Phrase-Metadata-Utility.md)
+- [PR-Reddit-Fit-Contract](archive/PR-Reddit-Fit-Contract.md) - lane: content-ops/reddit-listening/fit-eval | phase: Vertical slice
+- [PR-Reddit-Fit-Eval-Harness](archive/PR-Reddit-Fit-Eval-Harness.md) - lane: content-ops/reddit-listening/fit-eval | phase: Robust testing
+- [PR-Reddit-Fit-Guard](archive/PR-Reddit-Fit-Guard.md) - lane: content-ops/reddit-listening/fit-eval | phase: Vertical slice
+- [PR-Reddit-Fit-Store](archive/PR-Reddit-Fit-Store.md) - lane: content-ops/reddit-listening/fit-eval | phase: Vertical slice
 - [PR-Reddit-Listening-Config-Scoring](archive/PR-Reddit-Listening-Config-Scoring.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Digest](archive/PR-Reddit-Listening-Digest.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Praw-Poller](archive/PR-Reddit-Listening-Praw-Poller.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice

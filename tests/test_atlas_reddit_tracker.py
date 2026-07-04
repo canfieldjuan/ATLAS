@@ -505,7 +505,7 @@ def test_v1_store_migrates_to_current_preserving_data(tmp_path: Path) -> None:
         assert threads["t3_lonely"].last_activity == 200
         assert migrated.list_replies()[0].reply_id == "t1_r"
     conn = sqlite3.connect(db)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
     conn.close()
 
 

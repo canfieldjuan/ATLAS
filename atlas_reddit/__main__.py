@@ -9,6 +9,7 @@ dates and timestamps as data.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import re
 import sys
@@ -37,7 +38,9 @@ from .reddit_client import (
 from .poller import poll_once
 from .tracker import track_once
 from .purge import purge_once
-from .store import ListeningStore, StoreError
+from .fit import PROMPT_VERSION, FitParseError, parse_fit_decision
+from .fit_guard import guard_fit_decision
+from .store import ListeningStore, StoreError, fit_input_hash
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -212,6 +215,22 @@ def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
         default=defaults.db_path,
         help=f"SQLite state file (default: {defaults.db_path})",
     )
+
+    import_fit = subparsers.add_parser(
+        "import-fit",
+        help="Import manual fit predictions (JSONL of {post_id, prediction}) through the real parser + guard; no model calls.",
+    )
+    import_fit.add_argument(
+        "predictions",
+        type=Path,
+        help="JSONL file: one {post_id, prediction:{...}} object per line.",
+    )
+    import_fit.add_argument(
+        "--db",
+        type=Path,
+        default=defaults.db_path,
+        help=f"SQLite state file (default: {defaults.db_path})",
+    )
     return parser
 
 
@@ -369,6 +388,70 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(f"marked seen: {args.reply_id}")
         return 0
+
+    if args.command == "import-fit":
+        try:
+            raw = args.predictions.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        now = int(datetime.now(tz=timezone.utc).timestamp())
+        imported = 0
+        errors: list[str] = []
+        try:
+            with ListeningStore(args.db) as store:
+                for line_no, line in enumerate(raw.splitlines(), start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        errors.append(f"line {line_no}: malformed JSON: {exc}")
+                        continue
+                    post_id = record.get("post_id") if isinstance(record, dict) else None
+                    if not isinstance(post_id, str) or not post_id:
+                        errors.append(f"line {line_no}: missing or invalid post_id")
+                        continue
+                    candidate = store.get_candidate(post_id)
+                    if candidate is None:
+                        errors.append(f"line {line_no}: unknown candidate {post_id}")
+                        continue
+                    try:
+                        decision = parse_fit_decision(record.get("prediction"))
+                    except FitParseError as exc:
+                        # Malformed model output is data, not a crash: record
+                        # the parse code and move on.
+                        errors.append(f"line {line_no}: {post_id}: {exc.code}")
+                        continue
+                    guarded = guard_fit_decision(decision)
+                    store.upsert_fit_review(
+                        post_id=post_id,
+                        verdict=decision.verdict,
+                        reason=decision.reason,
+                        angle=decision.angle,
+                        risk_flags=decision.risk_flags,
+                        guard_ok=guarded.ok,
+                        guard_codes=guarded.codes,
+                        source="manual",
+                        model_id="",
+                        prompt_version=PROMPT_VERSION,
+                        input_hash=fit_input_hash(
+                            post_id=candidate.post_id,
+                            subreddit=candidate.subreddit,
+                            title=candidate.title,
+                            body_excerpt=candidate.body_excerpt,
+                            matched_topics=candidate.matched_topics,
+                        ),
+                        reviewed_at=now,
+                    )
+                    imported += 1
+        except (StoreError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"imported={imported} errors={len(errors)}")
+        for line in errors:
+            print(f"warning: {line}", file=sys.stderr)
+        return 0 if not errors else 1
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return 2  # pragma: no cover

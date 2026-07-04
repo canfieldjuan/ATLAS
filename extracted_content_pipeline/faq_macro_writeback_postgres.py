@@ -58,6 +58,7 @@ def _row_to_attempt(row: Mapping[str, Any]) -> FAQMacroPublishAttempt:
         failed_count=int(row.get("failed_count") or 0),
         pending_reconcile_count=int(row.get("pending_reconcile_count") or 0),
         draft_status_updated=bool(row.get("draft_status_updated")),
+        status_conflict=bool(row.get("status_conflict")),
         skipped=_json_list(row.get("skipped")),
         results=_json_list(row.get("results")),
         created_at=str(row.get("created_at") or ""),
@@ -209,13 +210,13 @@ class PostgresFAQMacroPublishAttemptRepository:
                 account_id, faq_draft_id, draft_status, ok,
                 publishable_count, skipped_count, published_count,
                 updated_count, failed_count, pending_reconcile_count,
-                draft_status_updated, skipped, results
+                draft_status_updated, status_conflict, skipped, results
             )
             VALUES (
                 $1, $2, $3, $4,
                 $5, $6, $7,
                 $8, $9, $10,
-                $11, $12::jsonb, $13::jsonb
+                $11, $12, $13::jsonb, $14::jsonb
             )
             """,
             scope.account_id or "",
@@ -229,6 +230,7 @@ class PostgresFAQMacroPublishAttemptRepository:
             int(summary.failed_count),
             int(summary.pending_reconcile_count),
             bool(summary.draft_status_updated),
+            bool(summary.status_conflict),
             json_dump_jsonb([dict(item) for item in summary.skipped]),
             json_dump_jsonb([dict(item) for item in summary.results]),
         )
@@ -246,7 +248,7 @@ class PostgresFAQMacroPublishAttemptRepository:
                 id, faq_draft_id, draft_status, ok,
                 publishable_count, skipped_count, published_count,
                 updated_count, failed_count, pending_reconcile_count,
-                draft_status_updated, skipped, results, created_at
+                draft_status_updated, status_conflict, skipped, results, created_at
               FROM ticket_faq_macro_publish_attempts
              WHERE account_id = $1
                AND faq_draft_id = $2

@@ -16,6 +16,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
+      - ".github/workflows/retired_failure_detector.yml"
       - "scripts/maturity_sweep.py"
       - "scripts/**"
       - "tests/**"
@@ -65,6 +66,7 @@ on:
       - main
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
+      - ".github/workflows/retired_failure_detector.yml"
       - "scripts/maturity_sweep.py"
       - "scripts/**"
       - "tests/**"
@@ -130,7 +132,13 @@ jobs:
       # --noconftest: the repo-level tests/conftest.py imports pytest_asyncio
       # and app dependencies; these tests are self-contained stdlib by design.
       - name: Sweep unit tests (blocking)
-        run: python -m pytest tests/test_maturity_sweep.py --noconftest -q
+        run: |
+          python -m pytest \
+            tests/test_maturity_sweep.py \
+            tests/test_detect_retired_failure_modes.py \
+            tests/test_retired_failure_detector_workflow.py \
+            --noconftest \
+            -q
 
       # The sweep itself is stdlib-only.
       - name: Maturity sweep (advisory, non-blocking)

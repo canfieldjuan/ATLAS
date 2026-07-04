@@ -90,6 +90,7 @@ atlas-ui/.vite/
 # Progress logs (session artifacts)
 PROGRESS_*.md
 SESSION_STATE.local.md
+SESSION_STATE.*.local.md
 
 # Hybrid reasoning checks JSON report output
 artifacts/
@@ -113,3 +114,6 @@ requirements.freeze.bak
 .env*.local
 .playwright-mcp/
 *.png
+
+# Read-only audit scratch (fixtures, sweeps, profiling) — not shipped
+_audit_scratch/
