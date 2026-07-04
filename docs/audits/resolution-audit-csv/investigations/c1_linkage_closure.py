@@ -69,15 +69,19 @@ def main() -> None:
         print("\nNo pure-2 band at any single-linkage threshold => IMPOSSIBILITY holds for this fixture.")
     print(f"connect >= merge ? {connect_dist:.4f} >= {merge_dist:.4f} = {connect_dist >= merge_dist}")
 
-    # Fail-closed: the committed proof MUST reproduce at the pinned revision, else exit non-zero.
-    assert not pure_band, "REGRESSION: a pure-2 single-linkage band appeared -> C1 claim broken."
-    assert connect_dist > merge_dist, (
-        f"REGRESSION: connect_dist {connect_dist:.4f} <= merge_dist {merge_dist:.4f}."
-    )
-    assert abs(merge_dist - 0.2945) < 0.02, f"REGRESSION: merge_distance drifted to {merge_dist:.4f}."
-    assert abs(connect_dist - 0.5352) < 0.02, f"REGRESSION: connect_distance drifted to {connect_dist:.4f}."
-    assert abs(min(intra) - 0.236) < 0.02 and abs(max(inter) - 0.706) < 0.02, "REGRESSION: sim bands drifted."
-    print("\nPROOF HOLDS: fail-closed asserts passed (exits 0 only if the claim is reproduced).")
+    # Fail-closed: explicit raises (NOT assert, which python -O / PYTHONOPTIMIZE strips), so the
+    # committed proof still exits non-zero on drift under optimized interpreters.
+    if pure_band:
+        raise SystemExit("REGRESSION: a pure-2 single-linkage band appeared -> C1 claim broken.")
+    if connect_dist <= merge_dist:
+        raise SystemExit(f"REGRESSION: connect_dist {connect_dist:.4f} <= merge_dist {merge_dist:.4f}.")
+    if abs(merge_dist - 0.2945) >= 0.02:
+        raise SystemExit(f"REGRESSION: merge_distance drifted to {merge_dist:.4f}.")
+    if abs(connect_dist - 0.5352) >= 0.02:
+        raise SystemExit(f"REGRESSION: connect_distance drifted to {connect_dist:.4f}.")
+    if abs(min(intra) - 0.236) >= 0.02 or abs(max(inter) - 0.706) >= 0.02:
+        raise SystemExit("REGRESSION: sim bands drifted.")
+    print("\nPROOF HOLDS: fail-closed guards passed (exits non-zero on drift, even under python -O).")
 
 
 if __name__ == "__main__":

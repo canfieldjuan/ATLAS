@@ -78,9 +78,9 @@ artifact re-run reproduces `0.295 / 0.535 / no pure-2 band`.
 |---|---:|
 | `docs/audits/resolution-audit-csv/FINDINGS.md` | 24 |
 | `docs/audits/resolution-audit-csv/INVESTIGATIONS.md` | 16 |
-| `docs/audits/resolution-audit-csv/investigations/c1_linkage_closure.py` | 84 |
+| `docs/audits/resolution-audit-csv/investigations/c1_linkage_closure.py` | 88 |
 | `plans/INDEX.md` | 4 |
 | `plans/PR-Resolution-Audit-Self-Correction-Round2.md` | 86 |
 | `plans/archive/PR-Resolution-Audit-Investigations.md` | 0 |
 | `plans/archive/PR-Resolution-Audit-Self-Correction.md` | 0 |
-| **Total** | **214** |
+| **Total** | **218** |
