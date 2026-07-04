@@ -1,6 +1,6 @@
 # Plan archive index
 
-1379 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1380 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -16,6 +16,7 @@
 - [PR-Agents-Session-Map-Guard](archive/PR-Agents-Session-Map-Guard.md) - lane: repo-workflow/session-discipline | phase: Workflow/process
 - [PR-Agents-Session-PR-Map](archive/PR-Agents-Session-PR-Map.md) - lane: repo-workflow/session-discipline | phase: Workflow/process
 - [PR-Archive-Current-Merged-Plans](archive/PR-Archive-Current-Merged-Plans.md) - lane: workflow/process | phase: Workflow/process
+- [PR-Archive-Merged-Plans-Housekeeping](archive/PR-Archive-Merged-Plans-Housekeeping.md) - lane: workflow/plan-archive-housekeeping | phase: Workflow/process
 - [PR-Archive-On-Merge-Ritual](archive/PR-Archive-On-Merge-Ritual.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Archive-Remaining-Merged-Plans](archive/PR-Archive-Remaining-Merged-Plans.md) - lane: dev-workflow/plan-archive-housekeeping | phase: Workflow/process
 - [PR-Archive-Resolution-Audit-Zendesk-Plans](archive/PR-Archive-Resolution-Audit-Zendesk-Plans.md) - lane: content-ops/resolution-audit-zendesk-writeback | phase: Workflow/process
