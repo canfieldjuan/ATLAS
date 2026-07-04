@@ -189,6 +189,12 @@ The reviewer should produce something like:
 ```
 **Reviewed head:** `<sha from checked-out PR head>`
 
+**Reconstruction (gaps first, per docs/PR_RECONSTRUCTION_PROTOCOL.md):**
+- Gaps: <diff != description / diff != correct fix / diff changes unmentioned
+  things>, each cited `file:line`.
+- Confirmed: <finding + citation>. Contradicted: <finding + citation>.
+  Could-not-determine: <finding + why unresolved>.
+
 **Verification (independent):**
 1. <claim from PR description> -- verified via <command>
 2. <invariant from Mechanism> -- confirmed at <file:line>
@@ -874,21 +880,23 @@ go in the §2a template.
 ### 4a. Independent verification
 
 **Reconstruct the PR independently from the diff -- never review it against its
-description** (`docs/PR_RECONSTRUCTION_PROTOCOL.md`, mandatory for every review):
-(1) read the diff alone and state what it actually does, change by change, in
-your own words -- the code is ground truth, the description/commit/title are
-unverified claims; (2) from the problem alone, derive what a correct fix would
-need to touch and change, without letting the diff shape the answer; (3) report
-every gap between what the diff does, what a correct fix should do, and what the
-description claims (diff != description; diff != correct fix; diff changes
-unmentioned things); (4) cite `file:line` for every claim, sort each into
-confirmed / contradicted / could-not-determine (never confirmed without a
-citation), and lead with the gaps.
+description** (`docs/PR_RECONSTRUCTION_PROTOCOL.md`, mandatory for every review).
+Build two INDEPENDENT reconstructions, then compare them:
 
-Run a **challenger pass first, before reading the builder's summary** -- the
-builder's confident narrative anchors you into believing the story. In order:
-read the Review Contract, predict which files *should* change and which tests
-*should* exist, *then* open the diff.
+1. **What the diff actually does** -- read the diff alone and state it change by
+   change, in your own words. The code is ground truth; the description, commit,
+   and title are unverified claims.
+2. **What a correct fix should do** -- from the problem and the Review Contract
+   alone, derive which files *should* change and which tests *should* exist,
+   without letting the diff shape the answer. This is the **challenger pass**:
+   do it before the builder's confident narrative -- and ideally before the
+   diff -- anchors you into believing the story.
+3. **Compare** those two against what the description claims and report every
+   gap: diff != description; diff != correct fix (wrong / incomplete / symptom
+   patch); diff changes unmentioned things.
+4. **Cite `file:line` for every claim**, sort each into confirmed /
+   contradicted / could-not-determine (never confirmed without a citation), and
+   lead with the gaps (record them in the §2a template's Reconstruction block).
 
 Don't trust the PR description's claims; reproduce them. The
 reviewer should:

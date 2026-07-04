@@ -5,7 +5,7 @@
 Reviews that trust the PR description reproduce the author's framing and miss
 where the diff diverges from a correct fix. This codifies the independent
 reconstruction method as the mandatory review protocol so it applies to every
-reviewer -- human Claude sessions, Codex, and the CI review action -- and
+reviewer -- human Claude sessions and the Codex/reconciliation gate -- and
 survives compactions and new sessions. Exemplar: on #1999 a review posted a
 BLOCKER + "six blocking findings" read off the description and stale bot
 thread-titles that the head code had already resolved; reconstructing from the
@@ -54,9 +54,10 @@ names the protocol mandatory and links the doc. No code paths change.
 ## Intentional
 
 - Codified in the repo (not only in a session memory) so it reaches Codex and
-  the CI review action, not just one session lineage. Session-local layers
-  (operator memory, global reviewer rules) mirror it for redundancy but the
-  repo doc is the canonical source.
+  the reconciliation gate, not just one session lineage. (No automated CI review
+  action exists in the repo today; wiring one is a when-added follow-up.)
+  Session-local layers (operator memory, global reviewer rules) mirror it for
+  redundancy but the repo doc is the canonical source.
 
 ## Deferred
 
@@ -73,7 +74,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | 12 |
-| `docs/PR_RECONSTRUCTION_PROTOCOL.md` | 47 |
-| `plans/PR-Reconstruction-Protocol.md` | 79 |
-| **Total** | **138** |
+| `AGENTS.md` | 28 |
+| `docs/PR_RECONSTRUCTION_PROTOCOL.md` | 49 |
+| `plans/PR-Reconstruction-Protocol.md` | 80 |
+| **Total** | **157** |

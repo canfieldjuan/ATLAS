@@ -1,8 +1,10 @@
 # PR Reconstruction Protocol
 
 Every PR review **reconstructs the PR independently from the diff**. Never
-review a PR against its description. This applies to all reviewers -- human
-Claude sessions, Codex, and the CI review action.
+review a PR against its description. This binds every reviewer that reads this
+contract -- human Claude sessions and the Codex/reconciliation review gate. (No
+automated CI review action exists in the repo today; when one is added, wire it
+to this protocol then.)
 
 ## Why
 
