@@ -200,6 +200,12 @@
     },
     "score": 7
   },
+  "scripts/audit_pr_watcher_safety.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
   "scripts/audit_pre_scrape_skip_gates.py": {
     "counts": {
       "NO_TEST_FILE": 1,
@@ -838,6 +844,12 @@
     },
     "score": 22
   },
+  "scripts/codex_wake_bridge.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
   "scripts/content_ops_faq_cli_rules.py": {
     "counts": {
       "NO_TEST_FILE": 1,
@@ -1317,6 +1329,12 @@
       "UNGUARDED_INPUT": 1
     },
     "score": 12
+  },
+  "scripts/report_pr_watcher_state.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
   },
   "scripts/requeue_30d_v3_witness_candidates.py": {
     "counts": {

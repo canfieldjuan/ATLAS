@@ -288,9 +288,43 @@ written threat model):
   static presence gate tracks names, not scopes. The review contract
   owns broken-by-scoping negatives, same as skipped tests.
 
+Review-fix notes (Codex wave 10; all five verified real, fixed at root):
+
+- **FIXED -- decorative keywords satisfied the raises arity**: any
+  keyword counted, so `pytest.raises(X, match="m")` as a bare statement
+  and `with self.assertRaises(msg="n"):` (unittest `msg=` fills no slot)
+  passed. Only slot-filling keywords count now -- `expected_exception=`
+  and, for assertRaisesRegex*, `expected_regex=` -- while the callable
+  (non-with) form requires the callable as a positional.
+- **FIXED -- a callable inside a with-item counted**:
+  `with pytest.raises(X, fn):` runs `fn` before the block and yields a
+  non-context-manager; the with-form now requires
+  `positional < callable_form_args`, rejecting it.
+- **FIXED -- methods from any class counted as collected**: pytest does
+  not collect test methods from an arbitrary `class Helper`. Methods now
+  count only from `Test*`-named classes or `*TestCase` subclasses
+  (`_is_collected_test_class`).
+- **FIXED -- unittest camelCase methods were missed**: the counter keyed
+  on `test_`, but pytest collects the `test*` prefix (`testRejectsBad`),
+  so a valid camelCase suite was misread as a stub. It matches the `test`
+  prefix now.
+- **Baseline consequence (grandfathered, logged on #1942)**: the more
+  accurate test count tips three pre-existing main-added sensitive
+  scripts (`audit_pr_watcher_safety.py`, `codex_wake_bridge.py`,
+  `report_pr_watcher_state.py`) over the `>= 3` NO_RAISES threshold --
+  each has 10-13 tests and zero raises assertions (verified real, not a
+  false fire). They were never in `baseline_scripts.json`; they are
+  recorded there now at their true state so the gate blocks NEW
+  violations without this slice smuggling in test changes to three
+  scripts it does not own. Adding their raises tests is deferred to their
+  owning lanes.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
+- Raises tests for the three grandfathered scripts
+  (`audit_pr_watcher_safety.py`, `codex_wake_bridge.py`,
+  `report_pr_watcher_state.py`) -- owned by their lanes, logged on #1942.
 - Trusted-base execution for the maturity-sweep workflows (the row-7
   residual surfaced in review; logged on #1942).
 - The row-2 reconciliation gap stays tracked on #1942 (unrelated to
@@ -329,10 +363,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
-| `plans/INDEX.md` | 1 |
-| `plans/PR-Negatives-Presence-Gate.md` | 338 |
+| `plans/INDEX.md` | 3 |
+| `plans/PR-Negatives-Presence-Gate.md` | 372 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
 | `scripts/maturity_sweep.py` | 178 |
-| `tests/maturity_sweep/baseline_scripts.json` | 29 |
+| `tests/maturity_sweep/baseline_scripts.json` | 47 |
 | `tests/test_maturity_sweep.py` | 1074 |
-| **Total** | **1626** |
+| **Total** | **1680** |
