@@ -188,6 +188,57 @@ fragmentation failure.
   amplification -> feeds Slice 3).
 - Clustering top-5 stable under +/-10% threshold perturbation (F10).
 
+## Slice 3 -- Performance (Phase 3)
+
+Measured on the real chain (`build_support_ticket_input_package` ->
+`FAQDeflectionReportService.generate` -> `build_ticket_faq_markdown`) with
+realistic ticket text (~256 bytes/row, 15% HTML). Scripts in `_audit_scratch/perf/`.
+Reviewer re-ran the scaling curve independently.
+
+### P1 -- ~20 uncached full passes + ~30M regex calls dominate; heavy linear constant [verified-by-reviewer]
+`build_support_ticket_input_package` makes ~15 separate O(n) passes over the rows
+(`support_ticket_input_package.py:404-422`), each re-invoking uncached field
+helpers; end-to-end there are ~20 full passes. cProfile at 10k tickets:
+`re.Pattern.sub` called **30.8M times (11.3s)**, `_key`
+(`support_ticket_input_package.py:990`) **8.6M calls (9.2s)**, `_first_value`
+(`:976`) 390k calls (10.3s), and `_field_value` (`ticket_faq_markdown.py:3381`)
+**854k calls (15.2s cumulative)**. Field normalization (`_key` = a `re.sub` per
+call) is re-run for every field on every pass with no memoization -- the dominant
+cost. Fix: memoize `_key`/normalized-field lookups and collapse the ~20 passes.
+- Severity: HIGH. Repro: `_audit_scratch/perf/profile_cprofile.py`, `cprofile_10k.txt`.
+
+### P2 -- Impractically slow for a synchronous request; needs chunking/async at scale [verified-by-reviewer]
+Measured total time (reviewer clean run): 2k=4.2s, 5k=9.2s, **10k=18.6s** (agent's
+loaded run measured 73s at 10k). **Scaling is ~linear** (per-ticket ~1.86ms,
+doubling n -> ~2.0x time -- not O(n^2)). Extrapolated: 100k ~= 3-6 min, 500k ~=
+15-30 min in one request. A realistic large upload cannot complete synchronously.
+- Severity: HIGH. Repro: reviewer sweep via `_audit_scratch/perf/harness.py` at 2k/5k/10k.
+
+### P3 -- The O(n^2) token-set clustering is gated OFF above 2000 rows (no blowup, but silent preview loss) [verified-by-reviewer]
+`support_ticket_clustering.py` bucket matching is O(n^2)-ish, but the preview is
+skipped above `MAX_TOKEN_SET_CLUSTER_ROWS=2000` (`:249`) -- confirmed: `build_package`
+is flat (~0.65s) for short-text rows 1k-8k because the token-set pass is skipped
+(`cluster_preview_skipped: true`). So no quadratic blowup at scale, but any file
+>2000 rows silently gets NO token-set cluster preview / diagnostic counts. The
+billed grouping (`ticket_faq_markdown`) still runs.
+- Severity: MEDIUM.
+
+### P4 -- ~27-40x file->RAM amplification [verified-by-reviewer]
+10k tickets / 2.4 MiB input -> peak RSS **66-97 MiB** (reviewer 27x; agent 40x).
+Multiple full copies held simultaneously (raw rows -> source_material -> package ->
+groups). At 500k rows the parse layer alone peaked ~243 MiB (Slice 2); the full
+pipeline multiplier is higher.
+- Severity: MEDIUM. Repro: `_audit_scratch/perf/harness.py` (rss_peak_mib).
+
+### P5 -- Redundant recomputation: fields re-derived ~85x/ticket + metrics computed twice
+`_field_value` at 854k calls for 10k tickets (~85 derivations per ticket) reflects
+the same fields recomputed across passes. Separately (Phase 0), support-tax metrics
+are computed twice -- structured model `_support_tax_data:3208` vs prose
+`_support_tax_section:4034` -- and the snapshot re-derives via the same helpers. No
+cache exists between the snapshot and full-report computation on one file, or between
+reruns. Fix pairs with P1 (single normalized pass + one metrics computation).
+- Severity: MEDIUM.
+
 ## Single highest-leverage fixes
 
 1. **Clustering fragmentation (F1/F3/F6):** the token-set topic partition producing
