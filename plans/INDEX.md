@@ -1,6 +1,6 @@
 # Plan archive index
 
-1272 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1283 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -987,6 +987,7 @@
 - [PR-FAQ-Get-Draft-Postgres-Isolation](archive/PR-FAQ-Get-Draft-Postgres-Isolation.md) - lane: content-ops/faq-output-ingestion | phase: Functional validation
 - [PR-FAQ-Intent-Rule-Regression-Net](archive/PR-FAQ-Intent-Rule-Regression-Net.md) - lane: content-ops/deflection-report-ui | phase: Functional validation
 - [PR-FAQ-Live-Run-Blocker-Preflight](archive/PR-FAQ-Live-Run-Blocker-Preflight.md) - lane: content-ops/faq-search | phase: Functional validation.
+- [PR-FAQ-Macro-Writeback-Approve-On-Publish-CAS](archive/PR-FAQ-Macro-Writeback-Approve-On-Publish-CAS.md) - lane: content-ops/resolution-audit-zendesk-writeback | phase: Vertical slice
 - [PR-FAQ-Macro-Writeback-Content-Hash-Update](archive/PR-FAQ-Macro-Writeback-Content-Hash-Update.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
 - [PR-FAQ-Macro-Writeback-Credential-API](archive/PR-FAQ-Macro-Writeback-Credential-API.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
 - [PR-FAQ-Macro-Writeback-Credential-Fallback-Fail-Closed](archive/PR-FAQ-Macro-Writeback-Credential-Fallback-Fail-Closed.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
@@ -1130,6 +1131,9 @@
 - [PR-Live-Provider-Circular-Import](archive/PR-Live-Provider-Circular-Import.md)
 - [PR-Live-Smoke-Saved-Draft-Export](archive/PR-Live-Smoke-Saved-Draft-Export.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Local-MCP-Model-Eval-Harness](archive/PR-Local-MCP-Model-Eval-Harness.md) - lane: mcp/local-model-evals | phase: Vertical slice
+- [PR-Long-Running-Hook-Split](archive/PR-Long-Running-Hook-Split.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
+- [PR-Long-Running-Monitoring-Spec](archive/PR-Long-Running-Monitoring-Spec.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
+- [PR-Long-Running-Watcher-Handoff](archive/PR-Long-Running-Watcher-Handoff.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-Lucide-React-Major-Batch](archive/PR-Lucide-React-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-MCP-ChatGPT-OAuth-Rollout-Runbook](archive/PR-MCP-ChatGPT-OAuth-Rollout-Runbook.md)
 - [PR-MCP-Connector-Session-Handoff](archive/PR-MCP-Connector-Session-Handoff.md)
@@ -1143,6 +1147,7 @@
 - [PR-Maturity-Sweep-Baseline-Report](archive/PR-Maturity-Sweep-Baseline-Report.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Gate-Scope](archive/PR-Maturity-Sweep-Gate-Scope.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Internal-Mock-Ratchet](archive/PR-Maturity-Sweep-Internal-Mock-Ratchet.md) - lane: real-adapters/test-quality | phase: Workflow/process
+- [PR-Maturity-Sweep-Matrix](archive/PR-Maturity-Sweep-Matrix.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-Maturity-Sweep-Phase-C1-Extracted-Core](archive/PR-Maturity-Sweep-Phase-C1-Extracted-Core.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence](archive/PR-Maturity-Sweep-Phase-C2-Competitive-Intelligence.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Phase-C3-LLM-Infrastructure](archive/PR-Maturity-Sweep-Phase-C3-LLM-Infrastructure.md) - lane: ci/maturity-sweep | phase: Production hardening
@@ -1178,7 +1183,11 @@
 - [PR-Reasoning-Core-Reflection-Port-Adapter-2026-05-17](archive/PR-Reasoning-Core-Reflection-Port-Adapter-2026-05-17.md)
 - [PR-Reasoning-Enrichment-Pack-Split](archive/PR-Reasoning-Enrichment-Pack-Split.md)
 - [PR-Reasoning-Phrase-Metadata-Utility](archive/PR-Reasoning-Phrase-Metadata-Utility.md)
+- [PR-Reddit-Fit-Client](archive/PR-Reddit-Fit-Client.md) - lane: content-ops/reddit-listening/fit-eval | phase: Vertical slice
+- [PR-Reddit-Fit-Contract](archive/PR-Reddit-Fit-Contract.md) - lane: content-ops/reddit-listening/fit-eval | phase: Vertical slice
 - [PR-Reddit-Fit-Eval-Harness](archive/PR-Reddit-Fit-Eval-Harness.md) - lane: content-ops/reddit-listening/fit-eval | phase: Robust testing
+- [PR-Reddit-Fit-Guard](archive/PR-Reddit-Fit-Guard.md) - lane: content-ops/reddit-listening/fit-eval | phase: Vertical slice
+- [PR-Reddit-Fit-Store](archive/PR-Reddit-Fit-Store.md) - lane: content-ops/reddit-listening/fit-eval | phase: Vertical slice
 - [PR-Reddit-Listening-Config-Scoring](archive/PR-Reddit-Listening-Config-Scoring.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Digest](archive/PR-Reddit-Listening-Digest.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Hardening](archive/PR-Reddit-Listening-Hardening.md) - lane: content-ops/reddit-listening/hardening | phase: Production hardening
@@ -1189,6 +1198,7 @@
 - [PR-Refresh-CLAUDE-Md](archive/PR-Refresh-CLAUDE-Md.md)
 - [PR-Remove-Query-Token-Auth](archive/PR-Remove-Query-Token-Auth.md) - lane: security/hardening-1656 | phase: Production hardening
 - [PR-Resolution-Audit-Artifact-Title](archive/PR-Resolution-Audit-Artifact-Title.md) - lane: deflection/report-artifact-naming | phase: Product polish
+- [PR-Resolution-Audit-Zendesk-Writeback](archive/PR-Resolution-Audit-Zendesk-Writeback.md) - lane: content-ops/resolution-audit-zendesk-writeback | phase: Vertical slice
 - [PR-Revert-Drone-Client-Python-314](archive/PR-Revert-Drone-Client-Python-314.md) - lane: infra/docker-base-images | phase: Production hardening
 - [PR-Review-Rule-Fix-Class-Not-Example](archive/PR-Review-Rule-Fix-Class-Not-Example.md) - lane: dev-workflow/review-contract | phase: Workflow/process
 - [PR-Reviewer-Codebase-Verification-Rule](archive/PR-Reviewer-Codebase-Verification-Rule.md) - lane: workflow/process | phase: Workflow/process
@@ -1209,6 +1219,7 @@
 - [PR-Security-Paid-Funnel-Alert-Channel](archive/PR-Security-Paid-Funnel-Alert-Channel.md) - lane: security/paid-funnel-alert-channel | phase: Production hardening
 - [PR-Security-Structured-JSON-Logging](archive/PR-Security-Structured-JSON-Logging.md) - lane: security/structured-json-logging | phase: Production hardening
 - [PR-Semantic-Diff-Advisor-CI](archive/PR-Semantic-Diff-Advisor-CI.md) - lane: review-workflow | phase: workflow/process
+- [PR-Session-Bootstrap-Temporal-Discipline](archive/PR-Session-Bootstrap-Temporal-Discipline.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-Spark-Routing-Light-Enforcement](archive/PR-Spark-Routing-Light-Enforcement.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Spark-Subagent-Routing-Docs](archive/PR-Spark-Subagent-Routing-Docs.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Stale-Base-Push-Guard](archive/PR-Stale-Base-Push-Guard.md) - lane: workflow/process | phase: Workflow/process

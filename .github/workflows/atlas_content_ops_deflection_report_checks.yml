@@ -7,7 +7,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_deflection_report_checks.yml"
-      - "requirements.txt"
+      - "requirements.content_ops_ci.txt"
       - "atlas_brain/autonomous/scheduler.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
       - "atlas_brain/autonomous/tasks/content_ops_deflection_delta_automation.py"
@@ -26,6 +26,7 @@ on:
       - "portfolio-ui/src/types/deflectionReportModel.ts"
       - "portfolio-ui/src/types/deflectionSnapshot.ts"
       - "tests/test_content_ops_deflection_report.py"
+      - "tests/test_content_ops_ci_requirements_workflows.py"
       - "tests/test_deflection_delta_automation_task.py"
       - "tests/test_deflection_snapshot_report_drift.py"
       - "tests/test_generate_deflection_frontend_contract_types.py"
@@ -38,7 +39,7 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_deflection_report_checks.yml"
-      - "requirements.txt"
+      - "requirements.content_ops_ci.txt"
       - "atlas_brain/autonomous/scheduler.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
       - "atlas_brain/autonomous/tasks/content_ops_deflection_delta_automation.py"
@@ -57,6 +58,7 @@ on:
       - "portfolio-ui/src/types/deflectionReportModel.ts"
       - "portfolio-ui/src/types/deflectionSnapshot.ts"
       - "tests/test_content_ops_deflection_report.py"
+      - "tests/test_content_ops_ci_requirements_workflows.py"
       - "tests/test_deflection_delta_automation_task.py"
       - "tests/test_deflection_snapshot_report_drift.py"
       - "tests/test_generate_deflection_frontend_contract_types.py"
@@ -93,12 +95,12 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: requirements.content_ops_ci.txt
 
       - name: Install runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m pip install asyncpg pytest pytest-asyncio
+          pip install -r requirements.content_ops_ci.txt
 
       - name: Run Content Ops deflection report tests
         run: |
@@ -122,6 +124,7 @@ jobs:
             tests/test_content_ops_deflection_report.py::test_retention_runner_resolves_database_url_from_non_argv_sources \
             tests/test_content_ops_deflection_report.py::test_retention_runner_preflights_output_before_opening_pool \
             tests/test_content_ops_deflection_report.py::test_retention_runner_output_failure_after_purge_falls_back_to_stdout \
+            tests/test_content_ops_ci_requirements_workflows.py \
             tests/test_deflection_delta_automation_task.py \
             tests/test_deflection_snapshot_report_drift.py \
             tests/test_run_deflection_full_report_qa_live_runner.py \

@@ -65,6 +65,7 @@ pytest \
   tests/test_content_ops_deflection_delta_go_live_runbook.py \
   tests/test_content_ops_deflection_launch_preflight_runbook.py \
   tests/test_content_ops_deflection_resolution_live_proof.py \
+  tests/test_content_ops_ci_requirements_workflows.py \
   tests/test_extracted_content_deflection_submit.py \
   tests/test_prepare_content_ops_deflection_env.py \
   tests/test_smoke_content_ops_deflection_submit_handoff.py \

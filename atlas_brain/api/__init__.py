@@ -176,6 +176,7 @@ try:
         build_content_ops_skill_store,
     )
     from .._content_ops_macro_writeback import (
+        build_content_ops_faq_macro_publish_service,
         build_content_ops_macro_publish_provider,
     )
     from .._content_ops_brand_voice_profiles import lookup_brand_voice_profile
@@ -300,6 +301,9 @@ try:
         input_provider=build_content_ops_input_provider(pool_provider=get_db_pool),
         deflection_report_store_provider=lambda: (
             PostgresDeflectionReportArtifactStore(pool=get_db_pool())
+        ),
+        faq_macro_publish_service_provider=lambda: (
+            build_content_ops_faq_macro_publish_service(pool_provider=get_db_pool)
         ),
         cache_policy_default_provider=_content_ops_cache_policy_default,
         opportunity_import_pool_provider=get_db_pool,
