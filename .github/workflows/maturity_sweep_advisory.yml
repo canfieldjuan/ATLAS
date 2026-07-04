@@ -113,7 +113,8 @@ on:
       - "atlas_brain/services/scraping/**"
 
 jobs:
-  maturity-sweep:
+  maturity-sweep-unit-and-advisory:
+    name: Maturity sweep unit + advisory
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -136,6 +137,7 @@ jobs:
           python -m pytest \
             tests/test_maturity_sweep.py \
             tests/test_detect_retired_failure_modes.py \
+            tests/test_maturity_sweep_advisory_workflow.py \
             tests/test_retired_failure_detector_workflow.py \
             --noconftest \
             -q
@@ -151,271 +153,302 @@ jobs:
           echo
           python scripts/maturity_sweep.py extracted_content_pipeline --tests-root tests --top 25
 
-      - name: Maturity sweep ratchet gate (blocking)
-        run: |
-          python scripts/maturity_sweep.py extracted_content_pipeline \
-            --tests-root tests \
-            --baseline tests/maturity_sweep/baseline_extracted_content_pipeline.json \
-            --min-score 8 \
-            --sensitive-glob '**/billing/**' \
-            --sensitive-glob '**/paid*' \
-            --sensitive-glob '**/auth/**' \
-            --sensitive-glob '**/webhook*' \
-            --sensitive-glob '**/payment*' \
-            --sensitive-glob '**/*deletion*'
+  maturity-sweep-ratchets:
+    name: Maturity sweep ratchet (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: extracted-content-pipeline
+            command: |
+              python scripts/maturity_sweep.py extracted_content_pipeline \
+                --tests-root tests \
+                --baseline tests/maturity_sweep/baseline_extracted_content_pipeline.json \
+                --min-score 8 \
+                --sensitive-glob '**/billing/**' \
+                --sensitive-glob '**/paid*' \
+                --sensitive-glob '**/auth/**' \
+                --sensitive-glob '**/webhook*' \
+                --sensitive-glob '**/payment*' \
+                --sensitive-glob '**/*deletion*'
+          - group: phase-c1-extracted-core
+            command: |
+              set -euo pipefail
+              for lane in extracted_reasoning_core extracted_quality_gate extracted_evidence_to_story; do
+                echo "::group::${lane}"
+                python scripts/maturity_sweep.py "${lane}" \
+                  --tests-root tests \
+                  --baseline "tests/maturity_sweep/baseline_${lane}.json" \
+                  --min-score 8 \
+                  --sensitive-glob "${lane}/**"
+                echo "::endgroup::"
+              done
+          - group: phase-c2-competitive-intelligence
+            command: |
+              set -euo pipefail
+              python scripts/maturity_sweep.py extracted_competitive_intelligence \
+                --tests-root tests \
+                --baseline tests/maturity_sweep/baseline_extracted_competitive_intelligence.json \
+                --min-score 8 \
+                --sensitive-glob 'extracted_competitive_intelligence/**'
+          - group: phase-c3-llm-infrastructure
+            command: |
+              set -euo pipefail
+              python scripts/maturity_sweep.py extracted_llm_infrastructure \
+                --tests-root tests \
+                --baseline tests/maturity_sweep/baseline_extracted_llm_infrastructure.json \
+                --min-score 8 \
+                --sensitive-glob 'extracted_llm_infrastructure/**'
+          - group: phase-c4-scripts
+            command: |
+              set -euo pipefail
+              python scripts/maturity_sweep.py scripts \
+                --tests-root tests \
+                --baseline tests/maturity_sweep/baseline_scripts.json \
+                --min-score 8 \
+                --sensitive-glob 'scripts/**'
+          - group: atlas-brain-api
+            command: |
+              python scripts/maturity_sweep.py atlas_brain/api \
+                --tests-root tests \
+                --baseline tests/maturity_sweep/baseline_atlas_brain_api.json \
+                --min-score 8 \
+                --sensitive-glob '**/billing/**' \
+                --sensitive-glob '**/billing*' \
+                --sensitive-glob '**/paid*' \
+                --sensitive-glob '**/auth/**' \
+                --sensitive-glob '**/auth*' \
+                --sensitive-glob '**/webhook*' \
+                --sensitive-glob '**/webhooks/**' \
+                --sensitive-glob '**/payment*' \
+                --sensitive-glob '**/invoicing/**' \
+                --sensitive-glob '**/*invoice*' \
+                --sensitive-glob '**/*deletion*'
+          - group: atlas-brain-auth
+            command: |
+              python scripts/maturity_sweep.py atlas_brain/auth \
+                --tests-root tests \
+                --baseline tests/maturity_sweep/baseline_atlas_brain_auth.json \
+                --min-score 8 \
+                --sensitive-glob '**/*'
+          - group: atlas-brain-autonomous
+            command: |
+              python scripts/maturity_sweep.py atlas_brain/autonomous \
+                --tests-root tests \
+                --baseline tests/maturity_sweep/baseline_atlas_brain_autonomous.json \
+                --min-score 8 \
+                --sensitive-glob '**/billing/**' \
+                --sensitive-glob '**/billing*' \
+                --sensitive-glob '**/paid*' \
+                --sensitive-glob '**/auth/**' \
+                --sensitive-glob '**/webhook*' \
+                --sensitive-glob '**/webhooks/**' \
+                --sensitive-glob '**/payment*' \
+                --sensitive-glob '**/invoicing/**' \
+                --sensitive-glob '**/*invoice*' \
+                --sensitive-glob '**/*deletion*'
+          - group: atlas-brain-mcp
+            command: |
+              python scripts/maturity_sweep.py atlas_brain/mcp \
+                --tests-root tests \
+                --baseline tests/maturity_sweep/baseline_atlas_brain_mcp.json \
+                --min-score 8 \
+                --sensitive-glob '**/*'
+          - group: atlas-brain-services-b2b
+            command: |
+              python scripts/maturity_sweep.py atlas_brain/services/b2b \
+                --tests-root tests \
+                --baseline tests/maturity_sweep/baseline_atlas_brain_services_b2b.json \
+                --min-score 8 \
+                --sensitive-glob '**/billing/**' \
+                --sensitive-glob '**/billing*' \
+                --sensitive-glob '**/paid*' \
+                --sensitive-glob '**/auth/**' \
+                --sensitive-glob '**/webhook*' \
+                --sensitive-glob '**/payment*' \
+                --sensitive-glob '**/*deletion*'
+          - group: atlas-brain-b2a-support
+            command: |
+              set -euo pipefail
+              common_sensitive_args=(
+                --sensitive-glob '**/billing/**'
+                --sensitive-glob '**/billing*'
+                --sensitive-glob '**/paid*'
+                --sensitive-glob '**/auth/**'
+                --sensitive-glob '**/auth*'
+                --sensitive-glob '**/webhook*'
+                --sensitive-glob '**/webhooks/**'
+                --sensitive-glob '**/*webhook*/**'
+                --sensitive-glob '**/payment*'
+                --sensitive-glob '**/invoicing/**'
+                --sensitive-glob '**/*invoice*'
+                --sensitive-glob '**/*deletion*'
+              )
+              for lane in alerts brand discovery escalation events jobs memory modes orchestration pipelines presence schemas templates utils; do
+                echo "::group::atlas_brain/${lane}"
+                python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+                  --tests-root tests \
+                  --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
+                  --min-score 8 \
+                  "${common_sensitive_args[@]}"
+                echo "::endgroup::"
+              done
+          - group: atlas-brain-b2b-service-comms
+            command: |
+              set -euo pipefail
+              common_sensitive_args=(
+                --sensitive-glob '**/billing/**'
+                --sensitive-glob '**/billing*'
+                --sensitive-glob '**/paid*'
+                --sensitive-glob '**/auth/**'
+                --sensitive-glob '**/auth*'
+                --sensitive-glob '**/webhook*'
+                --sensitive-glob '**/webhooks/**'
+                --sensitive-glob '**/*webhook*/**'
+                --sensitive-glob '**/payment*'
+                --sensitive-glob '**/invoicing/**'
+                --sensitive-glob '**/*invoice*'
+                --sensitive-glob '**/*deletion*'
+              )
+              lanes=(
+                comms
+                services/email_webhooks
+                services/embedding
+                services/llm
+                services/personaplex
+                services/speaker_id
+                skills
+                vision
+                voice
+              )
+              for lane in "${lanes[@]}"; do
+                slug="${lane//\//_}"
+                echo "::group::atlas_brain/${lane}"
+                python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+                  --tests-root tests \
+                  --baseline "tests/maturity_sweep/baseline_atlas_brain_${slug}.json" \
+                  --min-score 8 \
+                  "${common_sensitive_args[@]}"
+                echo "::endgroup::"
+              done
+          - group: atlas-brain-b2c-core-risk
+            command: |
+              set -euo pipefail
+              common_sensitive_args=(
+                --sensitive-glob '**/billing/**'
+                --sensitive-glob '**/billing*'
+                --sensitive-glob '**/paid*'
+                --sensitive-glob '**/auth/**'
+                --sensitive-glob '**/auth*'
+                --sensitive-glob '**/webhook*'
+                --sensitive-glob '**/webhooks/**'
+                --sensitive-glob '**/*webhook*/**'
+                --sensitive-glob '**/payment*'
+                --sensitive-glob '**/invoicing/**'
+                --sensitive-glob '**/*invoice*'
+                --sensitive-glob '**/*deletion*'
+                --sensitive-glob '**/delete*/**'
+                --sensitive-glob 'atlas_brain/security/**'
+                --sensitive-glob 'atlas_brain/storage/**'
+              )
+              for lane in reasoning security storage; do
+                echo "::group::atlas_brain/${lane}"
+                python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+                  --tests-root tests \
+                  --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
+                  --min-score 8 \
+                  "${common_sensitive_args[@]}"
+                echo "::endgroup::"
+              done
+          - group: atlas-brain-b2d-runtime-control
+            command: |
+              set -euo pipefail
+              common_sensitive_args=(
+                --sensitive-glob '**/billing/**'
+                --sensitive-glob '**/billing*'
+                --sensitive-glob '**/paid*'
+                --sensitive-glob '**/auth/**'
+                --sensitive-glob '**/auth*'
+                --sensitive-glob '**/webhook*'
+                --sensitive-glob '**/webhooks/**'
+                --sensitive-glob '**/*webhook*/**'
+                --sensitive-glob '**/payment*'
+                --sensitive-glob '**/invoicing/**'
+                --sensitive-glob '**/*invoice*'
+                --sensitive-glob '**/*deletion*'
+                --sensitive-glob '**/delete*/**'
+                --sensitive-glob '**/security.py'
+                --sensitive-glob '**/security/**'
+              )
+              for lane in agents capabilities tools; do
+                echo "::group::atlas_brain/${lane}"
+                python scripts/maturity_sweep.py "atlas_brain/${lane}" \
+                  --tests-root tests \
+                  --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
+                  --min-score 8 \
+                  "${common_sensitive_args[@]}"
+                echo "::endgroup::"
+              done
+          - group: atlas-brain-b2e-scraping
+            command: |
+              set -euo pipefail
+              common_sensitive_args=(
+                --sensitive-glob '**/billing/**'
+                --sensitive-glob '**/billing*'
+                --sensitive-glob '**/paid*'
+                --sensitive-glob '**/auth/**'
+                --sensitive-glob '**/auth*'
+                --sensitive-glob '**/webhook*'
+                --sensitive-glob '**/webhooks/**'
+                --sensitive-glob '**/*webhook*/**'
+                --sensitive-glob '**/payment*'
+                --sensitive-glob '**/invoicing/**'
+                --sensitive-glob '**/*invoice*'
+                --sensitive-glob '**/*deletion*'
+                --sensitive-glob '**/delete*/**'
+                --sensitive-glob 'atlas_brain/services/scraping/**'
+              )
+              python scripts/maturity_sweep.py atlas_brain/services/scraping \
+                --tests-root tests \
+                --baseline tests/maturity_sweep/baseline_atlas_brain_services_scraping.json \
+                --min-score 8 \
+                "${common_sensitive_args[@]}"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Maturity sweep Phase C1 extracted core ratchet gates (blocking)
-        run: |
-          set -euo pipefail
-          for lane in extracted_reasoning_core extracted_quality_gate extracted_evidence_to_story; do
-            echo "::group::${lane}"
-            python scripts/maturity_sweep.py "${lane}" \
-              --tests-root tests \
-              --baseline "tests/maturity_sweep/baseline_${lane}.json" \
-              --min-score 8 \
-              --sensitive-glob "${lane}/**"
-            echo "::endgroup::"
-          done
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
 
-      - name: Maturity sweep Phase C2 competitive intelligence ratchet gate (blocking)
+      # The sweep itself is stdlib-only; each matrix leg runs one independent
+      # ratchet group so PR wall time trends toward the slowest group, not the
+      # sum of every group.
+      - name: Run maturity sweep ratchet group
+        shell: bash
         run: |
-          set -euo pipefail
-          python scripts/maturity_sweep.py extracted_competitive_intelligence \
-            --tests-root tests \
-            --baseline tests/maturity_sweep/baseline_extracted_competitive_intelligence.json \
-            --min-score 8 \
-            --sensitive-glob 'extracted_competitive_intelligence/**'
+          ${{ matrix.command }}
 
-      - name: Maturity sweep Phase C3 LLM infrastructure ratchet gate (blocking)
+  maturity-sweep:
+    name: maturity-sweep
+    runs-on: ubuntu-latest
+    needs:
+      - maturity-sweep-unit-and-advisory
+      - maturity-sweep-ratchets
+    if: always()
+    steps:
+      - name: Require all maturity sweep jobs
+        shell: bash
         run: |
-          set -euo pipefail
-          python scripts/maturity_sweep.py extracted_llm_infrastructure \
-            --tests-root tests \
-            --baseline tests/maturity_sweep/baseline_extracted_llm_infrastructure.json \
-            --min-score 8 \
-            --sensitive-glob 'extracted_llm_infrastructure/**'
-
-      - name: Maturity sweep Phase C4 scripts ratchet gate (blocking)
-        run: |
-          set -euo pipefail
-          python scripts/maturity_sweep.py scripts \
-            --tests-root tests \
-            --baseline tests/maturity_sweep/baseline_scripts.json \
-            --min-score 8 \
-            --sensitive-glob 'scripts/**'
-
-      - name: Maturity sweep atlas_brain/api ratchet gate (blocking)
-        run: |
-          python scripts/maturity_sweep.py atlas_brain/api \
-            --tests-root tests \
-            --baseline tests/maturity_sweep/baseline_atlas_brain_api.json \
-            --min-score 8 \
-            --sensitive-glob '**/billing/**' \
-            --sensitive-glob '**/billing*' \
-            --sensitive-glob '**/paid*' \
-            --sensitive-glob '**/auth/**' \
-            --sensitive-glob '**/auth*' \
-            --sensitive-glob '**/webhook*' \
-            --sensitive-glob '**/webhooks/**' \
-            --sensitive-glob '**/payment*' \
-            --sensitive-glob '**/invoicing/**' \
-            --sensitive-glob '**/*invoice*' \
-            --sensitive-glob '**/*deletion*'
-
-      - name: Maturity sweep atlas_brain/auth ratchet gate (blocking)
-        run: |
-          python scripts/maturity_sweep.py atlas_brain/auth \
-            --tests-root tests \
-            --baseline tests/maturity_sweep/baseline_atlas_brain_auth.json \
-            --min-score 8 \
-            --sensitive-glob '**/*'
-
-      - name: Maturity sweep atlas_brain/autonomous ratchet gate (blocking)
-        run: |
-          python scripts/maturity_sweep.py atlas_brain/autonomous \
-            --tests-root tests \
-            --baseline tests/maturity_sweep/baseline_atlas_brain_autonomous.json \
-            --min-score 8 \
-            --sensitive-glob '**/billing/**' \
-            --sensitive-glob '**/billing*' \
-            --sensitive-glob '**/paid*' \
-            --sensitive-glob '**/auth/**' \
-            --sensitive-glob '**/webhook*' \
-            --sensitive-glob '**/webhooks/**' \
-            --sensitive-glob '**/payment*' \
-            --sensitive-glob '**/invoicing/**' \
-            --sensitive-glob '**/*invoice*' \
-            --sensitive-glob '**/*deletion*'
-
-      - name: Maturity sweep atlas_brain/mcp ratchet gate (blocking)
-        run: |
-          python scripts/maturity_sweep.py atlas_brain/mcp \
-            --tests-root tests \
-            --baseline tests/maturity_sweep/baseline_atlas_brain_mcp.json \
-            --min-score 8 \
-            --sensitive-glob '**/*'
-
-      - name: Maturity sweep atlas_brain/services/b2b ratchet gate (blocking)
-        run: |
-          python scripts/maturity_sweep.py atlas_brain/services/b2b \
-            --tests-root tests \
-            --baseline tests/maturity_sweep/baseline_atlas_brain_services_b2b.json \
-            --min-score 8 \
-            --sensitive-glob '**/billing/**' \
-            --sensitive-glob '**/billing*' \
-            --sensitive-glob '**/paid*' \
-            --sensitive-glob '**/auth/**' \
-            --sensitive-glob '**/webhook*' \
-            --sensitive-glob '**/payment*' \
-            --sensitive-glob '**/*deletion*'
-
-      - name: Maturity sweep atlas_brain B2a support ratchet gates (blocking)
-        run: |
-          set -euo pipefail
-          common_sensitive_args=(
-            --sensitive-glob '**/billing/**'
-            --sensitive-glob '**/billing*'
-            --sensitive-glob '**/paid*'
-            --sensitive-glob '**/auth/**'
-            --sensitive-glob '**/auth*'
-            --sensitive-glob '**/webhook*'
-            --sensitive-glob '**/webhooks/**'
-            --sensitive-glob '**/*webhook*/**'
-            --sensitive-glob '**/payment*'
-            --sensitive-glob '**/invoicing/**'
-            --sensitive-glob '**/*invoice*'
-            --sensitive-glob '**/*deletion*'
-          )
-          for lane in alerts brand discovery escalation events jobs memory modes orchestration pipelines presence schemas templates utils; do
-            echo "::group::atlas_brain/${lane}"
-            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
-              --tests-root tests \
-              --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
-              --min-score 8 \
-              "${common_sensitive_args[@]}"
-            echo "::endgroup::"
-          done
-
-      - name: Maturity sweep atlas_brain B2b service/comms ratchet gates (blocking)
-        run: |
-          set -euo pipefail
-          common_sensitive_args=(
-            --sensitive-glob '**/billing/**'
-            --sensitive-glob '**/billing*'
-            --sensitive-glob '**/paid*'
-            --sensitive-glob '**/auth/**'
-            --sensitive-glob '**/auth*'
-            --sensitive-glob '**/webhook*'
-            --sensitive-glob '**/webhooks/**'
-            --sensitive-glob '**/*webhook*/**'
-            --sensitive-glob '**/payment*'
-            --sensitive-glob '**/invoicing/**'
-            --sensitive-glob '**/*invoice*'
-            --sensitive-glob '**/*deletion*'
-          )
-          lanes=(
-            comms
-            services/email_webhooks
-            services/embedding
-            services/llm
-            services/personaplex
-            services/speaker_id
-            skills
-            vision
-            voice
-          )
-          for lane in "${lanes[@]}"; do
-            slug="${lane//\//_}"
-            echo "::group::atlas_brain/${lane}"
-            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
-              --tests-root tests \
-              --baseline "tests/maturity_sweep/baseline_atlas_brain_${slug}.json" \
-              --min-score 8 \
-              "${common_sensitive_args[@]}"
-            echo "::endgroup::"
-          done
-
-      - name: Maturity sweep atlas_brain B2c core-risk ratchet gates (blocking)
-        run: |
-          set -euo pipefail
-          common_sensitive_args=(
-            --sensitive-glob '**/billing/**'
-            --sensitive-glob '**/billing*'
-            --sensitive-glob '**/paid*'
-            --sensitive-glob '**/auth/**'
-            --sensitive-glob '**/auth*'
-            --sensitive-glob '**/webhook*'
-            --sensitive-glob '**/webhooks/**'
-            --sensitive-glob '**/*webhook*/**'
-            --sensitive-glob '**/payment*'
-            --sensitive-glob '**/invoicing/**'
-            --sensitive-glob '**/*invoice*'
-            --sensitive-glob '**/*deletion*'
-            --sensitive-glob '**/delete*/**'
-            --sensitive-glob 'atlas_brain/security/**'
-            --sensitive-glob 'atlas_brain/storage/**'
-          )
-          for lane in reasoning security storage; do
-            echo "::group::atlas_brain/${lane}"
-            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
-              --tests-root tests \
-              --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
-              --min-score 8 \
-              "${common_sensitive_args[@]}"
-            echo "::endgroup::"
-          done
-
-      - name: Maturity sweep atlas_brain B2d runtime-control ratchet gates (blocking)
-        run: |
-          set -euo pipefail
-          common_sensitive_args=(
-            --sensitive-glob '**/billing/**'
-            --sensitive-glob '**/billing*'
-            --sensitive-glob '**/paid*'
-            --sensitive-glob '**/auth/**'
-            --sensitive-glob '**/auth*'
-            --sensitive-glob '**/webhook*'
-            --sensitive-glob '**/webhooks/**'
-            --sensitive-glob '**/*webhook*/**'
-            --sensitive-glob '**/payment*'
-            --sensitive-glob '**/invoicing/**'
-            --sensitive-glob '**/*invoice*'
-            --sensitive-glob '**/*deletion*'
-            --sensitive-glob '**/delete*/**'
-            --sensitive-glob '**/security.py'
-            --sensitive-glob '**/security/**'
-          )
-          for lane in agents capabilities tools; do
-            echo "::group::atlas_brain/${lane}"
-            python scripts/maturity_sweep.py "atlas_brain/${lane}" \
-              --tests-root tests \
-              --baseline "tests/maturity_sweep/baseline_atlas_brain_${lane}.json" \
-              --min-score 8 \
-              "${common_sensitive_args[@]}"
-            echo "::endgroup::"
-          done
-
-      - name: Maturity sweep atlas_brain B2e scraping ratchet gate (blocking)
-        run: |
-          set -euo pipefail
-          common_sensitive_args=(
-            --sensitive-glob '**/billing/**'
-            --sensitive-glob '**/billing*'
-            --sensitive-glob '**/paid*'
-            --sensitive-glob '**/auth/**'
-            --sensitive-glob '**/auth*'
-            --sensitive-glob '**/webhook*'
-            --sensitive-glob '**/webhooks/**'
-            --sensitive-glob '**/*webhook*/**'
-            --sensitive-glob '**/payment*'
-            --sensitive-glob '**/invoicing/**'
-            --sensitive-glob '**/*invoice*'
-            --sensitive-glob '**/*deletion*'
-            --sensitive-glob '**/delete*/**'
-            --sensitive-glob 'atlas_brain/services/scraping/**'
-          )
-          python scripts/maturity_sweep.py atlas_brain/services/scraping \
-            --tests-root tests \
-            --baseline tests/maturity_sweep/baseline_atlas_brain_services_scraping.json \
-            --min-score 8 \
-            "${common_sensitive_args[@]}"
+          failed=0
+          if [ "${{ needs.maturity-sweep-unit-and-advisory.result }}" != "success" ]; then
+            echo "maturity-sweep-unit-and-advisory result: ${{ needs.maturity-sweep-unit-and-advisory.result }}"
+            failed=1
+          fi
+          if [ "${{ needs.maturity-sweep-ratchets.result }}" != "success" ]; then
+            echo "maturity-sweep-ratchets result: ${{ needs.maturity-sweep-ratchets.result }}"
+            failed=1
+          fi
+          exit "$failed"

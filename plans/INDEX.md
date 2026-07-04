@@ -1215,6 +1215,7 @@
 - [PR-Security-Paid-Funnel-Alert-Channel](archive/PR-Security-Paid-Funnel-Alert-Channel.md) - lane: security/paid-funnel-alert-channel | phase: Production hardening
 - [PR-Security-Structured-JSON-Logging](archive/PR-Security-Structured-JSON-Logging.md) - lane: security/structured-json-logging | phase: Production hardening
 - [PR-Semantic-Diff-Advisor-CI](archive/PR-Semantic-Diff-Advisor-CI.md) - lane: review-workflow | phase: workflow/process
+- [PR-Session-Bootstrap-Temporal-Discipline](archive/PR-Session-Bootstrap-Temporal-Discipline.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-Spark-Routing-Light-Enforcement](archive/PR-Spark-Routing-Light-Enforcement.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Spark-Subagent-Routing-Docs](archive/PR-Spark-Subagent-Routing-Docs.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Stale-Base-Push-Guard](archive/PR-Stale-Base-Push-Guard.md) - lane: workflow/process | phase: Workflow/process

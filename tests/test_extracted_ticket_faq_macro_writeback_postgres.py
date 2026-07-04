@@ -87,6 +87,7 @@ def _attempt_row(**overrides) -> dict:
         "failed_count": 0,
         "pending_reconcile_count": 0,
         "draft_status_updated": True,
+        "status_conflict": False,
         "skipped": "[]",
         "results": '[{"status":"updated","external_id":"macro-123"}]',
         "created_at": "2026-05-30 12:00:00+00:00",
@@ -340,6 +341,7 @@ async def test_record_publish_attempt_persists_summary_with_tenant_scope() -> No
     query, args = pool.execute_calls[0]
     assert "INSERT INTO ticket_faq_macro_publish_attempts" in query
     assert "account_id, faq_draft_id, draft_status, ok" in query
+    assert "draft_status_updated, status_conflict, skipped, results" in query
     assert args == (
         "acct-1",
         "11111111-1111-1111-1111-111111111111",
@@ -352,6 +354,7 @@ async def test_record_publish_attempt_persists_summary_with_tenant_scope() -> No
         0,
         0,
         True,
+        False,
         "[]",
         '[{"status":"updated","external_id":"macro-123","error":""}]',
     )
@@ -393,6 +396,7 @@ async def test_list_publish_attempts_filters_by_tenant_faq_and_limit() -> None:
         "failed_count": 0,
         "pending_reconcile_count": 0,
         "draft_status_updated": True,
+        "status_conflict": False,
         "skipped": [],
         "results": [{"status": "updated", "external_id": "macro-123"}],
         "created_at": "2026-05-30 12:00:00+00:00",

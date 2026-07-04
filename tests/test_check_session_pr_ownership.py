@@ -171,3 +171,21 @@ def test_main_accepts_may_touch_pr_when_owned_slot_is_empty(tmp_path, capsys) ->
 
     assert code == 0
     assert "session PR ownership check passed for PR #1189" in capsys.readouterr().out
+
+
+def test_main_reads_session_state_from_env(tmp_path, monkeypatch, capsys) -> None:
+    state_file = tmp_path / "SESSION_STATE.codex-workflow-1982.local.md"
+    state_file.write_text(_state_text(), encoding="utf-8")
+    monkeypatch.setenv("ATLAS_SESSION_STATE_FILE", str(state_file))
+
+    code = guard.main([
+        "--pr",
+        "1189",
+        "--branch",
+        "claude/pr-agents-session-pr-map",
+        "--head-sha",
+        "abc123",
+    ])
+
+    assert code == 0
+    assert "session PR ownership check passed for PR #1189" in capsys.readouterr().out

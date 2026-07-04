@@ -195,8 +195,14 @@ class PostgresTicketFAQRepository:
         status: str,
         *,
         scope: TenantScope,
+        expected_status: str | None = None,
     ) -> bool:
         async def _update(db: Any) -> bool:
+            params: list[Any] = [faq_id, status, scope.account_id or ""]
+            status_guard = ""
+            if expected_status is not None:
+                params.append(expected_status)
+                status_guard = "AND status = $4"
             rows = await db.fetch(
                 f"""
                 UPDATE ticket_faq_markdown
@@ -204,11 +210,10 @@ class PostgresTicketFAQRepository:
                        updated_at = NOW()
                  WHERE id = $1
                    AND account_id = $3
+                   {status_guard}
                 RETURNING {_TICKET_FAQ_COLUMNS}
                 """,
-                faq_id,
-                status,
-                scope.account_id or "",
+                *params,
             )
             drafts = tuple(_row_to_draft(row_to_dict(row)) for row in rows)
             if not drafts:
