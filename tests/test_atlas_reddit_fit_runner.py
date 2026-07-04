@@ -257,6 +257,79 @@ def test_digest_renders_guard_ok_fit_line_and_hides_blocked(store, tmp_path) -> 
     assert content.count("fit: yes") == 1
 
 
+def test_prompt_excludes_volatile_engagement_fields(store) -> None:
+    """The fit prompt is content-only, so the staleness hash covers exactly
+    what is sent -- an upvote must not make a review stale."""
+    from atlas_reddit.fit_runner import _candidate_prompt
+
+    _seed(store, "t3_a")
+    candidate = store.get_candidate("t3_a")
+    _system, user = _candidate_prompt(candidate)
+    user_text = user["content"]
+    assert "Reddit score" not in user_text
+    assert "Keyword score" not in user_text
+    assert "Comments:" not in user_text
+    assert "Docs vs product" in user_text  # content is still there
+
+
+def test_refresh_ignores_score_only_changes(store) -> None:
+    """A poll bumping only reddit_score/num_comments does not change the
+    prompt, so --refresh correctly skips (no wasted call on an upvote)."""
+    _seed(store, "t3_a", body="stable body")
+    _run(store, FakeTransport())
+    # re-observe with different engagement metrics, same content
+    store.upsert_candidate(
+        post_id="t3_a", subreddit="CustomerSuccess", title="Docs vs product",
+        url="https://www.reddit.com/r/CustomerSuccess/x/", author="u",
+        created_utc=NOW - 3600, reddit_score=999, num_comments=888,
+        keyword_score=3.0, final_score=3.0, matched_topics=("repeat-tickets",),
+        observed_at=NOW, body_excerpt="stable body",
+    )
+    transport = FakeTransport()
+    assert _run(store, transport, refresh=True).skipped == 1
+    assert transport.calls == 0
+
+
+def test_cli_eval_rejects_bad_corpus_before_calling_backend(tmp_path, monkeypatch, capsys) -> None:
+    from atlas_reddit.__main__ import main
+
+    cases = tmp_path / "cases.jsonl"
+    dup = json.dumps({
+        "case_id": "c1", "candidate": {"title": "t"}, "expected_verdicts": ["yes"],
+    })
+    cases.write_text(dup + "\n" + dup + "\n", encoding="utf-8")  # duplicate case_id
+    transport = FakeTransport()
+    _patch_client(monkeypatch, transport)
+    code = main([
+        "judge-fit", "--eval-cases", str(cases),
+        "--predictions-output", str(tmp_path / "p.jsonl"),
+    ])
+    assert code == 2
+    assert transport.calls == 0  # validated BEFORE any (paid) model call
+    assert "duplicate case_id" in capsys.readouterr().err
+
+
+def test_cli_eval_unwritable_output_exits_two(tmp_path, monkeypatch, capsys) -> None:
+    from atlas_reddit.__main__ import main
+
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(
+        json.dumps({"case_id": "c1", "candidate": {"title": "t"},
+                    "expected_verdicts": ["yes"]}) + "\n",
+        encoding="utf-8",
+    )
+    # a directory as the output path -> mkdir(parents) on a file-shaped path
+    # under it fails cleanly, not with a traceback
+    bad_out = tmp_path / "adir"
+    bad_out.mkdir()
+    _patch_client(monkeypatch, FakeTransport())
+    code = main([
+        "judge-fit", "--eval-cases", str(cases), "--predictions-output", str(bad_out),
+    ])
+    assert code == 2
+    assert "error:" in capsys.readouterr().err
+
+
 # -- judge-fit CLI ---------------------------------------------------------
 
 
@@ -296,7 +369,11 @@ def test_cli_judge_fit_eval_mode_writes_envelopes(tmp_path, monkeypatch, capsys)
 
     cases = tmp_path / "cases.jsonl"
     cases.write_text(
-        json.dumps({"case_id": "c1", "candidate": {"title": "t", "subreddit": "s"}}) + "\n",
+        json.dumps({
+            "case_id": "c1", "category": "obvious_fit",
+            "candidate": {"title": "Repeat questions despite docs", "subreddit": "CS"},
+            "expected_verdicts": ["yes"],
+        }) + "\n",
         encoding="utf-8",
     )
     out = tmp_path / "preds.jsonl"

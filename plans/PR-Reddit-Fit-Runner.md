@@ -114,6 +114,26 @@ sanitized like all Reddit text.
 - **The same ruler closes the arc**: eval envelopes feed the S1 harness with
   no adapter, so "the harness is the ruler" holds for live models too.
 
+Review-fix notes (Codex wave 1 on bea9c0b94; all 3 verified real and fixed
+at root in this PR):
+
+- **The prompt sent volatile fields the staleness hash omitted**
+  (keyword_score/reddit_score/num_comments), so a poll bumping only an
+  upvote left the review tied to a stale prompt under --refresh. Root fix:
+  the fit prompt is now CONTENT-ONLY (title/subreddit/body/topics) -- the
+  fit decision is about content, not vote count -- so the hash covers
+  exactly what is sent; probed both ways (content change re-judges, an
+  upvote-only change does not).
+- **Eval mode called the model before validating the corpus**: a corpus
+  the harness would reject (duplicate case_id, missing expected_verdicts, a
+  non-object candidate) still spent calls and could crash. Now the corpus
+  is validated with the SAME fit_eval.load_cases contract BEFORE any model
+  call; probed that a bad corpus exits 2 with zero calls.
+- **The predictions-output write was outside error handling**: an
+  unwritable target crashed after paying for the calls. The output path is
+  prepared up front and the write is wrapped -- a bad path is a clean exit
+  2; probed.
+
 ## Deferred
 
 - Scheduling (an autonomous task cadence for poll/track/purge/judge-fit/
@@ -126,11 +146,11 @@ Parked hardening: none.
 ## Verification
 
 - `.venv/bin/python -m pytest tests/test_atlas_reddit_fit_runner.py -q`:
-  15 passed (runner both sides; below-threshold/cap/skip/refresh/containment/
+  19 passed (runner both sides; below-threshold/cap/skip/refresh/containment/
   malformed; digest guard-ok rendering; CLI backend-off/real/eval; the
   closing harness round-trip).
 - Full package suite `.venv/bin/python -m pytest
-  tests/test_atlas_reddit_*.py -q`: 552 passed.
+  tests/test_atlas_reddit_*.py -q`: 556 passed.
 - Reachability + closing proof: build eval-mode envelopes from a fake-transport
   client, then `python scripts/evaluate_atlas_reddit_fit.py --cases ...
   --predictions <emitted> --fail-on-eval-fail` grades them (1/1, exit 0).
@@ -141,11 +161,11 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_reddit/__main__.py` | 109 |
+| `atlas_reddit/__main__.py` | 111 |
 | `atlas_reddit/digest.py` | 29 |
-| `atlas_reddit/fit_runner.py` | 180 |
+| `atlas_reddit/fit_runner.py` | 178 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Fit-Runner.md` | 138 |
+| `plans/PR-Reddit-Fit-Runner.md` | 171 |
 | `plans/archive/PR-Reddit-Fit-Client.md` | 0 |
-| `tests/test_atlas_reddit_fit_runner.py` | 311 |
-| **Total** | **770** |
+| `tests/test_atlas_reddit_fit_runner.py` | 388 |
+| **Total** | **880** |

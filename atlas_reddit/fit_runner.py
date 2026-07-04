@@ -38,14 +38,15 @@ class FitRunStats:
 
 
 def _candidate_prompt(candidate) -> tuple[dict, ...]:
+    # Only the CONTENT fields the fit decision is about, so they match the
+    # staleness hash exactly. Volatile engagement metrics
+    # (reddit_score/num_comments) and the derived keyword_score are
+    # deliberately excluded: an upvote must not make a fit review stale.
     return build_fit_prompt(
         title=candidate.title,
         subreddit=candidate.subreddit,
         body=candidate.body_excerpt,
         matched_topics=candidate.matched_topics,
-        keyword_score=candidate.keyword_score,
-        reddit_score=candidate.reddit_score,
-        num_comments=candidate.num_comments,
     )
 
 
@@ -144,9 +145,6 @@ def run_eval_cases(
             subreddit=candidate.get("subreddit", ""),
             body=candidate.get("body", ""),
             matched_topics=tuple(candidate.get("matched_topics", ())),
-            keyword_score=candidate.get("keyword_score"),
-            reddit_score=candidate.get("reddit_score"),
-            num_comments=candidate.get("num_comments"),
         )
         prediction: dict | None
         parse_error: str | None

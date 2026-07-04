@@ -41,6 +41,7 @@ from .purge import purge_once
 from .fit import PROMPT_VERSION, FitParseError, parse_fit_decision
 from .fit_client import RedditFitConfigError, build_judge_client
 from .fit_guard import guard_fit_decision
+from .fit_eval import FitEvalError, load_cases
 from .fit_runner import judge_fit_once, run_eval_cases
 from .store import ListeningStore, StoreError, fit_input_hash
 
@@ -500,37 +501,38 @@ def main(argv: list[str] | None = None) -> int:
         if args.eval_cases is not None:
             if args.predictions_output is None:
                 parser.error("--eval-cases requires --predictions-output")
+            # Validate the corpus with the SAME contract the harness
+            # enforces, BEFORE any (paid) model call -- a corpus the harness
+            # would reject must never spend calls or emit ungradeable output.
             try:
-                raw = args.eval_cases.read_text(encoding="utf-8")
+                loaded = load_cases(args.eval_cases)
+            except (FitEvalError, OSError) as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+            cases = tuple(
+                {"case_id": case.case_id, "candidate": case.candidate}
+                for case in loaded
+            )
+            # Prepare the output path up front so an unwritable target fails
+            # before the model calls, not after paying for them.
+            try:
+                args.predictions_output.parent.mkdir(parents=True, exist_ok=True)
             except OSError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 2
-            cases: list[dict] = []
-            for line_no, line in enumerate(raw.splitlines(), start=1):
-                if not line.strip():
-                    continue
-                try:
-                    case = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    print(f"error: {args.eval_cases}:{line_no}: {exc}", file=sys.stderr)
-                    return 2
-                if not isinstance(case, dict) or "case_id" not in case or "candidate" not in case:
-                    print(
-                        f"error: {args.eval_cases}:{line_no}: case needs case_id + candidate",
-                        file=sys.stderr,
-                    )
-                    return 2
-                cases.append(case)
             envelopes = run_eval_cases(
-                client, tuple(cases), prompt_version=PROMPT_VERSION
+                client, cases, prompt_version=PROMPT_VERSION
             )
-            args.predictions_output.parent.mkdir(parents=True, exist_ok=True)
-            args.predictions_output.write_text(
-                "".join(
-                    json.dumps(env, sort_keys=True) + "\n" for env in envelopes
-                ),
-                encoding="utf-8",
-            )
+            try:
+                args.predictions_output.write_text(
+                    "".join(
+                        json.dumps(env, sort_keys=True) + "\n" for env in envelopes
+                    ),
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
             errors = sum(1 for env in envelopes if env["parse_error"] is not None)
             print(f"eval: {len(envelopes)} cases -> {args.predictions_output} "
                   f"({errors} unparsed)")
