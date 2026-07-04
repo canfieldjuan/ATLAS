@@ -39,7 +39,9 @@ from .poller import poll_once
 from .tracker import track_once
 from .purge import purge_once
 from .fit import PROMPT_VERSION, FitParseError, parse_fit_decision
+from .fit_client import RedditFitConfigError, build_judge_client
 from .fit_guard import guard_fit_decision
+from .fit_runner import judge_fit_once, run_eval_cases
 from .store import ListeningStore, StoreError, fit_input_hash
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -230,6 +232,34 @@ def _build_parser(defaults: RedditListeningSettings) -> argparse.ArgumentParser:
         type=Path,
         default=defaults.db_path,
         help=f"SQLite state file (default: {defaults.db_path})",
+    )
+
+    judge = subparsers.add_parser(
+        "judge-fit",
+        help="LLM-judge prequalified candidates (ATLAS_REDDIT_FIT_* config), or --eval-cases to grade a model against the fixture corpus.",
+    )
+    judge.add_argument(
+        "--db",
+        type=Path,
+        default=defaults.db_path,
+        help=f"SQLite state file (default: {defaults.db_path})",
+    )
+    judge.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-judge already-reviewed candidates whose inputs changed.",
+    )
+    judge.add_argument(
+        "--eval-cases",
+        type=Path,
+        default=None,
+        help="Eval mode: judge fixture cases (JSONL) instead of the store.",
+    )
+    judge.add_argument(
+        "--predictions-output",
+        type=Path,
+        default=None,
+        help="Eval mode: write harness prediction envelopes here (JSONL).",
     )
     return parser
 
@@ -452,6 +482,85 @@ def main(argv: list[str] | None = None) -> int:
         for line in errors:
             print(f"warning: {line}", file=sys.stderr)
         return 0 if not errors else 1
+
+    if args.command == "judge-fit":
+        try:
+            client = build_judge_client(settings)
+        except RedditFitConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if client is None:
+            print(
+                "error: fit backend is off; set ATLAS_REDDIT_FIT_BACKEND "
+                "to 'openrouter' or 'local'",
+                file=sys.stderr,
+            )
+            return 2
+
+        if args.eval_cases is not None:
+            if args.predictions_output is None:
+                parser.error("--eval-cases requires --predictions-output")
+            try:
+                raw = args.eval_cases.read_text(encoding="utf-8")
+            except OSError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+            cases: list[dict] = []
+            for line_no, line in enumerate(raw.splitlines(), start=1):
+                if not line.strip():
+                    continue
+                try:
+                    case = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    print(f"error: {args.eval_cases}:{line_no}: {exc}", file=sys.stderr)
+                    return 2
+                if not isinstance(case, dict) or "case_id" not in case or "candidate" not in case:
+                    print(
+                        f"error: {args.eval_cases}:{line_no}: case needs case_id + candidate",
+                        file=sys.stderr,
+                    )
+                    return 2
+                cases.append(case)
+            envelopes = run_eval_cases(
+                client, tuple(cases), prompt_version=PROMPT_VERSION
+            )
+            args.predictions_output.parent.mkdir(parents=True, exist_ok=True)
+            args.predictions_output.write_text(
+                "".join(
+                    json.dumps(env, sort_keys=True) + "\n" for env in envelopes
+                ),
+                encoding="utf-8",
+            )
+            errors = sum(1 for env in envelopes if env["parse_error"] is not None)
+            print(f"eval: {len(envelopes)} cases -> {args.predictions_output} "
+                  f"({errors} unparsed)")
+            return 0
+
+        now = int(datetime.now(tz=timezone.utc).timestamp())
+        try:
+            with ListeningStore(args.db) as store:
+                stats = judge_fit_once(
+                    store,
+                    client,
+                    now=now,
+                    min_final_score=settings.fit_min_score,
+                    max_calls=settings.fit_max_calls_per_run,
+                    prompt_version=PROMPT_VERSION,
+                    refresh=args.refresh,
+                    pace_seconds=settings.pace_seconds,
+                )
+        except (StoreError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"judged={stats.judged} blocked={stats.blocked} "
+            f"skipped={stats.skipped} calls={stats.calls} "
+            f"tokens_in={stats.input_tokens} tokens_out={stats.output_tokens} "
+            f"errors={len(stats.errors)}"
+        )
+        for line in stats.errors:
+            print(f"warning: {line}", file=sys.stderr)
+        return 0 if not stats.errors else 1
 
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return 2  # pragma: no cover

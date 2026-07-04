@@ -24,7 +24,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .store import Candidate, ListeningStore, Reply
+from .store import Candidate, FitReview, ListeningStore, Reply
 
 _EXCERPT_LENGTH = 140
 
@@ -76,8 +76,15 @@ def render_digest(
     candidates: list[Candidate],
     replies: list[Reply],
     generated_on: str,
+    fit_reviews: dict[str, FitReview] | None = None,
 ) -> str:
-    """Render the daily digest. Pure: same inputs, same output."""
+    """Render the daily digest. Pure: same inputs, same output.
+
+    ``fit_reviews`` maps post_id -> a guard-passed FitReview; when present
+    for a radar candidate, its advisory verdict + angle render on a fit
+    line. Guard-rejected reviews are excluded by the caller, so unsafe
+    model text never reaches the digest."""
+    fit_reviews = fit_reviews or {}
     lines: list[str] = [f"# Reddit Listening Digest -- {generated_on}", ""]
 
     lines.append("## Radar (new candidates)")
@@ -100,6 +107,16 @@ def render_digest(
                 f"   topics: {topics} | posted: {_utc_date(candidate.created_utc)} "
                 f"| comments: {candidate.num_comments} | reddit score: {candidate.reddit_score}"
             )
+            review = fit_reviews.get(candidate.post_id)
+            if review is not None:
+                # All model-derived text goes through the same Markdown
+                # sanitizer as Reddit text.
+                fit_line = f"   fit: {_sanitize_inline(review.verdict)}"
+                if review.reason:
+                    fit_line += f" -- {_sanitize_inline(review.reason)}"
+                if review.angle:
+                    fit_line += f" | angle: {_sanitize_inline(review.angle)}"
+                lines.append(fit_line)
     else:
         lines.append("No new candidates.")
     lines.append("")
@@ -142,8 +159,14 @@ def write_digest(
         status="new", min_final_score=min_final_score, limit=limit
     )
     replies = store.list_replies(only_unseen=True, only_to_me=True)
+    fit_reviews = store.list_fit_reviews(
+        tuple(c.post_id for c in candidates), only_guard_ok=True
+    )
     content = render_digest(
-        candidates=candidates, replies=replies, generated_on=generated_on
+        candidates=candidates,
+        replies=replies,
+        generated_on=generated_on,
+        fit_reviews=fit_reviews,
     )
     digest_dir.mkdir(parents=True, exist_ok=True)
     path = digest_dir / f"{generated_on}.md"
