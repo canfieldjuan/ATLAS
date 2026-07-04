@@ -85,9 +85,16 @@ def judge_fit_once(
             break
         input_hash = _candidate_input_hash(candidate)
         existing = store.get_fit_review(candidate.post_id)
-        if existing is not None and (not refresh or existing.input_hash == input_hash):
-            # Already judged; only re-judge under --refresh when the inputs
-            # behind the review actually changed.
+        if existing is not None and (
+            not refresh
+            or (
+                existing.input_hash == input_hash
+                and existing.prompt_version == prompt_version
+            )
+        ):
+            # Already judged; under --refresh, re-judge only when the content
+            # inputs OR the prompt version changed (a prompt bump makes an
+            # older review stale even if the Reddit content is unchanged).
             stats.skipped += 1
             continue
         if stats.calls and pace_seconds > 0:

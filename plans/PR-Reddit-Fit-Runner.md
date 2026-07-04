@@ -134,6 +134,21 @@ at root in this PR):
   prepared up front and the write is wrapped -- a bad path is a clean exit
   2; probed.
 
+Review-fix notes (Codex wave 2 on 4fa803daf -- follow-ups on the wave-1
+fixes; all 3 verified real and fixed at root):
+
+- **A directory as --predictions-output still spent a call**: the wave-1
+  preflight only made the parent. Now the output FILE is opened before any
+  model call, so a directory/permission target fails pre-call (probed: zero
+  calls).
+- **--refresh ignored a PROMPT_VERSION bump**: a fit.v1 review survived a
+  fit.v2 run when the content hash matched. The staleness check now also
+  treats a prompt_version mismatch as stale under --refresh (probed both
+  ways; no-refresh stays idempotent).
+- **--predictions-output could overwrite --eval-cases**: the resolved paths
+  are now compared and the run refuses (exit 2) before judging, so the
+  corpus is never clobbered (probed: corpus intact, zero calls).
+
 ## Deferred
 
 - Scheduling (an autonomous task cadence for poll/track/purge/judge-fit/
@@ -146,11 +161,11 @@ Parked hardening: none.
 ## Verification
 
 - `.venv/bin/python -m pytest tests/test_atlas_reddit_fit_runner.py -q`:
-  19 passed (runner both sides; below-threshold/cap/skip/refresh/containment/
+  21 passed (runner both sides; below-threshold/cap/skip/refresh/containment/
   malformed; digest guard-ok rendering; CLI backend-off/real/eval; the
   closing harness round-trip).
 - Full package suite `.venv/bin/python -m pytest
-  tests/test_atlas_reddit_*.py -q`: 556 passed.
+  tests/test_atlas_reddit_*.py -q`: 558 passed.
 - Reachability + closing proof: build eval-mode envelopes from a fake-transport
   client, then `python scripts/evaluate_atlas_reddit_fit.py --cases ...
   --predictions <emitted> --fail-on-eval-fail` grades them (1/1, exit 0).
@@ -161,11 +176,11 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_reddit/__main__.py` | 111 |
+| `atlas_reddit/__main__.py` | 120 |
 | `atlas_reddit/digest.py` | 29 |
-| `atlas_reddit/fit_runner.py` | 178 |
+| `atlas_reddit/fit_runner.py` | 185 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Fit-Runner.md` | 171 |
+| `plans/PR-Reddit-Fit-Runner.md` | 186 |
 | `plans/archive/PR-Reddit-Fit-Client.md` | 0 |
-| `tests/test_atlas_reddit_fit_runner.py` | 388 |
-| **Total** | **880** |
+| `tests/test_atlas_reddit_fit_runner.py` | 429 |
+| **Total** | **952** |

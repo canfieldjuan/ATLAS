@@ -513,26 +513,35 @@ def main(argv: list[str] | None = None) -> int:
                 {"case_id": case.case_id, "candidate": case.candidate}
                 for case in loaded
             )
-            # Prepare the output path up front so an unwritable target fails
-            # before the model calls, not after paying for them.
+            # Never overwrite the corpus with its own predictions.
+            if args.predictions_output.resolve() == args.eval_cases.resolve():
+                print(
+                    "error: --predictions-output must not overwrite --eval-cases",
+                    file=sys.stderr,
+                )
+                return 2
+            # OPEN the output file up front so a bad target (an existing
+            # directory, a permission error) fails BEFORE any paid model
+            # call, not after -- the file itself, not just its parent.
             try:
                 args.predictions_output.parent.mkdir(parents=True, exist_ok=True)
+                out_handle = args.predictions_output.open("w", encoding="utf-8")
             except OSError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 2
-            envelopes = run_eval_cases(
-                client, cases, prompt_version=PROMPT_VERSION
-            )
-            try:
-                args.predictions_output.write_text(
-                    "".join(
-                        json.dumps(env, sort_keys=True) + "\n" for env in envelopes
-                    ),
-                    encoding="utf-8",
+            with out_handle:
+                envelopes = run_eval_cases(
+                    client, cases, prompt_version=PROMPT_VERSION
                 )
-            except OSError as exc:
-                print(f"error: {exc}", file=sys.stderr)
-                return 2
+                try:
+                    out_handle.write(
+                        "".join(
+                            json.dumps(env, sort_keys=True) + "\n" for env in envelopes
+                        )
+                    )
+                except OSError as exc:
+                    print(f"error: {exc}", file=sys.stderr)
+                    return 2
             errors = sum(1 for env in envelopes if env["parse_error"] is not None)
             print(f"eval: {len(envelopes)} cases -> {args.predictions_output} "
                   f"({errors} unparsed)")

@@ -322,12 +322,53 @@ def test_cli_eval_unwritable_output_exits_two(tmp_path, monkeypatch, capsys) -> 
     # under it fails cleanly, not with a traceback
     bad_out = tmp_path / "adir"
     bad_out.mkdir()
-    _patch_client(monkeypatch, FakeTransport())
+    transport = FakeTransport()
+    _patch_client(monkeypatch, transport)
     code = main([
         "judge-fit", "--eval-cases", str(cases), "--predictions-output", str(bad_out),
     ])
     assert code == 2
+    assert transport.calls == 0  # opened BEFORE any paid call
     assert "error:" in capsys.readouterr().err
+
+
+def test_cli_eval_refuses_to_overwrite_corpus(tmp_path, monkeypatch, capsys) -> None:
+    from atlas_reddit.__main__ import main
+
+    cases = tmp_path / "corpus.jsonl"
+    original = json.dumps({"case_id": "c1", "candidate": {"title": "t"},
+                           "expected_verdicts": ["yes"]}) + "\n"
+    cases.write_text(original, encoding="utf-8")
+    transport = FakeTransport()
+    _patch_client(monkeypatch, transport)
+    code = main([  # output path == input corpus
+        "judge-fit", "--eval-cases", str(cases), "--predictions-output", str(cases),
+    ])
+    assert code == 2
+    assert transport.calls == 0
+    assert cases.read_text(encoding="utf-8") == original  # corpus intact
+    assert "must not overwrite" in capsys.readouterr().err
+
+
+def test_refresh_rejudges_on_prompt_version_bump(store) -> None:
+    """A prompt bump makes an existing review stale under --refresh even when
+    the Reddit content is unchanged -- the store keeps prompt_version for
+    exactly this distinction."""
+    _seed(store, "t3_a", body="stable content")
+    judge_fit_once(store, _client(FakeTransport()), now=NOW, min_final_score=1.0,
+                   max_calls=25, prompt_version="fit.v1")
+    assert store.get_fit_review("t3_a").prompt_version == "fit.v1"
+    # same content, bumped prompt version, --refresh -> re-judged
+    transport = FakeTransport()
+    stats = judge_fit_once(store, _client(transport), now=NOW, min_final_score=1.0,
+                           max_calls=25, prompt_version="fit.v2", refresh=True)
+    assert transport.calls == 1 and stats.judged == 1
+    assert store.get_fit_review("t3_a").prompt_version == "fit.v2"
+    # but a bumped version WITHOUT --refresh does not re-judge (idempotent)
+    t2 = FakeTransport()
+    assert judge_fit_once(store, _client(t2), now=NOW, min_final_score=1.0,
+                          max_calls=25, prompt_version="fit.v3").skipped == 1
+    assert t2.calls == 0
 
 
 # -- judge-fit CLI ---------------------------------------------------------
