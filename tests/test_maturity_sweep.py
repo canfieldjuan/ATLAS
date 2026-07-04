@@ -1471,3 +1471,100 @@ def test_keyword_only_raises_arguments_satisfy_the_gate(tmp_path: Path) -> None:
         "--min-score", "99",
         "--sensitive-glob", "**/purge_guard.py",
     ]) == 0
+
+
+# --- _has_raises_assertion: only real, runnable raises forms count ---
+
+
+def _raises(body: str) -> bool:
+    return MOD._has_raises_assertion("import pytest\nimport unittest\n" + body)
+
+
+def _unittest_body(inner: str) -> str:
+    return "class T(unittest.TestCase):\n    def test_x(self):\n" + inner
+
+
+def test_raises_statement_with_only_match_keyword_does_not_assert() -> None:
+    # pytest.raises(X, match=...) as a bare statement builds a context
+    # manager and asserts nothing -- match= is not the callable.
+    assert not _raises(
+        "def test_x():\n    pytest.raises(ValueError, match='bad')\n")
+
+
+def test_assert_raises_with_only_msg_keyword_does_not_assert() -> None:
+    # unittest msg= fills no slot; it does not supply the exception.
+    assert not _raises(_unittest_body(
+        "        with self.assertRaises(msg='n'):\n            pass\n"))
+
+
+def test_callable_form_inside_with_item_does_not_assert() -> None:
+    # `with pytest.raises(X, fn):` runs the callable before the block and
+    # yields a non-context-manager, so it asserts nothing.
+    assert not _raises(
+        "def test_x():\n    def fn():\n        pass\n"
+        "    with pytest.raises(ValueError, fn):\n        pass\n")
+
+
+def test_valid_raises_forms_still_assert() -> None:
+    assert _raises(
+        "def test_x():\n    with pytest.raises(ValueError):\n        go()\n")
+    assert _raises(
+        "def test_x():\n"
+        "    with pytest.raises(expected_exception=ValueError):\n        go()\n")
+    assert _raises(
+        "def test_x():\n    with pytest.raises(ValueError, match='m'):\n        go()\n")
+    assert _raises("def test_x():\n    pytest.raises(ValueError, go)\n")
+    assert _raises(_unittest_body(
+        "        with self.assertRaisesRegex(ValueError, 'r'):\n            go()\n"))
+    # unittest keyword regex fills the regex slot.
+    assert _raises(_unittest_body(
+        "        with self.assertRaisesRegex(ValueError, expected_regex='r'):\n"
+        "            go()\n"))
+
+
+def test_no_raises_fires_when_only_decorative_raises_present() -> None:
+    # Three happy-path tests plus a non-asserting pytest.raises statement:
+    # the decorative raises must NOT suppress the blocking NO_RAISES_TESTS.
+    src = (
+        "import pytest\n\n"
+        "def test_a():\n    assert build() == []\n\n"
+        "def test_b():\n    assert count() == 0\n\n"
+        "def test_c():\n    pytest.raises(ValueError, match='x')\n"
+    )
+    findings = MOD.score_tests(
+        "sensitive_mod", {"test_sensitive_mod": src}, all_test_text=src)
+    assert "NO_RAISES_TESTS" in codes(findings)
+
+
+# --- _collect_test_defs: pytest's real collection shape ---
+
+
+def test_helper_class_test_methods_are_not_collected() -> None:
+    # A non-Test / non-TestCase class does not have its test_* methods
+    # collected, so it cannot disguise a stub as covered.
+    assert MOD._collect_test_defs(
+        ["class Helper:\n    def test_x(self):\n        pass\n"]) == []
+
+
+def test_unittest_camelcase_methods_are_collected() -> None:
+    # pytest collects unittest test* (camelCase) methods on TestCase classes.
+    assert MOD._collect_test_defs([
+        "import unittest\n"
+        "class MyTest(unittest.TestCase):\n"
+        "    def testRejectsBad(self):\n        pass\n"]) == ["testRejectsBad"]
+
+
+def test_collected_classes_and_module_functions_still_count() -> None:
+    assert MOD._collect_test_defs(
+        ["def test_foo():\n    assert True\n"]) == ["test_foo"]
+    assert MOD._collect_test_defs(
+        ["class TestThing:\n    def test_x(self):\n        pass\n"]) == ["test_x"]
+
+
+def test_no_test_file_fires_when_only_helper_class_has_test_methods() -> None:
+    # A matched test file whose only test_* defs live in an uncollected
+    # helper class collects zero tests, so NO_TEST_FILE still fires.
+    src = "class Helper:\n    def test_x(self):\n        pass\n"
+    findings = MOD.score_tests(
+        "sensitive_mod", {"test_sensitive_mod": src}, all_test_text=src)
+    assert "NO_TEST_FILE" in codes(findings)

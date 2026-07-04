@@ -581,33 +581,66 @@ def _has_raises_assertion(source):
             callable_form_args = 2
         if callable_form_args is None:
             continue
-        # A raises API call only ASSERTS as a with-context (`with
-        # pytest.raises(X):`) or in the callable form; a dangling
-        # statement builds a context manager and asserts nothing. The
-        # with-form still needs everything but the callable (exception
-        # for raises/assertRaises, exception + regex for
-        # assertRaisesRegex*) -- `with self.assertRaises():` errors
-        # before asserting. Keyword args count toward arity: `with
-        # pytest.raises(expected_exception=ValueError):` is a real
-        # runnable assertion and must not be misreported as absent.
-        arg_count = len(node.args) + len(node.keywords)
+        # A raises API asserts only as a with-context (`with
+        # pytest.raises(X):`) that supplies the exception (+ regex for
+        # assertRaisesRegex*), or in the callable form (`pytest.raises(X,
+        # fn)`) that also supplies the callable. A bare statement missing
+        # the callable, or a with-item that DOES carry the callable (it
+        # runs and returns a non-context-manager before the block), asserts
+        # nothing. Only args that fill a real slot count: positionals
+        # always, plus the slot keywords `expected_exception=` /
+        # `expected_regex=` (both pytest and unittest accept them). The
+        # trailing callable has no keyword, so a callable-form statement is
+        # recognized by positionals alone. Decorative keywords -- pytest
+        # `match=`, unittest `msg=` -- fill no slot, so
+        # `pytest.raises(X, match="m")` as a statement and
+        # `with self.assertRaises(msg="n"):` do not count.
+        slot_keywords = {"expected_exception"}
+        if callable_form_args == 3:  # assertRaisesRegex* also takes the regex
+            slot_keywords.add("expected_regex")
+        positional = len(node.args)
+        exception_args = positional + sum(
+            1 for kw in node.keywords if kw.arg in slot_keywords)
         if id(node) in with_item_calls:
-            if arg_count >= callable_form_args - 1:
+            # Context form: supplies the exception (+ regex) but NOT the
+            # trailing callable. `positional < callable_form_args` rejects
+            # the callable-in-with form (`with pytest.raises(X, fn):`).
+            if (exception_args >= callable_form_args - 1
+                    and positional < callable_form_args):
                 return True
-        elif arg_count >= callable_form_args:
+        elif positional >= callable_form_args:
+            # Callable (non-with) form: the callable is a positional; a
+            # keyword never stands in for it.
             return True
     return False
+
+
+def _is_collected_test_class(node):
+    """True when pytest actually collects test methods from this class: a
+    `Test`-prefixed class (pytest's `python_classes` default) or a subclass
+    whose statically visible base ends in `TestCase` (unittest). A plain
+    `class Helper` with a `test_*` method is NOT collected, so it must not
+    disguise a stub. A cross-file base not named *TestCase is deliberately
+    missed -- the gate errs toward the standard idioms."""
+    if node.name.startswith("Test"):
+        return True
+    bases = [b.attr if isinstance(b, ast.Attribute) else b.id
+             for b in node.bases if isinstance(b, (ast.Attribute, ast.Name))]
+    return any(name.endswith("TestCase") for name in bases)
 
 
 def _collect_test_defs(matched):
     """Test names from real def/async-def AST nodes across the matched
     sources. The old text regex also counted `def test_*` inside comments
     and strings, so a placeholder file with commented-out tests looked
-    non-stub and dodged NO_TEST_FILE. Only module-level and class-level
-    defs count -- pytest's collection shape -- so a helper named test_*
-    nested inside another function does not disguise a stub either.
-    Unparseable sources contribute no runnable tests (fail closed,
-    matching _has_raises_assertion)."""
+    non-stub and dodged NO_TEST_FILE. Only pytest's actual collection
+    shape counts: module-level `test`-prefixed functions, and `test`-
+    prefixed methods of collected classes (`Test*` or `*TestCase`). The
+    `test` prefix -- not `test_` -- matches unittest's camelCase
+    (`testRejectsBad`), which pytest collects; a helper method inside an
+    uncollected class does not disguise a stub. Unparseable sources
+    contribute no runnable tests (fail closed, matching
+    _has_raises_assertion)."""
     names = []
     for source in matched:
         try:
@@ -616,11 +649,12 @@ def _collect_test_defs(matched):
             continue
         candidates = list(tree.body)
         candidates.extend(
-            sub for node in tree.body if isinstance(node, ast.ClassDef)
+            sub for node in tree.body
+            if isinstance(node, ast.ClassDef) and _is_collected_test_class(node)
             for sub in node.body)
         for node in candidates:
             if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and node.name.startswith("test_")):
+                    and node.name.startswith("test")):
                 names.append(node.name)
     return names
 

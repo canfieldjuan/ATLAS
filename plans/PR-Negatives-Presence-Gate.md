@@ -300,7 +300,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_maturity_sweep.py -q` -- 43 passed
+- `python -m pytest tests/test_maturity_sweep.py -q` -- 52 passed
   (23 pre-existing + both-sides probes for every review-fix wave:
   no-raises sensitive module fails with the
   `sensitive-path NO_RAISES_TESTS` reason and passes off-glob;
@@ -311,7 +311,11 @@ Parked hardening: none.
   and `self.assertRaisesRegex(X, "regex")` rejected while the callable
   forms pass; testless sensitive module fails with
   `sensitive-path NO_TEST_FILE` and passes off-glob; stub test file
-  counts as testless).
+  counts as testless). The final wave makes arity precise: only the slot
+  keywords `expected_exception=` / `expected_regex=` count (pytest
+  `match=` and unittest `msg=` do not), a callable inside a with-item is
+  rejected, and `_collect_test_defs` counts only pytest-collected classes
+  (`Test*` / `*TestCase`) while matching unittest camelCase (`test*`).
 - All 35 blocking ratchet gates from both maturity-sweep workflows
   re-run locally against the checked-in baselines with the stricter
   detector: every gate passes (no baseline regressions).
@@ -326,9 +330,9 @@ Parked hardening: none.
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
 | `plans/INDEX.md` | 1 |
-| `plans/PR-Negatives-Presence-Gate.md` | 334 |
+| `plans/PR-Negatives-Presence-Gate.md` | 338 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 144 |
+| `scripts/maturity_sweep.py` | 178 |
 | `tests/maturity_sweep/baseline_scripts.json` | 29 |
-| `tests/test_maturity_sweep.py` | 977 |
-| **Total** | **1491** |
+| `tests/test_maturity_sweep.py` | 1074 |
+| **Total** | **1626** |
