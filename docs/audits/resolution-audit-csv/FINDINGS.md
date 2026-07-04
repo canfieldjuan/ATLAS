@@ -169,9 +169,13 @@ fragmentation failure.
   reads ~**0.23x (~4.3x too low)** -- two-directional, not a flat 12x (correcting an earlier draft of this
   finding). **Scope:** the rendered markdown (`:4076-4083`) and PDF (`deflection_pdf_renderer.py:305-312`)
   ALREADY hedge this ("does not infer a monthly or annual reporting period ... If this uploaded batch is monthly
-  pace ... Estimate only"); the gap is the **raw `report_model` / API field** surfaced by any downstream consumer
-  (dashboard, CRM push, snapshot) WITHOUT that prose. Fix: carry the span basis on the field, or require consumers
-  to show the "if monthly pace" caveat. Surfaced by the GPT-5.5 Pro + Codex review (#2002 thread); tracked in #2000 / #1993.
+  pace ... Estimate only"); the gap is the **raw `report_model` / API field** surfaced WITHOUT that prose by the
+  **hosted-consumer allowlist** -- `HOSTED_CONSUMER_SAFE_FIELDS`
+  (`portfolio-ui/api/content-ops/deflection/report-model-contract.js:24`) and `OPTIONAL_FIELDS` (`:18`) both
+  include the annualized fields. By contrast the **snapshot** allowlist EXCLUDES them (backend `:543-551`,
+  frontend `:22`), consistent with P5-6 -- so the free teaser is not exposed. Fix: carry the span basis on the
+  field, or require the hosted consumer to render the "if monthly pace" caveat. Surfaced by the GPT-5.5 Pro +
+  Codex review; tracked in #2000 / #1993.
 
 ## LOW / informational
 
