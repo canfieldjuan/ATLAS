@@ -1157,9 +1157,14 @@ Read AUDITOR_PROMPT.md for the cross-cutting audit checks
 
 For each PR you review:
 
-1. Challenger pass first: read the Review Contract, predict which
-   files and tests should exist, THEN open the diff. Do not anchor
-   on the builder's summary.
+1. Reconstruct independently (`docs/PR_RECONSTRUCTION_PROTOCOL.md`,
+   mandatory): build two independent reconstructions -- what a correct
+   fix should do (from the Review Contract and problem, never shaped by
+   the diff) and what the diff actually does (read the diff alone) --
+   then report every gap (diff != description; diff != correct fix; diff
+   changes unmentioned things), cited `file:line`, sorted confirmed /
+   contradicted / could-not-determine, gaps first. Do not anchor on the
+   builder's summary.
 2. Reproduce the named verification commands from the PR body.
    Don't trust claims; re-run them. Spot-check the plan's
    invariants at the actual file:line cited in the diff.

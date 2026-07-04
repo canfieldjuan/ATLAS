@@ -53,11 +53,14 @@ names the protocol mandatory and links the doc. No code paths change.
 
 ## Intentional
 
-- Codified in the repo (not only in a session memory) so it reaches Codex and
-  the reconciliation gate, not just one session lineage. (No automated CI review
-  action exists in the repo today; wiring one is a when-added follow-up.)
-  Session-local layers (operator memory, global reviewer rules) mirror it for
-  redundancy but the repo doc is the canonical source.
+- Codified in the repo (not only in a session memory) so it binds every reviewer
+  session that reads the contract -- including a fresh session pasting the §8
+  reseed prompt -- not just one session lineage. (External Codex/bots are
+  advisory inputs, not bound; the CI reconciliation gate is a mechanical
+  bot-comparison, not a reviewer; no automated CI review action exists today,
+  and wiring one is a when-added follow-up.) Session-local layers (operator
+  memory, global reviewer rules) mirror it for redundancy but the repo doc is
+  the canonical source.
 
 ## Deferred
 
@@ -74,7 +77,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | 30 |
+| `AGENTS.md` | 41 |
 | `docs/PR_RECONSTRUCTION_PROTOCOL.md` | 51 |
-| `plans/PR-Reconstruction-Protocol.md` | 80 |
-| **Total** | **161** |
+| `plans/PR-Reconstruction-Protocol.md` | 83 |
+| **Total** | **175** |
