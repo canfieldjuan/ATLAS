@@ -25,7 +25,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
-from .config import FIT_BACKENDS, RedditListeningSettings
+from .config import FIT_BACKENDS, FIT_RESPONSE_FORMATS, RedditListeningSettings
 from .fit import FIT_OUTPUT_JSON_SCHEMA, FitDecision, FitParseError, parse_fit_decision
 
 # A transport is any callable that performs the POST and returns
@@ -87,6 +87,7 @@ class OpenAICompatibleJudgeClient:
         model: str,
         api_key: str,
         timeout_seconds: float,
+        response_format: str = "json_schema",
         transport: Transport | None = None,
     ) -> None:
         self._backend = backend
@@ -94,16 +95,20 @@ class OpenAICompatibleJudgeClient:
         self._model = model
         self._api_key = api_key
         self._timeout = timeout_seconds
+        self._response_format_mode = response_format
         self._transport = transport or _default_transport
 
     @property
     def model_id(self) -> str:
         return self._model
 
-    def _response_format(self) -> dict:
-        # OpenRouter reliably supports strict json_schema; a local server's
-        # support is model-dependent, so default to json_object there.
-        if self._backend == "openrouter":
+    def _response_format(self) -> dict | None:
+        # Which structured-output mode a server accepts is a property of the
+        # SERVER, not the backend name -- LM Studio needs json_schema (or
+        # text) and rejects json_object; vLLM/OpenRouter take json_schema.
+        # text returns None (no server-side constraint); the parser is the
+        # authoritative gate in every mode.
+        if self._response_format_mode == "json_schema":
             return {
                 "type": "json_schema",
                 "json_schema": {
@@ -112,7 +117,9 @@ class OpenAICompatibleJudgeClient:
                     "schema": FIT_OUTPUT_JSON_SCHEMA,
                 },
             }
-        return {"type": "json_object"}
+        if self._response_format_mode == "json_object":
+            return {"type": "json_object"}
+        return None
 
     def judge(self, messages: tuple[dict, ...]) -> tuple[FitDecision | None, FitCallMeta]:
         """Send one prompt, return the parsed decision (or None + a
@@ -120,8 +127,10 @@ class OpenAICompatibleJudgeClient:
         body_obj = {
             "model": self._model,
             "messages": list(messages),
-            "response_format": self._response_format(),
         }
+        response_format = self._response_format()
+        if response_format is not None:
+            body_obj["response_format"] = response_format
         if _REASONING_MODEL_RE.search(self._model):
             body_obj["max_completion_tokens"] = 400
         else:
@@ -197,11 +206,17 @@ def build_judge_client(
         raise RedditFitConfigError(
             "fit_backend=openrouter requires ATLAS_REDDIT_FIT_API_KEY"
         )
+    if settings.fit_response_format not in FIT_RESPONSE_FORMATS:
+        raise RedditFitConfigError(
+            f"invalid fit_response_format {settings.fit_response_format!r}; "
+            f"allowed: {FIT_RESPONSE_FORMATS}"
+        )
     return OpenAICompatibleJudgeClient(
         backend=backend,
         base_url=settings.fit_base_url,
         model=settings.fit_model,
         api_key=api_key,
         timeout_seconds=settings.fit_timeout_seconds,
+        response_format=settings.fit_response_format,
         transport=transport,
     )
