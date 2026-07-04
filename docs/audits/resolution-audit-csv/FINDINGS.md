@@ -191,53 +191,72 @@ fragmentation failure.
 ## Slice 3 -- Performance (Phase 3)
 
 Measured on the real chain (`build_support_ticket_input_package` ->
-`FAQDeflectionReportService.generate` -> `build_ticket_faq_markdown`) with
-realistic ticket text (~256 bytes/row, 15% HTML). Scripts in `_audit_scratch/perf/`.
-Reviewer re-ran the scaling curve independently.
+`FAQDeflectionReportService.generate` -> `build_ticket_faq_markdown`) with realistic
+free-text fixtures (~256 B/row, 15% HTML, unique source_ids). Scripts in
+`_audit_scratch/perf/`. Timing note: the reviewer's confirmed **unloaded** numbers
+are ~1.83 ms/ticket (10k = 18.3s, reproduced twice); under heavy concurrent load the
+same chain was observed at ~7 ms/ticket (10k = 73s), so real-world time under
+contention can be 3-4x the unloaded figure. Scaling is **linear** either way.
 
-### P1 -- ~20 uncached full passes + ~30M regex calls dominate; heavy linear constant [verified-by-reviewer]
-`build_support_ticket_input_package` makes ~15 separate O(n) passes over the rows
-(`support_ticket_input_package.py:404-422`), each re-invoking uncached field
-helpers; end-to-end there are ~20 full passes. cProfile at 10k tickets:
-`re.Pattern.sub` called **30.8M times (11.3s)**, `_key`
-(`support_ticket_input_package.py:990`) **8.6M calls (9.2s)**, `_first_value`
-(`:976`) 390k calls (10.3s), and `_field_value` (`ticket_faq_markdown.py:3381`)
-**854k calls (15.2s cumulative)**. Field normalization (`_key` = a `re.sub` per
-call) is re-run for every field on every pass with no memoization -- the dominant
-cost. Fix: memoize `_key`/normalized-field lookups and collapse the ~20 passes.
-- Severity: HIGH. Repro: `_audit_scratch/perf/profile_cprofile.py`, `cprofile_10k.txt`.
+### P1 -- Uncached field-normalization storm (~30.8M regex calls) dominates the pipeline [verified-by-reviewer]
+cProfile @10k: `re.Pattern.sub` = **30.8M calls / 11.3s tottime (25%)**;
+`_field_value` (`ticket_faq_markdown.py:3381`) = **15.2s cumulative (33%)**;
+`_first_value` (`support_ticket_input_package.py:976`) 390k calls / 10.3s; `_key`
+(`:990`) 8.6M calls / 9.2s. Root cause: `_first_value`/`_field_value` re-normalize
+**every key of the row on every field lookup** (linear `row.items()` scan calling
+regex `_key`/`_compact_key` per field, repeated for dozens of alias groups) with **no
+per-row key cache**, across ~20 full O(n) passes end-to-end
+(`support_ticket_input_package.py:404-422` is ~15 aggregation passes alone).
+Compounding: `_key` passes a string-literal pattern to `re.sub`, forcing ~9.4M
+`re._compile` cache lookups. This -- not clustering -- sets the ceiling.
+- Severity: HIGH. Fix: cache per-row normalized keys once + precompile the pattern.
+  Repro: `_audit_scratch/perf/profile_cprofile.py`, `cprofile_10k.txt`.
 
-### P2 -- Impractically slow for a synchronous request; needs chunking/async at scale [verified-by-reviewer]
-Measured total time (reviewer clean run): 2k=4.2s, 5k=9.2s, **10k=18.6s** (agent's
-loaded run measured 73s at 10k). **Scaling is ~linear** (per-ticket ~1.86ms,
-doubling n -> ~2.0x time -- not O(n^2)). Extrapolated: 100k ~= 3-6 min, 500k ~=
-15-30 min in one request. A realistic large upload cannot complete synchronously.
-- Severity: HIGH. Repro: reviewer sweep via `_audit_scratch/perf/harness.py` at 2k/5k/10k.
+### P7 -- The submit path has NO row cap; a 50 MiB blob (~200k tickets) runs synchronously for many minutes [verified-by-reviewer]
+`_deflection_submit_max_rows` (`api/control_surfaces.py:1814`) returns the full
+`raw_row_count` -- the only bound is `_MAX_DEFLECTION_SUBMIT_BLOB_BYTES = 50 MiB`
+(`:167`) ~= **~200k tickets** at ~257 B/row. At the measured linear rate that is
+~6 min unloaded / ~24 min under load, ~1.3 GB, in a single request. The practical
+30s-request ceiling is only **~4,000 tickets**. A realistic large customer upload
+must be chunked or run as an async job; today it will time out or hang.
+- Severity: HIGH. Repro: `harness.py` ladder (10k=18.3s, 50k measured ~120-356s).
 
-### P3 -- The O(n^2) token-set clustering is gated OFF above 2000 rows (no blowup, but silent preview loss) [verified-by-reviewer]
-`support_ticket_clustering.py` bucket matching is O(n^2)-ish, but the preview is
-skipped above `MAX_TOKEN_SET_CLUSTER_ROWS=2000` (`:249`) -- confirmed: `build_package`
-is flat (~0.65s) for short-text rows 1k-8k because the token-set pass is skipped
-(`cluster_preview_skipped: true`). So no quadratic blowup at scale, but any file
->2000 rows silently gets NO token-set cluster preview / diagnostic counts. The
-billed grouping (`ticket_faq_markdown`) still runs.
-- Severity: MEDIUM.
+### P2 -- Token-set clustering is near-quadratic (b~1.88) but hard-gated at 2,000 rows; the gate silently degrades clustering at scale [verified-by-reviewer]
+`_matching_token_bucket` (`support_ticket_clustering.py:567`) compares each row
+against every prior token_set -- fit b=1.88 ungated (6.0s@4k, 23.6s@8k, matching the
+code's own `:243-249` "~40 min at 35k" comment). Gate `MAX_TOKEN_SET_CLUSTER_ROWS=2000`
+(`:249`) caps it ~1.6s then **skips**, leaving rows uncategorized. So no quadratic
+blowup -- but above 2,000 rows the token-set labels vanish, degrading system-2's topic
+partition (observable: `faq_items` jumps 4->62 between 2k and 5k). Feeds Slice-2 F1/F3.
+- Severity: MEDIUM. Repro: `scaling_clustering.py`.
 
-### P4 -- ~27-40x file->RAM amplification [verified-by-reviewer]
-10k tickets / 2.4 MiB input -> peak RSS **66-97 MiB** (reviewer 27x; agent 40x).
-Multiple full copies held simultaneously (raw rows -> source_material -> package ->
-groups). At 500k rows the parse layer alone peaked ~243 MiB (Slice 2); the full
-pipeline multiplier is higher.
-- Severity: MEDIUM. Repro: `_audit_scratch/perf/harness.py` (rss_peak_mib).
+### P4 -- ~10x whole-pipeline file->RAM amplification; ~3 full copies co-resident [verified-by-reviewer]
+Deep-size: raw rows 2.2x, `source_material` 2.9x, campaign opportunities 4.6x the
+serialized input -- all co-resident during `build_ticket_faq_markdown` -> ~9.8x floor
+(23.9 MiB @10k, 119.6 MiB @50k py-heap); RSS peak 66-97 MiB @10k / 357 MiB @50k.
+`source_row_to_campaign_opportunity` builds a full new richer copy (1,189 B/row).
+Memory is NOT the binding constraint -- time crosses 30s ~40x sooner.
+- Severity: MEDIUM. Repro: `memory_copies.py`, `harness.py`.
 
-### P5 -- Redundant recomputation: fields re-derived ~85x/ticket + metrics computed twice
-`_field_value` at 854k calls for 10k tickets (~85 derivations per ticket) reflects
-the same fields recomputed across passes. Separately (Phase 0), support-tax metrics
-are computed twice -- structured model `_support_tax_data:3208` vs prose
-`_support_tax_section:4034` -- and the snapshot re-derives via the same helpers. No
-cache exists between the snapshot and full-report computation on one file, or between
-reruns. Fix pairs with P1 (single normalized pass + one metrics computation).
-- Severity: MEDIUM.
+### P3 -- (positive, corrects a Phase-0 concern) the sub-clusterer is LINEAR (b~0.92), not O(n^2) [verified-by-reviewer]
+`_question_subclusters` (`ticket_faq_markdown.py:1026`) uses prefix-filtered candidate
+nomination + length pre-filter + union-find, not naive pairwise: 0.61s@10k, 1.14s@20k,
+b=0.92. Negligible vs the report stage. PIPELINE_MAP 5b framed this as the
+pairwise-Jaccard O(n^2) risk; empirically it is not a hotspot.
+
+### P5 -- No memoization anywhere; reruns recompute everything
+Zero `lru_cache`/`cached_property` in the 5 core modules -- no cache between snapshot
+and full-report on one file, or between reruns; a re-submit repeats 100% of P1's work.
+Embeddings off by default (and when on, embed compressed gists, not raw tickets -- no
+raw-embedding cost). Severity: MEDIUM (pairs with P1).
+
+### P6 -- Metric double-computation is NEGLIGIBLE for perf (drift concern only)
+`_support_tax_section` (`faq_deflection_report.py:4034`) recomputes counts the model
+`_support_tax_data:3208` already produced, but both operate on the small final FAQ
+`items` list (~8-62), not raw tickets -> microseconds. Clustering runs exactly once
+per system per file; the snapshot is a projection (no re-clustering). Phase 0's
+"computed twice" stands as a correctness/drift concern (Slice 5), not a perf sink.
+- Severity: LOW (perf).
 
 ## Single highest-leverage fixes
 
