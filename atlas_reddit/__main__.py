@@ -529,19 +529,22 @@ def main(argv: list[str] | None = None) -> int:
             except OSError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 2
-            with out_handle:
-                envelopes = run_eval_cases(
-                    client, cases, prompt_version=PROMPT_VERSION
-                )
-                try:
+            # The whole block is under OSError handling -- not just write()
+            # but the context manager's flush/close, which can raise ENOSPC
+            # on a buffered text file after the (paid) calls completed.
+            try:
+                with out_handle:
+                    envelopes = run_eval_cases(
+                        client, cases, prompt_version=PROMPT_VERSION
+                    )
                     out_handle.write(
                         "".join(
                             json.dumps(env, sort_keys=True) + "\n" for env in envelopes
                         )
                     )
-                except OSError as exc:
-                    print(f"error: {exc}", file=sys.stderr)
-                    return 2
+            except OSError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
             errors = sum(1 for env in envelopes if env["parse_error"] is not None)
             print(f"eval: {len(envelopes)} cases -> {args.predictions_output} "
                   f"({errors} unparsed)")

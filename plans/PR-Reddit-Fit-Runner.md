@@ -77,6 +77,7 @@ Slice phase: Vertical slice
 
 - `atlas_reddit/__main__.py`
 - `atlas_reddit/digest.py`
+- `atlas_reddit/fit_eval.py`
 - `atlas_reddit/fit_runner.py`
 - `plans/INDEX.md`
 - `plans/PR-Reddit-Fit-Runner.md`
@@ -149,6 +150,20 @@ fixes; all 3 verified real and fixed at root):
   are now compared and the run refuses (exit 2) before judging, so the
   corpus is never clobbered (probed: corpus intact, zero calls).
 
+Review-fix notes (Codex wave 3 on 700d2e681 -- follow-ups on the wave-2
+fixes; both verified real and fixed at root):
+
+- **A harness-accepted candidate was not prompt-safe**: load_cases checked
+  only that the title was truthy, so a corpus row like {"title": 1} or
+  {"matched_topics": [1]} crashed build_fit_prompt with TypeError. Root fix:
+  the corpus contract now type-checks the prompt fields (title non-empty
+  string; subreddit/body strings; matched_topics a list of strings), so a
+  bad row is a clean exit 2 with zero calls (probed).
+- **Close-time write errors escaped the handler**: the write was wrapped
+  but the context manager's flush/close (which can raise ENOSPC after the
+  paid calls) was not. The whole with-block is now under the OSError
+  handler -> exit 2, not a traceback (probed by faking a close failure).
+
 ## Deferred
 
 - Scheduling (an autonomous task cadence for poll/track/purge/judge-fit/
@@ -161,11 +176,11 @@ Parked hardening: none.
 ## Verification
 
 - `.venv/bin/python -m pytest tests/test_atlas_reddit_fit_runner.py -q`:
-  21 passed (runner both sides; below-threshold/cap/skip/refresh/containment/
+  25 passed (runner both sides; below-threshold/cap/skip/refresh/containment/
   malformed; digest guard-ok rendering; CLI backend-off/real/eval; the
   closing harness round-trip).
 - Full package suite `.venv/bin/python -m pytest
-  tests/test_atlas_reddit_*.py -q`: 558 passed.
+  tests/test_atlas_reddit_*.py -q`: 562 passed.
 - Reachability + closing proof: build eval-mode envelopes from a fake-transport
   client, then `python scripts/evaluate_atlas_reddit_fit.py --cases ...
   --predictions <emitted> --fail-on-eval-fail` grades them (1/1, exit 0).
@@ -176,11 +191,12 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_reddit/__main__.py` | 120 |
+| `atlas_reddit/__main__.py` | 123 |
 | `atlas_reddit/digest.py` | 29 |
+| `atlas_reddit/fit_eval.py` | 24 |
 | `atlas_reddit/fit_runner.py` | 185 |
-| `plans/INDEX.md` | 3 |
-| `plans/PR-Reddit-Fit-Runner.md` | 186 |
+| `plans/INDEX.md` | 1 |
+| `plans/PR-Reddit-Fit-Runner.md` | 200 |
 | `plans/archive/PR-Reddit-Fit-Client.md` | 0 |
-| `tests/test_atlas_reddit_fit_runner.py` | 429 |
-| **Total** | **952** |
+| `tests/test_atlas_reddit_fit_runner.py` | 502 |
+| **Total** | **1064** |

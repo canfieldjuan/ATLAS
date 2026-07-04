@@ -135,9 +135,29 @@ def load_cases(path: Path) -> tuple[EvalCase, ...]:
                 f"non-empty subset of {FIT_VERDICTS}"
             )
         candidate = record.get("candidate")
-        if not isinstance(candidate, dict) or not candidate.get("title"):
+        if not isinstance(candidate, dict):
             raise FitEvalError(
-                f"{path}: case {case_id!r} candidate must be an object with a title"
+                f"{path}: case {case_id!r} candidate must be an object"
+            )
+        # The prompt fields are fed raw to build_fit_prompt, so the corpus
+        # contract type-checks them here: a harness-accepted candidate must
+        # be prompt-safe (no {"title": 1} / {"matched_topics": [1]} crash).
+        title = candidate.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise FitEvalError(
+                f"{path}: case {case_id!r} candidate.title must be a non-empty string"
+            )
+        for field in ("subreddit", "body"):
+            if not isinstance(candidate.get(field, ""), str):
+                raise FitEvalError(
+                    f"{path}: case {case_id!r} candidate.{field} must be a string"
+                )
+        topics = candidate.get("matched_topics", [])
+        if not isinstance(topics, list) or any(
+            not isinstance(item, str) for item in topics
+        ):
+            raise FitEvalError(
+                f"{path}: case {case_id!r} candidate.matched_topics must be a list of strings"
             )
 
         def _str_tuple(key: str) -> tuple[str, ...]:

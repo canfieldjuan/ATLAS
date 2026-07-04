@@ -405,6 +405,79 @@ def test_cli_judge_fit_real_mode_persists(tmp_path, monkeypatch, capsys) -> None
         assert store.get_fit_review("t3_a").source == "model"
 
 
+@pytest.mark.parametrize(
+    "bad_candidate",
+    [
+        {"title": 1},                              # title not a string
+        {"title": "ok", "matched_topics": [1]},    # non-string topic
+        {"title": "ok", "subreddit": 5},           # non-string subreddit
+    ],
+)
+def test_cli_eval_rejects_non_string_prompt_fields(
+    tmp_path, monkeypatch, capsys, bad_candidate
+) -> None:
+    """A harness-accepted candidate must be prompt-safe: non-string prompt
+    fields are rejected at corpus load, before any (paid) model call."""
+    from atlas_reddit.__main__ import main
+
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(
+        json.dumps({"case_id": "c1", "candidate": bad_candidate,
+                    "expected_verdicts": ["yes"]}) + "\n",
+        encoding="utf-8",
+    )
+    transport = FakeTransport()
+    _patch_client(monkeypatch, transport)
+    code = main([
+        "judge-fit", "--eval-cases", str(cases),
+        "--predictions-output", str(tmp_path / "p.jsonl"),
+    ])
+    assert code == 2
+    assert transport.calls == 0  # rejected before any call
+
+
+def test_cli_eval_close_time_write_error_exits_two(tmp_path, monkeypatch, capsys) -> None:
+    """An I/O error at flush/close (e.g. ENOSPC) after the calls completed is
+    a clean exit 2, not a traceback that loses the paid results."""
+    from atlas_reddit.__main__ import main
+
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(
+        json.dumps({"case_id": "c1", "candidate": {"title": "t"},
+                    "expected_verdicts": ["yes"]}) + "\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "preds.jsonl"
+
+    class CloseFailingHandle:
+        def __init__(self, real):
+            self._real = real
+
+        def write(self, s):
+            return self._real.write(s)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._real.close()
+            raise OSError("ENOSPC on close")
+
+    real_open = Path.open
+
+    def fake_open(self, *a, **k):
+        handle = real_open(self, *a, **k)
+        return CloseFailingHandle(handle) if self == out else handle
+
+    monkeypatch.setattr(Path, "open", fake_open)
+    _patch_client(monkeypatch, FakeTransport())
+    code = main([
+        "judge-fit", "--eval-cases", str(cases), "--predictions-output", str(out),
+    ])
+    assert code == 2
+    assert "error:" in capsys.readouterr().err
+
+
 def test_cli_judge_fit_eval_mode_writes_envelopes(tmp_path, monkeypatch, capsys) -> None:
     from atlas_reddit.__main__ import main
 
