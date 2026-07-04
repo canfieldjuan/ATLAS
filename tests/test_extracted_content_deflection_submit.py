@@ -2721,3 +2721,408 @@ def test_pinned_https_connection_uses_validated_ip_but_original_sni() -> None:
         ("sni", "portfolio.example"),
     ]
     assert connection.sock == ("tls", "socket", "portfolio.example")
+
+
+# --- Paid Resolution Audit -> FAQ macro publish route -----------------------
+
+from fastapi import HTTPException  # noqa: E402
+
+from extracted_content_pipeline.faq_macro_writeback import (  # noqa: E402
+    MacroPublishResult,
+)
+from extracted_content_pipeline.faq_macro_writeback_publish import (  # noqa: E402
+    FAQMacroWritebackPublishService,
+)
+from extracted_content_pipeline.faq_macro_writeback_zendesk import (  # noqa: E402
+    ZendeskMacroPublishProvider,
+)
+from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft  # noqa: E402
+
+_PUBLISH_FAQ_ID = "5a3c1f4e-9b2d-4e8f-a1c6-2d7b9e0f3a45"
+_PUBLISH_ACCOUNT = "acct-portfolio-submit"
+
+
+class _PublishFAQRepo:
+    def __init__(self, draft: TicketFAQDraft | None) -> None:
+        self.draft = draft
+        self.stored_status = draft.status if draft is not None else ""
+        self.get_calls: list[dict[str, Any]] = []
+        self.update_calls: list[dict[str, Any]] = []
+
+    async def get_draft(self, faq_id: str, *, scope: TenantScope) -> TicketFAQDraft | None:
+        self.get_calls.append({"faq_id": faq_id, "scope": scope})
+        if self.draft is not None and faq_id == self.draft.id:
+            return self.draft
+        return None
+
+    async def update_status(
+        self,
+        faq_id: str,
+        status: str,
+        *,
+        scope: TenantScope,
+        expected_status: str | None = None,
+    ) -> bool:
+        self.update_calls.append({"faq_id": faq_id, "status": status, "scope": scope})
+        if expected_status is not None and self.stored_status != expected_status:
+            return False
+        self.stored_status = status
+        return True
+
+
+class _PublishAttemptRepo:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def record_attempt(self, summary: Any, *, scope: TenantScope) -> None:
+        self.calls.append({"summary": summary, "scope": scope})
+
+
+class _ZendeskBoundaryFake:
+    """External Zendesk boundary fake: records calls, returns published."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def publish(
+        self,
+        macros: Any,
+        *,
+        scope: TenantScope,
+    ) -> Any:
+        self.calls.append({"macros": tuple(macros), "scope": scope})
+        return tuple(
+            MacroPublishResult(
+                macro=macro,
+                status="published",
+                external_id=f"zendesk-{index}",
+            )
+            for index, macro in enumerate(macros, start=1)
+        )
+
+
+class _NoneZendeskCredentials:
+    async def credentials_for_scope(self, scope: TenantScope) -> None:
+        del scope
+        return None
+
+
+class _MustNotTouchMappingRepo:
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(
+            f"mapping repository must not be touched without credentials: {name}"
+        )
+
+
+def _publish_draft(
+    *,
+    draft_id: str = _PUBLISH_FAQ_ID,
+    status: str = "draft",
+) -> TicketFAQDraft:
+    # 'draft' matches what PostgresTicketFAQRepository.save_drafts persists for
+    # real Resolution Audit runs; the route's explicit publish action promotes
+    # it (fixtures must match real producer output).
+    return TicketFAQDraft(
+        id=draft_id,
+        target_id="ticket-faq-report",
+        target_mode="support_ticket_faq",
+        title="Resolution Audit FAQ draft",
+        markdown="# Resolution Audit FAQ draft",
+        items=(
+            {
+                "faq_item_id": "faq-item-1",
+                "topic": "billing",
+                "question": "Why was I charged twice?",
+                "resolution_text": "Open Billing and compare settled charges.",
+                "answer_evidence_status": "resolution_evidence",
+            },
+        ),
+        source_count=1,
+        ticket_source_count=1,
+        status=status,
+    )
+
+
+async def _paid_report_store(
+    *,
+    account_id: str = _PUBLISH_ACCOUNT,
+    request_id: str = "resolution-audit-1",
+    artifact: dict[str, Any] | None = None,
+    paid: bool = True,
+) -> InMemoryDeflectionReportArtifactStore:
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id=account_id,
+        request_id=request_id,
+        snapshot={"summary": {}},
+        artifact=(
+            artifact
+            if artifact is not None
+            else {"faq_result": {"saved_ids": [_PUBLISH_FAQ_ID]}}
+        ),
+    )
+    if paid:
+        assert await store.mark_paid(account_id=account_id, request_id=request_id)
+    return store
+
+
+def _publish_router(
+    store: InMemoryDeflectionReportArtifactStore,
+    service_provider: Any,
+    *,
+    account_id: str = _PUBLISH_ACCOUNT,
+) -> Any:
+    return create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            deflection_snapshot_top_n=2,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService(),
+        ),
+        deflection_report_store_provider=lambda: store,
+        faq_macro_publish_service_provider=service_provider,
+        scope_provider=lambda: {"account_id": account_id},
+    )
+
+
+def _publish_route(router: Any) -> Any:
+    return _route(router, "/ops/deflection-reports/{request_id}/publish-macros", "POST")
+
+
+async def test_publish_macros_publishes_saved_faq_for_paid_report() -> None:
+    store = await _paid_report_store()
+    repo = _PublishFAQRepo(_publish_draft())
+    boundary = _ZendeskBoundaryFake()
+    attempts = _PublishAttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=boundary,
+        attempt_repository=attempts,
+    )
+    router = _publish_router(store, lambda: service)
+
+    payload = await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert payload["account_id"] == _PUBLISH_ACCOUNT
+    assert payload["request_id"] == "resolution-audit-1"
+    assert payload["faq_id"] == _PUBLISH_FAQ_ID
+    assert payload["asset"] == "faq_markdown"
+    assert payload["ok"] is True
+    assert payload["published_count"] == 1
+    assert payload["draft_status_updated"] is True
+    # Observable state: the draft was marked published under the tenant scope,
+    # the external boundary saw exactly the tenant scope, and the attempt was
+    # recorded through the real service (no call-arg fakery on the service).
+    assert [
+        (call["faq_id"], call["status"]) for call in repo.update_calls
+    ] == [
+        (_PUBLISH_FAQ_ID, "approved"),
+        (_PUBLISH_FAQ_ID, "published"),
+    ]
+    assert repo.get_calls[0]["scope"].account_id == _PUBLISH_ACCOUNT
+    assert boundary.calls[0]["scope"].account_id == _PUBLISH_ACCOUNT
+    assert len(attempts.calls) == 1
+
+
+async def test_publish_macros_locked_report_fails_closed() -> None:
+    store = await _paid_report_store(paid=False)
+    repo = _PublishFAQRepo(_publish_draft())
+    boundary = _ZendeskBoundaryFake()
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=boundary)
+    router = _publish_router(store, lambda: service)
+
+    with pytest.raises(HTTPException) as exc:
+        await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert exc.value.status_code == 403
+    assert repo.get_calls == []
+    assert boundary.calls == []
+
+
+async def test_publish_macros_missing_report_404_and_publishes_nothing() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    boundary = _ZendeskBoundaryFake()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=_PublishFAQRepo(_publish_draft()),
+        provider=boundary,
+    )
+    router = _publish_router(store, lambda: service)
+
+    with pytest.raises(HTTPException) as exc:
+        await _publish_route(router).endpoint(request_id="missing-report")
+
+    assert exc.value.status_code == 404
+    assert boundary.calls == []
+
+
+async def test_publish_macros_cross_tenant_report_is_not_visible() -> None:
+    store = await _paid_report_store(account_id="acct-other-tenant")
+    boundary = _ZendeskBoundaryFake()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=_PublishFAQRepo(_publish_draft()),
+        provider=boundary,
+    )
+    router = _publish_router(store, lambda: service)
+
+    with pytest.raises(HTTPException) as exc:
+        await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert exc.value.status_code == 404
+    assert boundary.calls == []
+
+
+async def test_publish_macros_without_saved_faq_id_409_before_service() -> None:
+    for artifact in (
+        {"faq_result": {"saved_ids": []}},
+        {"faq_result": {"saved_ids": ["not-a-uuid"]}},
+        {"faq_result": {}},
+        {},
+    ):
+        store = await _paid_report_store(artifact=artifact)
+        repo = _PublishFAQRepo(_publish_draft())
+        boundary = _ZendeskBoundaryFake()
+        service = FAQMacroWritebackPublishService(faq_repository=repo, provider=boundary)
+        router = _publish_router(store, lambda: service)
+
+        with pytest.raises(HTTPException) as exc:
+            await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+        assert exc.value.status_code == 409
+        assert repo.get_calls == []
+        assert boundary.calls == []
+
+
+async def test_publish_macros_stale_saved_faq_id_409_without_publish() -> None:
+    store = await _paid_report_store()
+    repo = _PublishFAQRepo(None)
+    boundary = _ZendeskBoundaryFake()
+    attempts = _PublishAttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=boundary,
+        attempt_repository=attempts,
+    )
+    router = _publish_router(store, lambda: service)
+
+    with pytest.raises(HTTPException) as exc:
+        await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert exc.value.status_code == 409
+    assert boundary.calls == []
+    assert attempts.calls == []
+
+
+async def test_publish_macros_missing_tenant_credentials_fails_safely() -> None:
+    store = await _paid_report_store()
+    repo = _PublishFAQRepo(_publish_draft())
+    attempts = _PublishAttemptRepo()
+    # Real Zendesk publish provider: with no tenant credentials it must fail
+    # per-macro with a sanitized error, before touching mappings or HTTP.
+    provider = ZendeskMacroPublishProvider(
+        credentials_provider=_NoneZendeskCredentials(),
+        mapping_repository=_MustNotTouchMappingRepo(),
+    )
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+    router = _publish_router(store, lambda: service)
+
+    payload = await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert payload["ok"] is False
+    assert payload["published_count"] == 0
+    assert "zendesk_credentials_missing" in json.dumps(payload)
+    # the explicit publish intent approves the generated draft, but the failed
+    # publish must never mark it published; a later retry can still publish it
+    assert [(c["status"]) for c in repo.update_calls] == ["approved"]
+    assert len(attempts.calls) == 1
+
+
+async def test_publish_macros_provider_unavailable_503_fails_closed() -> None:
+    store = await _paid_report_store()
+    router = _publish_router(store, None)
+
+    with pytest.raises(HTTPException) as exc:
+        await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert exc.value.status_code == 503
+
+
+async def test_publish_macros_does_not_revive_rejected_draft() -> None:
+    # approve-on-publish only promotes the exact 'draft' status; a rejected
+    # draft stays rejected and nothing reaches the boundary as published.
+    store = await _paid_report_store()
+    repo = _PublishFAQRepo(_publish_draft(status="rejected"))
+    boundary = _ZendeskBoundaryFake()
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=boundary)
+    router = _publish_router(store, lambda: service)
+
+    payload = await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert payload["ok"] is False
+    assert payload["published_count"] == 0
+    assert boundary.calls == []
+    assert repo.update_calls == []
+
+
+async def test_publish_macros_already_approved_draft_still_publishes() -> None:
+    store = await _paid_report_store()
+    repo = _PublishFAQRepo(_publish_draft(status="approved"))
+    boundary = _ZendeskBoundaryFake()
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=boundary)
+    router = _publish_router(store, lambda: service)
+
+    payload = await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert payload["ok"] is True
+    assert payload["published_count"] == 1
+    # no redundant approve transition for an already-approved draft
+    assert [(c["status"]) for c in repo.update_calls] == ["published"]
+
+
+async def test_publish_macros_partial_generated_draft_publishes_nothing() -> None:
+    # A paid report whose generated FAQ is only partially publishable must not
+    # promote the draft or publish; the route surfaces ok:false with no writes.
+    store = await _paid_report_store()
+    repo = _PublishFAQRepo(_publish_draft(status="draft"))
+    repo.draft = TicketFAQDraft(
+        id=_PUBLISH_FAQ_ID,
+        target_id="ticket-faq-report",
+        target_mode="support_ticket_faq",
+        title="Resolution Audit FAQ draft",
+        markdown="# Resolution Audit FAQ draft",
+        items=(
+            {
+                "faq_item_id": "faq-item-1",
+                "topic": "billing",
+                "question": "Why was I charged twice?",
+                "resolution_text": "Open Billing and compare settled charges.",
+                "answer_evidence_status": "resolution_evidence",
+            },
+            {
+                "faq_item_id": "faq-item-2",
+                "question": "How do I export a report?",
+                "answer": "Customers mention exports.",
+                "answer_evidence_status": "draft_needs_review",
+            },
+        ),
+        source_count=2,
+        ticket_source_count=2,
+        status="draft",
+    )
+    repo.stored_status = "draft"
+    boundary = _ZendeskBoundaryFake()
+    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=boundary)
+    router = _publish_router(store, lambda: service)
+
+    payload = await _publish_route(router).endpoint(request_id="resolution-audit-1")
+
+    assert payload["ok"] is False
+    assert payload["published_count"] == 0
+    assert boundary.calls == []
+    assert repo.update_calls == []
+    assert repo.stored_status == "draft"

@@ -304,3 +304,73 @@ async def test_tenant_zendesk_credentials_provider_fails_closed_for_unprovisione
     )
 
     assert credentials is None
+
+
+@pytest.mark.asyncio
+async def test_build_faq_macro_publish_service_returns_none_without_pool() -> None:
+    from atlas_brain._content_ops_macro_writeback import (
+        build_content_ops_faq_macro_publish_service,
+    )
+
+    service = await build_content_ops_faq_macro_publish_service(
+        pool_provider=lambda: None,
+        config_provider=lambda: _Config(),
+    )
+
+    assert service is None
+
+
+@pytest.mark.asyncio
+async def test_build_faq_macro_publish_service_returns_none_for_uninitialized_pool() -> None:
+    from atlas_brain._content_ops_macro_writeback import (
+        build_content_ops_faq_macro_publish_service,
+    )
+
+    class _UninitializedPool:
+        is_initialized = False
+
+    service = await build_content_ops_faq_macro_publish_service(
+        pool_provider=lambda: _UninitializedPool(),
+        config_provider=lambda: _Config(),
+    )
+
+    assert service is None
+
+
+@pytest.mark.asyncio
+async def test_build_faq_macro_publish_service_composes_existing_building_blocks() -> None:
+    from atlas_brain._content_ops_macro_writeback import (
+        TenantZendeskMacroCredentialsProvider,
+        build_content_ops_faq_macro_publish_service,
+    )
+    from extracted_content_pipeline.faq_macro_writeback_postgres import (
+        PostgresFAQMacroPublishAttemptRepository,
+    )
+    from extracted_content_pipeline.faq_macro_writeback_publish import (
+        FAQMacroWritebackPublishService,
+    )
+    from extracted_content_pipeline.ticket_faq_postgres import (
+        PostgresTicketFAQRepository,
+    )
+
+    pool = _Pool()
+    service = await build_content_ops_faq_macro_publish_service(
+        pool_provider=lambda: pool,
+        config_provider=lambda: _Config(),
+    )
+
+    assert isinstance(service, FAQMacroWritebackPublishService)
+    assert isinstance(service.faq_repository, PostgresTicketFAQRepository)
+    assert isinstance(service.provider, ZendeskMacroPublishProvider)
+    assert isinstance(
+        service.provider.credentials_provider,
+        TenantZendeskMacroCredentialsProvider,
+    )
+    assert isinstance(
+        service.provider.mapping_repository,
+        PostgresFAQMacroWritebackMappingRepository,
+    )
+    assert isinstance(
+        service.attempt_repository,
+        PostgresFAQMacroPublishAttemptRepository,
+    )
