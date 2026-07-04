@@ -7,7 +7,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_macro_writeback_checks.yml"
-      - "requirements.txt"
+      - "requirements.content_ops_ci.txt"
       - "extracted_content_pipeline/**"
       - "atlas_brain/autonomous/runner.py"
       - "atlas_brain/autonomous/scheduler.py"
@@ -21,6 +21,7 @@ on:
       - "scripts/seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
       - "tests/test_check_content_ops_faq_macro_lifecycle_artifact.py"
+      - "tests/test_content_ops_ci_requirements_workflows.py"
       - "tests/test_cleanup_content_ops_faq_macro_sandbox.py"
       - "tests/test_extracted_ticket_faq_macro_writeback_zendesk.py"
       - "tests/test_faq_macro_writeback_sandbox_e2e_smoke.py"
@@ -33,7 +34,7 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_macro_writeback_checks.yml"
-      - "requirements.txt"
+      - "requirements.content_ops_ci.txt"
       - "extracted_content_pipeline/**"
       - "atlas_brain/autonomous/runner.py"
       - "atlas_brain/autonomous/scheduler.py"
@@ -47,6 +48,7 @@ on:
       - "scripts/seed_faq_macro_writeback_live_smoke_draft.py"
       - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
       - "tests/test_check_content_ops_faq_macro_lifecycle_artifact.py"
+      - "tests/test_content_ops_ci_requirements_workflows.py"
       - "tests/test_cleanup_content_ops_faq_macro_sandbox.py"
       - "tests/test_extracted_ticket_faq_macro_writeback_zendesk.py"
       - "tests/test_faq_macro_writeback_sandbox_e2e_smoke.py"
@@ -67,18 +69,19 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: requirements.content_ops_ci.txt
 
       - name: Install runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m pip install pytest pytest-asyncio
+          pip install -r requirements.content_ops_ci.txt
 
       - name: Run Content Ops macro writeback scheduler tests
         run: |
           python -m pytest \
             tests/test_autonomous_faq_macro_writeback_scheduled_publish.py \
             tests/test_check_content_ops_faq_macro_lifecycle_artifact.py \
+            tests/test_content_ops_ci_requirements_workflows.py \
             tests/test_cleanup_content_ops_faq_macro_sandbox.py \
             tests/test_extracted_ticket_faq_macro_writeback_zendesk.py \
             tests/test_faq_macro_writeback_sandbox_e2e_smoke.py \

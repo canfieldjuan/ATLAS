@@ -7,7 +7,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_input_provider_checks.yml"
-      - "requirements.txt"
+      - "requirements.content_ops_ci.txt"
       - "extracted_content_pipeline/**"
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/config.py"
@@ -17,6 +17,7 @@ on:
       - "atlas_brain/services/embedding/sentence_transformer.py"
       - "tests/test_atlas_content_ops_input_provider.py"
       - "tests/test_atlas_content_ops_infrastructure.py"
+      - "tests/test_content_ops_ci_requirements_workflows.py"
       - "tests/test_atlas_content_ops_review_input_provider.py"
       - "tests/test_atlas_content_ops_execution_services.py"
       - "tests/test_support_ticket_provider_landing_blog_execute.py"
@@ -25,7 +26,7 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_input_provider_checks.yml"
-      - "requirements.txt"
+      - "requirements.content_ops_ci.txt"
       - "extracted_content_pipeline/**"
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/config.py"
@@ -35,6 +36,7 @@ on:
       - "atlas_brain/services/embedding/sentence_transformer.py"
       - "tests/test_atlas_content_ops_input_provider.py"
       - "tests/test_atlas_content_ops_infrastructure.py"
+      - "tests/test_content_ops_ci_requirements_workflows.py"
       - "tests/test_atlas_content_ops_review_input_provider.py"
       - "tests/test_atlas_content_ops_execution_services.py"
       - "tests/test_support_ticket_provider_landing_blog_execute.py"
@@ -51,18 +53,19 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: requirements.content_ops_ci.txt
 
       - name: Install runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m pip install pytest pytest-asyncio
+          pip install -r requirements.content_ops_ci.txt
 
       - name: Run Content Ops input provider tests
         run: |
           python -m pytest \
             tests/test_atlas_content_ops_input_provider.py \
             tests/test_atlas_content_ops_infrastructure.py \
+            tests/test_content_ops_ci_requirements_workflows.py \
             tests/test_atlas_content_ops_review_input_provider.py \
             tests/test_atlas_content_ops_execution_services.py \
             tests/test_support_ticket_provider_landing_blog_execute.py \
