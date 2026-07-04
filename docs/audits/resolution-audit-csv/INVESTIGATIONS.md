@@ -69,11 +69,17 @@ known-pending prerequisite, not new work).
 The audit's R1 ("embed a gist, cluster by cosine over the whole set") is **under-specified**.
 Measured separability of cl_attack2 (cancel-subscription vs cancel-order):
 `intra-intent cosine min 0.506` vs `inter-intent max 0.672` -> **separation gap NEGATIVE**
-(reviewer's independent run: **-0.470**, min 0.236 vs max 0.706). The bands OVERLAP, so
-**single-linkage at any threshold chains the two intents into one -- a naive semantic pass
-REPRODUCES F4.** Cross-fixture sweep: no single (linkage, threshold) both merges diverse
-same-intent AND separates adjacent distinct-intent. This is a property of the data;
-mxbai-large shifts thresholds but does not erase the overlap.
+(reviewer's independent run: **-0.470**, min 0.236 vs max 0.706). The negative gap proves the
+*pairwise* cosine bands overlap -- no single global pairwise threshold classifies every pair
+correctly. That alone does NOT prove single-linkage impossibility (single-linkage needs only a
+connected chain, not every pair above threshold). **Closed with the MST connectivity bottleneck:**
+the two intents JOIN at `merge_distance = 1 - max_inter = 0.295`, but each intent only becomes
+internally connected at `connect_distance = 0.535` (its single-linkage MST bottleneck). Since
+`connect_distance (0.535) > merge_distance (0.295)`, single-linkage merges the two intents BEFORE
+either is internally whole -> **no threshold yields the 2 pure intents** (sweep confirms: no
+pure-2 band). So a naive single-linkage semantic pass genuinely reproduces F4 -- now *proven* via
+the bottleneck, not inferred from the gap. Property of the data; mxbai-large shifts thresholds but
+does not erase the overlap.
 
 **Concrete algorithm:**
 1. **Stage A -- demote the lexical stage to duplicate-compression only.** Keep the token-set
@@ -89,9 +95,10 @@ mxbai-large shifts thresholds but does not erase the overlap.
 4. **F7 wired first** so Stage B gets a port.
 
 **Prototype results [verified]:** cl_attack1 (25 same-intent) -> 1 cluster of 25 (vs current
-10 items); cl_attack2 -> single-linkage over-merges at every T, complete-linkage d=0.50
-separates to 2 pure [10,10] but doesn't collapse *diverse* same-intent -- **the honest
-trade-off R1 must resolve with calibration, not a hard-coded constant.** Modules:
+10 items); cl_attack2 -> single-linkage yields no pure-2 partition at any T (MST bottleneck
+0.535 > merge 0.295), complete-linkage d=0.50 separates to 2 pure [10,10] but doesn't collapse
+*diverse* same-intent -- **the honest trade-off R1 must resolve with calibration, not a
+hard-coded constant.** Modules:
 `ticket_faq_markdown.py:788,850-868` (Stage A/B), `faq_deflection_report.py:1697` (F7),
 `support_ticket_clustering.py` (repurpose to reps; synced file -- edit `atlas_brain/` source
 + `sync_extracted.sh`). A/B behind a flag + golden support-tax on a labeled corpus.
@@ -170,16 +177,21 @@ Effort: high (~4-6 days incl. F7 + calibration harness + comparison gate).
   re-derived `_model_money(13.50)=$14` on the PDF; (4) money baked into `product_gap_summary`
   string (`:3829`) shown next to the email's own price -> $40 and $41 in one line.
   **Fix [verified]:** one shared helper in the owned package (both renderers already import it),
-  **render cents** -- proven: rows `['$67.50','$81.00','$40.50']` sum to headline `$189.00`
-  exactly, benchmark renders true `$13.50`, all surfaces identical. Cents beats "round the
-  total" and "sum the rounded rows" (the latter makes the headline wrong, amplified ~16x by the
-  annualized). Kill the baked-money anti-pattern. ~1.5-2 days.
+  **render cents** -- proven for the base support-cost table: rows `['$67.50','$81.00','$40.50']`
+  sum to headline `$189.00` exactly (`n x $13.50` is always cent-exact), benchmark renders true
+  `$13.50`, all surfaces identical. Cents beats "round the total" and "sum the rounded rows" (the
+  latter makes the headline wrong, amplified ~16x by the annualized). **Scope caveat:** cents fix
+  the base `n x $13.50` display, NOT universal row-sum reconciliation -- fractional-cent rows (e.g.
+  annualized `window=4 -> $1,231.875/row`; two rows render `$1,231.88` summing `$2,463.76` vs true
+  `$2,463.75`) still need the raw-total guard below. Kill the baked-money anti-pattern. ~1.5-2 days.
 - **P5-7 guard [verified]** -- add a totals-reconciliation guard at `build_deflection_report_artifact:1721`
   (the single chokepoint all surfaces read). **Second-side trap (verified):** the headline uses a
   repeat-only basis (tc>=2) while per-row costs include tc==1, so a naive `sum(all rows)==headline`
   guard FALSE-POSITIVES on any report with a single-ticket question (202.50 vs 189.00). The guard
-  must replicate the tc>=2 basis (it then correctly catches real model drift). Cents rendering
-  makes the DISPLAY reconcile by construction; the model guard catches drift. Also wire the
+  must call the **same billed-repeat predicate** used to compute `repeat_ticket_count` (not a
+  re-hardcoded `tc>=2` -- that would be a second source of drift); it then correctly catches real
+  model drift. Cents rendering makes the base-cost DISPLAY reconcile by construction; the model
+  guard catches drift. Also wire the
   CI-only scorecard (zero runtime callers) into runtime.
 - **P5-1 [trivial]** -- SEO section priority 20 above ranked (30)/fix-queue (35); it disclaims its
   own value (`:4123`). Fix: `priority=45` (data-only). ~1h.
@@ -221,6 +233,19 @@ status transitions/handle-time, escalation depth, comment threads w/ role+timest
    but needs a labeled calibration corpus and resolves the F4 band-overlap trade-off.
 7. **R5 large-upload cap/async** (fix the byte-alias, `to_thread` the inline build): ~2-3 days.
 
+## Self-corrections (post external review, 2026-07-04)
+
+Independent adversarial review by GPT-5.5 Pro (portal) confirmed the money math (A1-A3, B1)
+and caught real over-claims in the above, corrected in place (tracking #2000):
+- **C1** -- the negative separation gap was cited as proof that single-linkage reproduces F4; it
+  only proves *pairwise* inseparability. Closed with the MST connectivity bottleneck
+  (`connect 0.535 > merge 0.295` -> no pure-2 threshold; sweep confirms). Conclusion stands, now proven.
+- **A4** -- "cents reconciles by construction" scoped to base `n x $13.50`; fractional-cent
+  annualized rows still need the raw-total guard.
+- **B2** -- the reconciliation guard must call the same billed-repeat predicate, not a re-hardcoded `tc>=2`.
+- **D1/D2** -- `$810/$1,944` are the dateless `x12` run-rate (`:3232`), not a `x365/window`
+  annualization; annualized dollars are labeled run-rates, not confident annual claims (FINDINGS H-x12).
+
 *No product code was modified. Prototypes in gitignored `_audit_scratch/`. The R1 semantic
-placement, R2 speedup+parity, P5-2 cents reconciliation, guard second-side trap, and P7 byte-alias
-were re-run by the reviewer.*
+placement (+ the C1 MST closure), R2 speedup+parity, P5-2 cents reconciliation, guard second-side
+trap, and P7 byte-alias were re-run by the reviewer.*

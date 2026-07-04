@@ -44,6 +44,8 @@ Concrete catches on the real fixture (14 repeat tickets: clusters 5/6/3):
   re-count -- currently non-overlapping, a latent drift path.
 - **(f)** annualized `$2,999` = `14 x 365/23 x 13.50` reconciles but is a 15.9x
   extrapolation from a 23-day window (copy hedges "at the same measured daily pace" -- defensible).
+  It is a **run-rate**, not a confident annual loss: at n=14 in 23 days the Poisson variance is
+  large, so it should be shown with an "if this pace holds" range, not a point figure (D2).
 
 This is the biggest presentation defect: the paid artifacts show numbers a sharp reader
 adds up and catches, and there is no runtime guard (P5-7). Fix: one money helper, one

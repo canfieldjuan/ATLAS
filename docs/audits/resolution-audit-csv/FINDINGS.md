@@ -53,9 +53,13 @@ UK/EU/AU export of "1 Feb" (day-first) is silently read as Feb 1; day>12
 12 tickets, all "cannot authenticate / access account", each phrased with low
 lexical overlap. Measured: **1 cluster with `ticket_count=5`; the other 7 each land
 in their own single-row topic bucket and are excluded as `non_repeat` (7).**
-`report_model`: `repeat_ticket_count=5`, `annualized_run_rate_support_cost=$810`.
-Correct clustering (12 repeats) would be ~$1,944 annualized. **58% of the repeat
-surface silently dropped; 7 genuine repeats mislabeled "asked only once."**
+`report_model`: `repeat_ticket_count=5`, `annualized_run_rate_support_cost=$810`
+-- this fixture is dateless, so the pipeline uses its **x12 run-rate fallback**
+(`faq_deflection_report.py:3232`: `5 x 12 x $13.50`); a *dated* upload annualizes by
+`x365/window_days` (`:3228`) instead. Correct clustering (12 repeats) = ~$1,944 on the same
+x12 run-rate. **58% of the repeat surface silently dropped** (basis-independent); 7 genuine
+repeats mislabeled "asked only once." The dollar figure is a run-rate "if this pace holds,"
+not a confident annual loss (see H-x12).
 - Evidence: topic partition seeds from the token-set label
   (`ticket_faq_markdown.py:770,787-788`; label `support_ticket_clustering.py:462`);
   the `<2 distinct-source` exclusion `ticket_faq_markdown.py:862` discards the scattered singletons.
@@ -70,9 +74,10 @@ surface silently dropped; 7 genuine repeats mislabeled "asked only once."**
 **the 6 auto-replies become their own cluster, `ticket_count=6`, ranked #1**
 (representative "What should I do about automatic monday office out?"); the real
 question ranks #2. `repeat_ticket_count=11`, `estimated_support_cost=$148.50`,
-`annualized=$1,782`; the junk line item is `$81` and is the #1 priority-fix /
-drafted-resolution / JIRA item. Legit-only would be $67.50 / $810 annualized --
-**junk inflates the annualized tax by ~$972 (>2x) and owns the top recommendation.**
+`annualized=$1,782` (x12 dateless run-rate, `:3232`); the junk line item is `$81` and is the
+#1 priority-fix / drafted-resolution / JIRA item. Legit-only would be $67.50 / $810 run-rate --
+**junk inflates the tax by ~$972 (>2x) and owns the top recommendation** (the >2x ratio is
+basis-independent; annualized dollars are a run-rate, not a confident annual figure).
 - Evidence: publishable gate is PII/question-shape only, not spam
   (`_publishable_customer_question_text:2659`); every group member counts toward
   `ticket_count` (`:1430`).
@@ -156,6 +161,15 @@ fragmentation failure.
 - **F9 -- 22% of a realistic mixed inbox excluded** from the repeat/billed surface
   (45 tickets -> `non_repeat=10`). Defensible here (genuine one-offs) but it is the
   same `<2` gate that drops real repeats under F1. Repro: `cl_attack34_mixed.json`.
+- **H-x12 -- Dateless annualization hard-codes a x12 "one month" assumption [verified-by-reviewer]**
+  For a dateless upload the pipeline annualizes as `repeat_ticket_count x 12 x $13.50`
+  (`faq_deflection_report.py:3232`, field `annualized_run_rate_support_cost`), assuming the upload
+  represents exactly one month of tickets -- with no inference of the actual span. A dateless year
+  of tickets is reported ~12x too high; a week's worth ~12x too low. (A *dated* upload correctly
+  uses `x365/window_days`, `:3228`.) The x12 constant is an unfounded basis for a customer-facing
+  dollar figure -- the annualization sibling of the P5-2 rounding defect. Fix: infer the span or
+  present dateless figures as an explicit unbounded run-rate. Surfaced by the GPT-5.5 Pro review;
+  tracked in #2000 / #1993.
 
 ## LOW / informational
 
