@@ -132,6 +132,8 @@ def build_prompt(
     state = str(status.get("state") or "unknown")
     next_poll = str(status.get("next_poll_at") or "unknown")
     reconciliation_code = status.get("reconciliation_exit_code")
+    session_state_label = session_state or "SESSION_STATE.local.md"
+    session_state_shell = shlex.quote(session_state_label)
 
     lines = [
         "# Atlas Codex Wake Bridge Handoff",
@@ -155,12 +157,12 @@ def build_prompt(
         f"Handoff Markdown: {handoff_md_path}",
         "",
         "Before doing anything:",
-        "1. Read AGENTS.md and SESSION_STATE.local.md.",
+        f"1. Read AGENTS.md and the session state file named above: {session_state_label}.",
         "2. Run `gh pr list --state open`.",
         "3. Run `git log --oneline -15 origin/main`.",
-        "4. Confirm this PR is listed as owned or may-touch in SESSION_STATE.local.md.",
+        "4. Confirm this PR is listed as owned or may-touch in that session state file.",
         "5. Run the ownership guard before any PR mutation:",
-        f"   `python scripts/check_session_pr_ownership.py --pr {pr_number} --branch {branch} --head-sha {head_sha}`",
+        f"   `ATLAS_SESSION_STATE_FILE={session_state_shell} python scripts/check_session_pr_ownership.py --pr {pr_number} --branch {branch} --head-sha {head_sha}`",
         "6. Refresh current checks, review-thread status, live reconciliation, and mergeability.",
         "",
         "Safety boundary: this bridge is a wake/handoff only. It did not poll GitHub,",
@@ -179,7 +181,7 @@ def build_prompt(
             "Scheduled green-confirmation wake:",
             "- This is the only wake class that can proceed to merge consideration.",
             "- Do not trust the watcher alone; run every AGENTS pre-merge guard live.",
-            "- Merge only if SESSION_STATE.local.md records explicit standing merge authorization for this arc.",
+            "- Merge only if that session state file records explicit standing merge authorization for this arc.",
             "- If authorization is absent or any guard is not clean, report readiness or the blocker and stop.",
         ])
     elif wake_kind == "event-attention":
@@ -194,7 +196,7 @@ def build_prompt(
         lines.extend([
             "Pending watcher state:",
             "- Do not start a chat-side polling loop.",
-            "- Record the pending state and next watcher poll in SESSION_STATE.local.md, then stop.",
+            "- Record the pending state and next watcher poll in the session state file, then stop.",
         ])
     elif wake_kind == "closed":
         lines.extend([

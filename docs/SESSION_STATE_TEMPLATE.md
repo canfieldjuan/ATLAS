@@ -1,7 +1,14 @@
-# SESSION_STATE.local.md Template
+# Session-State File Template
 
-Create `SESSION_STATE.local.md` at the repository root from this template for
-each builder session. Keep it local; it is ignored by git.
+Create one local state file per builder session at the repository root from
+this template. Prefer `SESSION_STATE.<session-id>.local.md` (for example,
+`SESSION_STATE.codex-workflow-1982.local.md`). Use legacy
+`SESSION_STATE.local.md` only when one active session owns the worktree.
+
+Keep the file local; `SESSION_STATE.local.md` and
+`SESSION_STATE.*.local.md` are ignored by git. Export
+`ATLAS_SESSION_STATE_FILE=<absolute or repo-relative path>` for the active
+session so ownership guards and wake prompts read the right file.
 
 Update it before opening a PR, after pushing a PR update, after merging a PR,
 and after any compaction/restart reorientation. If current GitHub state
@@ -101,7 +108,7 @@ Do-NOT-redo: <paths ruled out, checks already green, dead ends>
 
 ## Ownership Rule
 
-If a PR is not listed as owned in `SESSION_STATE.local.md`, it is not yours.
+If a PR is not listed as owned in this session's state file, it is not yours.
 Lane proximity is not ownership. Similar file paths are not ownership. A PR
 opened by another active session is not yours unless the operator explicitly
 reassigns it and the map is updated first.

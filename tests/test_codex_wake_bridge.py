@@ -48,7 +48,7 @@ def _write_fixture(
         "REPO_DIR": f'"{repo_dir}"',
         "PR": '"123"',
         "REPO": '"canfieldjuan/ATLAS"',
-        "SESSION_STATE": f'"{repo_dir / "SESSION_STATE.local.md"}"',
+        "SESSION_STATE": f'"{repo_dir / "SESSION_STATE.slice-123.local.md"}"',
         "HEAD_SHA": '"abc123"',
         "POLL_MINUTES": '"30"',
         "AUTO_MERGE": '"0"',
@@ -113,6 +113,8 @@ def test_scheduled_ready_writes_guarded_merge_prompt(tmp_path: Path) -> None:
     assert payload["wake_kind"] == "scheduled-ready"
     assert payload["actionable"] is True
     assert "Scheduled green-confirmation wake" in prompt
+    assert "SESSION_STATE.slice-123.local.md" in prompt
+    assert "ATLAS_SESSION_STATE_FILE=" in prompt
     assert "scripts/check_session_pr_ownership.py --pr 123" in prompt
     assert "explicit standing merge authorization" in prompt
     assert "did not merge anything" in prompt

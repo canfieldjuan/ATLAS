@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
 import sys
@@ -11,7 +12,6 @@ from typing import Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_STATE_FILE = ROOT / "SESSION_STATE.local.md"
 SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
 PR_RE = re.compile(r"#(?P<number>\d+)\b")
 
@@ -117,11 +117,26 @@ def ownership_errors(
     return errors
 
 
+def default_state_file() -> Path:
+    configured = os.environ.get("ATLAS_SESSION_STATE_FILE")
+    if configured:
+        return Path(configured)
+    return ROOT / "SESSION_STATE.local.md"
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Validate that a target PR is owned by SESSION_STATE.local.md."
+        description="Validate that a target PR is owned by this session's state file."
     )
-    parser.add_argument("--state-file", type=Path, default=DEFAULT_STATE_FILE)
+    parser.add_argument(
+        "--state-file",
+        type=Path,
+        default=default_state_file(),
+        help=(
+            "Session state file to read. Defaults to ATLAS_SESSION_STATE_FILE, "
+            "then SESSION_STATE.local.md."
+        ),
+    )
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--branch", required=True)
     parser.add_argument("--head-sha", default="")
