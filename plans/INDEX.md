@@ -1184,6 +1184,7 @@
 - [PR-Reddit-Fit-Contract](archive/PR-Reddit-Fit-Contract.md) - lane: content-ops/reddit-listening/fit-eval | phase: Vertical slice
 - [PR-Reddit-Fit-Eval-Harness](archive/PR-Reddit-Fit-Eval-Harness.md) - lane: content-ops/reddit-listening/fit-eval | phase: Robust testing
 - [PR-Reddit-Fit-Guard](archive/PR-Reddit-Fit-Guard.md) - lane: content-ops/reddit-listening/fit-eval | phase: Vertical slice
+- [PR-Reddit-Fit-Store](archive/PR-Reddit-Fit-Store.md) - lane: content-ops/reddit-listening/fit-eval | phase: Vertical slice
 - [PR-Reddit-Listening-Config-Scoring](archive/PR-Reddit-Listening-Config-Scoring.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Digest](archive/PR-Reddit-Listening-Digest.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
 - [PR-Reddit-Listening-Praw-Poller](archive/PR-Reddit-Listening-Praw-Poller.md) - lane: content-ops/reddit-listening/resolution-audit | phase: Vertical slice
