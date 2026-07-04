@@ -1626,3 +1626,49 @@ def test_unittest_testcase_collects_camelcase_and_run_test() -> None:
         "import unittest\n"
         "class M(unittest.TestCase):\n"
         "    def testRejectsBad(self):\n        pass\n"]) == ["testRejectsBad"]
+
+
+# --- wave 12: async-with, check=, __test__ opt-out, None exception ---
+
+
+def test_async_with_raises_context_does_not_assert() -> None:
+    # pytest.raises / assertRaises return sync context managers, so
+    # `async with pytest.raises(...)` errors before the block.
+    assert not _raises(
+        "async def test_x():\n"
+        "    async with pytest.raises(ValueError):\n        await go()\n")
+
+
+def test_pytest_check_predicate_context_asserts() -> None:
+    # pytest accepts the `check=` predicate, including a check-only context.
+    assert _raises(
+        "def test_x():\n    with pytest.raises(check=_c):\n        go()\n")
+    assert _raises(
+        "def test_x():\n    with pytest.raises(ValueError, check=_c):\n        go()\n")
+
+
+def test_pytest_raises_none_exception_does_not_assert() -> None:
+    # `with pytest.raises(None):` (no matcher) raises before the block.
+    assert not _raises(
+        "def test_x():\n    with pytest.raises(None):\n        go()\n")
+    assert not _raises(
+        "def test_x():\n"
+        "    with pytest.raises(expected_exception=None):\n        go()\n")
+
+
+def test_module_and_class_test_optout_collect_nothing() -> None:
+    # `__test__ = False` opts a module or class out of pytest collection.
+    assert MOD._collect_test_defs(
+        ["__test__ = False\ndef test_a():\n    pass\n"]) == []
+    assert MOD._collect_test_defs(
+        ["class TestX:\n    __test__ = False\n"
+         "    def test_a(self):\n        pass\n"]) == []
+
+
+def test_assert_raises_regexp_variant_gets_regex_arity() -> None:
+    # The explicitly accepted `assertRaisesRegexp` alias needs the regex
+    # (3-arg) arity: the callable form must supply exception + regex + fn.
+    assert _raises(_unittest_body(
+        "        self.assertRaisesRegexp(ValueError, 'r', go)\n"))
+    assert not _raises(_unittest_body(
+        "        self.assertRaisesRegexp(ValueError, go)\n"))

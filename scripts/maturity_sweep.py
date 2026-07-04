@@ -535,7 +535,11 @@ def _has_raises_assertion(source):
             for alias in node.names:
                 if alias.name == "pytest":
                     pytest_module_names.add(alias.asname or alias.name)
-        elif isinstance(node, (ast.With, ast.AsyncWith)):
+        elif isinstance(node, ast.With):
+            # Only a plain `with` is a raises context. pytest.raises /
+            # assertRaises return SYNC context managers (no __aenter__), so
+            # `async with pytest.raises(...)` errors before the block and
+            # asserts nothing -- do not treat AsyncWith items as contexts.
             for item in node.items:
                 with_item_calls.add(id(item.context_expr))
         elif isinstance(node, ast.ClassDef):
@@ -607,7 +611,7 @@ def _has_raises_assertion(source):
         # `pytest.raises(ValueError, expected_exception=ValueError)`. It is
         # a broken test, not a runnable assertion, so it fills no slot.
         if is_pytest_raises:
-            valid_keywords = {"expected_exception", "match"}
+            valid_keywords = {"expected_exception", "match", "check"}
         elif callable_form_args == 3:
             valid_keywords = {"expected_exception", "expected_regex", "msg"}
         else:
@@ -626,13 +630,28 @@ def _has_raises_assertion(source):
         if callable_form_args == 3:  # assertRaisesRegex* also takes the regex
             slot_keywords.add("expected_regex")
         exception_args = positional + sum(1 for k in kwargs if k in slot_keywords)
+        # pytest's match-only / check-only contexts assert without an
+        # exception type; a literal `None` exception with neither raises
+        # before the block.
+        matcher_kwargs = bool(kwargs & {"match", "check"})
+        none_exception = (
+            (positional >= 1 and isinstance(node.args[0], ast.Constant)
+             and node.args[0].value is None)
+            or any(kw.arg == "expected_exception"
+                   and isinstance(kw.value, ast.Constant)
+                   and kw.value.value is None
+                   for kw in node.keywords))
         if id(node) in with_item_calls:
-            # pytest.raises has a match-only context
-            # (`with pytest.raises(match="..."):`) that asserts SOME
-            # exception matching the pattern is raised -- a real runnable
-            # assertion even without the exception type.
-            if is_pytest_raises and positional == 0 and "match" in kwargs:
+            # pytest.raises has match-only / check-only contexts
+            # (`with pytest.raises(match="..."):` / `check=...`) that assert
+            # SOME matching exception even without the exception type.
+            if is_pytest_raises and positional == 0 and matcher_kwargs:
                 return True
+            # `with pytest.raises(None):` (no matcher) raises before the
+            # block ("must specify at least one parameter to match on") --
+            # it asserts nothing.
+            if is_pytest_raises and none_exception and not matcher_kwargs:
+                continue
             # Otherwise the context form supplies the exception (+ regex)
             # but NOT the trailing callable; `positional < callable_form_args`
             # rejects the callable-in-with form (`with pytest.raises(X, fn):`).
@@ -658,6 +677,18 @@ def _is_unittest_method_name(name):
     return name.startswith("test") or name == "runTest"
 
 
+def _has_test_optout(body):
+    """True when a module or class body sets `__test__ = False`, pytest's
+    opt-out marker -- pytest then collects nothing from that scope."""
+    for stmt in body:
+        if isinstance(stmt, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "__test__"
+                for t in stmt.targets):
+            if isinstance(stmt.value, ast.Constant) and stmt.value.value is False:
+                return True
+    return False
+
+
 def _test_class_kind(node):
     """Classify a class for pytest collection:
 
@@ -672,6 +703,8 @@ def _test_class_kind(node):
 
     A cross-file base not named `*TestCase` is deliberately missed -- the
     gate errs toward the standard idioms."""
+    if _has_test_optout(node.body):
+        return None
     bases = [b.attr if isinstance(b, ast.Attribute) else b.id
              for b in node.bases if isinstance(b, (ast.Attribute, ast.Name))]
     if any(name.endswith("TestCase") for name in bases):
@@ -699,6 +732,10 @@ def _collect_test_defs(matched):
         try:
             tree = ast.parse(source)
         except SyntaxError:
+            continue
+        if _has_test_optout(tree.body):
+            # A module-level `__test__ = False` opts the whole file out of
+            # collection; pytest gathers no tests from it.
             continue
         for node in tree.body:
             if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))

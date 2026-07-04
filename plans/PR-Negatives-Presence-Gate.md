@@ -363,6 +363,33 @@ repo `pytest.ini`):
   pattern reprices coverage for every module repo-wide (a
   baseline-repricing slice of its own). Logged on #1942, not smuggled in.
 
+Review-fix notes (Codex wave 12; 4 fixed at root, 1 refuted with a
+verified counter-proof; claims checked against pytest 9):
+
+- **FIXED -- async-with raises contexts counted**: `pytest.raises` /
+  `assertRaises` return sync context managers (`RaisesContext` has
+  `__enter__` but no `__aenter__`, verified), so `async with
+  pytest.raises(...)` errors before the block. Only a plain `with` now
+  registers a raises context; AsyncWith items do not.
+- **FIXED -- pytest `check=` predicate rejected**: pytest accepts the
+  `check=` predicate, including a check-only context
+  (`with pytest.raises(check=...)`); verified it enters and asserts. It is
+  now an accepted keyword and, like `match=`, forms a matcher-only context.
+- **FIXED -- literal `None` exception counted**: `with pytest.raises(None):`
+  (and `expected_exception=None`) with no matcher raises "must specify at
+  least one parameter to match on" before the block (verified). A None
+  literal in the exception slot with no `match`/`check` now fills no slot.
+- **FIXED -- module/class `__test__ = False` ignored**: pytest honors the
+  opt-out (verified `--collect-only` reports zero tests). `_collect_test_defs`
+  skips a module whose body sets `__test__ = False`, and `_test_class_kind`
+  returns None for such a class.
+- **REFUTED -- `assertRaisesRegexp` gets 2-arg arity**: false.
+  `"assertRaisesRegexp".startswith("assertRaisesRegex")` is `True`, so the
+  alias already takes the 3-arg regex arity. Counter-proof:
+  `self.assertRaisesRegexp(ValueError, fn)` (missing the regex) is rejected
+  and `self.assertRaisesRegexp(ValueError, 'r', fn)` is accepted, both
+  pinned in tests.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -378,7 +405,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_maturity_sweep.py -q` -- 57 passed
+- `python -m pytest tests/test_maturity_sweep.py -q` -- 62 passed
   (23 pre-existing + both-sides probes for every review-fix wave:
   no-raises sensitive module fails with the
   `sensitive-path NO_RAISES_TESTS` reason and passes off-glob;
@@ -408,9 +435,9 @@ Parked hardening: none.
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Negatives-Presence-Gate.md` | 416 |
+| `plans/PR-Negatives-Presence-Gate.md` | 443 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 236 |
+| `scripts/maturity_sweep.py` | 273 |
 | `tests/maturity_sweep/baseline_scripts.json` | 47 |
-| `tests/test_maturity_sweep.py` | 1132 |
-| **Total** | **1840** |
+| `tests/test_maturity_sweep.py` | 1178 |
+| **Total** | **1950** |
