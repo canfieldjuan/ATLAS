@@ -46,8 +46,12 @@ Slice phase: Workflow/process
   prints them for the operator to place; no writes to `.env`); scope
   breadth (hard-coded to the three read scopes).
 - Reviewer rules triggered: R1, R2 (resolution + both fail-closed exits),
-  R11 (praw already a pipeline dependency; lazy-imported), R12 (test
-  auto-enrolls via the glob).
+  R10 (resolve_credentials is a gate predicate -- traced: complete-pair
+  only), R11 (praw already a pipeline dependency; lazy-imported), R12 (test
+  auto-enrolls via the renamed glob), R13 (the wave-1 findings named defect
+  classes -- cross-namespace mixing, raw-UA -- fixed at the class), R14
+  (resolve_credentials / build_user_agent are validators; reachability
+  proof named above).
 - Test-adapter posture (#1934): the external boundary (praw, the localhost
   socket, browser approval) is the operator's live step; every deterministic
   helper is tested for real, nothing mocked.
