@@ -1,6 +1,6 @@
 # Plan archive index
 
-1380 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1382 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1278,10 +1278,12 @@
 - [PR-Refresh-CLAUDE-Md](archive/PR-Refresh-CLAUDE-Md.md)
 - [PR-Remove-Query-Token-Auth](archive/PR-Remove-Query-Token-Auth.md) - lane: security/hardening-1656 | phase: Production hardening
 - [PR-Resolution-Audit-Artifact-Title](archive/PR-Resolution-Audit-Artifact-Title.md) - lane: deflection/report-artifact-naming | phase: Product polish
+- [PR-Resolution-Audit-Investigations](archive/PR-Resolution-Audit-Investigations.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-S1-Pipeline-Map](archive/PR-Resolution-Audit-S1-Pipeline-Map.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-S2-Parsing-Clustering](archive/PR-Resolution-Audit-S2-Parsing-Clustering.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-S3-Performance](archive/PR-Resolution-Audit-S3-Performance.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-S4-Synthesis](archive/PR-Resolution-Audit-S4-Synthesis.md) - lane: workflow/process | phase: workflow/process
+- [PR-Resolution-Audit-Self-Correction](archive/PR-Resolution-Audit-Self-Correction.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-Zendesk-Writeback](archive/PR-Resolution-Audit-Zendesk-Writeback.md) - lane: content-ops/resolution-audit-zendesk-writeback | phase: Vertical slice
 - [PR-Retired-Failure-Detector-Workflow](archive/PR-Retired-Failure-Detector-Workflow.md) - lane: workflow/retired-failure-detectors | phase: Workflow/process
 - [PR-Retired-Failure-Mode-Detector](archive/PR-Retired-Failure-Mode-Detector.md) - lane: workflow/retired-failure-detectors | phase: Workflow/process
