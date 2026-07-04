@@ -1,6 +1,6 @@
 # Plan archive index
 
-1280 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1282 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
@@ -987,6 +987,7 @@
 - [PR-FAQ-Get-Draft-Postgres-Isolation](archive/PR-FAQ-Get-Draft-Postgres-Isolation.md) - lane: content-ops/faq-output-ingestion | phase: Functional validation
 - [PR-FAQ-Intent-Rule-Regression-Net](archive/PR-FAQ-Intent-Rule-Regression-Net.md) - lane: content-ops/deflection-report-ui | phase: Functional validation
 - [PR-FAQ-Live-Run-Blocker-Preflight](archive/PR-FAQ-Live-Run-Blocker-Preflight.md) - lane: content-ops/faq-search | phase: Functional validation.
+- [PR-FAQ-Macro-Writeback-Approve-On-Publish-CAS](archive/PR-FAQ-Macro-Writeback-Approve-On-Publish-CAS.md) - lane: content-ops/resolution-audit-zendesk-writeback | phase: Vertical slice
 - [PR-FAQ-Macro-Writeback-Content-Hash-Update](archive/PR-FAQ-Macro-Writeback-Content-Hash-Update.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
 - [PR-FAQ-Macro-Writeback-Credential-API](archive/PR-FAQ-Macro-Writeback-Credential-API.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
 - [PR-FAQ-Macro-Writeback-Credential-Fallback-Fail-Closed](archive/PR-FAQ-Macro-Writeback-Credential-Fallback-Fail-Closed.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
@@ -1194,6 +1195,7 @@
 - [PR-Refresh-CLAUDE-Md](archive/PR-Refresh-CLAUDE-Md.md)
 - [PR-Remove-Query-Token-Auth](archive/PR-Remove-Query-Token-Auth.md) - lane: security/hardening-1656 | phase: Production hardening
 - [PR-Resolution-Audit-Artifact-Title](archive/PR-Resolution-Audit-Artifact-Title.md) - lane: deflection/report-artifact-naming | phase: Product polish
+- [PR-Resolution-Audit-Zendesk-Writeback](archive/PR-Resolution-Audit-Zendesk-Writeback.md) - lane: content-ops/resolution-audit-zendesk-writeback | phase: Vertical slice
 - [PR-Revert-Drone-Client-Python-314](archive/PR-Revert-Drone-Client-Python-314.md) - lane: infra/docker-base-images | phase: Production hardening
 - [PR-Review-Rule-Fix-Class-Not-Example](archive/PR-Review-Rule-Fix-Class-Not-Example.md) - lane: dev-workflow/review-contract | phase: Workflow/process
 - [PR-Reviewer-Codebase-Verification-Rule](archive/PR-Reviewer-Codebase-Verification-Rule.md) - lane: workflow/process | phase: Workflow/process
