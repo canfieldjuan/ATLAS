@@ -19,7 +19,7 @@ Slice phase: Workflow/process
    `ATLAS_REDDIT_CLIENT_ID`/`_SECRET`, falling back to the B2B scraper's
    `ATLAS_B2B_SCRAPE_REDDIT_*`; prints the refresh token + the `.env` block.
    Fail-closed on missing creds/username (exit 2).
-2. `tests/test_mint_reddit_listening_token.py`: the deterministic logic --
+2. `tests/test_atlas_reddit_mint_token.py`: the deterministic logic --
    dotenv parsing, credential resolution + B2B fallback + precedence, the
    redirect-param parser, and the fail-closed CLI exits.
 
@@ -107,7 +107,7 @@ Review-fix notes (Codex wave 1; all 4 verified real, fixed at root):
 
 ## Verification
 
-- `.venv/bin/python -m pytest tests/test_mint_reddit_listening_token.py -q`:
+- `.venv/bin/python -m pytest tests/test_atlas_reddit_mint_token.py -q`:
   15 passed (load_env parse/missing; resolution precedence + B2B fallback +
   blank-not-set + fail-closed; redirect-param code/state/error; CLI exit-2 on
   missing creds and missing username).
@@ -118,7 +118,7 @@ Review-fix notes (Codex wave 1; all 4 verified real, fixed at root):
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_reddit_checks.yml` | 1 |
-| `plans/PR-Reddit-Mint-Token-Script.md` | 118 |
+| `plans/PR-Reddit-Mint-Token-Script.md` | 124 |
 | `scripts/mint_reddit_listening_token.py` | 193 |
 | `tests/test_atlas_reddit_mint_token.py` | 157 |
-| **Total** | **469** |
+| **Total** | **475** |
