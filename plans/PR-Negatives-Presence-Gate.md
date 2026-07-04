@@ -11,6 +11,17 @@ it cannot reach the blocking ratchet's min-score alone, so today it is a
 whisper, not a gate. This slice makes it blocking where it matters:
 inside the sensitive globs the ratchet workflows already declare.
 
+**Over the 400 LOC budget (indivisible, per AGENTS.md 1d).** The
+production change is small -- one `SENSITIVE_ZERO_TOLERANCE` entry plus a
+precise AST model of what pytest actually collects and what a raises call
+actually asserts. The LOC is dominated by (1) the both-sides test coverage
+the gate itself demands under R12 -- every review wave adds a passing and a
+failing probe, so the tests cannot ship in a later slice without the gate
+being un-probed at merge -- and (2) this plan's own review-fix ledger
+(eleven Codex waves). Splitting the detector from its tests would merge a
+blocking gate whose behavior is unverified against the very edge cases
+review surfaced; the gate and its proofs are one unit.
+
 ## Scope (this PR)
 
 Ownership lane: workflow/negatives-presence-gate
@@ -319,6 +330,39 @@ Review-fix notes (Codex wave 10; all five verified real, fixed at root):
   scripts it does not own. Adding their raises tests is deferred to their
   owning lanes.
 
+Review-fix notes (Codex wave 11; 6 fixed at root, 1 waived as
+pre-existing; every claim verified against the installed pytest 9 and the
+repo `pytest.ini`):
+
+- **FIXED -- pytest match-only context was missed**: modern pytest treats
+  `with pytest.raises(match="..."):` (no exception type) as a real
+  assertion; verified it enters the context and fails with "DID NOT
+  RAISE". It now counts for the pytest with-form (still not as a bare
+  statement).
+- **FIXED -- module-level / pytest-class camelCase was over-counted**: the
+  repo sets `python_functions = test_*`, so `def testFoo()` at module
+  scope and `testA` in a `Test*` pytest class are NOT collected. The
+  counter uses the `test_` prefix there and reserves the broader `test*`
+  prefix (plus `runTest`) for unittest `TestCase` subclasses, whose loader
+  ignores `python_functions`. This narrows the wave-10 camelCase fix to
+  where it is actually correct.
+- **FIXED -- uncollectable `Test*` classes counted**: pytest warns and
+  skips a `Test*` class that defines `__init__`/`__new__` (verified via
+  `--collect-only`); such a class now contributes no tests.
+- **FIXED -- unittest `runTest` was missed**: a `TestCase` whose only
+  method is `runTest` is collected by unittest (verified); it now counts.
+- **FIXED -- malformed raises calls counted**: a duplicated exception slot
+  (`pytest.raises(X, expected_exception=X)`) and an unknown keyword
+  (`pytest.raises(X, bogus=1)`) both raise TypeError before asserting
+  (verified); a call whose keywords are not in the API's accepted set, or
+  that double-fills a slot, now fills no slot.
+- **WAIVED -- `index_tests` indexes helper `.py` files under a test dir**:
+  a helper module sharing a production stem can be matched even though
+  pytest would not collect it. This is pre-existing `index_tests`
+  behavior, unchanged by this slice; narrowing it to the `test_*.py` file
+  pattern reprices coverage for every module repo-wide (a
+  baseline-repricing slice of its own). Logged on #1942, not smuggled in.
+
 ## Deferred
 
 - Widening sensitive globs per lane (owners decide).
@@ -334,7 +378,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_maturity_sweep.py -q` -- 52 passed
+- `python -m pytest tests/test_maturity_sweep.py -q` -- 57 passed
   (23 pre-existing + both-sides probes for every review-fix wave:
   no-raises sensitive module fails with the
   `sensitive-path NO_RAISES_TESTS` reason and passes off-glob;
@@ -364,9 +408,9 @@ Parked hardening: none.
 |---|---:|
 | `docs/fable5_pr_1935_1941_review_lessons.md` | 6 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Negatives-Presence-Gate.md` | 372 |
+| `plans/PR-Negatives-Presence-Gate.md` | 416 |
 | `plans/archive/PR-Reddit-Listening-Hardening.md` | 0 |
-| `scripts/maturity_sweep.py` | 178 |
+| `scripts/maturity_sweep.py` | 236 |
 | `tests/maturity_sweep/baseline_scripts.json` | 47 |
-| `tests/test_maturity_sweep.py` | 1074 |
-| **Total** | **1680** |
+| `tests/test_maturity_sweep.py` | 1132 |
+| **Total** | **1840** |

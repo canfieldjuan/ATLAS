@@ -565,6 +565,7 @@ def _has_raises_assertion(source):
         # satisfy a blocking gate, so assertRaises* is accepted only on
         # the unittest receivers self/cls.
         callable_form_args = None
+        is_pytest_raises = False
         if isinstance(func, ast.Attribute):
             if (func.attr in ("assertRaises", "assertRaisesRegex",
                               "assertRaisesRegexp")
@@ -577,8 +578,10 @@ def _has_raises_assertion(source):
                     and isinstance(func.value, ast.Name)
                     and func.value.id in pytest_module_names):
                 callable_form_args = 2
+                is_pytest_raises = True
         elif isinstance(func, ast.Name) and func.id in pytest_raises_names:
             callable_form_args = 2
+            is_pytest_raises = True
         if callable_form_args is None:
             continue
         # A raises API asserts only as a with-context (`with
@@ -595,16 +598,44 @@ def _has_raises_assertion(source):
         # `match=`, unittest `msg=` -- fill no slot, so
         # `pytest.raises(X, match="m")` as a statement and
         # `with self.assertRaises(msg="n"):` do not count.
+        kwargs = {kw.arg for kw in node.keywords if kw.arg}
+        positional = len(node.args)
+        # A call with a keyword the API does not accept, or a duplicated
+        # slot (exception/regex given both positionally and by keyword),
+        # raises TypeError before asserting -- e.g.
+        # `pytest.raises(ValueError, bogus=1)` or
+        # `pytest.raises(ValueError, expected_exception=ValueError)`. It is
+        # a broken test, not a runnable assertion, so it fills no slot.
+        if is_pytest_raises:
+            valid_keywords = {"expected_exception", "match"}
+        elif callable_form_args == 3:
+            valid_keywords = {"expected_exception", "expected_regex", "msg"}
+        else:
+            valid_keywords = {"expected_exception", "msg"}
+        if kwargs - valid_keywords:
+            continue
+        if positional >= 1 and "expected_exception" in kwargs:
+            continue
+        if callable_form_args == 3 and positional >= 2 and "expected_regex" in kwargs:
+            continue
+        # Slot-filling args: positionals plus the exception/regex keywords.
+        # Decorative keywords (pytest `match=`, unittest `msg=`) fill no
+        # slot, so `pytest.raises(X, match="m")` as a statement and
+        # `with self.assertRaises(msg="n"):` do not count.
         slot_keywords = {"expected_exception"}
         if callable_form_args == 3:  # assertRaisesRegex* also takes the regex
             slot_keywords.add("expected_regex")
-        positional = len(node.args)
-        exception_args = positional + sum(
-            1 for kw in node.keywords if kw.arg in slot_keywords)
+        exception_args = positional + sum(1 for k in kwargs if k in slot_keywords)
         if id(node) in with_item_calls:
-            # Context form: supplies the exception (+ regex) but NOT the
-            # trailing callable. `positional < callable_form_args` rejects
-            # the callable-in-with form (`with pytest.raises(X, fn):`).
+            # pytest.raises has a match-only context
+            # (`with pytest.raises(match="..."):`) that asserts SOME
+            # exception matching the pattern is raised -- a real runnable
+            # assertion even without the exception type.
+            if is_pytest_raises and positional == 0 and "match" in kwargs:
+                return True
+            # Otherwise the context form supplies the exception (+ regex)
+            # but NOT the trailing callable; `positional < callable_form_args`
+            # rejects the callable-in-with form (`with pytest.raises(X, fn):`).
             if (exception_args >= callable_form_args - 1
                     and positional < callable_form_args):
                 return True
@@ -615,47 +646,74 @@ def _has_raises_assertion(source):
     return False
 
 
-def _is_collected_test_class(node):
-    """True when pytest actually collects test methods from this class: a
-    `Test`-prefixed class (pytest's `python_classes` default) or a subclass
-    whose statically visible base ends in `TestCase` (unittest). A plain
-    `class Helper` with a `test_*` method is NOT collected, so it must not
-    disguise a stub. A cross-file base not named *TestCase is deliberately
-    missed -- the gate errs toward the standard idioms."""
-    if node.name.startswith("Test"):
-        return True
+# Module-level functions and pytest-style class methods are collected on
+# this repo's `python_functions = test_*` (pytest.ini); unittest TestCase
+# subclasses use unittest's own loader (`test` prefix incl camelCase, plus
+# the default `runTest`), which ignores python_functions.
+def _is_pytest_function_name(name):
+    return name.startswith("test_")
+
+
+def _is_unittest_method_name(name):
+    return name.startswith("test") or name == "runTest"
+
+
+def _test_class_kind(node):
+    """Classify a class for pytest collection:
+
+    - 'unittest': a subclass whose statically visible base ends in
+      `TestCase`. unittest's loader collects its `test*` methods (incl
+      camelCase) and `runTest`, regardless of an `__init__`.
+    - 'pytest': a `Test*`-named class (pytest's `python_classes = Test*`)
+      that does NOT define `__init__`/`__new__`. pytest warns and skips a
+      `Test*` class with a constructor, so such a class collects nothing.
+    - None: not collected (a plain `class Helper`, or a `Test*` class with
+      a constructor).
+
+    A cross-file base not named `*TestCase` is deliberately missed -- the
+    gate errs toward the standard idioms."""
     bases = [b.attr if isinstance(b, ast.Attribute) else b.id
              for b in node.bases if isinstance(b, (ast.Attribute, ast.Name))]
-    return any(name.endswith("TestCase") for name in bases)
+    if any(name.endswith("TestCase") for name in bases):
+        return "unittest"
+    if node.name.startswith("Test"):
+        if any(isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and m.name in ("__init__", "__new__") for m in node.body):
+            return None
+        return "pytest"
+    return None
 
 
 def _collect_test_defs(matched):
     """Test names from real def/async-def AST nodes across the matched
     sources. The old text regex also counted `def test_*` inside comments
     and strings, so a placeholder file with commented-out tests looked
-    non-stub and dodged NO_TEST_FILE. Only pytest's actual collection
-    shape counts: module-level `test`-prefixed functions, and `test`-
-    prefixed methods of collected classes (`Test*` or `*TestCase`). The
-    `test` prefix -- not `test_` -- matches unittest's camelCase
-    (`testRejectsBad`), which pytest collects; a helper method inside an
-    uncollected class does not disguise a stub. Unparseable sources
-    contribute no runnable tests (fail closed, matching
-    _has_raises_assertion)."""
+    non-stub and dodged NO_TEST_FILE. Only pytest's actual collection shape
+    counts: module-level `test_`-prefixed functions, `test_`-prefixed
+    methods of a collected pytest class, and `test*`/`runTest` methods of a
+    unittest TestCase subclass. A helper method inside an uncollected class
+    does not disguise a stub. Unparseable sources contribute no runnable
+    tests (fail closed, matching _has_raises_assertion)."""
     names = []
     for source in matched:
         try:
             tree = ast.parse(source)
         except SyntaxError:
             continue
-        candidates = list(tree.body)
-        candidates.extend(
-            sub for node in tree.body
-            if isinstance(node, ast.ClassDef) and _is_collected_test_class(node)
-            for sub in node.body)
-        for node in candidates:
+        for node in tree.body:
             if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and node.name.startswith("test")):
+                    and _is_pytest_function_name(node.name)):
                 names.append(node.name)
+            elif isinstance(node, ast.ClassDef):
+                kind = _test_class_kind(node)
+                if kind is None:
+                    continue
+                is_name = (_is_unittest_method_name if kind == "unittest"
+                           else _is_pytest_function_name)
+                for sub in node.body:
+                    if (isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and is_name(sub.name)):
+                        names.append(sub.name)
     return names
 
 

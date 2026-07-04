@@ -1568,3 +1568,61 @@ def test_no_test_file_fires_when_only_helper_class_has_test_methods() -> None:
     findings = MOD.score_tests(
         "sensitive_mod", {"test_sensitive_mod": src}, all_test_text=src)
     assert "NO_TEST_FILE" in codes(findings)
+
+
+# --- wave 11: match-only raises, malformed calls, exact collection shape ---
+
+
+def test_pytest_match_only_with_context_asserts() -> None:
+    # Modern pytest allows `with pytest.raises(match="..."):` with no
+    # exception type -- it asserts SOME matching exception is raised.
+    assert _raises(
+        "def test_x():\n    with pytest.raises(match='boom'):\n        go()\n")
+    # ... but as a bare statement it just builds a context manager.
+    assert not _raises("def test_x():\n    pytest.raises(match='boom')\n")
+
+
+def test_malformed_raises_calls_do_not_assert() -> None:
+    # A duplicated exception slot or an unknown keyword raises TypeError
+    # before asserting -- a broken test, not a runnable assertion.
+    assert not _raises(
+        "def test_x():\n"
+        "    with pytest.raises(ValueError, expected_exception=ValueError):\n"
+        "        go()\n")
+    assert not _raises(
+        "def test_x():\n    with pytest.raises(ValueError, bogus=1):\n        go()\n")
+    assert not _raises(_unittest_body(
+        "        with self.assertRaises(ValueError, bogus=1):\n            go()\n"))
+
+
+def test_module_level_camelcase_is_not_collected() -> None:
+    # pytest.ini sets python_functions = test_*, so a module-level camelCase
+    # function is NOT collected; only test_ counts at module scope.
+    assert MOD._collect_test_defs(["def testFoo():\n    pass\n"]) == []
+    assert MOD._collect_test_defs(
+        ["def test_foo():\n    pass\n"]) == ["test_foo"]
+
+
+def test_pytest_class_uses_underscore_prefix_and_skips_constructor() -> None:
+    # A Test* pytest class collects test_ methods but NOT camelCase (that is
+    # a unittest-loader idiom), and pytest skips a Test* class with __init__.
+    assert MOD._collect_test_defs(
+        ["class TestX:\n    def test_a(self):\n        pass\n"]) == ["test_a"]
+    assert MOD._collect_test_defs(
+        ["class TestX:\n    def testA(self):\n        pass\n"]) == []
+    assert MOD._collect_test_defs([
+        "class TestX:\n    def __init__(self):\n        pass\n"
+        "    def test_a(self):\n        pass\n"]) == []
+
+
+def test_unittest_testcase_collects_camelcase_and_run_test() -> None:
+    # unittest's loader collects the test* prefix (incl camelCase) and the
+    # default runTest, regardless of an __init__.
+    assert MOD._collect_test_defs([
+        "import unittest\n"
+        "class M(unittest.TestCase):\n"
+        "    def runTest(self):\n        pass\n"]) == ["runTest"]
+    assert MOD._collect_test_defs([
+        "import unittest\n"
+        "class M(unittest.TestCase):\n"
+        "    def testRejectsBad(self):\n        pass\n"]) == ["testRejectsBad"]
