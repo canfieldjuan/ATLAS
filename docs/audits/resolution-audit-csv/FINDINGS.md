@@ -188,6 +188,82 @@ fragmentation failure.
   amplification -> feeds Slice 3).
 - Clustering top-5 stable under +/-10% threshold perturbation (F10).
 
+## Slice 3 -- Performance (Phase 3)
+
+Measured on the real chain (`build_support_ticket_input_package` ->
+`FAQDeflectionReportService.generate` -> `build_ticket_faq_markdown`) with realistic
+free-text fixtures (~256 B/row, 15% HTML, unique source_ids). Scripts in
+`_audit_scratch/perf/`. Timing note: the reviewer's confirmed **unloaded** numbers
+are ~1.83 ms/ticket (10k = 18.3s, reproduced twice); under heavy concurrent load the
+same chain was observed at ~7 ms/ticket (10k = 73s), so real-world time under
+contention can be 3-4x the unloaded figure. Scaling is **linear** either way --
+growth exponent **b~1.0**, per-ticket cost flat: total 4.2s@2k, 9.2s@5k, 18.3s@10k
+unloaded (doubling n -> ~2.0x time).
+
+### P1 -- Uncached field-normalization storm (~30.8M regex calls) dominates the pipeline [verified-by-reviewer]
+cProfile @10k: `re.Pattern.sub` = **30.8M calls / 11.3s tottime (25%)**;
+`_field_value` (`ticket_faq_markdown.py:3381`) = **15.2s cumulative (33%)**;
+`_first_value` (`support_ticket_input_package.py:976`) 390k calls / 10.3s; `_key`
+(`:990`) 8.6M calls / 9.2s. Root cause: `_first_value`/`_field_value` re-normalize
+**every key of the row on every field lookup** (linear `row.items()` scan calling
+regex `_key`/`_compact_key` per field, repeated for dozens of alias groups) with **no
+per-row key cache**, across ~20 full O(n) passes end-to-end
+(`support_ticket_input_package.py:404-422` is ~15 aggregation passes alone).
+Compounding: `_key` passes a string-literal pattern to `re.sub`, forcing ~9.4M
+`re._compile` cache lookups. This -- not clustering -- sets the ceiling.
+- Severity: HIGH. Fix: cache per-row normalized keys once + precompile the pattern.
+  Repro: `_audit_scratch/perf/profile_cprofile.py`, `cprofile_10k.txt`.
+
+### P7 -- The submit path has NO row cap; a 50 MiB blob (~200k tickets) runs synchronously for many minutes [verified-by-reviewer]
+`_deflection_submit_max_rows` (`api/control_surfaces.py:1814`) returns the full
+`raw_row_count` -- the only bound is `_MAX_DEFLECTION_SUBMIT_BLOB_BYTES = 50 MiB`
+(`:167`) ~= **~200k tickets** at ~257 B/row. At the measured linear rate that is
+~6 min unloaded / ~24 min under load, ~1.3 GB, in a single request. The practical
+30s-request ceiling is only **~4,000 tickets**. A realistic large customer upload
+must be chunked or run as an async job; today it will time out or hang.
+- Severity: HIGH. Repro: `harness.py` ladder (10k=18.3s, 50k measured ~120-356s).
+
+### P2 -- Token-set clustering is near-quadratic (b~1.88) but hard-gated at 2,000 rows; the skip degrades clustering at scale [verified-by-reviewer]
+`_matching_token_bucket` (`support_ticket_clustering.py:567`) compares each row
+against every prior token_set -- fit b=1.88 ungated (6.0s@4k, 23.6s@8k, matching the
+code's own `:243-249` "~40 min at 35k" comment). Gate `MAX_TOKEN_SET_CLUSTER_ROWS=2000`
+(`:249`) caps it ~1.6s then **skips** (rows left uncategorized). The skip is NOT silent
+-- it emits `cluster_preview_skipped_large_upload` + `cluster_preview_token_set_row_count`
+(`support_ticket_input_package.py:373-385,507-510`), forwarded in the submit response.
+But above 2,000 rows the token-set labels are still absent, degrading system-2's topic
+partition (observable: `faq_items` jumps 4->62 between 2k and 5k). Feeds Slice-2 F1/F3.
+- Severity: MEDIUM. Repro: `scaling_clustering.py`.
+
+### P4 -- ~10x whole-pipeline file->RAM amplification; ~3 full copies co-resident [verified-by-reviewer]
+Deep-size: raw rows 2.2x, `source_material` 2.9x, campaign opportunities 4.6x the
+serialized input -- all co-resident during `build_ticket_faq_markdown` -> ~9.8x floor
+(23.9 MiB @10k, 119.6 MiB @50k py-heap). RSS peak by size: **35 MiB @1k, 46 @2k, 62 @5k,
+97 @10k, 357 @50k** (linear in n). `source_row_to_campaign_opportunity` builds a full new
+richer copy (1,189 B/row). Memory is NOT the binding constraint -- time crosses 30s ~40x sooner.
+- Severity: MEDIUM. Repro: `memory_copies.py`, `harness.py`.
+
+### P3 -- (positive, corrects a Phase-0 concern) the sub-clusterer is LINEAR (b~0.92), not O(n^2) [verified-by-reviewer]
+`_question_subclusters` (`ticket_faq_markdown.py:1026`) uses prefix-filtered candidate
+nomination + length pre-filter + union-find, not naive pairwise: 0.61s@10k, 1.14s@20k,
+b=0.92. Negligible vs the report stage. PIPELINE_MAP 5b framed this as the
+pairwise-Jaccard O(n^2) risk; empirically it is not a hotspot.
+
+### P5 -- No memoization anywhere; reruns recompute everything
+Zero `lru_cache`/`cached_property` in the 5 core modules -- no cache between snapshot
+and full-report on one file, or between reruns; a re-submit repeats 100% of P1's work.
+Embeddings off by default (and when on, embed compressed gists, not raw tickets -- no
+raw-embedding cost). Severity: MEDIUM (pairs with P1).
+
+### P6 -- Metric double-computation is NEGLIGIBLE for perf (drift concern only)
+The only double-computation is the prose `_support_tax_section`
+(`faq_deflection_report.py:4034`) re-deriving counts the model `_support_tax_data:3208`
+already produced -- and both operate on the small final FAQ `items` list (~8-62), not
+raw tickets -> microseconds. The **snapshot does NOT recompute**: `build_deflection_snapshot`
+takes the report-model projection path (`:2641-2649`), copying support-tax fields from
+the stored model. Clustering runs exactly once per system per file. Phase 0's
+"computed twice" stands as a correctness/drift concern (Slice 5), not a perf sink.
+- Severity: LOW (perf).
+
 ## Single highest-leverage fixes
 
 1. **Clustering fragmentation (F1/F3/F6):** the token-set topic partition producing
