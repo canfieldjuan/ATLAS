@@ -52,6 +52,12 @@ MAX_DORMANT_AFTER_HOURS = 8760
 MAX_FIT_MAX_CALLS_PER_RUN = 500
 MAX_FIT_TIMEOUT_SECONDS = 120.0
 FIT_BACKENDS = ("off", "openrouter", "local")
+# Structured-output strategy sent to the server. Which one a server accepts
+# is a property of the SERVER, not the backend name -- LM Studio requires
+# json_schema or text and rejects json_object; vLLM/OpenRouter take
+# json_schema. The parser is the authoritative gate regardless, so text is
+# always a safe fallback for a server that supports neither.
+FIT_RESPONSE_FORMATS = ("json_schema", "json_object", "text")
 
 _ALLOWED_TOP_KEYS = {
     "version",
@@ -200,6 +206,16 @@ class RedditListeningSettings(BaseSettings):
         ge=1.0,
         le=MAX_FIT_TIMEOUT_SECONDS,
         description="Per-call HTTP timeout for the fit backend.",
+    )
+    fit_response_format: str = Field(
+        default="json_schema",
+        description=(
+            "Structured-output strategy: 'json_schema' (LM Studio, vLLM, "
+            "OpenRouter), 'json_object' (older OpenAI-compatible servers), "
+            "or 'text' (no server-side constraint; the parser still gates). "
+            "Default json_schema is the most widely supported by modern "
+            "local servers."
+        ),
     )
 
 

@@ -149,7 +149,10 @@ def test_request_carries_no_reddit_credentials() -> None:
     assert call["url"] == "https://openrouter.ai/api/v1/chat/completions"
 
 
-def test_openrouter_uses_json_schema_local_uses_json_object() -> None:
+def test_default_response_format_is_json_schema_for_both_backends() -> None:
+    """json_schema is the default for local AND openrouter -- LM Studio,
+    vLLM and OpenRouter all accept it; the old local=json_object default
+    was rejected by LM Studio (400)."""
     or_transport = FakeTransport()
     build_judge_client(_settings(), transport=or_transport).judge(_MESSAGES)
     assert or_transport.calls[0]["payload"]["response_format"]["type"] == "json_schema"
@@ -164,10 +167,32 @@ def test_openrouter_uses_json_schema_local_uses_json_object() -> None:
         ),
         transport=local_transport,
     ).judge(_MESSAGES)
-    fmt = local_transport.calls[0]["payload"]["response_format"]["type"]
-    assert fmt == "json_object"
+    assert local_transport.calls[0]["payload"]["response_format"]["type"] == "json_schema"
     # keyless local: no Authorization header
     assert "Authorization" not in local_transport.calls[0]["headers"]
+
+
+def test_response_format_json_object_mode() -> None:
+    t = FakeTransport()
+    build_judge_client(
+        _settings(fit_response_format="json_object"), transport=t
+    ).judge(_MESSAGES)
+    assert t.calls[0]["payload"]["response_format"] == {"type": "json_object"}
+
+
+def test_response_format_text_mode_omits_the_key() -> None:
+    """text mode sends no server-side constraint -- for servers that support
+    neither json_schema nor json_object; the parser still gates."""
+    t = FakeTransport()
+    build_judge_client(
+        _settings(fit_response_format="text"), transport=t
+    ).judge(_MESSAGES)
+    assert "response_format" not in t.calls[0]["payload"]
+
+
+def test_invalid_response_format_fails_closed() -> None:
+    with pytest.raises(RedditFitConfigError, match="fit_response_format"):
+        build_judge_client(_settings(fit_response_format="yaml"))
 
 
 # -- judge(): failure taxonomy ----------------------------------------------
