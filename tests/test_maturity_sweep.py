@@ -494,3 +494,1240 @@ def test_update_baseline_accepts_new_sensitive_finding(tmp_path: Path) -> None:
         "--min-score", "99",
         "--sensitive-glob", "**/billing_paid.py",
     ]) == 0
+
+
+def _write_happy_only_tests(tests: Path, module_stem: str) -> None:
+    """A test file with enough tests to trip NO_RAISES_TESTS (>= 3) and
+    zero raises assertions."""
+    _write(
+        tests / ("test_%s.py" % module_stem),
+        "import %s\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n" % module_stem,
+    )
+
+
+def test_new_sensitive_module_without_raises_tests_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Negatives-presence gate (#1934 arc lesson 5): a NEW module on a
+    sensitive path whose tests never assert that anything raises must
+    fail the ratchet outright -- min-score cannot save it, and the same
+    file off the sensitive globs still passes (the gate is scoped, not
+    repo-wide noise)."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write_happy_only_tests(tests, "purge_guard")
+
+    # Off the sensitive globs: score is far below min-score, passes.
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+    ]) == 0
+    # On the sensitive globs: zero tolerance, fails regardless of score.
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+    out = capsys.readouterr().out
+    assert "sensitive-path NO_RAISES_TESTS" in out
+
+
+def test_new_sensitive_module_with_raises_tests_passes(tmp_path: Path) -> None:
+    """Second side: the same new sensitive-path module whose tests DO
+    assert a raise sails through the zero-tolerance gate."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest\n"
+        "import purge_guard\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_rejects_bad_input():\n"
+        "    with pytest.raises(ValueError):\n"
+        "        raise ValueError('boundary probe')\n",
+    )
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+
+def test_comment_mention_of_raises_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex P2 on this PR: the raises signal must come from a REAL
+    pytest.raises/assertRaises call, not from a comment or string that
+    mentions one -- a '# TODO: add pytest.raises' note is exactly the
+    honest-but-hasty artifact the gate exists to catch."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n"
+        "# TODO: add pytest.raises coverage\n"
+        "NOTE = 'assertRaises would be nice'\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n",
+    )
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+
+def test_new_testless_sensitive_module_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Codex P2 on this PR: a sensitive module with NO tests at all is
+    the zero-negatives case at its worst -- NO_TEST_FILE is zero
+    tolerance too, so min-score cannot save it either."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "billing_hook.py",
+           "def charge(amount):\n"
+           "    if amount <= 0:\n"
+           "        raise ValueError('non-positive')\n"
+           "    return amount\n")
+    # No test file for billing_hook anywhere.
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+    ]) == 0
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/billing_hook.py",
+    ]) == 1
+    out = capsys.readouterr().out
+    assert "sensitive-path NO_TEST_FILE" in out
+
+
+def test_unrelated_raises_helper_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-2: only the real assertion APIs count -- an arbitrary
+    helper call named raises() (e.g. client.raises()) must not suppress
+    the blocking signal."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "class _Client:\n"
+        "    def raises(self):\n"
+        "        return 0\n\n"
+        "def test_one():\n    assert _Client().raises() == 0\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n",
+    )
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+
+def test_local_raises_helper_name_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-3: a bare raises(...) call only counts when the name is
+    bound by `from pytest import raises` (or an alias). A local helper or
+    fixture named raises must not suppress the blocking signal; the real
+    from-import (aliased or not) still does."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    module_src = ("def enforce(value):\n"
+                  "    if value < 0:\n"
+                  "        raise ValueError('negative')\n"
+                  "    return value\n")
+    _write(lane / "purge_guard.py", module_src)
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "def raises(exc):\n"
+        "    return exc\n\n"
+        "def test_one():\n    assert raises(ValueError) is ValueError\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: the real from-import, aliased, still satisfies it.
+    _write(
+        tests / "test_purge_guard.py",
+        "from pytest import raises as expect_raises\n"
+        "import purge_guard\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_rejects():\n"
+        "    with expect_raises(ValueError):\n"
+        "        purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+
+def test_dangling_raises_statement_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-4: a dangling `pytest.raises(X)` statement builds a
+    context manager and asserts nothing; only the with-context or the
+    callable form counts."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest\n"
+        "import purge_guard\n\n"
+        "def test_one():\n"
+        "    pytest.raises(ValueError)\n"
+        "    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: the callable form asserts and satisfies the gate.
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest\n"
+        "import purge_guard\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_rejects():\n"
+        "    pytest.raises(ValueError, purge_guard.enforce, -1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+
+def test_stub_test_file_counts_as_testless(tmp_path: Path) -> None:
+    """Codex wave-4: a matched test file with zero collected tests is a
+    placeholder, not coverage -- the sensitive zero-tolerance gate treats
+    it as testless."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "billing_hook.py",
+           "def charge(amount):\n"
+           "    if amount <= 0:\n"
+           "        raise ValueError('non-positive')\n"
+           "    return amount\n")
+    _write(tests / "test_billing_hook.py",
+           "import billing_hook\n\nHELPER = billing_hook.charge\n")
+
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+    ]) == 0
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/billing_hook.py",
+    ]) == 1
+
+def test_foreign_assert_raises_receiver_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-5: assertRaises* only counts on the unittest receivers
+    self/cls -- an unrelated helper like client.assertRaises(...) must
+    not suppress the blocking signal; the real self.assertRaises does."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "class _Client:\n"
+        "    def assertRaises(self, exc, fn):\n"
+        "        return fn\n\n"
+        "def test_one():\n"
+        "    client = _Client()\n"
+        "    client.assertRaises(ValueError, purge_guard.enforce)\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three():\n    assert True\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: the real unittest idiom on self satisfies the gate.
+    _write(
+        tests / "test_purge_guard.py",
+        "import unittest\n"
+        "import purge_guard\n\n"
+        "class PurgeGuardTest(unittest.TestCase):\n"
+        "    def test_one(self):\n        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_rejects(self):\n"
+        "        self.assertRaises(ValueError, purge_guard.enforce, -1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+
+def test_dangling_assert_raises_regex_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-5: self.assertRaisesRegex(Exc, "regex") with no with
+    block and no callable only builds a context object and asserts
+    nothing; the callable form with a third positional arg (or the with
+    form) still counts."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import unittest\n"
+        "import purge_guard\n\n"
+        "class PurgeGuardTest(unittest.TestCase):\n"
+        "    def test_one(self):\n"
+        "        self.assertRaisesRegex(ValueError, 'negative')\n"
+        "        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_three(self):\n        self.assertTrue(True)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: the callable form with the function argument asserts.
+    _write(
+        tests / "test_purge_guard.py",
+        "import unittest\n"
+        "import purge_guard\n\n"
+        "class PurgeGuardTest(unittest.TestCase):\n"
+        "    def test_one(self):\n        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_rejects(self):\n"
+        "        self.assertRaisesRegex(ValueError, 'negative',\n"
+        "                               purge_guard.enforce, -1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+def test_assert_raises_outside_testcase_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-6: self.assertRaises* only means the unittest API when
+    the enclosing class statically descends from a *TestCase base. A
+    pytest-style class with a non-asserting helper named assertRaises
+    must not suppress the blocking signal; the wave-5 second-side probe
+    already covers the real unittest.TestCase idiom passing."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "class TestPurgeGuard:\n"
+        "    def assertRaises(self, exc, fn):\n"
+        "        return fn\n\n"
+        "    def test_one(self):\n"
+        "        self.assertRaises(ValueError, purge_guard.enforce)\n\n"
+        "    def test_two(self):\n        assert True\n\n"
+        "    def test_three(self):\n        assert True\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: a project base class named *TestCase still counts.
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n"
+        "from helpers import ApiTestCase\n\n"
+        "class PurgeGuardTest(ApiTestCase):\n"
+        "    def test_one(self):\n        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_rejects(self):\n"
+        "        self.assertRaises(ValueError, purge_guard.enforce, -1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+def test_aliased_pytest_import_raises_satisfies_the_gate(tmp_path: Path) -> None:
+    """Codex wave-7: `import pytest as pt` + `with pt.raises(...)` is a
+    real assertion and must not be misreported as absent (which would
+    fail an honestly-tested sensitive module)."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest as pt\n"
+        "import purge_guard\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_rejects():\n"
+        "    with pt.raises(ValueError):\n"
+        "        purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+
+def test_unparseable_test_file_fails_closed(tmp_path: Path) -> None:
+    """Codex wave-7: a matched test file with a syntax error has no
+    runnable tests; a comment mentioning pytest.raises inside it must
+    not suppress the blocking signal (the old text-regex fallback
+    failed open)."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "# with pytest.raises(ValueError): mentioned in a comment only\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_three(:\n    assert True\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+
+def test_async_only_test_file_is_not_testless(tmp_path: Path) -> None:
+    """Codex wave-7 refutation lock: the test counter is unanchored, so
+    `async def test_*` already counts -- an async-only suite must not be
+    treated as a stub file, and its raises assertion satisfies the
+    gate."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest\n"
+        "import purge_guard\n\n"
+        "async def test_one():\n    assert True\n\n"
+        "async def test_two():\n    assert True\n\n"
+        "async def test_rejects():\n"
+        "    with pytest.raises(ValueError):\n"
+        "        purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+def test_commented_out_tests_do_not_hide_a_stub_file(tmp_path: Path) -> None:
+    """Codex wave-8: the test counter reads real def/async-def AST nodes,
+    so commented-out `def test_*` lines no longer make a placeholder file
+    look non-stub."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "# def test_one():\n"
+        "#     assert True\n\n"
+        "# def test_two():\n"
+        "#     assert True\n\n"
+        "HELPER = purge_guard.enforce\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+
+def test_fake_assert_raises_api_name_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-8: only the exact unittest APIs count (assertRaises,
+    assertRaisesRegex, assertRaisesRegexp) -- a helper like
+    self.assertRaisesLater must not suppress the blocking signal."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import unittest\n"
+        "import purge_guard\n\n"
+        "class PurgeGuardTest(unittest.TestCase):\n"
+        "    def assertRaisesLater(self, exc, fn):\n"
+        "        return fn\n\n"
+        "    def test_one(self):\n"
+        "        self.assertRaisesLater(ValueError, purge_guard.enforce)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_three(self):\n        self.assertTrue(True)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+
+def test_pytest_raises_without_import_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-8: `with pytest.raises(...)` only counts when the file
+    actually imports pytest -- a file that never binds the name has no
+    runnable assertion (it would NameError)."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_rejects():\n"
+        "    with pytest.raises(ValueError):\n"
+        "        purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+
+def test_argless_with_form_raises_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-8: the with-form still needs everything but the
+    callable -- `with self.assertRaisesRegex(ValueError):` (missing the
+    regex) errors before asserting; the complete with-form passes."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import unittest\n"
+        "import purge_guard\n\n"
+        "class PurgeGuardTest(unittest.TestCase):\n"
+        "    def test_one(self):\n        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_rejects(self):\n"
+        "        with self.assertRaisesRegex(ValueError):\n"
+        "            purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: the complete with-form asserts and satisfies the gate.
+    _write(
+        tests / "test_purge_guard.py",
+        "import unittest\n"
+        "import purge_guard\n\n"
+        "class PurgeGuardTest(unittest.TestCase):\n"
+        "    def test_one(self):\n        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_rejects(self):\n"
+        "        with self.assertRaisesRegex(ValueError, 'negative'):\n"
+        "            purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+def test_nested_test_helper_does_not_hide_a_stub_file(tmp_path: Path) -> None:
+    """Codex wave-9: only module-level and class-level test defs count
+    (pytest's collection shape) -- a helper named test_* nested inside
+    another function does not make a placeholder file look non-stub."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import purge_guard\n\n"
+        "def _make_helpers():\n"
+        "    def test_inner_only():\n"
+        "        return purge_guard.enforce\n"
+        "    return test_inner_only\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 1
+
+    # Second side: class-level test methods still count as collected.
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest\n"
+        "import purge_guard\n\n"
+        "class TestPurgeGuard:\n"
+        "    def test_one(self):\n        assert True\n\n"
+        "    def test_two(self):\n        assert True\n\n"
+        "    def test_rejects(self):\n"
+        "        with pytest.raises(ValueError):\n"
+        "            purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+
+def test_keyword_only_raises_arguments_satisfy_the_gate(tmp_path: Path) -> None:
+    """Codex wave-9: keyword args count toward the arity check --
+    `with pytest.raises(expected_exception=ValueError):` is a real
+    runnable assertion and must not be misreported as absent."""
+    lane = tmp_path / "lane"
+    tests = tmp_path / "tests"
+    _write(lane / "existing.py", "VALUE = 1\n")
+    _write_reference_test(tests, "existing")
+    baseline = tmp_path / "baseline.json"
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--update-baseline",
+    ]) == 0
+
+    _write(lane / "purge_guard.py",
+           "def enforce(value):\n"
+           "    if value < 0:\n"
+           "        raise ValueError('negative')\n"
+           "    return value\n")
+    _write(
+        tests / "test_purge_guard.py",
+        "import unittest\n"
+        "import purge_guard\n\n"
+        "class PurgeGuardTest(unittest.TestCase):\n"
+        "    def test_one(self):\n        self.assertTrue(True)\n\n"
+        "    def test_two(self):\n        self.assertTrue(True)\n\n"
+        "    def test_rejects(self):\n"
+        "        with self.assertRaisesRegex(ValueError, expected_regex='negative'):\n"
+        "            purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+    # Second side of the arity contract: the fully-keyword pytest form
+    # also counts.
+    _write(
+        tests / "test_purge_guard.py",
+        "import pytest\n"
+        "import purge_guard\n\n"
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n\n"
+        "def test_rejects():\n"
+        "    with pytest.raises(expected_exception=ValueError):\n"
+        "        purge_guard.enforce(-1)\n",
+    )
+    assert MOD.main([
+        str(lane),
+        "--tests-root", str(tests),
+        "--baseline", str(baseline),
+        "--min-score", "99",
+        "--sensitive-glob", "**/purge_guard.py",
+    ]) == 0
+
+
+# --- _has_raises_assertion: only real, runnable raises forms count ---
+
+
+def _raises(body: str) -> bool:
+    return MOD._has_raises_assertion("import pytest\nimport unittest\n" + body)
+
+
+def _unittest_body(inner: str) -> str:
+    return "class T(unittest.TestCase):\n    def test_x(self):\n" + inner
+
+
+def test_raises_statement_with_only_match_keyword_does_not_assert() -> None:
+    # pytest.raises(X, match=...) as a bare statement builds a context
+    # manager and asserts nothing -- match= is not the callable.
+    assert not _raises(
+        "def test_x():\n    pytest.raises(ValueError, match='bad')\n")
+
+
+def test_assert_raises_with_only_msg_keyword_does_not_assert() -> None:
+    # unittest msg= fills no slot; it does not supply the exception.
+    assert not _raises(_unittest_body(
+        "        with self.assertRaises(msg='n'):\n            pass\n"))
+
+
+def test_callable_form_inside_with_item_does_not_assert() -> None:
+    # `with pytest.raises(X, fn):` runs the callable before the block and
+    # yields a non-context-manager, so it asserts nothing.
+    assert not _raises(
+        "def test_x():\n    def fn():\n        pass\n"
+        "    with pytest.raises(ValueError, fn):\n        pass\n")
+
+
+def test_valid_raises_forms_still_assert() -> None:
+    assert _raises(
+        "def test_x():\n    with pytest.raises(ValueError):\n        go()\n")
+    assert _raises(
+        "def test_x():\n"
+        "    with pytest.raises(expected_exception=ValueError):\n        go()\n")
+    assert _raises(
+        "def test_x():\n    with pytest.raises(ValueError, match='m'):\n        go()\n")
+    assert _raises("def test_x():\n    pytest.raises(ValueError, go)\n")
+    assert _raises(_unittest_body(
+        "        with self.assertRaisesRegex(ValueError, 'r'):\n            go()\n"))
+    # unittest keyword regex fills the regex slot.
+    assert _raises(_unittest_body(
+        "        with self.assertRaisesRegex(ValueError, expected_regex='r'):\n"
+        "            go()\n"))
+
+
+def test_no_raises_fires_when_only_decorative_raises_present() -> None:
+    # Three happy-path tests plus a non-asserting pytest.raises statement:
+    # the decorative raises must NOT suppress the blocking NO_RAISES_TESTS.
+    src = (
+        "import pytest\n\n"
+        "def test_a():\n    assert build() == []\n\n"
+        "def test_b():\n    assert count() == 0\n\n"
+        "def test_c():\n    pytest.raises(ValueError, match='x')\n"
+    )
+    findings = MOD.score_tests(
+        "sensitive_mod", {"test_sensitive_mod": src}, all_test_text=src)
+    assert "NO_RAISES_TESTS" in codes(findings)
+
+
+# --- _collect_test_defs: pytest's real collection shape ---
+
+
+def test_helper_class_test_methods_are_not_collected() -> None:
+    # A non-Test / non-TestCase class does not have its test_* methods
+    # collected, so it cannot disguise a stub as covered.
+    assert MOD._collect_test_defs(
+        ["class Helper:\n    def test_x(self):\n        pass\n"]) == []
+
+
+def test_unittest_camelcase_methods_are_collected() -> None:
+    # pytest collects unittest test* (camelCase) methods on TestCase classes.
+    assert MOD._collect_test_defs([
+        "import unittest\n"
+        "class MyTest(unittest.TestCase):\n"
+        "    def testRejectsBad(self):\n        pass\n"]) == ["testRejectsBad"]
+
+
+def test_collected_classes_and_module_functions_still_count() -> None:
+    assert MOD._collect_test_defs(
+        ["def test_foo():\n    assert True\n"]) == ["test_foo"]
+    assert MOD._collect_test_defs(
+        ["class TestThing:\n    def test_x(self):\n        pass\n"]) == ["test_x"]
+
+
+def test_no_test_file_fires_when_only_helper_class_has_test_methods() -> None:
+    # A matched test file whose only test_* defs live in an uncollected
+    # helper class collects zero tests, so NO_TEST_FILE still fires.
+    src = "class Helper:\n    def test_x(self):\n        pass\n"
+    findings = MOD.score_tests(
+        "sensitive_mod", {"test_sensitive_mod": src}, all_test_text=src)
+    assert "NO_TEST_FILE" in codes(findings)
+
+
+# --- wave 11: match-only raises, malformed calls, exact collection shape ---
+
+
+def test_pytest_match_only_with_context_asserts() -> None:
+    # Modern pytest allows `with pytest.raises(match="..."):` with no
+    # exception type -- it asserts SOME matching exception is raised.
+    assert _raises(
+        "def test_x():\n    with pytest.raises(match='boom'):\n        go()\n")
+    # ... but as a bare statement it just builds a context manager.
+    assert not _raises("def test_x():\n    pytest.raises(match='boom')\n")
+
+
+def test_malformed_raises_calls_do_not_assert() -> None:
+    # A duplicated exception slot or an unknown keyword raises TypeError
+    # before asserting -- a broken test, not a runnable assertion.
+    assert not _raises(
+        "def test_x():\n"
+        "    with pytest.raises(ValueError, expected_exception=ValueError):\n"
+        "        go()\n")
+    assert not _raises(
+        "def test_x():\n    with pytest.raises(ValueError, bogus=1):\n        go()\n")
+    assert not _raises(_unittest_body(
+        "        with self.assertRaises(ValueError, bogus=1):\n            go()\n"))
+
+
+def test_module_level_camelcase_is_not_collected() -> None:
+    # pytest.ini sets python_functions = test_*, so a module-level camelCase
+    # function is NOT collected; only test_ counts at module scope.
+    assert MOD._collect_test_defs(["def testFoo():\n    pass\n"]) == []
+    assert MOD._collect_test_defs(
+        ["def test_foo():\n    pass\n"]) == ["test_foo"]
+
+
+def test_pytest_class_uses_underscore_prefix_and_skips_constructor() -> None:
+    # A Test* pytest class collects test_ methods but NOT camelCase (that is
+    # a unittest-loader idiom), and pytest skips a Test* class with __init__.
+    assert MOD._collect_test_defs(
+        ["class TestX:\n    def test_a(self):\n        pass\n"]) == ["test_a"]
+    assert MOD._collect_test_defs(
+        ["class TestX:\n    def testA(self):\n        pass\n"]) == []
+    assert MOD._collect_test_defs([
+        "class TestX:\n    def __init__(self):\n        pass\n"
+        "    def test_a(self):\n        pass\n"]) == []
+
+
+def test_unittest_testcase_collects_camelcase_and_run_test() -> None:
+    # unittest's loader collects the test* prefix (incl camelCase) and the
+    # default runTest, regardless of an __init__.
+    assert MOD._collect_test_defs([
+        "import unittest\n"
+        "class M(unittest.TestCase):\n"
+        "    def runTest(self):\n        pass\n"]) == ["runTest"]
+    assert MOD._collect_test_defs([
+        "import unittest\n"
+        "class M(unittest.TestCase):\n"
+        "    def testRejectsBad(self):\n        pass\n"]) == ["testRejectsBad"]
+
+
+# --- wave 12: async-with, check=, __test__ opt-out, None exception ---
+
+
+def test_async_with_raises_context_does_not_assert() -> None:
+    # pytest.raises / assertRaises return sync context managers, so
+    # `async with pytest.raises(...)` errors before the block.
+    assert not _raises(
+        "async def test_x():\n"
+        "    async with pytest.raises(ValueError):\n        await go()\n")
+
+
+def test_pytest_check_predicate_context_asserts() -> None:
+    # pytest accepts the `check=` predicate, including a check-only context.
+    assert _raises(
+        "def test_x():\n    with pytest.raises(check=_c):\n        go()\n")
+    assert _raises(
+        "def test_x():\n    with pytest.raises(ValueError, check=_c):\n        go()\n")
+
+
+def test_pytest_raises_none_exception_does_not_assert() -> None:
+    # `with pytest.raises(None):` (no matcher) raises before the block.
+    assert not _raises(
+        "def test_x():\n    with pytest.raises(None):\n        go()\n")
+    assert not _raises(
+        "def test_x():\n"
+        "    with pytest.raises(expected_exception=None):\n        go()\n")
+
+
+def test_module_and_class_test_optout_collect_nothing() -> None:
+    # `__test__ = False` opts a module or class out of pytest collection.
+    assert MOD._collect_test_defs(
+        ["__test__ = False\ndef test_a():\n    pass\n"]) == []
+    assert MOD._collect_test_defs(
+        ["class TestX:\n    __test__ = False\n"
+         "    def test_a(self):\n        pass\n"]) == []
+
+
+def test_assert_raises_regexp_variant_gets_regex_arity() -> None:
+    # The explicitly accepted `assertRaisesRegexp` alias needs the regex
+    # (3-arg) arity: the callable form must supply exception + regex + fn.
+    assert _raises(_unittest_body(
+        "        self.assertRaisesRegexp(ValueError, 'r', go)\n"))
+    assert not _raises(_unittest_body(
+        "        self.assertRaisesRegexp(ValueError, go)\n"))
+
+
+# --- wave 13: callable kwargs, collected-only scope, runTest precedence,
+# --- __test__ opt-in / annotated, None callable form, inherited constructor
+
+
+def test_callable_form_forwards_extra_kwargs_to_callable() -> None:
+    # `pytest.raises(X, fn, value=-1)` calls fn(value=-1); the extra kwargs
+    # go to the callable and must not be policed as raises-API keywords.
+    assert _raises("def test_x():\n    pytest.raises(ValueError, fn, value=-1)\n")
+    assert _raises(_unittest_body(
+        "        self.assertRaises(ValueError, fn, value=-1)\n"))
+
+
+def test_raises_only_counts_inside_collected_tests() -> None:
+    # A `with pytest.raises` in an uncollected helper is not negative
+    # coverage; the same call inside a collected test is.
+    assert not MOD._has_raises_assertion(
+        "import pytest\n"
+        "def _helper():\n    with pytest.raises(ValueError):\n        go()\n"
+        "def test_a():\n    assert True\n")
+    assert MOD._has_raises_assertion(
+        "import pytest\n"
+        "def test_a():\n    with pytest.raises(ValueError):\n        go()\n")
+
+
+def test_none_exception_callable_form_does_not_assert() -> None:
+    assert not MOD._has_raises_assertion(
+        "import pytest\ndef test_x():\n    pytest.raises(None, fn)\n")
+
+
+def test_run_test_counts_only_when_sole_test_method() -> None:
+    # unittest ignores runTest once a test* method exists.
+    assert MOD._collect_test_defs([
+        "import unittest\nclass M(unittest.TestCase):\n"
+        "    def runTest(self):\n        pass\n"]) == ["runTest"]
+    assert MOD._collect_test_defs([
+        "import unittest\nclass M(unittest.TestCase):\n"
+        "    def runTest(self):\n        pass\n"
+        "    def testFoo(self):\n        pass\n"]) == ["testFoo"]
+
+
+def test_test_marker_opt_in_and_annotated_falsy_opt_out() -> None:
+    # __test__ = True collects a non-Test class; annotated / falsy __test__
+    # opts out.
+    assert MOD._collect_test_defs([
+        "class Helper:\n    __test__ = True\n"
+        "    def test_a(self):\n        pass\n"]) == ["test_a"]
+    assert MOD._collect_test_defs(
+        ["__test__: bool = False\ndef test_a():\n    pass\n"]) == []
+    assert MOD._collect_test_defs(
+        ["__test__ = 0\ndef test_a():\n    pass\n"]) == []
+
+
+def test_inherited_constructor_excludes_test_class() -> None:
+    # pytest skips a Test* class that inherits __init__ from a same-file base.
+    assert MOD._collect_test_defs([
+        "class Base:\n    def __init__(self):\n        pass\n"
+        "class TestX(Base):\n    def test_a(self):\n        pass\n"]) == []

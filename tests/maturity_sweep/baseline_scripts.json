@@ -200,6 +200,12 @@
     },
     "score": 7
   },
+  "scripts/audit_pr_watcher_safety.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
   "scripts/audit_pre_scrape_skip_gates.py": {
     "counts": {
       "NO_TEST_FILE": 1,
@@ -248,12 +254,6 @@
       "SWALLOWED_EXCEPT": 1
     },
     "score": 8
-  },
-  "scripts/audit_ui_test_enrollment.py": {
-    "counts": {
-      "UNGUARDED_INDEX": 1
-    },
-    "score": 2
   },
   "scripts/audit_witness_field_propagation.py": {
     "counts": {
@@ -674,6 +674,13 @@
     },
     "score": 1
   },
+  "scripts/check_diff_budget.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 3,
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 5
+  },
   "scripts/check_extracted_campaign_reasoning_postgres.py": {
     "counts": {
       "UNGUARDED_INDEX": 1
@@ -837,6 +844,12 @@
     },
     "score": 22
   },
+  "scripts/codex_wake_bridge.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
+  },
   "scripts/content_ops_faq_cli_rules.py": {
     "counts": {
       "NO_TEST_FILE": 1,
@@ -931,6 +944,12 @@
     },
     "score": 18
   },
+  "scripts/detect_retired_failure_modes.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1
+    },
+    "score": 1
+  },
   "scripts/download_mcauley_dataset.py": {
     "counts": {
       "NO_TEST_FILE": 1,
@@ -962,6 +981,12 @@
       "WEAK_CONTRACT": 3
     },
     "score": 29
+  },
+  "scripts/evaluate_atlas_reddit_fit.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 1
+    },
+    "score": 2
   },
   "scripts/evaluate_csv_admission_threshold_evidence.py": {
     "counts": {
@@ -1156,11 +1181,11 @@
   "scripts/maturity_sweep.py": {
     "counts": {
       "HEURISTIC_COMMENT": 5,
-      "SWALLOWED_EXCEPT": 3,
+      "SWALLOWED_EXCEPT": 5,
       "UNGUARDED_INDEX": 14,
       "WEAK_CONTRACT": 28
     },
-    "score": 28
+    "score": 38
   },
   "scripts/maturity_sweep_file_lane.py": {
     "counts": {
@@ -1304,6 +1329,12 @@
       "UNGUARDED_INPUT": 1
     },
     "score": 12
+  },
+  "scripts/report_pr_watcher_state.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1
+    },
+    "score": 3
   },
   "scripts/requeue_30d_v3_witness_candidates.py": {
     "counts": {
