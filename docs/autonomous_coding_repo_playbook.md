@@ -48,6 +48,16 @@ These rules are repo-agnostic:
 - Technical forks are not operator menus: take the durable engineering fix,
   document the reasoning, and keep moving. Defer only decisions that are
   genuinely business/operator-owned.
+- Long-running sessions pick the next slice from an issue-backed queue, not
+  chat memory. The portable queue marker is `Autonomy lane: <lane>`, with
+  optional `Autonomy priority: <int>`, but the marker must live on a
+  maintainer-controlled surface such as a queue label plus issue body or a
+  trusted maintainer comment.
+- Operator-owned forks are recorded back to the issue queue plus a local
+  email-ready artifact before the agent moves on. Persist the defer in a
+  durable issue field such as a label, not only in a comment page that may be
+  truncated. Real email delivery is a later integration, not the first
+  portability requirement.
 - Tests must prove behavior, including unhappy paths and edge cases.
 
 These rules can live in `AGENTS.md`, `CLAUDE.md`, or a repo-local equivalent.
@@ -138,7 +148,8 @@ Long-running agents need more structure than normal interactive PR work:
 - no merge from a push/review attention wake;
 - scheduled green confirmation before a standing-authorized merge;
 - immediate stop on head-SHA mismatch or dirty owned worktree.
-- a configured queue/notification path before claiming long-horizon autonomy.
+- a configured issue-backed queue/notification path before claiming
+  long-horizon autonomy.
 
 If there is no external push/review-event bridge, record it as unavailable. The
 30-minute scheduled watcher is still useful, but the session does not have

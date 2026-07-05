@@ -9,9 +9,11 @@ on:
       - ".github/workflows/codex_wake_bridge_checks.yml"
       - "scripts/audit_pr_watcher_safety.py"
       - "scripts/codex_wake_bridge.py"
+      - "scripts/codex_issue_queue.py"
       - "scripts/install_codex_wake_bridge.py"
       - "tests/test_audit_pr_watcher_safety.py"
       - "tests/test_codex_wake_bridge.py"
+      - "tests/test_codex_issue_queue.py"
       - "tests/test_install_codex_wake_bridge.py"
 
 jobs:
@@ -32,6 +34,7 @@ jobs:
           python -m pip install --quiet pytest pytest-asyncio pyyaml
           python -m pytest \
             tests/test_codex_wake_bridge.py \
+            tests/test_codex_issue_queue.py \
             tests/test_install_codex_wake_bridge.py \
             tests/test_audit_pr_watcher_safety.py \
             -q
