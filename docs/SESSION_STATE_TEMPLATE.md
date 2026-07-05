@@ -41,6 +41,9 @@ Push/review-event hook: <name and trigger | unavailable | none>
 Timer/poll hook: Claude native 30-minute poll | systemd/cron/webhook name | none
 Wake bridge: Claude native subscription | <external Codex launch/resume bridge> | unavailable | none
 Ready-state handoff: scripts/report_pr_watcher_state.py | <other read-only reporter> | none
+Issue queue: #<issue number or none>
+Operator email: <email or none>
+Deferred decisions issue: #<issue number or none>
 Next timer wake: <timestamp or none>
 Last watcher state: <state/details or none>
 
@@ -102,6 +105,8 @@ Do-NOT-redo: <paths ruled out, checks already green, dead ends>
 - [ ] Confirm `Standing merge authorization` is explicit before the active
       builder merges on a scheduled `ready_for_human_merge` wake; do not infer
       it from watcher state.
+- [ ] At technical forks, choose the durable fix and document it; defer only
+      genuinely operator-owned decisions to the configured issue/email path.
 - [ ] Treat every other open PR as "must not touch" unless the operator
       explicitly reassigns it.
 ```

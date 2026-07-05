@@ -101,9 +101,9 @@ as having review-event wake-up coverage.
 
 ## Codex Wake Bridge
 
-The watcher records state; it does not wake Codex by itself. Use
-`scripts/codex_wake_bridge.py` to convert an existing watcher snapshot into a
-resumable handoff:
+The watcher records state; it does not wake Codex by itself. Use the installed
+bridge copy to convert an existing watcher snapshot into a resumable handoff.
+For one-off development checks, the repo script is equivalent:
 
 ```bash
 python scripts/codex_wake_bridge.py "${SESSION_ID}" --source scheduled
@@ -126,13 +126,17 @@ CODEX_WAKE_COMMAND="codex exec -C <repo-dir> -"
 ```
 
 The command receives the generated prompt on stdin. The prompt text is not
-interpolated into a shell command.
+interpolated into a shell command. Do not use no-approval/full-filesystem Codex
+flags in this config unless the watched PR, watcher config, and PR metadata are
+all trusted; watcher-sourced text is treated as untrusted prompt input.
 
 Wake-source rules:
 
 - `--source event` is attention-only. It can wake Codex to inspect review
   activity or a new push, but it must not merge, even if the watcher snapshot is
-  green.
+  green. Pending, ready, review-changed, and failure snapshots are actionable
+  as inspection/fix handoffs only; scheduled green-confirmation is still the
+  only wake source that may proceed to merge consideration after live guards.
 - `--source scheduled` may classify `ready_for_human_merge` as
   `scheduled-ready`, which is only permission to run the AGENTS merge guards.
   The resumed builder still needs explicit standing merge authorization in
@@ -179,6 +183,14 @@ timer can call it with `--source scheduled`.
   unclear.
 - Between watcher wake-ups, do not run an ad hoc `gh` polling loop just to see
   whether CI is green.
+- At a technical fork, take the durable engineering fix that will not break
+  later, document the reasoning in the PR, and keep going. Do not present the
+  shortcut as an equal option. Defer only decisions that are genuinely
+  operator-owned, such as product positioning, customer-facing policy, spend,
+  credentials, production data, irreversible action, scope ownership, or risk
+  tolerance. Deferred operator decisions go to a GitHub issue and notification
+  path in the follow-up slice; they are not a blocking chat-stop when other safe
+  queued work remains.
 
 This protects against the race where checks turn green before late comments or
 review threads land.
@@ -217,42 +229,16 @@ NOTIFY="1"
 EOF
 ```
 
-Install the bridge wrapper and systemd drop-in. The wrapper reads `REPO_DIR`
-from the session config each time it runs, so one systemd template can safely
-serve multiple sessions without baking one worktree path into every timer.
+Install the bridge wrapper, trusted bridge copy, and systemd drop-in through the
+repo-owned installer. The wrapper reads `REPO_DIR` from the session config each
+time it runs, but it invokes the installed bridge copy rather than executing
+`scripts/codex_wake_bridge.py` from the watched PR worktree. One systemd
+template can safely serve multiple sessions without baking one worktree path
+into every timer.
 
 ```bash
-cat > ~/.local/bin/atlas-pr-watch-and-wake <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-session_id="${1:?watcher session id required}"
-config="${HOME}/.config/atlas-pr-watchers/${session_id}.env"
-
-if [ ! -f "$config" ]; then
-  echo "watcher config not found: $config" >&2
-  exit 2
-fi
-
-# shellcheck disable=SC1090
-source "$config"
-
-if [ -z "${REPO_DIR:-}" ] || [ ! -d "$REPO_DIR" ]; then
-  echo "invalid REPO_DIR for ${session_id}: ${REPO_DIR:-}" >&2
-  exit 2
-fi
-
-~/.local/bin/atlas-pr-watch "${session_id}"
-cd "$REPO_DIR"
-python scripts/codex_wake_bridge.py "${session_id}" --source scheduled
-EOF
-chmod +x ~/.local/bin/atlas-pr-watch-and-wake
-
-mkdir -p ~/.config/systemd/user/atlas-pr-watch@.service.d
-cat > ~/.config/systemd/user/atlas-pr-watch@.service.d/wake-bridge.conf <<'EOF'
-[Service]
-ExecStart=
-ExecStart=%h/.local/bin/atlas-pr-watch-and-wake %i
-EOF
+python scripts/install_codex_wake_bridge.py --reload-systemd
+python scripts/install_codex_wake_bridge.py --check
 ```
 
 Run one manual poll through the same wrapper the timer will use:
@@ -319,8 +305,10 @@ New rules to follow:
 - Use `python scripts/codex_wake_bridge.py "${SESSION_ID}" --source event`
   for push/review-event bridges and
   `python scripts/codex_wake_bridge.py "${SESSION_ID}" --source scheduled`
-  after scheduled watcher polls that should wake Codex. Event wakes are always
-  attention-only; scheduled-ready wakes still require live AGENTS guards.
+  after scheduled watcher polls that should wake Codex. Installed systemd
+  wrappers should call the installed bridge copy, not the watched PR worktree's
+  script. Event wakes are always attention-only; scheduled-ready wakes still
+  require live AGENTS guards.
 - A local watcher must poll every 30 minutes and must use AUTO_MERGE="0".
 - Codex/local sessions must run `scripts/report_pr_watcher_state.py` on resume before starting the next slice in a long-running arc.
 - No auto-merge in the watcher. When the watcher reports ready_for_human_merge, the active builder reports readiness and waits for the operator unless this specific arc has explicit active-builder merge authorization.
@@ -361,40 +349,9 @@ NOTIFY="1"
 # CODEX_WAKE_COMMAND="codex exec -C <absolute repo or worktree path> -"
 EOF
 
-cat > ~/.local/bin/atlas-pr-watch-and-wake <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-session_id="${1:?watcher session id required}"
-config="${HOME}/.config/atlas-pr-watchers/${session_id}.env"
-
-if [ ! -f "$config" ]; then
-  echo "watcher config not found: $config" >&2
-  exit 2
-fi
-
-# shellcheck disable=SC1090
-source "$config"
-
-if [ -z "${REPO_DIR:-}" ] || [ ! -d "$REPO_DIR" ]; then
-  echo "invalid REPO_DIR for ${session_id}: ${REPO_DIR:-}" >&2
-  exit 2
-fi
-
-~/.local/bin/atlas-pr-watch "${session_id}"
-cd "$REPO_DIR"
-python scripts/codex_wake_bridge.py "${session_id}" --source scheduled
-EOF
-chmod +x ~/.local/bin/atlas-pr-watch-and-wake
-
-mkdir -p ~/.config/systemd/user/atlas-pr-watch@.service.d
-cat > ~/.config/systemd/user/atlas-pr-watch@.service.d/wake-bridge.conf <<'EOF'
-[Service]
-ExecStart=
-ExecStart=%h/.local/bin/atlas-pr-watch-and-wake %i
-EOF
-
+python scripts/install_codex_wake_bridge.py --reload-systemd
+python scripts/install_codex_wake_bridge.py --check
 ~/.local/bin/atlas-pr-watch-and-wake "${SESSION_ID}"
-systemctl --user daemon-reload
 systemctl --user enable --now "atlas-pr-watch@${SESSION_ID}.timer"
 ```
 
