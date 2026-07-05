@@ -896,9 +896,11 @@ it).
 3. **Compare** those two against what the description claims and report every
    gap: diff != description; diff != correct fix (wrong / incomplete / symptom
    patch); diff changes unmentioned things.
-4. **Cite `file:line` for every claim**, sort each into confirmed /
-   contradicted / could-not-determine (never confirmed without a citation), and
-   lead with the gaps (record them in the §2a template's Reconstruction block).
+4. **Cite checkable evidence for every claim**: `file:line` for code/content
+   claims, or a named non-file artifact such as command output, CI run/job,
+   generated artifact, or PR metadata. Sort each into confirmed / contradicted /
+   could-not-determine (never confirmed without evidence), and lead with the
+   gaps (record them in the §2a template's Reconstruction block).
 
 Don't trust the PR description's claims; reproduce them. The
 reviewer should:

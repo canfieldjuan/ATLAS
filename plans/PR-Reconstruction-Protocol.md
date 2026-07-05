@@ -17,18 +17,19 @@ Ownership lane: workflow/process
 Slice phase: Workflow/process
 
 1. Add `docs/PR_RECONSTRUCTION_PROTOCOL.md` -- the canonical 4-step protocol
-   (read the diff alone; derive the correct fix from the problem alone; report
-   every gap; cite file:line, sort confirmed/contradicted/could-not-determine,
-   gaps first).
+   (independently reconstruct what the diff does and what a correct fix should
+   do; report every gap; cite checkable evidence, sort
+   confirmed/contradicted/could-not-determine, gaps first).
 2. Make it mandatory in the reviewer workflow by referencing it at the head of
    `AGENTS.md` §4a (Independent verification).
 
 ### Review Contract
 
 - Acceptance criteria:
-  - [ ] `docs/PR_RECONSTRUCTION_PROTOCOL.md` states the 4 ordered steps and the
-        confirmed/contradicted/could-not-determine sorting with file:line
-        citations and gaps-first ordering.
+  - [ ] `docs/PR_RECONSTRUCTION_PROTOCOL.md` states the 4-step protocol without
+        making diff-reading the required first investigation step, and requires
+        confirmed/contradicted/could-not-determine sorting with checkable
+        evidence and gaps-first ordering.
   - [ ] `AGENTS.md` §4a names the protocol as mandatory for every review and
         links the doc.
   - [ ] Docs-only change; no code, config, migration, or test touched.
@@ -72,12 +73,13 @@ Parked hardening: none.
 
 - `scripts/audit_plan_doc.py` on this plan -- OK.
 - `git diff --name-status` -- one new doc + `AGENTS.md` + this plan; no code.
+- `bash scripts/local_pr_review.sh --current-pr-body-file /tmp/pr-body-reconstruction-protocol.md`
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | 41 |
-| `docs/PR_RECONSTRUCTION_PROTOCOL.md` | 51 |
-| `plans/PR-Reconstruction-Protocol.md` | 83 |
-| **Total** | **175** |
+| `AGENTS.md` | 43 |
+| `docs/PR_RECONSTRUCTION_PROTOCOL.md` | 59 |
+| `plans/PR-Reconstruction-Protocol.md` | 85 |
+| **Total** | **187** |

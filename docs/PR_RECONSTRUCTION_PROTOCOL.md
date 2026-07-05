@@ -19,7 +19,12 @@ blocking findings" read off the PR description and stale bot thread-titles. The
 head code had already resolved every one of them. Reconstructing from the diff
 caught the error before it stuck.
 
-## The protocol (in order)
+## The Protocol
+
+Build two independent reconstructions, then compare them. They are independent,
+not sequential: derive the correct-fix reconstruction from the problem before
+or separately from the diff so the diff cannot anchor it. The reporting order
+below is for the final review write-up, not the investigation order.
 
 1. **Read the diff alone.** State what it actually does, change by change, in
    your own words. Do not read intent off the description, commit message, or
@@ -35,11 +40,14 @@ caught the error before it stuck.
    - the diff does not match a correct fix (wrong, incomplete, or symptom patch);
    - the diff changes things the description never mentions.
 
-4. **Cite file and line for every claim.** Sort each finding into
-   **confirmed / contradicted / could-not-determine**. Never mark a finding
-   confirmed without a citation. **Lead with the gaps, not a summary.** Post
-   findings inline on the changed line; use the review body (with a `file:line`
-   reference) only for out-of-diff lines.
+4. **Cite checkable evidence for every claim.** For code or content claims,
+   cite `file:line`. For non-file evidence, cite the named artifact: command
+   output, CI run/job, generated artifact, PR metadata, or another inspectable
+   source. Sort each finding into **confirmed / contradicted /
+   could-not-determine**. Never mark a finding confirmed without checkable
+   evidence. **Lead with the gaps, not a summary.** Post findings inline on the
+   changed line when the evidence lives in the diff; use the review body for
+   out-of-diff lines and non-file evidence.
 
 ## Composition
 
@@ -48,4 +56,4 @@ caught the error before it stuck.
 - Apply the vertical-progress lens in the same pass: is the slice a vertical
   MVP step, or harness/hardening/polish drift that defers the core?
 - This is the strict-review form of "no evidence lifted from prose": no verdict
-  claim survives without a checked-out `file:line` behind it.
+  claim survives without checkable evidence behind it.
