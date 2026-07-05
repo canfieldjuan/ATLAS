@@ -21,6 +21,31 @@ redirect prompt in that file.
 
 ---
 
+## 0. Product Discipline And Consent Gates
+
+Read `docs/CURRENT_PRODUCT_DISCIPLINE.md` before choosing or widening a product
+slice. `BUILD_SPEC.md` is deprecated historical context and must not be used as
+the current roadmap or definition of done.
+
+Default to vertical, end-to-end product slices: the smallest real
+buyer-visible or operator-visible path that proves the flow through a real
+entrypoint and an observable output/state/artifact/job/gate. Workflow/process,
+autonomy harness, audit, maturity-gate, or other hardening slices are allowed
+only when they unblock the current vertical proof, fix a real
+safety/security/privacy/money risk, or are justified by a recent product slice
+that failed because that infrastructure gap existed. The plan must name that
+blocker, risk, or failed run.
+
+Do **not** change user-facing product shape without explicit operator consent
+in the current session or accepted issue/plan. Product shape includes report,
+snapshot, email, PDF, landing-page copy/positioning, pricing/checkout,
+subscription/entitlement surfaces, buyer-visible tables/cards/sections/labels,
+customer-facing promises, and output semantics. If a slice exposes a
+product-shape decision, park it in `Deferred`, `HARDENING.md`, or a GitHub issue
+and continue only on the technical path that does not decide that shape.
+
+---
+
 ## 1. PR shape
 
 Every non-trivial change ships as a single PR with the following
@@ -495,6 +520,12 @@ Small corrections can happen out of order, but the plan must name why
 the phase is appropriate now. If implementation changes the phase,
 update the plan and PR body before review.
 
+For product work, choose a vertical slice by default. A workflow/process,
+autonomy-harness, audit, maturity-gate, or hardening slice must name the
+specific vertical proof it unblocks, the safety/security/privacy/money risk it
+fixes, or the recent product run that failed because this infrastructure was
+missing. "This would make future autonomous coding cleaner" is not enough.
+
 For a `Vertical slice`, build the thinnest end-to-end version that
 exercises the real flow. A slice is done only when the builder
 demonstrates the behavior with a concrete test, script, artifact, or
@@ -520,6 +551,9 @@ refactors, and edge cases. Each entry must include file/location,
 one-line description, why it matters, rough effort (`S` / `M` / `L`),
 category (`correctness`, `polish`, `tech-debt`, or `security`), and the
 slice where it was found.
+
+User-facing product shape changes are never "while here" work. They require
+explicit operator consent before implementation, even when technically small.
 
 Report parked work in the existing `Deferred` section of the plan doc
 and in the PR body under `Parked hardening`. Final builder reports must
@@ -1046,11 +1080,14 @@ Things that should **never** appear in a PR or review:
 - `AUDITOR_PROMPT.md` -- cross-cutting auditor prompt
   (canonical / integration / scope / debt). Run before any non-trivial
   build session.
-- `BUILD_SPEC.md` -- what Atlas is, P0/P1/P2 priorities, definition
-  of done.
+- `docs/CURRENT_PRODUCT_DISCIPLINE.md` -- active product discipline, vertical-first,
+  hardening-deferral, and product-shape consent rules.
+- `BUILD_SPEC.md` -- deprecated historical context; do not use as the current
+  product roadmap or definition of done.
 - `CANONICAL.md` -- which implementation is the real one.
 - `INTEGRATION_MAP.md` -- what's wired to what.
-- `CONTEXT.md` -- session notes, known debt.
+- `CONTEXT.md` -- historical/session notes and known debt; verify before using
+  as current product state.
 - `CLAUDE.md` -- project-level Claude Code guidance.
 - `HARDENING.md` -- parked non-blocking hardening discoveries from
   thin slices.

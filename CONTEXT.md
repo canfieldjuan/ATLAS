@@ -1,7 +1,12 @@
-# Atlas Context - Current State
+# Atlas Context - Historical Notes
 
 **Last Updated**: 2025-01-22
-**Current Focus**: P0 - Voice-to-Voice
+**Status**: Historical context and debt notes only.
+
+This file is not the current product roadmap, priority stack, or product state.
+Use `docs/CURRENT_PRODUCT_DISCIPLINE.md`, the active GitHub issue, accepted
+plan doc, current PRs, and live code for current direction. Entries below may
+describe stale voice-era priorities and must be verified before use.
 
 ---
 

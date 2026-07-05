@@ -229,10 +229,13 @@ as early (and cheaply) as possible:
    suites, gated by path filters. CI is the *final* enforcement layer, not the
    first reviewer.
 
-And the governing docs the auditor reads before any of it: `BUILD_SPEC.md`
-(priorities + definition of done), `CANONICAL.md` (which implementation is the real
-one — "one canonical per component, deprecated = don't touch"), `INTEGRATION_MAP.md`
-(what's wired to what — "no floating code"), `CONTEXT.md` (known debt).
+And the governing docs the auditor reads before any of it: `AGENTS.md`
+(PR contract and consent gates), `docs/CURRENT_PRODUCT_DISCIPLINE.md`
+(vertical-first discipline, hardening parking, product-shape consent),
+`CANONICAL.md` (which implementation is the real one — "one canonical per
+component, deprecated = don't touch"), `INTEGRATION_MAP.md` (what's wired to
+what — "no floating code"), and `CONTEXT.md` (historical debt/session notes;
+verify before treating entries as current).
 
 ---
 
