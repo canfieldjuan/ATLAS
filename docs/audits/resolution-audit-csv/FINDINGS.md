@@ -161,15 +161,21 @@ fragmentation failure.
 - **F9 -- 22% of a realistic mixed inbox excluded** from the repeat/billed surface
   (45 tickets -> `non_repeat=10`). Defensible here (genuine one-offs) but it is the
   same `<2` gate that drops real repeats under F1. Repro: `cl_attack34_mixed.json`.
-- **H-x12 -- Dateless annualization hard-codes a x12 "one month" assumption [verified-by-reviewer]**
-  For a dateless upload the pipeline annualizes as `repeat_ticket_count x 12 x $13.50`
-  (`faq_deflection_report.py:3232`, field `annualized_run_rate_support_cost`), assuming the upload
-  represents exactly one month of tickets -- with no inference of the actual span. A dateless year
-  of tickets is reported ~12x too high; a week's worth ~12x too low. (A *dated* upload correctly
-  uses `x365/window_days`, `:3228`.) The x12 constant is an unfounded basis for a customer-facing
-  dollar figure -- the annualization sibling of the P5-2 rounding defect. Fix: infer the span or
-  present dateless figures as an explicit unbounded run-rate. Surfaced by the GPT-5.5 Pro review;
-  tracked in #2000 / #1993.
+- **H-x12 -- Raw `annualized_run_rate_support_cost` is a bare x12 run-rate with no span basis [verified-by-reviewer]**
+  For a dateless upload the pipeline sets `annualized_run_rate_support_cost = repeat_ticket_count x 12 x $13.50`
+  (`faq_deflection_report.py:3232`), which equals the true dated annualization (`repeat x 365/days x $13.50`,
+  `:3228`) ONLY when the actual span is ~30.4 days. For a span of T days the fallback is `12T/365` of the dated
+  figure: a **year** of dateless tickets reads ~**12x too high** (T=365 -> 12.0x), ~30 days is right, a **week**
+  reads ~**0.23x (~4.3x too low)** -- two-directional, not a flat 12x (correcting an earlier draft of this
+  finding). **Scope:** the rendered markdown (`:4076-4083`) and PDF (`deflection_pdf_renderer.py:305-312`)
+  ALREADY hedge this ("does not infer a monthly or annual reporting period ... If this uploaded batch is monthly
+  pace ... Estimate only"); the gap is the **raw `report_model` / API field** surfaced WITHOUT that prose by the
+  **hosted-consumer allowlist** -- `HOSTED_CONSUMER_SAFE_FIELDS`
+  (`portfolio-ui/api/content-ops/deflection/report-model-contract.js:24`) and `OPTIONAL_FIELDS` (`:18`) both
+  include the annualized fields. By contrast the **snapshot** allowlist EXCLUDES them (backend `:543-551`,
+  frontend `:22`), consistent with P5-6 -- so the free teaser is not exposed. Fix: carry the span basis on the
+  field, or require the hosted consumer to render the "if monthly pace" caveat. Surfaced by the GPT-5.5 Pro +
+  Codex review; tracked in #2000 / #1993.
 
 ## LOW / informational
 

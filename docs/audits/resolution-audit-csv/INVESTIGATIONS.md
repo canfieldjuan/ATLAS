@@ -78,7 +78,8 @@ internally connected at `connect_distance = 0.535` (its single-linkage MST bottl
 `connect_distance (0.535) > merge_distance (0.295)`, single-linkage merges the two intents BEFORE
 either is internally whole -> **no threshold yields the 2 pure intents** (sweep confirms: no
 pure-2 band). So a naive single-linkage semantic pass genuinely reproduces F4 -- now *proven* via
-the bottleneck, not inferred from the gap. Property of the data; mxbai-large shifts thresholds but
+the bottleneck, not inferred from the gap. **Reproducible** (committed, deterministic):
+`investigations/c1_linkage_closure.py`. Property of the data; mxbai-large shifts thresholds but
 does not erase the overlap.
 
 **Concrete algorithm:**
@@ -245,7 +246,14 @@ and caught real over-claims in the above, corrected in place (tracking #2000):
 - **B2** -- the reconciliation guard must call the same billed-repeat predicate, not a re-hardcoded `tc>=2`.
 - **D1/D2** -- `$810/$1,944` are the dateless `x12` run-rate (`:3232`), not a `x365/window`
   annualization; annualized dollars are labeled run-rates, not confident annual claims (FINDINGS H-x12).
+- **Round 2 (Codex on #2002 + reviewer):** the H-x12 finding itself shipped two errors, now fixed:
+  (a) magnitude -- the fallback error is `12T/365` (a year ~12x too high, a **week ~4.3x too low**,
+  not a flat 12x); (b) scope -- the rendered markdown/PDF already hedge ("if this uploaded batch is
+  monthly pace"), so the defect is the **raw model/API field**, not the customer-facing artifacts.
+  And C1 "proven" is now backed by a **committed** proof (`investigations/c1_linkage_closure.py`),
+  not only gitignored scratch.
 
-*No product code was modified. Prototypes in gitignored `_audit_scratch/`. The R1 semantic
-placement (+ the C1 MST closure), R2 speedup+parity, P5-2 cents reconciliation, guard second-side
-trap, and P7 byte-alias were re-run by the reviewer.*
+*No product code was modified. The C1 MST closure is committed and reproducible
+(`investigations/c1_linkage_closure.py`); other prototypes (R2 speedup+parity, P5-2 cents
+reconciliation, guard second-side trap, P7 byte-alias) are in gitignored `_audit_scratch/`,
+re-run by the reviewer.*
