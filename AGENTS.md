@@ -189,6 +189,12 @@ The reviewer should produce something like:
 ```
 **Reviewed head:** `<sha from checked-out PR head>`
 
+**Reconstruction (gaps first, per docs/PR_RECONSTRUCTION_PROTOCOL.md):**
+- Gaps: <diff != description / diff != correct fix / diff changes unmentioned
+  things>, each cited `file:line`.
+- Confirmed: <finding + citation>. Contradicted: <finding + citation>.
+  Could-not-determine: <finding + why unresolved>.
+
 **Verification (independent):**
 1. <claim from PR description> -- verified via <command>
 2. <invariant from Mechanism> -- confirmed at <file:line>
@@ -873,10 +879,28 @@ go in the §2a template.
 
 ### 4a. Independent verification
 
-Run a **challenger pass first, before reading the builder's summary** -- the
-builder's confident narrative anchors you into believing the story. In order:
-read the Review Contract, predict which files *should* change and which tests
-*should* exist, *then* open the diff.
+**Reconstruct the PR independently from the diff -- never review it against its
+description** (`docs/PR_RECONSTRUCTION_PROTOCOL.md`, mandatory for every review).
+Build two INDEPENDENT reconstructions, then compare them. They are independent,
+not sequential: derive (2) purely from the problem, never from the diff, so the
+diff cannot anchor it (the challenger pass -- easiest if you derive it before
+opening the diff, but the binding requirement is only that the diff never shapes
+it).
+
+1. **What the diff actually does** -- read the diff alone and state it change by
+   change, in your own words. The code is ground truth; the description, commit,
+   and title are unverified claims.
+2. **What a correct fix should do** -- from the problem and the Review Contract
+   alone (the challenger pass), derive which files *should* change and which
+   tests *should* exist, never letting the diff shape the answer.
+3. **Compare** those two against what the description claims and report every
+   gap: diff != description; diff != correct fix (wrong / incomplete / symptom
+   patch); diff changes unmentioned things.
+4. **Cite checkable evidence for every claim**: `file:line` for code/content
+   claims, or a named non-file artifact such as command output, CI run/job,
+   generated artifact, or PR metadata. Sort each into confirmed / contradicted /
+   could-not-determine (never confirmed without evidence), and lead with the
+   gaps (record them in the §2a template's Reconstruction block).
 
 Don't trust the PR description's claims; reproduce them. The
 reviewer should:
@@ -1135,9 +1159,14 @@ Read AUDITOR_PROMPT.md for the cross-cutting audit checks
 
 For each PR you review:
 
-1. Challenger pass first: read the Review Contract, predict which
-   files and tests should exist, THEN open the diff. Do not anchor
-   on the builder's summary.
+1. Reconstruct independently (`docs/PR_RECONSTRUCTION_PROTOCOL.md`,
+   mandatory): build two independent reconstructions -- what a correct
+   fix should do (from the Review Contract and problem, never shaped by
+   the diff) and what the diff actually does (read the diff alone) --
+   then report every gap (diff != description; diff != correct fix; diff
+   changes unmentioned things), cited `file:line`, sorted confirmed /
+   contradicted / could-not-determine, gaps first. Do not anchor on the
+   builder's summary.
 2. Reproduce the named verification commands from the PR body.
    Don't trust claims; re-run them. Spot-check the plan's
    invariants at the actual file:line cited in the diff.
