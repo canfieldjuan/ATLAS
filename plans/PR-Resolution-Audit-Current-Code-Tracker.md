@@ -42,7 +42,9 @@ Slice phase: Workflow/process
 The new doc becomes the local source of truth for the arc:
 
 - a "gaps first" section for stale, contradicted, or over-broad issue claims;
-- a confirmed current-code fix queue grouped by root cause;
+- a confirmed current-code fix queue grouped by root cause, including the
+  review-corrected queue items for row-key normalization, full money
+  reconciliation, and runtime QA scorecard wiring;
 - a slice plan that separates tracker-only, code-remediation, performance,
   and user-facing product-surface work;
 - a rule that follow-up implementation PRs update the tracker checkbox and
@@ -76,12 +78,15 @@ Parked hardening: none.
 - `git log --oneline -15 origin/main`
 - Plan sync helper: `scripts/sync_pr_plan.py`
 - Local review helper, advisory dirty pass: `scripts/local_pr_review.sh`
-- Pending before push: clean local review through `scripts/push_pr.sh`
+- Clean local review through `scripts/push_pr.sh`: passed before opening #2008.
+- Review-thread fetch through the Codex GitHub review-comment workflow.
+- Runtime scorecard caller check with ripgrep: confirmed tests/standalone
+  scripts exist, but no product/runtime report-generation caller.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 209 |
-| `plans/PR-Resolution-Audit-Current-Code-Tracker.md` | 87 |
-| **Total** | **296** |
+| `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 272 |
+| `plans/PR-Resolution-Audit-Current-Code-Tracker.md` | 92 |
+| **Total** | **364** |

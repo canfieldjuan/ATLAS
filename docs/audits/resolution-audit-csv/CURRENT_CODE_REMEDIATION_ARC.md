@@ -29,13 +29,15 @@ files remain evidence/history; code remains ground truth.
   embedding injection exists through `_content_ops_services._build_ticket_faq_service`.
 - P5 "no memoization anywhere" is too broad. `campaign_source_adapters` has
   `_SourceFieldLookup`; the still-live problem is the support-ticket and FAQ
-  markdown paths that repeatedly normalize row keys.
+  markdown paths that repeatedly normalize row keys. That live problem remains
+  queued below as its own fix.
 - M6 "no PII stripping" is false for final report output because the report
   scrubber handles common identifiers. The live gap is input conversation
   hygiene: signatures, quote chains, junk auto-replies, and embedded NULs.
-- P5-7 "QA scorecard has zero runtime callers" is stale. QA scorecard runners
-  and workflow enrollment now exist; any remaining concern must be framed as
-  live-observer quality, not absence.
+- P5-7 needs a narrower correction, not retirement. QA scorecard tests,
+  standalone runners, and workflow enrollment exist, but the scorecard is not
+  wired into product/runtime report generation. Keep the runtime/load-bearing
+  wiring gap open.
 - C3 is precise, not universal. Ambiguous day/month dates can silently
   transpose under the US parser; day-first values with day > 12 become
   unparseable and disable the date window.
@@ -69,7 +71,32 @@ Expected fix:
 - Add fixture tests for headerless, duplicate header, over-wide, short-row, and
   legacy-encoding cases.
 
-### S2 - Submit Row Cap And Heavy Inline Build
+### S2 - Row-Key Normalization Cache
+
+Status: open.
+
+Root: support-ticket and FAQ markdown paths repeatedly normalize row keys while
+scanning every lookup, even though a cached field-lookup pattern already exists
+elsewhere.
+
+Confirmed components:
+
+- `campaign_source_adapters._SourceFieldLookup` proves the cached pattern
+  exists.
+- `support_ticket_input_package._first_value` still normalizes raw row keys
+  during each lookup.
+- `ticket_faq_markdown._field_value` still scans and normalizes raw row keys
+  during each lookup.
+
+Expected fix:
+
+- Reuse or mirror the cached per-row lookup pattern in the support-ticket and
+  FAQ markdown hot paths.
+- Add parity fixtures proving output does not change.
+- Add a focused runtime/perf guard or benchmark artifact before claiming the
+  cache removed the hot path.
+
+### S3 - Submit Row Cap And Heavy Inline Build
 
 Status: open.
 
@@ -90,25 +117,35 @@ Expected fix:
 - Move or gate heavy report work behind the existing async job pattern if the
   cap still allows slow runs.
 
-### S3 - Money Formatting Unification
+### S4 - Money Reconciliation Contract
 
 Status: open.
 
-Root: money rendering has multiple helpers with different rounding semantics.
+Root: paid artifacts compute and render money through multiple paths, so helper
+rounding, row totals, headline totals, and baked money strings can contradict
+each other.
 
 Confirmed components:
 
 - Markdown/model formatting uses half-up integer dollars.
 - PDF formatting uses half-up integer dollars.
 - Email formatting uses Python `:.0f`, which is banker/half-even rounding.
+- Rounded row totals can diverge from rounded headline totals even if helpers
+  share a rounding mode.
+- Money strings baked into model summaries can drift from raw/cents totals.
 
 Expected fix:
 
-- One shared money display helper or one shared rounding policy.
-- Tests that render the same value through report model, PDF, and email paths.
+- Define one money reconciliation contract: raw/cents values are authoritative,
+  display helpers are shared, and rounded rows reconcile to the headline by an
+  explicit rule.
+- Remove or isolate baked money strings from model summaries where they can
+  drift.
+- Tests that render the same values through report model, PDF, and email paths,
+  including row-total-vs-headline reconciliation.
 - Keep the `$13.50 assisted-contact basis` label single-sourced.
 
-### S4 - Clustering Correctness Spike And First Fix
+### S5 - Clustering Correctness Spike And First Fix
 
 Status: open.
 
@@ -131,7 +168,7 @@ Expected fix:
 - Include order-shuffle tests.
 - Keep user-facing grouping/report shape unchanged until approved.
 
-### S5 - Text Chokepoint Hygiene
+### S6 - Text Chokepoint Hygiene
 
 Status: open.
 
@@ -152,7 +189,7 @@ Expected fix:
   customer wording.
 - Keep final-output scrub tests intact.
 
-### S6 - Date Parsing And Date Window Policy
+### S7 - Date Parsing And Date Window Policy
 
 Status: open.
 
@@ -175,6 +212,29 @@ Expected fix:
 - Rename or separate dateless run-rate fields if needed; user-facing wording
   requires operator approval.
 
+### S8 - Runtime QA Scorecard Wiring
+
+Status: open.
+
+Root: QA scorecard logic is exercised by tests and standalone scripts, but it is
+not load-bearing in product/runtime report generation.
+
+Confirmed components:
+
+- `build_deflection_full_report_qa_scorecard` has test callers and deterministic
+  harness callers.
+- `build_pdf_export_scorecard` has standalone script/test callers.
+- No product/runtime report generation path currently invokes the scorecard as a
+  guard before delivery or persistence.
+
+Expected fix:
+
+- Decide the runtime boundary: generation, storage, delivery, or release gate.
+- Wire the scorecard where a generated paid report can actually be blocked or
+  flagged.
+- Add an end-to-end test that proves a bad report artifact trips the runtime
+  guard, not just a standalone checker.
+
 ## Product-Surface Follow-Ups Requiring Operator Approval
 
 These are not coding-start items until the operator approves the product shape:
@@ -189,7 +249,8 @@ These are not coding-start items until the operator approves the product shape:
 
 ## Closed Or Reframed Claims
 
-- P5-7 zero runtime callers: closed as stale; runner/workflow callers exist.
+- P5-7 zero runtime callers: reframed, not closed. Standalone runners and tests
+  exist, but product/runtime wiring remains open as S8.
 - P3 subclusterer linear positive: keep as observation, not remediation.
 - L13 short-row truncation: keep as safe observation unless S1 changes row
   policy.
@@ -200,10 +261,12 @@ These are not coding-start items until the operator approves the product shape:
 ## Tracking Checklist
 
 - [ ] S1 CSV admission/data-loss PR linked here.
-- [ ] S2 submit row cap/heavy-build PR linked here.
-- [ ] S3 money helper PR linked here.
-- [ ] S4 clustering spike PR linked here.
-- [ ] S4 clustering first implementation PR linked here.
-- [ ] S5 text chokepoint hygiene PR linked here.
-- [ ] S6 date/window policy PR linked here.
+- [ ] S2 row-key normalization cache PR linked here.
+- [ ] S3 submit row cap/heavy-build PR linked here.
+- [ ] S4 money reconciliation PR linked here.
+- [ ] S5 clustering spike PR linked here.
+- [ ] S5 clustering first implementation PR linked here.
+- [ ] S6 text chokepoint hygiene PR linked here.
+- [ ] S7 date/window policy PR linked here.
+- [ ] S8 runtime QA scorecard wiring PR linked here.
 - [ ] Operator-approved product-surface issue/PR linked here, if any.
