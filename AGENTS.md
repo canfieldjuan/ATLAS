@@ -256,6 +256,15 @@ If the plan changes mid-implementation (you discovered something the
 plan missed), update the plan doc in the same commit. The plan and
 code ship together.
 
+Code for independent reconstruction
+(`docs/CODING_FOR_RECONSTRUCTION_REVIEW.md`). Before opening or updating a PR,
+check the three-way match yourself: what the diff actually does, what a correct
+fix for the stated problem should do, and what the PR body claims. If the diff
+changes unmentioned behavior, either split it out or name it plainly in the
+plan/PR body. If the correct fix needs more than this slice does, name the
+bounded deferral. Do not inflate the description to make the diff look larger
+than it is.
+
 ### 3a.1. Session ownership map
 
 Every builder session must maintain its own local session-state file at the

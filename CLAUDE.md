@@ -1129,6 +1129,10 @@ PR independently). The full contract lives in `AGENTS.md`; the highlights:
   halting until the operator notices green. See `AGENTS.md` §3c.1.
 - **Reviewer verdicts:** `BLOCKER` / `MAJOR` / `NIT` / `LGTM`. Reviewer
   reproduces the builder's verification commands; doesn't trust claims.
+- **Code for reconstruction review.** While building, follow
+  `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md`: start from the correct-fix shape,
+  keep the diff self-explaining, test real behavior, and make the PR body a
+  receipt rather than a shield.
 - **No "while I was here" cleanups.** Plan and implementation ship together;
   off-scope changes go to a follow-up slice (added to *Deferred*).
 
@@ -1141,6 +1145,7 @@ Companion docs:
 - `CANONICAL.md` — which implementation is the real one
 - `INTEGRATION_MAP.md` — what's wired to what
 - `docs/CURRENT_PRODUCT_DISCIPLINE.md` — vertical-first discipline, hardening parking, and product-shape consent
+- `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md` — builder rules for coding when the reviewer will reconstruct the diff independently
 - `BUILD_SPEC.md` — deprecated historical context; not current roadmap/DoD
 - `CONTEXT.md` — historical/session notes and known debt; verify before using as current product state
 
@@ -1379,6 +1384,10 @@ Compose files for sub-services:
   hard-code domain prompts inline.
 - **Plans are mandatory** for non-trivial PRs (see *Multi-Session PR
   Workflow* above). No code without a plan doc.
+- **Code for reconstruction review**: start from the problem and correct-fix
+  shape, keep every touched file tied to that shape, test behavior with real
+  adapters where available, and make the PR description match the diff exactly.
+  See `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md`.
 - **Root cause, not symptoms**: a fix names the underlying problem and
   addresses it, not the surface symptom or a reviewer's exact wording. A change
   that fights another stage (split-then-remerge, widen-then-filter,
