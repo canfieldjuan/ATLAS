@@ -191,6 +191,20 @@ timer can call it with `--source scheduled`.
   tolerance. Deferred operator decisions go to a GitHub issue and notification
   path in the follow-up slice; they are not a blocking chat-stop when other safe
   queued work remains.
+- After a guarded merge, use `scripts/codex_issue_queue.py next --lane <lane>`
+  to find the next issue-backed slice for the same lane. The queue source is
+  GitHub Issues with the `codex` label plus an `Autonomy lane: <lane>` marker
+  and optional `Autonomy priority: <int>` marker. Issue-body markers are trusted
+  only on `codex`-labeled issues; comment markers are trusted only from GitHub
+  author associations with repository write-level trust. Do not infer the next
+  slice from chat memory.
+- If a fork is genuinely operator-owned, record it with
+  `scripts/codex_issue_queue.py defer --issue <n> --lane <lane> --reason
+  "<why this belongs to the operator>"`. This writes a local email-ready
+  artifact under
+  `~/.local/state/atlas-pr-watchers/operator-defers/`; it does not send email.
+  The GitHub issue is then labeled `deferred` and receives a quoted defer
+  comment so multiline operator text cannot become queue-control markers.
 
 This protects against the race where checks turn green before late comments or
 review threads land.
