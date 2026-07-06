@@ -2782,6 +2782,10 @@ def _with_deflection_submit_diagnostics(
             )
             if key in package_metadata
         })
+        if package_metadata.get("source_id_fallback_count"):
+            metadata["source_id_fallback_count"] = package_metadata[
+                "source_id_fallback_count"
+            ]
         if package_metadata.get("ticket_status_present"):
             metadata.update({
                 key: package_metadata[key]
@@ -2832,7 +2836,10 @@ def _with_deflection_submit_diagnostics(
         dict(warning)
         for warning in package_warnings or ()
         if isinstance(warning, Mapping)
-        and warning.get("code") == "cluster_preview_skipped_large_upload"
+        and warning.get("code") in {
+            "cluster_preview_skipped_large_upload",
+            "support_ticket_missing_source_id",
+        }
     )
     if language_filtered_row_count:
         warnings.append({

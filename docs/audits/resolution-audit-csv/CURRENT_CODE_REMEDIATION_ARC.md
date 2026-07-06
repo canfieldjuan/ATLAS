@@ -286,7 +286,7 @@ These are not coding-start items until the operator approves the product shape:
 
 ## Tracking Checklist
 
-- [ ] S1 CSV admission/data-loss and missing-ID stability PR linked here.
+- [x] S1 CSV admission/data-loss and missing-ID stability PR linked here: #2026.
 - [ ] S2 row-key normalization cache PR linked here.
 - [ ] S3 submit row cap/heavy-build PR linked here.
 - [ ] S4 money reconciliation PR linked here.

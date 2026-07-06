@@ -145,7 +145,9 @@ def test_load_campaign_opportunities_from_csv_falls_back_for_cp1252_exports(
 
     loaded = load_campaign_opportunities_from_file(path)
 
-    assert loaded.warnings == ()
+    assert [warning.code for warning in loaded.warnings] == [
+        "csv_legacy_encoding_fallback"
+    ]
     assert loaded.opportunities[0]["pain_points"] == ["Buyer\u2019s renewal costs rose"]
 
 

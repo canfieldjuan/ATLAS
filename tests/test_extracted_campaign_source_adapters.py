@@ -948,7 +948,7 @@ def test_load_source_rows_infers_bomless_utf16_after_utf8_failure(
         ("latin-1", "Le caf\u00e9 export failed."),
     ),
 )
-def test_load_source_rows_from_legacy_csv_decodes_clean_text_without_warning(
+def test_load_source_rows_from_legacy_csv_decodes_clean_text_with_warning(
     tmp_path: Path,
     encoding: str,
     message: str,
@@ -964,7 +964,7 @@ def test_load_source_rows_from_legacy_csv_decodes_clean_text_without_warning(
         file_format="csv",
     )
 
-    assert warnings == ()
+    assert [warning.code for warning in warnings] == ["csv_legacy_encoding_fallback"]
     assert rows == [{
         "ticket_id": "ticket-1",
         "subject": "Export help",
@@ -994,7 +994,7 @@ def test_load_source_rows_prefers_clean_cp1252_marker_text_over_utf8_recovery(
         file_format="csv",
     )
 
-    assert warnings == ()
+    assert [warning.code for warning in warnings] == ["csv_legacy_encoding_fallback"]
     assert rows == [{
         "ticket_id": "ticket-1",
         "subject": "Export help",
@@ -1091,9 +1091,12 @@ def test_load_source_rows_warns_on_implausible_legacy_fallback_artifacts(
         "subject": "Export help",
         "message": f"{message}{legacy_char}{suffix.decode('ascii').strip()}",
     }]
-    assert [warning.code for warning in warnings] == ["csv_encoding_ambiguous"]
-    assert warnings[0].field == "encoding"
-    assert "failed strict UTF-8" in warnings[0].message
+    assert [warning.code for warning in warnings] == [
+        "csv_legacy_encoding_fallback",
+        "csv_encoding_ambiguous",
+    ]
+    assert warnings[1].field == "encoding"
+    assert "failed strict UTF-8" in warnings[1].message
 
 
 def test_load_source_rows_keeps_legacy_fallback_warning_position_correlated(
@@ -1112,7 +1115,7 @@ def test_load_source_rows_keeps_legacy_fallback_warning_position_correlated(
         "subject": "B",
         "message": "\xc4\x9dqqqq\xc1",
     }]
-    assert warnings == ()
+    assert [warning.code for warning in warnings] == ["csv_legacy_encoding_fallback"]
 
 
 @pytest.mark.parametrize(
@@ -1147,7 +1150,10 @@ def test_load_source_rows_warns_on_mid_field_implausible_fallback_artifacts(
         "subject": "Export help",
         "message": f"{prefix}{legacy_char}{suffix}",
     }]
-    assert [warning.code for warning in warnings] == ["csv_encoding_ambiguous"]
+    assert [warning.code for warning in warnings] == [
+        "csv_legacy_encoding_fallback",
+        "csv_encoding_ambiguous",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1160,7 +1166,7 @@ def test_load_source_rows_warns_on_mid_field_implausible_fallback_artifacts(
         "Se\u00f1or \u00fcber",
     ),
 )
-def test_load_source_rows_does_not_warn_on_clean_cp1252_field_endings(
+def test_load_source_rows_warns_on_clean_cp1252_field_endings(
     tmp_path: Path,
     message: str,
 ) -> None:
@@ -1175,7 +1181,7 @@ def test_load_source_rows_does_not_warn_on_clean_cp1252_field_endings(
         file_format="csv",
     )
 
-    assert warnings == ()
+    assert [warning.code for warning in warnings] == ["csv_legacy_encoding_fallback"]
     assert rows == [{
         "ticket_id": "ticket-1",
         "subject": "Export help",

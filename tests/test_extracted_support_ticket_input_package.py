@@ -5,6 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from extracted_content_pipeline.campaign_customer_data import (
+    CsvCustomerDataParseError,
+)
+from extracted_content_pipeline.campaign_source_adapters import (
+    load_csv_source_rows_result_from_file,
+)
 from extracted_content_pipeline.content_ops_input_provider import (
     content_ops_payload_from_input_package,
 )
@@ -36,6 +42,180 @@ from extracted_content_pipeline.support_ticket_zendesk_thread import (
 
 ROOT = Path(__file__).resolve().parents[1]
 ZENDESK_THREAD_SAMPLE = ROOT / "tests/fixtures/zendesk_full_thread_seed_sample.json"
+
+
+def test_csv_loader_rejects_duplicate_headers(tmp_path: Path) -> None:
+    path = tmp_path / "duplicate-headers.csv"
+    path.write_text(
+        "ticket_id,subject,Subject\n"
+        "T-1,Original subject,Overwritten subject\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CsvCustomerDataParseError) as exc_info:
+        load_csv_source_rows_result_from_file(path)
+
+    assert exc_info.value.code == "csv_duplicate_header"
+    assert exc_info.value.row_index == 1
+
+
+def test_csv_loader_rejects_compact_alias_duplicate_headers(tmp_path: Path) -> None:
+    path = tmp_path / "compact-alias-duplicate-headers.csv"
+    path.write_text(
+        "ticket.id,ticket_id,description\n"
+        "T-ignored,T-1,Customer cannot export reports\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CsvCustomerDataParseError) as exc_info:
+        load_csv_source_rows_result_from_file(path)
+
+    assert exc_info.value.code == "csv_duplicate_header"
+    assert exc_info.value.row_index == 1
+
+
+def test_csv_loader_keeps_meaningful_punctuation_headers_distinct(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "meaningful-punctuation-headers.csv"
+    path.write_text(
+        "Cost ($),Cost (%)\n"
+        "100,15\n",
+        encoding="utf-8",
+    )
+
+    result = load_csv_source_rows_result_from_file(path)
+
+    assert result.rows == [{"Cost ($)": "100", "Cost (%)": "15"}]
+    assert [warning.code for warning in result.warnings] == [
+        "csv_low_confidence_header"
+    ]
+
+
+def test_csv_loader_rejects_data_looking_fallback_header(tmp_path: Path) -> None:
+    path = tmp_path / "headerless.csv"
+    path.write_text(
+        '"How do I export reports?","I cannot find the export button."\n'
+        '"Can I invite a teammate?","The invite email never arrives."\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CsvCustomerDataParseError) as exc_info:
+        load_csv_source_rows_result_from_file(path)
+
+    assert exc_info.value.code == "csv_low_confidence_header"
+    assert exc_info.value.row_index == 1
+
+
+def test_csv_loader_rejects_short_prose_fallback_header(tmp_path: Path) -> None:
+    path = tmp_path / "short-prose-headerless.csv"
+    path.write_text(
+        "Export failed,Button missing\n"
+        "Login broken,Reset unavailable\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CsvCustomerDataParseError) as exc_info:
+        load_csv_source_rows_result_from_file(path)
+
+    assert exc_info.value.code == "csv_low_confidence_header"
+    assert exc_info.value.row_index == 1
+
+
+def test_csv_loader_warns_on_question_mark_header_columns(tmp_path: Path) -> None:
+    path = tmp_path / "question-mark-columns.csv"
+    path.write_text(
+        "Escalated?,Resolved?\n"
+        "yes,no\n",
+        encoding="utf-8",
+    )
+
+    result = load_csv_source_rows_result_from_file(path)
+
+    assert result.rows == [{"Escalated?": "yes", "Resolved?": "no"}]
+    assert [warning.code for warning in result.warnings] == [
+        "csv_low_confidence_header"
+    ]
+
+
+def test_csv_loader_warns_on_accepted_no_hint_header(tmp_path: Path) -> None:
+    path = tmp_path / "low-confidence-header.csv"
+    path.write_text(
+        "Conversation Text,Conversation Topic\n"
+        "Customer cannot export reports,Exports\n",
+        encoding="utf-8",
+    )
+
+    result = load_csv_source_rows_result_from_file(path)
+
+    assert result.rows == [{
+        "Conversation Text": "Customer cannot export reports",
+        "Conversation Topic": "Exports",
+    }]
+    assert [warning.code for warning in result.warnings] == [
+        "csv_low_confidence_header"
+    ]
+
+
+def test_csv_loader_rejects_overwide_rows(tmp_path: Path) -> None:
+    path = tmp_path / "overwide.csv"
+    path.write_text(
+        "ticket_id,subject\n"
+        "T-1,Export failed,unexpected extra cell\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CsvCustomerDataParseError) as exc_info:
+        load_csv_source_rows_result_from_file(path)
+
+    assert exc_info.value.code == "csv_inconsistent_columns"
+    assert exc_info.value.row_index == 2
+
+
+def test_csv_loader_warns_on_legacy_encoding_fallback(tmp_path: Path) -> None:
+    path = tmp_path / "cp1252.csv"
+    path.write_bytes(
+        "ticket_id,subject\nT-1,Caf\xe9 billing question\n".encode("cp1252")
+    )
+
+    result = load_csv_source_rows_result_from_file(path)
+
+    assert result.rows == [{
+        "ticket_id": "T-1",
+        "subject": "Caf\xe9 billing question",
+    }]
+    assert "csv_legacy_encoding_fallback" in {
+        warning.code for warning in result.warnings
+    }
+
+
+def test_support_ticket_package_surfaces_missing_source_id_diagnostics() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "subject": "How do I export reports?",
+            "description": "I cannot find the export button.",
+        },
+        {
+            "subject": "Can I invite a teammate?",
+            "description": "The invite email never arrives.",
+        },
+    ])
+
+    assert package.metadata["source_id_fallback_count"] == 2
+    warnings = [dict(warning) for warning in package.warnings]
+    assert {
+        warning["code"] for warning in warnings
+    } >= {"support_ticket_missing_source_id"}
+    warning = next(
+        item
+        for item in warnings
+        if item["code"] == "support_ticket_missing_source_id"
+    )
+    assert warning["example_source_ids"] == ["ticket-1", "ticket-2"]
+    assert all(
+        "_source_id_fallback" not in row
+        for row in package.inputs["source_material"]
+    )
 
 
 def test_support_ticket_fold_targets_survive_tokenization() -> None:
