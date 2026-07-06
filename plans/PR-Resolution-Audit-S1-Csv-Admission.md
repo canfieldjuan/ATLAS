@@ -22,6 +22,10 @@ Diff size note: the first pass was under the 400 LOC target. Review found
 three same-class boundary gaps in the real paths, so this revision exceeds the
 soft cap to cover the full variant class: downstream alias duplicate headers,
 short-prose fallback headers, and submit-response diagnostics.
+The second review pass exposed the same root one layer deeper: the CSV
+admission hint/duplicate vocabulary still lagged downstream source-row and
+support-ticket aliases, and source-ID lookup treated whitespace-only aliases as
+terminal values instead of continuing to later stable IDs.
 
 ## Scope (this PR)
 
@@ -43,6 +47,10 @@ Slice phase: Functional validation
   `build_support_ticket_input_package`, not hand-rolled parser fakes.
 - Duplicate headers fail closed with a structured
   `CsvCustomerDataParseError`.
+- Compact-equivalent downstream aliases fail closed before consumers can prefer
+  the wrong column value.
+- Known downstream aliases such as source-row case/text columns are admitted as
+  real headers before short-prose rejection runs.
 - Headerless/data-looking CSV does not silently treat the first data row as a
   trusted header.
 - Accepted legacy encoding and low-confidence fallback-header cases return
@@ -78,8 +86,12 @@ detector/gate predicates, R14 codebase verification.
   warning when the accepted header has no known support/customer-data hint.
 - Make legacy CP1252/Latin-1 fallback emit an explicit warning even when the
   file decodes cleanly.
+- Extend CSV header hints to cover downstream source-row/support-ticket aliases
+  so compact duplicate detection and short-prose rejection use the same
+  vocabulary as the consumers they protect.
 - In support-ticket normalization, count rows that use row-order fallback IDs
-  and surface that count/examples in package metadata and warnings.
+  and surface that count/examples in package metadata and warnings. Whitespace-
+  only aliases are skipped so a later stable ID column remains authoritative.
 - In the Resolution Audit submit endpoint, forward missing-ID diagnostics when
   they exist; omit zero-count metadata to keep unrelated submit payloads stable.
 - Add fixtures against the real loader/package entrypoints for duplicate
@@ -114,15 +126,14 @@ Parked hardening: none.
 ## Verification
 
 - Command: python -m py_compile extracted_content_pipeline/campaign_customer_data.py extracted_content_pipeline/support_ticket_input_package.py extracted_content_pipeline/api/control_surfaces.py
-- Command: python -m pytest tests/test_extracted_support_ticket_input_package.py -q (83 passed)
+- Command: python -m pytest tests/test_extracted_support_ticket_input_package.py -q (86 passed)
 - Command: python -m pytest tests/test_extracted_campaign_source_adapters.py -q (150 passed)
 - Command: python -m pytest tests/test_extracted_content_deflection_submit.py -q (92 passed)
-- Command: python -m pytest tests/test_evaluate_csv_admission_threshold_evidence.py -q (10 passed)
-- Command: python -m pytest tests/test_smoke_content_ops_support_ticket_package.py -q (24 passed)
+- Command: python -m pytest tests/test_evaluate_csv_admission_threshold_evidence.py tests/test_smoke_content_ops_support_ticket_package.py -q (34 passed)
 - Command: python scripts/maturity_sweep.py extracted_content_pipeline --tests-root tests --baseline tests/maturity_sweep/baseline_extracted_content_pipeline.json (ratchet passed)
 - Command: bash scripts/run_extracted_pipeline_checks.sh (5117 passed, 21 skipped)
 - Command: python scripts/sync_pr_plan.py plans/PR-Resolution-Audit-S1-Csv-Admission.md
-- Command: bash scripts/local_pr_review.sh --allow-dirty (passed)
+- Command: ATLAS_CURRENT_PR_BODY_FILE=tmp/pr-body-resolution-audit-s1-csv-admission.md bash scripts/local_pr_review.sh --allow-dirty --current-pr-body-file tmp/pr-body-resolution-audit-s1-csv-admission.md (passed)
 
 ## Estimated diff size
 
@@ -130,11 +141,11 @@ Parked hardening: none.
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 2 |
 | `extracted_content_pipeline/api/control_surfaces.py` | 9 |
-| `extracted_content_pipeline/campaign_customer_data.py` | 171 |
-| `extracted_content_pipeline/support_ticket_input_package.py` | 23 |
-| `plans/PR-Resolution-Audit-S1-Csv-Admission.md` | 140 |
+| `extracted_content_pipeline/campaign_customer_data.py` | 213 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 31 |
+| `plans/PR-Resolution-Audit-S1-Csv-Admission.md` | 151 |
 | `tests/test_extracted_campaign_customer_data.py` | 4 |
 | `tests/test_extracted_campaign_source_adapters.py` | 26 |
 | `tests/test_extracted_content_deflection_submit.py` | 39 |
-| `tests/test_extracted_support_ticket_input_package.py` | 180 |
-| **Total** | **594** |
+| `tests/test_extracted_support_ticket_input_package.py` | 231 |
+| **Total** | **706** |

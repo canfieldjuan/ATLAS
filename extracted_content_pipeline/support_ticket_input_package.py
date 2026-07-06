@@ -998,9 +998,15 @@ def _first_value(row: Mapping[str, Any], keys: Sequence[str]) -> Any:
     for key in keys:
         normalized_key = _key(key)
         for raw_key, value in row.items():
-            if _key(raw_key) == normalized_key and value not in (None, "", [], {}):
+            if _key(raw_key) == normalized_key and _has_value(value):
                 return value
     return None
+
+
+def _has_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value not in (None, "", [], {})
 
 
 def _has_any_key(row: Mapping[str, Any], keys: Sequence[str]) -> bool:

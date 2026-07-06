@@ -74,6 +74,23 @@ def test_csv_loader_rejects_compact_alias_duplicate_headers(tmp_path: Path) -> N
     assert exc_info.value.row_index == 1
 
 
+def test_csv_loader_rejects_downstream_text_alias_duplicate_headers(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "downstream-text-alias-duplicates.csv"
+    path.write_text(
+        "latest.message,latest_message,subject\n"
+        "ignored text,Customer cannot export reports,Export question\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CsvCustomerDataParseError) as exc_info:
+        load_csv_source_rows_result_from_file(path)
+
+    assert exc_info.value.code == "csv_duplicate_header"
+    assert exc_info.value.row_index == 1
+
+
 def test_csv_loader_keeps_meaningful_punctuation_headers_distinct(
     tmp_path: Path,
 ) -> None:
@@ -157,6 +174,23 @@ def test_csv_loader_warns_on_accepted_no_hint_header(tmp_path: Path) -> None:
     ]
 
 
+def test_csv_loader_accepts_known_source_row_alias_headers(tmp_path: Path) -> None:
+    path = tmp_path / "source-row-alias-headers.csv"
+    path.write_text(
+        "Case Number,Issue Description\n"
+        "CASE-1,Button missing from export screen\n",
+        encoding="utf-8",
+    )
+
+    result = load_csv_source_rows_result_from_file(path)
+
+    assert result.rows == [{
+        "Case Number": "CASE-1",
+        "Issue Description": "Button missing from export screen",
+    }]
+    assert result.warnings == ()
+
+
 def test_csv_loader_rejects_overwide_rows(tmp_path: Path) -> None:
     path = tmp_path / "overwide.csv"
     path.write_text(
@@ -216,6 +250,23 @@ def test_support_ticket_package_surfaces_missing_source_id_diagnostics() -> None
         "_source_id_fallback" not in row
         for row in package.inputs["source_material"]
     )
+
+
+def test_support_ticket_package_skips_blank_source_id_aliases() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "source_id": "  ",
+            "ticket_id": "T-1",
+            "subject": "How do I export reports?",
+            "description": "I cannot find the export button.",
+        }
+    ])
+
+    assert package.metadata["source_id_fallback_count"] == 0
+    assert {
+        warning["code"] for warning in package.warnings
+    }.isdisjoint({"support_ticket_missing_source_id"})
+    assert package.inputs["source_material"][0]["source_id"] == "T-1"
 
 
 def test_support_ticket_fold_targets_survive_tokenization() -> None:
