@@ -37,7 +37,7 @@ from collections.abc import Sequence
 CONTEXT = "claude-review"
 ALLOWED_STATES = ("success", "failure", "pending")
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 _DEFAULT_DESCRIPTIONS = {
     "success": "Claude reviewed this head: no blocker.",
@@ -58,7 +58,10 @@ def _validate(repo: str, sha: str, state: str) -> None:
     if not _REPO_RE.match(repo):
         raise UsageError(f"repo must be owner/name; got {repo!r}")
     if not _SHA_RE.match(sha):
-        raise UsageError(f"sha must be a 7-40 char hex commit SHA; got {sha!r}")
+        raise UsageError(
+            "sha must be a full 40-char hex commit SHA (the GitHub statuses API "
+            f"rejects abbreviations); got {sha!r}"
+        )
 
 
 def build_gh_args(

@@ -30,6 +30,7 @@ Slice phase: Workflow/process
 
 ### Files touched
 
+- `.github/workflows/pre_push_audit.yml`
 - `AGENTS.md`
 - `docs/REVIEWER_MERGE_GATE.md`
 - `plans/PR-Reviewer-Merge-Gate-Claude-Review-Status.md`
@@ -79,21 +80,32 @@ Parked hardening: none.
   `claude-review`, and notes the re-push reset.
 - `docs/REVIEWER_MERGE_GATE.md:1` documents the two-gate contract and the two
   remaining operator-owned steps.
+- `.github/workflows/pre_push_audit.yml` enrolls
+  `tests/test_set_claude_review_status.py` in both the PR-path and push-path
+  pytest lists, so a future break of the setter reds the required tooling
+  workflow instead of passing silently (the test file was omitted before).
+- `scripts/set_claude_review_status.py` tightens the SHA guard to a full
+  40-char hex (the GitHub statuses API rejects abbreviations), fixing a footgun
+  that let an abbreviated `--sha` pass validation and then fail the live call.
 
 ## Verification
 
-- Ran pytest over `tests/test_set_claude_review_status.py` -> 16 passed (0.15s).
+- Ran pytest over `tests/test_set_claude_review_status.py` -> 20 passed (0.18s),
+  now including abbreviated- and wrong-length-SHA rejection.
 - Dry-run of the setter emits the expected gh api POST to
   repos/<repo>/statuses/<sha> with context=claude-review and no network call.
+- Confirmed `tests/test_set_claude_review_status.py` now appears in both
+  pre_push_audit.yml pytest invocations.
 - Ran `scripts/audit_pr_body.py` against this PR body before push -> PASS.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/pre_push_audit.yml` | 4 |
 | `AGENTS.md` | 14 |
 | `docs/REVIEWER_MERGE_GATE.md` | 65 |
-| `plans/PR-Reviewer-Merge-Gate-Claude-Review-Status.md` | 105 |
-| `scripts/set_claude_review_status.py` | 140 |
-| `tests/test_set_claude_review_status.py` | 113 |
-| **Total** | **437** |
+| `plans/PR-Reviewer-Merge-Gate-Claude-Review-Status.md` | 109 |
+| `scripts/set_claude_review_status.py` | 143 |
+| `tests/test_set_claude_review_status.py` | 148 |
+| **Total** | **483** |
