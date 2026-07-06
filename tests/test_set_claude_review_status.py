@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -146,3 +147,29 @@ def test_cli_abbreviated_sha_exits_two() -> None:
     )
     assert proc.returncode == 2
     assert "full 40-char hex commit SHA" in proc.stderr
+
+
+def test_cli_missing_gh_exits_two() -> None:
+    # Empty PATH so `gh` cannot be found; a non-dry-run reaches the subprocess.
+    # Python is launched via its absolute path, so it still runs with no PATH.
+    env = {"PATH": ""}
+    if os.environ.get("SYSTEMROOT"):
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            "canfieldjuan/ATLAS",
+            "--sha",
+            VALID_SHA,
+            "--state",
+            "success",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    assert proc.returncode == 2
+    assert "gh not found on PATH" in proc.stderr

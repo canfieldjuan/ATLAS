@@ -5,7 +5,11 @@ work:
 
 1. **Builder session** — drafts the plan, writes the code, opens the PR.
 2. **Reviewer session** — audits each PR independently and posts a
-   verdict (BLOCKER / MAJOR / NIT / LGTM).
+   verdict (BLOCKER / MAJOR / NIT / LGTM). After the verdict, record it as the
+   machine-readable `claude-review` gate for the reviewed head SHA with
+   `scripts/set_claude_review_status.py` (LGTM/no-blocker -> `success`, an open
+   BLOCKER -> `failure`); see `docs/REVIEWER_MERGE_GATE.md` for the two-gate
+   merge condition and its trust boundary.
 
 This file is the contract both sessions work from. The auditor
 (prompt at `AUDITOR_PROMPT.md`) handles cross-cutting integration /
@@ -504,6 +508,16 @@ For long-running coding tasks, after each PR open or push:
    mode, first surface that state with `scripts/report_pr_watcher_state.py`. If
    the operator has not authorized the active builder to merge for this arc, or
    has not made `claude-review` a required check, report readiness and wait.
+   **Trust boundary (do not skip):** `claude-review` is a plain commit status,
+   so any token with `status:write` on the repo can publish
+   `claude-review=success`, including the builder if it shares the reviewer's
+   GitHub identity. It is therefore a coordination-and-audit signal that keeps
+   an honest builder from merging before review, NOT a defense against a builder
+   that forges it. It becomes a real gate only when it is posted from a reviewer
+   identity the builder does not have (a distinct GitHub App or bot token with
+   `status:write` that the builder's token lacks). The operator MUST NOT grant a
+   forge-capable builder merge authority on the strength of `claude-review`;
+   provision the distinct reviewer identity first.
 9. After merge, tear down only the owned worktree/branch, archive the plan as
    required, sync from `origin/main`, and continue to the next approved slice
    if the arc says to continue. The merge itself is the signal to pick up the

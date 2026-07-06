@@ -28,6 +28,36 @@ Slice phase: Workflow/process
 2. Prove it with unit tests over the status-argv builder and CLI, plus the
    AGENTS.md two-gate wording and a contract doc.
 
+### Review Contract
+
+Acceptance criteria (reviewer checks one by one):
+- The setter only ever emits `context=claude-review` (hardcoded); it cannot set
+  another check. Rejects invalid state/repo, and any non-full-40-char SHA.
+- `--dry-run` makes no network call; a missing `gh` binary exits 2, not a raw
+  traceback.
+- `tests/test_set_claude_review_status.py` is enrolled in
+  `.github/workflows/pre_push_audit.yml` in BOTH the PR and push paths.
+- AGENTS.md 3c.1 point 8 requires BOTH `live-reconciliation` and `claude-review`
+  and states the forgeability trust boundary; the reviewer flow (AGENTS.md 1)
+  now tells the reviewer to set the status after the verdict.
+
+Affected surfaces: dev-workflow tooling only (a script, a doc, AGENTS.md
+merge-condition + reviewer-flow text, and the CI pytest list). No runtime,
+product, billing, delivery, report, or public contract surface.
+
+Risk areas: the status is forgeable by any `status:write` token (documented as
+the trust boundary; real enforcement deferred to a distinct reviewer identity).
+The setter shells out to `gh`.
+
+Reviewer rule IDs: guard-shaped input validation on the setter -> boundary /
+second-side checks on the state/repo/sha validators; the merge-gate wording is a
+contract change -> verify the two-gate and trust-boundary claims against the
+code, not the description.
+
+Reachability proof: the setter was run live against #2028 and #2026 head SHAs;
+the `claude-review` status appeared in `gh pr checks` with the posted state,
+proving the gate surface is wired end to end.
+
 ### Files touched
 
 - `.github/workflows/pre_push_audit.yml`
@@ -87,11 +117,23 @@ Parked hardening: none.
 - `scripts/set_claude_review_status.py` tightens the SHA guard to a full
   40-char hex (the GitHub statuses API rejects abbreviations), fixing a footgun
   that let an abbreviated `--sha` pass validation and then fail the live call.
+- `scripts/set_claude_review_status.py` now catches `FileNotFoundError` when
+  `gh` is absent and exits 2 with a message, instead of a raw traceback (P3).
+- `AGENTS.md` 3c.1 point 8 adds the forgeability trust boundary: `claude-review`
+  is a plain commit status, forgeable by any `status:write` token, so it is a
+  coordination signal until posted from a distinct reviewer identity; the
+  operator must not grant a forge-capable builder merge authority on it (P2).
+- `AGENTS.md` reviewer flow (section 1) now tells the reviewer to set
+  `claude-review` after the verdict, and `docs/REVIEWER_MERGE_GATE.md` adds the
+  trust boundary + the distinct-identity step as the real-enforcement
+  prerequisite.
+- The plan's Scope now carries the required `### Review Contract` block.
 
 ## Verification
 
-- Ran pytest over `tests/test_set_claude_review_status.py` -> 20 passed (0.18s),
-  now including abbreviated- and wrong-length-SHA rejection.
+- Ran pytest over `tests/test_set_claude_review_status.py` -> 21 passed (0.20s),
+  now including abbreviated-/wrong-length-SHA rejection and the missing-`gh`
+  exit-2 path.
 - Dry-run of the setter emits the expected gh api POST to
   repos/<repo>/statuses/<sha> with context=claude-review and no network call.
 - Confirmed `tests/test_set_claude_review_status.py` now appears in both
@@ -103,9 +145,9 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/pre_push_audit.yml` | 4 |
-| `AGENTS.md` | 14 |
-| `docs/REVIEWER_MERGE_GATE.md` | 65 |
-| `plans/PR-Reviewer-Merge-Gate-Claude-Review-Status.md` | 109 |
-| `scripts/set_claude_review_status.py` | 143 |
-| `tests/test_set_claude_review_status.py` | 148 |
-| **Total** | **483** |
+| `AGENTS.md` | 30 |
+| `docs/REVIEWER_MERGE_GATE.md` | 84 |
+| `plans/PR-Reviewer-Merge-Gate-Claude-Review-Status.md` | 153 |
+| `scripts/set_claude_review_status.py` | 150 |
+| `tests/test_set_claude_review_status.py` | 175 |
+| **Total** | **596** |

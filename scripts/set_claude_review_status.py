@@ -127,7 +127,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(" ".join(args))
         return 0
 
-    proc = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    try:
+        proc = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    except FileNotFoundError:
+        print(
+            "set_claude_review_status: gh not found on PATH; install the GitHub CLI",
+            file=sys.stderr,
+        )
+        return 2
     if proc.returncode != 0:
         print(
             f"set_claude_review_status: gh failed ({proc.returncode}): "

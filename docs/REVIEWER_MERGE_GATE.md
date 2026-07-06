@@ -49,17 +49,36 @@ python scripts/set_claude_review_status.py --repo <owner/name> --sha <headSHA> \
 `--dry-run` prints the `gh api` argv without calling GitHub. The tool only ever
 sets the `claude-review` context; it cannot spoof another check.
 
+## Trust boundary: it is forgeable until the reviewer has a distinct identity
+
+`claude-review` is a plain commit status. GitHub does not permission statuses
+per-context, so **any token with `status:write` on the repo can publish
+`claude-review=success`**, including the builder if it runs under the same
+GitHub identity as the reviewer (today both are the operator's account). So as
+built this is a coordination-and-audit signal that keeps an honest builder from
+merging before review, NOT a defense against a builder that forges the status.
+
+It becomes a real, unforgeable gate only when it is posted from a reviewer
+identity the builder does not have: a distinct GitHub App or bot token that
+holds `status:write` while the builder's token does not. Until that exists, do
+not treat a green `claude-review` as proof the reviewer actually ran.
+
 ## What is still the operator's to flip
 
-This slice wires the **signal** only. Two steps remain operator-owned and are
-deliberately not done here:
+This slice wires the **signal** only. These steps remain operator-owned and are
+deliberately not done here, in order:
 
-1. **Make `claude-review` a required status check** in branch protection, so it
+1. **Provision a distinct reviewer identity** (a GitHub App or bot token) that
+   is the only actor with `status:write` for `claude-review`, so the builder
+   cannot forge it. This is the prerequisite for the gate to mean anything once
+   merge is automated.
+2. **Make `claude-review` a required status check** in branch protection, so it
    actually blocks merge (until then it is advisory: visible but non-gating).
-2. **Grant the active builder standing merge authorization** for the arc, and
+3. **Grant the active builder standing merge authorization** for the arc, and
    record the authorization source plus the scheduled-ready-only merge
-   condition per AGENTS.md 3c.1 point 1.
+   condition per AGENTS.md 3c.1 point 1. Do not do this before step 1 if the
+   builder shares the reviewer's credentials.
 
-Until both are done, nothing here changes who can merge. The reviewer publishes
+Until these are done, nothing here changes who can merge. The reviewer publishes
 a machine-readable verdict; the operator decides whether it gates and who acts
 on it.
