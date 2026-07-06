@@ -18,7 +18,8 @@ fresh handoff.
 - Correct fix must touch/change: update the builder workflow contract, the
   reconstruction guidance, the fresh-session bootstrap, the plan scaffold, and
   the PR-body audit/tests so future non-Dependabot PRs must carry the
-  `## Cold diff reconstruction` receipt.
+  `## Cold diff reconstruction` receipt; wire that audit into the local
+  push/open wrappers so invalid bodies fail before push or PR publication.
 - Must not change: runtime code, product shape, report/snapshot/email/PDF
   behavior, billing/checkout behavior, reviewer verdict semantics, merge
   authority, watcher behavior, or any active product lane.
@@ -34,6 +35,8 @@ Slice phase: Workflow/process
 3. Require `## Cold diff reconstruction` in non-Dependabot PR bodies.
 4. Add focused tests proving the scaffold and PR-body audit enforce the new
    shape.
+5. Run the PR-body audit from the push/open wrappers before push or PR
+   create/edit, with tests proving invalid bodies stop before external actions.
 
 ### Review Contract
 
@@ -45,6 +48,9 @@ Slice phase: Workflow/process
 - `scripts/new_pr_plan.sh` generates a `### Problem-derived contract` block.
 - `scripts/audit_pr_body.py` requires `## Cold diff reconstruction` for
   non-Dependabot PR bodies, with tests proving both pass and fail behavior.
+- `scripts/push_pr.sh` and `scripts/open_pr.sh` run the PR-body audit before
+  push, PR create, or PR edit, with tests proving invalid bodies do not reach
+  fetch/local-review/push or `gh`.
 - No runtime/product files or user-facing product shape move.
 Reviewer rules triggered: R1 requirements match, R2 test evidence, R10
 checker/gate predicates, R14 codebase verification.
@@ -57,8 +63,12 @@ checker/gate predicates, R14 codebase verification.
 - `plans/PR-Problem-Derived-Fix-Contract.md`
 - `scripts/audit_pr_body.py`
 - `scripts/new_pr_plan.sh`
+- `scripts/open_pr.sh`
+- `scripts/push_pr.sh`
 - `tests/test_audit_pr_body.py`
 - `tests/test_new_pr_plan.py`
+- `tests/test_open_pr_wrapper.py`
+- `tests/test_push_pr_wrapper.py`
 
 ## Mechanism
 
@@ -71,6 +81,8 @@ checker/gate predicates, R14 codebase verification.
   the contract area before implementation begins.
 - Add `Cold diff reconstruction` to the PR-body audit's required section list
   so local/CI PR-body checks fail if the self-reconstruction receipt is absent.
+- Call the same audit in the push/open wrappers immediately after the body file
+  exists check, so the documented local path fails before external side effects.
 
 ## Intentional
 
@@ -92,7 +104,7 @@ Parked hardening: none.
 ## Verification
 
 - Command: python -m pytest tests/test_new_pr_plan.py tests/test_audit_pr_body.py -q (27 passed)
-- Command: python -m pytest tests/test_new_pr_plan.py tests/test_audit_pr_body.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py -q (41 passed)
+- Command: python -m pytest tests/test_new_pr_plan.py tests/test_audit_pr_body.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py -q (44 passed)
 - Command: python scripts/audit_pr_body.py /tmp/pr-problem-derived-fix-contract-body.md (passed)
 - Command: ATLAS_CURRENT_PR_BODY_FILE=/tmp/pr-problem-derived-fix-contract-body.md bash scripts/local_pr_review.sh (passed)
 
@@ -103,9 +115,13 @@ Parked hardening: none.
 | `AGENTS.md` | 39 |
 | `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md` | 59 |
 | `docs/SESSION_BOOTSTRAP.md` | 1 |
-| `plans/PR-Problem-Derived-Fix-Contract.md` | 111 |
+| `plans/PR-Problem-Derived-Fix-Contract.md` | 127 |
 | `scripts/audit_pr_body.py` | 5 |
 | `scripts/new_pr_plan.sh` | 6 |
+| `scripts/open_pr.sh` | 2 |
+| `scripts/push_pr.sh` | 2 |
 | `tests/test_audit_pr_body.py` | 26 |
 | `tests/test_new_pr_plan.py` | 4 |
-| **Total** | **251** |
+| `tests/test_open_pr_wrapper.py` | 93 |
+| `tests/test_push_pr_wrapper.py` | 84 |
+| **Total** | **448** |

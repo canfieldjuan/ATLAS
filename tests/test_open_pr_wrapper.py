@@ -8,6 +8,7 @@ from shutil import copy2
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "open_pr.sh"
+AUDIT_SCRIPT = REPO_ROOT / "scripts" / "audit_pr_body.py"
 
 
 def test_open_pr_create_passes_body_via_stdin_not_path(tmp_path: Path) -> None:
@@ -113,10 +114,51 @@ def test_open_pr_missing_body_file_fails_clearly(tmp_path: Path) -> None:
     assert str(missing) in result.stderr
 
 
+def test_open_pr_rejects_invalid_body_before_gh_create(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_invalid_body(repo)
+    env, log, stdin_capture = _fake_gh_env(tmp_path, view_exit=1)
+
+    result = subprocess.run(
+        ["bash", "scripts/open_pr.sh", str(body), "--title", "Workflow wrapper"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "missing required section: ## Cold diff reconstruction" in result.stdout
+    assert not log.exists()
+    assert not stdin_capture.exists()
+
+
+def test_open_pr_rejects_invalid_body_before_gh_edit(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_invalid_body(repo)
+    env, log, stdin_capture = _fake_gh_env(tmp_path, view_exit=0)
+
+    result = subprocess.run(
+        ["bash", "scripts/open_pr.sh", str(body)],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "missing required section: ## Cold diff reconstruction" in result.stdout
+    assert not log.exists()
+    assert not stdin_capture.exists()
+
+
 def _write_fixture_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
     copy2(SCRIPT, repo / "scripts" / "open_pr.sh")
+    copy2(AUDIT_SCRIPT, repo / "scripts" / "audit_pr_body.py")
     subprocess.run(
         ["git", "init", "--initial-branch", "main"],
         cwd=repo,
@@ -129,11 +171,60 @@ def _write_fixture_repo(tmp_path: Path) -> Path:
 
 def _write_body(repo: Path) -> Path:
     body = repo / "body.md"
+    _write_plan(repo)
+    body.write_text(_valid_body(), encoding="utf-8")
+    return body
+
+
+def _write_invalid_body(repo: Path) -> Path:
+    body = repo / "body-invalid.md"
+    _write_plan(repo)
     body.write_text(
-        "Plan: plans/PR-Test.md\nSlice phase: Workflow/process\n",
+        _valid_body().replace(
+            "## Cold diff reconstruction\n"
+            "- Changed: scripts/example.sh:1 updates the wrapper.\n"
+            "- Contract match: traces to the body contract.\n"
+            "- Gaps: none.\n\n",
+            "",
+        ),
         encoding="utf-8",
     )
     return body
+
+
+def _write_plan(repo: Path) -> None:
+    plan = repo / "plans" / "PR-Test.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("# Test plan\n", encoding="utf-8")
+
+
+def _valid_body() -> str:
+    return "\n".join([
+        "Plan: plans/PR-Test.md",
+        "Slice phase: Workflow/process",
+        "",
+        "One-paragraph why.",
+        "",
+        "## Intentional",
+        "- a trade-off",
+        "",
+        "## Deferred",
+        "- a follow-up",
+        "",
+        "## Parked hardening",
+        "None.",
+        "",
+        "## Cold diff reconstruction",
+        "- Changed: scripts/example.sh:1 updates the wrapper.",
+        "- Contract match: traces to the body contract.",
+        "- Gaps: none.",
+        "",
+        "## Verification",
+        "- pytest passed",
+        "",
+        "## Diff size",
+        "2 files, +10 / -2",
+    ])
 
 
 def _fake_gh_env(
