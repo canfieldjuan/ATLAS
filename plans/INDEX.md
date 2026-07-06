@@ -1,6 +1,6 @@
 # Plan archive index
 
-1384 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1385 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1281,6 +1281,7 @@
 - [PR-Resolution-Audit-Artifact-Title](archive/PR-Resolution-Audit-Artifact-Title.md) - lane: deflection/report-artifact-naming | phase: Product polish
 - [PR-Resolution-Audit-Current-Code-Tracker](archive/PR-Resolution-Audit-Current-Code-Tracker.md) - lane: resolution-audit-csv | phase: Workflow/process
 - [PR-Resolution-Audit-Investigations](archive/PR-Resolution-Audit-Investigations.md) - lane: workflow/process | phase: workflow/process
+- [PR-Resolution-Audit-S1-Csv-Admission](archive/PR-Resolution-Audit-S1-Csv-Admission.md) - lane: resolution-audit-csv | phase: Functional validation
 - [PR-Resolution-Audit-S1-Pipeline-Map](archive/PR-Resolution-Audit-S1-Pipeline-Map.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-S2-Parsing-Clustering](archive/PR-Resolution-Audit-S2-Parsing-Clustering.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-S3-Performance](archive/PR-Resolution-Audit-S3-Performance.md) - lane: workflow/process | phase: workflow/process
