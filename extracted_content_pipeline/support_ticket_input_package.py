@@ -9,7 +9,7 @@ the existing FAQ, landing-page, and blog planners already understand.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import ItemsView, Mapping, Sequence
 from datetime import date
 from typing import Any
 
@@ -339,7 +339,8 @@ def build_support_ticket_input_package(
                 "message": "Skipped ticket row because it was not an object.",
             })
             continue
-        normalized = _normalize_ticket_row(row, row_index=index)
+        row_lookup = _SupportTicketRowLookup(row)
+        normalized = _normalize_ticket_row(row_lookup, row_index=index)
         if normalized:
             normalized_rows.append(normalized)
             # Carry the date-column-present signal out-of-band rather than
@@ -348,7 +349,7 @@ def build_support_ticket_input_package(
             # has the signal when the raw upload carried a date column, even
             # if that cell was blank -- _has_any_key supersets a parseable
             # created_at, so this reproduces the old marker exactly.
-            if _has_any_key(row, _DATE_KEYS):
+            if _has_any_key(row_lookup, _DATE_KEYS):
                 source_date_signal_count += 1
             continue
         warnings.append({
@@ -543,9 +544,50 @@ def _rows_from_source_material(source_material: Any) -> list[Any]:
     return source_material_to_source_rows(source_material)
 
 
+class _SupportTicketRowLookup(Mapping[str, Any]):
+    """Mapping wrapper that caches support-ticket alias lookups for one row."""
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self._row = row
+        self._present_keys: set[str] = set()
+        self._values_by_key: dict[str, Any] = {}
+        for raw_key, value in row.items():
+            normalized_key = _key(raw_key)
+            self._present_keys.add(normalized_key)
+            if normalized_key not in self._values_by_key and _has_value(value):
+                self._values_by_key[normalized_key] = value
+
+    def __getitem__(self, key: str) -> Any:
+        return self._row[key]
+
+    def __iter__(self):
+        return iter(self._row)
+
+    def __len__(self) -> int:
+        return len(self._row)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._row.get(key, default)
+
+    def items(self) -> ItemsView[str, Any]:
+        return self._row.items()
+
+    def first_value(self, keys: Sequence[str]) -> Any:
+        for key in keys:
+            normalized_key = _key(key)
+            if normalized_key in self._values_by_key:
+                return self._values_by_key[normalized_key]
+        return None
+
+    def has_any_key(self, keys: Sequence[str]) -> bool:
+        return any(_key(key) in self._present_keys for key in keys)
+
+
 def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     if not isinstance(row, Mapping):
         return {}
+    if not isinstance(row, _SupportTicketRowLookup):
+        row = _SupportTicketRowLookup(row)
     source_title = support_ticket_plain_text(_first_text(row, _SOURCE_TITLE_KEYS))
     text = _ticket_text(row, source_title=source_title)
     if not text:
@@ -995,6 +1037,8 @@ def _first_text(row: Mapping[str, Any], keys: Sequence[str]) -> str:
 
 
 def _first_value(row: Mapping[str, Any], keys: Sequence[str]) -> Any:
+    if isinstance(row, _SupportTicketRowLookup):
+        return row.first_value(keys)
     for key in keys:
         normalized_key = _key(key)
         for raw_key, value in row.items():
@@ -1010,6 +1054,8 @@ def _has_value(value: Any) -> bool:
 
 
 def _has_any_key(row: Mapping[str, Any], keys: Sequence[str]) -> bool:
+    if isinstance(row, _SupportTicketRowLookup):
+        return row.has_any_key(keys)
     normalized_keys = {_key(key) for key in keys}
     return any(_key(raw_key) in normalized_keys for raw_key in row)
 
