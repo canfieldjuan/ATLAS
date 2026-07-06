@@ -37,6 +37,11 @@ def _valid_body(plan: str = "plans/PR-Example.md") -> str:
         "## Parked hardening",
         "None.",
         "",
+        "## Cold diff reconstruction",
+        "- Changed: docs/example.md:1 records the workflow rule.",
+        "- Contract match: traces to the process contract.",
+        "- Gaps: none.",
+        "",
         "## Verification",
         "- pytest passed",
         "",
@@ -92,6 +97,9 @@ def test_missing_one_paragraph_why_fails(tmp_path: Path) -> None:
         "## Parked hardening",
         "None.",
         "",
+        "## Cold diff reconstruction",
+        "- Gaps: none.",
+        "",
         "## Verification",
         "- pytest passed",
         "",
@@ -122,6 +130,21 @@ def test_missing_section_fails(tmp_path: Path) -> None:
     assert "missing required section: ## Parked hardening" in failures
 
 
+def test_missing_cold_diff_reconstruction_fails(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "## Cold diff reconstruction\n"
+        "- Changed: docs/example.md:1 records the workflow rule.\n"
+        "- Contract match: traces to the process contract.\n"
+        "- Gaps: none.\n\n",
+        "",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert "missing required section: ## Cold diff reconstruction" in failures
+
+
 def test_out_of_order_sections_fail(tmp_path: Path) -> None:
     root = _write_plan(tmp_path)
     body = "\n".join([
@@ -138,6 +161,9 @@ def test_out_of_order_sections_fail(tmp_path: Path) -> None:
         "",
         "## Parked hardening",
         "None.",
+        "",
+        "## Cold diff reconstruction",
+        "- Gaps: none.",
         "",
         "## Verification",
         "- pytest passed",

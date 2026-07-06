@@ -3,8 +3,8 @@
 
 The PR body must lead with ``Plan: plans/PR-<Slice-Name>.md`` and a
 ``Slice phase: <phase>`` line, then carry these ``##`` sections in order:
-Intentional, Deferred, Parked hardening, Verification, Diff size. The
-referenced plan doc must exist in the checkout.
+Intentional, Deferred, Parked hardening, Cold diff reconstruction,
+Verification, Diff size. The referenced plan doc must exist in the checkout.
 
 Intended for CI on ``pull_request`` events (the workflow writes
 ``github.event.pull_request.body`` to a file - no GitHub API call), and for
@@ -31,6 +31,7 @@ REQUIRED_SECTIONS = (
     "Intentional",
     "Deferred",
     "Parked hardening",
+    "Cold diff reconstruction",
     "Verification",
     "Diff size",
 )

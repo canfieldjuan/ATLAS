@@ -102,6 +102,12 @@ cat > "$tmp" <<EOF
 TODO: Tie this slice to a concrete user request, prior plan, audit finding, or
 review comment.
 
+### Problem-derived contract
+
+- Root cause: TODO: State what is actually wrong, and why, from the problem alone.
+- Correct fix must touch/change: TODO: Name the modules, contracts, tests, and behaviors the fix must change to reach that cause.
+- Must not change: TODO: Name modules, behaviors, product shape, contracts, and adjacent lanes this work must leave alone.
+
 ## Scope (this PR)
 
 Ownership lane: $lane
