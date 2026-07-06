@@ -734,7 +734,8 @@ def test_run_success_posts_multipart_csv_and_probes_locked_artifact(monkeypatch,
     assert "How do I export reports?" not in serialized
 
 
-def test_run_sends_explicit_large_submit_limit_when_requested(monkeypatch, tmp_path):
+def test_run_sends_explicit_submit_limit_when_requested(monkeypatch, tmp_path):
+    submit_limit = smoke.SUBMIT_ROW_LIMIT_MAX
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
         smoke,
@@ -746,10 +747,10 @@ def test_run_sends_explicit_large_submit_limit_when_requested(monkeypatch, tmp_p
                     _submit_payload(
                         metadata={
                             "source": "portfolio_deflection_submit",
-                            "source_row_count": 25000,
-                            "submitted_row_count": 25000,
+                            "source_row_count": submit_limit + 7,
+                            "submitted_row_count": submit_limit,
                             "truncated_row_count": 0,
-                            "max_source_material_rows": 25000,
+                            "max_source_material_rows": submit_limit,
                             "blob_bytes": 200,
                             "support_platform": "zendesk",
                         }
@@ -761,13 +762,20 @@ def test_run_sends_explicit_large_submit_limit_when_requested(monkeypatch, tmp_p
             calls,
         ),
     )
-    args = smoke._build_parser().parse_args([*_base_args(tmp_path), "--limit", "25000"])
+    args = smoke._build_parser().parse_args([
+        *_base_args(tmp_path),
+        "--limit",
+        str(submit_limit),
+    ])
 
     summary = smoke.run(args)
 
     assert summary["ok"] is True
-    assert calls[0]["body"]["limit"] == 25000
-    assert summary["submit"]["diagnostics"]["metadata"]["max_source_material_rows"] == 25000
+    assert calls[0]["body"]["limit"] == submit_limit
+    assert (
+        summary["submit"]["diagnostics"]["metadata"]["max_source_material_rows"]
+        == submit_limit
+    )
 
 
 def _full_volume_snapshot() -> dict[str, Any]:
@@ -794,8 +802,8 @@ def _observed_full_volume_snapshot() -> dict[str, Any]:
         **SNAPSHOT,
         "summary": {
             **SNAPSHOT["summary"],
-            "generated": 1659,
-            "repeat_ticket_count": 27384,
+            "generated": 37,
+            "repeat_ticket_count": 1000,
         },
         "top_questions": [
             {
@@ -812,9 +820,9 @@ def _observed_full_volume_metadata() -> dict[str, Any]:
     return {
         "source": "portfolio_deflection_submit",
         "source_row_count": 40383,
-        "submitted_row_count": 40383,
-        "truncated_row_count": 0,
-        "max_source_material_rows": 40383,
+        "submitted_row_count": smoke.SUBMIT_ROW_LIMIT_MAX,
+        "truncated_row_count": 39383,
+        "max_source_material_rows": smoke.SUBMIT_ROW_LIMIT_MAX,
         "blob_bytes": 52428276,
         "support_platform": "zendesk",
     }
@@ -854,17 +862,17 @@ def test_run_passes_calibrated_full_volume_cfpb_profile(
         "configured": {
             "uploaded_bytes": 50000000,
             "source_row_count": 30000,
-            "submitted_row_count": 30000,
-            "generated_questions": 30,
-            "repeat_ticket_count": 25000,
+            "submitted_row_count": smoke.SUBMIT_ROW_LIMIT_MAX,
+            "generated_questions": 5,
+            "repeat_ticket_count": 750,
             "top_question_count": 5,
         },
         "actual": {
             "uploaded_bytes": 52428276,
             "source_row_count": 40383,
-            "submitted_row_count": 40383,
-            "generated_questions": 1659,
-            "repeat_ticket_count": 27384,
+            "submitted_row_count": smoke.SUBMIT_ROW_LIMIT_MAX,
+            "generated_questions": 37,
+            "repeat_ticket_count": 1000,
             "top_question_count": 5,
         },
         "ok": True,
@@ -895,9 +903,9 @@ def test_run_fails_calibrated_full_volume_cfpb_profile_for_tiny_fixture(
 
     assert summary["ok"] is False
     assert summary["volume_gates"]["profile"] == "full-volume-cfpb"
-    assert summary["volume_gates"]["configured"]["repeat_ticket_count"] == 25000
+    assert summary["volume_gates"]["configured"]["repeat_ticket_count"] == 750
     assert (
-        "volume gate repeat_ticket_count expected >= 25000, got 4"
+        "volume gate repeat_ticket_count expected >= 750, got 4"
         in summary["volume_gates"]["errors"]
     )
 
@@ -935,7 +943,7 @@ def test_run_explicit_repeat_gate_overrides_full_volume_cfpb_profile(
     assert summary["ok"] is False
     assert summary["volume_gates"]["configured"]["repeat_ticket_count"] == 30000
     assert summary["volume_gates"]["errors"] == [
-        "volume gate repeat_ticket_count expected >= 30000, got 27384"
+        "volume gate repeat_ticket_count expected >= 30000, got 1000"
     ]
 
 

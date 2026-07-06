@@ -39,10 +39,14 @@ _UNRATED_ZENDESK_SCORES = frozenset({"unoffered", "offered"})
 class ZendeskThreadImportResult:
     rows: list[dict[str, Any]]
     warnings: tuple[dict[str, Any], ...] = ()
+    source_row_count: int = 0
+    truncated_row_count: int = 0
 
 
 def load_zendesk_full_thread_rows_from_json_bytes(
     data: bytes,
+    *,
+    max_rows: int | None = None,
 ) -> ZendeskThreadImportResult:
     """Parse Zendesk thread JSON bytes into support-ticket rows."""
 
@@ -50,11 +54,13 @@ def load_zendesk_full_thread_rows_from_json_bytes(
         artifact = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Zendesk full-thread JSON could not be parsed.") from exc
-    return rows_from_zendesk_full_thread(artifact)
+    return rows_from_zendesk_full_thread(artifact, max_rows=max_rows)
 
 
 def load_zendesk_full_thread_rows_from_json_file(
     path: str | Path,
+    *,
+    max_rows: int | None = None,
 ) -> ZendeskThreadImportResult:
     """Parse a staged Zendesk thread JSON file into support-ticket rows."""
 
@@ -62,12 +68,18 @@ def load_zendesk_full_thread_rows_from_json_file(
         artifact = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Zendesk full-thread JSON could not be parsed.") from exc
-    return rows_from_zendesk_full_thread(artifact)
+    return rows_from_zendesk_full_thread(artifact, max_rows=max_rows)
 
 
-def rows_from_zendesk_full_thread(artifact: Any) -> ZendeskThreadImportResult:
+def rows_from_zendesk_full_thread(
+    artifact: Any,
+    *,
+    max_rows: int | None = None,
+) -> ZendeskThreadImportResult:
     """Normalize Zendesk `{ticket, comments}` records into flat ticket rows."""
 
+    if max_rows is not None and max_rows < 1:
+        raise ValueError("max_rows must be at least 1")
     ticket_entries = _ticket_entries(artifact)
     rows: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
@@ -78,6 +90,7 @@ def rows_from_zendesk_full_thread(artifact: Any) -> ZendeskThreadImportResult:
                 "code": "zendesk_thread_invalid_shape",
                 "message": "Zendesk full-thread artifact must be an object or list.",
             },),
+            source_row_count=0,
         )
     if not ticket_entries:
         return ZendeskThreadImportResult(
@@ -86,8 +99,14 @@ def rows_from_zendesk_full_thread(artifact: Any) -> ZendeskThreadImportResult:
                 "code": "zendesk_thread_empty",
                 "message": "Zendesk full-thread artifact did not include tickets.",
             },),
+            source_row_count=0,
         )
+    source_row_count = len(ticket_entries)
+    processed_row_count = 0
     for index, entry in enumerate(ticket_entries, start=1):
+        if max_rows is not None and index > max_rows:
+            break
+        processed_row_count = index
         normalized = _row_from_entry(entry, row_index=index)
         if normalized is None:
             warnings.append({
@@ -99,7 +118,12 @@ def rows_from_zendesk_full_thread(artifact: Any) -> ZendeskThreadImportResult:
         row, row_warnings = normalized
         rows.append(row)
         warnings.extend(row_warnings)
-    return ZendeskThreadImportResult(rows=rows, warnings=tuple(warnings))
+    return ZendeskThreadImportResult(
+        rows=rows,
+        warnings=tuple(warnings),
+        source_row_count=source_row_count,
+        truncated_row_count=max(0, source_row_count - processed_row_count),
+    )
 
 
 def _ticket_entries(artifact: Any) -> Sequence[Any] | None:

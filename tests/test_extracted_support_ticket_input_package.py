@@ -1898,6 +1898,7 @@ def test_zendesk_full_thread_rows_preserve_public_roles_and_drop_private_notes()
     )
 
     assert result.warnings == ()
+    assert result.source_row_count == 4
     by_id = {row["ticket_id"]: row for row in result.rows}
     assert by_id["2"]["description"] == (
         "I was billed twice for this month. How do I get the duplicate charge refunded?"
@@ -1927,12 +1928,63 @@ def test_zendesk_full_thread_rows_load_from_json_file() -> None:
 
     by_id = {row["ticket_id"]: row for row in result.rows}
     assert set(by_id) == {"2", "28", "34", "41"}
+    assert result.source_row_count == 4
     assert by_id["2"]["resolution_text"].startswith(
         "We confirmed the duplicate billing event"
     )
     assert by_id["2"]["satisfaction_rating"] == "good"
     assert "Internal note" not in json.dumps(result.rows)
     assert result.warnings == ()
+
+
+def test_zendesk_full_thread_rows_cap_admitted_rows_and_preserve_source_count() -> None:
+    result = load_zendesk_full_thread_rows_from_json_bytes(
+        ZENDESK_THREAD_SAMPLE.read_bytes(),
+        max_rows=2,
+    )
+
+    assert [row["ticket_id"] for row in result.rows] == ["2", "28"]
+    assert result.source_row_count == 4
+    assert result.truncated_row_count == 2
+    assert result.warnings == ()
+
+
+def test_zendesk_full_thread_rows_cap_processed_source_entries() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [
+            {"comments": []},
+            {
+                "ticket": {
+                    "id": "zd-valid-1",
+                    "subject": "How do I export data?",
+                    "description": "Where do I download the export?",
+                },
+            },
+            {
+                "ticket": {
+                    "id": "zd-valid-2",
+                    "subject": "How do I add a billing recipient?",
+                    "description": "Where do invoice recipients live?",
+                },
+            },
+            {
+                "ticket": {
+                    "id": "zd-valid-3",
+                    "subject": "How do I enable SSO?",
+                    "description": "Where is the SSO setup page?",
+                },
+            },
+        ],
+    }, max_rows=2)
+
+    assert [row["ticket_id"] for row in result.rows] == ["zd-valid-1"]
+    assert result.source_row_count == 4
+    assert result.truncated_row_count == 2
+    assert result.warnings == ({
+        "code": "zendesk_thread_ticket_missing",
+        "row_index": 1,
+        "message": "Skipped Zendesk thread row because ticket was missing.",
+    },)
 
 
 def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:
@@ -2074,3 +2126,5 @@ def test_zendesk_full_thread_rows_warn_on_malformed_entries() -> None:
             "message": "Ignored Zendesk comments because they were not a list.",
         },
     )
+    assert result.source_row_count == 2
+    assert result.truncated_row_count == 0
