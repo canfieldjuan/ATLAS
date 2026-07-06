@@ -128,6 +128,30 @@ def _csv_dict_bytes(rows: list[dict[str, str]]) -> bytes:
     return out.getvalue().encode("utf-8")
 
 
+def _full_thread_json_bytes(count: int) -> bytes:
+    return json.dumps({
+        "tickets": [
+            {
+                "ticket": {
+                    "id": f"zd-thread-{index}",
+                    "subject": f"Export report issue {index}",
+                    "description": f"How do I export report batch {index}?",
+                    "requester_id": f"requester-{index}",
+                    "status": "solved",
+                },
+                "comments": [
+                    {
+                        "author_id": f"agent-{index}",
+                        "public": True,
+                        "plain_body": "Open Analytics and click Download report.",
+                    }
+                ],
+            }
+            for index in range(1, count + 1)
+        ]
+    }).encode("utf-8")
+
+
 def test_deflection_submit_defaults_fill_blank_support_platform_cells() -> None:
     rows = api_module._deflection_submit_rows_with_defaults(
         {
@@ -371,6 +395,27 @@ def test_deflection_submit_blob_full_thread_streams_response_to_tempfile(
         for size in response.read_sizes
     )
     assert len(data) + 1025 not in response.read_sizes
+
+
+def test_deflection_submit_blob_full_thread_applies_parse_row_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_public_dns(monkeypatch)
+    data = _full_thread_json_bytes(3)
+    _install_blob(monkeypatch, data)
+
+    loaded = api_module._load_deflection_submit_blob_rows_sync(
+        "https://portfolio.example/blob/zendesk-thread.json",
+        max_bytes=len(data) + 1024,
+        importer_mode="full_thread",
+        max_rows=2,
+    )
+
+    assert loaded.source_row_count == 3
+    assert [row["ticket_id"] for row in loaded.rows] == [
+        "zd-thread-1",
+        "zd-thread-2",
+    ]
 
 
 def test_copy_bounded_https_blob_rejects_oversize_before_writing_chunk(
@@ -1621,8 +1666,8 @@ async def test_deflection_submit_accepts_multipart_csv_bytes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deflection_submit_defaults_to_all_rows_that_fit_upload_guard() -> None:
-    row_count = api_module._MAX_INGESTION_ROWS + 5
+async def test_deflection_submit_defaults_to_sync_row_cap_before_report_build() -> None:
+    row_count = api_module._MAX_DEFLECTION_SUBMIT_ROWS + 5
     csv_data = _csv_bytes([
         "ticket_id,subject,message,resolution_text,pain_category",
         *(
@@ -1648,11 +1693,20 @@ async def test_deflection_submit_defaults_to_all_rows_that_fit_upload_guard() ->
 
     metadata = payload["input_provider"]["metadata"]
     assert metadata["source_row_count"] == row_count
-    assert metadata["submitted_row_count"] == row_count
-    assert metadata["included_row_count"] == row_count
-    assert metadata["truncated_row_count"] == 0
-    assert metadata["max_source_material_rows"] == row_count
-    assert payload["input_provider"]["warnings"] == []
+    assert metadata["submitted_row_count"] == api_module._MAX_DEFLECTION_SUBMIT_ROWS
+    assert metadata["included_row_count"] == api_module._MAX_DEFLECTION_SUBMIT_ROWS
+    assert metadata["truncated_row_count"] == 5
+    assert metadata["max_source_material_rows"] == api_module._MAX_DEFLECTION_SUBMIT_ROWS
+    assert payload["input_provider"]["warnings"] == [{
+        "code": "deflection_submit_rows_truncated",
+        "message": (
+            f"Used first {api_module._MAX_DEFLECTION_SUBMIT_ROWS} "
+            f"support-ticket rows out of {row_count}."
+        ),
+        "row_count": row_count,
+        "max_rows": api_module._MAX_DEFLECTION_SUBMIT_ROWS,
+        "truncated_row_count": 5,
+    }]
     assert payload["steps"][0]["result"]["full_report"] == {
         "status": "locked",
         "reason": "payment_required",
@@ -1691,6 +1745,7 @@ async def test_deflection_submit_request_limit_becomes_csv_parse_cap() -> None:
         byte_count_key,
         load_warnings,
         parser_source_row_count,
+        parser_truncated_row_count,
     ) = await api_module._load_deflection_submit_rows_from_request(
         request,
         max_bytes=2048,
@@ -1701,10 +1756,49 @@ async def test_deflection_submit_request_limit_becomes_csv_parse_cap() -> None:
     assert byte_count_key == "uploaded_bytes"
     assert load_warnings == ()
     assert parser_source_row_count == 3
+    assert parser_truncated_row_count == 1
     assert [row["ticket_id"] for row in rows] == [
         "ticket-export-1",
         "ticket-export-2",
     ]
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_rejects_request_limit_above_sync_cap() -> None:
+    csv_data = _csv_bytes([
+        "ticket_id,subject,message",
+        "ticket-export-1,Export help,How do I export reports?",
+    ])
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint(_FormRequest({
+            "csv_file": _Upload(csv_data),
+            "support_platform": "zendesk",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+            "limit": str(api_module._MAX_DEFLECTION_SUBMIT_ROWS + 1),
+        }))
+
+    assert exc.value.status_code == 422
+    assert "less than or equal to" in str(exc.value.detail)
+
+
+@pytest.mark.parametrize("limit", ["1001", "999999", 1001])
+def test_deflection_submit_parse_max_rows_clamps_defense_in_depth(limit: Any) -> None:
+    assert (
+        api_module._deflection_submit_parse_max_rows(limit)
+        == api_module._MAX_DEFLECTION_SUBMIT_ROWS
+    )
+
+
+@pytest.mark.parametrize("limit", ["abc", "0", "-1", 0, -1])
+def test_deflection_submit_parse_max_rows_rejects_bad_raw_limits(limit: Any) -> None:
+    with pytest.raises(api_module.HTTPException) as exc:
+        api_module._deflection_submit_parse_max_rows(limit)
+
+    assert exc.value.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -2163,6 +2257,85 @@ async def test_deflection_submit_accepts_full_thread_multipart_json_upload() -> 
     assert payload["input_provider"]["warnings"] == []
     assert "Internal note" not in json.dumps(payload)
     assert "A member of the support team will get back to you" not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_full_thread_upload_limit_caps_parse_and_diagnostics() -> None:
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    artifact_data = _full_thread_json_bytes(3)
+    request = _FormRequest({
+        "json_file": _Upload(artifact_data, filename="zendesk-thread.json"),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+        "importer_mode": "full_thread",
+        "limit": "2",
+    })
+
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["source_row_count"] == 3
+    assert metadata["submitted_row_count"] == 2
+    assert metadata["included_row_count"] == 2
+    assert metadata["truncated_row_count"] == 1
+    assert metadata["max_source_material_rows"] == 2
+    assert metadata["importer_mode"] == "full_thread"
+    assert payload["input_provider"]["warnings"] == [{
+        "code": "deflection_submit_rows_truncated",
+        "message": "Used first 2 support-ticket rows out of 3.",
+        "row_count": 3,
+        "max_rows": 2,
+        "truncated_row_count": 1,
+    }]
+    assert "zd-thread-3" not in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_full_thread_invalid_entries_do_not_report_truncation() -> None:
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    artifact_data = json.dumps({
+        "tickets": [
+            {"comments": []},
+            {
+                "ticket": {
+                    "id": "zd-valid",
+                    "subject": "Export report issue",
+                    "description": "How do I export reports?",
+                    "requester_id": "requester-1",
+                    "status": "solved",
+                },
+                "comments": [{
+                    "author_id": "agent-1",
+                    "public": True,
+                    "plain_body": "Open Analytics and click Download report.",
+                }],
+            },
+        ],
+    }).encode("utf-8")
+    request = _FormRequest({
+        "json_file": _Upload(artifact_data, filename="zendesk-thread.json"),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+        "importer_mode": "full_thread",
+    })
+
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["source_row_count"] == 2
+    assert metadata["submitted_row_count"] == 1
+    assert metadata["included_row_count"] == 1
+    assert metadata["truncated_row_count"] == 0
+    warnings = payload["input_provider"]["warnings"]
+    assert warnings == [{
+        "code": "zendesk_thread_ticket_missing",
+        "row_index": 1,
+        "message": "Skipped Zendesk thread row because ticket was missing.",
+    }]
 
 
 @pytest.mark.asyncio

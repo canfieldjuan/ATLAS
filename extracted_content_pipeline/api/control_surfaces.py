@@ -165,7 +165,7 @@ _MAX_INGESTION_ROWS = 1000
 _MAX_FILE_INGESTION_ROWS = 10000
 _MAX_INGESTION_FILE_BYTES = 25 * 1024 * 1024
 _MAX_DEFLECTION_SUBMIT_BLOB_BYTES = 50 * 1024 * 1024
-_MAX_DEFLECTION_SUBMIT_ROWS = _MAX_DEFLECTION_SUBMIT_BLOB_BYTES
+_MAX_DEFLECTION_SUBMIT_ROWS = _MAX_INGESTION_ROWS
 _MAX_DEFLECTION_SUBMIT_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 _DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES = 1024 * 1024
 _MAX_INGESTION_SAMPLE_LIMIT = 25
@@ -214,6 +214,7 @@ class _DeflectionSubmitRowsLoad:
     byte_count: int
     warnings: tuple[dict[str, Any], ...]
     source_row_count: int | None = None
+    truncated_row_count: int = 0
 
     def __iter__(self):
         yield self.rows
@@ -1549,6 +1550,7 @@ def create_content_ops_control_surface_router(
             byte_count_key,
             csv_load_warnings,
             parser_source_row_count,
+            parser_truncated_row_count,
         ) = await _load_deflection_submit_rows_from_request(
             request,
             max_bytes=_MAX_DEFLECTION_SUBMIT_BLOB_BYTES,
@@ -1592,7 +1594,7 @@ def create_content_ops_control_surface_router(
             loaded_included_row_count=loaded_included_row_count,
             eligible_row_count=len(rows),
             submitted_row_count=len(submitted_rows),
-            parser_source_row_count=parser_source_row_count,
+            parser_truncated_row_count=parser_truncated_row_count,
         )
         title = _deflection_submit_title(data)
         package = build_support_ticket_input_package(
@@ -1665,6 +1667,7 @@ async def _load_deflection_submit_rows_from_request(
     str,
     tuple[dict[str, Any], ...],
     int | None,
+    int,
 ]:
     if _is_deflection_submit_http_request(request):
         content_type = _request_content_type(request)
@@ -1688,11 +1691,20 @@ async def _load_deflection_submit_rows_from_request(
                 json_file = form.get("json_file") if hasattr(form, "get") else None
                 if json_file is None:
                     raise HTTPException(status_code=422, detail="json_file is required")
-                rows, byte_count, load_warnings = await _load_deflection_submit_json_upload_rows(
+                loaded = await _load_deflection_submit_json_upload_rows(
                     json_file,
                     max_bytes=max_bytes,
+                    max_rows=_deflection_submit_parse_max_rows(data.get("limit")),
                 )
-                return data, rows, byte_count, "uploaded_bytes", load_warnings, None
+                return (
+                    data,
+                    loaded.rows,
+                    loaded.byte_count,
+                    "uploaded_bytes",
+                    loaded.warnings,
+                    loaded.source_row_count,
+                    loaded.truncated_row_count,
+                )
             json_file = form.get("json_file") if hasattr(form, "get") else None
             if json_file is not None:
                 raise HTTPException(
@@ -1714,6 +1726,7 @@ async def _load_deflection_submit_rows_from_request(
                 "uploaded_bytes",
                 loaded.warnings,
                 loaded.source_row_count,
+                loaded.truncated_row_count,
             )
 
         try:
@@ -1737,6 +1750,7 @@ async def _load_deflection_submit_rows_from_request(
             "blob_bytes",
             loaded.warnings,
             loaded.source_row_count,
+            loaded.truncated_row_count,
         )
 
     data = _deflection_submit_payload_to_mapping(request)
@@ -1753,6 +1767,7 @@ async def _load_deflection_submit_rows_from_request(
         "blob_bytes",
         loaded.warnings,
         loaded.source_row_count,
+        loaded.truncated_row_count,
     )
 
 
@@ -1814,9 +1829,10 @@ def _deflection_submit_form_to_mapping(form: Any) -> dict[str, Any]:
 def _deflection_submit_max_rows(limit: Any, raw_row_count: int) -> int:
     if raw_row_count <= 0:
         return 0
+    max_allowed = min(raw_row_count, _MAX_DEFLECTION_SUBMIT_ROWS)
     if limit is None:
-        return raw_row_count
-    return min(int(limit), raw_row_count)
+        return max_allowed
+    return min(int(limit), max_allowed)
 
 
 def _deflection_submit_truncated_row_count(
@@ -1825,21 +1841,23 @@ def _deflection_submit_truncated_row_count(
     loaded_included_row_count: int,
     eligible_row_count: int,
     submitted_row_count: int,
-    parser_source_row_count: int | None,
+    parser_truncated_row_count: int,
 ) -> int:
-    parser_truncated = (
-        max(0, source_row_count - loaded_included_row_count)
-        if parser_source_row_count is not None
-        else 0
-    )
+    parser_truncated = max(0, int(parser_truncated_row_count))
     post_filter_truncated = max(0, eligible_row_count - submitted_row_count)
     return parser_truncated + post_filter_truncated
 
 
 def _deflection_submit_parse_max_rows(limit: Any) -> int | None:
     if limit is None:
-        return None
-    return int(limit)
+        return _MAX_DEFLECTION_SUBMIT_ROWS
+    try:
+        parsed = int(limit)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="limit must be an integer") from exc
+    if parsed < 1:
+        raise HTTPException(status_code=422, detail="limit must be at least 1")
+    return min(parsed, _MAX_DEFLECTION_SUBMIT_ROWS)
 
 
 async def _inspect_uploaded_ingestion_file(
@@ -1999,7 +2017,8 @@ async def _load_deflection_submit_json_upload_rows(
     json_file: Any,
     *,
     max_bytes: int,
-) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    max_rows: int | None = None,
+) -> _DeflectionSubmitRowsLoad:
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -2028,6 +2047,7 @@ async def _load_deflection_submit_json_upload_rows(
         return _parse_deflection_submit_zendesk_thread_file(
             temp_path,
             byte_count=byte_count,
+            max_rows=max_rows,
         )
     finally:
         if temp_path is not None:
@@ -2044,11 +2064,11 @@ def _load_deflection_submit_blob_rows_sync(
     max_rows: int | None = None,
 ) -> _DeflectionSubmitRowsLoad:
     if importer_mode == "full_thread":
-        rows, byte_count, warnings = _load_deflection_submit_json_blob_rows_sync(
+        return _load_deflection_submit_json_blob_rows_sync(
             blob_url,
             max_bytes=max_bytes,
+            max_rows=max_rows,
         )
-        return _DeflectionSubmitRowsLoad(rows, byte_count, warnings)
     return _load_deflection_submit_csv_blob_rows_sync(
         blob_url,
         max_bytes=max_bytes,
@@ -2060,7 +2080,8 @@ def _load_deflection_submit_json_blob_rows_sync(
     blob_url: str,
     *,
     max_bytes: int,
-) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    max_rows: int | None = None,
+) -> _DeflectionSubmitRowsLoad:
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -2086,6 +2107,7 @@ def _load_deflection_submit_json_blob_rows_sync(
         return _parse_deflection_submit_zendesk_thread_file(
             temp_path,
             byte_count=byte_count,
+            max_rows=max_rows,
         )
     finally:
         if temp_path is not None:
@@ -2190,30 +2212,51 @@ def _copy_bounded_https_blob_to_tempfile(
 
 def _parse_deflection_submit_zendesk_thread_bytes(
     data: bytes,
-) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    *,
+    max_rows: int | None = None,
+) -> _DeflectionSubmitRowsLoad:
     try:
-        result = load_zendesk_full_thread_rows_from_json_bytes(data)
+        result = load_zendesk_full_thread_rows_from_json_bytes(
+            data,
+            max_rows=max_rows,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
             detail="Zendesk full-thread JSON could not be parsed.",
         ) from exc
-    return result.rows, len(data), result.warnings
+    return _DeflectionSubmitRowsLoad(
+        rows=result.rows,
+        byte_count=len(data),
+        warnings=result.warnings,
+        source_row_count=result.source_row_count,
+        truncated_row_count=result.truncated_row_count,
+    )
 
 
 def _parse_deflection_submit_zendesk_thread_file(
     temp_path: Path,
     *,
     byte_count: int,
-) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    max_rows: int | None = None,
+) -> _DeflectionSubmitRowsLoad:
     try:
-        result = load_zendesk_full_thread_rows_from_json_file(temp_path)
+        result = load_zendesk_full_thread_rows_from_json_file(
+            temp_path,
+            max_rows=max_rows,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
             detail="Zendesk full-thread JSON could not be parsed.",
         ) from exc
-    return result.rows, byte_count, result.warnings
+    return _DeflectionSubmitRowsLoad(
+        rows=result.rows,
+        byte_count=byte_count,
+        warnings=result.warnings,
+        source_row_count=result.source_row_count,
+        truncated_row_count=result.truncated_row_count,
+    )
 
 
 def _parse_deflection_submit_csv_file(
@@ -2243,6 +2286,7 @@ def _parse_deflection_submit_csv_file(
         byte_count=byte_count,
         warnings=tuple(warning.as_dict() for warning in result.warnings),
         source_row_count=result.source_row_count,
+        truncated_row_count=result.truncated_row_count,
     )
 
 

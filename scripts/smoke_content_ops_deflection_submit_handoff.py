@@ -41,7 +41,7 @@ DEFAULT_CSV_FILE = (
 LOCAL_BASE_URL_HOSTS = frozenset({"localhost", "0.0.0.0", "::1"})
 SUPPORT_PLATFORMS = frozenset({"zendesk", "intercom", "help_scout", "other"})
 CSV_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
-SUBMIT_ROW_LIMIT_MAX = CSV_UPLOAD_MAX_BYTES
+SUBMIT_ROW_LIMIT_MAX = 1000
 SUBMIT_PATH = "/api/v1/content-ops/deflection-reports/submit"
 SNAPSHOT_PATH_TEMPLATE = "/api/v1/content-ops/deflection-reports/{request_id}/snapshot"
 ARTIFACT_PATH_TEMPLATE = "/api/v1/content-ops/deflection-reports/{request_id}/artifact"
@@ -69,9 +69,9 @@ VOLUME_GATE_PROFILES: dict[str, dict[str, int]] = {
     "full-volume-cfpb": {
         "uploaded_bytes": 50_000_000,
         "source_row_count": 30_000,
-        "submitted_row_count": 30_000,
-        "generated_questions": 30,
-        "repeat_ticket_count": 25_000,
+        "submitted_row_count": SUBMIT_ROW_LIMIT_MAX,
+        "generated_questions": 5,
+        "repeat_ticket_count": 750,
         "top_question_count": 5,
     },
 }

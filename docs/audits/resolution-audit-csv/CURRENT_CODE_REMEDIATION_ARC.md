@@ -81,7 +81,7 @@ Expected fix:
 
 ### S2 - Row-Key Normalization Cache
 
-Status: in review. Fixing PR:
+Status: complete. Fixing PR:
 [#2029](https://github.com/canfieldjuan/ATLAS/pull/2029).
 
 Root: support-ticket and FAQ markdown paths repeatedly normalize row keys while
@@ -116,7 +116,8 @@ Implementation notes:
 
 ### S3 - Submit Row Cap And Heavy Inline Build
 
-Status: open.
+Status: in review. Fixing PR:
+[#2030](https://github.com/canfieldjuan/ATLAS/pull/2030).
 
 Root: submit limits conflate bytes and rows, then synchronous report build can
 run over very large input.
@@ -137,6 +138,12 @@ Expected fix:
 - Keep the cap visible in diagnostics.
 - Move or gate heavy report work behind the existing async job pattern if the
   cap still allows slow runs.
+
+Implementation notes:
+
+- This slice derives the sync cap from the existing 1,000-row execute/source
+  material contract so sync submit cannot reach the known heavy inline build
+  path. Full-volume/background submit remains a separate large-upload slice.
 
 ### S4 - Money Reconciliation Contract
 
@@ -297,8 +304,8 @@ These are not coding-start items until the operator approves the product shape:
 ## Tracking Checklist
 
 - [x] S1 CSV admission/data-loss and missing-ID stability PR linked here: #2026.
-- [ ] S2 row-key normalization cache PR linked here.
-- [ ] S3 submit row cap/heavy-build PR linked here.
+- [x] S2 row-key normalization cache PR linked here: #2029.
+- [ ] S3 submit row cap/heavy-build PR linked here: #2030.
 - [ ] S4 money reconciliation PR linked here.
 - [ ] S5 clustering spike PR linked here.
 - [ ] S5 clustering first implementation PR linked here.
