@@ -11,6 +11,8 @@ Root cause: the issue body is acting as both evidence archive and current
 remediation tracker, so stale claims keep looking like current requirements.
 This slice fixes the tracking root, not the product defects: it creates a
 current-code tracker doc and points #1993 at the verified code-grounded arc.
+The tracker is deliberately living and non-exhaustive so S1 can start before
+the ledger becomes another blocking project.
 
 ## Scope (this PR)
 
@@ -44,7 +46,9 @@ The new doc becomes the local source of truth for the arc:
 - a "gaps first" section for stale, contradicted, or over-broad issue claims;
 - a confirmed current-code fix queue grouped by root cause, including the
   review-corrected queue items for row-key normalization, full money
-  reconciliation, and runtime QA scorecard wiring;
+  reconciliation, runtime QA scorecard wiring, full-thread limits, token-set
+  skip behavior, comment privacy, status normalization, missing-ID stability,
+  and hosted annualized-field exposure;
 - a slice plan that separates tracker-only, code-remediation, performance,
   and user-facing product-surface work;
 - a rule that follow-up implementation PRs update the tracker checkbox and
@@ -87,6 +91,6 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 272 |
-| `plans/PR-Resolution-Audit-Current-Code-Tracker.md` | 92 |
-| **Total** | **364** |
+| `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 298 |
+| `plans/PR-Resolution-Audit-Current-Code-Tracker.md` | 96 |
+| **Total** | **394** |

@@ -2,9 +2,9 @@
 
 Issue: https://github.com/canfieldjuan/ATLAS/issues/1993
 
-Status: tracking source of truth as of 2026-07-05. This doc supersedes the
-older issue-body finding dump for implementation planning. The older audit
-files remain evidence/history; code remains ground truth.
+Status: living, non-exhaustive tracking source as of 2026-07-05. This doc
+supersedes the older issue-body finding dump for implementation planning. The
+older audit files remain evidence/history; code remains ground truth.
 
 ## Ground Rules
 
@@ -16,6 +16,9 @@ files remain evidence/history; code remains ground truth.
   explicit operator approval first.
 - Vertical-first: fix the smallest root that proves real behavior. Park
   non-blocking hardening instead of widening a slice.
+- Do not perfect this ledger before shipping fixes. Each remediation slice must
+  reconstruct the item it touches and update this doc with what current code
+  proves.
 - Every remediation PR must update this doc and link the fixing PR.
 
 ## Gaps In The Existing Issue Body
@@ -31,9 +34,10 @@ files remain evidence/history; code remains ground truth.
   `_SourceFieldLookup`; the still-live problem is the support-ticket and FAQ
   markdown paths that repeatedly normalize row keys. That live problem remains
   queued below as its own fix.
-- M6 "no PII stripping" is false for final report output because the report
-  scrubber handles common identifiers. The live gap is input conversation
-  hygiene: signatures, quote chains, junk auto-replies, and embedded NULs.
+- M6 "no PII stripping" is over-broad for scrubbed submit/store paths, but the
+  final-output boundary is uneven. The live gaps are input conversation hygiene,
+  comment privacy admission, and CLI/customer-facing output paths that can write
+  generated markdown, summary, or evidence without the submit scrub.
 - P5-7 needs a narrower correction, not retirement. QA scorecard tests,
   standalone runners, and workflow enrollment exist, but the scorecard is not
   wired into product/runtime report generation. Keep the runtime/load-bearing
@@ -60,6 +64,8 @@ Confirmed components:
   documented.
 - Legacy encoding fallback can accept clean CP1252/Latin-1 without an explicit
   admission warning.
+- Rows without stable IDs fall back to `ticket-{row_index}`, so duplicate rows
+  with missing/changing IDs can inflate repeat volume and cost.
 
 Expected fix:
 
@@ -68,6 +74,8 @@ Expected fix:
 - Detect duplicate headers and fail or disambiguate explicitly.
 - Decide over-wide policy once: reject with clear row detail or quarantine rows
   with an explicit warning.
+- Decide missing-ID dedup identity or diagnostics before cost/repeat counts are
+  trusted for those rows.
 - Add fixture tests for headerless, duplicate header, over-wide, short-row, and
   legacy-encoding cases.
 
@@ -107,12 +115,15 @@ Confirmed components:
 
 - `_MAX_DEFLECTION_SUBMIT_ROWS` equals the 50 MiB byte cap.
 - Missing `limit` returns raw row count.
+- Full-thread JSON upload/blob loaders parse without a `max_rows` bound before
+  later slicing, so `limit` does not cap staging/parsing work.
 - Upload/blob loaders stage to temp files before parsing; memory multiplier
   should be profiled before repeating the older numeric claim.
 
 Expected fix:
 
 - Define an explicit row cap separate from bytes.
+- Apply the cap to CSV and full-thread JSON importer paths.
 - Keep the cap visible in diagnostics.
 - Move or gate heavy report work behind the existing async job pattern if the
   cap still allows slow runs.
@@ -159,34 +170,47 @@ Confirmed components:
   logic.
 - Embedding rescue currently only considers singleton components.
 - Representative question choice and some output ordering depend on row order.
+- Large token-set uploads above 2,000 rows deliberately skip token-set
+  clustering and leave those rows uncategorized, with only a warning/metadata
+  signal.
 
 Expected fix:
 
 - Run a calibration spike before changing thresholds.
 - Avoid single-link semantic merge behavior; prove same-intent and
   distinct-intent fixtures.
+- Include the large-upload token-set skip in the spike, or ensure S3 caps
+  full-submit rows below that skip threshold.
 - Include order-shuffle tests.
 - Keep user-facing grouping/report shape unchanged until approved.
 
-### S6 - Text Chokepoint Hygiene
+### S6 - Text, Comment, And Outcome Evidence Hygiene
 
 Status: open.
 
-Root: input normalization preserves useful customer language but does not strip
-conversation artifacts before clustering.
+Root: input normalization preserves useful customer language, but text/comment
+and outcome evidence are admitted through narrow local rules instead of one
+explicit hygiene boundary.
 
 Confirmed components:
 
 - Subject/body/comments are concatenated.
 - HTML is compacted to text, but signatures, quoted chains, junk auto-replies,
   and low-ratio embedded NULs are not governed by one explicit chokepoint.
-- The final report scrubber exists, so this is not a total PII-output absence.
+- `_comment_text` only skips comments where `public is False`; private/internal
+  markers such as `is_private`, `is_internal`, or string `"false"` can still
+  flow into ticket text.
+- Status values outside the small resolved/open/reopened/cancelled sets
+  normalize to `other`, so resolved outcome evidence can be undercounted.
+- The final report scrubber exists for scrubbed paths, but CLI/customer-facing
+  markdown, summary, and evidence outputs still need boundary review.
 
 Expected fix:
 
 - Add one ticket-text hygiene chokepoint before clustering.
 - Test junk auto-reply, signature, quoted thread, NUL, and near-miss legitimate
   customer wording.
+- Add private/internal comment fixtures and status synonym fixtures.
 - Keep final-output scrub tests intact.
 
 ### S7 - Date Parsing And Date Window Policy
@@ -202,7 +226,8 @@ Confirmed components:
 - Day-first dates with day > 12 become unparseable.
 - One unparseable/missing date can disable the full date window.
 - Dateless annualized run-rate stores `repeat_ticket_count * 12`; prose now
-  says "if monthly pace," but the data field is still a strong assumption.
+  says "if monthly pace," but the hosted report-model/consumer payload still
+  exposes annualized fields as a strong assumption.
 
 Expected fix:
 
@@ -244,8 +269,9 @@ These are not coding-start items until the operator approves the product shape:
 - Whether priority fix queue/top unresolved repeats should appear in markdown
   prose or remain structured-only for web/PDF/email consumers.
 - Whether snapshot locked rows should expose cost/topic metadata.
-- Whether annualized/dateless run-rate should remain in the free snapshot or
-  be withheld/renamed.
+- Whether annualized/dateless run-rate belongs in hosted report-model consumer
+  payloads, PDF/email/page delivery, or any future snapshot projection. Current
+  free snapshot fields do not expose annualized values.
 
 ## Closed Or Reframed Claims
 
@@ -260,13 +286,13 @@ These are not coding-start items until the operator approves the product shape:
 
 ## Tracking Checklist
 
-- [ ] S1 CSV admission/data-loss PR linked here.
+- [ ] S1 CSV admission/data-loss and missing-ID stability PR linked here.
 - [ ] S2 row-key normalization cache PR linked here.
 - [ ] S3 submit row cap/heavy-build PR linked here.
 - [ ] S4 money reconciliation PR linked here.
 - [ ] S5 clustering spike PR linked here.
 - [ ] S5 clustering first implementation PR linked here.
-- [ ] S6 text chokepoint hygiene PR linked here.
+- [ ] S6 text/comment/outcome hygiene PR linked here.
 - [ ] S7 date/window policy PR linked here.
 - [ ] S8 runtime QA scorecard wiring PR linked here.
 - [ ] Operator-approved product-surface issue/PR linked here, if any.
