@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import csv
 from html.parser import HTMLParser
 import json
@@ -11,6 +12,7 @@ from pathlib import Path
 import markdown
 import pytest
 
+import extracted_content_pipeline.ticket_faq_markdown as ticket_faq_markdown
 from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
 )
@@ -62,6 +64,25 @@ _IRREGULAR_PAST_RESOLUTION_ACTION_INFLECTIONS = {
     "reran": "rerun",
     "sent": "send",
 }
+
+
+class _CountingMapping(Mapping[str, object]):
+    def __init__(self, data: Mapping[str, object]) -> None:
+        self._data = dict(data)
+        self.items_calls = 0
+
+    def __getitem__(self, key: str) -> object:
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def items(self):
+        self.items_calls += 1
+        return self._data.items()
 
 
 class _StubEmbeddingPort:
@@ -317,6 +338,103 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
         "has_action_items": True,
         "resolution_evidence_scoped": True,
     }
+
+
+def test_ticket_faq_field_lookup_preserves_raw_alias_semantics() -> None:
+    row = {
+        "created_at": "",
+        "Created At": "2026-02-01",
+        "Source Weight": 3,
+        "Resolution Text": "Choose Export CSV from Analytics.",
+    }
+    lookup = ticket_faq_markdown._TicketFAQFieldLookup(row)
+
+    for key in ("created_at", "source_weight", "resolution_text", "missing"):
+        assert ticket_faq_markdown._field_value(
+            lookup,
+            key,
+        ) == ticket_faq_markdown._field_value(
+            row,
+            key,
+        )
+
+
+def test_ticket_faq_field_lookup_reuses_cached_row_key_scan() -> None:
+    row = _CountingMapping({
+        **{f"Unused Field {index}": "" for index in range(40)},
+        "Created At": "2026-02-01",
+        "Source Weight": "4",
+        "Resolution Text": "Choose Export CSV from Analytics.",
+    })
+    lookup = ticket_faq_markdown._TicketFAQFieldLookup(row)
+
+    for _ in range(5):
+        assert ticket_faq_markdown._field_value(lookup, "created_at") == "2026-02-01"
+        assert ticket_faq_markdown._field_value(lookup, "source_weight") == "4"
+        assert ticket_faq_markdown._field_value(
+            lookup,
+            "resolution_text",
+        ) == "Choose Export CSV from Analytics."
+        assert ticket_faq_markdown._field_value(lookup, "missing") is None
+
+    assert row.items_calls == 1
+
+
+def test_ticket_faq_field_lookup_empty_and_missing_keys_return_none() -> None:
+    lookup = ticket_faq_markdown._TicketFAQFieldLookup({})
+
+    assert ticket_faq_markdown._field_value(lookup, "created_at") is None
+    assert ticket_faq_markdown._field_value(lookup, "source_weight") is None
+
+
+def test_ticket_faq_field_lookup_duplicate_compact_key_keeps_first_alias() -> None:
+    row = {
+        "Source Weight": "4",
+        "source.weight": "8",
+    }
+    lookup = ticket_faq_markdown._TicketFAQFieldLookup(row)
+
+    assert ticket_faq_markdown._field_value(lookup, "source_weight") == "4"
+
+
+def test_ticket_faq_field_lookup_falsey_exact_key_is_not_missing() -> None:
+    row = {
+        "source_weight": 0,
+        "Source Weight": "4",
+    }
+    lookup = ticket_faq_markdown._TicketFAQFieldLookup(row)
+
+    assert ticket_faq_markdown._field_value(lookup, "source_weight") == 0
+
+
+def test_build_ticket_faq_markdown_uses_alias_fields_through_cached_lookup() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Export issue",
+            "evidence": [{
+                "text": "How do I export the attribution dashboard before renewal?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+                "Created At": "2026-02-01",
+                "Source Weight": "4",
+                "Resolution Text": (
+                    "Open Analytics, choose the attribution dashboard, and select "
+                    "Export CSV."
+                ),
+            }],
+        }],
+        as_of_date="2026-02-15",
+        window_days=30,
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["weighted_frequency"] == 4
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Open Analytics, choose the attribution dashboard, and select Export CSV."
+    )
 
 
 def test_build_ticket_faq_markdown_does_not_invent_support_contact() -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, ItemsView, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 import math
@@ -121,6 +121,7 @@ _FAILURE_RISK_RULES = (
     ("incorrect_record", ("wrong", "incorrect", "inaccurate", "error", "mistake", "does not recognize")),
     ("money_or_account_risk", ("charged", "fee", "fees", "payment", "balance", "debt", "foreclosure", "fraud")),
 )
+_FIELD_LOOKUP_MISSING = object()
 DEFAULT_INTENT_RULES = (
     ("credit report disputes", (
         "credit report",
@@ -739,8 +740,13 @@ def build_ticket_faq_markdown(
     seen: set[tuple[str, str]] = set()
     source_keys: set[str] = set()
 
-    for opportunity_index, opportunity in enumerate(opportunities, start=1):
-        for evidence_index, evidence in enumerate(_evidence_rows(opportunity), start=1):
+    for opportunity_index, raw_opportunity in enumerate(opportunities, start=1):
+        opportunity = _TicketFAQFieldLookup(raw_opportunity)
+        for evidence_index, raw_evidence in enumerate(
+            _evidence_rows(opportunity),
+            start=1,
+        ):
+            evidence = _TicketFAQFieldLookup(raw_evidence)
             if date_window is not None and not _inside_date_window(
                 opportunity,
                 evidence,
@@ -962,6 +968,51 @@ def _evidence_rows(opportunity: Mapping[str, Any]) -> tuple[Mapping[str, Any], .
         "source_type": opportunity.get("source_type") or "",
         "source_title": opportunity.get("source_title") or "",
     },)
+
+
+class _TicketFAQFieldLookup(Mapping[str, Any]):
+    """Mapping wrapper that caches FAQ source-row alias lookups for one row."""
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self._row = row
+        self._indexed = tuple(
+            (
+                _source_type_key(raw_key),
+                _compact_key(raw_key),
+                value,
+            )
+            for raw_key, value in row.items()
+        )
+        self._cache: dict[str, Any] = {}
+
+    def __getitem__(self, key: str) -> Any:
+        return self._row[key]
+
+    def __iter__(self):
+        return iter(self._row)
+
+    def __len__(self) -> int:
+        return len(self._row)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._row.get(key, default)
+
+    def items(self) -> ItemsView[str, Any]:
+        return self._row.items()
+
+    def field_value(self, key: str) -> Any:
+        if key in self._row:
+            return self._row.get(key)
+        if key in self._cache:
+            return self._cache[key]
+        target = _source_type_key(key)
+        compact_target = _compact_key(key)
+        for raw_target, raw_compact, value in self._indexed:
+            if raw_target == target or raw_compact == compact_target:
+                self._cache[key] = value
+                return value
+        self._cache[key] = _FIELD_LOOKUP_MISSING
+        return _FIELD_LOOKUP_MISSING
 
 
 # --- Question sub-clustering (#1460) -------------------------------------
@@ -3379,6 +3430,9 @@ def _source_date(row: Mapping[str, Any]) -> date | None:
 
 
 def _field_value(row: Mapping[str, Any], key: str) -> Any:
+    if isinstance(row, _TicketFAQFieldLookup):
+        value = row.field_value(key)
+        return None if value is _FIELD_LOOKUP_MISSING else value
     if key in row:
         return row.get(key)
     target = _source_type_key(key)

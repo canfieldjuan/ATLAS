@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
 
 import pytest
 
+import extracted_content_pipeline.support_ticket_input_package as support_ticket_input_package
 from extracted_content_pipeline.campaign_customer_data import (
     CsvCustomerDataParseError,
 )
@@ -42,6 +44,25 @@ from extracted_content_pipeline.support_ticket_zendesk_thread import (
 
 ROOT = Path(__file__).resolve().parents[1]
 ZENDESK_THREAD_SAMPLE = ROOT / "tests/fixtures/zendesk_full_thread_seed_sample.json"
+
+
+class _CountingMapping(Mapping[str, object]):
+    def __init__(self, data: Mapping[str, object]) -> None:
+        self._data = dict(data)
+        self.items_calls = 0
+
+    def __getitem__(self, key: str) -> object:
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def items(self):
+        self.items_calls += 1
+        return self._data.items()
 
 
 def test_csv_loader_rejects_duplicate_headers(tmp_path: Path) -> None:
@@ -267,6 +288,105 @@ def test_support_ticket_package_skips_blank_source_id_aliases() -> None:
         warning["code"] for warning in package.warnings
     }.isdisjoint({"support_ticket_missing_source_id"})
     assert package.inputs["source_material"][0]["source_id"] == "T-1"
+
+
+def test_support_ticket_row_lookup_preserves_raw_alias_semantics() -> None:
+    row = {
+        "source_id": "  ",
+        "Ticket ID": "T-1",
+        "Request Subject": "How do I export reports?",
+        "Latest Message": "I cannot find the export button.",
+        "Created At": "",
+    }
+    lookup = support_ticket_input_package._SupportTicketRowLookup(row)
+
+    assert support_ticket_input_package._first_value(
+        lookup,
+        support_ticket_input_package._SOURCE_ID_KEYS,
+    ) == support_ticket_input_package._first_value(
+        row,
+        support_ticket_input_package._SOURCE_ID_KEYS,
+    )
+    assert support_ticket_input_package._first_text(
+        lookup,
+        support_ticket_input_package._SOURCE_TITLE_KEYS,
+    ) == support_ticket_input_package._first_text(
+        row,
+        support_ticket_input_package._SOURCE_TITLE_KEYS,
+    )
+    assert support_ticket_input_package._has_any_key(
+        lookup,
+        support_ticket_input_package._DATE_KEYS,
+    ) == support_ticket_input_package._has_any_key(
+        row,
+        support_ticket_input_package._DATE_KEYS,
+    )
+
+
+def test_support_ticket_row_lookup_reuses_cached_row_key_scan() -> None:
+    row = _CountingMapping({
+        **{f"Unused Field {index}": "" for index in range(40)},
+        "Ticket ID": "T-1",
+        "Request Subject": "How do I export reports?",
+        "Latest Message": "I cannot find the export button.",
+        "Created At": "",
+    })
+    lookup = support_ticket_input_package._SupportTicketRowLookup(row)
+
+    for _ in range(5):
+        assert support_ticket_input_package._first_value(
+            lookup,
+            support_ticket_input_package._SOURCE_ID_KEYS,
+        ) == "T-1"
+        assert support_ticket_input_package._first_text(
+            lookup,
+            support_ticket_input_package._TEXT_KEYS,
+        ) == "I cannot find the export button."
+        assert support_ticket_input_package._has_any_key(
+            lookup,
+            support_ticket_input_package._DATE_KEYS,
+        )
+
+    assert row.items_calls == 1
+
+
+def test_support_ticket_row_lookup_empty_and_blank_values_are_missing() -> None:
+    empty_lookup = support_ticket_input_package._SupportTicketRowLookup({})
+    blank_lookup = support_ticket_input_package._SupportTicketRowLookup({
+        "Ticket ID": " ",
+        "Case ID": "",
+    })
+
+    assert support_ticket_input_package._first_value(
+        empty_lookup,
+        support_ticket_input_package._SOURCE_ID_KEYS,
+    ) is None
+    assert not support_ticket_input_package._has_any_key(
+        empty_lookup,
+        support_ticket_input_package._SOURCE_ID_KEYS,
+    )
+    assert support_ticket_input_package._first_value(
+        blank_lookup,
+        support_ticket_input_package._SOURCE_ID_KEYS,
+    ) is None
+    assert support_ticket_input_package._has_any_key(
+        blank_lookup,
+        support_ticket_input_package._SOURCE_ID_KEYS,
+    )
+
+
+def test_support_ticket_row_lookup_duplicate_normalized_key_keeps_first_value() -> None:
+    row = {
+        "Ticket ID": "T-first",
+        "ticket_id": "T-second",
+        "Subject": "How do I export reports?",
+    }
+    lookup = support_ticket_input_package._SupportTicketRowLookup(row)
+
+    assert support_ticket_input_package._first_value(
+        lookup,
+        support_ticket_input_package._SOURCE_ID_KEYS,
+    ) == "T-first"
 
 
 def test_support_ticket_fold_targets_survive_tokenization() -> None:

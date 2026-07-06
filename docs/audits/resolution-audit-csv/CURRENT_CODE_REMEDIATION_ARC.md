@@ -81,7 +81,8 @@ Expected fix:
 
 ### S2 - Row-Key Normalization Cache
 
-Status: open.
+Status: in review. Fixing PR:
+[#2029](https://github.com/canfieldjuan/ATLAS/pull/2029).
 
 Root: support-ticket and FAQ markdown paths repeatedly normalize row keys while
 scanning every lookup, even though a cached field-lookup pattern already exists
@@ -103,6 +104,15 @@ Expected fix:
 - Add parity fixtures proving output does not change.
 - Add a focused runtime/perf guard or benchmark artifact before claiming the
   cache removed the hot path.
+
+Implementation notes:
+
+- Support-ticket input package now carries a per-row lookup wrapper through the
+  normalization hot path while keeping ordinary `row.get(...)` exact.
+- FAQ markdown now wraps each opportunity/evidence row once before the helper
+  graph calls `_field_value`.
+- Focused tests assert cached-vs-raw lookup parity and that repeated cached
+  lookups do not rescan the raw mapping.
 
 ### S3 - Submit Row Cap And Heavy Inline Build
 
