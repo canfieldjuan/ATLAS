@@ -48,7 +48,7 @@ kokoro>=0.7.0
 
 # Optional: Flash Attention 2 for faster inference (Ampere+ GPUs)
 # Install separately: pip install flash-attn --no-build-isolation
-rich>=13.0.0
+rich>=15.0.0
 
 # LangGraph for agent orchestration
 langgraph>=0.2.0
