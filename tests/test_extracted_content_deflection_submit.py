@@ -844,6 +844,43 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
 
 
 @pytest.mark.asyncio
+async def test_deflection_submit_forwards_missing_source_id_diagnostics() -> None:
+    csv_data = _csv_dict_bytes([
+        {
+            "subject": "Export report failed",
+            "body": "How do I export attribution reports?",
+            "answer": "Open Reports, choose Attribution, then Export.",
+        },
+        {
+            "subject": "Invite email missing",
+            "body": "Can I invite a teammate again?",
+            "answer": "Open Settings, then resend the invitation.",
+        },
+    ])
+    router = _router(InMemoryDeflectionReportArtifactStore())
+
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+    })
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["source_id_fallback_count"] == 2
+    missing_id_warnings = [
+        warning
+        for warning in payload["input_provider"]["warnings"]
+        if warning["code"] == "support_ticket_missing_source_id"
+    ]
+    assert len(missing_id_warnings) == 1
+    assert missing_id_warnings[0]["row_count"] == 2
+    assert missing_id_warnings[0]["example_source_ids"] == ["ticket-1", "ticket-2"]
+
+
+@pytest.mark.asyncio
 async def test_deflection_report_search_returns_full_paid_uploaded_item() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     await store.save_report(
@@ -1674,6 +1711,7 @@ async def test_deflection_submit_request_limit_becomes_csv_parse_cap() -> None:
 async def test_deflection_submit_filters_non_english_huggingface_shaped_rows() -> None:
     csv_data = _csv_dict_bytes([
         {
+            "ticket_id": "return-1",
             "subject": "Instructions for Returning Products",
             "body": "How do I return a recent purchase from your store?",
             "answer": (
@@ -1684,6 +1722,7 @@ async def test_deflection_submit_filters_non_english_huggingface_shaped_rows() -
             "queue": "Returns and Exchanges",
         },
         {
+            "ticket_id": "sync-1",
             "subject": "Synchronisationsproblem",
             "body": "Ich erfahre Schwierigkeiten bei der Synchronisation.",
             "answer": "Bitte senden Sie aktuelle Fehlerprotokolle.",

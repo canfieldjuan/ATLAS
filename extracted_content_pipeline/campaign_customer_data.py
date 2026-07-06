@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from io import StringIO
 import json
 from pathlib import Path
+import re
 from typing import Any, Literal
 
 from .campaign_opportunities import (
@@ -35,6 +36,7 @@ _CSV_UTF8_MOJIBAKE_MARKER_TAIL_CHARS = max(
 _CSV_IMPLAUSIBLE_LEGACY_FALLBACK_CHARS = ("\u00ff", "\u00fe")
 _CSV_READ_CHUNK_BYTES = 64 * 1024
 _CSV_FIELD_SIZE_LIMIT = 16 * 1024 * 1024
+_CSV_FIELD_SEPARATOR_RE = re.compile(r"[^a-z0-9]+")
 _CSV_BOM_ENCODINGS = (
     (b"\xff\xfe\x00\x00", "utf-32"),
     (b"\x00\x00\xfe\xff", "utf-32"),
@@ -46,8 +48,13 @@ _CSV_HEADER_HINTS = frozenset({
     "account",
     "account_name",
     "answer",
+    "agent",
+    "agent_name",
+    "assigned_to",
     "body",
     "case_id",
+    "case_number",
+    "case_status",
     "category",
     "comment",
     "comment_body",
@@ -58,36 +65,96 @@ _CSV_HEADER_HINTS = frozenset({
     "conversation_id",
     "conversation_title",
     "created_at",
+    "created_time",
     "customer_message",
+    "customer_email",
     "description",
     "email",
+    "first_message",
+    "group",
+    "helpdesk_platform",
     "history",
     "id",
     "initial_message",
+    "initial_comment",
+    "issue",
+    "issue_description",
+    "issue_status",
     "language",
+    "last_agent_reply",
+    "last_customer_message",
+    "latest_agent_reply",
+    "latest_customer_message",
+    "latest_message",
     "message",
     "opportunity_id",
+    "organization",
     "pain_category",
+    "platform",
+    "product_area",
+    "product_name",
     "queue",
     "public_comment",
     "public_comments",
+    "request_id",
+    "request_subject",
     "requester_comment",
+    "requester_email",
+    "requester_message",
+    "requester_organization",
     "resolution",
     "resolution_text",
+    "satisfaction_score",
+    "source_platform",
     "source_id",
+    "source_url",
+    "status",
     "subject",
     "summary",
+    "support_group",
+    "support_platform",
+    "tags",
     "ticket_comments",
     "ticket_history",
+    "ticket_group",
     "ticket_number",
     "ticket_id",
+    "ticket_state",
     "ticket_subject",
+    "ticket_tags",
+    "ticket_url",
     "title",
     "topic",
+    "updated_at",
     "user_email",
     "vendor",
     "vendor_name",
+    "zendesk_brand",
+    "zendesk_group",
 })
+_CSV_HEADER_HINT_COMPACT_KEYS = frozenset(
+    _CSV_FIELD_SEPARATOR_RE.sub("", hint.strip().lower())
+    for hint in _CSV_HEADER_HINTS
+)
+_CSV_QUESTION_HEADER_STARTS = frozenset({
+    "can",
+    "could",
+    "do",
+    "does",
+    "how",
+    "is",
+    "should",
+    "what",
+    "when",
+    "where",
+    "why",
+    "who",
+})
+_CSV_SHORT_PROSE_DATA_RE = re.compile(
+    r"\b(cannot|can't|cant|failed?|failing|missing|broken|error|issue|"
+    r"problem|unable|won't|wont|doesn't|doesnt|stuck)\b",
+    re.IGNORECASE,
+)
 _CSV_MISSING_HEADER_FIX = (
     "Add a header row with column names such as ticket_id, subject, and message, "
     "then export the CSV again."
@@ -98,6 +165,10 @@ _CSV_ENCODING_FIX = (
 _CSV_INCONSISTENT_COLUMNS_FIX = (
     "Use one delimiter consistently, keep every row within the header width, "
     "and quote cells that contain commas, tabs, semicolons, pipes, or newlines."
+)
+_CSV_LOW_CONFIDENCE_HEADER_FIX = (
+    "Add a real header row with stable column names such as ticket_id, subject, "
+    "and message, then export the CSV again."
 )
 
 
@@ -507,6 +578,11 @@ def _load_csv_dict_rows_result(
                 continue
             if row_index == header_row_number:
                 header_width = len(values)
+                _validate_csv_header_values(
+                    values,
+                    header_has_hint=candidate.header_has_hint,
+                    row_index=row_index,
+                )
                 header_fields = tuple(
                     (index, str(field or "").strip())
                     for index, field in enumerate(values)
@@ -551,6 +627,9 @@ def _load_csv_dict_rows_result(
         skipped_leading_count,
         first_leading_row,
         header_index,
+    ) + _low_confidence_header_warnings(
+        candidate,
+        header_row_number,
     )
     return CsvDictRowsLoadResult(
         rows=rows,
@@ -584,6 +663,31 @@ def _csv_inconsistent_columns_error(
         code="csv_inconsistent_columns",
         message=message,
         how_to_fix=_CSV_INCONSISTENT_COLUMNS_FIX,
+        row_index=row_index,
+    )
+
+
+def _csv_duplicate_header_error(
+    duplicate: str,
+    *,
+    row_index: int,
+) -> CsvCustomerDataParseError:
+    return CsvCustomerDataParseError(
+        code="csv_duplicate_header",
+        message=f"CSV header contains duplicate column name: {duplicate}.",
+        how_to_fix=(
+            "Rename or remove duplicate header columns so each source field has "
+            "one unambiguous value."
+        ),
+        row_index=row_index,
+    )
+
+
+def _csv_low_confidence_header_error(row_index: int) -> CsvCustomerDataParseError:
+    return CsvCustomerDataParseError(
+        code="csv_low_confidence_header",
+        message="CSV header row looks like customer data instead of column names.",
+        how_to_fix=_CSV_LOW_CONFIDENCE_HEADER_FIX,
         row_index=row_index,
     )
 
@@ -714,6 +818,24 @@ def _leading_rows_skipped_warnings(
     )
 
 
+def _low_confidence_header_warnings(
+    candidate: _CsvDelimiterCandidate,
+    row_index: int,
+) -> tuple[CampaignOpportunityWarning, ...]:
+    if candidate.header_has_hint:
+        return ()
+    return (
+        CampaignOpportunityWarning(
+            code="csv_low_confidence_header",
+            message=(
+                "Accepted a CSV header row that does not contain a known "
+                "source-field name; verify the first row is a real header."
+            ),
+            row_index=row_index,
+        ),
+    )
+
+
 def _csv_row_preview(row: Sequence[Any], *, max_chars: int = 80) -> str:
     text = ", ".join(
         str(cell).strip() for cell in row if str(cell or "").strip()
@@ -747,16 +869,74 @@ def _csv_header_index_and_hint(
 
 
 def _csv_row_has_header_hint(row: Sequence[Any]) -> bool:
-    normalized = {
-        _normalize_csv_header_cell(str(cell or "").strip())
-        for cell in row
-        if str(cell or "").strip()
-    }
-    return bool(normalized.intersection(_CSV_HEADER_HINTS))
+    for cell in row:
+        raw = str(cell or "").strip()
+        if not raw:
+            continue
+        if _csv_header_hint_key(raw) in _CSV_HEADER_HINTS:
+            return True
+        if _compact_csv_header_cell(raw) in _CSV_HEADER_HINT_COMPACT_KEYS:
+            return True
+    return False
+
+
+def _validate_csv_header_values(
+    values: Sequence[Any],
+    *,
+    header_has_hint: bool,
+    row_index: int,
+) -> None:
+    seen: dict[str, str] = {}
+    for value in values:
+        raw = str(value or "").strip()
+        if not raw:
+            continue
+        duplicate_keys = _csv_duplicate_header_keys(raw)
+        for normalized in duplicate_keys:
+            if normalized in seen:
+                raise _csv_duplicate_header_error(raw, row_index=row_index)
+        for normalized in duplicate_keys:
+            seen[normalized] = raw
+    if not header_has_hint and _csv_header_looks_like_data(values):
+        raise _csv_low_confidence_header_error(row_index)
+
+
+def _csv_header_looks_like_data(values: Sequence[Any]) -> bool:
+    return any(
+        _csv_header_cell_looks_like_data(str(value or "").strip())
+        for value in values
+        if str(value or "").strip()
+    )
+
+
+def _csv_header_cell_looks_like_data(value: str) -> bool:
+    words = re.findall(r"[A-Za-z0-9]+", value)
+    first_word = next((word.lower() for word in words), "")
+    if "?" in value and first_word in _CSV_QUESTION_HEADER_STARTS:
+        return True
+    if len(words) >= 6:
+        return True
+    return len(words) >= 2 and bool(_CSV_SHORT_PROSE_DATA_RE.search(value))
+
+
+def _csv_duplicate_header_keys(value: str) -> tuple[str, ...]:
+    keys = [_normalize_csv_header_cell(value)]
+    compact = _compact_csv_header_cell(value)
+    if compact in _CSV_HEADER_HINT_COMPACT_KEYS:
+        keys.append(f"compact:{compact}")
+    return tuple(dict.fromkeys(key for key in keys if key))
+
+
+def _csv_header_hint_key(value: str) -> str:
+    return _CSV_FIELD_SEPARATOR_RE.sub("_", value.strip().lower()).strip("_")
 
 
 def _normalize_csv_header_cell(value: str) -> str:
     return value.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _compact_csv_header_cell(value: str) -> str:
+    return _CSV_FIELD_SEPARATOR_RE.sub("", value.strip().lower())
 
 
 def _csv_byte_prefix_and_count(path: Path) -> tuple[bytes, int]:
@@ -799,10 +979,8 @@ def _csv_utf8_error_encoding_plan(path: Path, *, prefix: bytes) -> _CsvEncodingP
         )
     return _CsvEncodingPlan(
         encoding=legacy_encoding,
-        warnings=_csv_decode_warnings_from_stats(
-            legacy_stats,
-            encoding=legacy_encoding,
-        )
+        warnings=_legacy_fallback_encoding_warnings(legacy_encoding)
+        + _csv_decode_warnings_from_stats(legacy_stats, encoding=legacy_encoding)
         + _legacy_fallback_corruption_warnings(
             path,
             legacy_encoding=legacy_encoding,
@@ -910,6 +1088,21 @@ def _utf16_encoding_from_nul_bytes(data: bytes) -> str | None:
     ):
         return "utf-16-be"
     return None
+
+
+def _legacy_fallback_encoding_warnings(
+    legacy_encoding: str,
+) -> tuple[CampaignOpportunityWarning, ...]:
+    return (
+        CampaignOpportunityWarning(
+            code="csv_legacy_encoding_fallback",
+            field="encoding",
+            message=(
+                "CSV failed strict UTF-8 decoding and was decoded as "
+                f"{legacy_encoding}; export as UTF-8 when possible."
+            ),
+        ),
+    )
 
 
 def _legacy_fallback_corruption_warnings(

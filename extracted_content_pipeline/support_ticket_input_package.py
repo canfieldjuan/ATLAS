@@ -370,6 +370,21 @@ def build_support_ticket_input_package(
         assign_support_ticket_clusters_with_diagnostics(normalized_rows)
     )
     normalized_rows = list(clustered_rows)
+    source_id_fallback_rows = [
+        row for row in normalized_rows if row.get("_source_id_fallback")
+    ]
+    if source_id_fallback_rows:
+        warnings.append({
+            "code": "support_ticket_missing_source_id",
+            "message": (
+                "Some included ticket rows did not include a stable source ID; "
+                "row-order fallback IDs were used for diagnostics only."
+            ),
+            "row_count": len(source_id_fallback_rows),
+            "example_source_ids": [
+                _clean(row.get("source_id")) for row in source_id_fallback_rows[:5]
+            ],
+        })
     if cluster_diagnostics["cluster_preview_skipped"]:
         warnings.append({
             "code": "cluster_preview_skipped_large_upload",
@@ -497,6 +512,7 @@ def build_support_ticket_input_package(
         "ticket_status_present": ticket_status_present_count > 0,
         "ticket_status_present_count": ticket_status_present_count,
         "ticket_status_summary": ticket_status_summary,
+        "source_id_fallback_count": len(source_id_fallback_rows),
         "csat_present": csat_present_count > 0,
         "csat_present_count": csat_present_count,
         "csat_score_count": len(csat_scores),
@@ -534,13 +550,18 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     text = _ticket_text(row, source_title=source_title)
     if not text:
         return {}
-    source_id = _first_text(row, _SOURCE_ID_KEYS) or f"ticket-{row_index}"
+    source_id = _first_text(row, _SOURCE_ID_KEYS)
+    source_id_fallback = not source_id
+    if source_id_fallback:
+        source_id = f"ticket-{row_index}"
     normalized: dict[str, Any] = {
         "source_id": source_id,
         "source_type": _first_text(row, ("source_type", "type")) or "support_ticket",
         "source_title": source_title or source_id,
         "text": text,
     }
+    if source_id_fallback:
+        normalized["_source_id_fallback"] = True
     resolution_text = _first_text(row, _RESOLUTION_TEXT_KEYS)
     if resolution_text:
         normalized["resolution_text"] = _clip_text(
@@ -977,9 +998,15 @@ def _first_value(row: Mapping[str, Any], keys: Sequence[str]) -> Any:
     for key in keys:
         normalized_key = _key(key)
         for raw_key, value in row.items():
-            if _key(raw_key) == normalized_key and value not in (None, "", [], {}):
+            if _key(raw_key) == normalized_key and _has_value(value):
                 return value
     return None
+
+
+def _has_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value not in (None, "", [], {})
 
 
 def _has_any_key(row: Mapping[str, Any], keys: Sequence[str]) -> bool:
