@@ -494,10 +494,16 @@ For long-running coding tasks, after each PR open or push:
    Claude poll or Codex/local wake-bridge confirmation before merging.
 8. If the scheduled poll/wake reports all required checks green, all
    review/reconciliation gates clean, and merge-conflict/mergeability state
-   clean, the active builder follows the merge rules for the current arc. In
-   Codex/local watcher mode, first surface that state with
-   `scripts/report_pr_watcher_state.py`. If the operator has not authorized the
-   active builder to merge for this arc, report readiness and wait.
+   clean, the active builder follows the merge rules for the current arc. The
+   review/reconciliation gates are **two, and both must be green** -- neither
+   one alone is sufficient: `live-reconciliation` for the Codex/bot review
+   (unaccounted bot threads red it) and `claude-review` for the Claude Code
+   reviewer (a per-SHA commit status; absent or `failure` is not clean). See
+   `docs/REVIEWER_MERGE_GATE.md`. A re-push resets `claude-review`, so a merge
+   waits for the reviewer to re-review the new head. In Codex/local watcher
+   mode, first surface that state with `scripts/report_pr_watcher_state.py`. If
+   the operator has not authorized the active builder to merge for this arc, or
+   has not made `claude-review` a required check, report readiness and wait.
 9. After merge, tear down only the owned worktree/branch, archive the plan as
    required, sync from `origin/main`, and continue to the next approved slice
    if the arc says to continue. The merge itself is the signal to pick up the
