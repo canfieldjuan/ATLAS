@@ -3820,6 +3820,9 @@ def _action_representative_phrasing(item: Mapping[str, Any]) -> list[str]:
 
 
 def _action_customer_vocabulary(item: Mapping[str, Any]) -> list[str]:
+    explicit = _texts(item.get("customer_vocabulary"))
+    if explicit:
+        return explicit[:3]
     return _action_representative_phrasing(item)[:3]
 
 

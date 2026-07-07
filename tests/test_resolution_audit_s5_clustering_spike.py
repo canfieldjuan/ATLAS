@@ -1,8 +1,4 @@
-"""S5 current-code clustering calibration for issue #1993.
-
-The implementation slice replaces these current-behavior expectations with the
-accepted corrected grouping behavior.
-"""
+"""S5 clustering acceptance coverage for issue #1993."""
 
 from __future__ import annotations
 
@@ -59,13 +55,13 @@ _CANCEL_ORDER_ROWS = (
 )
 
 
-class _ConstantEmbeddingPort:
+class _PairEmbeddingPort:
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
 
     def embed_texts(self, texts: Sequence[str]) -> tuple[tuple[float, float], ...]:
         self.calls.append(tuple(texts))
-        return tuple((1.0, 0.0) for _ in texts)
+        return ((1.0, 0.0), (0.99, 0.01))
 
 
 def _ticket_rows(prefix: str, texts: Sequence[str]) -> list[dict[str, str]]:
@@ -79,43 +75,64 @@ def _ticket_rows(prefix: str, texts: Sequence[str]) -> list[dict[str, str]]:
     ]
 
 
-def test_s5_current_code_fragments_same_intent_sso_rows_below_repeat_gate() -> None:
+def test_s5_sso_rows_do_not_render_fabricated_question() -> None:
     package = build_support_ticket_input_package(_ticket_rows("sso", _SSO_SAME_INTENT_ROWS))
 
     result = build_ticket_faq_markdown(package.inputs["source_material"], max_items=0)
 
-    assert package.inputs["top_ticket_clusters"] == [
-        {"label": "login", "count": 10},
-        {"label": "acs identity provider reject", "count": 1},
-        {"label": "certificate expired metadata onelogin", "count": 1},
-    ]
+    assert package.inputs["top_ticket_clusters"] == [{"label": "login", "count": 12}]
     assert result.items == ()
+    assert "How do I fix SSO login?" not in result.markdown
     assert result.non_repeat_ticket_count == 12
     assert result.non_repeat_question_count == 12
 
 
-def test_s5_current_embedding_booster_cannot_cross_hard_topic_partitions() -> None:
-    package = build_support_ticket_input_package(_ticket_rows("sso", _SSO_SAME_INTENT_ROWS))
-    port = _ConstantEmbeddingPort()
+def test_s5_embedding_booster_can_cross_generated_token_partitions() -> None:
+    rows = [
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "auto-alpha",
+            "support_ticket_cluster_source": "token_set",
+            "source_id": "auto-1",
+            "source_title": "Provider metadata failed",
+            "text": "Enterprise access fails after provider change",
+        },
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "auto-beta",
+            "support_ticket_cluster_source": "token_set",
+            "source_id": "auto-2",
+            "source_title": "Directory login failed",
+            "text": "Company login error after directory update",
+        },
+    ]
+    port = _PairEmbeddingPort()
     semantic_merges: list[dict[str, object]] = []
 
     result = build_ticket_faq_markdown(
-        package.inputs["source_material"],
+        rows,
         max_items=0,
         embedding_port=port,
         embedding_merge_recorder=semantic_merges.append,
     )
 
-    assert [len(batch) for batch in port.calls] == [10]
-    embedded_texts = set(port.calls[0])
-    assert "Identity Provider Rejects The Acs Url" not in embedded_texts
-    assert "Onelogin Metadata Certificate Expired" not in embedded_texts
-    assert semantic_merges == []
-    assert result.items == ()
-    assert result.non_repeat_ticket_count == 12
+    assert port.calls == [
+        (
+            "Enterprise access fails after provider change",
+            "Company login error after directory update",
+        )
+    ]
+    assert [
+        (merge["left_source_id"], merge["right_source_id"])
+        for merge in semantic_merges
+    ] == [("auto-1", "auto-2")]
+    assert len(result.items) == 1
+    assert result.items[0]["ticket_count"] == 2
+    assert result.items[0]["source_ids"] == ("auto-1", "auto-2")
+    assert result.non_repeat_ticket_count == 0
 
 
-def test_s5_current_code_overmerges_cancel_subscription_and_order_intents() -> None:
+def test_s5_cancel_subscription_and_order_intents_do_not_overmerge() -> None:
     package = build_support_ticket_input_package(
         [
             *_ticket_rows("sub", _CANCEL_SUBSCRIPTION_ROWS),
@@ -126,16 +143,80 @@ def test_s5_current_code_overmerges_cancel_subscription_and_order_intents() -> N
     result = build_ticket_faq_markdown(package.inputs["source_material"], max_items=0)
 
     assert package.inputs["top_ticket_clusters"][0] == {"label": "order", "count": 17}
-    assert len(result.items) == 1
-    item = result.items[0]
-    assert item["topic"] == "order"
-    assert item["ticket_count"] == 11
-    assert any(source_id.startswith("sub-") for source_id in item["source_ids"])
-    assert any(source_id.startswith("order-") for source_id in item["source_ids"])
-    assert result.non_repeat_ticket_count == 9
+    assert len(result.items) == 3
+    source_sets = [set(item["source_ids"]) for item in result.items]
+    assert {"sub-1", "sub-6"} in source_sets
+    assert {"order-1", "order-2", "order-6", "order-7"} in source_sets
+    assert {"order-3", "order-9"} in source_sets
+    assert all(
+        not (
+            any(source_id.startswith("sub-") for source_id in item["source_ids"])
+            and any(source_id.startswith("order-") for source_id in item["source_ids"])
+        )
+        for item in result.items
+    )
+    assert result.non_repeat_ticket_count == 12
 
 
-def test_s5_current_output_order_and_source_id_order_follow_input_order() -> None:
+def test_s5_nested_advisory_cluster_source_is_inherited_before_topic_selection() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster_source": "token_set",
+                "evidence": [
+                    {
+                        "source_type": "support_ticket",
+                        "support_ticket_cluster": "alpha",
+                        "source_id": "alpha-1",
+                        "text": "How do I reset password?",
+                    },
+                    {
+                        "source_type": "support_ticket",
+                        "support_ticket_cluster": "beta",
+                        "source_id": "beta-1",
+                        "text": "How do I reset password?",
+                    },
+                ],
+            }
+        ],
+        max_items=0,
+    )
+
+    assert [(item["topic"], item["question"], item["source_ids"]) for item in result.items] == [
+        ("login reset", "How do I reset password?", ("alpha-1", "beta-1"))
+    ]
+
+
+def test_s5_advisory_duplicate_can_join_matching_hard_topic() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "invoice view",
+                "support_ticket_cluster_source": "provided",
+                "source_id": "provided-1",
+                "text": "Where can I view my invoice?",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "invoice view",
+                "support_ticket_cluster_source": "token_set",
+                "source_id": "generated-1",
+                "text": "Where can I view my invoice?",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert [(item["topic"], item["question"], item["source_ids"]) for item in result.items] == [
+        ("invoice view", "Where can I view my invoice?", ("generated-1", "provided-1"))
+    ]
+    assert result.non_repeat_ticket_count == 0
+    assert result.non_repeat_question_count == 0
+
+
+def test_s5_output_order_and_source_id_order_are_input_order_stable() -> None:
     rows = [
         {
             "source_type": "support_ticket",
@@ -175,12 +256,12 @@ def test_s5_current_output_order_and_source_id_order_follow_input_order() -> Non
         ("Where can I request a refund credit?", ("refund-b1", "refund-b2")),
     ]
     assert [(item["question"], item["source_ids"]) for item in reverse.items] == [
-        ("Where can I request a refund credit?", ("refund-b2", "refund-b1")),
-        ("How do I get my money back?", ("refund-a2", "refund-a1")),
+        ("How do I get my money back?", ("refund-a1", "refund-a2")),
+        ("Where can I request a refund credit?", ("refund-b1", "refund-b2")),
     ]
 
 
-def test_s5_current_token_set_skip_leaves_large_preview_rows_uncategorized() -> None:
+def test_s5_token_set_skip_leaves_large_preview_rows_uncategorized() -> None:
     rows = [
         {
             "ticket_id": f"large-{index}",

@@ -50,6 +50,8 @@ _PHRASE_FOLDS = (
     (re.compile(r"\baccess\s+(?:my\s+|the\s+)?account\b", re.IGNORECASE), "login"),
     (re.compile(r"\bsingle[-\s]?sign[-\s]?on\b", re.IGNORECASE), "sso"),
     (re.compile(r"\bsingle\s+sign\s+on\b", re.IGNORECASE), "sso"),
+    (re.compile(r"\bidentity\s+provider\b", re.IGNORECASE), "sso"),
+    (re.compile(r"\bazure\s+ad\b", re.IGNORECASE), "sso"),
     (re.compile(r"\be[-\s]?mail\b", re.IGNORECASE), "email"),
     (re.compile(r"\btwo[-\s]?factor\b", re.IGNORECASE), "2fa"),
 )
@@ -201,6 +203,9 @@ _TOKEN_FOLDS = {
     "signin": "login",
     "signins": "login",
     "saml": "sso",
+    "idp": "sso",
+    "okta": "sso",
+    "onelogin": "sso",
     "updated": "update",
     "updating": "update",
     "webhook": "api",

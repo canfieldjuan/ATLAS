@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, ItemsView, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
@@ -104,6 +104,10 @@ _REDACTED_MONEY_RE = re.compile(r"\{\$|\$\s*X{2,}", re.IGNORECASE)
 _TRAILING_TITLE_RE = re.compile(r"\b(?:mr|mrs|ms|dr)\.?$", re.IGNORECASE)
 _QUOTE_ARTIFACT_RE = re.compile(r"(?:''|``)")
 _LEADING_BRACKETED_METADATA_RE = re.compile(r"^(?:\[[^\]\n]{1,80}\]\s*)+")
+_SYNTHETIC_SUPPORT_QUESTION_PREFIX_RE = re.compile(
+    r"^localized\s+support\s+question\s+",
+    re.IGNORECASE,
+)
 _METADATA_QUESTION_START_RE = re.compile(
     r"\b(?:how|what|where|when|why|can|could|do|does|como)\s+",
     re.IGNORECASE,
@@ -122,6 +126,8 @@ _FAILURE_RISK_RULES = (
     ("money_or_account_risk", ("charged", "fee", "fees", "payment", "balance", "debt", "foreclosure", "fraud")),
 )
 _FIELD_LOOKUP_MISSING = object()
+_ADVISORY_SUPPORT_TICKET_CLUSTER_SOURCES = {"token_set", "token_anchor"}
+_MIN_NON_EXACT_SHARED_QUESTION_TOKENS = 2
 DEFAULT_INTENT_RULES = (
     ("credit report disputes", (
         "credit report",
@@ -773,7 +779,21 @@ def build_ticket_faq_markdown(
                 continue
             seen.add(key)
             source_keys.add(source_key)
-            topic = _topic(opportunity, evidence, intent_rules=intent_rules)
+            support_ticket_cluster = support_ticket_plain_text(
+                evidence.get("support_ticket_cluster")
+                or opportunity.get("support_ticket_cluster")
+            )
+            support_ticket_cluster_source = support_ticket_plain_text(
+                evidence.get("support_ticket_cluster_source")
+                or opportunity.get("support_ticket_cluster_source")
+            ).lower()
+            topic = _topic(
+                opportunity,
+                evidence,
+                support_ticket_cluster=support_ticket_cluster,
+                support_ticket_cluster_source=support_ticket_cluster_source,
+                intent_rules=intent_rules,
+            )
             resolution_context = " / ".join(
                 value
                 for value in (
@@ -801,10 +821,13 @@ def build_ticket_faq_markdown(
                 "source_title": support_ticket_plain_text(
                     evidence.get("source_title") or opportunity.get("source_title")
                 ),
-                "support_ticket_cluster": support_ticket_plain_text(
-                    evidence.get("support_ticket_cluster")
-                    or opportunity.get("support_ticket_cluster")
+                "support_ticket_cluster": support_ticket_cluster,
+                "support_ticket_cluster_key": support_ticket_plain_text(
+                    evidence.get("support_ticket_cluster_key")
+                    or opportunity.get("support_ticket_cluster_key")
                 ),
+                "support_ticket_cluster_source": support_ticket_cluster_source,
+                "topic": topic,
                 "safe_label_context": _representative_safe_context_text(
                     opportunity,
                     evidence,
@@ -853,10 +876,13 @@ def build_ticket_faq_markdown(
     subclustered_groups: dict[tuple[str, str], list[dict[str, str]]] = {}
     excluded_singleton_keys: set[str] = set()
     non_repeat_question_count = 0
-    for (topic, scope), rows in groups.items():
-        if not scope.startswith("topic:"):
-            subclustered_groups[(topic, scope)] = rows
-            continue
+
+    def add_question_subclusters(
+        topic: str,
+        scope: str,
+        rows: Sequence[dict[str, str]],
+    ) -> None:
+        nonlocal non_repeat_question_count
         for cluster_index, cluster_rows in enumerate(
             _question_subclusters(
                 rows,
@@ -869,9 +895,56 @@ def build_ticket_faq_markdown(
                 excluded_singleton_keys.update(cluster_keys)
                 non_repeat_question_count += 1
                 continue
-            subclustered_groups[(topic, f"{scope}:question:{cluster_index}")] = list(
-                cluster_rows
+            cluster_topic = (
+                _topic_for_question_cluster(cluster_rows)
+                if scope == "__auto_support_ticket_cluster__"
+                else topic
             )
+            subclustered_groups[
+                (cluster_topic, f"{scope}:question:{cluster_index}")
+            ] = list(cluster_rows)
+
+    auto_topic_rows: list[dict[str, str]] = []
+    hard_topic_rows_by_topic: dict[str, list[dict[str, str]]] = defaultdict(list)
+    advisory_topic_rows: list[dict[str, str]] = []
+    for (topic, scope), rows in groups.items():
+        if not scope.startswith("topic:"):
+            continue
+        hard_topic_rows_by_topic[topic].extend(
+            row for row in rows if not _has_advisory_support_ticket_cluster(row)
+        )
+        advisory_topic_rows.extend(
+            row for row in rows if _has_advisory_support_ticket_cluster(row)
+        )
+    matched_advisory_rows: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for row in advisory_topic_rows:
+        matched_topic = _matching_hard_topic_for_advisory_row(
+            row,
+            hard_topic_rows_by_topic,
+        )
+        if matched_topic:
+            matched_advisory_rows[matched_topic].append(row)
+        else:
+            auto_topic_rows.append(row)
+    for (topic, scope), rows in groups.items():
+        if not scope.startswith("topic:"):
+            subclustered_groups[(topic, scope)] = rows
+            continue
+        hard_topic_rows = [
+            row for row in rows if not _has_advisory_support_ticket_cluster(row)
+        ]
+        if hard_topic_rows:
+            add_question_subclusters(
+                topic,
+                scope,
+                [*hard_topic_rows, *matched_advisory_rows.pop(topic, ())],
+            )
+    if auto_topic_rows:
+        add_question_subclusters(
+            "customer support issues",
+            "__auto_support_ticket_cluster__",
+            auto_topic_rows,
+        )
     # A ticket only counts as non-repeat if none of its evidence rows landed
     # in any kept group; this keeps the condensed-coverage accounting exact
     # (rendered distinct tickets + non-repeat distinct tickets == sources).
@@ -1125,7 +1198,7 @@ def _question_subclusters(
             candidate_gist = gists[candidate]
             if not _jaccard_lengths_can_match(len(candidate_gist), len(gist)):
                 continue
-            if _jaccard(candidate_gist, gist) >= _SUBCLUSTER_JACCARD_THRESHOLD:
+            if _question_gists_can_link(candidate_gist, gist):
                 union(candidate, index)
         for token in prefix:
             prefix_index[token].append(index)
@@ -1142,7 +1215,28 @@ def _question_subclusters(
     clusters: dict[int, list[Mapping[str, str]]] = defaultdict(list)
     for index, row in enumerate(rows):
         clusters[find(index)].append(row)
-    return [clusters[root] for root in sorted(clusters)]
+    return [
+        sorted(clusters[root], key=_question_cluster_row_sort_key)
+        for root in sorted(clusters)
+    ]
+
+
+def _question_gists_can_link(
+    left: frozenset[str],
+    right: frozenset[str],
+) -> bool:
+    if not _jaccard_lengths_can_match(len(left), len(right)):
+        return False
+    if left != right and len(left & right) < _MIN_NON_EXACT_SHARED_QUESTION_TOKENS:
+        return False
+    return _jaccard(left, right) >= _SUBCLUSTER_JACCARD_THRESHOLD
+
+
+def _question_cluster_row_sort_key(row: Mapping[str, str]) -> tuple[str, str]:
+    return (
+        _clean(row.get("source_key") or row.get("source_id")),
+        str(row.get("text") or ""),
+    )
 
 
 def _apply_embedding_booster(
@@ -1246,9 +1340,16 @@ def _topic(
     opportunity: Mapping[str, Any],
     evidence: Mapping[str, Any],
     *,
+    support_ticket_cluster: str = "",
+    support_ticket_cluster_source: str = "",
     intent_rules: Sequence[tuple[str, Sequence[str]]],
 ) -> str:
-    provided_cluster = _provided_support_ticket_cluster_topic(opportunity, evidence)
+    provided_cluster = _provided_support_ticket_cluster_topic(
+        opportunity,
+        evidence,
+        support_ticket_cluster=support_ticket_cluster,
+        support_ticket_cluster_source=support_ticket_cluster_source,
+    )
     if provided_cluster:
         return provided_cluster.lower()
     intent = _intent_topic(opportunity, evidence, intent_rules=intent_rules)
@@ -1268,12 +1369,82 @@ def _topic(
 
 def _provided_support_ticket_cluster_topic(
     *rows: Mapping[str, Any],
+    support_ticket_cluster: str = "",
+    support_ticket_cluster_source: str = "",
 ) -> str:
+    if support_ticket_cluster:
+        return (
+            ""
+            if _is_advisory_support_ticket_cluster_source(
+                support_ticket_cluster_source
+            )
+            else support_ticket_cluster
+        )
+    inherited_source = support_ticket_plain_text(support_ticket_cluster_source).lower()
+    for row in rows:
+        inherited_source = inherited_source or support_ticket_plain_text(
+            row.get("support_ticket_cluster_source")
+        ).lower()
     for row in rows:
         value = support_ticket_plain_text(row.get("support_ticket_cluster"))
         if value:
-            return value
+            return (
+                ""
+                if _is_advisory_support_ticket_cluster_source(inherited_source)
+                else value
+            )
     return ""
+
+
+def _has_advisory_support_ticket_cluster(row: Mapping[str, Any]) -> bool:
+    source = support_ticket_plain_text(row.get("support_ticket_cluster_source")).lower()
+    return _is_advisory_support_ticket_cluster_source(source)
+
+
+def _is_advisory_support_ticket_cluster_source(source: str) -> bool:
+    return (
+        support_ticket_plain_text(source).lower()
+        in _ADVISORY_SUPPORT_TICKET_CLUSTER_SOURCES
+    )
+
+
+def _matching_hard_topic_for_advisory_row(
+    row: Mapping[str, str],
+    hard_topic_rows_by_topic: Mapping[str, Sequence[Mapping[str, str]]],
+) -> str:
+    row_gist = _question_gist_tokens(str(row.get("text") or ""))
+    if not row_gist:
+        return ""
+    cluster_label = _clean(row.get("support_ticket_cluster")).lower()
+    candidates: list[tuple[int, int, str, str]] = []
+    for topic, hard_rows in hard_topic_rows_by_topic.items():
+        topic_key = _clean(topic).lower()
+        matched_count = 0
+        for hard_row in hard_rows:
+            hard_gist = _question_gist_tokens(str(hard_row.get("text") or ""))
+            if hard_gist and _question_gists_can_link(row_gist, hard_gist):
+                matched_count += 1
+        if matched_count:
+            candidates.append((
+                0 if cluster_label and cluster_label == topic_key else 1,
+                -matched_count,
+                topic_key,
+                topic,
+            ))
+    if not candidates:
+        return ""
+    return min(candidates)[3]
+
+
+def _topic_for_question_cluster(rows: Sequence[Mapping[str, str]]) -> str:
+    counts = Counter(
+        _clean(row.get("topic")).lower()
+        for row in rows
+        if _clean(row.get("topic"))
+    )
+    if not counts:
+        return "customer support issues"
+    return min(counts, key=lambda topic: (-counts[topic], topic))
 
 
 def _evidence_group_key(resolution_text: Any) -> str:
@@ -1291,7 +1462,9 @@ def _has_mixed_evidence_scopes(rows: Sequence[Mapping[str, Any]]) -> bool:
     return len(scopes) > 1 or (bool(scopes) and has_unscoped_rows)
 
 
-def _group_sort_key(item: tuple[str, Sequence[Mapping[str, str]]]) -> tuple[int, int, int, str]:
+def _group_sort_key(
+    item: tuple[str, Sequence[Mapping[str, str]]],
+) -> tuple[int, int, int, str, str]:
     topic, rows = item
     score = _opportunity_score(topic, rows)
     return (
@@ -1299,7 +1472,19 @@ def _group_sort_key(item: tuple[str, Sequence[Mapping[str, str]]]) -> tuple[int,
         -score["frequency"],
         -score["failure_risk_score"],
         topic.lower(),
+        _group_stable_tie_key(rows),
     )
+
+
+def _group_stable_tie_key(rows: Sequence[Mapping[str, str]]) -> str:
+    parts = [
+        (
+            f"{_question_gist_text(str(row.get('text') or '')).lower()}:"
+            f"{_clean(row.get('source_key'))}"
+        )
+        for row in rows
+    ]
+    return min(parts, default="")
 
 
 def _intent_topic(
@@ -1444,6 +1629,10 @@ def _item(
     opportunity = _opportunity_score(topic, rows)
     term_mappings = _term_mappings(rows, documentation_terms, vocabulary_gap_rules)
     routing_signals = _routing_signals(rows)
+    customer_vocabulary = _item_customer_vocabulary(
+        question=question,
+        rows=rows,
+    )
     item = {
         "topic": topic,
         "question": question,
@@ -1480,6 +1669,8 @@ def _item(
         "displayed_evidence_count": len(display_rows),
         "ticket_count": len(source_ids),
     }
+    if customer_vocabulary:
+        item["customer_vocabulary"] = customer_vocabulary
     if routing_signals:
         item["routing_signals"] = routing_signals
     outcome_diagnostics = _outcome_diagnostics(rows)
@@ -1489,6 +1680,27 @@ def _item(
     if source_date_span is not None:
         item["source_date_span"] = source_date_span
     return item
+
+
+def _item_customer_vocabulary(
+    *,
+    question: str,
+    rows: Sequence[Mapping[str, str]],
+) -> tuple[str, ...]:
+    cluster_labels = tuple(
+        support_ticket_plain_text(row.get("support_ticket_cluster"))
+        for row in rows
+        if _has_advisory_support_ticket_cluster(row)
+        and support_ticket_plain_text(row.get("support_ticket_cluster"))
+    )
+    if not cluster_labels:
+        return ()
+    phrases: list[str] = []
+    for value in (question, *cluster_labels):
+        text = support_ticket_plain_text(value)
+        if text and text not in phrases:
+            phrases.append(text)
+    return tuple(phrases[:3])
 
 
 def _routing_signals(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
@@ -2804,7 +3016,8 @@ def _question_candidate_variants(value: str) -> tuple[str, ...]:
 
 
 def _strip_leading_question_metadata(value: str) -> str:
-    return _compact(_LEADING_BRACKETED_METADATA_RE.sub("", value))
+    stripped = _compact(_LEADING_BRACKETED_METADATA_RE.sub("", value))
+    return _compact(_SYNTHETIC_SUPPORT_QUESTION_PREFIX_RE.sub("", stripped))
 
 
 def _question_after_metadata_prefix(value: str) -> str:
