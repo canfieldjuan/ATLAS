@@ -126,6 +126,16 @@ echo
 echo "changed files:"
 git diff --name-status "$base"...HEAD || true
 
+if [ -n "$current_pr_body_file" ]; then
+    if [ -f "$script_root/scripts/audit_pr_body.py" ]; then
+        run_check "PR body contract" python "$script_root/scripts/audit_pr_body.py" "$current_pr_body_file"
+    else
+        echo
+        echo "==> PR body contract"
+        echo "    SKIP (scripts/audit_pr_body.py not found)"
+    fi
+fi
+
 run_check "Pre-push audit wrapper" bash "$script_root/scripts/pre_push_audit.sh" --repo-root "$repo_root" --script-root "$script_root"
 
 if [ -f "$script_root/scripts/audit_extracted_pipeline_ci_enrollment.py" ]; then

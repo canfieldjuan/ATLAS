@@ -19,7 +19,8 @@ fresh handoff.
   reconstruction guidance, the fresh-session bootstrap, the plan scaffold, and
   the PR-body audit/tests so future non-Dependabot PRs must carry the
   `## Cold diff reconstruction` receipt; wire that audit into the local
-  push/open wrappers so invalid bodies fail before push or PR publication.
+  push/open wrappers and local review hook path so invalid bodies fail before
+  push or PR publication; enroll the wrapper tests in required PR-review CI.
 - Must not change: runtime code, product shape, report/snapshot/email/PDF
   behavior, billing/checkout behavior, reviewer verdict semantics, merge
   authority, watcher behavior, or any active product lane.
@@ -37,6 +38,8 @@ Slice phase: Workflow/process
    shape.
 5. Run the PR-body audit from the push/open wrappers before push or PR
    create/edit, with tests proving invalid bodies stop before external actions.
+6. Enroll the new open-wrapper tests in the pre-push workflow and run the body
+   audit from `local_pr_review.sh` when a current PR body is supplied.
 
 ### Review Contract
 
@@ -51,23 +54,32 @@ Slice phase: Workflow/process
 - `scripts/push_pr.sh` and `scripts/open_pr.sh` run the PR-body audit before
   push, PR create, or PR edit, with tests proving invalid bodies do not reach
   fetch/local-review/push or `gh`.
+- `scripts/local_pr_review.sh` runs the same body audit when
+  `ATLAS_CURRENT_PR_BODY_FILE`/`--current-pr-body-file` is supplied, so direct
+  pre-push-hook execution fails closed too.
+- `.github/workflows/pre_push_audit.yml` enrolls both push/open wrapper test
+  files in the PR-review tooling unit-test list.
 - No runtime/product files or user-facing product shape move.
 Reviewer rules triggered: R1 requirements match, R2 test evidence, R10
 checker/gate predicates, R14 codebase verification.
 
 ### Files touched
 
+- `.github/workflows/pre_push_audit.yml`
 - `AGENTS.md`
 - `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md`
 - `docs/SESSION_BOOTSTRAP.md`
 - `plans/PR-Problem-Derived-Fix-Contract.md`
 - `scripts/audit_pr_body.py`
+- `scripts/local_pr_review.sh`
 - `scripts/new_pr_plan.sh`
 - `scripts/open_pr.sh`
 - `scripts/push_pr.sh`
 - `tests/test_audit_pr_body.py`
+- `tests/test_local_pr_review.py`
 - `tests/test_new_pr_plan.py`
 - `tests/test_open_pr_wrapper.py`
+- `tests/test_pre_push_audit_workflow.py`
 - `tests/test_push_pr_wrapper.py`
 
 ## Mechanism
@@ -83,6 +95,10 @@ checker/gate predicates, R14 codebase verification.
   so local/CI PR-body checks fail if the self-reconstruction receipt is absent.
 - Call the same audit in the push/open wrappers immediately after the body file
   exists check, so the documented local path fails before external side effects.
+- Call the audit from `local_pr_review.sh` when a current PR body is present,
+  closing the bare pre-push-hook path without changing body-less main pushes.
+- Add `tests/test_open_pr_wrapper.py` to both explicit pre-push workflow pytest
+  command lists.
 
 ## Intentional
 
@@ -105,6 +121,7 @@ Parked hardening: none.
 
 - Command: python -m pytest tests/test_new_pr_plan.py tests/test_audit_pr_body.py -q (27 passed)
 - Command: python -m pytest tests/test_new_pr_plan.py tests/test_audit_pr_body.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py -q (44 passed)
+- Command: python -m pytest tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py tests/test_audit_pr_body.py -q (61 passed)
 - Command: python scripts/audit_pr_body.py /tmp/pr-problem-derived-fix-contract-body.md (passed)
 - Command: ATLAS_CURRENT_PR_BODY_FILE=/tmp/pr-problem-derived-fix-contract-body.md bash scripts/local_pr_review.sh (passed)
 
@@ -112,16 +129,20 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/pre_push_audit.yml` | 4 |
 | `AGENTS.md` | 39 |
 | `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md` | 59 |
 | `docs/SESSION_BOOTSTRAP.md` | 1 |
-| `plans/PR-Problem-Derived-Fix-Contract.md` | 127 |
+| `plans/PR-Problem-Derived-Fix-Contract.md` | 148 |
 | `scripts/audit_pr_body.py` | 5 |
+| `scripts/local_pr_review.sh` | 10 |
 | `scripts/new_pr_plan.sh` | 6 |
 | `scripts/open_pr.sh` | 2 |
 | `scripts/push_pr.sh` | 2 |
 | `tests/test_audit_pr_body.py` | 26 |
+| `tests/test_local_pr_review.py` | 54 |
 | `tests/test_new_pr_plan.py` | 4 |
 | `tests/test_open_pr_wrapper.py` | 93 |
+| `tests/test_pre_push_audit_workflow.py` | 6 |
 | `tests/test_push_pr_wrapper.py` | 84 |
-| **Total** | **448** |
+| **Total** | **543** |

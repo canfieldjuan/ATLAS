@@ -97,6 +97,51 @@ def test_local_pr_review_runs_cross_session_drift_audit_when_present(tmp_path: P
     assert "drift guard ran" in result.stdout
 
 
+def test_local_pr_review_runs_pr_body_contract_when_body_supplied(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("PR body\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_pr_body.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('body audit ran for ' + sys.argv[1])\n",
+    )
+    _git(repo, "add", "scripts/audit_pr_body.py")
+    _git(repo, "commit", "-m", "add body audit")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh", "--current-pr-body-file", str(body)])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PR body contract" in result.stdout
+    assert f"body audit ran for {body}" in result.stdout
+    assert "local PR review passed" in result.stdout
+
+
+def test_local_pr_review_env_pr_body_contract_fails_closed(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("missing receipt\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_pr_body.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('body audit rejected ' + sys.argv[1])\n"
+        "sys.exit(1)\n",
+    )
+    _git(repo, "add", "scripts/audit_pr_body.py")
+    _git(repo, "commit", "-m", "add failing body audit")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"ATLAS_CURRENT_PR_BODY_FILE": str(body)})
+
+    assert result.returncode == 1
+    assert "PR body contract" in result.stdout
+    assert f"body audit rejected {body}" in result.stdout
+    assert "1 local review check(s) failed" in result.stdout
+
+
 def test_local_pr_review_runs_plans_archive_advisory_when_present(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
@@ -192,14 +237,19 @@ def _write_fixture_repo(repo: Path) -> None:
     _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 
 
-def _run(repo: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(
+    repo: Path,
+    args: list[str],
+    *,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         cwd=repo,
         check=False,
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTHONPATH": str(repo)},
+        env={**os.environ, "PYTHONPATH": str(repo), **(env or {})},
     )
 
 
