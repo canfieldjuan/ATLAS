@@ -371,6 +371,25 @@ def test_support_ticket_package_escaped_html_uses_line_hygiene() -> None:
     assert "<p>" not in text
 
 
+def test_support_ticket_package_self_closing_skipped_html_keeps_following_text() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-self-closing-html",
+        "subject": "Export report",
+        "description": (
+            "<script src=\"https://cdn.example.invalid/ticket.js\" />"
+            "How do I export attribution reports?"
+            "<style />Where is the billing page?"
+            "<blockquote />Can I reset MFA?"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "How do I export attribution reports?" in text
+    assert "Where is the billing page?" in text
+    assert "Can I reset MFA?" in text
+    assert "cdn.example.invalid" not in text
+
+
 def test_support_ticket_package_string_history_preserves_later_messages() -> None:
     package = build_support_ticket_input_package([{
         "ticket_id": "zd-history-string",

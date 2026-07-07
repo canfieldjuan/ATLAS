@@ -177,7 +177,7 @@ def _row_from_entry(
         })
         comments = ()
     private_comment_keys = {
-        _text_key(_comment_text(comment))
+        _text_key(_comment_duplicate_text(comment))
         for comment in comments
         if isinstance(comment, Mapping) and support_ticket_comment_is_private(comment)
     }
@@ -236,6 +236,14 @@ def _row_from_entry(
 def _comment_text(comment: Mapping[str, Any]) -> str:
     for key in ("plain_body", "body", "html_body"):
         text = _comment_plain(comment.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _comment_duplicate_text(comment: Mapping[str, Any]) -> str:
+    for key in ("plain_body", "body", "html_body"):
+        text = _plain(comment.get(key))
         if text:
             return text
     return ""

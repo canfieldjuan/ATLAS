@@ -259,7 +259,12 @@ class _LinePreservingHTMLExtractor(HTMLParser):
         tag: str,
         attrs: list[tuple[str, str | None]],
     ) -> None:
-        self.handle_starttag(tag, attrs)
+        del attrs
+        lowered = tag.lower()
+        if lowered in _HTML_SKIP_TAGS or lowered in _HTML_LINE_TAGS:
+            self.parts.append("\n")
+            return
+        self.parts.append(" ")
 
     def handle_endtag(self, tag: str) -> None:
         lowered = tag.lower()

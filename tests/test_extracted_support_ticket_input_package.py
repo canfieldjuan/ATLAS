@@ -2030,6 +2030,47 @@ def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:
     ]
 
 
+def test_zendesk_full_thread_rows_suppress_private_html_first_description() -> None:
+    private_html = (
+        "<p>Internal note: explain the real workaround only to the owner.</p>"
+        "<p>--</p>"
+        "<p>Jane Agent</p>"
+    )
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-private-html-first",
+                "subject": "Migration workaround",
+                "description": private_html,
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "public": False,
+                    "html_body": private_html,
+                },
+                {
+                    "author_id": "requester-1",
+                    "public": True,
+                    "plain_body": "What permission do I need for account exports?",
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    assert result.rows == [{
+        "ticket_id": "zd-private-html-first",
+        "source_id": "zd-private-html-first",
+        "source_type": "support_ticket",
+        "subject": "Migration workaround",
+        "description": "What permission do I need for account exports?",
+    }]
+    assert "Internal note" not in json.dumps(result.rows)
+    assert "Jane Agent" not in json.dumps(result.rows)
+
+
 def test_zendesk_full_thread_rows_share_private_comment_marker_filter() -> None:
     result = rows_from_zendesk_full_thread({
         "tickets": [{

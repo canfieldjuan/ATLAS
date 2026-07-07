@@ -117,8 +117,13 @@ use a transcript cleanup mode that skips local junk blocks without truncating
 later public messages. Zendesk full-thread rows filter through the same privacy
 predicate before flattening comments into customer or resolution text, and
 public Zendesk comments use the same text-component hygiene as package
-comments. The FAQ builder keeps consuming the same normalized rows; tests prove
-the row-level status state flows into `outcome_diagnostics`.
+comments. Private-description duplicate suppression compares private comments
+with the same raw text key used for ticket descriptions, so a private first
+comment cannot be re-admitted through the ticket description when public comment
+hygiene removes signatures or quoted sections. Self-closing script/style/
+blockquote tags are treated as balanced separators so later customer text is not
+lost. The FAQ builder keeps consuming the same normalized rows; tests prove the
+row-level status state flows into `outcome_diagnostics`.
 
 ## Intentional
 
@@ -141,8 +146,8 @@ Parked hardening: none.
 
 ## Verification
 
-- `pytest tests/test_smoke_content_ops_support_ticket_package.py tests/test_extracted_support_ticket_input_package.py tests/test_extracted_ticket_faq_markdown.py -q` - 552 passed.
-- `scripts/run_extracted_pipeline_checks.sh` - 5171 passed, 21 skipped, 1 warning.
+- `pytest tests/test_smoke_content_ops_support_ticket_package.py tests/test_extracted_support_ticket_input_package.py tests/test_extracted_ticket_faq_markdown.py -q` - 554 passed.
+- `scripts/run_extracted_pipeline_checks.sh` - 5173 passed, 21 skipped, 1 warning.
 
 ## Estimated diff size
 
@@ -151,10 +156,10 @@ Parked hardening: none.
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 33 |
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 70 |
-| `extracted_content_pipeline/support_ticket_text_hygiene.py` | 326 |
-| `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 14 |
-| `plans/PR-Resolution-Audit-S6-Evidence-Hygiene.md` | 160 |
-| `tests/test_extracted_support_ticket_input_package.py` | 120 |
+| `extracted_content_pipeline/support_ticket_text_hygiene.py` | 331 |
+| `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 22 |
+| `plans/PR-Resolution-Audit-S6-Evidence-Hygiene.md` | 165 |
+| `tests/test_extracted_support_ticket_input_package.py` | 161 |
 | `tests/test_extracted_ticket_faq_markdown.py` | 58 |
-| `tests/test_smoke_content_ops_support_ticket_package.py` | 181 |
-| **Total** | **965** |
+| `tests/test_smoke_content_ops_support_ticket_package.py` | 200 |
+| **Total** | **1043** |
