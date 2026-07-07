@@ -437,6 +437,64 @@ def test_build_ticket_faq_markdown_uses_alias_fields_through_cached_lookup() -> 
     )
 
 
+def test_build_ticket_faq_markdown_uses_normalized_helpdesk_status_synonyms() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-resolved",
+            "subject": "Export reports",
+            "description": "How do I export attribution reports?",
+            "ticket_status": "Solved - Closed",
+            "csat": "5",
+        },
+        {
+            "ticket_id": "ticket-reopened",
+            "subject": "Export reports",
+            "description": "How can I export attribution reports?",
+            "ticket_status": "Reopened by customer",
+            "csat": "bad",
+        },
+        {
+            "ticket_id": "ticket-open",
+            "subject": "Export reports",
+            "description": "Where do I export attribution reports?",
+            "ticket_status": "Awaiting requester",
+            "csat": "4",
+        },
+        {
+            "ticket_id": "ticket-cancelled",
+            "subject": "Export reports",
+            "description": "Can I export attribution reports?",
+            "ticket_status": "Cancelled by requester",
+            "csat": "1",
+        },
+        {
+            "ticket_id": "ticket-other",
+            "subject": "Export reports",
+            "description": "Could I export attribution reports?",
+            "ticket_status": "Escalated to product",
+            "csat": "5",
+        },
+    ])
+
+    result = build_ticket_faq_markdown(package.inputs["source_material"])
+
+    assert len(result.items) == 1
+    diagnostics = result.items[0]["outcome_diagnostics"]
+    assert diagnostics["diagnostic_ticket_count"] == 5
+    assert diagnostics["ticket_status_summary"] == {
+        "cancelled": 1,
+        "open": 1,
+        "other": 1,
+        "reopened": 1,
+        "resolved": 1,
+    }
+    assert diagnostics["reopened_ticket_count"] == 1
+    assert diagnostics["outcome_risk_ticket_count"] == 2
+    assert diagnostics["negative_csat_ticket_count"] == 2
+    assert diagnostics["csat_present_count"] == 5
+    assert diagnostics["csat_score_average"] == 3.75
+
+
 def test_build_ticket_faq_markdown_does_not_invent_support_contact() -> None:
     loaded = load_source_campaign_opportunities_from_file(SUPPORT_TICKET_CSV, file_format="csv")
 

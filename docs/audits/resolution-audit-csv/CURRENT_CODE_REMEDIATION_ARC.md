@@ -187,8 +187,9 @@ Implementation notes:
 
 ### S5 - Clustering Correctness Spike And First Fix
 
-Status: spike complete; first implementation in progress. Spike PR:
-[#2032](https://github.com/canfieldjuan/ATLAS/pull/2032).
+Status: complete. Spike PR:
+[#2032](https://github.com/canfieldjuan/ATLAS/pull/2032). Fixing PR:
+[#2033](https://github.com/canfieldjuan/ATLAS/pull/2033).
 
 Root: token-set labels are promoted into hard partitions before question-level
 similarity has a chance to unify or split intents.
@@ -234,7 +235,7 @@ Implementation notes:
 
 ### S6 - Text, Comment, And Outcome Evidence Hygiene
 
-Status: open.
+Status: in progress. Fixing PR: pending S6 evidence-hygiene slice.
 
 Root: input normalization preserves useful customer language, but text/comment
 and outcome evidence are admitted through narrow local rules instead of one
@@ -260,6 +261,17 @@ Expected fix:
   customer wording.
 - Add private/internal comment fixtures and status synonym fixtures.
 - Keep final-output scrub tests intact.
+
+Implementation notes:
+
+- This slice keeps report/snapshot/email/PDF/product shape unchanged.
+- Support-ticket subject/body/comment text now routes through one input hygiene
+  helper before clustering.
+- Private/internal comment variants are detected through boolean-ish public,
+  private, internal, visibility, and type markers rather than only
+  `public is False`.
+- Common helpdesk status synonyms map into the existing canonical lifecycle
+  buckets, while unknown statuses remain `other`.
 
 ### S7 - Date Parsing And Date Window Policy
 
@@ -339,7 +351,7 @@ These are not coding-start items until the operator approves the product shape:
 - [x] S3 submit row cap/heavy-build PR linked here: #2030.
 - [x] S4 money reconciliation PR linked here: #2031.
 - [x] S5 clustering spike PR linked here: #2032.
-- [ ] S5 clustering first implementation PR linked here.
+- [x] S5 clustering first implementation PR linked here: #2033.
 - [ ] S6 text/comment/outcome hygiene PR linked here.
 - [ ] S7 date/window policy PR linked here.
 - [ ] S8 runtime QA scorecard wiring PR linked here.

@@ -213,6 +213,68 @@ def test_support_ticket_package_skips_private_comment_objects_in_history() -> No
     assert package.warnings == ()
 
 
+def test_support_ticket_package_skips_private_comment_marker_variants() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-marker-variants",
+        "subject": "Refund status",
+        "comments": [
+            {"body": "Where can I download the refund receipt?", "public": True},
+            {"body": "Can I see the retry status?", "public": "true"},
+            {"body": "Markerless public customer follow-up."},
+            {"body": "PRIVATE public false string", "public": "false"},
+            {"body": "PRIVATE is private bool", "is_private": True},
+            {"body": "PRIVATE is internal bool", "is_internal": True},
+            {"body": "PRIVATE private string", "private": "yes"},
+            {"body": "PRIVATE internal int", "internal": 1},
+            {"body": "PRIVATE visibility label", "visibility": "private"},
+            {"body": "PRIVATE type label", "type": "internal_note"},
+        ],
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert len(source_material) == 1
+    text = source_material[0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "Can I see the retry status?" in text
+    assert "Markerless public customer follow-up." in text
+    assert "PRIVATE" not in text
+
+
+def test_support_ticket_package_ticket_text_hygiene_keeps_customer_wording() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-hygiene",
+        "subject": "Export report",
+        "description": (
+            "How do I export attribution reports?\x00\x00\n"
+            "Auto-reply: We received your request and will respond soon.\n"
+            "-- \n"
+            "Jane Agent\n"
+            "On Mon, Support wrote:\n"
+            "> old quoted chain"
+        ),
+        "comments": [
+            {"body": "I still need help exporting reports.\nSent from my iPhone"},
+            {"body": "How do I add a signature block to email replies?"},
+            {"body": "Sent from my iPhone app, how do I export a report?"},
+        ],
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Export report" in text
+    assert "How do I export attribution reports?" in text
+    assert "I still need help exporting reports." in text
+    assert "How do I add a signature block to email replies?" in text
+    assert "Sent from my iPhone app, how do I export a report?" in text
+    assert "\x00" not in text
+    assert "Auto-reply" not in text
+    assert "Jane Agent" not in text
+    assert "old quoted chain" not in text
+    assert (
+        "I still need help exporting reports. Sent from my iPhone"
+        not in text
+    )
+
+
 def test_support_ticket_package_private_only_comments_stay_index_metadata() -> None:
     package = build_support_ticket_input_package([{
         "ticket_id": "zd-private",
