@@ -181,6 +181,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "head) instead of the working tree -- for trusted-base gate runs"
         ),
     )
+    parser.add_argument(
+        "--repo-root",
+        default="",
+        help=(
+            "repo checkout whose working tree or fetched refs should be "
+            "inspected; defaults to this script's checkout"
+        ),
+    )
     parser.add_argument("body_file", help="path to a file holding the PR body")
     args = parser.parse_args(argv)
 
@@ -194,18 +202,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("pr body audit: PASS (Dependabot PR body exempt)")
         return 0
 
+    repo_root = ROOT
+    if args.repo_root:
+        repo_root = Path(args.repo_root).resolve()
+        if not repo_root.is_dir():
+            print(f"pr body audit: repo root not found: {repo_root}", file=sys.stderr)
+            return 2
+
     plan_exists = None
     if args.plan_git_ref:
-        if not resolve_git_ref(args.plan_git_ref):
+        if not resolve_git_ref(args.plan_git_ref, repo_root=repo_root):
             print(
                 f"pr body audit: plan ref not resolvable: {args.plan_git_ref} "
                 "(fetch the PR head before auditing)",
                 file=sys.stderr,
             )
             return 2  # infrastructure failure -- never a silent pass
-        plan_exists = plan_exists_at_ref(args.plan_git_ref)
+        plan_exists = plan_exists_at_ref(args.plan_git_ref, repo_root=repo_root)
 
-    failures = audit_pr_body(body, plan_exists=plan_exists)
+    failures = audit_pr_body(body, root=repo_root, plan_exists=plan_exists)
     if failures:
         print("pr body audit: FAIL (AGENTS.md section 1b contract)")
         for failure in failures:

@@ -27,6 +27,8 @@ def test_pre_push_audit_workflow_passes_pr_body_to_trusted_local_review() -> Non
     assert "Write current PR body" in text
     assert 'Path(os.environ["RUNNER_TEMP"], "current-pr-body.md")' in text
     assert '--current-pr-body-file "$RUNNER_TEMP/current-pr-body.md"' in text
+    assert "PR_AUTHOR: ${{ github.event.pull_request.user.login }}" in text
+    assert '--pr-author "$PR_AUTHOR"' in text
 
 
 def test_pre_push_audit_workflow_keeps_push_to_main_without_pr_body() -> None:

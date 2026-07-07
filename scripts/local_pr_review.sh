@@ -7,6 +7,7 @@ base_ref="origin/main"
 base_ref_set=0
 allow_dirty=0
 current_pr_body_file="${ATLAS_CURRENT_PR_BODY_FILE:-}"
+current_pr_author="${ATLAS_CURRENT_PR_AUTHOR:-}"
 repo_root=""
 script_root=""
 
@@ -40,9 +41,17 @@ while [ "$#" -gt 0 ]; do
             current_pr_body_file="$2"
             shift 2
             ;;
+        --pr-author|--current-pr-author)
+            if [ "$#" -lt 2 ]; then
+                echo "local_pr_review.sh: $1 requires a GitHub login" >&2
+                exit 2
+            fi
+            current_pr_author="$2"
+            shift 2
+            ;;
         --help|-h)
             cat <<'EOF'
-Usage: bash scripts/local_pr_review.sh [--allow-dirty] [--repo-root PATH] [--script-root PATH] [--current-pr-body-file PATH] [base-ref]
+Usage: bash scripts/local_pr_review.sh [--allow-dirty] [--repo-root PATH] [--script-root PATH] [--current-pr-body-file PATH] [--pr-author LOGIN] [base-ref]
 
 Run the local mechanical review bundle before opening or updating a PR.
 By default, the worktree must be clean so committed-diff checks cannot
@@ -55,6 +64,9 @@ When running before the GitHub PR exists, pass --current-pr-body-file
 with the PR description you plan to use. The drift audit validates that
 body's Slice phase against the branch plan. Installed pre-push hooks can
 use ATLAS_CURRENT_PR_BODY_FILE=PATH for the same check.
+
+Trusted CI should also pass --pr-author (or ATLAS_CURRENT_PR_AUTHOR=LOGIN)
+so PR-body contract exemptions match the standalone body gate.
 EOF
             exit 0
             ;;
@@ -128,7 +140,12 @@ git diff --name-status "$base"...HEAD || true
 
 if [ -n "$current_pr_body_file" ]; then
     if [ -f "$script_root/scripts/audit_pr_body.py" ]; then
-        run_check "PR body contract" python "$script_root/scripts/audit_pr_body.py" "$current_pr_body_file"
+        body_audit_args=("$script_root/scripts/audit_pr_body.py" --repo-root "$repo_root")
+        if [ -n "$current_pr_author" ]; then
+            body_audit_args+=(--pr-author "$current_pr_author")
+        fi
+        body_audit_args+=("$current_pr_body_file")
+        run_check "PR body contract" python "${body_audit_args[@]}"
     else
         echo
         echo "==> PR body contract"

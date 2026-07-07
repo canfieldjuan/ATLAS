@@ -65,11 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           bash scripts/local_pr_review.sh \
             --repo-root "$RUNNER_TEMP/pr-tree" \
             --script-root "$GITHUB_WORKSPACE" \
             --current-pr-body-file "$RUNNER_TEMP/current-pr-body.md" \
+            --pr-author "$PR_AUTHOR" \
             "origin/${BASE_REF}"
 
       # Unit-cover the PR-review tooling itself (including the plans-archive

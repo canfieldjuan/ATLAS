@@ -258,6 +258,29 @@ def test_normal_author_cli_rejects_same_invalid_body() -> None:
         body_path.unlink(missing_ok=True)
 
 
+def test_cli_repo_root_checks_plan_in_inspected_checkout(tmp_path: Path) -> None:
+    repo = _write_plan(tmp_path / "inspected", "plans/PR-OnlyInInspected.md")
+    body = tmp_path / "body.md"
+    body.write_text(_valid_body(plan="plans/PR-OnlyInInspected.md"), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo-root",
+            str(repo),
+            str(body),
+        ],
+        check=False,
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pr body audit: PASS" in result.stdout
+
+
 # -- trusted-base plan-doc inspection (--plan-git-ref) ---------------------------
 
 
@@ -302,6 +325,31 @@ def test_audit_against_ref_fails_when_plan_missing_at_ref(tmp_path: Path) -> Non
         _valid_body(plan="plans/PR-Not-There.md"), plan_exists=exists
     )
     assert any("does not exist" in failure for failure in failures)
+
+
+def test_cli_plan_git_ref_uses_repo_root(tmp_path: Path) -> None:
+    repo = _git_repo_with_plan(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text(_valid_body(), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo-root",
+            str(repo),
+            "--plan-git-ref",
+            "HEAD",
+            str(body),
+        ],
+        check=False,
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pr body audit: PASS" in result.stdout
 
 
 def test_resolve_git_ref_true_for_head_false_for_unfetched(tmp_path: Path) -> None:

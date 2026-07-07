@@ -40,6 +40,9 @@ Slice phase: Workflow/process
    create/edit, with tests proving invalid bodies stop before external actions.
 6. Enroll the new open-wrapper tests in the pre-push workflow and run the body
    audit from `local_pr_review.sh` when a current PR body is supplied.
+7. In trusted-base CI, make the local review body audit inspect the PR worktree
+   for plan-doc existence and pass the PR author so Dependabot exemptions match
+   the standalone PR-body gate.
 
 ### Review Contract
 
@@ -57,6 +60,12 @@ Slice phase: Workflow/process
 - `scripts/local_pr_review.sh` runs the same body audit when
   `ATLAS_CURRENT_PR_BODY_FILE`/`--current-pr-body-file` is supplied, so direct
   pre-push-hook execution fails closed too.
+- Trusted-base `local_pr_review.sh` passes the inspected repo root to
+  `audit_pr_body.py`, so a plan doc added by the PR is checked in the PR
+  worktree instead of the trusted script checkout.
+- Trusted-base `local_pr_review.sh` forwards the PR author to
+  `audit_pr_body.py`, preserving the Dependabot generated-body exemption in the
+  required pre-push audit.
 - `.github/workflows/pre_push_audit.yml` enrolls both push/open wrapper test
   files in the PR-review tooling unit-test list.
 - No runtime/product files or user-facing product shape move.
@@ -97,6 +106,11 @@ checker/gate predicates, R14 codebase verification.
   exists check, so the documented local path fails before external side effects.
 - Call the audit from `local_pr_review.sh` when a current PR body is present,
   closing the bare pre-push-hook path without changing body-less main pushes.
+- Add an explicit `--repo-root` option to `audit_pr_body.py` and have
+  `local_pr_review.sh` pass the inspected worktree, preserving trusted-base
+  execution while checking PR-head plan files as data.
+- Add `--pr-author`/`ATLAS_CURRENT_PR_AUTHOR` support to `local_pr_review.sh`
+  and pass the GitHub PR author from `.github/workflows/pre_push_audit.yml`.
 - Add `tests/test_open_pr_wrapper.py` to both explicit pre-push workflow pytest
   command lists.
 
@@ -122,6 +136,7 @@ Parked hardening: none.
 - Command: python -m pytest tests/test_new_pr_plan.py tests/test_audit_pr_body.py -q (27 passed)
 - Command: python -m pytest tests/test_new_pr_plan.py tests/test_audit_pr_body.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py -q (44 passed)
 - Command: python -m pytest tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py tests/test_audit_pr_body.py -q (61 passed)
+- Command: python -m pytest tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py tests/test_audit_pr_body.py -q (67 passed)
 - Command: python scripts/audit_pr_body.py /tmp/pr-problem-derived-fix-contract-body.md (passed)
 - Command: ATLAS_CURRENT_PR_BODY_FILE=/tmp/pr-problem-derived-fix-contract-body.md bash scripts/local_pr_review.sh (passed)
 
@@ -129,20 +144,20 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/pre_push_audit.yml` | 4 |
+| `.github/workflows/pre_push_audit.yml` | 6 |
 | `AGENTS.md` | 39 |
 | `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md` | 59 |
 | `docs/SESSION_BOOTSTRAP.md` | 1 |
 | `plans/PR-Problem-Derived-Fix-Contract.md` | 148 |
-| `scripts/audit_pr_body.py` | 5 |
-| `scripts/local_pr_review.sh` | 10 |
+| `scripts/audit_pr_body.py` | 26 |
+| `scripts/local_pr_review.sh` | 29 |
 | `scripts/new_pr_plan.sh` | 6 |
 | `scripts/open_pr.sh` | 2 |
 | `scripts/push_pr.sh` | 2 |
-| `tests/test_audit_pr_body.py` | 26 |
-| `tests/test_local_pr_review.py` | 54 |
+| `tests/test_audit_pr_body.py` | 74 |
+| `tests/test_local_pr_review.py` | 220 |
 | `tests/test_new_pr_plan.py` | 4 |
 | `tests/test_open_pr_wrapper.py` | 93 |
-| `tests/test_pre_push_audit_workflow.py` | 6 |
+| `tests/test_pre_push_audit_workflow.py` | 8 |
 | `tests/test_push_pr_wrapper.py` | 84 |
-| **Total** | **543** |
+| **Total** | **810** |
