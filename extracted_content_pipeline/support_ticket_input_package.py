@@ -378,6 +378,13 @@ def build_support_ticket_input_package(
             })
             continue
         row_lookup = _SupportTicketRowLookup(row)
+        if support_ticket_comment_is_private(row_lookup):
+            warnings.append({
+                "code": "ticket_row_private",
+                "row_index": index,
+                "message": "Skipped ticket row because it is marked private/internal.",
+            })
+            continue
         normalized = _normalize_ticket_row(row_lookup, row_index=index)
         if normalized:
             normalized_rows.append(normalized)

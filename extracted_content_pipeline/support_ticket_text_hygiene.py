@@ -81,11 +81,17 @@ _HTML_LINE_TAGS = frozenset({
 _COMMENT_PUBLIC_KEYS = ("public", "is_public")
 _COMMENT_PRIVATE_KEYS = (
     "private",
+    "private_note",
+    "private_comment",
     "is_private",
+    "is_private_note",
+    "is_private_comment",
     "internal",
-    "is_internal",
     "internal_note",
+    "internal_comment",
+    "is_internal",
     "is_internal_note",
+    "is_internal_comment",
 )
 _COMMENT_VISIBILITY_KEYS = (
     "visibility",
@@ -103,6 +109,13 @@ _COMMENT_PRIVATE_LABELS = frozenset({
     "privatecomment",
     "privatenote",
     "staffnote",
+})
+_COMMENT_PUBLIC_LABELS = frozenset({
+    "customer",
+    "customercomment",
+    "external",
+    "public",
+    "publiccomment",
 })
 _TRUEISH_VALUES = frozenset({"1", "true", "yes", "y", "on"})
 _FALSEISH_VALUES = frozenset({"0", "false", "no", "n", "off"})
@@ -137,6 +150,10 @@ def support_ticket_comment_is_private(item: Mapping[str, Any]) -> bool:
         if value is None:
             continue
         marker = _boolish(value)
+        if marker is True:
+            continue
+        if marker is None and _key(value) in _COMMENT_PUBLIC_LABELS:
+            continue
         if marker is not True:
             return True
     for key in _COMMENT_VISIBILITY_KEYS:
@@ -197,8 +214,17 @@ def _strip_ticket_text_junk(value: Any, *, stop_at_boundary: bool = True) -> str
 
 def _line_preserving_text(value: Any) -> str:
     text = str(value or "").replace("\x00", " ")
-    if not text.strip() or not _HTML_SIGNAL_RE.search(text):
-        return unescape(text)
+    if not text.strip():
+        return ""
+    unescaped = unescape(text)
+    if not _HTML_SIGNAL_RE.search(text):
+        if _HTML_SIGNAL_RE.search(unescaped):
+            return _html_to_line_preserving_text(unescaped)
+        return unescaped
+    return _html_to_line_preserving_text(text)
+
+
+def _html_to_line_preserving_text(text: str) -> str:
     parser = _LinePreservingHTMLExtractor()
     try:
         parser.feed(text)

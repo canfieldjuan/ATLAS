@@ -2072,6 +2072,21 @@ def test_zendesk_full_thread_rows_share_private_comment_marker_filter() -> None:
                 },
                 {
                     "author_id": "agent-1",
+                    "private_note": True,
+                    "plain_body": "PRIVATE private note alias",
+                },
+                {
+                    "author_id": "agent-1",
+                    "private_comment": "yes",
+                    "plain_body": "PRIVATE private comment alias",
+                },
+                {
+                    "author_id": "agent-1",
+                    "internal_comment": "1.0",
+                    "plain_body": "PRIVATE internal comment alias",
+                },
+                {
+                    "author_id": "agent-1",
                     "public": True,
                     "plain_body": "Open Billing > Receipts to download it.",
                 },
@@ -2091,6 +2106,48 @@ def test_zendesk_full_thread_rows_share_private_comment_marker_filter() -> None:
         "resolution_text": "Open Billing > Receipts to download it.",
     }]
     assert "PRIVATE" not in json.dumps(result.rows)
+
+
+def test_zendesk_full_thread_rows_hygienize_public_agent_reply_text() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-html-answer",
+                "subject": "How do I export invoices?",
+                "description": "Where do invoice exports live?",
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "requester-1",
+                    "public": "public",
+                    "html_body": (
+                        "<p>Can I export all invoices?</p>"
+                        "<blockquote>old requester thread</blockquote>"
+                    ),
+                },
+                {
+                    "author_id": "agent-1",
+                    "public": True,
+                    "html_body": (
+                        "<p>Open Billing &gt; Invoices, then choose Export CSV.</p>"
+                        "<blockquote>old agent thread</blockquote>"
+                        "<p>--</p><p>Jane Agent</p>"
+                    ),
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    row = result.rows[0]
+    assert row["description"] == (
+        "Where do invoice exports live?\nCan I export all invoices?"
+    )
+    assert row["resolution_text"] == "Open Billing > Invoices, then choose Export CSV."
+    assert "old requester thread" not in json.dumps(row)
+    assert "old agent thread" not in json.dumps(row)
+    assert "Jane Agent" not in json.dumps(row)
 
 
 def test_zendesk_full_thread_rows_keep_substantive_agent_reply_after_boilerplate() -> None:

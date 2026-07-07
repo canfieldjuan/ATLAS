@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from .support_ticket_clustering import support_ticket_plain_text
-from .support_ticket_text_hygiene import support_ticket_comment_is_private
+from .support_ticket_text_hygiene import (
+    support_ticket_comment_is_private,
+    support_ticket_text_component,
+)
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -232,7 +235,7 @@ def _row_from_entry(
 
 def _comment_text(comment: Mapping[str, Any]) -> str:
     for key in ("plain_body", "body", "html_body"):
-        text = _plain(comment.get(key))
+        text = _comment_plain(comment.get(key))
         if text:
             return text
     return ""
@@ -264,6 +267,10 @@ def _looks_like_auto_ack(value: str) -> bool:
 
 def _plain(value: Any) -> str:
     return _WHITESPACE_RE.sub(" ", support_ticket_plain_text(_clean(value))).strip()
+
+
+def _comment_plain(value: Any) -> str:
+    return _WHITESPACE_RE.sub(" ", support_ticket_text_component(value)).strip()
 
 
 def _text_key(value: Any) -> str:

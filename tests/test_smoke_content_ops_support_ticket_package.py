@@ -221,11 +221,16 @@ def test_support_ticket_package_skips_private_comment_marker_variants() -> None:
             {"body": "Where can I download the refund receipt?", "public": True},
             {"body": "Can I see the retry status?", "public": "true"},
             {"body": "Can I see the shipment retries?", "public": "1.0"},
+            {"body": "Can I see public-label comments?", "public": "public"},
+            {"body": "Can I see is-public label comments?", "is_public": "public"},
             {"body": "Markerless public customer follow-up."},
             {"body": "PRIVATE public false string", "public": "false"},
             {"body": "PRIVATE public decimal false", "public": "0.0"},
             {"body": "PRIVATE is private bool", "is_private": True},
             {"body": "PRIVATE ambiguous private marker", "is_private": "maybe"},
+            {"body": "PRIVATE private note alias", "private_note": True},
+            {"body": "PRIVATE private comment alias", "private_comment": "1.0"},
+            {"body": "PRIVATE internal comment alias", "internal_comment": True},
             {"body": "PRIVATE is internal bool", "is_internal": True},
             {"body": "PRIVATE internal decimal", "is_internal": "1.0"},
             {"body": "PRIVATE private string", "private": "yes"},
@@ -241,8 +246,37 @@ def test_support_ticket_package_skips_private_comment_marker_variants() -> None:
     assert "Where can I download the refund receipt?" in text
     assert "Can I see the retry status?" in text
     assert "Can I see the shipment retries?" in text
+    assert "Can I see public-label comments?" in text
+    assert "Can I see is-public label comments?" in text
     assert "Markerless public customer follow-up." in text
     assert "PRIVATE" not in text
+
+
+def test_support_ticket_package_skips_row_level_private_markers_before_text() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "private-row",
+            "subject": "PRIVATE subject",
+            "description": "PRIVATE row-level text should never become source material.",
+            "is_private": True,
+        },
+        {
+            "ticket_id": "public-row",
+            "subject": "Refund receipt",
+            "description": "Where can I download the refund receipt?",
+            "public": "public",
+        },
+    ])
+
+    source_material = package.inputs["source_material"]
+    assert [row["source_id"] for row in source_material] == ["public-row"]
+    assert "Where can I download the refund receipt?" in source_material[0]["text"]
+    assert "PRIVATE" not in json.dumps(package.as_dict())
+    assert package.warnings == ({
+        "code": "ticket_row_private",
+        "row_index": 1,
+        "message": "Skipped ticket row because it is marked private/internal.",
+    },)
 
 
 def test_support_ticket_package_ticket_text_hygiene_keeps_customer_wording() -> None:
@@ -311,6 +345,30 @@ def test_support_ticket_package_ticket_text_hygiene_keeps_customer_wording() -> 
         "I still need help exporting reports. Sent from my iPhone"
         not in text
     )
+
+
+def test_support_ticket_package_escaped_html_uses_line_hygiene() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-escaped-html",
+        "subject": "Export report",
+        "description": (
+            "&lt;p&gt;How do I export attribution reports?&lt;/p&gt;"
+            "&lt;script&gt;alert('old ticket')&lt;/script&gt;"
+            "&lt;blockquote&gt;old blockquoted thread&lt;/blockquote&gt;"
+            "&lt;p&gt;--&lt;/p&gt;"
+            "&lt;p&gt;Jane Agent&lt;/p&gt;"
+            "&lt;p&gt;On Mon, Agent &amp;lt;agent@example.com&amp;gt; wrote:&lt;/p&gt;"
+            "&lt;p&gt;&amp;gt; old quoted chain&lt;/p&gt;"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "How do I export attribution reports?" in text
+    assert "alert" not in text
+    assert "old blockquoted thread" not in text
+    assert "Jane Agent" not in text
+    assert "old quoted chain" not in text
+    assert "<p>" not in text
 
 
 def test_support_ticket_package_string_history_preserves_later_messages() -> None:

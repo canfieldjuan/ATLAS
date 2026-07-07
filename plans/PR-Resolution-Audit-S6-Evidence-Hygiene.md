@@ -36,9 +36,11 @@ than parked.
   questions about auto-reply/out-of-office features; drop standalone auto-reply
   boilerplate blocks; require real email/date/sender cues for quoted-reply
   headers; clean multi-message string histories without truncating later public
-  messages; fail closed on present ambiguous private/public markers; expand
-  status normalization only for concrete helpdesk synonyms that still map to
-  the existing canonical buckets; prove the behavior through the real
+  messages; re-parse escaped HTML before junk stripping; fail closed on present
+  ambiguous private/public markers while accepting explicit public labels; skip
+  row-level private/internal source rows before extracting subject/body text;
+  expand status normalization only for concrete helpdesk synonyms that still map
+  to the existing canonical buckets; prove the behavior through the real
   `build_support_ticket_input_package` -> `build_ticket_faq_markdown` path and
   focused package/Zendesk fixtures.
 - Must not change: no report-model, snapshot, landing, email, PDF, checkout, or
@@ -55,9 +57,10 @@ Slice phase: Vertical slice
 1. Normalize support-ticket subject/body/comment text through one explicit
    pre-clustering hygiene helper.
 2. Treat private/internal comment markers as private even when exports use
-   `is_private`, `is_internal`, `private`, `internal`, `public: "false"`,
-   decimal booleans, ambiguous present markers, or equivalent visibility/type
-   labels.
+   `is_private`, `is_internal`, `private`, `internal`, `private_note`,
+   `private_comment`, `internal_comment`, `public: "false"`, decimal booleans,
+   ambiguous present markers, or equivalent visibility/type labels; skip
+   row-level private/internal ticket rows before extracting source text.
 3. Add bounded status synonyms that preserve the existing canonical
    `resolved`/`reopened`/`cancelled`/`open`/`other` buckets.
 4. Add tests for junk auto-reply/signature/quoted-thread/NUL/HTML handling,
@@ -67,13 +70,14 @@ Slice phase: Vertical slice
 
 ### Review Contract
 
-- Acceptance criteria: private/internal comments are excluded on both package
-  and Zendesk full-thread paths while markerless/customer-public comments stay;
-  mechanical reply junk is removed after HTML line breaks are preserved while
-  parser-excluded HTML blocks stay excluded, transcript strings preserve later
-  public messages, quoted-reply detection does not eat ordinary customer error
-  prose, near-misses remain, status synonyms reach package summaries and real
-  FAQ diagnostics, and report/snapshot/email/PDF shape does not change.
+- Acceptance criteria: private/internal rows are skipped before source text is
+  extracted; private/internal comments are excluded on both package and Zendesk
+  full-thread paths while markerless/customer-public comments stay; mechanical
+  reply junk is removed after raw or escaped HTML line breaks are preserved
+  while parser-excluded HTML blocks stay excluded, transcript strings preserve
+  later public messages, quoted-reply detection does not eat ordinary customer
+  error prose, near-misses remain, status synonyms reach package summaries and
+  real FAQ diagnostics, and report/snapshot/email/PDF shape does not change.
 - Affected surfaces: support-ticket input normalization, Zendesk full-thread
   row flattening, FAQ consumption through existing normalized rows, S6 tracker
   docs, and focused tests.
@@ -105,13 +109,16 @@ embedded NULs, uses a line-preserving HTML parser so `<p>`/`<br>` boundaries
 remain visible while script/style/blockquote bodies stay excluded, removes
 mechanical auto-reply/signature/quoted-thread sections, keeps legitimate
 customer questions about auto-reply/out-of-office features, and centralizes
-private/internal comment detection for boolean-ish, decimal, visibility, and
-type markers. Whole string histories use a transcript cleanup mode that skips
-local junk blocks without truncating later public messages. Zendesk full-thread
-rows filter through the same privacy predicate before flattening comments into
-customer or resolution text. The FAQ builder keeps consuming the same
-normalized rows; tests prove the row-level status state flows into
-`outcome_diagnostics`.
+private/internal detection for boolean-ish, decimal, private-note aliases,
+explicit public labels, visibility, and type markers. Ticket rows marked
+private/internal are rejected before subject/body normalization. Raw and escaped
+HTML both route through the parser before junk stripping. Whole string histories
+use a transcript cleanup mode that skips local junk blocks without truncating
+later public messages. Zendesk full-thread rows filter through the same privacy
+predicate before flattening comments into customer or resolution text, and
+public Zendesk comments use the same text-component hygiene as package
+comments. The FAQ builder keeps consuming the same normalized rows; tests prove
+the row-level status state flows into `outcome_diagnostics`.
 
 ## Intentional
 
@@ -134,8 +141,8 @@ Parked hardening: none.
 
 ## Verification
 
-- `pytest tests/test_smoke_content_ops_support_ticket_package.py tests/test_extracted_support_ticket_input_package.py tests/test_extracted_ticket_faq_markdown.py -q` - 549 passed.
-- `scripts/run_extracted_pipeline_checks.sh` - 5168 passed, 21 skipped, 1 warning.
+- `pytest tests/test_smoke_content_ops_support_ticket_package.py tests/test_extracted_support_ticket_input_package.py tests/test_extracted_ticket_faq_markdown.py -q` - 552 passed.
+- `scripts/run_extracted_pipeline_checks.sh` - 5171 passed, 21 skipped, 1 warning.
 
 ## Estimated diff size
 
@@ -143,11 +150,11 @@ Parked hardening: none.
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 33 |
 | `extracted_content_pipeline/manifest.json` | 3 |
-| `extracted_content_pipeline/support_ticket_input_package.py` | 63 |
-| `extracted_content_pipeline/support_ticket_text_hygiene.py` | 300 |
-| `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 5 |
-| `plans/PR-Resolution-Audit-S6-Evidence-Hygiene.md` | 153 |
-| `tests/test_extracted_support_ticket_input_package.py` | 63 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 70 |
+| `extracted_content_pipeline/support_ticket_text_hygiene.py` | 326 |
+| `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 14 |
+| `plans/PR-Resolution-Audit-S6-Evidence-Hygiene.md` | 160 |
+| `tests/test_extracted_support_ticket_input_package.py` | 120 |
 | `tests/test_extracted_ticket_faq_markdown.py` | 58 |
-| `tests/test_smoke_content_ops_support_ticket_package.py` | 123 |
-| **Total** | **801** |
+| `tests/test_smoke_content_ops_support_ticket_package.py` | 181 |
+| **Total** | **965** |
