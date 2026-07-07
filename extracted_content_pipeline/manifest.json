@@ -322,6 +322,9 @@
       "target": "extracted_content_pipeline/support_ticket_clustering.py"
     },
     {
+      "target": "extracted_content_pipeline/support_ticket_text_hygiene.py"
+    },
+    {
       "target": "extracted_content_pipeline/support_ticket_dates.py"
     },
     {

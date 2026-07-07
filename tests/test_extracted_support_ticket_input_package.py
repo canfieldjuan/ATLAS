@@ -2030,6 +2030,69 @@ def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:
     ]
 
 
+def test_zendesk_full_thread_rows_share_private_comment_marker_filter() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-private-markers",
+                "subject": "Refund receipt",
+                "description": "Where can I download the refund receipt?",
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "requester-1",
+                    "public": "1.0",
+                    "plain_body": "Can I see refund retries?",
+                },
+                {
+                    "author_id": "requester-1",
+                    "public": "0.0",
+                    "plain_body": "PRIVATE public decimal false",
+                },
+                {
+                    "author_id": "requester-1",
+                    "public": "maybe",
+                    "plain_body": "PRIVATE ambiguous public marker",
+                },
+                {
+                    "author_id": "agent-1",
+                    "is_internal": "1.0",
+                    "plain_body": "PRIVATE internal decimal",
+                },
+                {
+                    "author_id": "agent-1",
+                    "is_private": "maybe",
+                    "plain_body": "PRIVATE ambiguous private marker",
+                },
+                {
+                    "author_id": "agent-1",
+                    "visibility": "internal_note",
+                    "plain_body": "PRIVATE visibility label",
+                },
+                {
+                    "author_id": "agent-1",
+                    "public": True,
+                    "plain_body": "Open Billing > Receipts to download it.",
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    assert result.rows == [{
+        "ticket_id": "zd-private-markers",
+        "source_id": "zd-private-markers",
+        "source_type": "support_ticket",
+        "subject": "Refund receipt",
+        "description": (
+            "Where can I download the refund receipt?\nCan I see refund retries?"
+        ),
+        "resolution_text": "Open Billing > Receipts to download it.",
+    }]
+    assert "PRIVATE" not in json.dumps(result.rows)
+
+
 def test_zendesk_full_thread_rows_keep_substantive_agent_reply_after_boilerplate() -> None:
     result = rows_from_zendesk_full_thread({
         "tickets": [{

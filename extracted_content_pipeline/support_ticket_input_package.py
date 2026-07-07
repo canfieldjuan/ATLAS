@@ -27,6 +27,10 @@ from .support_ticket_context_contract import (
     support_ticket_topic_filter,
 )
 from .support_ticket_dates import parse_support_ticket_source_date
+from .support_ticket_text_hygiene import (
+    support_ticket_comment_is_private,
+    support_ticket_text_component,
+)
 
 
 DEFAULT_SUPPORT_TICKET_OUTPUTS: tuple[str, ...] = (
@@ -74,19 +78,6 @@ _QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 _WHITESPACE_RE = re.compile(r"\s+")
-_AUTO_REPLY_LINE_RE = re.compile(
-    r"^\s*(?:auto(?:mated)?[-\s]?reply|automatic reply|out of office)\b",
-    re.IGNORECASE,
-)
-_QUOTED_REPLY_HEADER_RE = re.compile(
-    r"^\s*on\s+.{1,160}\s+wrote:\s*$",
-    re.IGNORECASE,
-)
-_SIGNATURE_BOUNDARY_RE = re.compile(r"^\s*(?:--+|__+)\s*$")
-_MOBILE_SIGNATURE_RE = re.compile(
-    r"^\s*sent from my (?:iphone|ipad|android|mobile device)\.?\s*$",
-    re.IGNORECASE,
-)
 _QUESTION_STARTS = (
     "can ",
     "could ",
@@ -334,36 +325,6 @@ _OPEN_STATUS_VALUES = frozenset({
     "investigating",
     "active",
 })
-_COMMENT_PUBLIC_KEYS = ("public", "is_public")
-_COMMENT_PRIVATE_KEYS = (
-    "private",
-    "is_private",
-    "internal",
-    "is_internal",
-    "internal_note",
-    "is_internal_note",
-)
-_COMMENT_VISIBILITY_KEYS = (
-    "visibility",
-    "visibility_type",
-    "comment_type",
-    "type",
-    "kind",
-)
-_COMMENT_PRIVATE_LABELS = frozenset({
-    "agentnote",
-    "internal",
-    "internalcomment",
-    "internalnote",
-    "private",
-    "privatecomment",
-    "privatenote",
-    "staffnote",
-})
-_TRUEISH_VALUES = frozenset({"1", "true", "yes", "y", "on"})
-_FALSEISH_VALUES = frozenset({"0", "false", "no", "n", "off"})
-
-
 def build_support_ticket_input_package(
     source_material: Any,
     *,
@@ -654,7 +615,7 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         return {}
     if not isinstance(row, _SupportTicketRowLookup):
         row = _SupportTicketRowLookup(row)
-    source_title = _ticket_text_component(_first_text(row, _SOURCE_TITLE_KEYS))
+    source_title = support_ticket_text_component(_first_text(row, _SOURCE_TITLE_KEYS))
     text = _ticket_text(row, source_title=source_title)
     if not text:
         return {}
@@ -777,7 +738,7 @@ def _ticket_text(row: Mapping[str, Any], *, source_title: str) -> str:
     parts: list[str] = []
     if source_title:
         parts.append(source_title)
-    body = _ticket_text_component(_first_text(row, _TEXT_KEYS))
+    body = support_ticket_text_component(_first_text(row, _TEXT_KEYS))
     if body and body.lower() != source_title.lower():
         parts.append(body)
     comments = _comments_text(row)
@@ -808,75 +769,12 @@ def _comments_text(row: Mapping[str, Any]) -> str:
 
 def _comment_text(item: Any) -> str:
     if isinstance(item, Mapping):
-        if _comment_is_private(item):
+        if support_ticket_comment_is_private(item):
             return ""
-        return _ticket_text_component(
+        return support_ticket_text_component(
             _first_text(item, ("body", "message", "text", "content", "description"))
         )
-    return _ticket_text_component(item)
-
-
-def _ticket_text_component(value: Any) -> str:
-    """Return customer/support ticket text after input hygiene, before clustering."""
-
-    return support_ticket_plain_text(_strip_ticket_text_junk(value))
-
-
-def _strip_ticket_text_junk(value: Any) -> str:
-    text = str(value or "").replace("\x00", " ")
-    if not text.strip():
-        return ""
-    lines: list[str] = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            lines.append(raw_line)
-            continue
-        if _AUTO_REPLY_LINE_RE.match(line):
-            continue
-        if (
-            _SIGNATURE_BOUNDARY_RE.match(line)
-            or _MOBILE_SIGNATURE_RE.match(line)
-            or _QUOTED_REPLY_HEADER_RE.match(line)
-        ):
-            break
-        if line.startswith(">"):
-            continue
-        lines.append(raw_line)
-    return "\n".join(lines)
-
-
-def _comment_is_private(item: Mapping[str, Any]) -> bool:
-    for key in _COMMENT_PRIVATE_KEYS:
-        marker = _boolish(_first_value(item, (key,)))
-        if marker is True:
-            return True
-    for key in _COMMENT_PUBLIC_KEYS:
-        marker = _boolish(_first_value(item, (key,)))
-        if marker is False:
-            return True
-    for key in _COMMENT_VISIBILITY_KEYS:
-        label = _key(_first_value(item, (key,)))
-        if label in _COMMENT_PRIVATE_LABELS:
-            return True
-    return False
-
-
-def _boolish(value: Any) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if value == 1:
-            return True
-        if value == 0:
-            return False
-        return None
-    key = _key(value)
-    if key in _TRUEISH_VALUES:
-        return True
-    if key in _FALSEISH_VALUES:
-        return False
-    return None
+    return support_ticket_text_component(item)
 
 
 def _ticket_questions(rows: Sequence[Mapping[str, Any]], *, limit: int = 6) -> list[str]:
