@@ -1,0 +1,46 @@
+name: Unit Gate
+
+# The per-area checks are path-filtered and run hand-maintained test lists, so a
+# test file that no workflow enrolls can pass CI while never executing
+# (#2035 / G1.1, G2). This gate runs the WHOLE unit suite (no integration/e2e,
+# which need Postgres/Neo4j) on every PR and fails only on a REGRESSION -- a
+# failing/errored node not already in tests/unit_gate_baseline.txt. It runs on
+# all PR paths (unlike the path-filtered per-area checks and the schedule-only
+# repo_wide_unit_backstop) so nothing merges without the suite executing.
+#
+# Advisory at birth: this check is not yet in branch-protection required checks;
+# enrolling it is the next slice, once it is proven on live PRs.
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: unit-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Unit gate (ratchet against baseline)
+        run: python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt
