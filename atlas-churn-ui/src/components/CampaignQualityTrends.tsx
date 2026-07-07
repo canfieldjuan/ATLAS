@@ -111,7 +111,10 @@ export default function CampaignQualityTrends({
                     tickLine={false}
                   />
                   <Tooltip
-                    formatter={(value: number) => [value, 'Blockers']}
+                    formatter={(value) => [
+                      typeof value === 'number' ? value : 0,
+                      'Blockers',
+                    ]}
                     contentStyle={{
                       backgroundColor: '#1e293b',
                       border: '1px solid #334155',
