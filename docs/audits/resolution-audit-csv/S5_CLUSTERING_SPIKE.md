@@ -41,3 +41,12 @@ accepted corrected behavior instead of adding another downstream patch.
   already shows the cancel fixture is single-link fragile.
 - Keep the large-upload token-set skip visible, or prove the sync submit cap
   prevents this path from mattering for the synchronous audit flow.
+
+## Implementation Update
+
+PR #2032 merged the current-code spike. The follow-up implementation converts
+the spike tests into corrected acceptance coverage: generated token clusters are
+advisory, semantic comparison can cross those generated partitions, single
+`cancel` token bridges no longer merge subscription/order workflows, and stable
+ordering no longer follows upload order. The large-upload token-set skip remains
+unchanged and covered as a boundary.

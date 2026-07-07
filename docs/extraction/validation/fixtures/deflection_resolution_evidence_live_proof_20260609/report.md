@@ -24,8 +24,8 @@ Use these source-backed phrases as help-center headings, internal-search synonym
 
 1. How do I export attribution reports before our board meeting?
 2. Where can I download invoices for last quarter?
-3. Where do I upload the new SSO certificate before it expires?
-4. Why did the CRM integration pause after the field mapping changed?
+3. Where should I upload the new SSO certificate before it expires?
+4. Why did the CRM integration sync pause after the field mapping change?
 
 ## Ranked Question Opportunities
 
@@ -33,8 +33,8 @@ Use these source-backed phrases as help-center headings, internal-search synonym
 |---:|---|---:|---:|---:|---|---|
 | 1 | How do I export attribution reports before our board meeting? | 4 | $54.00 | 12 | drafted from resolution evidence | 4 source tickets |
 | 2 | Where can I download invoices for last quarter? | 3 | $40.50 | 3 | drafted from resolution evidence | 3 source tickets |
-| 3 | Where do I upload the new SSO certificate before it expires? | 3 | $40.50 | 3 | no proven answer yet | 3 source tickets |
-| 4 | Why did the CRM integration pause after the field mapping changed? | 2 | $27.00 | 2 | no proven answer yet | 2 source tickets |
+| 3 | Where should I upload the new SSO certificate before it expires? | 3 | $40.50 | 3 | no proven answer yet | 3 source tickets |
+| 4 | Why did the CRM integration sync pause after the field mapping change? | 2 | $27.00 | 2 | no proven answer yet | 2 source tickets |
 
 ## Resolution Outcome Diagnostics
 
@@ -49,8 +49,8 @@ These status and CSAT signals flag answers that may need review. They do not pro
 |---|---|---:|---:|---|
 | How do I export attribution reports before our board meeting? | resolved: 4 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
 | Where can I download invoices for last quarter? | resolved: 3 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
-| Where do I upload the new SSO certificate before it expires? | resolved: 3 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
-| Why did the CRM integration pause after the field mapping changed? | resolved: 2 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
+| Where should I upload the new SSO certificate before it expires? | resolved: 3 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
+| Why did the CRM integration sync pause after the field mapping change? | resolved: 2 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
 
 ## Question Details and Evidence
 
@@ -109,7 +109,7 @@ To resolve this, open Billing then Invoices, filter by the quarter, and download
 - `fd-4202` - Annual invoice PDF: "How do I get the annual subscription invoice PDF?"
 - `hs-4203` - Receipt export: "Can finance export subscription receipts without admin access?"
 
-### 3. Where do I upload the new SSO certificate before it expires?
+### 3. Where should I upload the new SSO certificate before it expires?
 
 **Answer status:** no proven answer yet
 
@@ -119,17 +119,17 @@ To resolve this, open Billing then Invoices, filter by the quarter, and download
 
 No uploaded resolution evidence was present for this question.
 
-**Ticket backing:** Seen in 3 repeated tickets (zd-4301, fd-4302, hs-4303). Complete source IDs are in this question detail block.
+**Ticket backing:** Seen in 3 repeated tickets (fd-4302, hs-4303, zd-4301). Complete source IDs are in this question detail block.
 
 **Complete evidence:**
 
-**Source IDs (full list):** zd-4301, fd-4302, hs-4303
+**Source IDs (full list):** fd-4302, hs-4303, zd-4301
 
-- `zd-4301` - SSO certificate rotation: "Where do I upload the new SSO certificate before it expires?"
 - `fd-4302` - SSO certificate rotation: "Where should I upload the new SSO certificate before it expires?"
 - `hs-4303` - SSO certificate upload: "Where do we upload the new SSO certificate before it expires?"
+- `zd-4301` - SSO certificate rotation: "Where do I upload the new SSO certificate before it expires?"
 
-### 4. Why did the CRM integration pause after the field mapping changed?
+### 4. Why did the CRM integration sync pause after the field mapping change?
 
 **Answer status:** no proven answer yet
 
@@ -139,11 +139,11 @@ No uploaded resolution evidence was present for this question.
 
 No uploaded resolution evidence was present for this question.
 
-**Ticket backing:** Seen in 2 repeated tickets (zd-4401, fd-4402). Complete source IDs are in this question detail block.
+**Ticket backing:** Seen in 2 repeated tickets (fd-4402, zd-4401). Complete source IDs are in this question detail block.
 
 **Complete evidence:**
 
-**Source IDs (full list):** zd-4401, fd-4402
+**Source IDs (full list):** fd-4402, zd-4401
 
-- `zd-4401` - CRM sync paused: "Why did the CRM integration pause after the field mapping changed?"
 - `fd-4402` - CRM sync paused after mapping change: "Why did the CRM integration sync pause after the field mapping change?"
+- `zd-4401` - CRM sync paused: "Why did the CRM integration pause after the field mapping changed?"

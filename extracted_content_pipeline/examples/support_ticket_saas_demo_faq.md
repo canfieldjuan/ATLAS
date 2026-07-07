@@ -211,9 +211,9 @@ Contact support at https://example.com/support if the issue still affects the wo
 - `saas-demo-031` - Automation pause: "How do I pause automations during a territory change?"
 - `saas-demo-032` - Automation pause request: "How do we pause automations during a territory change?"
 
-## 12. How do I let managers edit workflows without full admin access?
+## 12. Can I transfer a paid seat from a departed employee?
 
-Customers are asking about other support issues across 14 ticket sources. The clearest customer wording is "How do I let managers edit workflows without full admin access?", so this FAQ should answer that request directly and tell users exactly what to try next.
+Customers are asking about other support issues across 14 ticket sources. The clearest customer wording is "Can I transfer a paid seat from a departed employee?", so this FAQ should answer that request directly and tell users exactly what to try next.
 
 **What to do next:**
 
@@ -227,6 +227,6 @@ Contact support at https://example.com/support if the issue still affects the wo
 
 **Sources:**
 
-- `saas-demo-013` - Role permissions: "How do I let managers edit workflows without full admin access?"
-- `saas-demo-014` - Manager role permissions: "How do we let managers edit workflows without full admin access?"
 - `saas-demo-015` - Seat transfer: "Can I transfer a paid seat from a departed employee?"
+- `saas-demo-016` - Seat transfer request: "Can we transfer a paid seat from a departed employee?"
+- `saas-demo-013` - Role permissions: "How do I let managers edit workflows without full admin access?"

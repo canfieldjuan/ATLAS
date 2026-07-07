@@ -187,7 +187,8 @@ Implementation notes:
 
 ### S5 - Clustering Correctness Spike And First Fix
 
-Status: spike in progress.
+Status: spike complete; first implementation in progress. Spike PR:
+[#2032](https://github.com/canfieldjuan/ATLAS/pull/2032).
 
 Root: token-set labels are promoted into hard partitions before question-level
 similarity has a chance to unify or split intents.
@@ -220,6 +221,16 @@ Spike notes:
   builder, real FAQ builder, and real token-set clusterer. The implementation
   PR replaces those current-behavior expectations with the accepted corrected
   behavior.
+
+Implementation notes:
+
+- The first fix keeps report/snapshot/email/PDF/landing shape unchanged.
+- Token-generated support-ticket clusters are advisory FAQ grouping signals,
+  while explicit/provided/keyword clusters remain hard topic boundaries.
+- SSO/SAML same-intent rows now clear the repeat gate; generated-token
+  partitions no longer wall off the embedding path; cancel subscription/order
+  rows no longer merge through the single `cancel` token; equal-score item and
+  source ordering are stable under input reversal.
 
 ### S6 - Text, Comment, And Outcome Evidence Hygiene
 
@@ -326,8 +337,8 @@ These are not coding-start items until the operator approves the product shape:
 - [x] S1 CSV admission/data-loss and missing-ID stability PR linked here: #2026.
 - [x] S2 row-key normalization cache PR linked here: #2029.
 - [x] S3 submit row cap/heavy-build PR linked here: #2030.
-- [ ] S4 money reconciliation PR linked here: #2031.
-- [ ] S5 clustering spike PR linked here.
+- [x] S4 money reconciliation PR linked here: #2031.
+- [x] S5 clustering spike PR linked here: #2032.
 - [ ] S5 clustering first implementation PR linked here.
 - [ ] S6 text/comment/outcome hygiene PR linked here.
 - [ ] S7 date/window policy PR linked here.

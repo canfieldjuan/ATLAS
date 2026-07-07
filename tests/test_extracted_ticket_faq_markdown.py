@@ -2058,6 +2058,7 @@ def test_question_text_recognizes_semantic_support_issue_phrasing(
         "Please review when you have time",
         "Please billing team can ignore this",
         "Please password is included in the screenshot",
+        "The assertion in the legal brief is invalid",
     ),
 )
 def test_question_text_rejects_semantic_support_issue_near_misses(text: str) -> None:
@@ -2569,12 +2570,12 @@ def test_build_ticket_faq_markdown_disambiguates_colliding_safe_source_policy_la
         for item in result.items
     ] == [
         (
-            "What should I do about workspace connector dashboard export billing - invoice refund ledger?",
-            ("refund-0", "refund-1"),
-        ),
-        (
             "What should I do about workspace connector dashboard export billing - device reboot loop?",
             ("reboot-0", "reboot-1"),
+        ),
+        (
+            "What should I do about workspace connector dashboard export billing - invoice refund ledger?",
+            ("refund-0", "refund-1"),
         ),
     ]
     assert result.items[0]["question"] in result.items[0]["answer"]
@@ -2770,8 +2771,8 @@ def test_build_ticket_faq_markdown_labels_topic_degraded_subclusters_without_mer
         (item["question"], item["source_ids"], item["ticket_count"])
         for item in result.items
     ] == [
-        ("What should I do about device reboot loop?", ("ticket-1", "ticket-2"), 2),
         ("What should I do about analytics export timeout?", ("ticket-3", "ticket-4"), 2),
+        ("What should I do about device reboot loop?", ("ticket-1", "ticket-2"), 2),
     ]
     assert {item["question_source"] for item in result.items} == {"source_policy"}
     assert {item["answer_evidence_status"] for item in result.items} == {"draft_needs_review"}
@@ -2857,6 +2858,33 @@ def test_question_subclusters_exact_join_keeps_empty_gists_separate() -> None:
     assert [tuple(row["source_key"] for row in cluster) for cluster in clusters] == [
         ("ticket-empty-1",),
         ("ticket-empty-2",),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("left_text", "right_text", "left_key", "right_key"),
+    (
+        ("cancel subscription", "cancel order", "subscription", "order"),
+        ("refund invoice", "refund shipping", "invoice", "shipping"),
+        ("update email", "update billing", "email", "billing"),
+    ),
+)
+def test_question_subclusters_rejects_single_token_non_exact_bridge(
+    left_text: str,
+    right_text: str,
+    left_key: str,
+    right_key: str,
+) -> None:
+    clusters = _question_subclusters([
+        {"text": left_text, "source_key": f"{left_key}-1"},
+        {"text": left_text, "source_key": f"{left_key}-2"},
+        {"text": right_text, "source_key": f"{right_key}-1"},
+        {"text": right_text, "source_key": f"{right_key}-2"},
+    ])
+
+    assert [tuple(row["source_key"] for row in cluster) for cluster in clusters] == [
+        (f"{left_key}-1", f"{left_key}-2"),
+        (f"{right_key}-1", f"{right_key}-2"),
     ]
 
 
@@ -3255,8 +3283,8 @@ def test_build_ticket_faq_markdown_does_not_merge_resolution_backed_same_label()
 
     assert result.as_dict()["generated"] == 2
     assert [item["question"] for item in result.items] == [
-        "What should I do about technical support - device reboot loop?",
         "What should I do about technical support - export timeout?",
+        "What should I do about technical support - device reboot loop?",
     ]
     assert {
         item["answer_evidence_status"] for item in result.items
@@ -4213,8 +4241,8 @@ async def test_ticket_faq_service_groups_package_cluster_hints_for_raw_rows() ->
     )
 
     assert [(item["topic"], item["ticket_count"]) for item in result.items] == [
-        ("login password reset", 2),
-        ("email update", 2),
+        ("login reset", 2),
+        ("email and profile updates", 2),
     ]
     assert all(
         item["answer_evidence_status"] == "draft_needs_review"

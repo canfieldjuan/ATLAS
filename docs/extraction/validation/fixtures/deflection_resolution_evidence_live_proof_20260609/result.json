@@ -49,9 +49,9 @@
       {
         "answer_evidence_status": "draft_needs_review",
         "evidence_count": 3,
-        "first_source_id": "zd-4301",
+        "first_source_id": "fd-4302",
         "opportunity_score": 3,
-        "question": "Where do I upload the new SSO certificate before it expires?",
+        "question": "Where should I upload the new SSO certificate before it expires?",
         "rank": 3,
         "source_id_count": 3,
         "step_count": 3,
@@ -62,9 +62,9 @@
       {
         "answer_evidence_status": "draft_needs_review",
         "evidence_count": 2,
-        "first_source_id": "zd-4401",
+        "first_source_id": "fd-4402",
         "opportunity_score": 2,
-        "question": "Why did the CRM integration pause after the field mapping changed?",
+        "question": "Why did the CRM integration sync pause after the field mapping change?",
         "rank": 4,
         "source_id_count": 2,
         "step_count": 3,
