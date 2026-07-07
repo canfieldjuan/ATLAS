@@ -87,7 +87,7 @@ def plan_exists_at_ref(ref: str, *, repo_root: Path = ROOT) -> Callable[[str], b
         # be a REGULAR-FILE blob: a tree at the path (plans/PR-Foo.md/child)
         # or a symlink (mode 120000, possibly dangling) is not a plan doc.
         # Requiring the 100644/100755 blob prefix mirrors the working-tree
-        # default's is_file().
+        # regular-file checker.
         code, out = _git_read(["ls-tree", ref, "--", plan], repo_root=repo_root)
         line = out.strip()
         return code == 0 and (
@@ -95,6 +95,24 @@ def plan_exists_at_ref(ref: str, *, repo_root: Path = ROOT) -> Callable[[str], b
         )
 
     return _exists
+
+
+def plan_exists_in_worktree(plan: str, *, repo_root: Path = ROOT) -> bool:
+    """True only for a regular plan file in ``repo_root``.
+
+    ``Path.is_file()`` follows symlinks, but the trusted ref checker rejects
+    symlink plan entries. Keep the working-tree fallback equally strict.
+    """
+
+    rel = Path(plan)
+    if rel.is_absolute() or ".." in rel.parts:
+        return False
+    current = repo_root
+    for part in rel.parts:
+        current = current / part
+        if current.is_symlink():
+            return False
+    return current.is_file()
 
 
 def audit_pr_body(
@@ -107,7 +125,7 @@ def audit_pr_body(
 
     if plan_exists is None:
         def plan_exists(plan: str) -> bool:
-            return (root / plan).is_file()
+            return plan_exists_in_worktree(plan, repo_root=root)
 
     failures: list[str] = []
     lines = body.splitlines()

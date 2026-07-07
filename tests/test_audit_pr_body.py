@@ -82,6 +82,29 @@ def test_nonexistent_plan_doc_fails(tmp_path: Path) -> None:
     assert any("does not exist" in failure for failure in failures)
 
 
+def test_symlinked_working_tree_plan_doc_fails(tmp_path: Path) -> None:
+    target = tmp_path / "real-plan.md"
+    target.write_text("# real target\n", encoding="utf-8")
+    plan = tmp_path / "plans" / "PR-Example.md"
+    plan.parent.mkdir(parents=True)
+    plan.symlink_to(target)
+
+    failures = audit_pr_body(_valid_body(), root=tmp_path)
+
+    assert any("does not exist" in failure for failure in failures)
+
+
+def test_working_tree_plan_under_symlinked_parent_fails(tmp_path: Path) -> None:
+    target_dir = tmp_path / "actual-plans"
+    target_dir.mkdir()
+    (target_dir / "PR-Example.md").write_text("# real target\n", encoding="utf-8")
+    (tmp_path / "plans").symlink_to(target_dir, target_is_directory=True)
+
+    failures = audit_pr_body(_valid_body(), root=tmp_path)
+
+    assert any("does not exist" in failure for failure in failures)
+
+
 def test_missing_one_paragraph_why_fails(tmp_path: Path) -> None:
     root = _write_plan(tmp_path)
     body = "\n".join([
@@ -279,6 +302,37 @@ def test_cli_repo_root_checks_plan_in_inspected_checkout(tmp_path: Path) -> None
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "pr body audit: PASS" in result.stdout
+
+
+def test_cli_repo_root_rejects_symlinked_plan_in_inspected_checkout(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "inspected"
+    target = repo / "real-plan.md"
+    target.parent.mkdir()
+    target.write_text("# real target\n", encoding="utf-8")
+    plan = repo / "plans" / "PR-Example.md"
+    plan.parent.mkdir()
+    plan.symlink_to(target)
+    body = tmp_path / "body.md"
+    body.write_text(_valid_body(), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo-root",
+            str(repo),
+            str(body),
+        ],
+        check=False,
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "plan doc named in the PR body does not exist" in result.stdout
 
 
 # -- trusted-base plan-doc inspection (--plan-git-ref) ---------------------------
