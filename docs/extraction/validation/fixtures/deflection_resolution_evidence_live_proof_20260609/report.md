@@ -2,9 +2,9 @@
 
 ## Support Tax Confirmation
 
-This report found 12 question-level repeat tickets across 4 ranked questions. At the Gartner $13.50 assisted-contact benchmark, that repeated-question work sizes to about $162 of assisted-contact handling.
+This report found 12 question-level repeat tickets across 4 ranked questions. At the Gartner $13.50 assisted-contact benchmark, that repeated-question work sizes to about $162.00 of assisted-contact handling.
 
-The source window is 2026-05-02 to 2026-05-08 (7 days). At the same measured daily pace, that is about $8,447 over 12 months.
+The source window is 2026-05-02 to 2026-05-08 (7 days). At the same measured daily pace, that is about $8,447.14 over 12 months.
 
 Estimate only. This is not a savings guarantee; adjust the $13.50 benchmark to your own loaded support cost.
 
@@ -31,10 +31,10 @@ Use these source-backed phrases as help-center headings, internal-search synonym
 
 | Rank | Customer question | Tickets | Estimated support cost | Opportunity | Answer status | Source proof |
 |---:|---|---:|---:|---:|---|---|
-| 1 | How do I export attribution reports before our board meeting? | 4 | $54 | 12 | drafted from resolution evidence | 4 source tickets |
-| 2 | Where can I download invoices for last quarter? | 3 | $41 | 3 | drafted from resolution evidence | 3 source tickets |
-| 3 | Where do I upload the new SSO certificate before it expires? | 3 | $41 | 3 | no proven answer yet | 3 source tickets |
-| 4 | Why did the CRM integration pause after the field mapping changed? | 2 | $27 | 2 | no proven answer yet | 2 source tickets |
+| 1 | How do I export attribution reports before our board meeting? | 4 | $54.00 | 12 | drafted from resolution evidence | 4 source tickets |
+| 2 | Where can I download invoices for last quarter? | 3 | $40.50 | 3 | drafted from resolution evidence | 3 source tickets |
+| 3 | Where do I upload the new SSO certificate before it expires? | 3 | $40.50 | 3 | no proven answer yet | 3 source tickets |
+| 4 | Why did the CRM integration pause after the field mapping changed? | 2 | $27.00 | 2 | no proven answer yet | 2 source tickets |
 
 ## Resolution Outcome Diagnostics
 
@@ -62,7 +62,7 @@ Questions without uploaded resolution evidence stay in review: outcome/status si
 
 **Answer status:** drafted from resolution evidence
 
-**Ticket/support-cost context:** 4 tickets, estimated at $54 of assisted-contact handling.
+**Ticket/support-cost context:** 4 tickets, estimated at $54.00 of assisted-contact handling.
 
 **Publishable answer draft:**
 
@@ -88,7 +88,7 @@ To resolve this, open Analytics then Attribution then click Download report. The
 
 **Answer status:** drafted from resolution evidence
 
-**Ticket/support-cost context:** 3 tickets, estimated at $41 of assisted-contact handling.
+**Ticket/support-cost context:** 3 tickets, estimated at $40.50 of assisted-contact handling.
 
 **Publishable answer draft:**
 
@@ -113,7 +113,7 @@ To resolve this, open Billing then Invoices, filter by the quarter, and download
 
 **Answer status:** no proven answer yet
 
-**Ticket/support-cost context:** 3 tickets, estimated at $41 of assisted-contact handling.
+**Ticket/support-cost context:** 3 tickets, estimated at $40.50 of assisted-contact handling.
 
 **No proven answer yet:**
 
@@ -133,7 +133,7 @@ No uploaded resolution evidence was present for this question.
 
 **Answer status:** no proven answer yet
 
-**Ticket/support-cost context:** 2 tickets, estimated at $27 of assisted-contact handling.
+**Ticket/support-cost context:** 2 tickets, estimated at $27.00 of assisted-contact handling.
 
 **No proven answer yet:**
 

@@ -329,12 +329,69 @@ await test("paid dashboard uses canonical repeat-ticket count for support tax", 
   });
 
   assert.match(html, /data-atlas-deflection-paid-summary/);
-  assert.match(html, /<span>Support tax estimate<\/span><strong>\$54<\/strong>/);
+  assert.match(html, /<span>Support tax estimate<\/span><strong>\$54\.00<\/strong>/);
   assert.match(html, /<span>Repeat-ticket workload<\/span><strong>4<\/strong>/);
-  assert.doesNotMatch(html, /<span>Support tax estimate<\/span><strong>\$81<\/strong>/);
+  assert.doesNotMatch(html, /<span>Support tax estimate<\/span><strong>\$81\.00<\/strong>/);
   assert.doesNotMatch(html, /<span>Repeat-ticket workload<\/span><strong>6<\/strong>/);
   assert.match(html, /<td>1<\/td>/);
   assert.match(html, /Can I rename a workspace\?/);
+});
+
+await test("paid dashboard uses report-model support tax when artifact summary omits totals", () => {
+  const html = renderResultPage({
+    requestId: "content-ops-model-support-tax",
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    report: {
+      ok: true,
+      snapshot: {
+        summary: {
+          generated: 1,
+          repeat_ticket_count: 7,
+          drafted_answer_count: 1,
+          no_proven_answer_count: 0,
+          support_ticket_resolution_evidence_present: true,
+          support_ticket_resolution_evidence_count: 1,
+        },
+        top_questions: [],
+      },
+      artifact_status: "unlocked",
+      artifact: {
+        summary: {
+          generated: 1,
+        },
+        report_model: {
+          schema_version: "deflection.v1",
+          sections: [
+            {
+              id: "support_tax",
+              data: {
+                generated_question_count: 1,
+                repeat_ticket_count: 7,
+                drafted_answer_count: 1,
+                no_proven_answer_count: 0,
+                estimated_support_cost: 94.5,
+              },
+            },
+          ],
+        },
+        faq_result: {
+          items: [
+            {
+              question: "How do I export reports?",
+              ticket_count: 7,
+              answer_evidence_status: "resolution_evidence",
+              answer: "Use the verified export workflow.",
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert.match(html, /<span>Support tax estimate<\/span><strong>\$94\.50<\/strong>/);
+  assert.match(html, /<span>Repeat-ticket workload<\/span><strong>7<\/strong>/);
+  assert.doesNotMatch(html, /<span>Support tax estimate<\/span><strong>\$0\.00<\/strong>/);
+  assert.equal(parseQaObservation(html).counts.estimated_support_cost, 94.5);
 });
 
 await test("unlocked paid result page renders CSV owner-lane gap card fields", () => {
@@ -424,7 +481,8 @@ await test("unlocked paid result page renders CSV owner-lane gap card fields", (
   assert.match(html, /Where is the login button\?/);
   assert.match(html, /65 tickets/);
   assert.match(html, /Owner: Auth \/ Product UX/);
-  assert.match(html, /Estimated handling: \$878/);
+  assert.match(html, /Estimated handling: \$877\.50/);
+  assert.doesNotMatch(html, /Estimated handling: \$878/);
   assert.match(html, /Repeated support friction routes to Auth \/ Product UX/);
   assert.match(html, /Cost basis: this upload \/ benchmark cost with customer text/);
   assert.match(html, /Evidence: CSV customer text/);
@@ -437,7 +495,8 @@ await test("unlocked paid result page renders CSV owner-lane gap card fields", (
   assert.match(html, /Issue: Where is the login button\?/);
   assert.match(html, /Owner lane: Auth \/ Product UX/);
   assert.match(html, /Impact: 65 repeat tickets/);
-  assert.match(html, /Estimated handling cost: \$878/);
+  assert.match(html, /Estimated handling cost: \$877\.50/);
+  assert.doesNotMatch(html, /Estimated handling cost: \$878/);
   assert.match(html, /Cost basis: this upload \/ benchmark cost with customer text/);
   assert.match(html, /Evidence tier: CSV customer text/);
   assert.match(html, /Next action: Review login discoverability and create the missing answer/);
@@ -547,6 +606,7 @@ await test("locked result page does not render paid report-model fields", () => 
     "Hidden paid item question",
     "65 tickets",
     "Owner: Auth / Product UX",
+    "Estimated handling: $877.50",
     "Estimated handling: $878",
     "Evidence: CSV customer text",
     "Hidden product gap summary",

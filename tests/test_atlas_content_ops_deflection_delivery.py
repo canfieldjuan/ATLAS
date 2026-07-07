@@ -1107,14 +1107,14 @@ async def test_delivery_worker_renders_model_backed_email_summary(
     request = sender.requests[0]
     assert "Key numbers" in request.html_body
     assert "1,234 repeat tickets across 8 ranked questions" in request.html_body
-    assert "$16,659 estimated assisted-contact handling" in request.html_body
+    assert "$16,659.00 estimated assisted-contact handling" in request.html_body
     assert "3 publishable answers drafted" in request.html_body
     assert "5 questions still need approved resolution evidence" in request.html_body
     assert "42 ticket sources represented" in request.html_body
     assert "Next actions" in request.html_body
     assert "How do I export attribution reports?" in request.html_body
     assert "9 repeat tickets" in request.html_body
-    assert "$122 estimated handling" in request.html_body
+    assert "$121.50 estimated handling" in request.html_body
     assert "Owner: Reporting" in request.html_body
     assert "Evidence: CSV customer text" in request.html_body
     assert "Repeated support friction routes to Reporting" in request.html_body
@@ -1141,7 +1141,7 @@ async def test_delivery_worker_renders_model_backed_email_summary(
     assert "resolution_evidence" not in request.html_body
     assert request.text_body is not None
     assert "1,234 repeat tickets across 8 ranked questions" in request.text_body
-    assert "$16,659 estimated assisted-contact handling" in request.text_body
+    assert "$16,659.00 estimated assisted-contact handling" in request.text_body
     assert "Next actions" in request.text_body
     assert "How do I export attribution reports?" in request.text_body
     assert "Owner: Reporting" in request.text_body
