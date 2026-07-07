@@ -119,6 +119,15 @@ Integrity guards (added in review):
 - **Pinned test deps:** the workflow installs `pytest==9.1.1
   pytest-asyncio==1.4.0` (the versions that produced the baseline), so an
   unpinned pytest release cannot drift the ledger.
+- **Exact match, not superset:** the baseline must EQUAL the failing set --
+  both a new failure (regression) and a stale entry that now passes fail the
+  gate. A superset ledger is a live allow-list hole (a later PR could
+  reintroduce a baselined failure and still pass), so the ratchet enforces
+  shrinkage, not just advises it.
+- **Head-determinism:** the gate checks out the PR HEAD (not the default
+  merge-with-base ref), so concurrent `main` advances cannot leak new failures
+  into the run and make the baseline a moving target. Merge-time breakage with
+  current `main` is covered by the cross-session drift auditor, not this gate.
 
 ## Intentional
 
@@ -165,9 +174,9 @@ Integrity guards (added in review):
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/unit_gate.yml` | 64 |
-| `plans/PR-Unit-Gate.md` | 173 |
-| `scripts/check_unit_gate.py` | 216 |
-| `tests/test_check_unit_gate.py` | 153 |
+| `.github/workflows/unit_gate.yml` | 69 |
+| `plans/PR-Unit-Gate.md` | 182 |
+| `scripts/check_unit_gate.py` | 223 |
+| `tests/test_check_unit_gate.py` | 165 |
 | `tests/unit_gate_baseline.txt` | 194 |
-| **Total** | **800** |
+| **Total** | **833** |

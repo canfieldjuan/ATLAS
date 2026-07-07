@@ -88,18 +88,30 @@ def _run(args, tmp_path, report):
     )
 
 
-def test_cli_exit0_when_failing_subset_of_baseline(tmp_path):
+_EXACT_BASELINE = (
+    "tests/security/test_network_ids.py::TestX::test_arp\n"
+    "tests/test_call_workflow.py::TestCall::test_route[make a call]\n"
+    "tests/test_deflection.py::test_case[Credit card - Fees]\n"
+    "tests/test_competitive_intelligence.py\n"
+)
+
+
+def test_cli_exit0_when_baseline_exactly_matches(tmp_path):
     baseline = tmp_path / "baseline.txt"
-    baseline.write_text(
-        "tests/security/test_network_ids.py::TestX::test_arp\n"
-        "tests/test_call_workflow.py::TestCall::test_route[make a call]\n"
-        "tests/test_deflection.py::test_case[Credit card - Fees]\n"
-        "tests/test_competitive_intelligence.py\n"
-        "tests/extra_known_fail.py::t\n"
-    )
+    baseline.write_text(_EXACT_BASELINE)
     r = _run(["--baseline", str(baseline)], tmp_path, SAMPLE_PYTEST_OUTPUT)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "no regression" in r.stdout
+    assert "exactly matches" in r.stdout
+
+
+def test_cli_exit1_on_stale_baseline_entry(tmp_path):
+    # a node that now PASSES but is still in the baseline -> ratchet must shrink
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text(_EXACT_BASELINE + "tests/now_passing.py::t\n")
+    r = _run(["--baseline", str(baseline)], tmp_path, SAMPLE_PYTEST_OUTPUT)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "STALE" in r.stdout
+    assert "tests/now_passing.py::t" in r.stdout
 
 
 def test_cli_exit1_on_regression(tmp_path):

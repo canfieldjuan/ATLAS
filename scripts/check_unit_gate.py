@@ -196,8 +196,14 @@ def main() -> int:
     print(f"unit gate: {len(failing)} failing/errored node(s); "
           f"baseline={len(baseline)}; regressions={len(regressions)}; "
           f"newly-passing={len(fixed)}")
+    # The baseline must EXACTLY equal the current failing set: no un-baselined
+    # failure (regression), AND no stale entry that now passes. A stale entry
+    # is a live allow-list hole -- a later PR could reintroduce that failure and
+    # still pass because it stays in the ledger. So the ratchet enforces both
+    # sides; the ledger tracks reality and can only move by an explicit edit.
     if fixed:
-        print("\nbaseline entries that now PASS (remove them from the baseline):")
+        print("\nSTALE baseline entries -- these node(s) PASS now; remove them "
+              "from the baseline (the ratchet must shrink):")
         for node in fixed:
             print(f"  - {node}")
     if regressions:
@@ -206,9 +212,10 @@ def main() -> int:
             print(f"  {node}")
         print("\nFix the test (do not baseline it). The gate fails on any "
               "un-baselined failure.")
+    if regressions or fixed:
         return 1
 
-    print("\nOK: no regression -- every failing node is accounted for by the baseline.")
+    print("\nOK: the baseline exactly matches the current failing set.")
     return 0
 
 
