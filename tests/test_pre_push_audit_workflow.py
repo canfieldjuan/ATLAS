@@ -51,6 +51,12 @@ def test_pre_push_audit_workflow_enrolls_open_pr_wrapper_tests() -> None:
     assert "tests/test_open_pr_wrapper.py" in text
 
 
+def test_pre_push_audit_workflow_enrolls_plan_doc_audit_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tests/test_audit_plan_doc.py" in text
+
+
 def test_pre_push_audit_workflow_enrolls_full_report_redaction_checker_tests() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 

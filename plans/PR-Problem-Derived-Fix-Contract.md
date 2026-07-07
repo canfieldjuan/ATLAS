@@ -45,6 +45,8 @@ Slice phase: Workflow/process
    the standalone PR-body gate.
 8. Reject symlinked plan docs in working-tree PR-body audits so the
    working-tree checker matches the trusted git-ref checker.
+9. Require the generated `### Problem-derived contract` subsection in
+   plan-shape audits, so older or hand-edited plans cannot omit it.
 
 ### Review Contract
 
@@ -71,8 +73,10 @@ Slice phase: Workflow/process
 - `scripts/audit_pr_body.py` treats plan docs as valid only when the plan path
   and its parents are regular working-tree entries, matching the trusted
   `git ls-tree` checker's symlink/tree rejection.
-- `.github/workflows/pre_push_audit.yml` enrolls both push/open wrapper test
-  files in the PR-review tooling unit-test list.
+- `scripts/audit_plan_doc.py` requires the `### Problem-derived contract`
+  subsection under `## Why this slice exists`, with focused pass/fail tests.
+- `.github/workflows/pre_push_audit.yml` enrolls the push/open wrapper tests
+  and the plan-doc audit tests in the PR-review tooling unit-test list.
 - No runtime/product files or user-facing product shape move.
 Reviewer rules triggered: R1 requirements match, R2 test evidence, R10
 checker/gate predicates, R14 codebase verification.
@@ -84,11 +88,13 @@ checker/gate predicates, R14 codebase verification.
 - `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md`
 - `docs/SESSION_BOOTSTRAP.md`
 - `plans/PR-Problem-Derived-Fix-Contract.md`
+- `scripts/audit_plan_doc.py`
 - `scripts/audit_pr_body.py`
 - `scripts/local_pr_review.sh`
 - `scripts/new_pr_plan.sh`
 - `scripts/open_pr.sh`
 - `scripts/push_pr.sh`
+- `tests/test_audit_plan_doc.py`
 - `tests/test_audit_pr_body.py`
 - `tests/test_local_pr_review.py`
 - `tests/test_new_pr_plan.py`
@@ -116,10 +122,12 @@ checker/gate predicates, R14 codebase verification.
   execution while checking PR-head plan files as data.
 - Replace the working-tree plan existence fallback with a regular-file checker
   that rejects symlinked plan paths and symlinked parent directories.
+- Extend `audit_plan_doc.py` so the plan-shape gate also checks for
+  `### Problem-derived contract` inside `## Why this slice exists`.
 - Add `--pr-author`/`ATLAS_CURRENT_PR_AUTHOR` support to `local_pr_review.sh`
   and pass the GitHub PR author from `.github/workflows/pre_push_audit.yml`.
-- Add `tests/test_open_pr_wrapper.py` to both explicit pre-push workflow pytest
-  command lists.
+- Add `tests/test_open_pr_wrapper.py` and `tests/test_audit_plan_doc.py` to
+  both explicit pre-push workflow pytest command lists.
 
 ## Intentional
 
@@ -146,7 +154,10 @@ Parked hardening: none.
 - Command: python -m pytest tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py tests/test_audit_pr_body.py -q (67 passed)
 - Command: python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**' (passed)
 - Command: python -m pytest tests/test_audit_pr_body.py -q (26 passed)
-- Command: python -m pytest tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py tests/test_audit_pr_body.py -q (70 passed)
+- Command: python -m pytest tests/test_audit_plan_doc.py -q (9 passed)
+- Command: python scripts/audit_plan_doc.py plans/PR-Problem-Derived-Fix-Contract.md (passed)
+- Command: python -m pytest tests/test_pre_push_audit_workflow.py -q (12 passed)
+- Command: python -m pytest tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py tests/test_audit_pr_body.py -q (71 passed)
 - Command: python scripts/audit_pr_body.py /tmp/pr-problem-derived-fix-contract-body.md (passed)
 - Command: ATLAS_CURRENT_PR_BODY_FILE=/tmp/pr-problem-derived-fix-contract-body.md bash scripts/local_pr_review.sh (passed)
 
@@ -158,16 +169,18 @@ Parked hardening: none.
 | `AGENTS.md` | 39 |
 | `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md` | 59 |
 | `docs/SESSION_BOOTSTRAP.md` | 1 |
-| `plans/PR-Problem-Derived-Fix-Contract.md` | 170 |
+| `plans/PR-Problem-Derived-Fix-Contract.md` | 188 |
+| `scripts/audit_plan_doc.py` | 35 |
 | `scripts/audit_pr_body.py` | 51 |
 | `scripts/local_pr_review.sh` | 29 |
 | `scripts/new_pr_plan.sh` | 6 |
 | `scripts/open_pr.sh` | 2 |
 | `scripts/push_pr.sh` | 2 |
+| `tests/test_audit_plan_doc.py` | 49 |
 | `tests/test_audit_pr_body.py` | 128 |
 | `tests/test_local_pr_review.py` | 220 |
 | `tests/test_new_pr_plan.py` | 4 |
 | `tests/test_open_pr_wrapper.py` | 93 |
-| `tests/test_pre_push_audit_workflow.py` | 8 |
+| `tests/test_pre_push_audit_workflow.py` | 14 |
 | `tests/test_push_pr_wrapper.py` | 84 |
-| **Total** | **903** |
+| **Total** | **1011** |
