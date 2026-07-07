@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # need the base ref for the ratchet growth guard
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -40,7 +42,23 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          python -m pip install pytest pytest-asyncio
+          # pinned: the baseline is only stable for the pytest/plugin versions
+          # that produced it -- an unpinned pytest could shift collection or the
+          # summary format and drift the ledger (matches requirements.content_ops_ci.txt).
+          python -m pip install pytest==9.1.1 pytest-asyncio==1.4.0
+
+      - name: Resolve base-branch baseline (for the ratchet growth guard)
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          # empty file when the base has no baseline yet (this PR seeds it)
+          git show "origin/${BASE_REF}:tests/unit_gate_baseline.txt" \
+            > /tmp/base_baseline.txt 2>/dev/null || : > /tmp/base_baseline.txt
 
       - name: Unit gate (ratchet against baseline)
-        run: python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt
+        run: |
+          python scripts/check_unit_gate.py \
+            --baseline tests/unit_gate_baseline.txt \
+            --base-baseline /tmp/base_baseline.txt

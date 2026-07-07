@@ -25,7 +25,7 @@ failures while catching any new one. It lands after slice 1 because the ratchet
 baseline is only meaningful on a reproducible (pinned) dependency set.
 
 Diff-budget note: over 400 LOC because `tests/unit_gate_baseline.txt` is a
-190-line DATA ledger (the 185 known-failing node ids), not logic. The logic is
+190-line DATA ledger (the 188 known-failing node ids), not logic. The logic is
 ~250 LOC (checker + tests). The ledger may only shrink as failures are
 remediated.
 
@@ -44,8 +44,8 @@ Slice phase: workflow/process
 - `scripts/check_unit_gate.py` -- runs the backstop's exact pytest invocation,
   parses the failing/errored node set, fails iff any failing node is not in the
   baseline (regression); reports baseline entries that now pass (ratchet-shrink).
-- `tests/unit_gate_baseline.txt` -- the committed 185-node known-failures
-  ledger, reconciled to CI reality on this PR's own gate run.
+- `tests/unit_gate_baseline.txt` -- the committed 188-node known-failures
+  ledger (185 nightly + 3 pull_request-context), reconciled to CI on this PR.
 - `.github/workflows/unit_gate.yml` -- `pull_request` (all paths) +
   `workflow_dispatch`; installs pinned deps; invokes the checker. Not added to
   required checks this slice (advisory at birth; enrolling it is slice 3).
@@ -107,6 +107,19 @@ captured, not propagated -- the gate verdict is the script's exit, decided by
 the set comparison. `--update-baseline` regenerates the ledger; `--report-file`
 gates a pre-captured summary (used by the tests to avoid the real suite).
 
+Integrity guards (added in review):
+- **Ran-check:** `ensure_pytest_ran` fails the gate (exit 2) when pytest's exit
+  status is not 0/1 -- a usage/plugin/internal error produces no summary lines
+  and would otherwise parse to an empty failing set and go silently green.
+- **Ratchet growth guard:** `--base-baseline` rejects (exit 3) any node the PR
+  adds to the ledger vs the base branch -- a PR cannot baseline its own new
+  failure to pass. An empty/absent base file = the initial seed (this PR).
+- **Param-safe parse:** the node-id regex captures an optional `[...]` group
+  whole, so parametrized ids with spaces/dashes are not truncated.
+- **Pinned test deps:** the workflow installs `pytest==9.1.1
+  pytest-asyncio==1.4.0` (the versions that produced the baseline), so an
+  unpinned pytest release cannot drift the ledger.
+
 ## Intentional
 
 - **Whole-suite, not changed-file subset.** Closing the G2 blind spot requires
@@ -132,12 +145,18 @@ gates a pre-captured summary (used by the tests to avoid the real suite).
   the full run is too slow to require.
 - Flaky-test policy (reruns / quarantine marker) -- only if a flake enters the
   suite; the current 185 are deterministic.
+- Nested `[]` inside a parametrized id (vanishingly rare) still truncates at
+  the inner `]`; a switch to structured pytest output (`--report-log`) would
+  remove all regex fragility -- deferred, no current baseline id is affected.
+- The 3 baselined `test_audit_pr_session_drift` cli tests fail only in the
+  `pull_request` CI context (they pass locally and in the `schedule` nightly);
+  investigating/fixing that context-sensitivity is separate remediation.
 
 ## Verification
 
 - Local: `pytest tests/test_check_unit_gate.py -q` green (9 tests, gate logic
   both directions); `scripts/check_ascii_python.sh`-clean; the committed
-  baseline parses, is sorted + unique (185).
+  baseline parses, is sorted + unique (188).
 - CI (this PR): the `unit-gate` check runs the full suite on all paths and
   reports green -- the reconciliation of the baseline to the pinned-dep CI
   failing set happens on that run; any delta is reconciled before merge.
@@ -146,9 +165,9 @@ gates a pre-captured summary (used by the tests to avoid the real suite).
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/unit_gate.yml` | 46 |
-| `plans/PR-Unit-Gate.md` | 154 |
-| `scripts/check_unit_gate.py` | 152 |
-| `tests/test_check_unit_gate.py` | 104 |
-| `tests/unit_gate_baseline.txt` | 190 |
-| **Total** | **646** |
+| `.github/workflows/unit_gate.yml` | 64 |
+| `plans/PR-Unit-Gate.md` | 173 |
+| `scripts/check_unit_gate.py` | 216 |
+| `tests/test_check_unit_gate.py` | 153 |
+| `tests/unit_gate_baseline.txt` | 194 |
+| **Total** | **800** |

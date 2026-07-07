@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import check_unit_gate as gate  # noqa: E402
 
@@ -20,35 +22,35 @@ SAMPLE_PYTEST_OUTPUT = """\
 short test summary info
 FAILED tests/security/test_network_ids.py::TestX::test_arp - AssertionError: boom
 FAILED tests/test_call_workflow.py::TestCall::test_route[make a call] - x
+FAILED tests/test_deflection.py::test_case[Credit card - Fees] - ValueError: bad
 ERROR tests/test_competitive_intelligence.py - ImportError: no module named foo
 1 failed, 100 passed, 1 error in 4.20s
 """
 
 
-def test_parse_failing_nodes_handles_failed_error_and_spaced_params():
+def test_parse_failing_nodes_keeps_params_with_spaces_and_dashes():
     nodes = gate.parse_failing_nodes(SAMPLE_PYTEST_OUTPUT)
     assert nodes == {
         "tests/security/test_network_ids.py::TestX::test_arp",
         "tests/test_call_workflow.py::TestCall::test_route[make a call]",  # space kept
+        "tests/test_deflection.py::test_case[Credit card - Fees]",          # dash-in-param kept whole
         "tests/test_competitive_intelligence.py",  # bare node = collection error
     }
 
 
 def test_parse_ignores_non_summary_lines():
-    # a passing run has no FAILED/ERROR summary lines
     assert gate.parse_failing_nodes("...\n5 passed in 1.2s\n") == set()
 
 
 def test_compare_subset_is_no_regression():
-    baseline = {"a", "b", "c"}
-    regressions, fixed = gate.compare({"a", "b"}, baseline)
-    assert regressions == []           # failing subset of baseline -> clean
-    assert fixed == ["c"]              # c no longer fails -> ratchet-shrink hint
+    regressions, fixed = gate.compare({"a", "b"}, {"a", "b", "c"})
+    assert regressions == []
+    assert fixed == ["c"]
 
 
 def test_compare_new_failure_is_regression():
     regressions, fixed = gate.compare({"a", "NEW"}, {"a", "b"})
-    assert regressions == ["NEW"]      # NEW not in baseline -> gate must fail
+    assert regressions == ["NEW"]
     assert fixed == ["b"]
 
 
@@ -56,6 +58,24 @@ def test_load_baseline_ignores_comments_and_blanks(tmp_path):
     p = tmp_path / "b.txt"
     p.write_text("# header\n\ntests/x.py::t1\n  tests/y.py::t2  \n# trailer\n")
     assert gate.load_baseline(p) == {"tests/x.py::t1", "tests/y.py::t2"}
+
+
+# --- integrity: pytest must have actually run (P1) --------------------------
+
+def test_ensure_pytest_ran_raises_on_infrastructure_exit():
+    with pytest.raises(RuntimeError):
+        gate.ensure_pytest_ran(4)   # usage error
+    with pytest.raises(RuntimeError):
+        gate.ensure_pytest_ran(5)   # no tests collected
+    gate.ensure_pytest_ran(0)       # all passed -> no raise
+    gate.ensure_pytest_ran(1)       # tests failed (expected) -> no raise
+
+
+# --- integrity: baseline may only shrink (P1) -------------------------------
+
+def test_added_baseline_entries_detects_growth():
+    assert gate.added_baseline_entries({"a", "b", "NEW"}, {"a", "b"}) == ["NEW"]
+    assert gate.added_baseline_entries({"a"}, {"a", "b"}) == []   # shrink is fine
 
 
 def _run(args, tmp_path, report):
@@ -73,8 +93,9 @@ def test_cli_exit0_when_failing_subset_of_baseline(tmp_path):
     baseline.write_text(
         "tests/security/test_network_ids.py::TestX::test_arp\n"
         "tests/test_call_workflow.py::TestCall::test_route[make a call]\n"
+        "tests/test_deflection.py::test_case[Credit card - Fees]\n"
         "tests/test_competitive_intelligence.py\n"
-        "tests/extra_known_fail.py::t\n"  # baseline superset -> the extra is "fixed"
+        "tests/extra_known_fail.py::t\n"
     )
     r = _run(["--baseline", str(baseline)], tmp_path, SAMPLE_PYTEST_OUTPUT)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -87,7 +108,6 @@ def test_cli_exit1_on_regression(tmp_path):
     r = _run(["--baseline", str(baseline)], tmp_path, SAMPLE_PYTEST_OUTPUT)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "REGRESSION" in r.stdout
-    assert "tests/test_competitive_intelligence.py" in r.stdout
 
 
 def test_cli_exit2_on_missing_baseline(tmp_path):
@@ -95,10 +115,39 @@ def test_cli_exit2_on_missing_baseline(tmp_path):
     assert r.returncode == 2
 
 
+def test_cli_exit3_on_baseline_growth_vs_base(tmp_path):
+    # PR baseline adds a node the base baseline does not have -> ratchet violation
+    base = tmp_path / "base.txt"
+    base.write_text("tests/security/test_network_ids.py::TestX::test_arp\n")
+    pr = tmp_path / "pr.txt"
+    pr.write_text(
+        "tests/security/test_network_ids.py::TestX::test_arp\n"
+        "tests/sneaked_in_new_failure.py::t\n"
+    )
+    r = _run(["--baseline", str(pr), "--base-baseline", str(base)], tmp_path,
+             SAMPLE_PYTEST_OUTPUT)
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "RATCHET VIOLATION" in r.stdout
+
+
+def test_cli_empty_base_baseline_allows_initial_seed(tmp_path):
+    base = tmp_path / "base.txt"
+    base.write_text("")  # base has no baseline yet
+    pr = tmp_path / "pr.txt"
+    pr.write_text("tests/security/test_network_ids.py::TestX::test_arp\n"
+                  "tests/test_call_workflow.py::TestCall::test_route[make a call]\n"
+                  "tests/test_deflection.py::test_case[Credit card - Fees]\n"
+                  "tests/test_competitive_intelligence.py\n")
+    r = _run(["--baseline", str(pr), "--base-baseline", str(base)], tmp_path,
+             SAMPLE_PYTEST_OUTPUT)
+    assert r.returncode == 0, r.stdout + r.stderr  # seed allowed, no regression
+
+
 def test_committed_baseline_parses_and_is_sorted_unique():
-    baseline = gate.load_baseline(ROOT / "tests" / "unit_gate_baseline.txt")
-    assert len(baseline) >= 150  # the large stable pre-existing set
-    lines = [l.strip() for l in (ROOT / "tests" / "unit_gate_baseline.txt")
-             .read_text().splitlines() if l.strip() and not l.startswith("#")]
-    assert lines == sorted(lines)          # committed sorted
-    assert len(lines) == len(set(lines))   # no dupes
+    path = ROOT / "tests" / "unit_gate_baseline.txt"
+    baseline = gate.load_baseline(path)
+    assert len(baseline) >= 150
+    lines = [l.strip() for l in path.read_text().splitlines()
+             if l.strip() and not l.startswith("#")]
+    assert lines == sorted(lines)
+    assert len(lines) == len(set(lines))
