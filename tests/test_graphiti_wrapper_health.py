@@ -32,9 +32,20 @@ _SPEC.loader.exec_module(_MODULE)
 
 def _make_settings():
     return SimpleNamespace(
+        openai_api_key="test-openai-key",
+        openai_base_url="https://openrouter.ai/api/v1",
+        model_name="anthropic/claude-haiku-4-5",
         neo4j_uri="bolt://neo4j:7687",
         neo4j_user="neo4j",
         neo4j_password="password123",
+        neo4j_database="neo4j",
+        embedder_provider="openai",
+        embedder_model="text-embedding-3-small",
+        embedder_api_key=None,
+        embedder_base_url=None,
+        embedder_device="cpu",
+        embedder_batch_size=32,
+        embedder_embedding_dim=1536,
     )
 
 
@@ -144,3 +155,90 @@ async def test_startup_event_can_block_on_preload_when_configured():
 
     preload_mock.assert_awaited_once_with(settings)
     create_task_mock.assert_not_called()
+
+
+def test_openrouter_base_url_uses_generic_openai_client():
+    from llm_client_wrapper import RetryingOpenAIGenericClient, create_retrying_llm_client
+
+    client = create_retrying_llm_client(
+        api_key="test-key",
+        base_url="https://openrouter.ai/api/v1",
+        model="anthropic/claude-haiku-4-5",
+    )
+
+    assert isinstance(client, RetryingOpenAIGenericClient)
+
+
+def test_direct_openai_base_url_keeps_openai_specific_client():
+    from llm_client_wrapper import RetryingOpenAIClient, create_retrying_llm_client
+
+    client = create_retrying_llm_client(
+        api_key="test-key",
+        base_url="https://api.openai.com/v1",
+        model="gpt-4o-mini",
+    )
+
+    assert isinstance(client, RetryingOpenAIClient)
+
+
+def test_atlas_neo4j_driver_clone_keeps_physical_database():
+    driver = object.__new__(_MODULE.AtlasNeo4jDriver)
+    driver._database = "neo4j"
+
+    cloned = driver.clone(database="atlas-conversations")
+
+    assert cloned is driver
+    assert driver._database == "neo4j"
+
+
+@pytest.mark.asyncio
+async def test_graphiti_client_is_cached_and_schema_build_runs_once():
+    settings = _make_settings()
+    await _MODULE._close_graphiti_clients()
+
+    fake_driver = MagicMock()
+    fake_driver.build_indices_and_constraints = AsyncMock()
+    fake_client = MagicMock()
+    fake_client.driver = fake_driver
+    fake_client.close = AsyncMock()
+
+    with (
+        patch.object(_MODULE, "create_embedder", return_value=object()) as embedder_mock,
+        patch.object(_MODULE, "create_retrying_llm_client", return_value=object()) as llm_mock,
+        patch.object(_MODULE, "AtlasNeo4jDriver", return_value=fake_driver) as driver_mock,
+        patch.object(_MODULE, "Graphiti", return_value=fake_client) as graphiti_mock,
+    ):
+        first = await _MODULE._get_or_create_graphiti_client(
+            settings,
+            provider=settings.embedder_provider,
+            base_url=settings.openai_base_url,
+            model=settings.embedder_model,
+            api_key=settings.openai_api_key,
+        )
+        second = await _MODULE._get_or_create_graphiti_client(
+            settings,
+            provider=settings.embedder_provider,
+            base_url=settings.openai_base_url,
+            model=settings.embedder_model,
+            api_key=settings.openai_api_key,
+        )
+
+    assert first is fake_client
+    assert second is fake_client
+    embedder_mock.assert_called_once()
+    llm_mock.assert_called_once()
+    driver_mock.assert_called_once_with(
+        uri="bolt://neo4j:7687",
+        user="neo4j",
+        password="password123",
+        database="neo4j",
+    )
+    graphiti_mock.assert_called_once_with(
+        graph_driver=fake_driver,
+        embedder=embedder_mock.return_value,
+        llm_client=llm_mock.return_value,
+    )
+    fake_driver.build_indices_and_constraints.assert_awaited_once_with(delete_existing=False)
+
+    await _MODULE._close_graphiti_clients()
+    fake_client.close.assert_awaited_once()
