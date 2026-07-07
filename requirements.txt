@@ -8,7 +8,7 @@ slowapi==0.1.10
 
 # ML / AI
 torch==2.12.1
-torchaudio==2.11.0
+torchaudio==2.11.0  # newest existing release (torchaudio trails torch; no 2.12 pairing exists); sole importer asr_server.py installs requirements.asr.txt instead
 transformers==4.57.6
 accelerate==1.14.0
 bitsandbytes==0.49.2

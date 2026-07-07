@@ -29,7 +29,7 @@ A correct fix pins every installable line to the exact version CI has already
 proven green, changes nothing else (no upgrades, no added/removed deps, no
 workflow edits), and is verified by the same CI fleet that consumes the files.
 
-## Scope
+## Scope (this PR)
 
 Slice phase: workflow/process
 
@@ -51,10 +51,10 @@ Max files: 4
 
 ### Files touched
 
-- `requirements.txt`
-- `requirements.content_ops_ci.txt`
-- `tests/test_content_ops_ci_requirements_workflows.py`
 - `plans/PR-Pin-Python-CI-Requirements.md`
+- `requirements.content_ops_ci.txt`
+- `requirements.txt`
+- `tests/test_content_ops_ci_requirements_workflows.py`
 
 ### Review Contract
 
@@ -166,13 +166,10 @@ on any violation or any name without a harvested version.
 
 ## Estimated diff size
 
-| File | ~LOC (added+deleted) |
-|---|---|
-| `requirements.txt` | ~104 |
-| `requirements.content_ops_ci.txt` | ~62 |
-| `tests/test_content_ops_ci_requirements_workflows.py` | ~30 |
-| `plans/PR-Pin-Python-CI-Requirements.md` | ~160 |
-| **Total** | **~356** |
-
-Under the 400-LOC budget (the two requirements files are in-place rewrites:
-52 + 31 lines each counted as an add plus a delete).
+| File | LOC |
+|---|---:|
+| `plans/PR-Pin-Python-CI-Requirements.md` | 175 |
+| `requirements.content_ops_ci.txt` | 62 |
+| `requirements.txt` | 105 |
+| `tests/test_content_ops_ci_requirements_workflows.py` | 22 |
+| **Total** | **364** |
