@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from extracted_content_pipeline.deflection_report_access import (
     stored_deflection_report_model,
 )
+from extracted_content_pipeline.deflection_money import format_support_cost_usd
 from extracted_content_pipeline.faq_deflection_report import (
     DEFAULT_DEFLECTION_REPORT_TITLE,
 )
@@ -937,12 +938,7 @@ def _model_count(value: int) -> str:
 
 
 def _model_money(value: Any) -> str:
-    try:
-        rounded = int(float(value) + 0.5)
-    except (TypeError, ValueError):
-        text = _model_text(value)
-        return text if text else "$0"
-    return f"${max(0, rounded):,}"
+    return format_support_cost_usd(value)
 
 
 def _is_sequence(value: Any) -> bool:

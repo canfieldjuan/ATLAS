@@ -19,6 +19,7 @@ from extracted_content_pipeline.deflection_report_access import (
     deflection_delta_read_payload,
     stored_deflection_report_model,
 )
+from extracted_content_pipeline.deflection_money import format_support_cost_usd
 from extracted_content_pipeline.faq_deflection_report import (
     deflection_report_email_action_rows,
 )
@@ -1634,15 +1635,19 @@ def _html_count(value: int) -> str:
 
 
 def _email_money(value: float) -> str:
-    return f"${float(value):,.0f}"
+    return format_support_cost_usd(value)
 
 
 def _signed_email_money(value: float) -> str:
     amount = float(value)
     if amount < 0:
-        return f"-${abs(amount):,.0f}"
+        return f"-{_whole_dollar_money(abs(amount))}"
     prefix = "+" if amount > 0 else ""
-    return f"{prefix}{_email_money(amount)}"
+    return f"{prefix}{_whole_dollar_money(amount)}"
+
+
+def _whole_dollar_money(value: float) -> str:
+    return f"${float(value):,.0f}"
 
 
 def _signed_count(value: int) -> str:

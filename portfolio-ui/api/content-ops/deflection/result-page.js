@@ -126,7 +126,8 @@ function formatMoney(value) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(numeric);
 }
 
@@ -408,16 +409,34 @@ function paidGapCardItems(report, fallbackItems) {
 
 function paidSummary(report, items) {
   const summary = isObjectRecord(report.artifact.summary) ? report.artifact.summary : {};
-  const repeatTickets = finiteCount(summary.repeat_ticket_count);
-  const publishableCount = items.filter(hasResolutionEvidence).length;
-  const generated = parsedCount(summary.generated) || items.length;
-  const needsProof = Math.max(0, generated - publishableCount);
+  const supportTax = reportModelSectionData(report, "support_tax");
+  const repeatTickets = firstParsedCount(
+    supportTax.repeat_ticket_count,
+    summary.repeat_ticket_count,
+  );
+  const publishableCount = firstParsedCount(
+    supportTax.drafted_answer_count,
+    items.filter(hasResolutionEvidence).length,
+  );
+  const generated = firstParsedCount(
+    supportTax.generated_question_count,
+    summary.generated,
+    items.length,
+  ) || items.length;
+  const needsProof = firstParsedCount(
+    supportTax.no_proven_answer_count,
+    Math.max(0, generated - publishableCount),
+  );
+  const supportCost = firstParsedCount(
+    supportTax.estimated_support_cost,
+    repeatTickets * ASSISTED_CONTACT_COST,
+  );
   return {
     generated,
     repeatTickets,
     publishableCount,
     needsProof,
-    supportCost: repeatTickets * ASSISTED_CONTACT_COST,
+    supportCost,
   };
 }
 

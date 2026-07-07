@@ -11,6 +11,13 @@ from types import MappingProxyType
 from typing import Any
 
 from .campaign_ports import TenantScope
+from .deflection_money import (
+    ASSISTED_CONTACT_COST_LABEL,
+    ASSISTED_CONTACT_COST_USD,
+    annualized_support_cost_usd,
+    format_support_cost_usd,
+    support_cost_usd,
+)
 from .ticket_faq_markdown import TicketFAQMarkdownResult, TicketFAQMarkdownService
 
 
@@ -48,8 +55,8 @@ DEFLECTION_FULL_REPORT_QA_REQUIRED_SURFACES = (
     "evidence_export",
 )
 _UNCAPPED_REPORT_MAX_ITEMS = 0
-_ASSISTED_CONTACT_COST = 13.50
-_ASSISTED_CONTACT_COST_LABEL = "$13.50"
+_ASSISTED_CONTACT_COST = float(ASSISTED_CONTACT_COST_USD)
+_ASSISTED_CONTACT_COST_LABEL = ASSISTED_CONTACT_COST_LABEL
 _ACTION_RESULT_PAGE_LIMIT = 3
 _ACTION_EMAIL_LIMIT = 3
 _ACTION_PDF_LIMIT = 10
@@ -3225,8 +3232,9 @@ def _support_tax_data(
     }
     if source_window:
         days = _int(source_window.get("source_window_days"))
-        data["annualized_support_cost"] = _support_cost(
-            repeat_ticket_count * 365 / days
+        data["annualized_support_cost"] = _annualized_support_cost(
+            repeat_ticket_count,
+            days,
         )
     else:
         data["annualized_run_rate_support_cost"] = _support_cost(
@@ -4061,8 +4069,9 @@ def _support_tax_section(
             ),
         ])
     if source_window:
-        annualized = _support_cost(
-            repeat_ticket_count * 365 / _int(source_window.get("source_window_days"))
+        annualized = _annualized_support_cost(
+            repeat_ticket_count,
+            _int(source_window.get("source_window_days")),
         )
         lines.extend([
             "",
@@ -4886,12 +4895,15 @@ def _source_window_label(source_window: Mapping[str, Any]) -> str:
 
 
 def _support_cost(ticket_count: float | int) -> float:
-    return max(0.0, float(ticket_count) * _ASSISTED_CONTACT_COST)
+    return support_cost_usd(ticket_count)
+
+
+def _annualized_support_cost(ticket_count: float | int, window_days: int) -> float:
+    return annualized_support_cost_usd(ticket_count, window_days)
 
 
 def _format_money(value: float | int) -> str:
-    rounded = int(float(value) + 0.5)
-    return f"${rounded:,}"
+    return format_support_cost_usd(value)
 
 
 def _count(value: int) -> str:

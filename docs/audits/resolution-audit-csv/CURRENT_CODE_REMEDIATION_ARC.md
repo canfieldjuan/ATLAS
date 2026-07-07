@@ -116,7 +116,7 @@ Implementation notes:
 
 ### S3 - Submit Row Cap And Heavy Inline Build
 
-Status: in review. Fixing PR:
+Status: complete. Fixing PR:
 [#2030](https://github.com/canfieldjuan/ATLAS/pull/2030).
 
 Root: submit limits conflate bytes and rows, then synchronous report build can
@@ -144,10 +144,13 @@ Implementation notes:
 - This slice derives the sync cap from the existing 1,000-row execute/source
   material contract so sync submit cannot reach the known heavy inline build
   path. Full-volume/background submit remains a separate large-upload slice.
+- #2030 merged and applied the cap to CSV, upload/blob, and Zendesk full-thread
+  source-entry paths while keeping truncation diagnostics honest.
 
 ### S4 - Money Reconciliation Contract
 
-Status: open.
+Status: in review. Fixing PR:
+[#2031](https://github.com/canfieldjuan/ATLAS/pull/2031).
 
 Root: paid artifacts compute and render money through multiple paths, so helper
 rounding, row totals, headline totals, and baked money strings can contradict
@@ -172,6 +175,13 @@ Expected fix:
 - Tests that render the same values through report model, PDF, and email paths,
   including row-total-vs-headline reconciliation.
 - Keep the `$13.50 assisted-contact basis` label single-sourced.
+
+Implementation notes:
+
+- This slice keeps the report model shape unchanged and fixes the current
+  display defect by routing support-cost displays through one cents renderer.
+  Stored raw numeric fields remain numeric; adding stored cents fields remains
+  approval-gated because it would change hosted payload shape.
 
 ### S5 - Clustering Correctness Spike And First Fix
 
@@ -305,8 +315,8 @@ These are not coding-start items until the operator approves the product shape:
 
 - [x] S1 CSV admission/data-loss and missing-ID stability PR linked here: #2026.
 - [x] S2 row-key normalization cache PR linked here: #2029.
-- [ ] S3 submit row cap/heavy-build PR linked here: #2030.
-- [ ] S4 money reconciliation PR linked here.
+- [x] S3 submit row cap/heavy-build PR linked here: #2030.
+- [ ] S4 money reconciliation PR linked here: #2031.
 - [ ] S5 clustering spike PR linked here.
 - [ ] S5 clustering first implementation PR linked here.
 - [ ] S6 text/comment/outcome hygiene PR linked here.

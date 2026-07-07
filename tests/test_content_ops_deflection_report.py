@@ -37,6 +37,10 @@ from extracted_content_pipeline.deflection_report_access import (
     PostgresDeflectionReportArtifactStore,
     stored_deflection_report_model,
 )
+from extracted_content_pipeline.deflection_money import (
+    annualized_support_cost_usd,
+    format_support_cost_usd,
+)
 from extracted_content_pipeline.support_ticket_input_package import (
     build_support_ticket_input_package,
 )
@@ -136,7 +140,25 @@ def _report_access_snapshot(question: str, *, generated: int = 1) -> dict[str, o
 
 
 def _money(value: object) -> str:
-    return f"${int(float(value) + 0.5):,}"
+    return format_support_cost_usd(value)
+
+
+@pytest.mark.parametrize(
+    ("ticket_count", "window_days", "expected_cost"),
+    [
+        (5, 36, 684.38),
+        (1, 7, 703.93),
+        (2, 31, 317.90),
+        (11, 90, 602.25),
+        (7, 28, 1231.88),
+    ],
+)
+def test_annualized_support_cost_preserves_exact_cent_rounding(
+    ticket_count: int,
+    window_days: int,
+    expected_cost: float,
+) -> None:
+    assert annualized_support_cost_usd(ticket_count, window_days) == expected_cost
 
 
 def _structured_report_fixture_result() -> TicketFAQMarkdownResult:
@@ -314,9 +336,9 @@ _STRUCTURED_REPORT_GOLDEN_MARKDOWN = f"""# {DEFAULT_DEFLECTION_REPORT_TITLE}
 
 ## Support Tax Confirmation
 
-This report found 8 question-level repeat tickets across 2 ranked questions. At the Gartner $13.50 assisted-contact benchmark, that repeated-question work sizes to about $108 of assisted-contact handling.
+This report found 8 question-level repeat tickets across 2 ranked questions. At the Gartner $13.50 assisted-contact benchmark, that repeated-question work sizes to about $108.00 of assisted-contact handling.
 
-The source window is 2026-05-01 to 2026-05-15 (15 days). At the same measured daily pace, that is about $2,628 over 12 months.
+The source window is 2026-05-01 to 2026-05-15 (15 days). At the same measured daily pace, that is about $2,628.00 over 12 months.
 
 Estimate only. This is not a savings guarantee; adjust the $13.50 benchmark to your own loaded support cost.
 
@@ -338,8 +360,8 @@ Use these source-backed phrases as help-center headings, internal-search synonym
 
 | Rank | Customer question | Tickets | Estimated support cost | Opportunity | Answer status | Source proof |
 |---:|---|---:|---:|---:|---|---|
-| 1 | How do I export attribution reports? | 5 | $68 | 21 | drafted from resolution evidence | 5 source tickets |
-| 2 | Can I turn on SSO for all users? | 3 | $41 | 13 | no proven answer yet | 3 source tickets |
+| 1 | How do I export attribution reports? | 5 | $67.50 | 21 | drafted from resolution evidence | 5 source tickets |
+| 2 | Can I turn on SSO for all users? | 3 | $40.50 | 13 | no proven answer yet | 3 source tickets |
 
 ## Resolution Outcome Diagnostics
 
@@ -366,7 +388,7 @@ Questions without uploaded resolution evidence stay in review: outcome/status si
 
 **Answer status:** drafted from resolution evidence
 
-**Ticket/support-cost context:** 5 tickets, estimated at $68 of assisted-contact handling.
+**Ticket/support-cost context:** 5 tickets, estimated at $67.50 of assisted-contact handling.
 
 **Publishable answer draft:**
 
@@ -394,7 +416,7 @@ To resolve this, open Analytics, choose Attribution, then Download report.
 
 **Answer status:** no proven answer yet
 
-**Ticket/support-cost context:** 3 tickets, estimated at $41 of assisted-contact handling.
+**Ticket/support-cost context:** 3 tickets, estimated at $40.50 of assisted-contact handling.
 
 **No proven answer yet:**
 
@@ -423,6 +445,80 @@ def test_deflection_report_model_keeps_current_markdown_golden_snapshot() -> Non
     assert render_deflection_report_model(rebuilt_model) == (
         _STRUCTURED_REPORT_GOLDEN_MARKDOWN
     )
+
+
+def test_deflection_report_support_cost_display_matches_markdown_pdf_and_email() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=7,
+        ticket_source_count=7,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I export reports?",
+                "weighted_frequency": 7,
+                "ticket_count": 7,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": tuple(f"ticket-export-{index}" for index in range(1, 8)),
+            },
+        ),
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    model = artifact.report_model.as_dict()
+
+    from atlas_brain.content_ops_deflection_delivery import (
+        _render_model_summary_text,
+        _support_tax_email_summary,
+    )
+    from atlas_brain.deflection_pdf_renderer import _report_model_pdf_markdown
+
+    support_tax = next(
+        section
+        for section in model["sections"]
+        if section["id"] == "support_tax"
+    )
+    email_summary = _support_tax_email_summary(support_tax)
+    assert email_summary is not None
+
+    assert "about $94.50 of assisted-contact handling" in artifact.markdown
+    assert "about $94.50 of assisted-contact handling" in _report_model_pdf_markdown(model)
+    assert "$94.50 estimated assisted-contact handling" in _render_model_summary_text(
+        "https://example.test/report",
+        has_attachment=False,
+        summary=email_summary,
+    )
+
+
+def test_deflection_report_support_cost_rows_reconcile_to_headline_with_cents() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=6,
+        ticket_source_count=6,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I change workspace owners?",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-owner-1", "ticket-owner-2", "ticket-owner-3"),
+            },
+            {
+                "question": "How do I add invoice recipients?",
+                "weighted_frequency": 3,
+                "ticket_count": 3,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-invoice-1", "ticket-invoice-2", "ticket-invoice-3"),
+            },
+        ),
+    )
+
+    markdown = build_deflection_report_artifact(result).markdown
+
+    assert "about $81.00 of assisted-contact handling" in markdown
+    assert "| 1 | How do I change workspace owners? | 3 | $40.50 |" in markdown
+    assert "| 2 | How do I add invoice recipients? | 3 | $40.50 |" in markdown
 
 
 def test_deflection_report_artifact_exposes_structured_model_sections() -> None:
@@ -745,7 +841,7 @@ def test_csv_product_gap_owner_lane_vertical_routes_login_gap() -> None:
     assert priority_item["product_gap_summary"] == (
         "Repeated support friction routes to Auth / Product UX. "
         "4 support tickets in this upload; estimated assisted-contact cost "
-        "is $54 based on CSV customer text."
+        "is $54.00 based on CSV customer text."
     )
     assert priority_item["customer_vocabulary"] == [
         "Where is the login button?",
@@ -957,7 +1053,7 @@ def test_product_gap_summary_does_not_copy_root_cause_or_screen_path_question() 
     assert priority_item["product_gap_summary"] == (
         "Repeated support friction routes to Auth / Product UX. "
         "3 support tickets in this upload; estimated assisted-contact cost "
-        "is $41 based on CSV index metadata only."
+        "is $40.50 based on CSV index metadata only."
     )
     assert "Account Settings" not in priority_item["product_gap_summary"]
     assert "buried" not in priority_item["product_gap_summary"].lower()
@@ -3224,6 +3320,49 @@ def test_deflection_report_model_support_tax_data_matches_markdown() -> None:
     ) in support_tax_markdown
 
 
+def test_deflection_report_annualized_support_tax_preserves_half_cent_rounding() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=5,
+        ticket_source_count=5,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I export a report?",
+                "customer_wording": "export a report",
+                "topic": "exports",
+                "ticket_count": 5,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (
+                    "ticket-export-1",
+                    "ticket-export-2",
+                    "ticket-export-3",
+                    "ticket-export-4",
+                    "ticket-export-5",
+                ),
+                "source_date_span": {
+                    "start": "2026-01-01",
+                    "end": "2026-02-05",
+                    "missing_source_count": 0,
+                },
+            },
+        ),
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    support_tax = next(
+        section
+        for section in artifact.report_model.sections
+        if section.id == "support_tax"
+    )
+    support_tax_markdown = "\n".join(support_tax.markdown_lines)
+
+    assert support_tax.data["source_date_window"]["source_window_days"] == 36
+    assert support_tax.data["annualized_support_cost"] == 684.38
+    assert "$684.38 over 12 months" in support_tax_markdown
+    assert "$684.37" not in support_tax_markdown
+
+
 def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",
@@ -4176,9 +4315,9 @@ def test_deflection_report_reframes_paid_artifact_with_cost_and_seo_sections() -
     assert "ranked repeat questions" not in markdown
     assert "every ranked repeat question" not in markdown
     assert "Gartner $13.50 assisted-contact benchmark" in markdown
-    assert "about $108 of assisted-contact handling" in markdown
+    assert "about $108.00 of assisted-contact handling" in markdown
     assert "2026-05-01 to 2026-05-15 (15 days)" in markdown
-    assert "about $2,628 over 12 months" in markdown
+    assert "about $2,628.00 over 12 months" in markdown
     assert "Estimate only. This is not a savings guarantee" in markdown
     assert "## Your Help-Desk SEO Targeting List" in markdown
     assert "export attribution reports" in markdown
@@ -4189,8 +4328,8 @@ def test_deflection_report_reframes_paid_artifact_with_cost_and_seo_sections() -
         "| Rank | Customer question | Tickets | Estimated support cost | Opportunity |"
         in markdown
     )
-    assert "| 1 | How do I export attribution reports? | 5 | $68 | 21 |" in markdown
-    assert "| 2 | Can I turn on SSO for all users? | 3 | $41 | 13 |" in markdown
+    assert "| 1 | How do I export attribution reports? | 5 | $67.50 | 21 |" in markdown
+    assert "| 2 | Can I turn on SSO for all users? | 3 | $40.50 | 13 |" in markdown
     assert (
         "Backed by 5 resolved tickets (ticket-export-1, ticket-export-2, "
         "ticket-export-3, +2 more)."
@@ -4335,11 +4474,11 @@ def test_deflection_report_uses_unknown_window_cost_fallback_without_inference()
     assert "2 question-level repeat tickets across 1 ranked questions" in markdown
     assert "repeat-ticket hits" not in markdown
     assert "ranked repeat questions" not in markdown
-    assert "about $27 of assisted-contact handling" in markdown
+    assert "about $27.00 of assisted-contact handling" in markdown
     assert "did not receive a complete source-date window" in markdown
     assert "does not infer a monthly or annual reporting period" in markdown
     assert "If this uploaded batch is monthly pace" in markdown
-    assert "the 12-month run-rate would be about $324" in markdown
+    assert "the 12-month run-rate would be about $324.00" in markdown
     assert "same measured daily pace" not in markdown
     assert "monthly_pace_support_cost" not in support_tax.data
     assert support_tax.data["annualized_run_rate_support_cost"] == 324.0
