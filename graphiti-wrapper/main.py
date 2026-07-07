@@ -3,16 +3,18 @@ Minimal FastAPI wrapper for graphiti-core
 Exposes native graphiti-core API for Next.js client
 """
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from graphiti_core import Graphiti
+from graphiti_core.driver.neo4j_driver import Neo4jDriver
 from graphiti_core.edges import EntityEdge
 from graphiti_core.nodes import EpisodeType
 from graphiti_core.errors import NodeNotFoundError
@@ -49,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 _NEO4J_HEALTH_CONNECTION_TIMEOUT_SECONDS = 5.0
 _embedder_preload_task: asyncio.Task | None = None
+_graphiti_clients: dict[tuple[str, ...], Graphiti] = {}
+_graphiti_client_lock = asyncio.Lock()
 
 
 # ============================================================================
@@ -62,6 +66,7 @@ class Settings(BaseSettings):
     neo4j_uri: str
     neo4j_user: str
     neo4j_password: str
+    neo4j_database: str = "neo4j"
 
     # Embedder configuration (optional, defaults to OpenAI)
     embedder_provider: str = "openai"
@@ -82,6 +87,157 @@ class Settings(BaseSettings):
 
 def get_settings():
     return Settings()
+
+
+class AtlasNeo4jDriver(Neo4jDriver):
+    """Neo4j Community driver that keeps Graphiti groups in one physical DB."""
+
+    def clone(self, database: str):
+        return self
+
+
+def _secret_fingerprint(value: str | None) -> str:
+    if not value:
+        return ""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_ollama_base_url(base_url: str | None) -> bool:
+    normalized = (base_url or "").lower()
+    return "11434" in normalized or "ollama" in normalized
+
+
+def _graphiti_cache_key(
+    settings: Settings,
+    *,
+    provider: str,
+    base_url: str | None,
+    model: str | None,
+    api_key: str | None,
+) -> tuple[str, ...]:
+    return (
+        settings.neo4j_uri,
+        settings.neo4j_user,
+        _secret_fingerprint(settings.neo4j_password),
+        settings.neo4j_database,
+        provider,
+        base_url or "",
+        model or "",
+        _secret_fingerprint(api_key),
+        settings.embedder_device,
+        str(settings.embedder_batch_size),
+        str(settings.embedder_embedding_dim or ""),
+        settings.openai_base_url or "",
+        settings.model_name or "",
+        _secret_fingerprint(settings.openai_api_key),
+    )
+
+
+def _create_graphiti_client(
+    settings: Settings,
+    *,
+    provider: str,
+    base_url: str | None,
+    model: str | None,
+    api_key: str | None,
+) -> Graphiti:
+    effective_provider = "openai" if provider == "runpod" else provider
+
+    embedder_config = EmbedderSettings(
+        provider=effective_provider,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        device=settings.embedder_device,
+        batch_size=settings.embedder_batch_size,
+        embedding_dim=settings.embedder_embedding_dim,
+    )
+
+    logger.info(
+        "Creating embedder: provider=%s (effective=%s) model=%s base_url=%s",
+        provider,
+        effective_provider,
+        embedder_config.model,
+        base_url[:50] if base_url else None,
+    )
+    embedder = create_embedder(embedder_config)
+
+    if _is_ollama_base_url(settings.openai_base_url):
+        llm_client = create_ollama_llm_client(
+            model=settings.model_name or "hermes3:8b-q4",
+            base_url=settings.openai_base_url,
+        )
+        logger.info(
+            "Created Ollama LLM client: model=%s base_url=%s",
+            settings.model_name,
+            settings.openai_base_url,
+        )
+    else:
+        llm_client = create_retrying_llm_client(
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            model=settings.model_name,
+            max_retries=8,
+            base_delay=5.0,
+            max_delay=60.0,
+        )
+        logger.info("Created OpenAI-compatible LLM client with retry logic")
+
+    graph_driver = AtlasNeo4jDriver(
+        uri=settings.neo4j_uri,
+        user=settings.neo4j_user,
+        password=settings.neo4j_password,
+        database=settings.neo4j_database,
+    )
+
+    return Graphiti(
+        graph_driver=graph_driver,
+        embedder=embedder,
+        llm_client=llm_client,
+    )
+
+
+async def _get_or_create_graphiti_client(
+    settings: Settings,
+    *,
+    provider: str,
+    base_url: str | None,
+    model: str | None,
+    api_key: str | None,
+) -> Graphiti:
+    cache_key = _graphiti_cache_key(
+        settings,
+        provider=provider,
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+    )
+
+    client = _graphiti_clients.get(cache_key)
+    if client is not None:
+        return client
+
+    async with _graphiti_client_lock:
+        client = _graphiti_clients.get(cache_key)
+        if client is not None:
+            return client
+        client = _create_graphiti_client(
+            settings,
+            provider=provider,
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
+        )
+        _graphiti_clients[cache_key] = client
+        await client.driver.build_indices_and_constraints(delete_existing=False)
+        return client
+
+
+async def _close_graphiti_clients() -> None:
+    clients = list(_graphiti_clients.values())
+    _graphiti_clients.clear()
+    for client in clients:
+        await client.close()
 
 
 async def _preload_embedder(settings: Settings) -> None:
@@ -276,12 +432,6 @@ class SentimentResponse(BaseModel):
     method: str  # semantic_similarity
 
 
-# ============================================================================
-# Graphiti Dependency
-# ============================================================================
-
-from fastapi import Header
-
 async def get_graphiti(
     settings: Annotated[Settings, Depends(get_settings)],
     x_embedder_provider: str | None = Header(None, alias="X-Embedder-Provider"),
@@ -289,74 +439,21 @@ async def get_graphiti(
     x_embedder_model: str | None = Header(None, alias="X-Embedder-Model"),
     x_embedder_api_key: str | None = Header(None, alias="X-Embedder-Api-Key"),
 ):
-    """Create and yield Graphiti client with optional per-request embedder config"""
+    """Yield a cached Graphiti client for the resolved embedder configuration."""
 
-    # Use per-request config if provided, otherwise fall back to settings
     provider = x_embedder_provider or settings.embedder_provider
     base_url = x_embedder_base_url or settings.embedder_base_url or settings.openai_base_url
     model = x_embedder_model or settings.embedder_model
     api_key = x_embedder_api_key or settings.embedder_api_key or settings.openai_api_key
 
-    # Map 'runpod' provider to 'openai' since RunPod uses OpenAI-compatible API
-    effective_provider = "openai" if provider == "runpod" else provider
-
-    # Create custom embedder based on settings
-    embedder_config = EmbedderSettings(
-        provider=effective_provider,
+    client = await _get_or_create_graphiti_client(
+        settings,
+        provider=provider,
+        base_url=base_url,
         model=model,
         api_key=api_key,
-        base_url=base_url,
-        device=settings.embedder_device,
-        batch_size=settings.embedder_batch_size,
-        embedding_dim=settings.embedder_embedding_dim,
     )
-
-    logger.info(
-        "Creating embedder: provider=%s (effective=%s) model=%s base_url=%s",
-        provider,
-        effective_provider,
-        embedder_config.model,
-        base_url[:50] if base_url else None,
-    )
-
-    try:
-        embedder = create_embedder(embedder_config)
-    except Exception as e:
-        logger.error("Failed to create embedder: %s", e)
-        raise HTTPException(status_code=500, detail=f"Embedder creation failed: {e}")
-
-    # Create LLM client - use Ollama client if base_url points to Ollama
-    is_ollama = settings.openai_base_url and ("11434" in settings.openai_base_url or "ollama" in settings.openai_base_url.lower())
-
-    if is_ollama:
-        llm_client = create_ollama_llm_client(
-            model=settings.model_name or "hermes3:8b-q4",
-            base_url=settings.openai_base_url,
-        )
-        logger.info("Created Ollama LLM client: model=%s base_url=%s", settings.model_name, settings.openai_base_url)
-    else:
-        llm_client = create_retrying_llm_client(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            model=settings.model_name,
-            max_retries=8,
-            base_delay=5.0,
-            max_delay=60.0,
-        )
-        logger.info("Created OpenAI LLM client with retry logic (max_retries=8, base_delay=5s)")
-
-    client = Graphiti(
-        uri=settings.neo4j_uri,
-        user=settings.neo4j_user,
-        password=settings.neo4j_password,
-        embedder=embedder,
-        llm_client=llm_client,
-    )
-
-    try:
-        yield client
-    finally:
-        await client.close()
+    yield client
 
 
 GraphitiDep = Annotated[Graphiti, Depends(get_graphiti)]
@@ -535,6 +632,12 @@ async def startup_event():
     _embedder_preload_task = asyncio.create_task(_preload_embedder(settings))
     _embedder_preload_task.add_done_callback(_log_embedder_preload_result)
     logger.info("Embedder preload started in background")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close cached Graphiti clients on service shutdown."""
+    await _close_graphiti_clients()
 
 
 @app.get('/health')

@@ -10,12 +10,66 @@ from typing import Any
 from graphiti_core.llm_client import OpenAIClient
 from graphiti_core.llm_client.config import LLMConfig, ModelSize
 from graphiti_core.llm_client.errors import RateLimitError
+from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 from graphiti_core.prompts.models import Message
 
 logger = logging.getLogger(__name__)
 
 
-class RetryingOpenAIClient(OpenAIClient):
+class _RetryingRateLimitMixin:
+    rate_limit_max_retries: int
+    base_delay: float
+    max_delay: float
+
+    async def generate_response(
+        self,
+        messages: list[Message],
+        response_model: type | None = None,
+        max_tokens: int | None = None,
+        model_size: ModelSize = ModelSize.medium,
+        group_id: str | None = None,
+        prompt_name: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Generate response with exponential backoff on rate limits."""
+        last_error = None
+
+        for attempt in range(self.rate_limit_max_retries + 1):
+            try:
+                return await super().generate_response(
+                    messages=messages,
+                    response_model=response_model,
+                    max_tokens=max_tokens,
+                    model_size=model_size,
+                    group_id=group_id,
+                    prompt_name=prompt_name,
+                    **kwargs,
+                )
+            except RateLimitError as e:
+                last_error = e
+
+                if attempt >= self.rate_limit_max_retries:
+                    logger.error(
+                        f"Rate limit: max retries ({self.rate_limit_max_retries}) exceeded"
+                    )
+                    raise
+
+                delay = min(
+                    self.base_delay * (2 ** attempt) + random.uniform(0, 1),
+                    self.max_delay
+                )
+
+                logger.warning(
+                    f"Rate limited (attempt {attempt + 1}/{self.rate_limit_max_retries + 1}). "
+                    f"Waiting {delay:.1f}s before retry..."
+                )
+
+                await asyncio.sleep(delay)
+
+        raise last_error or RateLimitError("Max retries exceeded")
+
+
+class RetryingOpenAIClient(_RetryingRateLimitMixin, OpenAIClient):
     """
     OpenAI client with exponential backoff for rate limit errors.
 
@@ -45,54 +99,28 @@ class RetryingOpenAIClient(OpenAIClient):
         self.base_delay = base_delay
         self.max_delay = max_delay
 
-    async def generate_response(
+class RetryingOpenAIGenericClient(_RetryingRateLimitMixin, OpenAIGenericClient):
+    """OpenAI-compatible client with exponential backoff for rate limit errors."""
+
+    def __init__(
         self,
-        messages: list[Message],
-        response_model: type | None = None,
-        max_tokens: int | None = None,
-        model_size: ModelSize = ModelSize.medium,
-        group_id: str | None = None,
-        prompt_name: str | None = None,
-    ) -> dict[str, Any]:
-        """
-        Generate response with exponential backoff on rate limits.
-        """
-        last_error = None
-
-        for attempt in range(self.rate_limit_max_retries + 1):
-            try:
-                return await super().generate_response(
-                    messages=messages,
-                    response_model=response_model,
-                    max_tokens=max_tokens,
-                    model_size=model_size,
-                    group_id=group_id,
-                    prompt_name=prompt_name,
-                )
-            except RateLimitError as e:
-                last_error = e
-
-                if attempt >= self.rate_limit_max_retries:
-                    logger.error(
-                        f"Rate limit: max retries ({self.rate_limit_max_retries}) exceeded"
-                    )
-                    raise
-
-                # Calculate delay with exponential backoff and jitter
-                delay = min(
-                    self.base_delay * (2 ** attempt) + random.uniform(0, 1),
-                    self.max_delay
-                )
-
-                logger.warning(
-                    f"Rate limited (attempt {attempt + 1}/{self.rate_limit_max_retries + 1}). "
-                    f"Waiting {delay:.1f}s before retry..."
-                )
-
-                await asyncio.sleep(delay)
-
-        # Should never reach here, but just in case
-        raise last_error or RateLimitError("Max retries exceeded")
+        config: LLMConfig | None = None,
+        cache: bool = False,
+        max_tokens: int = 16384,
+        max_retries: int = 5,
+        base_delay: float = 2.0,
+        max_delay: float = 60.0,
+    ):
+        try:
+            super().__init__(config=config, cache=cache, max_tokens=max_tokens)
+        except TypeError as exc:
+            if "max_tokens" not in str(exc):
+                raise
+            super().__init__(config=config, cache=cache)
+            self.max_tokens = max_tokens
+        self.rate_limit_max_retries = max_retries
+        self.base_delay = base_delay
+        self.max_delay = max_delay
 
 
 def create_retrying_llm_client(
@@ -102,7 +130,7 @@ def create_retrying_llm_client(
     max_retries: int = 5,
     base_delay: float = 2.0,
     max_delay: float = 60.0,
-) -> RetryingOpenAIClient:
+) -> RetryingOpenAIClient | RetryingOpenAIGenericClient:
     """
     Factory function to create a RetryingOpenAIClient.
 
@@ -115,7 +143,8 @@ def create_retrying_llm_client(
         max_delay: Maximum delay cap in seconds (default: 60.0)
 
     Returns:
-        RetryingOpenAIClient instance
+        RetryingOpenAIClient for OpenAI direct, otherwise an OpenAI-compatible
+        generic client for OpenRouter, vLLM, llama.cpp, and similar endpoints.
     """
     model_name = model or "gpt-4o-mini"
     config = LLMConfig(
@@ -123,6 +152,16 @@ def create_retrying_llm_client(
         base_url=base_url,
         model=model_name,
     )
+
+    normalized_base_url = (base_url or "").lower().rstrip("/")
+
+    if normalized_base_url and "api.openai.com" not in normalized_base_url:
+        return RetryingOpenAIGenericClient(
+            config=config,
+            max_retries=max_retries,
+            base_delay=base_delay,
+            max_delay=max_delay,
+        )
 
     # Only set reasoning/verbosity for reasoning models (gpt-5*, o1*, o3*)
     is_reasoning_model = any(
