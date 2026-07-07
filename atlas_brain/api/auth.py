@@ -8,11 +8,11 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from ..auth.dependencies import AuthUser, require_auth
 from ..auth.jwt import create_access_token, create_password_reset_token, create_refresh_token, decode_token
-from ..auth.passwords import hash_password, verify_password
+from ..auth.passwords import hash_password, validate_bcrypt_password_length, verify_password
 from ..config import settings
 from ..storage.database import get_db_pool
 
@@ -36,6 +36,11 @@ class RegisterRequest(BaseModel):
     account_name: str = Field(..., max_length=200)
     product: str = Field(default="consumer", description="consumer | b2b_retention | b2b_challenger")
 
+    @field_validator("password")
+    @classmethod
+    def _password_fits_bcrypt(cls, value: str) -> str:
+        return validate_bcrypt_password_length(value)
+
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -50,6 +55,11 @@ class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., max_length=72)
     new_password: str = Field(..., min_length=8, max_length=72)
 
+    @field_validator("new_password")
+    @classmethod
+    def _new_password_fits_bcrypt(cls, value: str) -> str:
+        return validate_bcrypt_password_length(value)
+
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -58,6 +68,11 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str = Field(..., min_length=8, max_length=72)
+
+    @field_validator("new_password")
+    @classmethod
+    def _new_password_fits_bcrypt(cls, value: str) -> str:
+        return validate_bcrypt_password_length(value)
 
 
 class TokenResponse(BaseModel):
