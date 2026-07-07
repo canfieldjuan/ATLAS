@@ -5,12 +5,13 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from html import unescape
+from html.parser import HTMLParser
 from typing import Any
 
 from .support_ticket_clustering import support_ticket_plain_text
 
 
-_AUTO_REPLY_LINE_RE = re.compile(
+_AUTO_REPLY_INLINE_RE = re.compile(
     r"^\s*(?:auto(?:mated)?[-\s]?reply|automatic reply|out of office)\s*:\s*"
     r"(?:we\b.*\b(?:received|got|will|respond|reply)|"
     r"(?:we'?ll|will)\b.*\b(?:respond|reply)|"
@@ -23,8 +24,32 @@ _AUTO_REPLY_LINE_RE = re.compile(
     r"currently out\b)",
     re.IGNORECASE,
 )
+_AUTO_REPLY_HEADER_RE = re.compile(
+    r"^\s*(?:auto(?:mated)?[-\s]?reply|automatic reply|out of office)\s*:?\s*$",
+    re.IGNORECASE,
+)
+_AUTO_REPLY_BOILERPLATE_RE = re.compile(
+    r"^\s*(?:"
+    r"we\b.*\b(?:received|got|will|respond|reply)|"
+    r"(?:we'?ll|will)\b.*\b(?:respond|reply)|"
+    r"(?:thanks?|thank you)\b.*\b(?:contacting|reaching out)|"
+    r"your (?:ticket|request)\b.*\b(?:received|created)|"
+    r"(?:i am|i'm|i will be|i'll)\b.*\b(?:out|away|respond)|"
+    r"this (?:mailbox|message)\b|"
+    r"away from\b|"
+    r"currently out\b"
+    r")",
+    re.IGNORECASE,
+)
 _QUOTED_REPLY_HEADER_RE = re.compile(
-    r"^\s*on\s+.{1,160}\s+wrote:\s*$",
+    r"^\s*on\s+"
+    r"(?:(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|"
+    r"\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,4})?\b|"
+    r".{0,120}\b\d{1,2}:\d{2}\b|"
+    r".{0,120}<[^>]+@[^>]+>|"
+    r".{0,120}\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)"
+    r".{0,160}\s+wrote:\s*$",
     re.IGNORECASE,
 )
 _SIGNATURE_BOUNDARY_RE = re.compile(r"^\s*(?:--+|__+)\s*$")
@@ -34,14 +59,25 @@ _MOBILE_SIGNATURE_RE = re.compile(
 )
 _HTML_SIGNAL_RE = re.compile(
     r"(?is)<\s*/?\s*"
-    r"(?:a|blockquote|body|br|div|em|html|li|ol|p|span|strong|td|tr|ul)\b"
+    r"(?:a|blockquote|body|br|div|em|html|li|ol|p|script|span|strong|style|td|tr|ul)\b"
 )
-_HTML_LINE_BREAK_RE = re.compile(
-    r"(?is)<\s*(?:br|/blockquote|/div|/li|/p|/tr)\b[^>]*>"
+_HTML_DROP_BLOCK_RE = re.compile(
+    r"(?is)<\s*(script|style|blockquote)\b[^>]*>.*?<\s*/\s*\1\s*>"
 )
 _HTML_TAG_RE = re.compile(r"(?s)<[^>]+>")
 _NUMERIC_ZERO_RE = re.compile(r"^[+-]?0+(?:\.0+)?$")
 _NUMERIC_ONE_RE = re.compile(r"^\+?1(?:\.0+)?$")
+_HTML_SKIP_TAGS = frozenset({"script", "style", "blockquote"})
+_HTML_LINE_TAGS = frozenset({
+    "blockquote",
+    "br",
+    "div",
+    "li",
+    "ol",
+    "p",
+    "tr",
+    "ul",
+})
 _COMMENT_PUBLIC_KEYS = ("public", "is_public")
 _COMMENT_PRIVATE_KEYS = (
     "private",
@@ -78,6 +114,14 @@ def support_ticket_text_component(value: Any) -> str:
     return support_ticket_plain_text(_strip_ticket_text_junk(value))
 
 
+def support_ticket_history_text(value: Any) -> str:
+    """Return transcript text while preserving later messages after signatures."""
+
+    return support_ticket_plain_text(
+        _strip_ticket_text_junk(value, stop_at_boundary=False)
+    )
+
+
 def support_ticket_comment_is_private(item: Mapping[str, Any]) -> bool:
     """Return whether a comment should be excluded from customer/report text."""
 
@@ -102,24 +146,49 @@ def support_ticket_comment_is_private(item: Mapping[str, Any]) -> bool:
     return False
 
 
-def _strip_ticket_text_junk(value: Any) -> str:
+def _strip_ticket_text_junk(value: Any, *, stop_at_boundary: bool = True) -> str:
     text = _line_preserving_text(value)
     if not text.strip():
         return ""
     lines: list[str] = []
+    skip_auto_block = False
+    skip_signature_block = False
+    skip_quote_block = False
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
+            skip_auto_block = False
+            skip_signature_block = False
+            skip_quote_block = False
             lines.append(raw_line)
             continue
-        if _AUTO_REPLY_LINE_RE.match(line):
+        if skip_auto_block and _AUTO_REPLY_BOILERPLATE_RE.match(line):
             continue
-        if (
-            _SIGNATURE_BOUNDARY_RE.match(line)
-            or _MOBILE_SIGNATURE_RE.match(line)
-            or _QUOTED_REPLY_HEADER_RE.match(line)
-        ):
-            break
+        if skip_auto_block:
+            skip_auto_block = False
+        if skip_signature_block:
+            continue
+        if skip_quote_block and line.startswith(">"):
+            continue
+        if skip_quote_block:
+            skip_quote_block = False
+        if _AUTO_REPLY_INLINE_RE.match(line):
+            continue
+        if _AUTO_REPLY_HEADER_RE.match(line):
+            skip_auto_block = True
+            continue
+        if _SIGNATURE_BOUNDARY_RE.match(line) or _MOBILE_SIGNATURE_RE.match(line):
+            if stop_at_boundary:
+                break
+            skip_signature_block = True
+            continue
+        if _QUOTED_REPLY_HEADER_RE.match(line):
+            if stop_at_boundary:
+                break
+            skip_quote_block = True
+            continue
+        if line.startswith(">") and not stop_at_boundary:
+            continue
         if line.startswith(">"):
             continue
         lines.append(raw_line)
@@ -129,10 +198,58 @@ def _strip_ticket_text_junk(value: Any) -> str:
 def _line_preserving_text(value: Any) -> str:
     text = str(value or "").replace("\x00", " ")
     if not text.strip() or not _HTML_SIGNAL_RE.search(text):
-        return text
-    text = _HTML_LINE_BREAK_RE.sub("\n", text)
-    text = _HTML_TAG_RE.sub(" ", text)
-    return unescape(text)
+        return unescape(text)
+    parser = _LinePreservingHTMLExtractor()
+    try:
+        parser.feed(text)
+        parser.close()
+        return "".join(parser.parts)
+    except Exception:
+        text = _HTML_DROP_BLOCK_RE.sub("\n", text)
+        text = _HTML_TAG_RE.sub(" ", text)
+        return unescape(text)
+
+
+class _LinePreservingHTMLExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        lowered = tag.lower()
+        if lowered in _HTML_SKIP_TAGS:
+            self._skip_depth += 1
+            self.parts.append("\n")
+            return
+        if lowered in _HTML_LINE_TAGS:
+            self.parts.append("\n")
+            return
+        self.parts.append(" ")
+
+    def handle_startendtag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        lowered = tag.lower()
+        if lowered in _HTML_SKIP_TAGS:
+            if self._skip_depth:
+                self._skip_depth -= 1
+            self.parts.append("\n")
+            return
+        if lowered in _HTML_LINE_TAGS:
+            self.parts.append("\n")
+            return
+        self.parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            self.parts.append(data)
 
 
 def _boolish(value: Any) -> bool | None:
@@ -178,5 +295,6 @@ def _key(value: Any) -> str:
 
 __all__ = [
     "support_ticket_comment_is_private",
+    "support_ticket_history_text",
     "support_ticket_text_component",
 ]

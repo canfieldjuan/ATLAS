@@ -29,6 +29,7 @@ from .support_ticket_context_contract import (
 from .support_ticket_dates import parse_support_ticket_source_date
 from .support_ticket_text_hygiene import (
     support_ticket_comment_is_private,
+    support_ticket_history_text,
     support_ticket_text_component,
 )
 
@@ -139,6 +140,16 @@ _PUBLIC_COMMENT_KEYS = (
     "history",
     "conversation_history",
 )
+_PUBLIC_COMMENT_HISTORY_KEYS = frozenset({
+    "comments",
+    "messages",
+    "thread",
+    "conversation",
+    "ticket_comments",
+    "ticket_history",
+    "history",
+    "conversation_history",
+})
 _RESOLUTION_TEXT_KEYS = (
     "resolution",
     "resolution_text",
@@ -754,6 +765,11 @@ def _comments_text(row: Mapping[str, Any]) -> str:
         if isinstance(comments, Mapping):
             comments = (comments,)
         elif isinstance(comments, str):
+            if key in _PUBLIC_COMMENT_HISTORY_KEYS:
+                text = support_ticket_history_text(comments)
+                if text:
+                    parts.append(text)
+                continue
             comments = (comments,)
         elif not isinstance(comments, Sequence) or isinstance(
             comments,

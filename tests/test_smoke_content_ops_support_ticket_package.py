@@ -250,7 +250,10 @@ def test_support_ticket_package_ticket_text_hygiene_keeps_customer_wording() -> 
         "ticket_id": "zd-hygiene",
         "subject": "Export report",
         "description": (
+            "<style>.hidden{display:none}</style>"
+            "<script>alert('old ticket')</script>"
             "<p>How do I export attribution reports?\x00\x00</p>"
+            "<blockquote>old blockquoted thread should stay out</blockquote>"
             "<p>Auto-reply: We received your request and will respond soon.</p>"
             "<p>-- </p>"
             "<p>Jane Agent</p>"
@@ -263,8 +266,22 @@ def test_support_ticket_package_ticket_text_hygiene_keeps_customer_wording() -> 
             {"body": "Sent from my iPhone app, how do I export a report?"},
             {
                 "body": (
+                    "Auto-reply:\n"
+                    "We received your request and will respond soon.\n\n"
+                    "How do I change notification rules?"
+                )
+            },
+            {
+                "body": (
                     "Auto-reply settings keep emailing customers; "
                     "how do I turn them off?"
+                )
+            },
+            {"body": "Out of office setup fails for my team."},
+            {
+                "body": (
+                    "On the checkout page it wrote:\n"
+                    "Card failed. How do I retry checkout?"
                 )
             },
         ],
@@ -276,9 +293,17 @@ def test_support_ticket_package_ticket_text_hygiene_keeps_customer_wording() -> 
     assert "I still need help exporting reports." in text
     assert "How do I add a signature block to email replies?" in text
     assert "Sent from my iPhone app, how do I export a report?" in text
+    assert "How do I change notification rules?" in text
     assert "Auto-reply settings keep emailing customers" in text
+    assert "Out of office setup fails for my team." in text
+    assert "On the checkout page it wrote:" in text
+    assert "Card failed. How do I retry checkout?" in text
     assert "\x00" not in text
+    assert ".hidden" not in text
+    assert "alert" not in text
+    assert "old blockquoted thread" not in text
     assert "Auto-reply: We received your request" not in text
+    assert "We received your request" not in text
     assert "will respond soon" not in text
     assert "Jane Agent" not in text
     assert "old quoted chain" not in text
@@ -286,6 +311,29 @@ def test_support_ticket_package_ticket_text_hygiene_keeps_customer_wording() -> 
         "I still need help exporting reports. Sent from my iPhone"
         not in text
     )
+
+
+def test_support_ticket_package_string_history_preserves_later_messages() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-history-string",
+        "subject": "Refund receipt",
+        "ticket_history": (
+            "Where can I download the refund receipt?\n"
+            "--\n"
+            "Jane Agent\n\n"
+            "I still cannot find the receipt after following the steps.\n"
+            "On Mon, Agent <agent@example.com> wrote:\n"
+            "> old quoted chain should stay out\n\n"
+            "Can I resend the receipt to my accounting inbox?"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "I still cannot find the receipt after following the steps." in text
+    assert "Can I resend the receipt to my accounting inbox?" in text
+    assert "Jane Agent" not in text
+    assert "old quoted chain" not in text
 
 
 def test_support_ticket_package_private_only_comments_stay_index_metadata() -> None:
