@@ -8,6 +8,7 @@ from shutil import copy2
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "push_pr.sh"
+AUDIT_SCRIPT = REPO_ROOT / "scripts" / "audit_pr_body.py"
 
 
 def test_push_pr_dry_run_without_managed_hook_runs_wrapper_review(tmp_path: Path) -> None:
@@ -235,18 +236,99 @@ def test_push_pr_missing_body_file_fails_clearly(tmp_path: Path) -> None:
     assert str(missing) in result.stderr
 
 
+def test_push_pr_rejects_invalid_body_before_fetch_review_or_push(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_invalid_body(repo)
+    order_log = repo / "order.log"
+    _write_local_review(repo)
+    fake_bin = _write_fake_git(repo, order_log)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_GIT_TOPLEVEL": str(repo),
+        "FAKE_GIT_LOG": str(order_log),
+        "ORDER_LOG": str(order_log),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/push_pr.sh", str(body), "-u", "origin", "HEAD"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "missing required section: ## Cold diff reconstruction" in result.stdout
+    assert order_log.read_text(encoding="utf-8") == ""
+
+
 def _write_fixture_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
     copy2(SCRIPT, repo / "scripts" / "push_pr.sh")
+    copy2(AUDIT_SCRIPT, repo / "scripts" / "audit_pr_body.py")
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
     return repo
 
 
 def _write_body(repo: Path) -> Path:
     body = repo / "body.md"
-    body.write_text("Plan: plans/PR-Test.md\nSlice phase: Workflow/process\n", encoding="utf-8")
+    _write_plan(repo)
+    body.write_text(_valid_body(), encoding="utf-8")
     return body
+
+
+def _write_invalid_body(repo: Path) -> Path:
+    body = repo / "body-invalid.md"
+    _write_plan(repo)
+    body.write_text(
+        _valid_body().replace(
+            "## Cold diff reconstruction\n"
+            "- Changed: scripts/example.sh:1 updates the wrapper.\n"
+            "- Contract match: traces to the body contract.\n"
+            "- Gaps: none.\n\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+    return body
+
+
+def _write_plan(repo: Path) -> None:
+    plan = repo / "plans" / "PR-Test.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("# Test plan\n", encoding="utf-8")
+
+
+def _valid_body() -> str:
+    return "\n".join([
+        "Plan: plans/PR-Test.md",
+        "Slice phase: Workflow/process",
+        "",
+        "One-paragraph why.",
+        "",
+        "## Intentional",
+        "- a trade-off",
+        "",
+        "## Deferred",
+        "- a follow-up",
+        "",
+        "## Parked hardening",
+        "None.",
+        "",
+        "## Cold diff reconstruction",
+        "- Changed: scripts/example.sh:1 updates the wrapper.",
+        "- Contract match: traces to the body contract.",
+        "- Gaps: none.",
+        "",
+        "## Verification",
+        "- pytest passed",
+        "",
+        "## Diff size",
+        "2 files, +10 / -2",
+    ])
 
 
 def _write_local_review(repo: Path) -> None:

@@ -37,6 +37,11 @@ def _valid_body(plan: str = "plans/PR-Example.md") -> str:
         "## Parked hardening",
         "None.",
         "",
+        "## Cold diff reconstruction",
+        "- Changed: docs/example.md:1 records the workflow rule.",
+        "- Contract match: traces to the process contract.",
+        "- Gaps: none.",
+        "",
         "## Verification",
         "- pytest passed",
         "",
@@ -77,6 +82,29 @@ def test_nonexistent_plan_doc_fails(tmp_path: Path) -> None:
     assert any("does not exist" in failure for failure in failures)
 
 
+def test_symlinked_working_tree_plan_doc_fails(tmp_path: Path) -> None:
+    target = tmp_path / "real-plan.md"
+    target.write_text("# real target\n", encoding="utf-8")
+    plan = tmp_path / "plans" / "PR-Example.md"
+    plan.parent.mkdir(parents=True)
+    plan.symlink_to(target)
+
+    failures = audit_pr_body(_valid_body(), root=tmp_path)
+
+    assert any("does not exist" in failure for failure in failures)
+
+
+def test_working_tree_plan_under_symlinked_parent_fails(tmp_path: Path) -> None:
+    target_dir = tmp_path / "actual-plans"
+    target_dir.mkdir()
+    (target_dir / "PR-Example.md").write_text("# real target\n", encoding="utf-8")
+    (tmp_path / "plans").symlink_to(target_dir, target_is_directory=True)
+
+    failures = audit_pr_body(_valid_body(), root=tmp_path)
+
+    assert any("does not exist" in failure for failure in failures)
+
+
 def test_missing_one_paragraph_why_fails(tmp_path: Path) -> None:
     root = _write_plan(tmp_path)
     body = "\n".join([
@@ -91,6 +119,9 @@ def test_missing_one_paragraph_why_fails(tmp_path: Path) -> None:
         "",
         "## Parked hardening",
         "None.",
+        "",
+        "## Cold diff reconstruction",
+        "- Gaps: none.",
         "",
         "## Verification",
         "- pytest passed",
@@ -122,6 +153,21 @@ def test_missing_section_fails(tmp_path: Path) -> None:
     assert "missing required section: ## Parked hardening" in failures
 
 
+def test_missing_cold_diff_reconstruction_fails(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "## Cold diff reconstruction\n"
+        "- Changed: docs/example.md:1 records the workflow rule.\n"
+        "- Contract match: traces to the process contract.\n"
+        "- Gaps: none.\n\n",
+        "",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert "missing required section: ## Cold diff reconstruction" in failures
+
+
 def test_out_of_order_sections_fail(tmp_path: Path) -> None:
     root = _write_plan(tmp_path)
     body = "\n".join([
@@ -138,6 +184,9 @@ def test_out_of_order_sections_fail(tmp_path: Path) -> None:
         "",
         "## Parked hardening",
         "None.",
+        "",
+        "## Cold diff reconstruction",
+        "- Gaps: none.",
         "",
         "## Verification",
         "- pytest passed",
@@ -232,6 +281,60 @@ def test_normal_author_cli_rejects_same_invalid_body() -> None:
         body_path.unlink(missing_ok=True)
 
 
+def test_cli_repo_root_checks_plan_in_inspected_checkout(tmp_path: Path) -> None:
+    repo = _write_plan(tmp_path / "inspected", "plans/PR-OnlyInInspected.md")
+    body = tmp_path / "body.md"
+    body.write_text(_valid_body(plan="plans/PR-OnlyInInspected.md"), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo-root",
+            str(repo),
+            str(body),
+        ],
+        check=False,
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pr body audit: PASS" in result.stdout
+
+
+def test_cli_repo_root_rejects_symlinked_plan_in_inspected_checkout(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "inspected"
+    target = repo / "real-plan.md"
+    target.parent.mkdir()
+    target.write_text("# real target\n", encoding="utf-8")
+    plan = repo / "plans" / "PR-Example.md"
+    plan.parent.mkdir()
+    plan.symlink_to(target)
+    body = tmp_path / "body.md"
+    body.write_text(_valid_body(), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo-root",
+            str(repo),
+            str(body),
+        ],
+        check=False,
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "plan doc named in the PR body does not exist" in result.stdout
+
+
 # -- trusted-base plan-doc inspection (--plan-git-ref) ---------------------------
 
 
@@ -276,6 +379,31 @@ def test_audit_against_ref_fails_when_plan_missing_at_ref(tmp_path: Path) -> Non
         _valid_body(plan="plans/PR-Not-There.md"), plan_exists=exists
     )
     assert any("does not exist" in failure for failure in failures)
+
+
+def test_cli_plan_git_ref_uses_repo_root(tmp_path: Path) -> None:
+    repo = _git_repo_with_plan(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text(_valid_body(), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo-root",
+            str(repo),
+            "--plan-git-ref",
+            "HEAD",
+            str(body),
+        ],
+        check=False,
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pr body audit: PASS" in result.stdout
 
 
 def test_resolve_git_ref_true_for_head_false_for_unfetched(tmp_path: Path) -> None:

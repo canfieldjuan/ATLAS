@@ -55,6 +55,7 @@ def test_local_pr_review_help_exits_cleanly(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert "Usage: bash scripts/local_pr_review.sh" in result.stdout
+    assert "--pr-author LOGIN" in result.stdout
 
 
 def test_local_pr_review_rejects_unknown_option(tmp_path: Path) -> None:
@@ -95,6 +96,139 @@ def test_local_pr_review_runs_cross_session_drift_audit_when_present(tmp_path: P
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Cross-session PR drift" in result.stdout
     assert "drift guard ran" in result.stdout
+
+
+def test_local_pr_review_runs_pr_body_contract_when_body_supplied(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("PR body\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_pr_body.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('body audit args=' + ' '.join(sys.argv[1:]))\n",
+    )
+    _git(repo, "add", "scripts/audit_pr_body.py")
+    _git(repo, "commit", "-m", "add body audit")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh", "--current-pr-body-file", str(body)])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PR body contract" in result.stdout
+    assert f"--repo-root {repo}" in result.stdout
+    assert f" {body}" in result.stdout
+    assert "local PR review passed" in result.stdout
+
+
+def test_local_pr_review_forwards_pr_author_to_body_contract(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("generated body\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_pr_body.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('body audit args=' + ' '.join(sys.argv[1:]))\n",
+    )
+    _git(repo, "add", "scripts/audit_pr_body.py")
+    _git(repo, "commit", "-m", "add body audit")
+
+    result = _run(
+        repo,
+        [
+            "bash",
+            "scripts/local_pr_review.sh",
+            "--current-pr-body-file",
+            str(body),
+            "--pr-author",
+            "dependabot[bot]",
+        ],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--pr-author dependabot[bot]" in result.stdout
+
+
+def test_local_pr_review_env_pr_author_reaches_body_contract(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("generated body\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_pr_body.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('body audit args=' + ' '.join(sys.argv[1:]))\n",
+    )
+    _git(repo, "add", "scripts/audit_pr_body.py")
+    _git(repo, "commit", "-m", "add body audit")
+
+    result = _run(
+        repo,
+        ["bash", "scripts/local_pr_review.sh"],
+        env={
+            "ATLAS_CURRENT_PR_BODY_FILE": str(body),
+            "ATLAS_CURRENT_PR_AUTHOR": "app/dependabot",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--pr-author app/dependabot" in result.stdout
+
+
+def test_local_pr_review_env_pr_body_contract_fails_closed(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("missing receipt\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_pr_body.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('body audit rejected ' + sys.argv[-1])\n"
+        "sys.exit(1)\n",
+    )
+    _git(repo, "add", "scripts/audit_pr_body.py")
+    _git(repo, "commit", "-m", "add failing body audit")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"ATLAS_CURRENT_PR_BODY_FILE": str(body)})
+
+    assert result.returncode == 1
+    assert "PR body contract" in result.stdout
+    assert f"body audit rejected {body}" in result.stdout
+    assert "1 local review check(s) failed" in result.stdout
+
+
+def test_local_pr_review_real_body_audit_honors_dependabot_exemption(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("Dependabot generated body without the Atlas plan contract.\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_pr_body.py",
+        (REPO_ROOT / "scripts" / "audit_pr_body.py").read_text(encoding="utf-8"),
+    )
+    _git(repo, "add", "scripts/audit_pr_body.py")
+    _git(repo, "commit", "-m", "add real body audit")
+
+    result = _run(
+        repo,
+        [
+            "bash",
+            "scripts/local_pr_review.sh",
+            "--current-pr-body-file",
+            str(body),
+            "--pr-author",
+            "app/dependabot",
+        ],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Dependabot PR body exempt" in result.stdout
 
 
 def test_local_pr_review_runs_plans_archive_advisory_when_present(tmp_path: Path) -> None:
@@ -156,6 +290,54 @@ def test_local_pr_review_trusted_script_root_does_not_execute_repo_scripts(tmp_p
     assert "repo pre-push should not run" not in result.stderr
 
 
+def test_local_pr_review_body_audit_inspects_repo_root_plan_with_trusted_scripts(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    plan = repo / "plans" / "PR-TrustedSplit.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("# PR-TrustedSplit\n", encoding="utf-8")
+    _git(repo, "add", "plans/PR-TrustedSplit.md")
+    _git(repo, "commit", "-m", "add PR-only plan")
+
+    body = tmp_path / "body.md"
+    body.write_text(_valid_pr_body("plans/PR-TrustedSplit.md"), encoding="utf-8")
+
+    trusted = tmp_path / "trusted"
+    (trusted / "scripts").mkdir(parents=True)
+    _write_executable(
+        trusted / "scripts" / "local_pr_review.sh",
+        (REPO_ROOT / "scripts" / "local_pr_review.sh").read_text(encoding="utf-8"),
+    )
+    _write_executable(
+        trusted / "scripts" / "audit_pr_body.py",
+        (REPO_ROOT / "scripts" / "audit_pr_body.py").read_text(encoding="utf-8"),
+    )
+    _write_executable(
+        trusted / "scripts" / "pre_push_audit.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\necho trusted pre-push ok\n",
+    )
+
+    result = _run(
+        tmp_path,
+        [
+            "bash",
+            str(trusted / "scripts" / "local_pr_review.sh"),
+            "--repo-root",
+            str(repo),
+            "--script-root",
+            str(trusted),
+            "--current-pr-body-file",
+            str(body),
+        ],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pr body audit: PASS" in result.stdout
+    assert "trusted pre-push ok" in result.stdout
+
+
 def test_local_pr_review_skips_plans_advisory_when_absent(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
@@ -164,6 +346,35 @@ def test_local_pr_review_skips_plans_advisory_when_absent(tmp_path: Path) -> Non
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "SKIP (scripts/archive_plans.py not found)" in result.stdout
+
+
+def _valid_pr_body(plan: str) -> str:
+    return "\n".join([
+        f"Plan: {plan}",
+        "Slice phase: Production hardening",
+        "",
+        "One-paragraph why.",
+        "",
+        "## Intentional",
+        "- a trade-off",
+        "",
+        "## Deferred",
+        "- a follow-up",
+        "",
+        "## Parked hardening",
+        "None.",
+        "",
+        "## Cold diff reconstruction",
+        "- Changed: docs/example.md:1 records the workflow rule.",
+        "- Contract match: traces to the process contract.",
+        "- Gaps: none.",
+        "",
+        "## Verification",
+        "- pytest passed",
+        "",
+        "## Diff size",
+        "2 files, +10 / -2",
+    ])
 
 
 def _write_fixture_repo(repo: Path) -> None:
@@ -192,14 +403,19 @@ def _write_fixture_repo(repo: Path) -> None:
     _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 
 
-def _run(repo: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(
+    repo: Path,
+    args: list[str],
+    *,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         cwd=repo,
         check=False,
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTHONPATH": str(repo)},
+        env={**os.environ, "PYTHONPATH": str(repo), **(env or {})},
     )
 
 

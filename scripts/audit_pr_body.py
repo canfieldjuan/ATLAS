@@ -3,8 +3,8 @@
 
 The PR body must lead with ``Plan: plans/PR-<Slice-Name>.md`` and a
 ``Slice phase: <phase>`` line, then carry these ``##`` sections in order:
-Intentional, Deferred, Parked hardening, Verification, Diff size. The
-referenced plan doc must exist in the checkout.
+Intentional, Deferred, Parked hardening, Cold diff reconstruction,
+Verification, Diff size. The referenced plan doc must exist in the checkout.
 
 Intended for CI on ``pull_request`` events (the workflow writes
 ``github.event.pull_request.body`` to a file - no GitHub API call), and for
@@ -31,6 +31,7 @@ REQUIRED_SECTIONS = (
     "Intentional",
     "Deferred",
     "Parked hardening",
+    "Cold diff reconstruction",
     "Verification",
     "Diff size",
 )
@@ -86,7 +87,7 @@ def plan_exists_at_ref(ref: str, *, repo_root: Path = ROOT) -> Callable[[str], b
         # be a REGULAR-FILE blob: a tree at the path (plans/PR-Foo.md/child)
         # or a symlink (mode 120000, possibly dangling) is not a plan doc.
         # Requiring the 100644/100755 blob prefix mirrors the working-tree
-        # default's is_file().
+        # regular-file checker.
         code, out = _git_read(["ls-tree", ref, "--", plan], repo_root=repo_root)
         line = out.strip()
         return code == 0 and (
@@ -94,6 +95,24 @@ def plan_exists_at_ref(ref: str, *, repo_root: Path = ROOT) -> Callable[[str], b
         )
 
     return _exists
+
+
+def plan_exists_in_worktree(plan: str, *, repo_root: Path = ROOT) -> bool:
+    """True only for a regular plan file in ``repo_root``.
+
+    ``Path.is_file()`` follows symlinks, but the trusted ref checker rejects
+    symlink plan entries. Keep the working-tree fallback equally strict.
+    """
+
+    rel = Path(plan)
+    if rel.is_absolute() or ".." in rel.parts:
+        return False
+    current = repo_root
+    for part in rel.parts:
+        current = current / part
+        if current.is_symlink():
+            return False
+    return current.is_file()
 
 
 def audit_pr_body(
@@ -106,7 +125,7 @@ def audit_pr_body(
 
     if plan_exists is None:
         def plan_exists(plan: str) -> bool:
-            return (root / plan).is_file()
+            return plan_exists_in_worktree(plan, repo_root=root)
 
     failures: list[str] = []
     lines = body.splitlines()
@@ -180,6 +199,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "head) instead of the working tree -- for trusted-base gate runs"
         ),
     )
+    parser.add_argument(
+        "--repo-root",
+        default="",
+        help=(
+            "repo checkout whose working tree or fetched refs should be "
+            "inspected; defaults to this script's checkout"
+        ),
+    )
     parser.add_argument("body_file", help="path to a file holding the PR body")
     args = parser.parse_args(argv)
 
@@ -193,18 +220,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("pr body audit: PASS (Dependabot PR body exempt)")
         return 0
 
+    repo_root = ROOT
+    if args.repo_root:
+        repo_root = Path(args.repo_root).resolve()
+        if not repo_root.is_dir():
+            print(f"pr body audit: repo root not found: {repo_root}", file=sys.stderr)
+            return 2
+
     plan_exists = None
     if args.plan_git_ref:
-        if not resolve_git_ref(args.plan_git_ref):
+        if not resolve_git_ref(args.plan_git_ref, repo_root=repo_root):
             print(
                 f"pr body audit: plan ref not resolvable: {args.plan_git_ref} "
                 "(fetch the PR head before auditing)",
                 file=sys.stderr,
             )
             return 2  # infrastructure failure -- never a silent pass
-        plan_exists = plan_exists_at_ref(args.plan_git_ref)
+        plan_exists = plan_exists_at_ref(args.plan_git_ref, repo_root=repo_root)
 
-    failures = audit_pr_body(body, plan_exists=plan_exists)
+    failures = audit_pr_body(body, root=repo_root, plan_exists=plan_exists)
     if failures:
         print("pr body audit: FAIL (AGENTS.md section 1b contract)")
         for failure in failures:

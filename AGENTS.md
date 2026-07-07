@@ -61,7 +61,7 @@ Required sections, in this order:
 
 | Section | Purpose |
 |---|---|
-| **Why this slice exists** | What's broken / what's missing / what audit item this closes. Tie to a prior plan, audit finding, or a concrete user request. For a fix/defect/review-finding PR, name the **root cause** (the underlying problem, not the surface symptom or the reviewer's wording) and state whether this change fixes the root or treats a symptom -- see §3k. |
+| **Why this slice exists** | What's broken / what's missing / what audit item this closes. Tie to a prior plan, audit finding, or a concrete user request. For any coding slice, include a **Problem-derived contract** written before code: root cause from the problem alone, what the correct fix must touch/change to reach that cause, and what must not change. For a fix/defect/review-finding PR, name the **root cause** (the underlying problem, not the surface symptom or the reviewer's wording) and state whether this change fixes the root or treats a symptom -- see §3k. |
 | **Scope (this PR)** | The narrow surface this PR touches. Start with an `Ownership lane: <lane>` line, then a `Slice phase: <phase>` line, then a numbered list of intent and a "Files touched" subsection. |
 | **Mechanism** | Short prose (and code stub if helpful) explaining *how* the change works -- enough that the reviewer doesn't have to reverse-engineer it from the diff. |
 | **Intentional** | Things that look wrong but aren't -- explicit trade-offs and rejected alternatives ("no `warnings.warn` shim because ..."). Saves reviewer cycles. |
@@ -98,6 +98,11 @@ Slice phase: <phase>
 ## Parked hardening
 - None. (or: `HARDENING.md` entry title and why it was parked)
 
+## Cold diff reconstruction
+- Changed: <file:line + what the diff actually does>
+- Contract match: <how each change traces to the Problem-derived contract>
+- Gaps: <none, or every untraced change / missing contract item / forbidden touch>
+
 ## Verification
 - ...
 
@@ -108,8 +113,8 @@ N files, +X / -Y
 ### 1c. Commit message
 
 Same `Plan: ...` and `Slice phase: ...` lead lines + Intentional /
-Deferred / Parked hardening sections as the PR body. Squash-merge
-collapses to one canonical commit at merge time.
+Deferred / Parked hardening / Cold diff reconstruction sections as the PR
+body. Squash-merge collapses to one canonical commit at merge time.
 
 ### 1d. Diff budget
 
@@ -261,13 +266,13 @@ plan missed), update the plan doc in the same commit. The plan and
 code ship together.
 
 Code for independent reconstruction
-(`docs/CODING_FOR_RECONSTRUCTION_REVIEW.md`). Before opening or updating a PR,
-check the three-way match yourself: what the diff actually does, what a correct
-fix for the stated problem should do, and what the PR body claims. If the diff
-changes unmentioned behavior, either split it out or name it plainly in the
-plan/PR body. If the correct fix needs more than this slice does, name the
-bounded deferral. Do not inflate the description to make the diff look larger
-than it is.
+(`docs/CODING_FOR_RECONSTRUCTION_REVIEW.md`). Before coding, derive the
+Problem-derived contract from the problem alone: root cause, what the correct
+fix must touch/change, and what must not change. Build only to that contract.
+Before opening or updating a PR, reconstruct your own diff cold with
+`file:line` citations and compare it to the contract. If the diff changes
+unmentioned behavior, misses a contract item, or touches something the contract
+said to leave alone, fix the gap before calling the slice done.
 
 ### 3a.1. Session ownership map
 
@@ -429,6 +434,20 @@ caller hints from local review and either add focused caller-layer tests
 or name why the referenced callers are unaffected. The hints are
 advisory rather than blocking because outside references can be valid,
 but silently ignoring them recreates the diff-only review gap.
+
+Before calling a slice done, reconstruct the diff cold as if someone else
+wrote it. Read the changed files and report, with `file:line` citations:
+
+1. what each change actually does;
+2. which Problem-derived contract requirement it traces to;
+3. any contract requirement missing from the diff;
+4. any touched module/behavior the contract said must not change; and
+5. any change that does not trace to the contract.
+
+Lead with gaps. Do not open, update, or call the PR done while any untraced
+change, missing contract item, or forbidden touch remains. Put the cold
+reconstruction in the PR body under `## Cold diff reconstruction` so the
+reviewer can audit the builder's self-check.
 
 GitHub Actions still runs the same wrapper after the PR opens. Treat CI
 as the final enforcement layer, not the first reviewer.

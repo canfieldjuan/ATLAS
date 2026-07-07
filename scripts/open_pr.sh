@@ -36,6 +36,8 @@ if [ ! -f "$body_file" ]; then
     exit 2
 fi
 
+python scripts/audit_pr_body.py "$body_file"
+
 for arg in "$@"; do
     case "$arg" in
         --body|--body-file|-b|-F)

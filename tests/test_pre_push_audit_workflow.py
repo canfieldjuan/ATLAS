@@ -27,6 +27,8 @@ def test_pre_push_audit_workflow_passes_pr_body_to_trusted_local_review() -> Non
     assert "Write current PR body" in text
     assert 'Path(os.environ["RUNNER_TEMP"], "current-pr-body.md")' in text
     assert '--current-pr-body-file "$RUNNER_TEMP/current-pr-body.md"' in text
+    assert "PR_AUTHOR: ${{ github.event.pull_request.user.login }}" in text
+    assert '--pr-author "$PR_AUTHOR"' in text
 
 
 def test_pre_push_audit_workflow_keeps_push_to_main_without_pr_body() -> None:
@@ -41,6 +43,18 @@ def test_pre_push_audit_workflow_enrolls_push_pr_wrapper_tests() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
     assert "tests/test_push_pr_wrapper.py" in text
+
+
+def test_pre_push_audit_workflow_enrolls_open_pr_wrapper_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tests/test_open_pr_wrapper.py" in text
+
+
+def test_pre_push_audit_workflow_enrolls_plan_doc_audit_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tests/test_audit_plan_doc.py" in text
 
 
 def test_pre_push_audit_workflow_enrolls_full_report_redaction_checker_tests() -> None:

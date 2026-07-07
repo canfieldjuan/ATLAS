@@ -39,6 +39,7 @@ def test_happy_path_accepts_required_sections_in_order():
         # Plan
 
         ## Why this slice exists
+        ### Problem-derived contract
         ## Scope (this PR)
         ## Mechanism
         ## Intentional
@@ -49,6 +50,48 @@ def test_happy_path_accepts_required_sections_in_order():
     )
 
     assert set(_statuses(text).values()) == {"OK"}
+    assert "Problem-derived contract" in _statuses(text)
+
+
+def test_missing_problem_derived_contract_is_reported():
+    text = textwrap.dedent(
+        """\
+        # Plan
+
+        ## Why this slice exists
+        ## Scope (this PR)
+        ## Mechanism
+        ## Intentional
+        ## Deferred
+        ## Verification
+        ## Estimated diff size
+        """
+    )
+
+    statuses = _statuses(text)
+
+    assert statuses["Problem-derived contract"] == "MISSING"
+
+
+def test_problem_derived_contract_must_live_under_why_section():
+    text = textwrap.dedent(
+        """\
+        # Plan
+
+        ## Why this slice exists
+        ## Scope (this PR)
+        ### Problem-derived contract
+        ## Mechanism
+        ## Intentional
+        ## Deferred
+        ## Verification
+        ## Estimated diff size
+        """
+    )
+
+    statuses = _statuses(text)
+
+    assert statuses["Problem-derived contract"] == "MISSING"
 
 
 def test_out_of_scope_does_not_satisfy_scope():
@@ -57,6 +100,7 @@ def test_out_of_scope_does_not_satisfy_scope():
         # Plan
 
         ## Why this slice exists
+        ### Problem-derived contract
         ## Out of scope
         ## Mechanism
         ## Intentional
@@ -77,6 +121,7 @@ def test_out_of_order_section_is_reported():
         # Plan
 
         ## Why this slice exists
+        ### Problem-derived contract
         ## Mechanism
         ## Scope
         ## Intentional
@@ -97,6 +142,7 @@ def test_duplicate_required_section_is_reported():
         # Plan
 
         ## Why this slice exists
+        ### Problem-derived contract
         ## Scope
         ## Scope (this PR)
         ## Mechanism
@@ -132,6 +178,7 @@ def test_cli_accepts_valid_plan(tmp_path):
             # Plan
 
             ## Why this slice exists
+            ### Problem-derived contract
             ## Scope
             ## Mechanism
             ## Intentional
@@ -152,6 +199,7 @@ def test_cli_accepts_valid_plan(tmp_path):
 
     assert result.returncode == 0
     assert "OK" in result.stdout
+    assert "### Problem-derived contract" in result.stdout
 
 
 def test_cli_returns_nonzero_for_plan_drift(tmp_path):
@@ -162,6 +210,7 @@ def test_cli_returns_nonzero_for_plan_drift(tmp_path):
             # Plan
 
             ## Why this slice exists
+            ### Problem-derived contract
             ## Out of scope
             ## Mechanism
             ## Intentional

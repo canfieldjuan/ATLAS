@@ -48,6 +48,8 @@ if [ ! -f "$body_file" ]; then
     exit 2
 fi
 
+python scripts/audit_pr_body.py "$body_file"
+
 if [ "$#" -eq 0 ]; then
     set -- -u origin HEAD
 fi

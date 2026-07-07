@@ -17,6 +17,7 @@ REQUIRED: list[tuple[str, tuple[str, ...]]] = [
     ("Verification", ("verification",)),
     ("Estimated diff size", ("estimated diff size",)),
 ]
+PROBLEM_CONTRACT_HEADING = "Problem-derived contract"
 
 _WS = re.compile(r"\s+")
 
@@ -39,6 +40,18 @@ def plan_headings(text: str) -> list[tuple[int, str]]:
         for line_no, line in enumerate(text.splitlines(), start=1)
         if line.startswith("## ")
     ]
+
+
+def _find_problem_contract(text: str, why_line_no: int) -> tuple[int, str] | None:
+    lines = text.splitlines()
+    for line_no, line in enumerate(lines[why_line_no:], start=why_line_no + 1):
+        if line.startswith("## "):
+            return None
+        if line.startswith("### ") and _normalize(line[4:]) == _normalize(
+            PROBLEM_CONTRACT_HEADING
+        ):
+            return line_no, line[4:].strip()
+    return None
 
 
 def audit_plan_text(text: str) -> list[SectionAuditRow]:
@@ -85,6 +98,25 @@ def audit_plan_text(text: str) -> list[SectionAuditRow]:
                 )
             )
             last_index = idx
+            if canonical == "Why this slice exists":
+                problem_contract = _find_problem_contract(text, line_no)
+                if problem_contract is None:
+                    rows.append(
+                        SectionAuditRow(
+                            canonical=PROBLEM_CONTRACT_HEADING,
+                            status="MISSING",
+                        )
+                    )
+                else:
+                    contract_line_no, contract_heading = problem_contract
+                    rows.append(
+                        SectionAuditRow(
+                            canonical=PROBLEM_CONTRACT_HEADING,
+                            status="OK",
+                            line_no=contract_line_no,
+                            heading=contract_heading,
+                        )
+                    )
     return rows
 
 
@@ -108,7 +140,8 @@ def main() -> int:
         if row.line_no is None:
             print(f"{row.status:<14} ## {row.canonical}")
         else:
-            print(f"{row.status:<14} line {row.line_no:>4}: ## {row.heading}")
+            marker = "###" if row.canonical == PROBLEM_CONTRACT_HEADING else "##"
+            print(f"{row.status:<14} line {row.line_no:>4}: {marker} {row.heading}")
     return 1 if drift else 0
 
 
