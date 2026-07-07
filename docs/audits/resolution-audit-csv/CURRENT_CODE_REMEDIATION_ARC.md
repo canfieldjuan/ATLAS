@@ -149,7 +149,7 @@ Implementation notes:
 
 ### S4 - Money Reconciliation Contract
 
-Status: in review. Fixing PR:
+Status: complete. Fixing PR:
 [#2031](https://github.com/canfieldjuan/ATLAS/pull/2031).
 
 Root: paid artifacts compute and render money through multiple paths, so helper
@@ -182,10 +182,12 @@ Implementation notes:
   display defect by routing support-cost displays through one cents renderer.
   Stored raw numeric fields remain numeric; adding stored cents fields remains
   approval-gated because it would change hosted payload shape.
+- #2031 merged with the report, PDF, email, and hosted page support-cost
+  displays using the shared cents renderer and parity coverage.
 
 ### S5 - Clustering Correctness Spike And First Fix
 
-Status: open.
+Status: spike in progress.
 
 Root: token-set labels are promoted into hard partitions before question-level
 similarity has a chance to unify or split intents.
@@ -210,6 +212,14 @@ Expected fix:
   full-submit rows below that skip threshold.
 - Include order-shuffle tests.
 - Keep user-facing grouping/report shape unchanged until approved.
+
+Spike notes:
+
+- `S5_CLUSTERING_SPIKE.md` records the current-code calibration cases.
+- The first S5 PR is proof-only: synthetic fixtures through the real package
+  builder, real FAQ builder, and real token-set clusterer. The implementation
+  PR replaces those current-behavior expectations with the accepted corrected
+  behavior.
 
 ### S6 - Text, Comment, And Outcome Evidence Hygiene
 
