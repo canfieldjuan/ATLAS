@@ -36,16 +36,24 @@ Slice phase: workflow/process
 - `requirements.txt` — every non-comment line pinned `==`; extras
   (`uvicorn[standard]`, `nemo_toolkit[asr]`) and inline comments preserved.
 - `requirements.content_ops_ci.txt` — same, all 31 lines.
+- `tests/test_content_ops_ci_requirements_workflows.py` — contract amendment
+  found by the PR's own CI: this guard asserted the REQUIRED side as exact
+  raw requirement strings (`"torch"`, `"asyncpg>=0.31.0"`, line 99), so pins
+  broke all four content-ops suites. The excluded-heavy side was already
+  name-based (`requirement_name`); the fix makes the required side symmetric
+  (name-based, specifier-agnostic), preserving the guard's intent — needed
+  packages present, heavy stack absent — under any specifier shape.
 - This plan doc.
 
-Nothing else. No workflow YAML, no other requirements files, no code.
+Nothing else. No workflow YAML, no other requirements files, no runtime code.
 
-Max files: 3
+Max files: 4
 
 ### Files touched
 
 - `requirements.txt`
 - `requirements.content_ops_ci.txt`
+- `tests/test_content_ops_ci_requirements_workflows.py`
 - `plans/PR-Pin-Python-CI-Requirements.md`
 
 ## Mechanism
@@ -119,8 +127,9 @@ on any violation or any name without a harvested version.
 |---|---|
 | `requirements.txt` | ~104 |
 | `requirements.content_ops_ci.txt` | ~62 |
-| `plans/PR-Pin-Python-CI-Requirements.md` | ~130 |
-| **Total** | **~296** |
+| `tests/test_content_ops_ci_requirements_workflows.py` | ~30 |
+| `plans/PR-Pin-Python-CI-Requirements.md` | ~160 |
+| **Total** | **~356** |
 
 Under the 400-LOC budget (the two requirements files are in-place rewrites:
 52 + 31 lines each counted as an add plus a delete).
