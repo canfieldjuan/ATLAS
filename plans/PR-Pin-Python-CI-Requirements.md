@@ -144,8 +144,18 @@ on any violation or any name without a harvested version.
 - `requirements.asr.txt`, `atlas_edge/`, `atlas_video-processing/`,
   `graphiti-wrapper/` requirements — separate deploy surfaces, installed by
   no PR workflow.
+- `nemo_toolkit[asr]` dedup (#2040): the one line left unpinned. A `==` pin
+  conflicts with `requirements.asr.txt`'s git-ref in the joint
+  `security_full_sweep` pip-audit (verified: pip rejects `==` + `@ git` for
+  the same name across `-r` files). nemo is installed-but-never-imported by
+  any `requirements.txt`-only suite (real importers: `asr_server.py` via
+  `requirements.asr.txt`, `scripts/debug/*` not in CI), so its unpinned
+  version cannot flip a PR-suite outcome. Root fix = relocate/dedup, a
+  dependency-set change deferred to #2040.
 - Full transitive lock (constraints file / pip-compile) — hardening
-  follow-up once the gate exists to validate it.
+  follow-up once the gate exists to validate it (#2040). Top-level pins
+  narrow RC3; a transitive lock reconciled across py3.11 + py3.10 must be
+  validated by the slice-2 aggregate gate before it can be trusted.
 - Dependabot interaction: pinned lines change how dependabot proposes bumps
   (PRs will now move explicit pins). Acceptable; dependabot PRs get the same
   fleet validation.
@@ -168,8 +178,8 @@ on any violation or any name without a harvested version.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Pin-Python-CI-Requirements.md` | 175 |
+| `plans/PR-Pin-Python-CI-Requirements.md` | 185 |
 | `requirements.content_ops_ci.txt` | 62 |
 | `requirements.txt` | 105 |
 | `tests/test_content_ops_ci_requirements_workflows.py` | 22 |
-| **Total** | **364** |
+| **Total** | **374** |
