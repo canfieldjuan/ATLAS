@@ -13,7 +13,10 @@ transformers==4.57.6
 accelerate==1.14.0
 bitsandbytes==0.49.2
 Pillow==12.3.0
-nemo_toolkit[asr]==2.7.3
+# nemo_toolkit stays UNPINNED by design: requirements.asr.txt supplies the
+# canonical direct git-ref build, and security_full_sweep pip-audits both
+# files jointly -- a == pin here conflicts with that direct reference (#2036).
+nemo_toolkit[asr]
 sentence-transformers==5.6.0
 opencv-python==4.13.0.92  # For video processing (SAM 3)
 sounddevice==0.5.5

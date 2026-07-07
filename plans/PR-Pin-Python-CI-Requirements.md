@@ -56,6 +56,41 @@ Max files: 4
 - `tests/test_content_ops_ci_requirements_workflows.py`
 - `plans/PR-Pin-Python-CI-Requirements.md`
 
+### Review Contract
+
+Acceptance criteria (check one-by-one):
+1. Every non-comment line of both files carries `==` EXCEPT the single
+   documented carve-out `nemo_toolkit[asr]` (unpinned because
+   `requirements.asr.txt` supplies a direct git-ref build and
+   `security_full_sweep` pip-audits both files jointly; a `==` pin conflicts
+   with the direct reference).
+2. No version moves vs what the harvested green runs resolved; extras and
+   inline comments byte-identical; no dependency added or removed.
+3. The requirements-shape guard asserts NAMES on its required side (pinned
+   entries pass; a removed required package still fails; a pinned heavy
+   package is still excluded).
+4. No workflow YAML, no runtime code, no other requirements files change.
+
+Reachability proof: the PR itself exercises the real entrypoints — the
+path-filtered pytest fleet installs `requirements.txt` (py3.11 + py3.10) and
+the four content-ops workflows install `requirements.content_ops_ci.txt` and
+run the shape guard; observable result = those check runs green on this PR.
+The joint pip-audit resolution over `requirements.txt` + `requirements.asr.txt`
+(security_full_sweep) is restored to its pre-PR state by the nemo carve-out
+(that name returns to exactly its previous unversioned form).
+
+Affected surfaces: CI dependency installs for every Python suite; the
+security full-sweep joint audit input; the content-ops requirements shape
+guard.
+
+Risk areas: a pin that resolves on py3.11 but not py3.10 (mitigated:
+3.10-resolved versions win divergences; both fleets run on this PR); pinned
+set drifting from `requirements.asr.txt`'s git-ref NeMo (mitigated: carve-out).
+
+Triggered reviewer rules: R11, R12 (env/config surface — requirements files);
+R2, R14 (guard/validator change — the shape-guard test edit, boundary-probed
+both directions).
+
 ## Mechanism
 
 Pin versions are harvested from the `Successfully installed ...` lines of
@@ -88,6 +123,12 @@ on any violation or any name without a harvested version.
   `==0.50.2` in the content-ops file): each file pins what ITS consuming
   fleet proved. They are installed by disjoint jobs, never together.
 - **Top-level pins only, no transitive lock** — see Deferred.
+- **One documented carve-out:** `nemo_toolkit[asr]` stays unpinned.
+  `requirements.asr.txt:7` supplies a direct git-ref NeMo build and
+  `security_full_sweep.yml` pip-audits `requirements.txt` +
+  `requirements.asr.txt` jointly; a `==` pin on nemo conflicts with the
+  direct reference (Codex T3). Unpinned restores that name to its exact
+  pre-PR (proven) form.
 - **Commented-out optionals** (`# twilio`, `# llama-cpp-python`) stay
   commented.
 - Where the 3.10 run resolved older than the 3.11 run (5 packages above), the
@@ -117,8 +158,10 @@ on any violation or any name without a harvested version.
   `extracted_content_pipeline/**`-adjacent content-ops suites install the
   content-ops file. Green fleet on both interpreters = the pins reproduce
   what CI had.
-- Closes-when (from #2035): `grep -cvE '^\s*#|^\s*$' <file>` equals
-  `grep -cE '==' <file>` for both files (52==52, 31==31 locally).
+- Closes-when (from #2035, amended): every non-comment line pinned except
+  the documented `nemo_toolkit` carve-out — requirements.txt 51 of 52 lines
+  `==` (+ carve-out comment), requirements.content_ops_ci.txt 31 of 31. The
+  G1.2 closes-when on #2035 is amended accordingly at close-out.
 - Specifier-compliance already machine-checked at rewrite time (fail-loud).
 
 ## Estimated diff size
