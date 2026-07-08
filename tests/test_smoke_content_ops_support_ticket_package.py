@@ -390,6 +390,22 @@ def test_support_ticket_package_self_closing_skipped_html_keeps_following_text()
     assert "cdn.example.invalid" not in text
 
 
+def test_support_ticket_package_heading_section_html_gets_line_hygiene() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-heading-html",
+        "subject": "Export report",
+        "description": (
+            "<section>How do I export attribution reports?</section>"
+            "<h2>--</h2><h2>Jane Agent</h2>"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "How do I export attribution reports?" in text
+    assert "Jane Agent" not in text
+    assert "--" not in text
+
+
 def test_support_ticket_package_string_history_preserves_later_messages() -> None:
     package = build_support_ticket_input_package([{
         "ticket_id": "zd-history-string",
@@ -411,6 +427,52 @@ def test_support_ticket_package_string_history_preserves_later_messages() -> Non
     assert "Can I resend the receipt to my accounting inbox?" in text
     assert "Jane Agent" not in text
     assert "old quoted chain" not in text
+
+
+def test_support_ticket_package_string_history_skips_long_signature_footer() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-history-long-signature",
+        "subject": "Refund receipt",
+        "ticket_history": (
+            "Where can I download the refund receipt?\n"
+            "--\n"
+            "Jane Agent\n"
+            "Support team\n"
+            "ExampleCo\n"
+            "555-1212\n"
+            "Confidentiality footer\n"
+            "I still cannot find the receipt after following the steps."
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "I still cannot find the receipt after following the steps." in text
+    assert "Jane Agent" not in text
+    assert "Support team" not in text
+    assert "ExampleCo" not in text
+    assert "555-1212" not in text
+    assert "Confidentiality footer" not in text
+
+
+def test_support_ticket_package_string_history_skips_unquoted_old_reply_body() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-history-unquoted-reply",
+        "subject": "Refund receipt",
+        "ticket_history": (
+            "Where can I download the refund receipt?\n"
+            "On Mon, Agent <agent@example.com> wrote:\n"
+            "old quoted chain should stay out\n"
+            "previous agent instruction should stay out\n"
+            "Can I resend the receipt to my accounting inbox?"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "Can I resend the receipt to my accounting inbox?" in text
+    assert "old quoted chain" not in text
+    assert "previous agent instruction" not in text
 
 
 def test_support_ticket_package_string_history_recovers_after_signature_without_blank() -> None:
@@ -469,6 +531,24 @@ def test_support_ticket_package_stripped_only_body_stays_index_metadata() -> Non
     assert package.metadata["support_ticket_evidence_tier"] == (
         "csv_index_metadata_only"
     )
+
+
+def test_support_ticket_package_subject_only_question_counts_as_customer_wording() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-subject-only",
+        "subject": "How do I reset MFA?",
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert len(source_material) == 1
+    assert source_material[0]["text"] == "How do I reset MFA?"
+    assert source_material[0]["support_ticket_evidence_tier"] == "csv_customer_text"
+    assert package.inputs["customer_wording_examples"] == [{
+        "source_id": "zd-subject-only",
+        "source_title": "How do I reset MFA?",
+        "text": "How do I reset MFA?",
+    }]
+    assert package.metadata["support_ticket_evidence_tier"] == "csv_customer_text"
 
 
 def test_support_ticket_package_scopes_resolution_evidence_tier_per_row() -> None:

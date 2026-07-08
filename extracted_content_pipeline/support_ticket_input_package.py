@@ -721,8 +721,10 @@ def _support_ticket_evidence_tier(
 
 
 def _has_customer_text(row: Mapping[str, Any]) -> bool:
+    source_title = support_ticket_text_component(_first_text(row, _SOURCE_TITLE_KEYS))
     return bool(
-        support_ticket_text_component(_first_text(row, _TEXT_KEYS))
+        _first_question(source_title)
+        or support_ticket_text_component(_first_text(row, _TEXT_KEYS))
         or _comments_text(row)
     )
 

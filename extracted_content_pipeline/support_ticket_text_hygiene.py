@@ -62,10 +62,64 @@ _HISTORY_MESSAGE_BOUNDARY_RE = re.compile(
     r"requester|should|still|thanks?|the|this|user|we|what|when|where|why)\b",
     re.IGNORECASE,
 )
-_SIGNATURE_SKIP_LINE_LIMIT = 3
+_HTML_SIGNAL_TAGS = (
+    "a",
+    "abbr",
+    "article",
+    "aside",
+    "b",
+    "blockquote",
+    "body",
+    "br",
+    "button",
+    "cite",
+    "code",
+    "dd",
+    "del",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "figcaption",
+    "figure",
+    "footer",
+    "h[1-6]",
+    "header",
+    "hr",
+    "html",
+    "i",
+    "img",
+    "ins",
+    "li",
+    "main",
+    "mark",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "s",
+    "script",
+    "section",
+    "small",
+    "span",
+    "strike",
+    "strong",
+    "style",
+    "sub",
+    "sup",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "time",
+    "tr",
+    "u",
+    "ul",
+)
 _HTML_SIGNAL_RE = re.compile(
-    r"(?is)<\s*/?\s*"
-    r"(?:a|blockquote|body|br|div|em|html|li|ol|p|script|span|strong|style|td|tr|ul)\b"
+    rf"(?is)<\s*/?\s*(?:{'|'.join(_HTML_SIGNAL_TAGS)})\b"
 )
 _HTML_DROP_BLOCK_RE = re.compile(
     r"(?is)<\s*(script|style|blockquote)\b[^>]*>.*?<\s*/\s*\1\s*>"
@@ -76,11 +130,39 @@ _NUMERIC_ONE_RE = re.compile(r"^\+?1(?:\.0+)?$")
 _HTML_SKIP_TAGS = frozenset({"script", "style", "blockquote"})
 _HTML_LINE_TAGS = frozenset({
     "blockquote",
+    "article",
+    "aside",
     "br",
+    "body",
+    "dd",
     "div",
+    "dl",
+    "dt",
+    "figcaption",
+    "figure",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hr",
+    "html",
     "li",
+    "main",
+    "nav",
     "ol",
     "p",
+    "pre",
+    "section",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
     "tr",
     "ul",
 })
@@ -175,13 +257,13 @@ def _strip_ticket_text_junk(value: Any, *, stop_at_boundary: bool = True) -> str
         return ""
     lines: list[str] = []
     skip_auto_block = False
-    signature_skip_remaining = 0
+    skip_signature_block = False
     skip_quote_block = False
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             skip_auto_block = False
-            signature_skip_remaining = 0
+            skip_signature_block = False
             skip_quote_block = False
             lines.append(raw_line)
             continue
@@ -189,16 +271,18 @@ def _strip_ticket_text_junk(value: Any, *, stop_at_boundary: bool = True) -> str
             continue
         if skip_auto_block:
             skip_auto_block = False
-        if signature_skip_remaining:
+        if skip_signature_block:
             if _HISTORY_MESSAGE_BOUNDARY_RE.match(line):
-                signature_skip_remaining = 0
+                skip_signature_block = False
             else:
-                signature_skip_remaining -= 1
                 continue
-        if skip_quote_block and line.startswith(">"):
-            continue
         if skip_quote_block:
-            skip_quote_block = False
+            if line.startswith(">"):
+                continue
+            if _HISTORY_MESSAGE_BOUNDARY_RE.match(line):
+                skip_quote_block = False
+            else:
+                continue
         if _AUTO_REPLY_INLINE_RE.match(line):
             continue
         if _AUTO_REPLY_HEADER_RE.match(line):
@@ -207,7 +291,7 @@ def _strip_ticket_text_junk(value: Any, *, stop_at_boundary: bool = True) -> str
         if _SIGNATURE_BOUNDARY_RE.match(line) or _MOBILE_SIGNATURE_RE.match(line):
             if stop_at_boundary:
                 break
-            signature_skip_remaining = _SIGNATURE_SKIP_LINE_LIMIT
+            skip_signature_block = True
             continue
         if _QUOTED_REPLY_HEADER_RE.match(line):
             if stop_at_boundary:
