@@ -1434,7 +1434,7 @@ describe('IncidentAlerts', () => {
     )
 
     expect(await screen.findByRole('heading', { name: 'Incident Alerts API' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Copy Webhook Link' }))
+    await user.click(await screen.findByRole('button', { name: 'Copy Webhook Link' }))
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(
@@ -1455,7 +1455,7 @@ describe('IncidentAlerts', () => {
     )
 
     expect(await screen.findByRole('heading', { name: 'Incident Alerts API' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Copy Webhook Link' }))
+    await user.click(await screen.findByRole('button', { name: 'Copy Webhook Link' }))
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(

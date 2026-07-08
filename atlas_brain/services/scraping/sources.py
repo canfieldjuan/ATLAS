@@ -155,14 +155,16 @@ DEFAULT_ALLOWLIST_SOURCES: frozenset[ReviewSource] = frozenset({
 # Helpers
 # ---------------------------------------------------------------------------
 
-REQUIRED_ACTIONABLE_SOURCES: frozenset[str] = frozenset({
-    ReviewSource.TRUSTRADIUS.value,
+REQUIRED_ACTIONABLE_SOURCE_ORDER: tuple[str, ...] = (
     ReviewSource.SOFTWARE_ADVICE.value,
-})
+    ReviewSource.TRUSTRADIUS.value,
+)
 
-REQUIRED_SCRAPE_SOURCES: frozenset[str] = REQUIRED_ACTIONABLE_SOURCES | frozenset({
+REQUIRED_ACTIONABLE_SOURCES: frozenset[str] = frozenset(REQUIRED_ACTIONABLE_SOURCE_ORDER)
+
+REQUIRED_SCRAPE_SOURCES: tuple[str, ...] = REQUIRED_ACTIONABLE_SOURCE_ORDER + (
     ReviewSource.CAPTERRA.value,
-})
+)
 
 def parse_source_allowlist(raw: str) -> list[str]:
     """Return a normalized source allowlist from a comma-separated string."""
@@ -176,7 +178,7 @@ def with_required_sources(
     """Append required sources while preserving order and deduplicating."""
     merged: list[str] = []
     seen: set[str] = set()
-    required_sources = list(REQUIRED_ACTIONABLE_SOURCES if required is None else required)
+    required_sources = list(REQUIRED_ACTIONABLE_SOURCE_ORDER if required is None else required)
     for source in list(sources) + required_sources:
         normalized = str(source).strip().lower()
         if not normalized or normalized in seen:

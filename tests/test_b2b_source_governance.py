@@ -6,8 +6,10 @@ import atlas_brain.api.b2b_scrape as scrape_mod
 import atlas_brain.autonomous.tasks._b2b_shared as shared_mod
 import atlas_brain.autonomous.tasks.b2b_blog_post_generation as blog_mod
 from atlas_brain.services.scraping.sources import (
+    REQUIRED_SCRAPE_SOURCES,
     filter_blocked_sources,
     filter_deprecated_sources,
+    with_required_sources,
 )
 
 
@@ -25,6 +27,20 @@ def test_filter_blocked_sources_preserves_order():
         "getapp",
     )
     assert filtered == ["g2", "trustradius"]
+
+
+def test_with_required_sources_uses_stable_append_order():
+    assert with_required_sources(["g2", "software_advice"]) == [
+        "g2",
+        "software_advice",
+        "trustradius",
+    ]
+    assert with_required_sources(["g2"], required=REQUIRED_SCRAPE_SOURCES) == [
+        "g2",
+        "software_advice",
+        "trustradius",
+        "capterra",
+    ]
 
 
 def test_scrape_current_allowed_sources_excludes_deprecated(monkeypatch):
