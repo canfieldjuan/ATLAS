@@ -188,8 +188,14 @@ class SaaSAuthConfig(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_secrets(self):
-        if self.enabled and self.jwt_secret == "change-me-in-production":
-            raise ValueError("ATLAS_SAAS_JWT_SECRET must be set when SaaS auth is enabled")
+        if self.enabled and (
+            not self.jwt_secret.strip()
+            or self.jwt_secret == "change-me-in-production"
+        ):
+            raise ValueError(
+                "ATLAS_SAAS_JWT_SECRET must be set to a non-empty, "
+                "non-default value when SaaS auth is enabled"
+            )
         if self.enabled and (
             not self.api_key_pepper.strip()
             or self.api_key_pepper == "api-key-pepper-change-me"

@@ -1,41 +1,41 @@
-fastapi<0.137
-uvicorn[standard]
-python-dotenv
-python-multipart
-pydantic-settings
-psutil
-slowapi>=0.1.9
+fastapi==0.136.3
+uvicorn[standard]==0.50.2
+python-dotenv==1.2.2
+python-multipart==0.0.32
+pydantic-settings==2.14.2
+psutil==7.2.2
+slowapi==0.1.10
 
 # Content-ops workflow collection still imports the torch-backed service base.
-torch
-numpy
+torch==2.12.1
+numpy==2.4.6
 
 # HTTP, database, and scheduling surfaces exercised by content-ops tests.
-httpx
-websockets
-asyncpg>=0.31.0
-dateparser>=1.2.0
-rich>=13.0.0
-langgraph>=0.2.0
-langchain-core>=0.3.0
-apscheduler>=3.10,<4.0
-tzlocal>=3.0,<6.0
+httpx==0.28.1
+websockets==15.0.1
+asyncpg==0.31.0
+dateparser==1.4.1
+rich==15.0.0
+langgraph==1.2.8
+langchain-core==1.4.8
+apscheduler==3.11.3
+tzlocal==5.4.4
 
 # MCP, auth, billing, and document/report rendering surfaces.
-mcp>=1.28.1,<2
-bcrypt>=4.0.0
-PyJWT>=2.8.0
-cryptography>=42.0.0
-stripe>=8.0.0
-email-validator>=2.3.0
-fpdf2>=2.8.0
-markdown>=3.5
+mcp==1.28.1
+bcrypt==5.0.0
+PyJWT==2.13.0
+cryptography==49.0.0
+stripe==15.3.0
+email-validator==2.3.0
+fpdf2==2.8.7
+markdown==3.10.2
 
 # Eager atlas_brain.api collection currently pulls B2B scraping parsers.
-feedparser>=6.0
-curl_cffi>=0.7.0
-beautifulsoup4>=4.15.0
+feedparser==6.0.12
+curl_cffi==0.15.0
+beautifulsoup4==4.15.0
 
 # Test runner dependencies for the targeted workflows.
-pytest
-pytest-asyncio
+pytest==9.1.1
+pytest-asyncio==1.4.0

@@ -8,11 +8,11 @@ pydantic>=2.0.0
 pydantic-settings>=2.0.0
 
 # Graphiti Core - Knowledge Graph Library
-graphiti-core>=0.5.0
+graphiti-core>=0.29.2
 
 # HTTP client
 httpx>=0.25.0
-aiofiles>=23.0.0
+aiofiles>=25.1.0
 
 # Embeddings (optional - for local embeddings)
 sentence-transformers>=2.2.0

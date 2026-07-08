@@ -41,17 +41,21 @@ WORKFLOW_CANARIES = {
     ),
 }
 
+# Required by NAME (specifier-agnostic): the guard's intent is that these
+# packages stay present in the subset file, not that they carry a particular
+# specifier shape (the file is ==pinned as of #2035 G1.2). The excluded side
+# below was already name-based; this makes both sides symmetric.
 REQUIRED_PACKAGES = (
     "torch",
     "numpy",
-    "asyncpg>=0.31.0",
-    "mcp>=1.28.1,<2",
-    "stripe>=8.0.0",
-    "fpdf2>=2.8.0",
-    "markdown>=3.5",
-    "feedparser>=6.0",
-    "curl_cffi>=0.7.0",
-    "beautifulsoup4>=4.15.0",
+    "asyncpg",
+    "mcp",
+    "stripe",
+    "fpdf2",
+    "markdown",
+    "feedparser",
+    "curl_cffi",
+    "beautifulsoup4",
     "pytest",
     "pytest-asyncio",
 )
@@ -96,7 +100,7 @@ def test_content_ops_ci_requirements_keep_needed_packages_without_heavy_stack() 
     requirement_names = {requirement_name(line) for line in requirements}
 
     for package in REQUIRED_PACKAGES:
-        assert package in requirements
+        assert requirement_name(package) in requirement_names
     for package in EXCLUDED_HEAVY_PACKAGES:
         assert requirement_name(package) not in requirement_names
 
