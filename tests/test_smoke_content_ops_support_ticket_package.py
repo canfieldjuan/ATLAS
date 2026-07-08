@@ -220,8 +220,11 @@ def test_support_ticket_package_skips_private_comment_objects_in_history() -> No
     {"is_private_note": "true"},
     {"private_note": "yes"},
     {"type": "private_note"},
+    {"type": "private_reply"},
+    {"message_type": "internal_reply"},
     {"visibility": "internal"},
     {"visibility": {"name": "internal"}},
+    {"Public": False, "public": True},
     {"public": "maybe"},
 ])
 def test_support_ticket_package_skips_private_comment_marker_variants(
@@ -285,7 +288,9 @@ def test_support_ticket_package_keeps_public_comment_marker_variants(
     {"visibility": "private"},
     {"visibility": {"name": "private"}},
     {"access": "internal"},
+    {"access": "restricted access"},
     {"type": "internal_note"},
+    {"Public": False, "public": True},
     {"public": "maybe"},
 ])
 def test_support_ticket_package_rejects_private_row_markers_before_text_admission(

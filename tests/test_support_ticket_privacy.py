@@ -27,6 +27,9 @@ from extracted_content_pipeline.support_ticket_privacy import (
     {"privacy": "private"},
     {"privacy": {"label": "private"}},
     {"type": "private_note"},
+    {"type": "private_reply"},
+    {"message_type": "internal_reply"},
+    {"Public": False, "public": True},
 ])
 def test_support_ticket_comment_private_markers_fail_closed(
     marker: dict[str, object],
@@ -92,8 +95,12 @@ def test_support_ticket_row_private_check_ignores_access_metadata() -> None:
     {"visibility": "restricted"},
     {"visibility": {"name": "internal"}},
     {"access": "internal"},
+    {"access": "restricted"},
+    {"access": "restricted access"},
     {"audience": "agent only"},
+    {"audience": "restricted"},
     {"type": "internal_note"},
+    {"Public": False, "public": True},
 ])
 def test_support_ticket_row_private_markers_fail_closed(
     marker: dict[str, object],

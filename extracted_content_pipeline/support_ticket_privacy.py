@@ -75,7 +75,11 @@ _PRIVATE_LABELS = frozenset({
     "internal",
     "internalcomment",
     "internalnote",
+    "internalreply",
+    "privatereply",
     "agentonly",
+    "restricted",
+    "restrictedaccess",
     "staffonly",
     "nonpublic",
     "hidden",
@@ -110,9 +114,9 @@ def _mapping_is_private(
     *,
     include_comment_alias_keys: bool,
 ) -> bool:
-    markers = {_key(key): marker_value for key, marker_value in value.items()}
+    markers = _marker_values_by_key(value)
     for key in _PUBLIC_BOOL_KEYS:
-        marker = _marker(markers.get(key))
+        marker = _marker_from_values(markers.get(key))
         if marker is None:
             continue
         if _boolish(marker) is True or marker in _PUBLIC_LABELS:
@@ -122,7 +126,7 @@ def _mapping_is_private(
     if include_comment_alias_keys:
         private_keys.update(_COMMENT_PRIVATE_ALIAS_KEYS)
     for key in private_keys:
-        marker = _marker(markers.get(key))
+        marker = _marker_from_values(markers.get(key))
         if marker is None:
             continue
         boolish = _boolish(marker)
@@ -130,21 +134,44 @@ def _mapping_is_private(
             continue
         return True
     for key in _STRICT_PRIVACY_LABEL_KEYS:
-        marker = _marker(markers.get(key))
+        marker = _marker_from_values(markers.get(key))
         if marker is None:
             continue
         if marker in _PUBLIC_LABELS:
             continue
         return True
     for key in _VALUE_PRIVACY_LABEL_KEYS:
-        marker = _marker(markers.get(key))
-        if marker in _PRIVATE_LABELS:
+        marker = _marker_from_values(markers.get(key))
+        if marker == _AMBIGUOUS_MARKER or marker in _PRIVATE_LABELS:
             return True
     for key in _KIND_LABEL_KEYS:
-        marker = _marker(markers.get(key))
-        if marker in _PRIVATE_LABELS:
+        marker = _marker_from_values(markers.get(key))
+        if marker == _AMBIGUOUS_MARKER or marker in _PRIVATE_LABELS:
             return True
     return False
+
+
+def _marker_values_by_key(value: Mapping[str, Any]) -> dict[str, list[Any]]:
+    markers: dict[str, list[Any]] = {}
+    for key, marker_value in value.items():
+        markers.setdefault(_key(key), []).append(marker_value)
+    return markers
+
+
+def _marker_from_values(values: list[Any] | None) -> str | None:
+    if not values:
+        return None
+    markers = [
+        marker
+        for value in values
+        if (marker := _marker(value)) is not None
+    ]
+    if not markers:
+        return None
+    first = markers[0]
+    if all(marker == first for marker in markers):
+        return first
+    return _AMBIGUOUS_MARKER
 
 
 def _marker(value: Any) -> str | None:
@@ -167,9 +194,9 @@ def _marker(value: Any) -> str | None:
 
 
 def _object_marker(value: Mapping[str, Any]) -> str:
-    markers = {_key(key): marker_value for key, marker_value in value.items()}
+    markers = _marker_values_by_key(value)
     for key in _OBJECT_MARKER_KEYS:
-        marker = _marker(markers.get(_key(key)))
+        marker = _marker_from_values(markers.get(_key(key)))
         if marker is not None:
             return marker
     return _AMBIGUOUS_MARKER

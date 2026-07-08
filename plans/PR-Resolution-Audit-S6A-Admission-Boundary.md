@@ -102,11 +102,14 @@ fail closed. Strict privacy labels such as `visibility` and `privacy` still
 fail closed, while ordinary metadata labels such as `access` and `audience`
 classify by value so routing phrases like "Account access" do not drop public
 rows. Object-shaped markers normalize through the same label vocabulary.
-Package rows call the row wrapper before any `source_title`, body, or comment
-extraction. Package comments and Zendesk comments use the comment wrapper before
-their text is appended. Zendesk private-description duplicate suppression still
-compares raw normalized text keys, so filtering does not depend on a separate
-sanitizer shape.
+Restricted value labels and private/internal reply kind labels are treated as
+private. Case/punctuation variants of the same marker key are grouped before
+classification; conflicting grouped values become ambiguous and fail closed
+instead of using last-writer-wins. Package rows call the row wrapper before any
+`source_title`, body, or comment extraction. Package comments and Zendesk
+comments use the comment wrapper before their text is appended. Zendesk
+private-description duplicate suppression still compares raw normalized text
+keys, so filtering does not depend on a separate sanitizer shape.
 
 ## Intentional
 
@@ -128,7 +131,7 @@ Parked hardening: none.
 ## Verification
 
 - Passed:
-  - `python -m pytest tests/test_support_ticket_privacy.py tests/test_smoke_content_ops_support_ticket_package.py tests/test_extracted_support_ticket_input_package.py -q` (`214 passed`)
+  - `python -m pytest tests/test_support_ticket_privacy.py tests/test_smoke_content_ops_support_ticket_package.py tests/test_extracted_support_ticket_input_package.py -q` (`231 passed`)
   - `python scripts/maturity_sweep.py extracted_content_pipeline --tests-root tests --baseline tests/maturity_sweep/baseline_extracted_content_pipeline.json --min-score 8 --sensitive-glob '**/billing/**' --sensitive-glob '**/billing*' --sensitive-glob '**/paid*' --sensitive-glob '**/auth/**' --sensitive-glob '**/webhook*' --sensitive-glob '**/payment*' --sensitive-glob '**/*deletion*'`
   - `python -m pytest tests/test_smoke_content_ops_support_ticket_package.py tests/test_extracted_support_ticket_input_package.py -q` (`150 passed`)
   - `bash` `scripts/validate_extracted_content_pipeline.sh`
@@ -145,11 +148,11 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
-| `extracted_content_pipeline/support_ticket_privacy.py` | 204 |
+| `extracted_content_pipeline/support_ticket_privacy.py` | 231 |
 | `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 21 |
-| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 155 |
+| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 158 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_extracted_support_ticket_input_package.py` | 189 |
-| `tests/test_smoke_content_ops_support_ticket_package.py` | 114 |
-| `tests/test_support_ticket_privacy.py` | 113 |
-| **Total** | **808** |
+| `tests/test_extracted_support_ticket_input_package.py` | 194 |
+| `tests/test_smoke_content_ops_support_ticket_package.py` | 119 |
+| `tests/test_support_ticket_privacy.py` | 120 |
+| **Total** | **855** |

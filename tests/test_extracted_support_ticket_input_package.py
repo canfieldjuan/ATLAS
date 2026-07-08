@@ -2037,8 +2037,11 @@ def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:
     {"is_private_note": "true"},
     {"private_note": "yes"},
     {"type": "private_note"},
+    {"type": "private_reply"},
+    {"message_type": "internal_reply"},
     {"visibility": "internal"},
     {"visibility": {"name": "internal"}},
+    {"Public": False, "public": True},
     {"public": "maybe"},
 ])
 def test_zendesk_full_thread_rows_skip_private_comment_marker_variants(
@@ -2156,7 +2159,9 @@ def test_zendesk_full_thread_rows_suppress_private_first_description_alias() -> 
     {"visibility": "private"},
     {"visibility": {"name": "private"}},
     {"access": "internal"},
+    {"access": "restricted access"},
     {"type": "internal_note"},
+    {"Public": False, "public": True},
 ])
 def test_zendesk_full_thread_rows_skip_ticket_private_markers_before_flattening(
     private_marker: dict[str, object],
