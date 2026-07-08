@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from .support_ticket_clustering import support_ticket_plain_text
+from .support_ticket_privacy import (
+    support_ticket_comment_is_private,
+    support_ticket_row_is_private,
+)
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -33,6 +37,13 @@ _AUTO_ACK_PATTERNS = (
     ),
 )
 _UNRATED_ZENDESK_SCORES = frozenset({"unoffered", "offered"})
+
+
+class _SkipZendeskThreadRow:
+    pass
+
+
+_SKIP_ZENDESK_THREAD_ROW = _SkipZendeskThreadRow()
 
 
 @dataclass(frozen=True)
@@ -108,6 +119,8 @@ def rows_from_zendesk_full_thread(
             break
         processed_row_count = index
         normalized = _row_from_entry(entry, row_index=index)
+        if normalized is _SKIP_ZENDESK_THREAD_ROW:
+            continue
         if normalized is None:
             warnings.append({
                 "code": "zendesk_thread_ticket_missing",
@@ -145,12 +158,14 @@ def _row_from_entry(
     entry: Any,
     *,
     row_index: int,
-) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | _SkipZendeskThreadRow | None:
     if not isinstance(entry, Mapping):
         return None
     ticket = entry.get("ticket") if isinstance(entry.get("ticket"), Mapping) else entry
     if not isinstance(ticket, Mapping):
         return None
+    if support_ticket_row_is_private(entry) or support_ticket_row_is_private(ticket):
+        return _SKIP_ZENDESK_THREAD_ROW
     requester_id = _id_text(ticket.get("requester_id"))
     ticket_id = _clean(ticket.get("id")) or f"zendesk-ticket-{row_index}"
     subject = _plain(ticket.get("subject") or ticket.get("raw_subject"))
@@ -175,7 +190,7 @@ def _row_from_entry(
     private_comment_keys = {
         _text_key(_comment_text(comment))
         for comment in comments
-        if isinstance(comment, Mapping) and comment.get("public") is False
+        if isinstance(comment, Mapping) and support_ticket_comment_is_private(comment)
     }
     description = _plain(ticket.get("description"))
     if description and _text_key(description) not in private_comment_keys:
@@ -189,7 +204,7 @@ def _row_from_entry(
                 "message": "Ignored Zendesk comment because it was not an object.",
             })
             continue
-        if comment.get("public") is False:
+        if support_ticket_comment_is_private(comment):
             continue
         text = _comment_text(comment)
         if not text:
