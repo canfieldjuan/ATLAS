@@ -595,3 +595,73 @@ def test_support_ticket_round8_rule_does_not_over_reject(
     row: dict[str, object],
 ) -> None:
     assert support_ticket_row_is_private(row) is False
+
+
+# Round-9 refinements: token-based value classification, outer-polarity
+# object resolution, negation flips, and audience-note keys.
+
+
+def test_support_ticket_object_label_with_boolean_under_private_key() -> None:
+    assert support_ticket_comment_is_private(
+        {"private": {"label": "public", "value": True}, "body": "x"}
+    ) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"staff_note": True},
+    {"agent_reply": True},
+    {"support_note": True},
+])
+def test_support_ticket_audience_note_boolean_keys_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"visibility": {"name": "public", "publicly_visible": False}},
+    {"visibility": {"label": "public", "hidden_from_customer": True}},
+])
+def test_support_ticket_nested_alias_subfields_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private(marker) is True
+
+
+def test_support_ticket_visible_to_customer_label_value_passes() -> None:
+    assert support_ticket_comment_is_private(
+        {"visibility": "visible to customer", "body": "x"}
+    ) is False
+
+
+@pytest.mark.parametrize("marker", [
+    {"audience": "support staff only"},
+    {"type": "support_agent_note"},
+    {"access": "restricted to agents"},
+    {"audience": "private to team"},
+    {"access": "internal to staff"},
+    {"type": "private_response"},
+    {"comment_type": "internal_response"},
+    {"message_type": "agent_response"},
+])
+def test_support_ticket_compound_value_phrases_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"not_visible_to_customer": True},
+    {"not_publicly_visible": True},
+    {"not_customer_facing": True},
+])
+def test_support_ticket_negated_visibility_keys_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+
+
+def test_support_ticket_everyone_audience_passes() -> None:
+    assert support_ticket_comment_is_private(
+        {"visibility": "everyone", "body": "x"}
+    ) is False

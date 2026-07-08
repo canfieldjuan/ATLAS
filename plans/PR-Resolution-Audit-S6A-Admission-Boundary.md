@@ -140,6 +140,24 @@ join the private-audience flip (`visible_to_internal`, `public_to_internal`);
 audience-only compounds (`admin_only`, `team_only`, `support_only`) classify
 private; `for internal use only` value labels resolve via prefix strips.
 
+Round-9 restructure (each finding verified failing first; the cluster showed
+the VALUE side still used string-strip loops while keys had tokenization):
+values now get the same closed token rule as keys (multi-token label phrases
+like `restricted to agents`, `support staff only`, `private_response`, and
+`visible to customer` classify by semantic tokens in both directions); object
+markers resolve in the ENCLOSING key's polarity frame with classifier-driven
+subfield polarity (fixes `private: {"label": "public", "value": true}` and
+nested alias subfields like `{"visibility": {"publicly_visible": false}}`);
+negated assertions flip polarity (`not_visible_to_customer`,
+`not_customer_facing`; `not_private` passes); audience-note boolean keys
+(`staff_note: true`, `agent_reply: true`) classify private while text-valued
+forms stay content columns; `everyone`/`anyone`/`all` join the affirmative
+public labels. Plus an ADVERSARIAL GRAMMAR SWEEP
+(`tests/test_support_ticket_privacy_sweep.py`, CI-enrolled): ~335 generated
+cases crossing stems x key structure x audiences x value shapes x containers
+in BOTH error directions, so coverage is the family grammar, not
+per-reviewer-finding spellings.
+
 Round-8 refinements (same closed rule; each verified failing first; one was a
 polarity defect in the round-7 object resolver): `hidden_from_customer`-style
 inverse markers classify (`from` is structure); compound audience-only flags
@@ -193,6 +211,7 @@ Slice phase: Vertical slice
 - `tests/test_extracted_support_ticket_input_package.py`
 - `tests/test_smoke_content_ops_support_ticket_package.py`
 - `tests/test_support_ticket_privacy.py`
+- `tests/test_support_ticket_privacy_sweep.py`
 
 ## Mechanism
 
@@ -250,11 +269,12 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
-| `extracted_content_pipeline/support_ticket_privacy.py` | 531 |
+| `extracted_content_pipeline/support_ticket_privacy.py` | 612 |
 | `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 21 |
-| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 260 |
-| `scripts/run_extracted_pipeline_checks.sh` | 1 |
+| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 280 |
+| `scripts/run_extracted_pipeline_checks.sh` | 2 |
 | `tests/test_extracted_support_ticket_input_package.py` | 194 |
 | `tests/test_smoke_content_ops_support_ticket_package.py` | 119 |
-| `tests/test_support_ticket_privacy.py` | 597 |
-| **Total** | **1734** |
+| `tests/test_support_ticket_privacy.py` | 667 |
+| `tests/test_support_ticket_privacy_sweep.py` | 196 |
+| **Total** | **2102** |

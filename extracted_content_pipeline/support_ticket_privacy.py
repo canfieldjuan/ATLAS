@@ -60,6 +60,19 @@ _PUBLIC_FLAG_KEY_STEMS = frozenset({
 })
 _STRICT_LABEL_KEY_STEMS = frozenset({"visibility", "privacy", "confidentiality"})
 _PUBLIC_FAMILY_TOKENS = frozenset({"public", "visible", "visibility", "external"})
+_PUBLIC_AUDIENCE_TOKENS = frozenset({
+    "customer", "customers", "user", "users", "enduser", "endusers",
+    "requester", "requesters", "client", "clients", "viewer", "viewers",
+    "everyone",
+})
+# Structural tokens inside VALUE phrases ("restricted to agents",
+# "private_response", "for internal use only").
+_VALUE_STRUCTURAL_TOKENS = frozenset({
+    "is", "to", "for", "of", "the", "from", "only", "use", "uses",
+    "access", "team", "teams", "note", "notes", "comment", "comments",
+    "reply", "replies", "message", "messages", "msg",
+    "response", "responses", "answer", "answers", "facing",
+})
 _VALUE_LABEL_KEY_STEMS = frozenset({"access", "audience"})
 _KIND_KEY_STEMS = frozenset({"type", "kind"})
 
@@ -113,6 +126,9 @@ _PUBLIC_LABELS = frozenset({
     "external",
     "visible",
     "published",
+    "everyone",
+    "anyone",
+    "all",
 })
 _PRIVATE_LABELS = frozenset({
     "private",
@@ -187,7 +203,7 @@ def _mapping_is_private(value: Mapping[str, Any], *, row_mode: bool) -> bool:
         if classified is None:
             continue
         kind, note_alias, flag_shaped = classified
-        marker = _marker(raw_value)
+        marker = _marker(raw_value, negative_polarity=kind == _KIND_PRIVATE)
         if marker is None:
             continue
         content_column = note_alias and not flag_shaped
@@ -266,6 +282,18 @@ def _classify_key(key: str) -> tuple[str, bool, bool] | None:
     filtered = [token for token in tokens if token not in _KEY_STOP_TOKENS]
     if filtered and len(filtered) < len(tokens):
         candidates.append("".join(filtered))
+    # Negated assertions flip polarity: not_visible_to_customer /
+    # not_publicly_visible / not_customer_facing assert the private side,
+    # not_private asserts the public side.
+    if tokens[0] in ("not", "non") and len(tokens) > 1:
+        rest = _classify_key(" ".join(tokens[1:]))
+        if rest is not None:
+            rest_kind, rest_note, rest_flag = rest
+            if rest_kind in (_KIND_PUBLIC, _KIND_PUBLIC_FLAG):
+                return (_KIND_PRIVATE, note_alias or rest_note, flag_shaped or rest_flag)
+            if rest_kind == _KIND_PRIVATE:
+                return (_KIND_PUBLIC, note_alias or rest_note, flag_shaped or rest_flag)
+        # Unresolvable negations stay unclassified rather than guessing.
     # Audience-only compounds (admin_only / team_only / support_team_only):
     # every token before "only" is a private audience.
     if (
@@ -274,6 +302,22 @@ def _classify_key(key: str) -> tuple[str, bool, bool] | None:
         and all(token in _PRIVATE_AUDIENCE_TOKENS for token in tokens[:-1])
     ):
         return (_KIND_PRIVATE, note_alias, flag_shaped)
+    # Audience-note keys (staff_note / agent_reply / support_note): every
+    # token is a private audience or note structure, with both present.
+    note_structure = frozenset({
+        "note", "notes", "comment", "comments", "reply", "replies",
+        "message", "messages", "msg", "response", "responses",
+    })
+    if (
+        len(tokens) >= 2
+        and any(token in _PRIVATE_AUDIENCE_TOKENS for token in tokens)
+        and any(token in note_structure for token in tokens)
+        and all(
+            token in _PRIVATE_AUDIENCE_TOKENS or token in note_structure
+            for token in tokens
+        )
+    ):
+        return (_KIND_PRIVATE, True, flag_shaped)
     # All-public-family compounds (publicly_visible / public_visibility):
     # every meaningful token asserts the public side.
     meaningful = [token for token in tokens if token not in _KEY_STOP_TOKENS]
@@ -372,7 +416,7 @@ def _stem_kind(stem: str) -> str | None:
     return None
 
 
-def _marker(value: Any) -> str | None:
+def _marker(value: Any, *, negative_polarity: bool = False) -> str | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -382,7 +426,7 @@ def _marker(value: Any) -> str | None:
         # {"privacy": {}} fails closed like any other unreadable marker.
         if not value:
             return _AMBIGUOUS_MARKER
-        return _object_marker(value)
+        return _object_marker(value, negative_polarity=negative_polarity)
     if isinstance(value, (int, float)):
         return _numeric_marker(str(value).strip().lower()) or _key(value)
     if isinstance(value, str):
@@ -392,7 +436,7 @@ def _marker(value: Any) -> str | None:
         numeric = _numeric_marker(text)
         if numeric is not None:
             return numeric
-        return _key(text)
+        return _value_marker(text)
     if isinstance(value, (list, tuple, set, frozenset)) and not value:
         # Present-but-empty sequence markers fail closed like empty objects.
         return _AMBIGUOUS_MARKER
@@ -400,57 +444,51 @@ def _marker(value: Any) -> str | None:
     return _AMBIGUOUS_MARKER
 
 
-_NEGATIVE_OBJECT_MARKER_KEYS = frozenset({
-    "private", "isprivate", "internal", "hidden",
-})
-_POSITIVE_OBJECT_MARKER_KEYS = frozenset({"public", "ispublic"})
+def _object_marker(value: Mapping[str, Any], *, negative_polarity: bool) -> str:
+    """Resolve a structured marker to a verdict in the OUTER key's frame.
 
+    Neutral boolean subfields ({"value": true}) take the enclosing key's
+    polarity; alias subfields (publicly_visible, hidden_from_customer) take
+    their own classified polarity; label subfields resolve by value. Any
+    conflict between verdicts fails closed.
+    """
 
-def _object_marker(value: Mapping[str, Any]) -> str:
-    labels: set[str] = set()
-    bools: set[bool] = set()
-    unknown = False
+    verdicts: set[str] = set()
     for key, marker_value in value.items():
         compact_key = _key(key)
-        if compact_key not in _OBJECT_MARKER_KEYS:
-            continue
+        classified = _classify_key(str(key))
+        subfield_kind = classified[0] if classified is not None else None
+        polarity_subfield = subfield_kind in (
+            _KIND_PRIVATE, _KIND_PUBLIC, _KIND_PUBLIC_FLAG,
+        )
+        if not polarity_subfield and compact_key not in _OBJECT_MARKER_KEYS:
+            if subfield_kind is None:
+                continue
         marker = _marker(marker_value)
         if marker is None:
             continue
         boolish = _boolish(marker)
-        # Boolean POLARITY subfields carry their own key's direction:
-        # {"private": true} is a private decision, {"public": false} likewise.
-        if boolish is not None and compact_key in _NEGATIVE_OBJECT_MARKER_KEYS:
-            labels.add("private" if boolish else "public")
-            continue
-        if boolish is not None and compact_key in _POSITIVE_OBJECT_MARKER_KEYS:
-            labels.add("public" if boolish else "private")
-            continue
-        # Boolean NEUTRAL subfields ({"value": true}) keep their boolean-ness
-        # so the ENCLOSING key's polarity applies (private: {"value": true}).
         if boolish is not None:
-            bools.add(boolish)
+            # Assertion subfields carry their OWN polarity ({"private": true},
+            # {"publicly_visible": false}); neutral subfields ({"value": true})
+            # take the enclosing key's polarity.
+            if subfield_kind == _KIND_PRIVATE:
+                verdicts.add("private" if boolish else "public")
+            elif subfield_kind in (_KIND_PUBLIC, _KIND_PUBLIC_FLAG):
+                verdicts.add("public" if boolish else "private")
+            elif compact_key in _OBJECT_MARKER_KEYS:
+                if negative_polarity:
+                    verdicts.add("private" if boolish else "public")
+                else:
+                    verdicts.add("public" if boolish else "private")
+            else:
+                # Label-class alias subfield with a bare boolean: unresolvable.
+                verdicts.add("unknown")
             continue
-        verdict = _marker_verdict(marker)
-        if verdict == "unknown":
-            unknown = True
-        else:
-            labels.add(verdict)
-    if unknown or len(labels) > 1 or len(bools) > 1:
+        verdicts.add(_marker_verdict(marker))
+    if not verdicts or "unknown" in verdicts or len(verdicts) > 1:
         return _AMBIGUOUS_MARKER
-    if labels and bools:
-        # A label plus a bare boolean agree only when the boolean reads as
-        # the same side under a neutral/label outer key (true ~ public).
-        label = next(iter(labels))
-        boolean = next(iter(bools))
-        if (label == "public") == boolean:
-            return label
-        return _AMBIGUOUS_MARKER
-    if labels:
-        return next(iter(labels))
-    if bools:
-        return "true" if next(iter(bools)) else "false"
-    return _AMBIGUOUS_MARKER
+    return next(iter(verdicts))
 
 
 def _marker_verdict(marker: str) -> str:
@@ -461,6 +499,49 @@ def _marker_verdict(marker: str) -> str:
     ):
         return "private"
     return "unknown"
+
+
+def _value_marker(text: str) -> str:
+    """Resolve a text value to a marker, token-classifying label phrases.
+
+    Multi-token values get the same closed token rule as keys, so
+    "restricted to agents", "support staff only", "private_response", and
+    "visible to customer" resolve by their semantic tokens instead of
+    per-spelling compact enumeration. Single tokens and already-known
+    compacts keep the pinned membership behavior.
+    """
+
+    compact = _key(text)
+    if (
+        compact in _PUBLIC_LABELS
+        or compact in _PRIVATE_LABELS
+        or compact in _TRUTHY_TEXT
+        or compact in _FALSEY_TEXT
+    ):
+        return compact
+    tokens = _key_tokens(text)
+    if len(tokens) >= 2:
+        private_side = _PRIVATE_KEY_STEMS | _PRIVATE_AUDIENCE_TOKENS
+        public_side = (
+            _PUBLIC_FAMILY_TOKENS | _PUBLIC_AUDIENCE_TOKENS | _PUBLIC_LABELS
+        )
+        has_private = any(token in private_side for token in tokens)
+        has_public = any(token in public_side for token in tokens)
+        structural = _VALUE_STRUCTURAL_TOKENS
+        if has_private and all(
+            token in private_side or token in structural or token in public_side
+            for token in tokens
+        ):
+            # Any private signal in a privacy phrase fails closed, even
+            # alongside public words ("visible to staff").
+            return "private"
+        if (
+            has_public
+            and not has_private
+            and all(token in public_side or token in structural for token in tokens)
+        ):
+            return "public"
+    return compact
 
 
 def _numeric_marker(value: str) -> str | None:

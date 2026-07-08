@@ -139,6 +139,7 @@ pytest \
   tests/test_extracted_content_ops_input_provider.py \
   tests/test_support_ticket_context_contract.py \
   tests/test_support_ticket_privacy.py \
+  tests/test_support_ticket_privacy_sweep.py \
   tests/test_resolution_audit_s5_clustering_spike.py \
   tests/test_extracted_support_ticket_input_package.py \
   tests/test_extracted_support_ticket_zendesk_export.py \
