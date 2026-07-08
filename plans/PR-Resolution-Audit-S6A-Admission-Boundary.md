@@ -87,8 +87,10 @@ Slice phase: Vertical slice
 - `extracted_content_pipeline/support_ticket_privacy.py`
 - `extracted_content_pipeline/support_ticket_zendesk_thread.py`
 - `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md`
+- `scripts/run_extracted_pipeline_checks.sh`
 - `tests/test_extracted_support_ticket_input_package.py`
 - `tests/test_smoke_content_ops_support_ticket_package.py`
+- `tests/test_support_ticket_privacy.py`
 
 ## Mechanism
 
@@ -122,6 +124,8 @@ Parked hardening: none.
 ## Verification
 
 - Passed:
+  - `python -m pytest tests/test_support_ticket_privacy.py tests/test_smoke_content_ops_support_ticket_package.py tests/test_extracted_support_ticket_input_package.py -q` (`190 passed`)
+  - `python scripts/maturity_sweep.py extracted_content_pipeline --tests-root tests --baseline tests/maturity_sweep/baseline_extracted_content_pipeline.json --min-score 8 --sensitive-glob '**/billing/**' --sensitive-glob '**/billing*' --sensitive-glob '**/paid*' --sensitive-glob '**/auth/**' --sensitive-glob '**/webhook*' --sensitive-glob '**/payment*' --sensitive-glob '**/*deletion*'`
   - `python -m pytest tests/test_smoke_content_ops_support_ticket_package.py tests/test_extracted_support_ticket_input_package.py -q` (`150 passed`)
   - `bash` `scripts/validate_extracted_content_pipeline.sh`
   - `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline`
@@ -137,9 +141,11 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
-| `extracted_content_pipeline/support_ticket_privacy.py` | 167 |
-| `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 5 |
-| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 145 |
-| `tests/test_extracted_support_ticket_input_package.py` | 114 |
+| `extracted_content_pipeline/support_ticket_privacy.py` | 171 |
+| `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 21 |
+| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 151 |
+| `scripts/run_extracted_pipeline_checks.sh` | 1 |
+| `tests/test_extracted_support_ticket_input_package.py` | 183 |
 | `tests/test_smoke_content_ops_support_ticket_package.py` | 94 |
-| **Total** | **536** |
+| `tests/test_support_ticket_privacy.py` | 92 |
+| **Total** | **724** |

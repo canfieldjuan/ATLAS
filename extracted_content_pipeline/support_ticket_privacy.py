@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 
 _COMPACT_RE = re.compile(r"[^a-z0-9]+")
+_NUMERIC_MARKER_RE = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\Z")
 
 _PUBLIC_BOOL_KEYS = frozenset({"public", "ispublic"})
 _PRIVATE_BOOL_KEYS = frozenset({
@@ -35,8 +36,8 @@ _PRIVACY_LABEL_KEYS = frozenset({
     "privacy",
     "privacysetting",
     "access",
-    "audience",
 })
+_COMMENT_PRIVACY_LABEL_KEYS = frozenset({"audience"})
 _KIND_LABEL_KEYS = frozenset({
     "type",
     "kind",
@@ -107,7 +108,10 @@ def _mapping_is_private(
         if boolish is False or marker in _PUBLIC_LABELS:
             continue
         return True
-    for key in _PRIVACY_LABEL_KEYS:
+    privacy_label_keys = set(_PRIVACY_LABEL_KEYS)
+    if include_comment_alias_keys:
+        privacy_label_keys.update(_COMMENT_PRIVACY_LABEL_KEYS)
+    for key in privacy_label_keys:
         marker = _marker(markers.get(key))
         if marker is None:
             continue
@@ -127,7 +131,8 @@ def _marker(value: Any) -> str | None:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return _numeric_marker(str(value))
+        text = str(value).strip().lower()
+        return _numeric_marker(text) or _key(text)
     text = str(value).strip().lower()
     if not text:
         return None
@@ -138,10 +143,9 @@ def _marker(value: Any) -> str | None:
 
 
 def _numeric_marker(value: str) -> str | None:
-    try:
-        number = Decimal(value)
-    except (InvalidOperation, ValueError):
+    if not _NUMERIC_MARKER_RE.fullmatch(value):
         return None
+    number = Decimal(value)
     if number == 0:
         return "false"
     if number == 1:
