@@ -145,3 +145,46 @@ def test_every_block_tag_is_in_the_detector_families() -> None:
     # Drift guard: line extraction and HTML detection share tag families.
     for tag in sorted(_BLOCK_TAG_NAMES):
         assert re.fullmatch(_HTML_TAG_NAMES_RE, tag, re.IGNORECASE), tag
+
+
+# Round-1 review refinements: script/style are detector signals, EOF
+# recovery admits only customer text, excluded-scope boundaries follow the
+# block rule, and the lines seam is exported.
+
+
+def test_script_only_bodies_are_excluded_not_passed_through() -> None:
+    assert support_ticket_plain_text_lines("<script>alert(1)</script>") == ""
+    assert support_ticket_plain_text("<script>alert(1)</script>") == ""
+
+
+def test_script_then_text_extracts_only_the_text() -> None:
+    assert support_ticket_plain_text_lines(
+        "<script>x=1;</script><p>Real question</p>"
+    ) == "Real question"
+
+
+def test_unclosed_script_recovery_drops_machinery() -> None:
+    assert support_ticket_plain_text(
+        "<p>before</p><script>var x=1;<p>after</p>"
+    ) == "before after"
+    assert support_ticket_plain_text_lines(
+        "<p>before</p><script>var x=1;<p>after</p>"
+    ) == "before\nafter"
+
+
+def test_unclosed_script_with_no_markup_recovers_nothing() -> None:
+    assert support_ticket_plain_text(
+        "<p>before</p><script>var x=1; no more tags"
+    ) == "before"
+
+
+def test_inline_excluded_scope_does_not_split_the_line() -> None:
+    assert support_ticket_plain_text_lines(
+        "<p>foo<script>x</script>bar</p>"
+    ) == "foo bar"
+
+
+def test_lines_seam_is_exported() -> None:
+    import extracted_content_pipeline.support_ticket_clustering as module
+
+    assert "support_ticket_plain_text_lines" in module.__all__

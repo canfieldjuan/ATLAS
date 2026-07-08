@@ -59,6 +59,16 @@ customer text; and an unclosed `<script>` tag swallows the ENTIRE ticket body
     scrubber grammar.
   - Goldens untouched (verified: full gauntlet green with no golden changes).
 
+Round-1 review refinements (each verified failing first; two were blockers):
+`script`/`style` join the detector tag families so script-only bodies are
+excluded instead of passed through raw; EOF recovery re-extracts only the
+markup after the first HTML signal in the buffer, so script/CSS machinery is
+never admitted alongside rescued customer text (pure-machinery buffers recover
+nothing); excluded-scope open/close boundaries follow the same block-tag rule
+(an inline script inside a paragraph no longer splits the line); blockquote
+bodies are no longer buffered (only recoverable script/style scopes are);
+`support_ticket_plain_text_lines` exported via `__all__`.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -162,8 +172,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 125 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 169 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 149 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 179 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 147 |
-| **Total** | **456** |
+| `tests/test_support_ticket_plain_text_lines.py` | 190 |
+| **Total** | **533** |

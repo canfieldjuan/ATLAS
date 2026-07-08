@@ -17,8 +17,8 @@ _LEADING_BRACKETED_METADATA_RE = re.compile(r"^(?:\[[^\]\n]{1,80}\]\s*)+")
 _HTML_TAG_NAMES_RE = (
     r"(?:a|abbr|article|aside|b|blockquote|body|br|button|cite|code|dd|"
     r"del|div|dl|dt|em|figcaption|figure|footer|h[1-6]|header|hr|html|i|"
-    r"img|ins|li|main|mark|nav|ol|p|pre|s|section|small|span|strike|strong|"
-    r"sub|sup|table|tbody|td|tfoot|th|thead|time|tr|u|ul)"
+    r"img|ins|li|main|mark|nav|ol|p|pre|s|script|section|small|span|strike|"
+    r"strong|style|sub|sup|table|tbody|td|tfoot|th|thead|time|tr|u|ul)"
 )
 _HTML_ATTR_RE = (
     r"(?:\s+[a-z_:][a-z0-9_:.-]*\s*=\s*"
@@ -330,10 +330,14 @@ class _HTMLTextExtractor(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         del attrs
         lowered = tag.lower()
-        if lowered in self._excluded:
+        if lowered in self._excluded and not self._skip_stack:
+            # The excluded tag's own boundary follows the block rule too.
+            self.parts.append("\n" if lowered in _BLOCK_TAG_NAMES else " ")
             self._skip_stack.append(lowered)
             return
         if self._skip_stack:
+            if lowered in self._excluded:
+                self._skip_stack.append(lowered)
             return
         self.parts.append("\n" if lowered in _BLOCK_TAG_NAMES else " ")
 
@@ -345,13 +349,18 @@ class _HTMLTextExtractor(HTMLParser):
                 if not self._skip_stack:
                     # Scope closed properly: excluded content stays excluded.
                     self._pending.clear()
-                    self.parts.append("\n")
+                    self.parts.append(
+                        "\n" if lowered in _BLOCK_TAG_NAMES else " "
+                    )
             return
         self.parts.append("\n" if lowered in _BLOCK_TAG_NAMES else " ")
 
     def handle_data(self, data: str) -> None:
         if self._skip_stack:
-            self._pending.append(data)
+            # Buffer only scopes finalize() can recover (script/style);
+            # blockquote bodies are never recovered, so never buffered.
+            if self._skip_stack[0] in {"script", "style"}:
+                self._pending.append(data)
             return
         self.parts.append(data)
 
@@ -359,12 +368,22 @@ class _HTMLTextExtractor(HTMLParser):
         self.close()
         if self._skip_stack and self._pending:
             # Unclosed script/style swallowed trailing content via CDATA
-            # mode; recover it tag-stripped rather than losing the ticket.
+            # mode. Everything before the first recognized HTML signal in
+            # the buffer is script/CSS machinery and stays excluded; the
+            # remainder is real markup the parser never saw -- re-extract it
+            # so customer text is recovered without admitting machinery.
             # An unclosed blockquote is a quote to EOF and stays excluded.
             if self._skip_stack[0] in {"script", "style"}:
-                recovered = _TAG_FALLBACK_RE.sub(" ", "".join(self._pending))
-                self.parts.append("\n")
-                self.parts.append(recovered)
+                buffered = "".join(self._pending)
+                signal = _HTML_SIGNAL_RE.search(buffered)
+                if signal is not None:
+                    recovered = _extract_html_text(
+                        buffered[signal.start():],
+                        exclude_blockquote="blockquote" in self._excluded,
+                    )
+                    if recovered.strip():
+                        self.parts.append("\n")
+                        self.parts.append(recovered)
         return "".join(self.parts)
 
 
@@ -804,5 +823,6 @@ __all__ = [
     "support_ticket_cluster_quality",
     "support_ticket_cluster_summary",
     "support_ticket_plain_text",
+    "support_ticket_plain_text_lines",
     "support_ticket_tokens",
 ]
