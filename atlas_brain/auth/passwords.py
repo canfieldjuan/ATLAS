@@ -19,7 +19,7 @@ def _password_bytes_for_hash(plain: str) -> bytes:
 
 
 def _password_bytes_for_verify(plain: str) -> bytes:
-    return plain.encode("utf-8")[:BCRYPT_MAX_PASSWORD_BYTES]
+    return plain.encode("utf-8")
 
 
 def hash_password(plain: str) -> str:
@@ -29,4 +29,7 @@ def hash_password(plain: str) -> str:
 
 def verify_password(plain: str, hashed: str) -> bool:
     """Verify a plaintext password against a bcrypt hash."""
-    return bcrypt.checkpw(_password_bytes_for_verify(plain), hashed.encode())
+    password_bytes = _password_bytes_for_verify(plain)
+    if len(password_bytes) > BCRYPT_MAX_PASSWORD_BYTES:
+        return False
+    return bcrypt.checkpw(password_bytes, hashed.encode())

@@ -46,6 +46,11 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., max_length=72)
 
+    @field_validator("password")
+    @classmethod
+    def _password_fits_bcrypt(cls, value: str) -> str:
+        return validate_bcrypt_password_length(value)
+
 
 class RefreshRequest(BaseModel):
     refresh_token: str
@@ -54,6 +59,11 @@ class RefreshRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., max_length=72)
     new_password: str = Field(..., min_length=8, max_length=72)
+
+    @field_validator("current_password")
+    @classmethod
+    def _current_password_fits_bcrypt(cls, value: str) -> str:
+        return validate_bcrypt_password_length(value)
 
     @field_validator("new_password")
     @classmethod
