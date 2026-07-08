@@ -178,6 +178,71 @@ def test_default_scopes_is_llm_wildcard():
 _VALID_TEST_KEK = "v1:" + ("A" * 43) + "="
 
 
+def test_saas_auth_rejects_default_jwt_secret_when_enabled(monkeypatch):
+    """When ``ATLAS_SAAS_ENABLED=true``, the JWT default sentinel is
+    rejected before token creation can sign with a known secret."""
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.delenv("ATLAS_SAAS_JWT_SECRET", raising=False)
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "non-default-pepper")
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", _VALID_TEST_KEK)
+
+    import importlib
+    import atlas_brain.config as config_mod
+
+    with pytest.raises(Exception):
+        importlib.reload(config_mod)
+
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "post-test-jwt-secret")
+    importlib.reload(config_mod)
+
+
+def test_saas_auth_rejects_empty_jwt_secret_when_enabled(monkeypatch):
+    """PyJWT rejects an empty signing key at encode time; config should
+    fail closed at startup instead of letting auth endpoints crash later."""
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "non-default-pepper")
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", _VALID_TEST_KEK)
+
+    import importlib
+    import atlas_brain.config as config_mod
+
+    with pytest.raises(Exception):
+        importlib.reload(config_mod)
+
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "post-test-jwt-secret")
+    importlib.reload(config_mod)
+
+
+def test_saas_auth_rejects_whitespace_only_jwt_secret_when_enabled(monkeypatch):
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "   ")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "non-default-pepper")
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", _VALID_TEST_KEK)
+
+    import importlib
+    import atlas_brain.config as config_mod
+
+    with pytest.raises(Exception):
+        importlib.reload(config_mod)
+
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "post-test-jwt-secret")
+    importlib.reload(config_mod)
+
+
+def test_saas_auth_accepts_non_empty_non_default_jwt_secret_when_enabled(monkeypatch):
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "non-default-pepper")
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", _VALID_TEST_KEK)
+
+    import importlib
+    import atlas_brain.config as config_mod
+
+    importlib.reload(config_mod)
+    assert config_mod.settings.saas_auth.jwt_secret == "non-default-jwt"
+
+
 def test_saas_auth_rejects_default_pepper_when_enabled(monkeypatch):
     """When ``ATLAS_SAAS_ENABLED=true``, the default sentinel pepper
     raises a ValueError -- prevents shipping prod with a known pepper."""
