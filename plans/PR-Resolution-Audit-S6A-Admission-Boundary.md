@@ -103,6 +103,19 @@ Enumeration cannot close an open vocabulary; the decision rule must.
     enrolled).
   - Existing test expectations from rounds 1-3 (they pin resolved findings).
 
+Round-5 refinements (same closed rule, vocabulary adjustments only; each
+verified failing before the fix): (1) content-column carveout extended to
+public note/comment-suffixed keys so `public_comment`/`public_comments`
+ingestion columns (`_PUBLIC_COMMENT_KEYS`) are not over-rejected while
+flag-valued forms still fail closed; (2) present-but-empty object markers
+(`{"privacy": {}}`) are unresolvable -> private, matching item 2; (3) plural
+`agentsonly` added to private value labels; (4) private-audience tokens
+(agent/agents/staff/admin/admins/team/teams) flip a public-visibility key
+private (`visible_to_agents` is the inverse of `visible_to_customer`);
+(5) label-style suffixes (label/status/state/value/level/mode) strip only on
+label-class stems so `privacy_label`/`visibility_status`/`access_label`
+classify while `internal_status` stays a data column.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -201,11 +214,11 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
-| `extracted_content_pipeline/support_ticket_privacy.py` | 325 |
+| `extracted_content_pipeline/support_ticket_privacy.py` | 361 |
 | `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 21 |
-| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 211 |
+| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 224 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/test_extracted_support_ticket_input_package.py` | 194 |
 | `tests/test_smoke_content_ops_support_ticket_package.py` | 119 |
-| `tests/test_support_ticket_privacy.py` | 229 |
-| **Total** | **1111** |
+| `tests/test_support_ticket_privacy.py` | 317 |
+| **Total** | **1248** |

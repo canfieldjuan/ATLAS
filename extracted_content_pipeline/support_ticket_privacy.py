@@ -67,6 +67,7 @@ _KEY_STOP_TOKENS = frozenset({
     "field", "fields", "setting", "settings",
     "only", "use", "uses",
     "customer", "customers", "agent", "agents", "staff",
+    "admin", "admins", "team", "teams",
     "user", "users", "viewer", "viewers",
 })
 # Prefix/suffix strips for keys that arrive pre-compacted (``isprivatenote``).
@@ -76,6 +77,19 @@ _STRIP_SUFFIXES = (
     "messages", "message", "msg", "flags", "flag", "only",
 )
 _NOTE_HINTS = ("note", "comment", "reply", "message", "msg")
+# Audience tokens are droppable structure, but a private audience flips a
+# public-visibility key private: ``visible_to_agents`` is the inverse of
+# ``visible_to_customer``.
+_PRIVATE_AUDIENCE_TOKENS = frozenset({
+    "agent", "agents", "staff", "admin", "admins", "team", "teams",
+})
+# Label-style suffixes are structural ONLY on label-class stems:
+# ``visibility_status`` means visibility, but ``internal_status`` is a data
+# column, so these strip only when the remainder is a label stem.
+_LABELISH_TOKENS = frozenset({
+    "label", "labels", "status", "state", "states",
+    "value", "values", "level", "levels", "mode", "modes",
+})
 
 _TRUTHY_TEXT = frozenset({"true", "t", "yes", "y", "on"})
 _FALSEY_TEXT = frozenset({"false", "f", "no", "n", "off"})
@@ -99,9 +113,10 @@ _PRIVATE_LABELS = frozenset({
     "internalreply",
     "privatereply",
     "agentonly",
+    "agentsonly",
+    "staffonly",
     "restricted",
     "restrictedaccess",
-    "staffonly",
     "nonpublic",
     "hidden",
 })
@@ -183,9 +198,15 @@ def _marker_is_private(
         # column in row mode, not a privacy flag; comment mode fails closed.
         return not (row_mode and note_alias)
     if kind == _KIND_PUBLIC:
-        if _boolish(marker) is True or marker in _PUBLIC_LABELS:
+        boolish = _boolish(marker)
+        if boolish is True or marker in _PUBLIC_LABELS:
             return False
-        return True
+        if boolish is False or marker == _AMBIGUOUS_MARKER or marker in _PRIVATE_LABELS:
+            return True
+        # Unresolved free text under a note/comment-suffixed public key is a
+        # content column (public_comment / public_comments hold customer
+        # text in _PUBLIC_COMMENT_KEYS ingestion), not a privacy flag.
+        return not note_alias
     if kind == _KIND_STRICT_LABEL:
         return marker not in _PUBLIC_LABELS
     if kind == _KIND_VALUE_LABEL:
@@ -201,6 +222,7 @@ def _classify_key(key: str) -> tuple[str, bool] | None:
         return None
     compact_all = "".join(tokens)
     note_alias = any(hint in compact_all for hint in _NOTE_HINTS)
+    private_audience = any(token in _PRIVATE_AUDIENCE_TOKENS for token in tokens)
     candidates = [compact_all]
     filtered = [token for token in tokens if token not in _KEY_STOP_TOKENS]
     if filtered and len(filtered) < len(tokens):
@@ -209,6 +231,18 @@ def _classify_key(key: str) -> tuple[str, bool] | None:
         for stem in _stem_forms(candidate):
             kind = _stem_kind(stem)
             if kind is not None:
+                if kind == _KIND_PUBLIC and private_audience:
+                    # visible_to_agents / public_to_staff assert privacy.
+                    kind = _KIND_PRIVATE
+                return (kind, note_alias)
+    # Label-style suffixes are structural only on label-class stems
+    # (visibility_status / privacy_label / access_label), never on
+    # private stems (internal_status stays a data column).
+    delabeled = [token for token in filtered or tokens if token not in _LABELISH_TOKENS]
+    if delabeled and len(delabeled) < len(filtered or tokens):
+        for stem in _stem_forms("".join(delabeled)):
+            kind = _stem_kind(stem)
+            if kind in (_KIND_STRICT_LABEL, _KIND_VALUE_LABEL):
                 return (kind, note_alias)
     return None
 
@@ -257,8 +291,10 @@ def _marker(value: Any) -> str | None:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, Mapping):
+        # A present-but-empty structured marker is unresolvable, not absent:
+        # {"privacy": {}} fails closed like any other unreadable marker.
         if not value:
-            return None
+            return _AMBIGUOUS_MARKER
         return _object_marker(value)
     if isinstance(value, (int, float)):
         return _numeric_marker(str(value).strip().lower()) or _key(value)

@@ -227,3 +227,91 @@ def test_support_ticket_privacy_predicates_never_raise() -> None:
 
     assert support_ticket_comment_is_private(RaisingMapping()) is True
     assert support_ticket_row_is_private(RaisingMapping()) is True
+
+
+# Round-5 refinements: content-column carveout for public comment keys,
+# fail-closed empty object markers, private-audience key flip, plural
+# audience labels, and label-suffixed privacy keys.
+
+
+@pytest.mark.parametrize("row", [
+    {"subject": "s", "public_comment": "customer wrote a thing"},
+    {"subject": "s", "public_comments": "first reply\nsecond reply"},
+])
+def test_support_ticket_public_comment_content_columns_stay_admitted(
+    row: dict[str, object],
+) -> None:
+    assert support_ticket_row_is_private(row) is False
+    assert support_ticket_comment_is_private(row) is False
+
+
+@pytest.mark.parametrize("marker", [
+    {"public_comment": "false"},
+    {"public_comment": False},
+    {"public_comments": 0},
+])
+def test_support_ticket_flag_valued_public_comment_keys_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private(marker) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"privacy": {}},
+    {"visibility": {}},
+])
+def test_support_ticket_empty_object_markers_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+    assert support_ticket_row_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"audience": "agents only"},
+    {"access": "agents only"},
+])
+def test_support_ticket_plural_agent_audience_labels_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"visible_to_agents": True},
+    {"visible_to_staff": True},
+    {"visible_to_admins": "yes"},
+])
+def test_support_ticket_private_audience_visibility_keys_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+    assert support_ticket_row_is_private({"body": "x", **marker}) is True
+
+
+def test_support_ticket_customer_audience_visibility_still_passes() -> None:
+    assert support_ticket_comment_is_private(
+        {"body": "x", "visible_to_customer": True}
+    ) is False
+
+
+@pytest.mark.parametrize("marker", [
+    {"privacy_label": "private"},
+    {"visibility_status": "internal"},
+    {"access_label": "restricted access"},
+])
+def test_support_ticket_label_suffixed_privacy_keys_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("row", [
+    {"body": "x", "visibility_status": "public"},
+    {"body": "x", "internal_status": "open"},
+    {"body": "x", "access_label": "billing role"},
+])
+def test_support_ticket_label_suffix_rule_does_not_over_reject(
+    row: dict[str, object],
+) -> None:
+    assert support_ticket_row_is_private(row) is False
