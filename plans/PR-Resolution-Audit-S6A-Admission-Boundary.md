@@ -50,6 +50,59 @@ plan remains narrowly scoped to this one admission concern.
   - Report/snapshot/email/PDF/landing/checkout/product shape.
   - Final-output scrubber grammar.
 
+### Round-4 design re-cut contract (2026-07-08, builder takeover)
+
+Three review rounds (9 resolved + 5 open Codex P2 findings) grew the predicate
+from 171 to 231 lines without converging. Root cause of the churn, distinct
+from the original root cause above: the predicate classifies privacy markers
+by exact-match enumeration of key names and value spellings, but the marker
+vocabulary (key aliases x value shapes x container nesting) is producer-defined
+and open. Any unlisted alias classifies public (fail-open: `is_hidden`,
+`is_public_comment: false`, row-level `is_private_note`), object markers
+resolve first-field-wins (fail-open on conflict), and a malformed numeric
+marker raises `decimal.InvalidOperation` and crashes ingestion (verified:
+`Decimal("1e999999999999999999999")` raises through `_numeric_marker`).
+Enumeration cannot close an open vocabulary; the decision rule must.
+
+- Correct fix must touch/change (all inside `support_ticket_privacy.py`; the
+  two public function signatures and all call sites unchanged):
+  1. Replace exact-key sets with a closed token-stem rule: split each key on
+     separators + camelCase, lowercase; a key is privacy-relevant iff its
+     compacted token remainder (raw, and after dropping structural stopwords
+     and `is/has/was` prefixes and note/comment/reply/flag suffixes) EXACTLY
+     equals a privacy stem -- private stems (private, internal, hidden,
+     confidential, nonpublic, restricted, agentonly, staffonly), public stems
+     (public, visible, external), strict label stems (visibility, privacy),
+     value label stems (access, audience), kind stems (type, kind). Exact
+     equality of the semantic remainder -- not substring contains -- so data
+     columns like `internal_id`, `private_ip`, `publication_date`,
+     `hidden_count`, `internal_status`, `has_access` are NOT markers.
+  2. Values resolve affirmative-public-or-private for marker keys: truthy /
+     public-label admits (public keys), falsey / public-label skips (private
+     keys); anything unresolvable -- unknown text, conflicting or empty object
+     markers, malformed numerics -- classifies private. Kind keys keep
+     fail-open categorical semantics (private only on private labels /
+     ambiguous), and access/audience keep the head's value-label semantics.
+  3. Object-shaped markers resolve ALL recognized subfields; conflicting
+     resolutions are ambiguous (private), not first-field-wins.
+  4. Numeric parsing guarded: `Decimal` failure -> unresolvable marker, never
+     an exception.
+  5. Total-function guarantee: the two public predicates catch any unexpected
+     exception and return private (fail-closed); a malformed marker can never
+     crash package or Zendesk ingestion.
+  6. Row-mode note-content carveout kept: a note/comment-suffixed private key
+     with free-text value is a content column, not a flag, and does not reject
+     the row; flag-valued forms (`is_private_note: true`, `"yes"`, `1`) do.
+  7. All 14 prior-round findings plus the 5 open ones become parametrized
+     tests of the rule, plus over-rejection negatives for the data columns in
+     (1) and a no-crash test for malformed numerics and a raising Mapping.
+- Must not change (in addition to the list above):
+  - `support_ticket_input_package.py` and `support_ticket_zendesk_thread.py`
+    (wiring landed in earlier rounds; signatures stable).
+  - `manifest.json`, `scripts/run_extracted_pipeline_checks.sh` (already
+    enrolled).
+  - Existing test expectations from rounds 1-3 (they pin resolved findings).
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -148,11 +201,11 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
-| `extracted_content_pipeline/support_ticket_privacy.py` | 231 |
+| `extracted_content_pipeline/support_ticket_privacy.py` | 325 |
 | `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 21 |
-| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 158 |
+| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 211 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/test_extracted_support_ticket_input_package.py` | 194 |
 | `tests/test_smoke_content_ops_support_ticket_package.py` | 119 |
-| `tests/test_support_ticket_privacy.py` | 120 |
-| **Total** | **855** |
+| `tests/test_support_ticket_privacy.py` | 229 |
+| **Total** | **1111** |

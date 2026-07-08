@@ -118,3 +118,112 @@ def test_support_ticket_privacy_unknown_markers_do_not_use_numeric_exceptions(
     marker: dict[str, object],
 ) -> None:
     assert support_ticket_comment_is_private(marker) is True
+
+
+# Round-4 design re-cut: closed token-stem rule instead of key enumeration.
+# Each case class below traces to a reviewed finding or an over-rejection
+# guard; the rule -- not a key list -- must classify every member.
+
+
+@pytest.mark.parametrize("marker", [
+    {"is_hidden": True},
+    {"is_nonpublic": True},
+    {"is_public_comment": False},
+    {"public_comment": False},
+    {"public_reply": False},
+    {"publicComment": "false"},
+    {"isprivate": "true"},
+    {"privatenotes": "yes"},
+    {"visible_to_customer": False},
+    {"agent_only": True},
+    {"is_confidential": True},
+])
+def test_support_ticket_comment_alias_class_fails_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private(marker) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"visible_to_customer": True},
+    {"is_public_comment": True},
+    {"public_reply": "yes"},
+])
+def test_support_ticket_comment_alias_class_public_passes(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private(marker) is False
+
+
+@pytest.mark.parametrize("marker", [
+    {"body": "How do I export?", "is_private_note": True},
+    {"body": "How do I export?", "is_internal_comment": "yes"},
+    {"body": "How do I export?", "private_note": 1},
+    {"body": "How do I export?", "internal_use_only": True},
+])
+def test_support_ticket_row_flag_valued_note_aliases_reject(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_row_is_private(marker) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"visibility": {"name": "public", "value": "internal"}},
+    {"privacy": {"label": "customer", "kind": "internal"}},
+    {"visibility": {"id": 47, "note": "free text"}},
+])
+def test_support_ticket_conflicting_object_markers_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private(marker) is True
+
+
+def test_support_ticket_consistent_public_object_marker_passes() -> None:
+    marker = {"visibility": {"name": "public", "value": "public"}}
+    assert support_ticket_comment_is_private(marker) is False
+
+
+@pytest.mark.parametrize("marker", [
+    {"public": "1e999999999999999999999"},
+    {"public": "0e99999999999999999999999999"},
+    {"private": "1e999999999999999999999"},
+    {"visibility": "9" * 100000},
+])
+def test_support_ticket_malformed_numeric_markers_fail_closed_without_raising(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private(marker) is True
+    assert support_ticket_row_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("row", [
+    {"body": "x", "internal_id": "abc-123"},
+    {"body": "x", "private_ip": "10.0.0.1"},
+    {"body": "x", "publication_date": "2026-01-01"},
+    {"body": "x", "hidden_count": 3},
+    {"body": "x", "internal_status": "open"},
+    {"body": "x", "has_access": True},
+    {"body": "x", "external_id": "z-9"},
+])
+def test_support_ticket_data_columns_are_not_privacy_markers(
+    row: dict[str, object],
+) -> None:
+    assert support_ticket_row_is_private(row) is False
+    assert support_ticket_comment_is_private(row) is False
+
+
+def test_support_ticket_privacy_predicates_never_raise() -> None:
+    from collections.abc import Mapping
+
+    class RaisingMapping(Mapping):
+        def __getitem__(self, key: str) -> object:
+            raise RuntimeError("boom")
+
+        def __iter__(self):
+            raise RuntimeError("boom")
+
+        def __len__(self) -> int:
+            return 1
+
+    assert support_ticket_comment_is_private(RaisingMapping()) is True
+    assert support_ticket_row_is_private(RaisingMapping()) is True
