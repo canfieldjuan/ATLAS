@@ -413,6 +413,26 @@ def test_support_ticket_package_string_history_preserves_later_messages() -> Non
     assert "old quoted chain" not in text
 
 
+def test_support_ticket_package_string_history_recovers_after_signature_without_blank() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-history-tight-signature",
+        "subject": "Refund receipt",
+        "ticket_history": (
+            "Where can I download the refund receipt?\n"
+            "--\n"
+            "Jane Agent\n"
+            "I still cannot find the receipt after following the steps.\n"
+            "Can I resend the receipt to my accounting inbox?"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "I still cannot find the receipt after following the steps." in text
+    assert "Can I resend the receipt to my accounting inbox?" in text
+    assert "Jane Agent" not in text
+
+
 def test_support_ticket_package_private_only_comments_stay_index_metadata() -> None:
     package = build_support_ticket_input_package([{
         "ticket_id": "zd-private",
@@ -427,6 +447,26 @@ def test_support_ticket_package_private_only_comments_stay_index_metadata() -> N
     assert source_material[0]["text"] == "Login ticket index row"
     assert "PRIVATE customer cannot find login" not in source_material[0]["text"]
     assert source_material[0]["support_ticket_evidence_tier"] == (
+        "csv_index_metadata_only"
+    )
+
+
+def test_support_ticket_package_stripped_only_body_stays_index_metadata() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-stripped-body",
+        "subject": "Login ticket index row",
+        "description": "Auto-reply: We received your request and will respond soon.",
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert len(source_material) == 1
+    assert source_material[0]["text"] == "Login ticket index row"
+    assert "_customer_text_present" not in source_material[0]
+    assert source_material[0]["support_ticket_evidence_tier"] == (
+        "csv_index_metadata_only"
+    )
+    assert package.inputs["customer_wording_examples"] == []
+    assert package.metadata["support_ticket_evidence_tier"] == (
         "csv_index_metadata_only"
     )
 

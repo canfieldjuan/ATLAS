@@ -721,7 +721,10 @@ def _support_ticket_evidence_tier(
 
 
 def _has_customer_text(row: Mapping[str, Any]) -> bool:
-    return bool(_first_text(row, _TEXT_KEYS) or _comments_text(row))
+    return bool(
+        support_ticket_text_component(_first_text(row, _TEXT_KEYS))
+        or _comments_text(row)
+    )
 
 
 def _routing_context_value(value: Any) -> Any:
@@ -851,6 +854,8 @@ def _customer_wording_examples(
 ) -> list[dict[str, Any]]:
     examples: list[dict[str, Any]] = []
     for row in rows:
+        if not row.get("_customer_text_present"):
+            continue
         text = _compact(row.get("text"))
         if not text:
             continue

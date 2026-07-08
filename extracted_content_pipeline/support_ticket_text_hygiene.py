@@ -57,6 +57,12 @@ _MOBILE_SIGNATURE_RE = re.compile(
     r"^\s*sent from my (?:iphone|ipad|android|mobile device)\.?\s*$",
     re.IGNORECASE,
 )
+_HISTORY_MESSAGE_BOUNDARY_RE = re.compile(
+    r"^\s*(?:can|could|customer|do|does|hello|hi|how|i|is|it|my|our|please|"
+    r"requester|should|still|thanks?|the|this|user|we|what|when|where|why)\b",
+    re.IGNORECASE,
+)
+_SIGNATURE_SKIP_LINE_LIMIT = 3
 _HTML_SIGNAL_RE = re.compile(
     r"(?is)<\s*/?\s*"
     r"(?:a|blockquote|body|br|div|em|html|li|ol|p|script|span|strong|style|td|tr|ul)\b"
@@ -169,13 +175,13 @@ def _strip_ticket_text_junk(value: Any, *, stop_at_boundary: bool = True) -> str
         return ""
     lines: list[str] = []
     skip_auto_block = False
-    skip_signature_block = False
+    signature_skip_remaining = 0
     skip_quote_block = False
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             skip_auto_block = False
-            skip_signature_block = False
+            signature_skip_remaining = 0
             skip_quote_block = False
             lines.append(raw_line)
             continue
@@ -183,8 +189,12 @@ def _strip_ticket_text_junk(value: Any, *, stop_at_boundary: bool = True) -> str
             continue
         if skip_auto_block:
             skip_auto_block = False
-        if skip_signature_block:
-            continue
+        if signature_skip_remaining:
+            if _HISTORY_MESSAGE_BOUNDARY_RE.match(line):
+                signature_skip_remaining = 0
+            else:
+                signature_skip_remaining -= 1
+                continue
         if skip_quote_block and line.startswith(">"):
             continue
         if skip_quote_block:
@@ -197,7 +207,7 @@ def _strip_ticket_text_junk(value: Any, *, stop_at_boundary: bool = True) -> str
         if _SIGNATURE_BOUNDARY_RE.match(line) or _MOBILE_SIGNATURE_RE.match(line):
             if stop_at_boundary:
                 break
-            skip_signature_block = True
+            signature_skip_remaining = _SIGNATURE_SKIP_LINE_LIMIT
             continue
         if _QUOTED_REPLY_HEADER_RE.match(line):
             if stop_at_boundary:
