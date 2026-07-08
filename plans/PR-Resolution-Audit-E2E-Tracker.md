@@ -9,7 +9,7 @@ The Resolution Audit CSV remediation living tracker
 from reality and misrepresents launch readiness: the S5 first implementation
 (#2033) is merged but its checklist row is unchecked and its section still reads
 "first implementation in progress"; the single S6 row does not reflect the A-D
-split (#2042-#2045) or the shipped S6A (#2046); and there is no launch-blocker
+split (#2042-#2045) or the open, in-review S6A PR (#2046, not yet on main); and there is no launch-blocker
 status view, so the arc reads as "S1-S5 done, nearly there" when it is not. This
 slice merges the operator-requested end-to-end plan into the tracker so it tracks
 the arc correctly. Full plan also posted to #1993 (comment 4917360490).
