@@ -217,13 +217,15 @@ def test_support_ticket_package_skips_private_comment_objects_in_history() -> No
     {"public": "false"},
     {"public": "0.0"},
     {"is_private": "true"},
+    {"is_private_note": "true"},
     {"private_note": "yes"},
     {"type": "private_note"},
     {"visibility": "internal"},
+    {"visibility": {"name": "internal"}},
     {"public": "maybe"},
 ])
 def test_support_ticket_package_skips_private_comment_marker_variants(
-    private_marker: dict[str, str],
+    private_marker: dict[str, object],
 ) -> None:
     package = build_support_ticket_input_package([{
         "ticket_id": "zd-marker-private",
@@ -252,6 +254,8 @@ def test_support_ticket_package_skips_private_comment_marker_variants(
     {"public": "1.0"},
     {"is_public": "yes"},
     {"visibility": "public"},
+    {"visibility": {"name": "public"}},
+    {"privacy": {"label": "customer"}},
 ])
 def test_support_ticket_package_keeps_public_comment_marker_variants(
     public_marker: dict[str, object],
@@ -279,6 +283,8 @@ def test_support_ticket_package_keeps_public_comment_marker_variants(
     {"public": "0.0"},
     {"is_private": "true"},
     {"visibility": "private"},
+    {"visibility": {"name": "private"}},
+    {"access": "internal"},
     {"type": "internal_note"},
     {"public": "maybe"},
 ])
@@ -305,6 +311,20 @@ def test_support_ticket_package_rejects_private_row_markers_before_text_admissio
     assert "private account flag" not in payload
     assert "Where can I download the refund receipt?" in payload
     assert package.inputs["skipped_ticket_row_count"] == 1
+
+
+def test_support_ticket_package_keeps_access_metadata_rows_before_text_admission() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-access-row",
+        "subject": "How do I update account access?",
+        "description": "Where do I add a teammate to the billing role?",
+        "access": "Account access",
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert [row["source_id"] for row in source_material] == ["zd-access-row"]
+    assert "billing role" in source_material[0]["text"]
+    assert package.inputs["skipped_ticket_row_count"] == 0
 
 
 def test_support_ticket_package_private_only_comments_stay_index_metadata() -> None:

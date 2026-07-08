@@ -23,21 +23,31 @@ _PRIVATE_BOOL_KEYS = frozenset({
 _COMMENT_PRIVATE_ALIAS_KEYS = frozenset({
     "privatecomment",
     "privatecomments",
+    "isprivatecomment",
+    "isprivatecomments",
     "privatenote",
     "privatenotes",
+    "isprivatenote",
+    "isprivatenotes",
     "internalcomment",
     "internalcomments",
+    "isinternalcomment",
+    "isinternalcomments",
     "internalnote",
     "internalnotes",
+    "isinternalnote",
+    "isinternalnotes",
 })
-_PRIVACY_LABEL_KEYS = frozenset({
+_STRICT_PRIVACY_LABEL_KEYS = frozenset({
     "visibility",
     "commentvisibility",
     "privacy",
     "privacysetting",
-    "access",
 })
-_COMMENT_PRIVACY_LABEL_KEYS = frozenset({"audience"})
+_VALUE_PRIVACY_LABEL_KEYS = frozenset({
+    "access",
+    "audience",
+})
 _KIND_LABEL_KEYS = frozenset({
     "type",
     "kind",
@@ -70,6 +80,17 @@ _PRIVATE_LABELS = frozenset({
     "nonpublic",
     "hidden",
 })
+_OBJECT_MARKER_KEYS = (
+    "name",
+    "label",
+    "value",
+    "status",
+    "visibility",
+    "privacy",
+    "type",
+    "kind",
+)
+_AMBIGUOUS_MARKER = "__ambiguous__"
 
 
 def support_ticket_comment_is_private(comment: Mapping[str, Any]) -> bool:
@@ -108,16 +129,17 @@ def _mapping_is_private(
         if boolish is False or marker in _PUBLIC_LABELS:
             continue
         return True
-    privacy_label_keys = set(_PRIVACY_LABEL_KEYS)
-    if include_comment_alias_keys:
-        privacy_label_keys.update(_COMMENT_PRIVACY_LABEL_KEYS)
-    for key in privacy_label_keys:
+    for key in _STRICT_PRIVACY_LABEL_KEYS:
         marker = _marker(markers.get(key))
         if marker is None:
             continue
         if marker in _PUBLIC_LABELS:
             continue
         return True
+    for key in _VALUE_PRIVACY_LABEL_KEYS:
+        marker = _marker(markers.get(key))
+        if marker in _PRIVATE_LABELS:
+            return True
     for key in _KIND_LABEL_KEYS:
         marker = _marker(markers.get(key))
         if marker in _PRIVATE_LABELS:
@@ -128,6 +150,8 @@ def _mapping_is_private(
 def _marker(value: Any) -> str | None:
     if value in (None, "", [], {}):
         return None
+    if isinstance(value, Mapping):
+        return _object_marker(value)
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -140,6 +164,15 @@ def _marker(value: Any) -> str | None:
     if numeric is not None:
         return numeric
     return _key(text)
+
+
+def _object_marker(value: Mapping[str, Any]) -> str:
+    markers = {_key(key): marker_value for key, marker_value in value.items()}
+    for key in _OBJECT_MARKER_KEYS:
+        marker = _marker(markers.get(_key(key)))
+        if marker is not None:
+            return marker
+    return _AMBIGUOUS_MARKER
 
 
 def _numeric_marker(value: str) -> str | None:

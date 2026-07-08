@@ -2034,13 +2034,15 @@ def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:
     {"public": "false"},
     {"public": "0.0"},
     {"is_private": "true"},
+    {"is_private_note": "true"},
     {"private_note": "yes"},
     {"type": "private_note"},
     {"visibility": "internal"},
+    {"visibility": {"name": "internal"}},
     {"public": "maybe"},
 ])
 def test_zendesk_full_thread_rows_skip_private_comment_marker_variants(
-    private_marker: dict[str, str],
+    private_marker: dict[str, object],
 ) -> None:
     result = rows_from_zendesk_full_thread({
         "tickets": [{
@@ -2078,6 +2080,8 @@ def test_zendesk_full_thread_rows_skip_private_comment_marker_variants(
     {"public": "1.0"},
     {"is_public": "yes"},
     {"visibility": "public"},
+    {"visibility": {"name": "public"}},
+    {"privacy": {"label": "customer"}},
 ])
 def test_zendesk_full_thread_rows_keep_public_comment_marker_variants(
     public_marker: dict[str, object],
@@ -2150,6 +2154,8 @@ def test_zendesk_full_thread_rows_suppress_private_first_description_alias() -> 
     {"is_private": "true"},
     {"internal": "yes"},
     {"visibility": "private"},
+    {"visibility": {"name": "private"}},
+    {"access": "internal"},
     {"type": "internal_note"},
 ])
 def test_zendesk_full_thread_rows_skip_ticket_private_markers_before_flattening(
