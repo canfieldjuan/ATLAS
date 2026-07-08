@@ -27,6 +27,11 @@ from .support_ticket_context_contract import (
     support_ticket_topic_filter,
 )
 from .support_ticket_dates import parse_support_ticket_source_date
+from .support_ticket_text_hygiene import (
+    support_ticket_comment_is_private,
+    support_ticket_history_text,
+    support_ticket_text_component,
+)
 
 
 DEFAULT_SUPPORT_TICKET_OUTPUTS: tuple[str, ...] = (
@@ -135,6 +140,16 @@ _PUBLIC_COMMENT_KEYS = (
     "history",
     "conversation_history",
 )
+_PUBLIC_COMMENT_HISTORY_KEYS = frozenset({
+    "comments",
+    "messages",
+    "thread",
+    "conversation",
+    "ticket_comments",
+    "ticket_history",
+    "history",
+    "conversation_history",
+})
 _RESOLUTION_TEXT_KEYS = (
     "resolution",
     "resolution_text",
@@ -253,7 +268,13 @@ _CSAT_KEYS = (
 # Canonical lifecycle buckets. Values are compared after `_key()` normalization
 # (lowercase, alphanumerics only), so "In Progress" -> "inprogress". Unknown
 # vocabulary maps to "other" so nothing is silently relabeled resolved/open.
-_REOPENED_STATUS_VALUES = frozenset({"reopened", "reopen"})
+_REOPENED_STATUS_VALUES = frozenset({
+    "reopened",
+    "reopen",
+    "reopenedbycustomer",
+    "reopenedbyrequester",
+    "reopenedbyuser",
+})
 _RESOLVED_STATUS_VALUES = frozenset({
     "resolved",
     "closed",
@@ -262,11 +283,21 @@ _RESOLVED_STATUS_VALUES = frozenset({
     "complete",
     "completed",
     "fixed",
+    "closedresolved",
+    "closedsolved",
+    "resolvedclosed",
     "resolvedundermonitoring",
+    "solvedclosed",
 })
 _CANCELLED_STATUS_VALUES = frozenset({
     "cancelled",
     "canceled",
+    "cancelledbycustomer",
+    "cancelledbyrequester",
+    "cancelledbyuser",
+    "canceledbycustomer",
+    "canceledbyrequester",
+    "canceledbyuser",
     "rejected",
     "withdrawn",
     "void",
@@ -280,9 +311,18 @@ _OPEN_STATUS_VALUES = frozenset({
     "pendingcustomer",
     "pendingcustomerapproval",
     "pendingcustomerresponse",
+    "pendingrequester",
+    "pendinguser",
     "awaitingcustomer",
+    "awaitingreply",
+    "awaitingrequester",
+    "awaitinguser",
     "customerresponse",
     "waitingoncustomer",
+    "waitingonrequester",
+    "waitingonuser",
+    "waitingforreply",
+    "needsreply",
     "pendingdeployment",
     "waiting",
     "onhold",
@@ -296,8 +336,6 @@ _OPEN_STATUS_VALUES = frozenset({
     "investigating",
     "active",
 })
-
-
 def build_support_ticket_input_package(
     source_material: Any,
     *,
@@ -340,6 +378,13 @@ def build_support_ticket_input_package(
             })
             continue
         row_lookup = _SupportTicketRowLookup(row)
+        if support_ticket_comment_is_private(row_lookup):
+            warnings.append({
+                "code": "ticket_row_private",
+                "row_index": index,
+                "message": "Skipped ticket row because it is marked private/internal.",
+            })
+            continue
         normalized = _normalize_ticket_row(row_lookup, row_index=index)
         if normalized:
             normalized_rows.append(normalized)
@@ -588,7 +633,7 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         return {}
     if not isinstance(row, _SupportTicketRowLookup):
         row = _SupportTicketRowLookup(row)
-    source_title = support_ticket_plain_text(_first_text(row, _SOURCE_TITLE_KEYS))
+    source_title = support_ticket_text_component(_first_text(row, _SOURCE_TITLE_KEYS))
     text = _ticket_text(row, source_title=source_title)
     if not text:
         return {}
@@ -676,7 +721,12 @@ def _support_ticket_evidence_tier(
 
 
 def _has_customer_text(row: Mapping[str, Any]) -> bool:
-    return bool(_first_text(row, _TEXT_KEYS) or _comments_text(row))
+    source_title = support_ticket_text_component(_first_text(row, _SOURCE_TITLE_KEYS))
+    return bool(
+        _first_question(source_title)
+        or support_ticket_text_component(_first_text(row, _TEXT_KEYS))
+        or _comments_text(row)
+    )
 
 
 def _routing_context_value(value: Any) -> Any:
@@ -711,7 +761,7 @@ def _ticket_text(row: Mapping[str, Any], *, source_title: str) -> str:
     parts: list[str] = []
     if source_title:
         parts.append(source_title)
-    body = support_ticket_plain_text(_first_text(row, _TEXT_KEYS))
+    body = support_ticket_text_component(_first_text(row, _TEXT_KEYS))
     if body and body.lower() != source_title.lower():
         parts.append(body)
     comments = _comments_text(row)
@@ -727,6 +777,11 @@ def _comments_text(row: Mapping[str, Any]) -> str:
         if isinstance(comments, Mapping):
             comments = (comments,)
         elif isinstance(comments, str):
+            if key in _PUBLIC_COMMENT_HISTORY_KEYS:
+                text = support_ticket_history_text(comments)
+                if text:
+                    parts.append(text)
+                continue
             comments = (comments,)
         elif not isinstance(comments, Sequence) or isinstance(
             comments,
@@ -736,16 +791,18 @@ def _comments_text(row: Mapping[str, Any]) -> str:
         for item in comments:
             text = _comment_text(item)
             if text:
-                parts.append(support_ticket_plain_text(text))
+                parts.append(text)
     return support_ticket_plain_text("\n".join(parts))
 
 
 def _comment_text(item: Any) -> str:
     if isinstance(item, Mapping):
-        if item.get("public") is False:
+        if support_ticket_comment_is_private(item):
             return ""
-        return _first_text(item, ("body", "message", "text", "content", "description"))
-    return _clean(item)
+        return support_ticket_text_component(
+            _first_text(item, ("body", "message", "text", "content", "description"))
+        )
+    return support_ticket_text_component(item)
 
 
 def _ticket_questions(rows: Sequence[Mapping[str, Any]], *, limit: int = 6) -> list[str]:
@@ -799,6 +856,8 @@ def _customer_wording_examples(
 ) -> list[dict[str, Any]]:
     examples: list[dict[str, Any]] = []
     for row in rows:
+        if not row.get("_customer_text_present"):
+            continue
         text = _compact(row.get("text"))
         if not text:
             continue

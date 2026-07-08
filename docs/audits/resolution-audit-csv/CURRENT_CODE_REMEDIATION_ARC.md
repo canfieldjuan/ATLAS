@@ -187,8 +187,9 @@ Implementation notes:
 
 ### S5 - Clustering Correctness Spike And First Fix
 
-Status: spike complete; first implementation in progress. Spike PR:
-[#2032](https://github.com/canfieldjuan/ATLAS/pull/2032).
+Status: complete. Spike PR:
+[#2032](https://github.com/canfieldjuan/ATLAS/pull/2032). Fixing PR:
+[#2033](https://github.com/canfieldjuan/ATLAS/pull/2033).
 
 Root: token-set labels are promoted into hard partitions before question-level
 similarity has a chance to unify or split intents.
@@ -234,7 +235,8 @@ Implementation notes:
 
 ### S6 - Text, Comment, And Outcome Evidence Hygiene
 
-Status: open.
+Status: in progress. Fixing PR:
+[#2037](https://github.com/canfieldjuan/ATLAS/pull/2037).
 
 Root: input normalization preserves useful customer language, but text/comment
 and outcome evidence are admitted through narrow local rules instead of one
@@ -245,9 +247,11 @@ Confirmed components:
 - Subject/body/comments are concatenated.
 - HTML is compacted to text, but signatures, quoted chains, junk auto-replies,
   and low-ratio embedded NULs are not governed by one explicit chokepoint.
-- `_comment_text` only skips comments where `public is False`; private/internal
-  markers such as `is_private`, `is_internal`, or string `"false"` can still
-  flow into ticket text.
+- Comment privacy filtering was split by path: the package builder skipped only
+  narrow markers, and Zendesk full-thread rows flattened comments before the
+  package boundary, so private/internal markers such as `is_private`,
+  `is_internal`, decimal booleans, or string `"false"` could still flow into
+  ticket text.
 - Status values outside the small resolved/open/reopened/cancelled sets
   normalize to `other`, so resolved outcome evidence can be undercounted.
 - The final report scrubber exists for scrubbed paths, but CLI/customer-facing
@@ -258,8 +262,21 @@ Expected fix:
 - Add one ticket-text hygiene chokepoint before clustering.
 - Test junk auto-reply, signature, quoted thread, NUL, and near-miss legitimate
   customer wording.
-- Add private/internal comment fixtures and status synonym fixtures.
+- Add private/internal comment fixtures for both package and Zendesk full-thread
+  paths, plus status synonym fixtures.
 - Keep final-output scrub tests intact.
+
+Implementation notes:
+
+- This slice keeps report/snapshot/email/PDF/product shape unchanged.
+- Support-ticket subject/body/comment text now routes through one shared input
+  hygiene helper before clustering.
+- Package comments and Zendesk full-thread comments now use the same
+  private/internal comment predicate, including boolean-ish public/private,
+  decimal booleans, ambiguous present private/public markers, visibility, and
+  type markers rather than only `public is False`.
+- Common helpdesk status synonyms map into the existing canonical lifecycle
+  buckets, while unknown statuses remain `other`.
 
 ### S7 - Date Parsing And Date Window Policy
 
@@ -339,7 +356,7 @@ These are not coding-start items until the operator approves the product shape:
 - [x] S3 submit row cap/heavy-build PR linked here: #2030.
 - [x] S4 money reconciliation PR linked here: #2031.
 - [x] S5 clustering spike PR linked here: #2032.
-- [ ] S5 clustering first implementation PR linked here.
+- [x] S5 clustering first implementation PR linked here: #2033.
 - [ ] S6 text/comment/outcome hygiene PR linked here.
 - [ ] S7 date/window policy PR linked here.
 - [ ] S8 runtime QA scorecard wiring PR linked here.

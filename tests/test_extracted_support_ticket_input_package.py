@@ -2030,6 +2030,167 @@ def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:
     ]
 
 
+def test_zendesk_full_thread_rows_suppress_private_html_first_description() -> None:
+    private_html = (
+        "<p>Internal note: explain the real workaround only to the owner.</p>"
+        "<p>--</p>"
+        "<p>Jane Agent</p>"
+    )
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-private-html-first",
+                "subject": "Migration workaround",
+                "description": private_html,
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "public": False,
+                    "html_body": private_html,
+                },
+                {
+                    "author_id": "requester-1",
+                    "public": True,
+                    "plain_body": "What permission do I need for account exports?",
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    assert result.rows == [{
+        "ticket_id": "zd-private-html-first",
+        "source_id": "zd-private-html-first",
+        "source_type": "support_ticket",
+        "subject": "Migration workaround",
+        "description": "What permission do I need for account exports?",
+    }]
+    assert "Internal note" not in json.dumps(result.rows)
+    assert "Jane Agent" not in json.dumps(result.rows)
+
+
+def test_zendesk_full_thread_rows_share_private_comment_marker_filter() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-private-markers",
+                "subject": "Refund receipt",
+                "description": "Where can I download the refund receipt?",
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "requester-1",
+                    "public": "1.0",
+                    "plain_body": "Can I see refund retries?",
+                },
+                {
+                    "author_id": "requester-1",
+                    "public": "0.0",
+                    "plain_body": "PRIVATE public decimal false",
+                },
+                {
+                    "author_id": "requester-1",
+                    "public": "maybe",
+                    "plain_body": "PRIVATE ambiguous public marker",
+                },
+                {
+                    "author_id": "agent-1",
+                    "is_internal": "1.0",
+                    "plain_body": "PRIVATE internal decimal",
+                },
+                {
+                    "author_id": "agent-1",
+                    "is_private": "maybe",
+                    "plain_body": "PRIVATE ambiguous private marker",
+                },
+                {
+                    "author_id": "agent-1",
+                    "visibility": "internal_note",
+                    "plain_body": "PRIVATE visibility label",
+                },
+                {
+                    "author_id": "agent-1",
+                    "private_note": True,
+                    "plain_body": "PRIVATE private note alias",
+                },
+                {
+                    "author_id": "agent-1",
+                    "private_comment": "yes",
+                    "plain_body": "PRIVATE private comment alias",
+                },
+                {
+                    "author_id": "agent-1",
+                    "internal_comment": "1.0",
+                    "plain_body": "PRIVATE internal comment alias",
+                },
+                {
+                    "author_id": "agent-1",
+                    "public": True,
+                    "plain_body": "Open Billing > Receipts to download it.",
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    assert result.rows == [{
+        "ticket_id": "zd-private-markers",
+        "source_id": "zd-private-markers",
+        "source_type": "support_ticket",
+        "subject": "Refund receipt",
+        "description": (
+            "Where can I download the refund receipt?\nCan I see refund retries?"
+        ),
+        "resolution_text": "Open Billing > Receipts to download it.",
+    }]
+    assert "PRIVATE" not in json.dumps(result.rows)
+
+
+def test_zendesk_full_thread_rows_hygienize_public_agent_reply_text() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-html-answer",
+                "subject": "How do I export invoices?",
+                "description": "Where do invoice exports live?",
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "requester-1",
+                    "public": "public",
+                    "html_body": (
+                        "<p>Can I export all invoices?</p>"
+                        "<blockquote>old requester thread</blockquote>"
+                    ),
+                },
+                {
+                    "author_id": "agent-1",
+                    "public": True,
+                    "html_body": (
+                        "<p>Open Billing &gt; Invoices, then choose Export CSV.</p>"
+                        "<blockquote>old agent thread</blockquote>"
+                        "<p>--</p><p>Jane Agent</p>"
+                    ),
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    row = result.rows[0]
+    assert row["description"] == (
+        "Where do invoice exports live?\nCan I export all invoices?"
+    )
+    assert row["resolution_text"] == "Open Billing > Invoices, then choose Export CSV."
+    assert "old requester thread" not in json.dumps(row)
+    assert "old agent thread" not in json.dumps(row)
+    assert "Jane Agent" not in json.dumps(row)
+
+
 def test_zendesk_full_thread_rows_keep_substantive_agent_reply_after_boilerplate() -> None:
     result = rows_from_zendesk_full_thread({
         "tickets": [{

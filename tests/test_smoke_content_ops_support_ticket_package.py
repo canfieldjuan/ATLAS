@@ -213,6 +213,288 @@ def test_support_ticket_package_skips_private_comment_objects_in_history() -> No
     assert package.warnings == ()
 
 
+def test_support_ticket_package_skips_private_comment_marker_variants() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-marker-variants",
+        "subject": "Refund status",
+        "comments": [
+            {"body": "Where can I download the refund receipt?", "public": True},
+            {"body": "Can I see the retry status?", "public": "true"},
+            {"body": "Can I see the shipment retries?", "public": "1.0"},
+            {"body": "Can I see public-label comments?", "public": "public"},
+            {"body": "Can I see is-public label comments?", "is_public": "public"},
+            {"body": "Markerless public customer follow-up."},
+            {"body": "PRIVATE public false string", "public": "false"},
+            {"body": "PRIVATE public decimal false", "public": "0.0"},
+            {"body": "PRIVATE is private bool", "is_private": True},
+            {"body": "PRIVATE ambiguous private marker", "is_private": "maybe"},
+            {"body": "PRIVATE private note alias", "private_note": True},
+            {"body": "PRIVATE private comment alias", "private_comment": "1.0"},
+            {"body": "PRIVATE internal comment alias", "internal_comment": True},
+            {"body": "PRIVATE is internal bool", "is_internal": True},
+            {"body": "PRIVATE internal decimal", "is_internal": "1.0"},
+            {"body": "PRIVATE private string", "private": "yes"},
+            {"body": "PRIVATE internal int", "internal": 1},
+            {"body": "PRIVATE visibility label", "visibility": "private"},
+            {"body": "PRIVATE type label", "type": "internal_note"},
+        ],
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert len(source_material) == 1
+    text = source_material[0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "Can I see the retry status?" in text
+    assert "Can I see the shipment retries?" in text
+    assert "Can I see public-label comments?" in text
+    assert "Can I see is-public label comments?" in text
+    assert "Markerless public customer follow-up." in text
+    assert "PRIVATE" not in text
+
+
+def test_support_ticket_package_skips_row_level_private_markers_before_text() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "private-row",
+            "subject": "PRIVATE subject",
+            "description": "PRIVATE row-level text should never become source material.",
+            "is_private": True,
+        },
+        {
+            "ticket_id": "public-row",
+            "subject": "Refund receipt",
+            "description": "Where can I download the refund receipt?",
+            "public": "public",
+        },
+    ])
+
+    source_material = package.inputs["source_material"]
+    assert [row["source_id"] for row in source_material] == ["public-row"]
+    assert "Where can I download the refund receipt?" in source_material[0]["text"]
+    assert "PRIVATE" not in json.dumps(package.as_dict())
+    assert package.warnings == ({
+        "code": "ticket_row_private",
+        "row_index": 1,
+        "message": "Skipped ticket row because it is marked private/internal.",
+    },)
+
+
+def test_support_ticket_package_ticket_text_hygiene_keeps_customer_wording() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-hygiene",
+        "subject": "Export report",
+        "description": (
+            "<style>.hidden{display:none}</style>"
+            "<script>alert('old ticket')</script>"
+            "<p>How do I export attribution reports?\x00\x00</p>"
+            "<blockquote>old blockquoted thread should stay out</blockquote>"
+            "<p>Auto-reply: We received your request and will respond soon.</p>"
+            "<p>-- </p>"
+            "<p>Jane Agent</p>"
+            "<p>On Mon, Support wrote:</p>"
+            "<p>&gt; old quoted chain</p>"
+        ),
+        "comments": [
+            {"body": "I still need help exporting reports.\nSent from my iPhone"},
+            {"body": "How do I add a signature block to email replies?"},
+            {"body": "Sent from my iPhone app, how do I export a report?"},
+            {
+                "body": (
+                    "Auto-reply:\n"
+                    "We received your request and will respond soon.\n\n"
+                    "How do I change notification rules?"
+                )
+            },
+            {
+                "body": (
+                    "Auto-reply settings keep emailing customers; "
+                    "how do I turn them off?"
+                )
+            },
+            {"body": "Out of office setup fails for my team."},
+            {
+                "body": (
+                    "On the checkout page it wrote:\n"
+                    "Card failed. How do I retry checkout?"
+                )
+            },
+        ],
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Export report" in text
+    assert "How do I export attribution reports?" in text
+    assert "I still need help exporting reports." in text
+    assert "How do I add a signature block to email replies?" in text
+    assert "Sent from my iPhone app, how do I export a report?" in text
+    assert "How do I change notification rules?" in text
+    assert "Auto-reply settings keep emailing customers" in text
+    assert "Out of office setup fails for my team." in text
+    assert "On the checkout page it wrote:" in text
+    assert "Card failed. How do I retry checkout?" in text
+    assert "\x00" not in text
+    assert ".hidden" not in text
+    assert "alert" not in text
+    assert "old blockquoted thread" not in text
+    assert "Auto-reply: We received your request" not in text
+    assert "We received your request" not in text
+    assert "will respond soon" not in text
+    assert "Jane Agent" not in text
+    assert "old quoted chain" not in text
+    assert (
+        "I still need help exporting reports. Sent from my iPhone"
+        not in text
+    )
+
+
+def test_support_ticket_package_escaped_html_uses_line_hygiene() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-escaped-html",
+        "subject": "Export report",
+        "description": (
+            "&lt;p&gt;How do I export attribution reports?&lt;/p&gt;"
+            "&lt;script&gt;alert('old ticket')&lt;/script&gt;"
+            "&lt;blockquote&gt;old blockquoted thread&lt;/blockquote&gt;"
+            "&lt;p&gt;--&lt;/p&gt;"
+            "&lt;p&gt;Jane Agent&lt;/p&gt;"
+            "&lt;p&gt;On Mon, Agent &amp;lt;agent@example.com&amp;gt; wrote:&lt;/p&gt;"
+            "&lt;p&gt;&amp;gt; old quoted chain&lt;/p&gt;"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "How do I export attribution reports?" in text
+    assert "alert" not in text
+    assert "old blockquoted thread" not in text
+    assert "Jane Agent" not in text
+    assert "old quoted chain" not in text
+    assert "<p>" not in text
+
+
+def test_support_ticket_package_self_closing_skipped_html_keeps_following_text() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-self-closing-html",
+        "subject": "Export report",
+        "description": (
+            "<script src=\"https://cdn.example.invalid/ticket.js\" />"
+            "How do I export attribution reports?"
+            "<style />Where is the billing page?"
+            "<blockquote />Can I reset MFA?"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "How do I export attribution reports?" in text
+    assert "Where is the billing page?" in text
+    assert "Can I reset MFA?" in text
+    assert "cdn.example.invalid" not in text
+
+
+def test_support_ticket_package_heading_section_html_gets_line_hygiene() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-heading-html",
+        "subject": "Export report",
+        "description": (
+            "<section>How do I export attribution reports?</section>"
+            "<h2>--</h2><h2>Jane Agent</h2>"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "How do I export attribution reports?" in text
+    assert "Jane Agent" not in text
+    assert "--" not in text
+
+
+def test_support_ticket_package_string_history_preserves_later_messages() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-history-string",
+        "subject": "Refund receipt",
+        "ticket_history": (
+            "Where can I download the refund receipt?\n"
+            "--\n"
+            "Jane Agent\n\n"
+            "I still cannot find the receipt after following the steps.\n"
+            "On Mon, Agent <agent@example.com> wrote:\n"
+            "> old quoted chain should stay out\n\n"
+            "Can I resend the receipt to my accounting inbox?"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "I still cannot find the receipt after following the steps." in text
+    assert "Can I resend the receipt to my accounting inbox?" in text
+    assert "Jane Agent" not in text
+    assert "old quoted chain" not in text
+
+
+def test_support_ticket_package_string_history_skips_long_signature_footer() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-history-long-signature",
+        "subject": "Refund receipt",
+        "ticket_history": (
+            "Where can I download the refund receipt?\n"
+            "--\n"
+            "Jane Agent\n"
+            "Support team\n"
+            "ExampleCo\n"
+            "555-1212\n"
+            "Confidentiality footer\n"
+            "I still cannot find the receipt after following the steps."
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "I still cannot find the receipt after following the steps." in text
+    assert "Jane Agent" not in text
+    assert "Support team" not in text
+    assert "ExampleCo" not in text
+    assert "555-1212" not in text
+    assert "Confidentiality footer" not in text
+
+
+def test_support_ticket_package_string_history_skips_unquoted_old_reply_body() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-history-unquoted-reply",
+        "subject": "Refund receipt",
+        "ticket_history": (
+            "Where can I download the refund receipt?\n"
+            "On Mon, Agent <agent@example.com> wrote:\n"
+            "old quoted chain should stay out\n"
+            "previous agent instruction should stay out\n"
+            "Can I resend the receipt to my accounting inbox?"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "Can I resend the receipt to my accounting inbox?" in text
+    assert "old quoted chain" not in text
+    assert "previous agent instruction" not in text
+
+
+def test_support_ticket_package_string_history_recovers_after_signature_without_blank() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-history-tight-signature",
+        "subject": "Refund receipt",
+        "ticket_history": (
+            "Where can I download the refund receipt?\n"
+            "--\n"
+            "Jane Agent\n"
+            "I still cannot find the receipt after following the steps.\n"
+            "Can I resend the receipt to my accounting inbox?"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "I still cannot find the receipt after following the steps." in text
+    assert "Can I resend the receipt to my accounting inbox?" in text
+    assert "Jane Agent" not in text
+
+
 def test_support_ticket_package_private_only_comments_stay_index_metadata() -> None:
     package = build_support_ticket_input_package([{
         "ticket_id": "zd-private",
@@ -229,6 +511,44 @@ def test_support_ticket_package_private_only_comments_stay_index_metadata() -> N
     assert source_material[0]["support_ticket_evidence_tier"] == (
         "csv_index_metadata_only"
     )
+
+
+def test_support_ticket_package_stripped_only_body_stays_index_metadata() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-stripped-body",
+        "subject": "Login ticket index row",
+        "description": "Auto-reply: We received your request and will respond soon.",
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert len(source_material) == 1
+    assert source_material[0]["text"] == "Login ticket index row"
+    assert "_customer_text_present" not in source_material[0]
+    assert source_material[0]["support_ticket_evidence_tier"] == (
+        "csv_index_metadata_only"
+    )
+    assert package.inputs["customer_wording_examples"] == []
+    assert package.metadata["support_ticket_evidence_tier"] == (
+        "csv_index_metadata_only"
+    )
+
+
+def test_support_ticket_package_subject_only_question_counts_as_customer_wording() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-subject-only",
+        "subject": "How do I reset MFA?",
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert len(source_material) == 1
+    assert source_material[0]["text"] == "How do I reset MFA?"
+    assert source_material[0]["support_ticket_evidence_tier"] == "csv_customer_text"
+    assert package.inputs["customer_wording_examples"] == [{
+        "source_id": "zd-subject-only",
+        "source_title": "How do I reset MFA?",
+        "text": "How do I reset MFA?",
+    }]
+    assert package.metadata["support_ticket_evidence_tier"] == "csv_customer_text"
 
 
 def test_support_ticket_package_scopes_resolution_evidence_tier_per_row() -> None:

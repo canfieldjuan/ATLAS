@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from .support_ticket_clustering import support_ticket_plain_text
+from .support_ticket_text_hygiene import (
+    support_ticket_comment_is_private,
+    support_ticket_text_component,
+)
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -173,9 +177,9 @@ def _row_from_entry(
         })
         comments = ()
     private_comment_keys = {
-        _text_key(_comment_text(comment))
+        _text_key(_comment_duplicate_text(comment))
         for comment in comments
-        if isinstance(comment, Mapping) and comment.get("public") is False
+        if isinstance(comment, Mapping) and support_ticket_comment_is_private(comment)
     }
     description = _plain(ticket.get("description"))
     if description and _text_key(description) not in private_comment_keys:
@@ -189,7 +193,7 @@ def _row_from_entry(
                 "message": "Ignored Zendesk comment because it was not an object.",
             })
             continue
-        if comment.get("public") is False:
+        if support_ticket_comment_is_private(comment):
             continue
         text = _comment_text(comment)
         if not text:
@@ -231,6 +235,14 @@ def _row_from_entry(
 
 def _comment_text(comment: Mapping[str, Any]) -> str:
     for key in ("plain_body", "body", "html_body"):
+        text = _comment_plain(comment.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _comment_duplicate_text(comment: Mapping[str, Any]) -> str:
+    for key in ("plain_body", "body", "html_body"):
         text = _plain(comment.get(key))
         if text:
             return text
@@ -263,6 +275,10 @@ def _looks_like_auto_ack(value: str) -> bool:
 
 def _plain(value: Any) -> str:
     return _WHITESPACE_RE.sub(" ", support_ticket_plain_text(_clean(value))).strip()
+
+
+def _comment_plain(value: Any) -> str:
+    return _WHITESPACE_RE.sub(" ", support_ticket_text_component(value)).strip()
 
 
 def _text_key(value: Any) -> str:
