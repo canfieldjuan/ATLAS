@@ -286,7 +286,10 @@ export default function Dashboard() {
                     color: '#e2e8f0',
                     fontSize: 13,
                   }}
-                  formatter={(value: number) => [value.toLocaleString(), 'Reviews']}
+                  formatter={(value) => [
+                    typeof value === 'number' ? value.toLocaleString() : '0',
+                    'Reviews',
+                  ]}
                 />
               </PieChart>
             </ResponsiveContainer>
