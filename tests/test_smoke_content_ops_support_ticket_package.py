@@ -213,6 +213,100 @@ def test_support_ticket_package_skips_private_comment_objects_in_history() -> No
     assert package.warnings == ()
 
 
+@pytest.mark.parametrize("private_marker", [
+    {"public": "false"},
+    {"public": "0.0"},
+    {"is_private": "true"},
+    {"private_note": "yes"},
+    {"type": "private_note"},
+    {"visibility": "internal"},
+    {"public": "maybe"},
+])
+def test_support_ticket_package_skips_private_comment_marker_variants(
+    private_marker: dict[str, str],
+) -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-marker-private",
+        "subject": "Refund status",
+        "ticket_history": [
+            {"body": "Where can I download the refund receipt?", "public": "public"},
+            {
+                "body": "INTERNAL refund quietly; do not publish",
+                **private_marker,
+            },
+        ],
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert len(source_material) == 1
+    text = source_material[0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "INTERNAL refund quietly" not in text
+    assert source_material[0]["support_ticket_evidence_tier"] == "csv_customer_text"
+
+
+@pytest.mark.parametrize("public_marker", [
+    {},
+    {"public": True},
+    {"public": "public"},
+    {"public": "1.0"},
+    {"is_public": "yes"},
+    {"visibility": "public"},
+])
+def test_support_ticket_package_keeps_public_comment_marker_variants(
+    public_marker: dict[str, object],
+) -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "zd-marker-public",
+        "subject": "Refund status",
+        "ticket_history": [
+            {
+                "body": "Where can I download the refund receipt?",
+                **public_marker,
+            },
+        ],
+    }])
+
+    source_material = package.inputs["source_material"]
+    assert len(source_material) == 1
+    assert "Where can I download the refund receipt?" in source_material[0]["text"]
+    assert package.warnings == ()
+
+
+@pytest.mark.parametrize("private_marker", [
+    {"public": False},
+    {"public": "false"},
+    {"public": "0.0"},
+    {"is_private": "true"},
+    {"visibility": "private"},
+    {"type": "internal_note"},
+    {"public": "maybe"},
+])
+def test_support_ticket_package_rejects_private_row_markers_before_text_admission(
+    private_marker: dict[str, object],
+) -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "zd-private-row",
+            "subject": "Internal billing note",
+            "description": "Customer card failed because of a private account flag.",
+            **private_marker,
+        },
+        {
+            "ticket_id": "zd-public-row",
+            "subject": "Refund status",
+            "description": "Where can I download the refund receipt?",
+        },
+    ])
+
+    source_material = package.inputs["source_material"]
+    assert [row["source_id"] for row in source_material] == ["zd-public-row"]
+    payload = json.dumps(package.as_dict())
+    assert "private account flag" not in payload
+    assert "Where can I download the refund receipt?" in payload
+    assert package.inputs["skipped_ticket_row_count"] == 1
+
+
 def test_support_ticket_package_private_only_comments_stay_index_metadata() -> None:
     package = build_support_ticket_input_package([{
         "ticket_id": "zd-private",

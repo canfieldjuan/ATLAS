@@ -27,6 +27,10 @@ from .support_ticket_context_contract import (
     support_ticket_topic_filter,
 )
 from .support_ticket_dates import parse_support_ticket_source_date
+from .support_ticket_privacy import (
+    support_ticket_comment_is_private,
+    support_ticket_row_is_private,
+)
 
 
 DEFAULT_SUPPORT_TICKET_OUTPUTS: tuple[str, ...] = (
@@ -588,6 +592,8 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         return {}
     if not isinstance(row, _SupportTicketRowLookup):
         row = _SupportTicketRowLookup(row)
+    if support_ticket_row_is_private(row):
+        return {}
     source_title = support_ticket_plain_text(_first_text(row, _SOURCE_TITLE_KEYS))
     text = _ticket_text(row, source_title=source_title)
     if not text:
@@ -742,7 +748,7 @@ def _comments_text(row: Mapping[str, Any]) -> str:
 
 def _comment_text(item: Any) -> str:
     if isinstance(item, Mapping):
-        if item.get("public") is False:
+        if support_ticket_comment_is_private(item):
             return ""
         return _first_text(item, ("body", "message", "text", "content", "description"))
     return _clean(item)

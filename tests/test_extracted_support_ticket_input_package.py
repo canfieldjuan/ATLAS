@@ -2030,6 +2030,120 @@ def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:
     ]
 
 
+@pytest.mark.parametrize("private_marker", [
+    {"public": "false"},
+    {"public": "0.0"},
+    {"is_private": "true"},
+    {"private_note": "yes"},
+    {"type": "private_note"},
+    {"visibility": "internal"},
+    {"public": "maybe"},
+])
+def test_zendesk_full_thread_rows_skip_private_comment_marker_variants(
+    private_marker: dict[str, str],
+) -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-private-marker",
+                "subject": "How do I export invoices?",
+                "description": "Where do invoice exports live?",
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "plain_body": "Internal billing flag; do not publish.",
+                    **private_marker,
+                },
+                {
+                    "author_id": "agent-1",
+                    "public": "public",
+                    "plain_body": "Open Billing, then choose Export CSV.",
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    row = result.rows[0]
+    assert row["resolution_text"] == "Open Billing, then choose Export CSV."
+    assert "Internal billing flag" not in json.dumps(result.rows)
+
+
+@pytest.mark.parametrize("public_marker", [
+    {},
+    {"public": True},
+    {"public": "public"},
+    {"public": "1.0"},
+    {"is_public": "yes"},
+    {"visibility": "public"},
+])
+def test_zendesk_full_thread_rows_keep_public_comment_marker_variants(
+    public_marker: dict[str, object],
+) -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-public-marker",
+                "subject": "How do I export invoices?",
+                "description": "Where do invoice exports live?",
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "plain_body": "Open Billing, then choose Export CSV.",
+                    **public_marker,
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    assert result.rows[0]["resolution_text"] == (
+        "Open Billing, then choose Export CSV."
+    )
+
+
+def test_zendesk_full_thread_rows_suppress_private_first_description_alias() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-private-alias",
+                "subject": "Internal migration workaround",
+                "description": (
+                    "Internal note: explain the real workaround only to the owner."
+                ),
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "type": "private_note",
+                    "plain_body": (
+                        "Internal note: explain the real workaround only to the owner."
+                    ),
+                },
+                {
+                    "author_id": "requester-1",
+                    "public": "public",
+                    "plain_body": "What permission do I need for account exports?",
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    assert result.rows == [{
+        "ticket_id": "zd-private-alias",
+        "source_id": "zd-private-alias",
+        "source_type": "support_ticket",
+        "subject": "Internal migration workaround",
+        "description": "What permission do I need for account exports?",
+    }]
+
+
 def test_zendesk_full_thread_rows_keep_substantive_agent_reply_after_boilerplate() -> None:
     result = rows_from_zendesk_full_thread({
         "tickets": [{
