@@ -69,6 +69,13 @@ nothing); excluded-scope open/close boundaries follow the same block-tag rule
 bodies are no longer buffered (only recoverable script/style scopes are);
 `support_ticket_plain_text_lines` exported via `__all__`.
 
+Round-2 refinement (verified failing first): EOF recovery starts at the first
+HTML signal OUTSIDE string literals and comments
+(`_first_markup_outside_code_literals`), so script code embedding HTML
+templates (`var t="<p>template</p>"`, backtick templates, commented markup,
+escaped quotes) is never recovered as ticket text; unterminated literals run
+to EOF and recover nothing.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -172,8 +179,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 149 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 179 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 201 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 186 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 190 |
-| **Total** | **533** |
+| `tests/test_support_ticket_plain_text_lines.py` | 223 |
+| **Total** | **625** |

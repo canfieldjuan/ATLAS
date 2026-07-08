@@ -375,16 +375,68 @@ class _HTMLTextExtractor(HTMLParser):
             # An unclosed blockquote is a quote to EOF and stays excluded.
             if self._skip_stack[0] in {"script", "style"}:
                 buffered = "".join(self._pending)
-                signal = _HTML_SIGNAL_RE.search(buffered)
-                if signal is not None:
+                start = _first_markup_outside_code_literals(buffered)
+                if start is not None:
                     recovered = _extract_html_text(
-                        buffered[signal.start():],
+                        buffered[start:],
                         exclude_blockquote="blockquote" in self._excluded,
                     )
                     if recovered.strip():
                         self.parts.append("\n")
                         self.parts.append(recovered)
         return "".join(self.parts)
+
+
+def _first_markup_outside_code_literals(buffered: str) -> int | None:
+    """First HTML-signal offset outside string literals and comments.
+
+    Script/CSS code embeds markup in quoted templates ('<p>x</p>'),
+    template literals, and comments; those are code, not lost ticket text.
+    Only markup in plain code context marks where real trailing HTML began.
+    """
+
+    masked: list[tuple[int, int]] = []
+    state: str | None = None
+    start = 0
+    i = 0
+    length = len(buffered)
+    while i < length:
+        ch = buffered[i]
+        nxt = buffered[i + 1] if i + 1 < length else ""
+        if state is None:
+            if ch in "'\"`":
+                state, start = ch, i
+            elif ch == "/" and nxt == "/":
+                state, start = "//", i
+                i += 1
+            elif ch == "/" and nxt == "*":
+                state, start = "/*", i
+                i += 1
+        elif state in "'\"`":
+            if ch == "\\":
+                i += 1
+            elif ch == state:
+                masked.append((start, i))
+                state = None
+        elif state == "//":
+            if ch == "\n":
+                masked.append((start, i))
+                state = None
+        elif state == "/*":
+            if ch == "*" and nxt == "/":
+                masked.append((start, i + 1))
+                state = None
+                i += 1
+        i += 1
+    if state is not None:
+        # Unterminated literal/comment runs to EOF: everything after it is
+        # still code context, never recoverable ticket text.
+        masked.append((start, length - 1))
+    for match in _HTML_SIGNAL_RE.finditer(buffered):
+        position = match.start()
+        if not any(lo <= position <= hi for lo, hi in masked):
+            return position
+    return None
 
 
 def _extract_html_text(text: str, *, exclude_blockquote: bool) -> str:

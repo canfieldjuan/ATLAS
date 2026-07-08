@@ -188,3 +188,36 @@ def test_lines_seam_is_exported() -> None:
     import extracted_content_pipeline.support_ticket_clustering as module
 
     assert "support_ticket_plain_text_lines" in module.__all__
+
+
+# Round-2 refinement: EOF recovery ignores markup inside script string
+# literals and comments -- code templates are code, not lost ticket text.
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        ('<script>var t="<p>template</p>";<p>Real after</p>', "Real after"),
+        ("<script>let t=`<div>tpl</div>`;<p>Real</p>", "Real"),
+        ("<script>// <p>note</p>\n<p>Real</p>", "Real"),
+        ("<script>/* <p>x</p> */<p>Real</p>", "Real"),
+        ('<script>var s="a\\"<p>t</p>";<p>Real</p>', "Real"),
+    ],
+)
+def test_unclosed_script_recovery_skips_code_literals(
+    html: str, expected: str,
+) -> None:
+    assert support_ticket_plain_text(html) == expected
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<p>before</p><script>var t="<p>only template</p>";',
+        '<p>before</p><script>var t="<p>unterminated tpl</p>',
+    ],
+)
+def test_unclosed_script_with_only_code_templates_recovers_nothing(
+    html: str,
+) -> None:
+    assert support_ticket_plain_text(html) == "before"
