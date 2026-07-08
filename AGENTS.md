@@ -25,6 +25,29 @@ redirect prompt in that file.
 
 ---
 
+## Review guidelines
+
+Automated reviewers — including the GitHub Codex connector, which reads this
+section — follow Atlas's Reviewer Rules Pack in `docs/REVIEWER_RULES.md` (rules
+R1–R14) and the PR's Review Contract. Review the same way the Reviewer session does.
+
+- Verify against the codebase, not the PR story (R14): treat the PR description,
+  title, and commit messages as unverified claims; reconstruct what the diff
+  actually does from the code.
+- Every finding cites a rule ID (R1–R14) and `file:line`. Blockers must cite
+  `file:line`. Classify each finding as **BLOCKER / MAJOR / NIT / LGTM** per the pack.
+- Check the PR's `### Review Contract`: does the diff meet its acceptance criteria,
+  and which rules do the changed paths trigger (the path-to-rule table in the pack)?
+- Hunt the rule categories: requirements match (R1), test evidence (R2),
+  security/authorization (R3), data & migration safety (R4), backward compatibility
+  (R5), error handling & observability (R6), performance (R7), concurrency &
+  idempotency (R8), frontend (R9), maintainability (R10), dependencies & config
+  (R11), deployment safety & CI (R12). Fix the class, not the example (R13).
+- Lead with blockers. `LGTM` (all triggered rules pass, no open BLOCKER/MAJOR) is a
+  valid, complete result; do not manufacture NITs.
+
+---
+
 ## 0. Product Discipline And Consent Gates
 
 Read `docs/CURRENT_PRODUCT_DISCIPLINE.md` before choosing or widening a product
