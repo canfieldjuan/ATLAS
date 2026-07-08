@@ -363,9 +363,11 @@ class _HTMLTextExtractor(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         if self._skip_stack:
-            # Buffer only scopes finalize() can recover (script/style);
-            # blockquote bodies are never recovered, so never buffered.
-            if self._skip_stack[0] in {"script", "style"}:
+            # Buffer whenever the parser may be in CDATA mode (an open
+            # script/style is always innermost -- CDATA parses no tags), so a
+            # malformed script nested in a blockquote can still recover the
+            # swallowed tail. Blockquote-only scopes are never buffered.
+            if self._skip_stack[-1] in {"script", "style"}:
                 self._pending.append(data)
             return
         self.parts.append(data)
@@ -379,7 +381,7 @@ class _HTMLTextExtractor(HTMLParser):
             # remainder is real markup the parser never saw -- re-extract it
             # so customer text is recovered without admitting machinery.
             # An unclosed blockquote is a quote to EOF and stays excluded.
-            if self._skip_stack[0] in {"script", "style"}:
+            if self._skip_stack[-1] in {"script", "style"}:
                 buffered = "".join(self._pending)
                 start = _first_markup_outside_code_literals(buffered)
                 if start is not None:
@@ -421,7 +423,11 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
             elif ch == "/" and nxt == "*":
                 state, start = "/*", i
                 i += 1
-            elif ch == "/" and last_code_char not in ")]" and not last_code_char.isalnum():
+            elif (
+                ch == "/"
+                and last_code_char not in ")]}\"'`"
+                and not last_code_char.isalnum()
+            ):
                 # JS regex literal: a slash in expression position (after an
                 # operator/opening context, not after a value) opens /.../.
                 state, start = "re", i
@@ -440,6 +446,8 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
             elif ch == state:
                 masked.append((start, i))
                 state = None
+                # A closed literal is a value: a following slash is division.
+                last_code_char = ch
         elif state == "//":
             if ch == "\n":
                 masked.append((start, i))
@@ -454,8 +462,12 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
         # Unterminated literal/comment runs to EOF: everything after it is
         # still code context, never recoverable ticket text.
         masked.append((start, length - 1))
-    for match in _HTML_SIGNAL_RE.finditer(buffered):
-        position = match.start()
+    candidates = [
+        match.start()
+        for pattern in (_HTML_SIGNAL_RE, _HTML_CUSTOM_TAG_RE)
+        for match in pattern.finditer(buffered)
+    ]
+    for position in sorted(candidates):
         if not any(lo <= position <= hi for lo, hi in masked):
             return position
     return None

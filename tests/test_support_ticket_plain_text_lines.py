@@ -258,3 +258,38 @@ def test_lone_script_style_mentions_stay_customer_wording(text: str) -> None:
 
 def test_paired_script_only_body_still_excluded() -> None:
     assert support_ticket_plain_text("<script>alert(1)</script>") == ""
+
+
+# Round-4 refinements: division after value literals, custom-element
+# recovery, and CDATA recovery for scripts nested in excluded scopes.
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        ('<script>var a="x" / 2;<p>Real</p>', "Real"),
+        ("<script>var a={n:1} / 2;<p>Real</p>", "Real"),
+    ],
+)
+def test_division_after_value_literals_is_not_a_regex(
+    html: str, expected: str,
+) -> None:
+    assert support_ticket_plain_text(html) == expected
+
+
+def test_recovery_finds_custom_element_markup() -> None:
+    assert support_ticket_plain_text(
+        "<script>x;<x-ticket>Real</x-ticket>"
+    ) == "Real"
+
+
+def test_malformed_script_inside_blockquote_recovers_tail() -> None:
+    assert support_ticket_plain_text_lines(
+        "<blockquote><script>x</blockquote><p>Real</p>"
+    ) == "Real"
+
+
+def test_quoted_text_before_nested_malformed_script_stays_excluded() -> None:
+    assert support_ticket_plain_text_lines(
+        "<blockquote>quoted<script>x</blockquote><p>Real</p>"
+    ) == "Real"

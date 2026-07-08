@@ -86,6 +86,14 @@ division distinguished); recovery no longer invents a line boundary -- the
 scope-open boundary and the recovered extraction's own boundaries are the
 only ones emitted.
 
+Round-4 refinements (each verified failing first): closed string/template
+literals and closing braces are value positions, so division after them is
+never misread as a regex open (no mask-to-EOF data loss); EOF recovery also
+searches custom-element signals (`<x-ticket>`), matching `_looks_like_html`;
+buffering/recovery key on the CDATA condition (top of skip stack is
+script/style), so a malformed script nested inside a blockquote still
+recovers the swallowed tail while quoted text before it stays excluded.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -189,8 +197,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 220 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 196 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 232 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 204 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 260 |
-| **Total** | **691** |
+| `tests/test_support_ticket_plain_text_lines.py` | 295 |
+| **Total** | **746** |
