@@ -289,28 +289,89 @@ class _ClusterBucket:
     token_counts: Counter[str] = field(default_factory=Counter)
 
 
+# Block-level members of the SAME tag families _HTML_SIGNAL_RE recognizes,
+# so HTML detection and line extraction cannot drift apart. These tags carry
+# the message structure (paragraph/break/list/table/heading/quote boundaries)
+# that line-based hygiene downstream keys on.
+_BLOCK_TAG_NAMES = frozenset({
+    "article", "aside", "blockquote", "body", "br", "dd", "div", "dl", "dt",
+    "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
+    "header", "hr", "html", "li", "main", "nav", "ol", "p", "pre", "section",
+    "table", "tbody", "tfoot", "thead", "tr", "ul",
+})
+# Bodies excluded from customer text: script/style are markup machinery;
+# blockquote is the HTML-native quoted-prior-message marker.
+_EXCLUDED_CONTENT_TAGS = frozenset({"script", "style", "blockquote"})
+
+
 class _HTMLTextExtractor(HTMLParser):
-    def __init__(self) -> None:
+    """Extract text with line boundaries at block tags.
+
+    Block-level tags emit newlines so downstream line-based hygiene sees the
+    structure rich HTML encodes in tags; inline tags emit spaces as before.
+    script/style bodies (and blockquote bodies when ``exclude_blockquote``)
+    are excluded. Excluded content is buffered, not discarded: if a
+    script/style scope never closes (malformed HTML puts the parser in CDATA
+    mode and would otherwise swallow the rest of the ticket), the buffered
+    text is recovered tag-stripped at EOF so customer text is never lost. An
+    unclosed blockquote stays excluded -- a quote running to end-of-message
+    is a quote, not data loss.
+    """
+
+    def __init__(self, *, exclude_blockquote: bool = True) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
-        self._skip_depth = 0
+        self._skip_stack: list[str] = []
+        self._pending: list[str] = []
+        self._excluded = {"script", "style"}
+        if exclude_blockquote:
+            self._excluded = _EXCLUDED_CONTENT_TAGS
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         del attrs
         lowered = tag.lower()
-        if lowered in {"script", "style"}:
-            self._skip_depth += 1
-        self.parts.append(" ")
+        if lowered in self._excluded:
+            self._skip_stack.append(lowered)
+            return
+        if self._skip_stack:
+            return
+        self.parts.append("\n" if lowered in _BLOCK_TAG_NAMES else " ")
 
     def handle_endtag(self, tag: str) -> None:
         lowered = tag.lower()
-        if lowered in {"script", "style"} and self._skip_depth:
-            self._skip_depth -= 1
-        self.parts.append(" ")
+        if self._skip_stack:
+            if lowered == self._skip_stack[-1]:
+                self._skip_stack.pop()
+                if not self._skip_stack:
+                    # Scope closed properly: excluded content stays excluded.
+                    self._pending.clear()
+                    self.parts.append("\n")
+            return
+        self.parts.append("\n" if lowered in _BLOCK_TAG_NAMES else " ")
 
     def handle_data(self, data: str) -> None:
-        if not self._skip_depth:
-            self.parts.append(data)
+        if self._skip_stack:
+            self._pending.append(data)
+            return
+        self.parts.append(data)
+
+    def finalize(self) -> str:
+        self.close()
+        if self._skip_stack and self._pending:
+            # Unclosed script/style swallowed trailing content via CDATA
+            # mode; recover it tag-stripped rather than losing the ticket.
+            # An unclosed blockquote is a quote to EOF and stays excluded.
+            if self._skip_stack[0] in {"script", "style"}:
+                recovered = _TAG_FALLBACK_RE.sub(" ", "".join(self._pending))
+                self.parts.append("\n")
+                self.parts.append(recovered)
+        return "".join(self.parts)
+
+
+def _extract_html_text(text: str, *, exclude_blockquote: bool) -> str:
+    parser = _HTMLTextExtractor(exclude_blockquote=exclude_blockquote)
+    parser.feed(text)
+    return parser.finalize()
 
 
 def support_ticket_plain_text(value: Any) -> str:
@@ -325,14 +386,50 @@ def support_ticket_plain_text(value: Any) -> str:
         if not _looks_like_html(decoded):
             return _compact(decoded)
         text = decoded
-    parser = _HTMLTextExtractor()
     try:
-        parser.feed(text)
-        parser.close()
-        parsed = "".join(parser.parts)
+        parsed = _extract_html_text(text, exclude_blockquote=True)
+        compacted = _compact(parsed)
+        if compacted:
+            return compacted
+        # An all-quote body would otherwise turn a previously admitted row
+        # empty; keep the unexcluded extraction rather than losing the row.
+        parsed = _extract_html_text(text, exclude_blockquote=False)
     except Exception:
         parsed = _TAG_FALLBACK_RE.sub(" ", text)
     return _compact(parsed)
+
+
+def support_ticket_plain_text_lines(value: Any) -> str:
+    """Return readable text with line boundaries preserved.
+
+    The line-preserving seam for downstream line-based hygiene (scalar
+    history signature/quote handling and the junk/auto-reply gate): block
+    tags become newlines, each line is whitespace-compacted, and empty lines
+    are dropped. Plain-text input keeps its own newlines. Quoted
+    ``blockquote`` bodies and script/style bodies are excluded with no
+    all-quote fallback -- an all-quote body is genuinely empty of new
+    customer text for hygiene purposes.
+    """
+
+    raw = str(value or "")
+    if not raw.strip():
+        return ""
+    text = raw
+    if not _looks_like_html(text):
+        decoded = unescape(text)
+        if not _looks_like_html(decoded):
+            return _compact_lines(decoded)
+        text = decoded
+    try:
+        parsed = _extract_html_text(text, exclude_blockquote=True)
+    except Exception:
+        parsed = _TAG_FALLBACK_RE.sub(" ", text)
+    return _compact_lines(parsed)
+
+
+def _compact_lines(text: str) -> str:
+    lines = [_compact(line) for line in text.split("\n")]
+    return "\n".join(line for line in lines if line)
 
 
 def _looks_like_html(text: str) -> bool:
