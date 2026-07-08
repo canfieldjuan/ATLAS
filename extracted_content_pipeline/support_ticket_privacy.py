@@ -46,13 +46,19 @@ _PRIVATE_KEY_STEMS = frozenset({
     "hidden",
     "confidential",
     "nonpublic",
+    "notpublic",
     "restricted",
     "agentonly",
     "agentsonly",
     "staffonly",
 })
 _PUBLIC_KEY_STEMS = frozenset({"public", "visible", "external"})
-_STRICT_LABEL_KEY_STEMS = frozenset({"visibility", "privacy"})
+# Publication/facing flags assert privacy ONLY through boolean values:
+# ``published: false`` is private, but ``published: <date>`` is a data column.
+_PUBLIC_FLAG_KEY_STEMS = frozenset({
+    "published", "customerfacing", "clientfacing", "userfacing", "publicfacing",
+})
+_STRICT_LABEL_KEY_STEMS = frozenset({"visibility", "privacy", "confidentiality"})
 _VALUE_LABEL_KEY_STEMS = frozenset({"access", "audience"})
 _KIND_KEY_STEMS = frozenset({"type", "kind"})
 
@@ -69,12 +75,14 @@ _KEY_STOP_TOKENS = frozenset({
     "customer", "customers", "agent", "agents", "staff",
     "admin", "admins", "team", "teams",
     "user", "users", "viewer", "viewers",
+    "end", "ends", "requester", "requesters", "client", "clients",
+    "support", "supports", "facing",
 })
 # Prefix/suffix strips for keys that arrive pre-compacted (``isprivatenote``).
-_STRIP_PREFIXES = ("is", "has", "was")
+_STRIP_PREFIXES = ("is", "has", "was", "access")
 _STRIP_SUFFIXES = (
     "notes", "note", "comments", "comment", "replies", "reply",
-    "messages", "message", "msg", "flags", "flag", "only",
+    "messages", "message", "msg", "flags", "flag", "only", "access",
 )
 _NOTE_HINTS = ("note", "comment", "reply", "message", "msg")
 # Audience tokens are droppable structure, but a private audience flips a
@@ -82,6 +90,7 @@ _NOTE_HINTS = ("note", "comment", "reply", "message", "msg")
 # ``visible_to_customer``.
 _PRIVATE_AUDIENCE_TOKENS = frozenset({
     "agent", "agents", "staff", "admin", "admins", "team", "teams",
+    "support", "supports",
 })
 # Label-style suffixes are structural ONLY on label-class stems:
 # ``visibility_status`` means visibility, but ``internal_status`` is a data
@@ -134,6 +143,7 @@ _AMBIGUOUS_MARKER = "__ambiguous__"
 
 _KIND_PRIVATE = "private"
 _KIND_PUBLIC = "public"
+_KIND_PUBLIC_FLAG = "public_flag"
 _KIND_STRICT_LABEL = "strict_label"
 _KIND_VALUE_LABEL = "value_label"
 _KIND_KIND = "kind"
@@ -188,31 +198,40 @@ def _marker_is_private(
         boolish = _boolish(marker)
         if boolish is False or marker in _PUBLIC_LABELS:
             return False
-        if (
-            boolish is True
-            or marker == _AMBIGUOUS_MARKER
-            or marker in _PRIVATE_LABELS
-        ):
+        if boolish is True:
             return True
-        # Unresolved free text under a note/comment-suffixed key is a content
-        # column in row mode, not a privacy flag; comment mode fails closed.
-        return not (row_mode and note_alias)
+        if marker != _AMBIGUOUS_MARKER and _label_is_private(marker):
+            return True
+        # Remaining markers are unresolved text or container shapes. Under a
+        # note/comment-suffixed key in row mode these are content columns,
+        # not privacy flags; everywhere else they fail closed.
+        if row_mode and note_alias:
+            return False
+        return True
     if kind == _KIND_PUBLIC:
         boolish = _boolish(marker)
         if boolish is True or marker in _PUBLIC_LABELS:
             return False
-        if boolish is False or marker == _AMBIGUOUS_MARKER or marker in _PRIVATE_LABELS:
+        if boolish is False:
             return True
-        # Unresolved free text under a note/comment-suffixed public key is a
-        # content column (public_comment / public_comments hold customer
-        # text in _PUBLIC_COMMENT_KEYS ingestion), not a privacy flag.
+        if marker != _AMBIGUOUS_MARKER and _label_is_private(marker):
+            return True
+        # Remaining markers are unresolved text or container shapes. Under a
+        # note/comment-suffixed public key these are content columns
+        # (public_comment / public_comments hold customer text or comment
+        # lists in _PUBLIC_COMMENT_KEYS ingestion), not privacy flags;
+        # everywhere else they fail closed.
         return not note_alias
+    if kind == _KIND_PUBLIC_FLAG:
+        # Publication/facing flags assert privacy only via booleans:
+        # published: false is private; published: <date> is a data column.
+        return _boolish(marker) is False
     if kind == _KIND_STRICT_LABEL:
         return marker not in _PUBLIC_LABELS
     if kind == _KIND_VALUE_LABEL:
-        return marker == _AMBIGUOUS_MARKER or marker in _PRIVATE_LABELS
+        return marker == _AMBIGUOUS_MARKER or _label_is_private(marker)
     # _KIND_KIND: categorical, fail-open on unknown kinds by design.
-    return marker == _AMBIGUOUS_MARKER or marker in _PRIVATE_LABELS
+    return marker == _AMBIGUOUS_MARKER or _label_is_private(marker)
 
 
 @lru_cache(maxsize=4096)
@@ -276,6 +295,8 @@ def _stem_kind(stem: str) -> str | None:
         return _KIND_PRIVATE
     if stem in _PUBLIC_KEY_STEMS:
         return _KIND_PUBLIC
+    if stem in _PUBLIC_FLAG_KEY_STEMS:
+        return _KIND_PUBLIC_FLAG
     if stem in _STRICT_LABEL_KEY_STEMS:
         return _KIND_STRICT_LABEL
     if stem in _VALUE_LABEL_KEY_STEMS:
@@ -307,7 +328,8 @@ def _marker(value: Any) -> str | None:
             return numeric
         return _key(text)
     if isinstance(value, (list, tuple, set, frozenset)) and not value:
-        return None
+        # Present-but-empty sequence markers fail closed like empty objects.
+        return _AMBIGUOUS_MARKER
     # Present but shaped in a way this boundary cannot resolve: fail closed.
     return _AMBIGUOUS_MARKER
 
@@ -341,6 +363,33 @@ def _numeric_marker(value: str) -> str | None:
     if number == 1:
         return "true"
     return None
+
+
+def _label_is_private(marker: str) -> bool:
+    """Private-label check with a closed value-stem rule.
+
+    Strips structural suffixes (only/use/access/team) so labels like
+    ``internal only``, ``private-use-only``, and ``agents only`` resolve to a
+    private stem or private audience without enumerating each spelling.
+    """
+
+    if marker == _AMBIGUOUS_MARKER:
+        return True
+    if marker in _PRIVATE_LABELS:
+        return True
+    if marker in _PUBLIC_LABELS or marker in _TRUTHY_TEXT or marker in _FALSEY_TEXT:
+        return False
+    current = marker
+    changed = True
+    while changed:
+        changed = False
+        for suffix in ("only", "use", "uses", "access", "team", "teams"):
+            if current.endswith(suffix) and len(current) > len(suffix):
+                current = current[: -len(suffix)]
+                changed = True
+    if current in _PRIVATE_KEY_STEMS or current in _PRIVATE_AUDIENCE_TOKENS:
+        return True
+    return current in _PRIVATE_LABELS
 
 
 def _boolish(marker: str) -> bool | None:

@@ -116,6 +116,18 @@ private (`visible_to_agents` is the inverse of `visible_to_customer`);
 label-class stems so `privacy_label`/`visibility_status`/`access_label`
 classify while `internal_status` stays a data column.
 
+Round-6 refinements (same closed rule; each verified failing first): content
+carveout covers container shapes (`public_comments: [...]` lists/dicts and
+empty sequences are content columns, not flags); empty sequence markers under
+marker keys fail closed like empty objects; publication/facing flags
+(`published`, `customer_facing`) assert privacy ONLY via boolean values so
+`published: <date>` stays a data column; `notpublic` negation stem;
+end-user/requester as public audience and support/support-team as private
+audience; X-only value labels (`internal only`, `private only`,
+`internal-use-only`) resolve by a value-stem strip rule instead of per-spelling
+enumeration; access-composed keys (`restricted_access`, `private_access`,
+`access_internal`) classify private; `confidentiality` strict label added.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -214,11 +226,11 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
-| `extracted_content_pipeline/support_ticket_privacy.py` | 361 |
+| `extracted_content_pipeline/support_ticket_privacy.py` | 410 |
 | `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 21 |
-| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 224 |
+| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 236 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/test_extracted_support_ticket_input_package.py` | 194 |
 | `tests/test_smoke_content_ops_support_ticket_package.py` | 119 |
-| `tests/test_support_ticket_privacy.py` | 317 |
-| **Total** | **1248** |
+| `tests/test_support_ticket_privacy.py` | 433 |
+| **Total** | **1425** |

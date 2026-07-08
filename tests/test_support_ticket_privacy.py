@@ -315,3 +315,119 @@ def test_support_ticket_label_suffix_rule_does_not_over_reject(
     row: dict[str, object],
 ) -> None:
     assert support_ticket_row_is_private(row) is False
+
+
+# Round-6 refinements: container-shaped content columns, empty sequence
+# markers, publication flags, negated-public keys, audience synonyms,
+# X-only value labels, and access-composed keys.
+
+
+@pytest.mark.parametrize("row", [
+    {"subject": "s", "public_comments": ["How do I export?"]},
+    {"subject": "s", "public_comments": {"body": "text"}},
+    {"subject": "s", "public_comments": []},
+    {"subject": "s", "private_notes": [{"body": "agent note"}]},
+])
+def test_support_ticket_container_content_columns_do_not_reject_rows(
+    row: dict[str, object],
+) -> None:
+    assert support_ticket_row_is_private(row) is False
+
+
+@pytest.mark.parametrize("marker", [
+    {"privacy": []},
+    {"public": []},
+    {"visibility": ()},
+])
+def test_support_ticket_empty_sequence_markers_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"published": False},
+    {"is_published": "false"},
+    {"customer_facing": False},
+])
+def test_support_ticket_publication_flags_false_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("row", [
+    {"body": "x", "published": "2026-01-01"},
+    {"body": "x", "published": True},
+    {"body": "x", "customer_facing": True},
+])
+def test_support_ticket_publication_flags_only_assert_via_booleans(
+    row: dict[str, object],
+) -> None:
+    assert support_ticket_row_is_private(row) is False
+
+
+@pytest.mark.parametrize("marker", [
+    {"not_public": True},
+    {"is_not_public": True},
+])
+def test_support_ticket_negated_public_keys_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_row_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"visible_to_end_user": False},
+    {"visible_to_requester": False},
+])
+def test_support_ticket_end_user_visibility_false_fails_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"visible_to_support": True},
+    {"visible_to_support_team": True},
+])
+def test_support_ticket_support_team_visibility_fails_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+    assert support_ticket_row_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"audience": "internal only"},
+    {"audience": "private only"},
+    {"access": "internal-use-only"},
+    {"confidentiality": "high"},
+])
+def test_support_ticket_only_style_private_labels_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("marker", [
+    {"restricted_access": True},
+    {"private_access": True},
+    {"access_internal": True},
+])
+def test_support_ticket_access_composed_private_keys_fail_closed(
+    marker: dict[str, object],
+) -> None:
+    assert support_ticket_comment_is_private({"body": "x", **marker}) is True
+
+
+@pytest.mark.parametrize("row", [
+    {"body": "x", "support_ticket_id": "T-1"},
+    {"body": "x", "end_date": "2026-01-01"},
+    {"body": "x", "has_access": True},
+    {"body": "x", "access_label": "billing role"},
+])
+def test_support_ticket_round6_rule_does_not_over_reject(
+    row: dict[str, object],
+) -> None:
+    assert support_ticket_row_is_private(row) is False
