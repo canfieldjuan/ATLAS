@@ -17,8 +17,8 @@ _LEADING_BRACKETED_METADATA_RE = re.compile(r"^(?:\[[^\]\n]{1,80}\]\s*)+")
 _HTML_TAG_NAMES_RE = (
     r"(?:a|abbr|article|aside|b|blockquote|body|br|button|cite|code|dd|"
     r"del|div|dl|dt|em|figcaption|figure|footer|h[1-6]|header|hr|html|i|"
-    r"img|ins|li|main|mark|nav|ol|p|pre|s|script|section|small|span|strike|"
-    r"strong|style|sub|sup|table|tbody|td|tfoot|th|thead|time|tr|u|ul)"
+    r"img|ins|li|main|mark|nav|ol|p|pre|s|section|small|span|strike|strong|"
+    r"sub|sup|table|tbody|td|tfoot|th|thead|time|tr|u|ul)"
 )
 _HTML_ATTR_RE = (
     r"(?:\s+[a-z_:][a-z0-9_:.-]*\s*=\s*"
@@ -27,6 +27,12 @@ _HTML_ATTR_RE = (
 _HTML_SIGNAL_RE = re.compile(
     rf"</?{_HTML_TAG_NAMES_RE}(?:{_HTML_ATTR_RE})*\s*/?>",
     re.IGNORECASE,
+)
+# A LONE <script>/<style> in prose ("How do I add <script> to the page?")
+# is customer wording, not markup; only a paired open+close is an HTML signal.
+_HTML_SCRIPT_STYLE_PAIRED_RE = re.compile(
+    r"<(script|style)\b[^>]*>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
 )
 _HTML_CUSTOM_TAG_RE = re.compile(
     r"</?[a-z][a-z0-9:-]*-[a-z0-9:-]*(?:\s+[^<>]*)?/?>",
@@ -382,7 +388,9 @@ class _HTMLTextExtractor(HTMLParser):
                         exclude_blockquote="blockquote" in self._excluded,
                     )
                     if recovered.strip():
-                        self.parts.append("\n")
+                        # The scope-open boundary was already emitted per the
+                        # block rule; the recovered extraction carries its own
+                        # boundaries. Do not invent one here.
                         self.parts.append(recovered)
         return "".join(self.parts)
 
@@ -400,6 +408,7 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
     start = 0
     i = 0
     length = len(buffered)
+    last_code_char = ""
     while i < length:
         ch = buffered[i]
         nxt = buffered[i + 1] if i + 1 < length else ""
@@ -412,6 +421,19 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
             elif ch == "/" and nxt == "*":
                 state, start = "/*", i
                 i += 1
+            elif ch == "/" and last_code_char not in ")]" and not last_code_char.isalnum():
+                # JS regex literal: a slash in expression position (after an
+                # operator/opening context, not after a value) opens /.../.
+                state, start = "re", i
+            if state is None and not ch.isspace():
+                last_code_char = ch
+        elif state == "re":
+            if ch == "\\":
+                i += 1
+            elif ch == "/":
+                masked.append((start, i))
+                state = None
+                last_code_char = "/"
         elif state in "'\"`":
             if ch == "\\":
                 i += 1
@@ -506,6 +528,7 @@ def _compact_lines(text: str) -> str:
 def _looks_like_html(text: str) -> bool:
     return bool(
         _HTML_SIGNAL_RE.search(text)
+        or _HTML_SCRIPT_STYLE_PAIRED_RE.search(text)
         or _HTML_CUSTOM_TAG_RE.search(text)
     )
 

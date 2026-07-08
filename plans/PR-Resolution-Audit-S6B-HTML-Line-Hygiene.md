@@ -76,6 +76,16 @@ templates (`var t="<p>template</p>"`, backtick templates, commented markup,
 escaped quotes) is never recovered as ticket text; unterminated literals run
 to EOF and recover nothing.
 
+Round-3 refinements (each verified failing first; one was a regression from
+the round-1 detector change): lone `<script>`/`<style>` mentions in prose are
+customer wording -- script/style detect only as a PAIRED open+close
+(`_HTML_SCRIPT_STYLE_PAIRED_RE`), restoring "How do I add <script> to the
+page?" while paired script-only bodies stay excluded; the code-literal
+scanner also masks JS regex literals (expression-position slash, escapes,
+division distinguished); recovery no longer invents a line boundary -- the
+scope-open boundary and the recovered extraction's own boundaries are the
+only ones emitted.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -179,8 +189,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 201 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 186 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 220 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 196 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 223 |
-| **Total** | **625** |
+| `tests/test_support_ticket_plain_text_lines.py` | 260 |
+| **Total** | **691** |

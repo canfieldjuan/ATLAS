@@ -221,3 +221,40 @@ def test_unclosed_script_with_only_code_templates_recovers_nothing(
     html: str,
 ) -> None:
     assert support_ticket_plain_text(html) == "before"
+
+
+# Round-3 refinements: regex-literal masking, no invented recovery boundary,
+# and lone script/style mentions in prose stay customer wording.
+
+
+def test_unclosed_script_regex_literal_is_masked() -> None:
+    assert support_ticket_plain_text(
+        "<script>var r=/<p>template<\\/p>/;<p>Real</p>"
+    ) == "Real"
+
+
+def test_division_is_not_a_regex_literal() -> None:
+    assert support_ticket_plain_text(
+        "<script>var a=b / 2; c=d/e;<p>Real</p>"
+    ) == "Real"
+
+
+def test_recovered_inline_markup_keeps_inline_boundary() -> None:
+    assert support_ticket_plain_text_lines(
+        "<p>foo<script>x;<span>bar</span></p>"
+    ) == "foo bar"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "How do I add <script> to the page?",
+        "What does <style> do?",
+    ],
+)
+def test_lone_script_style_mentions_stay_customer_wording(text: str) -> None:
+    assert support_ticket_plain_text(text) == text
+
+
+def test_paired_script_only_body_still_excluded() -> None:
+    assert support_ticket_plain_text("<script>alert(1)</script>") == ""
