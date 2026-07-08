@@ -140,6 +140,18 @@ join the private-audience flip (`visible_to_internal`, `public_to_internal`);
 audience-only compounds (`admin_only`, `team_only`, `support_only`) classify
 private; `for internal use only` value labels resolve via prefix strips.
 
+Round-8 refinements (same closed rule; each verified failing first; one was a
+polarity defect in the round-7 object resolver): `hidden_from_customer`-style
+inverse markers classify (`from` is structure); compound audience-only flags
+(`support_team_only`) classify when every pre-`only` token is a private
+audience; object markers preserve boolean-ness for the ENCLOSING key's
+polarity (`private: {"value": true}` fails closed while
+`public: {"value": true}` passes); staff-note kind values (`type:
+"agent_note"`) resolve via value-stem note-suffix strips while
+`customer_note` passes; adverb spellings (`publicly_visible: false`,
+`public_visibility: false`) classify via token normalization + all-public-
+family compounds.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -238,11 +250,11 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
-| `extracted_content_pipeline/support_ticket_privacy.py` | 478 |
+| `extracted_content_pipeline/support_ticket_privacy.py` | 531 |
 | `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 21 |
-| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 248 |
+| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 260 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/test_extracted_support_ticket_input_package.py` | 194 |
 | `tests/test_smoke_content_ops_support_ticket_package.py` | 119 |
-| `tests/test_support_ticket_privacy.py` | 516 |
-| **Total** | **1588** |
+| `tests/test_support_ticket_privacy.py` | 597 |
+| **Total** | **1734** |
