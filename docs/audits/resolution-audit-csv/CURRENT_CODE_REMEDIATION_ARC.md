@@ -21,6 +21,64 @@ older audit files remain evidence/history; code remains ground truth.
   proves.
 - Every remediation PR must update this doc and link the fixing PR.
 
+## Launch-Blocker Ledger + E2E Plan (2026-07-08 review)
+
+Two independent reconstruction passes (merged S1-S5 closure review + remaining
+scope) re-derived launch-blocker status from current `main`. Full e2e plan with
+per-slice contracts, evidence, and sequencing: issue #1993 comment
+https://github.com/canfieldjuan/ATLAS/issues/1993#issuecomment-4917360490 .
+
+**Headline:** launch-blocker #1 (F1 fragmentation undercount) is NOT closed in
+default config -- it closes only with `content_ops_faq_embedding_booster_enabled`
+ON + calibrated (default False, `atlas_brain/config.py:4853`; gate
+`atlas_brain/api/__init__.py:262`). #2033's own merged test shows 12 same-intent
+SSO tickets -> 0 repeat rows in default state. Verify the prod flag + calibration
+before any paid-ship claim.
+
+Minimum true before paid reports ship:
+
+| # | Blocker | Slice | Status |
+|---|---|---|---|
+| 1 | Fragmentation undercount (F1/F3/F6) | S5 #2033 | CONDITIONAL (booster ON+calibrated; default OFF) |
+| 2 | Header/data-loss admission (C1/H4/C2) | S1 #2026 | MOSTLY (dup-header/encoding closed; terse-first-row + missing-ID residual) |
+| 3 | Money reconciliation (P5-2) | S4 #2031 | DISPLAY-only (buyer-visible cents change needs approval; P5-7 model guard -> S8) |
+| 4 | PII private/internal notes | S6A #2046 | BUILT, OPEN PR |
+| 5 | Junk/auto-reply/OOO gate (F2, incl HTML M6) | S6B #2043 | OPEN + scoping gap (junk-DETECTION rules unnamed; may need S6E) |
+| 6 | Date transposition/window (C3/M7) | S7 | OPEN |
+| 7 | Fail-closed runtime guard (P5-7 + scorecard) | S8 | OPEN (scorecard zero runtime callers) |
+
+Deferrable hardening: S6C (scalar transcripts; M6 MEDIUM), S6D (evidence tier + M9;
+precondition for S8).
+
+### Post-merge review findings (residuals on merged slices)
+
+- S1 #2026: terse structured first-row still accepted-as-header, data lost as
+  column names (`campaign_customer_data.py:312`); missing-ID rows get
+  `ticket-{index}`, reported-not-deduped (`support_ticket_input_package.py:374,516`)
+  -- can inflate repeat/cost counts feeding the money headline.
+- S4 #2031: reconciles via a buyer-visible whole-dollar -> cents display change
+  ($878 -> $877.50) -- confirm operator approval; signed delta money still
+  half-even (`content_ops_deflection_delivery.py:1641,1649`), deferred.
+- S3 #2030: full-thread JSON `json.loads` over the whole <=50 MiB before the row
+  cap -- unbounded parse memory (deferred).
+- S5 #2033: fixed overmerge/fabrication/order-dependence; F1 undercount remains
+  conditional on the default-OFF embedding booster (above).
+- Verified safe: S1 `_source_id_fallback` marker stripped by the `_public_ticket_row`
+  allowlist (`:448`) -- no buyer-facing leak.
+
+### Operator decisions (defer to #1993; not code)
+
+- F1 embedding booster on/off + calibration (BLOCKING).
+- S4 cents display retro-approval.
+- Annualized/dateless run-rate exposure in hosted-consumer/PDF/email
+  (`report-model-contract.js:18,24`).
+- Product-surface follow-ups (see that section below).
+
+### Sequencing
+
+verify F1 booster || merge S6A (#2046) -> S6B (+junk rules / S6E) || S7 date-parse
+-> S6C || S6D -> S8 (last; the fail-closed gate). ~9-13 dev-days, parallelizable.
+
 ## Gaps In The Existing Issue Body
 
 - Several cited paths are stale. `atlas_brain/faq_deflection_report.py` and
@@ -187,8 +245,12 @@ Implementation notes:
 
 ### S5 - Clustering Correctness Spike And First Fix
 
-Status: spike complete; first implementation in progress. Spike PR:
-[#2032](https://github.com/canfieldjuan/ATLAS/pull/2032).
+Status: spike merged ([#2032](https://github.com/canfieldjuan/ATLAS/pull/2032));
+first implementation merged ([#2033](https://github.com/canfieldjuan/ATLAS/pull/2033))
+-- overmerge/fabrication/order-dependence fixed, but the F1 same-intent
+varied-wording undercount closes ONLY with the default-OFF embedding booster
+enabled + calibrated (see the Launch-Blocker Ledger). Calibration is a separate
+tracked item.
 
 Root: token-set labels are promoted into hard partitions before question-level
 similarity has a chance to unify or split intents.
@@ -339,8 +401,14 @@ These are not coding-start items until the operator approves the product shape:
 - [x] S3 submit row cap/heavy-build PR linked here: #2030.
 - [x] S4 money reconciliation PR linked here: #2031.
 - [x] S5 clustering spike PR linked here: #2032.
-- [ ] S5 clustering first implementation PR linked here.
-- [ ] S6 text/comment/outcome hygiene PR linked here.
+- [x] S5 clustering first implementation PR linked here: #2033. F1 undercount
+  CONDITIONAL -- closes only with the default-OFF embedding booster ON+calibrated.
+- [ ] S5 clustering calibration (real-corpus + booster on/off decision) PR linked here.
+- [ ] S6A private/internal admission boundary PR linked here: OPEN #2046 (issue #2042, in review).
+- [ ] S6B HTML line hygiene + F2 auto-reply/OOO junk-DETECTION gate PR linked here (issue #2043). See scoping gap in the ledger above.
+- [ ] S6C scalar history signature/quoted-reply cleanup PR linked here (issue #2044).
+- [ ] S6D customer evidence tier + outcome semantics PR linked here (issue #2045).
+- [ ] S6E (only if S6B does not cover F2): explicit auto-reply/OOO junk-detection rules PR linked here.
 - [ ] S7 date/window policy PR linked here.
-- [ ] S8 runtime QA scorecard wiring PR linked here.
+- [ ] S8 runtime QA scorecard + P5-7 reconciliation guard PR linked here.
 - [ ] Operator-approved product-surface issue/PR linked here, if any.
