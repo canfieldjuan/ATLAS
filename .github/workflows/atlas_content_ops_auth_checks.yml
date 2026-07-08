@@ -9,9 +9,12 @@ on:
       - ".github/workflows/atlas_content_ops_auth_checks.yml"
       - "requirements.txt"
       - "atlas_brain/api/__init__.py"
+      - "atlas_brain/api/auth.py"
       - "atlas_brain/auth/dependencies.py"
+      - "atlas_brain/auth/passwords.py"
       - "atlas_brain/auth/rate_limit.py"
       - "tests/test_auth_dependencies.py"
+      - "tests/test_auth_passwords.py"
       - "tests/test_llm_gateway_plan_tier.py"
   push:
     branches:
@@ -20,9 +23,12 @@ on:
       - ".github/workflows/atlas_content_ops_auth_checks.yml"
       - "requirements.txt"
       - "atlas_brain/api/__init__.py"
+      - "atlas_brain/api/auth.py"
       - "atlas_brain/auth/dependencies.py"
+      - "atlas_brain/auth/passwords.py"
       - "atlas_brain/auth/rate_limit.py"
       - "tests/test_auth_dependencies.py"
+      - "tests/test_auth_passwords.py"
       - "tests/test_llm_gateway_plan_tier.py"
 
 jobs:
@@ -48,5 +54,6 @@ jobs:
         run: |
           python -m pytest \
             tests/test_auth_dependencies.py \
+            tests/test_auth_passwords.py \
             tests/test_llm_gateway_plan_tier.py \
             -q
