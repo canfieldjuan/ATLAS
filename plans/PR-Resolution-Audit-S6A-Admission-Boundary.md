@@ -128,6 +128,18 @@ audience; X-only value labels (`internal only`, `private only`,
 enumeration; access-composed keys (`restricted_access`, `private_access`,
 `access_internal`) classify private; `confidentiality` strict label added.
 
+Round-7 refinements (same closed rule; each verified failing first; three were
+defects in the round-5/6 mechanisms): flag-shaped aliases (`is_`/`has_`
+prefixed, `*_flag`) are excluded from the content-column carveouts and
+digit-only values are flag values, so `is_public_comment: "maybe"` and
+`public_reply: 2` fail closed while bare content columns stay admitted;
+object-marker subfields compare privacy VERDICTS with key polarity, so
+equivalent public forms ({"name": "public", "value": true}) agree instead of
+over-rejecting while nested `{"private": true}` fails closed; internal/private
+join the private-audience flip (`visible_to_internal`, `public_to_internal`);
+audience-only compounds (`admin_only`, `team_only`, `support_only`) classify
+private; `for internal use only` value labels resolve via prefix strips.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -226,11 +238,11 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 8 |
-| `extracted_content_pipeline/support_ticket_privacy.py` | 410 |
+| `extracted_content_pipeline/support_ticket_privacy.py` | 478 |
 | `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 21 |
-| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 236 |
+| `plans/PR-Resolution-Audit-S6A-Admission-Boundary.md` | 248 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/test_extracted_support_ticket_input_package.py` | 194 |
 | `tests/test_smoke_content_ops_support_ticket_package.py` | 119 |
-| `tests/test_support_ticket_privacy.py` | 433 |
-| **Total** | **1425** |
+| `tests/test_support_ticket_privacy.py` | 516 |
+| **Total** | **1588** |

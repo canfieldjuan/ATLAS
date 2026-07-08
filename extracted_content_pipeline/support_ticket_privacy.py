@@ -91,6 +91,7 @@ _NOTE_HINTS = ("note", "comment", "reply", "message", "msg")
 _PRIVATE_AUDIENCE_TOKENS = frozenset({
     "agent", "agents", "staff", "admin", "admins", "team", "teams",
     "support", "supports",
+    "internal", "private", "hidden", "confidential", "restricted",
 })
 # Label-style suffixes are structural ONLY on label-class stems:
 # ``visibility_status`` means visibility, but ``internal_status`` is a data
@@ -138,6 +139,12 @@ _OBJECT_MARKER_KEYS = frozenset({
     "privacy",
     "type",
     "kind",
+    "public",
+    "ispublic",
+    "private",
+    "isprivate",
+    "internal",
+    "hidden",
 })
 _AMBIGUOUS_MARKER = "__ambiguous__"
 
@@ -178,11 +185,14 @@ def _mapping_is_private(value: Mapping[str, Any], *, row_mode: bool) -> bool:
         classified = _classify_key(str(key))
         if classified is None:
             continue
-        kind, note_alias = classified
+        kind, note_alias, flag_shaped = classified
         marker = _marker(raw_value)
         if marker is None:
             continue
-        if _marker_is_private(kind, marker, note_alias=note_alias, row_mode=row_mode):
+        content_column = note_alias and not flag_shaped
+        if _marker_is_private(
+            kind, marker, content_column=content_column, row_mode=row_mode
+        ):
             return True
     return False
 
@@ -191,7 +201,7 @@ def _marker_is_private(
     kind: str,
     marker: str,
     *,
-    note_alias: bool,
+    content_column: bool,
     row_mode: bool,
 ) -> bool:
     if kind == _KIND_PRIVATE:
@@ -203,9 +213,10 @@ def _marker_is_private(
         if marker != _AMBIGUOUS_MARKER and _label_is_private(marker):
             return True
         # Remaining markers are unresolved text or container shapes. Under a
-        # note/comment-suffixed key in row mode these are content columns,
-        # not privacy flags; everywhere else they fail closed.
-        if row_mode and note_alias:
+        # non-flag note/comment-suffixed key in row mode these are content
+        # columns, not privacy flags -- but digit-only values are flag
+        # values, not content; everywhere else they fail closed.
+        if row_mode and content_column and not marker.isdigit():
             return False
         return True
     if kind == _KIND_PUBLIC:
@@ -217,11 +228,12 @@ def _marker_is_private(
         if marker != _AMBIGUOUS_MARKER and _label_is_private(marker):
             return True
         # Remaining markers are unresolved text or container shapes. Under a
-        # note/comment-suffixed public key these are content columns
+        # non-flag note/comment-suffixed public key these are content columns
         # (public_comment / public_comments hold customer text or comment
-        # lists in _PUBLIC_COMMENT_KEYS ingestion), not privacy flags;
-        # everywhere else they fail closed.
-        return not note_alias
+        # lists in _PUBLIC_COMMENT_KEYS ingestion), not privacy flags --
+        # but digit-only values are flag values, not content; everywhere
+        # else (incl. is_/has_ flag aliases) they fail closed.
+        return not (content_column and not marker.isdigit())
     if kind == _KIND_PUBLIC_FLAG:
         # Publication/facing flags assert privacy only via booleans:
         # published: false is private; published: <date> is a data column.
@@ -235,25 +247,49 @@ def _marker_is_private(
 
 
 @lru_cache(maxsize=4096)
-def _classify_key(key: str) -> tuple[str, bool] | None:
+def _classify_key(key: str) -> tuple[str, bool, bool] | None:
     tokens = _key_tokens(key)
     if not tokens:
         return None
     compact_all = "".join(tokens)
     note_alias = any(hint in compact_all for hint in _NOTE_HINTS)
+    # Flag-shaped aliases (is_/has_/was_ prefixed or *_flag) are assertions,
+    # never content columns, so the content carveouts must not apply to them.
+    flag_shaped = (
+        compact_all.startswith(_STRIP_PREFIXES)
+        or "flag" in tokens
+        or "flags" in tokens
+    )
     private_audience = any(token in _PRIVATE_AUDIENCE_TOKENS for token in tokens)
     candidates = [compact_all]
     filtered = [token for token in tokens if token not in _KEY_STOP_TOKENS]
     if filtered and len(filtered) < len(tokens):
         candidates.append("".join(filtered))
     for candidate in candidates:
+        # Bare audience-only compounds (admin_only / team_only /
+        # support_only) are the staff-only side, same as agent_only.
+        if candidate.endswith("only") and candidate[:-4] in _PRIVATE_AUDIENCE_TOKENS:
+            return (_KIND_PRIVATE, note_alias, flag_shaped)
         for stem in _stem_forms(candidate):
             kind = _stem_kind(stem)
             if kind is not None:
                 if kind == _KIND_PUBLIC and private_audience:
                     # visible_to_agents / public_to_staff assert privacy.
                     kind = _KIND_PRIVATE
-                return (kind, note_alias)
+                return (kind, note_alias, flag_shaped)
+    # Audience-flip pass: private-audience tokens are droppable structure on
+    # a public-visibility stem (visible_to_internal / public_to_internal).
+    if private_audience:
+        depersoned = [
+            token
+            for token in tokens
+            if token not in _KEY_STOP_TOKENS
+            and token not in _PRIVATE_AUDIENCE_TOKENS
+        ]
+        if depersoned and len(depersoned) < len(tokens):
+            for stem in _stem_forms("".join(depersoned)):
+                if _stem_kind(stem) in (_KIND_PUBLIC, _KIND_PUBLIC_FLAG):
+                    return (_KIND_PRIVATE, note_alias, flag_shaped)
     # Label-style suffixes are structural only on label-class stems
     # (visibility_status / privacy_label / access_label), never on
     # private stems (internal_status stays a data column).
@@ -262,7 +298,7 @@ def _classify_key(key: str) -> tuple[str, bool] | None:
         for stem in _stem_forms("".join(delabeled)):
             kind = _stem_kind(stem)
             if kind in (_KIND_STRICT_LABEL, _KIND_VALUE_LABEL):
-                return (kind, note_alias)
+                return (kind, note_alias, flag_shaped)
     return None
 
 
@@ -334,20 +370,48 @@ def _marker(value: Any) -> str | None:
     return _AMBIGUOUS_MARKER
 
 
+_NEGATIVE_OBJECT_MARKER_KEYS = frozenset({
+    "private", "isprivate", "internal", "hidden",
+})
+_POSITIVE_OBJECT_MARKER_KEYS = frozenset({"public", "ispublic"})
+
+
 def _object_marker(value: Mapping[str, Any]) -> str:
-    resolved: list[str] = []
+    verdicts: set[str] = set()
     for key, marker_value in value.items():
-        if _key(key) not in _OBJECT_MARKER_KEYS:
+        compact_key = _key(key)
+        if compact_key not in _OBJECT_MARKER_KEYS:
             continue
         marker = _marker(marker_value)
-        if marker is not None:
-            resolved.append(marker)
-    if not resolved:
-        return _AMBIGUOUS_MARKER
-    first = resolved[0]
-    if all(marker == first for marker in resolved):
-        return first
+        if marker is None:
+            continue
+        boolish = _boolish(marker)
+        # Boolean subfields carry the KEY's polarity: {"private": true} is a
+        # private decision, {"public": false} likewise.
+        if boolish is not None and compact_key in _NEGATIVE_OBJECT_MARKER_KEYS:
+            verdicts.add("private" if boolish else "public")
+            continue
+        if boolish is not None and compact_key in _POSITIVE_OBJECT_MARKER_KEYS:
+            verdicts.add("public" if boolish else "private")
+            continue
+        verdicts.add(_marker_verdict(marker))
+    # Equivalent forms of the same decision agree ("public" + true is not a
+    # conflict); any private signal or a genuine conflict fails closed.
+    if "private" in verdicts:
+        return "private" if verdicts == {"private"} else _AMBIGUOUS_MARKER
+    if verdicts == {"public"}:
+        return "public"
     return _AMBIGUOUS_MARKER
+
+
+def _marker_verdict(marker: str) -> str:
+    if _boolish(marker) is True or marker in _PUBLIC_LABELS:
+        return "public"
+    if _boolish(marker) is False or (
+        marker != _AMBIGUOUS_MARKER and _label_is_private(marker)
+    ):
+        return "private"
+    return "unknown"
 
 
 def _numeric_marker(value: str) -> str | None:
@@ -386,6 +450,10 @@ def _label_is_private(marker: str) -> bool:
         for suffix in ("only", "use", "uses", "access", "team", "teams"):
             if current.endswith(suffix) and len(current) > len(suffix):
                 current = current[: -len(suffix)]
+                changed = True
+        for prefix in ("for", "is"):
+            if current.startswith(prefix) and len(current) > len(prefix):
+                current = current[len(prefix):]
                 changed = True
     if current in _PRIVATE_KEY_STEMS or current in _PRIVATE_AUDIENCE_TOKENS:
         return True
