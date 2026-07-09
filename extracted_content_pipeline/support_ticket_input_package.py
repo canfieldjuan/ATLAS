@@ -27,7 +27,11 @@ from .support_ticket_context_contract import (
     UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD,
     support_ticket_topic_filter,
 )
-from .support_ticket_dates import parse_support_ticket_source_date
+from .support_ticket_dates import (
+    DATE_CONVENTION_AMBIGUOUS,
+    infer_support_ticket_date_convention,
+    parse_support_ticket_source_date,
+)
 from .support_ticket_junk import support_ticket_row_is_junk
 from .support_ticket_privacy import (
     support_ticket_comment_is_private,
@@ -338,6 +342,7 @@ def build_support_ticket_input_package(
         })
     source_date_signal_count = 0
     junk_excluded_counts: dict[str, int] = {}
+    raw_date_values: list[Any] = []
     for index, row in enumerate(raw_rows[:max_rows], start=1):
         if not isinstance(row, Mapping):
             warnings.append({
@@ -347,6 +352,11 @@ def build_support_ticket_input_package(
             })
             continue
         row_lookup = _SupportTicketRowLookup(row)
+        # The date convention is a property of the EXPORT, not of admission:
+        # a row excluded later (junk auto-reply, missing text) still proves
+        # how the export tool wrote dates. Only the count of evidence is
+        # used; excluded rows' values never egress.
+        raw_date_values.append(row_lookup.first_value(_DATE_KEYS))
         normalized = _normalize_ticket_row(row_lookup, row_index=index)
         junk_reason = normalized.pop("_junk_reason", None) if normalized else None
         if junk_reason:
@@ -423,12 +433,24 @@ def build_support_ticket_input_package(
                 "clusters."
             ),
         })
+    date_convention = infer_support_ticket_date_convention(raw_date_values)
+    if date_convention == DATE_CONVENTION_AMBIGUOUS:
+        warnings.append({
+            "code": "support_ticket_date_convention_ambiguous",
+            "message": (
+                "Numeric ticket dates contradict each other (both day-first "
+                "and month-first evidence); ambiguous dates were left "
+                "unparsed rather than guessed."
+            ),
+        })
+    _normalize_row_created_dates(normalized_rows, convention=date_convention)
     date_diagnostics = _source_date_diagnostics(
-        normalized_rows, source_date_signal_count=source_date_signal_count
+        normalized_rows,
+        source_date_signal_count=source_date_signal_count,
+        convention=date_convention,
     )
-    has_valid_date_window = (
-        bool(normalized_rows) and date_diagnostics["missing_count"] == 0
-    )
+    date_diagnostics["date_convention"] = date_convention
+    has_valid_date_window = _date_window_is_valid(date_diagnostics)
     if (
         normalized_rows
         and not has_valid_date_window
@@ -537,6 +559,9 @@ def build_support_ticket_input_package(
         "ticket_status_present_count": ticket_status_present_count,
         "ticket_status_summary": ticket_status_summary,
         "source_id_fallback_count": len(source_id_fallback_rows),
+        "support_ticket_date_convention": date_diagnostics.get(
+            "date_convention", "unknown"
+        ),
         "junk_excluded_count": sum(junk_excluded_counts.values()),
         "junk_excluded_reasons": dict(sorted(junk_excluded_counts.items())),
         "csat_present": csat_present_count > 0,
@@ -1023,14 +1048,56 @@ def _clip_text(value: str, *, max_chars: int) -> str:
     return f"{trimmed}..."
 
 
+# A window stays valid while at least this share of included rows carry a
+# parseable date: one blank export cell must not flip the report onto the
+# dateless x12 run-rate basis, while sparse dates must not fake a window.
+DATE_WINDOW_MIN_COVERAGE = 0.9
+
+
+def _date_window_is_valid(diagnostics: Mapping[str, Any]) -> bool:
+    included = int(diagnostics.get("included_count") or 0)
+    dated = int(diagnostics.get("dated_count") or 0)
+    if included <= 0:
+        return False
+    return dated / included >= DATE_WINDOW_MIN_COVERAGE
+
+
 def _all_rows_have_dates(rows: Sequence[Mapping[str, Any]]) -> bool:
     return bool(rows) and _source_date_diagnostics(rows)["missing_count"] == 0
+
+
+def _normalize_row_created_dates(
+    rows: Sequence[dict[str, Any]],
+    *,
+    convention: str,
+) -> None:
+    """Rewrite parseable created_at values to ISO once, at admission.
+
+    Downstream consumers (markdown recency, sorting) re-parse row dates;
+    canonicalizing here means the upload-level convention decision is made
+    exactly once and can never transpose later.
+    """
+
+    for row in rows:
+        raw = row.get("created_at")
+        if raw in (None, ""):
+            continue
+        parsed = parse_support_ticket_source_date(raw, convention=convention)
+        if parsed is not None:
+            row["created_at"] = parsed.isoformat()
+        else:
+            # Downstream consumers re-parse row dates with their own
+            # defaults; a raw value this boundary refused to interpret
+            # (ambiguous or malformed) must not leak out to be guessed at.
+            # The invariant: created_at is canonical ISO or absent.
+            row.pop("created_at", None)
 
 
 def _source_date_diagnostics(
     rows: Sequence[Mapping[str, Any]],
     *,
     source_date_signal_count: int | None = None,
+    convention: str = "unknown",
 ) -> dict[str, Any]:
     # The date-column-present signal is supplied out-of-band (computed during
     # row normalization) so it never has to ride on the row dicts. When it is
@@ -1043,7 +1110,9 @@ def _source_date_diagnostics(
     for index, row in enumerate(rows, start=1):
         if source_date_signal_count is None and _clean(row.get("created_at")) != "":
             fallback_signal_count += 1
-        if parse_support_ticket_source_date(row.get("created_at")) is not None:
+        if parse_support_ticket_source_date(
+            row.get("created_at"), convention=convention
+        ) is not None:
             dated_count += 1
             continue
         source_id = _clean(row.get("source_id")) or f"row-{index}"
@@ -1070,6 +1139,7 @@ def _date_window_disabled_warning(diagnostics: Mapping[str, Any]) -> dict[str, A
     missing_count = int(diagnostics.get("missing_count") or 0)
     return {
         "code": "support_ticket_date_window_disabled",
+        "date_convention": diagnostics.get("date_convention", "unknown"),
         "message": (
             "Disabled the dated support-ticket source window because "
             f"{missing_count} of {included_count} included ticket rows did not "

@@ -821,7 +821,7 @@ def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> No
         "text": (
             "How do I reset MFA? I cannot get the login code on my new phone."
         ),
-        "created_at": "05/01/2026",
+        "created_at": "2026-05-01",  # canonicalized to ISO at admission (S7)
         "contact_email": "maya@example.test",
         "support_ticket_cluster": "code login mfa new",
         "support_ticket_cluster_key": "tokens:code-login-mfa-new",
@@ -833,14 +833,14 @@ def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> No
     assert rows[1]["text"] == (
         "Where do I update billing? Why was I charged twice this month?"
     )
-    assert rows[1]["created_at"] == "5/2/2026"
+    assert rows[1]["created_at"] == "2026-05-02"  # ISO at admission (S7)
     assert rows[1]["contact_email"] == "ops@example.test"
     assert rows[2]["source_id"] == "ic-300"
     assert rows[2]["source_title"] == "Cancellation before renewal"
     assert rows[2]["text"] == (
         "Cancellation before renewal How do I cancel my account before it renews?"
     )
-    assert rows[2]["created_at"] == "05-03-26"
+    assert rows[2]["created_at"] == "2026-05-03"  # ISO at admission (S7)
     assert rows[2]["contact_email"] == "founder@example.test"
 
 
@@ -1323,6 +1323,7 @@ def test_support_ticket_input_package_warns_when_date_column_is_blank() -> None:
     assert package.warnings == (
         {
             "code": "support_ticket_date_window_disabled",
+            "date_convention": "unknown",  # S7: convention in diagnostics
             "message": (
                 "Disabled the dated support-ticket source window because "
                 "1 of 1 included ticket rows did not include a parseable "
@@ -1378,6 +1379,7 @@ def test_support_ticket_input_package_omits_window_filter_without_parseable_row_
     assert package.warnings == (
         {
             "code": "support_ticket_date_window_disabled",
+            "date_convention": "unknown",  # S7: convention in diagnostics
             "message": (
                 "Disabled the dated support-ticket source window because "
                 "1 of 1 included ticket rows did not include a parseable "
@@ -1411,6 +1413,7 @@ def test_support_ticket_input_package_omits_window_filter_for_mixed_date_rows() 
     assert package.warnings == (
         {
             "code": "support_ticket_date_window_disabled",
+            "date_convention": "unknown",  # S7: convention in diagnostics
             "message": (
                 "Disabled the dated support-ticket source window because "
                 "1 of 2 included ticket rows did not include a parseable "

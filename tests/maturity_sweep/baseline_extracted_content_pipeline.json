@@ -919,9 +919,10 @@
   },
   "extracted_content_pipeline/support_ticket_dates.py": {
     "counts": {
-      "SWALLOWED_EXCEPT": 3
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 4
     },
-    "score": 15
+    "score": 23
   },
   "extracted_content_pipeline/support_ticket_generated_content_eval.py": {
     "counts": {
