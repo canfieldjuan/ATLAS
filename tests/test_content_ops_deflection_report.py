@@ -3613,6 +3613,24 @@ def test_deflection_full_report_qa_scorecard_checks_surface_caps_behaviorally() 
 
     support_tax["generated_question_count"] = 30
     ranked_rows[:] = [dict(ranked_rows[0], rank=index) for index in range(1, 31)]
+    # Keep the inflated fixture money-consistent with the S8b guard: the
+    # headline must equal the billed-repeat predicate over the new rows.
+    from extracted_content_pipeline.deflection_money import (
+        annualized_support_cost_usd,
+        support_cost_usd,
+    )
+
+    inflated_repeat = sum(
+        int(row["ticket_count"])
+        for row in ranked_rows
+        if int(row["ticket_count"]) >= 2
+    )
+    support_tax["repeat_ticket_count"] = inflated_repeat
+    support_tax["estimated_support_cost"] = support_cost_usd(inflated_repeat)
+    support_tax["annualized_support_cost"] = annualized_support_cost_usd(
+        inflated_repeat,
+        support_tax["source_date_window"]["source_window_days"],
+    )
     detail_rows[:] = [dict(detail_rows[0], rank=index) for index in range(1, 13)]
     diagnostic_rows[:] = [dict(diagnostic_rows[0]) for _ in range(30)]
     seo_targets["phrases"] = [f"phrase {index}" for index in range(1, 31)]
@@ -7496,5 +7514,83 @@ def test_qa_gate_refuses_an_export_missing_linkage_keys() -> None:
         check_deflection_report_artifact_qa(drifted)
 
     assert "evidence_export.matches_stored_artifact" in (
+        exc_info.value.failing_assertion_ids
+    )
+
+
+# S8b: money reconciliation guard (P5-7) -- the scorecard verifies every
+# money figure against the ONE billed-repeat predicate, and the S8a gate
+# makes it fail-closed at persist.
+
+
+def _drifted(mutate) -> dict:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    payload = json.loads(
+        json.dumps(
+            scrub_deflection_report_payload(artifact.as_dict()), default=str
+        )
+    )
+    mutate(payload)
+    return payload
+
+
+def _section_data(payload: dict, section_id: str) -> dict:
+    for section in payload["report_model"]["sections"]:
+        if section["id"] == section_id:
+            return section["data"]
+    raise AssertionError(f"missing section {section_id}")
+
+
+def test_money_guard_passes_the_healthy_artifact() -> None:
+    payload = _drifted(lambda p: None)
+    assert check_deflection_report_artifact_qa(payload)["ok"] is True
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_id"),
+    [
+        (
+            lambda p: _section_data(p, "support_tax").__setitem__(
+                "repeat_ticket_count", 999
+            ),
+            "money.support_tax.repeat_ticket_count.matches_predicate",
+        ),
+        (
+            lambda p: _section_data(p, "support_tax").__setitem__(
+                "estimated_support_cost", 999.0
+            ),
+            "money.support_tax.estimated_support_cost.matches_rule",
+        ),
+        (
+            lambda p: _section_data(p, "ranked_questions")["rows"][0].__setitem__(
+                "estimated_support_cost", 1.0
+            ),
+            "money.rows.each_priced_by_rule",
+        ),
+        (
+            lambda p: _section_data(p, "support_tax").__setitem__(
+                "annualized_support_cost", 5.0
+            ),
+            "money.support_tax.annualized_support_cost.matches_rule",
+        ),
+    ],
+)
+def test_money_guard_refuses_drifted_money(mutate, expected_id: str) -> None:
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(_drifted(mutate))
+    assert expected_id in exc_info.value.failing_assertion_ids
+
+
+def test_money_guard_refuses_dateless_run_rate_drift() -> None:
+    def mutate(payload: dict) -> None:
+        data = _section_data(payload, "support_tax")
+        # Flip to the dateless x12 basis with a wrong run-rate figure.
+        data["source_date_window"] = None
+        data.pop("annualized_support_cost", None)
+        data["annualized_run_rate_support_cost"] = 1.0
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(_drifted(mutate))
+    assert "money.support_tax.annualized_run_rate.matches_rule" in (
         exc_info.value.failing_assertion_ids
     )

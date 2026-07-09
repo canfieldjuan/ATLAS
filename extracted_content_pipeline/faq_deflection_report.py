@@ -1841,6 +1841,7 @@ def build_deflection_full_report_qa_scorecard(
             )
 
     _add_evidence_export_assertions(add, counts, evidence_export)
+    _add_money_reconciliation_assertions(add, sections)
     _add_surface_observation_assertions(
         add,
         counts,
@@ -2270,6 +2271,110 @@ def _scorecard_counts(sections: Mapping[str, Mapping[str, Any]]) -> dict[str, An
             suppressed_repeat_review,
         ),
     }
+
+
+def _add_money_reconciliation_assertions(
+    add: Any,
+    sections: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Verify the model's money figures against the billed-repeat predicate.
+
+    Pure verification (P5-7): every expected value is recomputed from the
+    model's OWN rows via the same `_is_billed_repeat_item` /
+    `deflection_money` functions that produced the figures at build time.
+    Money is linear and quantized once, so equality is exact.
+    """
+
+    support_tax = sections.get("support_tax", {})
+    tax_data = (
+        support_tax.get("data")
+        if isinstance(support_tax.get("data"), Mapping)
+        else {}
+    )
+    ranked = sections.get("ranked_questions", {})
+    ranked_data = (
+        ranked.get("data") if isinstance(ranked.get("data"), Mapping) else {}
+    )
+    raw_rows = ranked_data.get("rows")
+    rows = [
+        row
+        for row in (raw_rows if isinstance(raw_rows, Sequence) else ())
+        if isinstance(row, Mapping)
+    ]
+
+    headline_repeat = _int(tax_data.get("repeat_ticket_count"))
+    predicate_repeat = _repeat_ticket_count(rows)
+    add(
+        "money.support_tax.repeat_ticket_count.matches_predicate",
+        headline_repeat == predicate_repeat,
+        expected=predicate_repeat,
+        actual=headline_repeat,
+    )
+
+    headline_cost = _money_value(tax_data.get("estimated_support_cost"))
+    expected_cost = support_cost_usd(headline_repeat)
+    add(
+        "money.support_tax.estimated_support_cost.matches_rule",
+        headline_cost == expected_cost,
+        expected=expected_cost,
+        actual=headline_cost,
+    )
+
+    billed_row_sum = round(
+        sum(
+            _money_value(row.get("estimated_support_cost"))
+            for row in rows
+            if _is_billed_repeat_item(row)
+        ),
+        2,
+    )
+    add(
+        "money.rows.billed_sum_matches_headline",
+        billed_row_sum == headline_cost,
+        expected=headline_cost,
+        actual=billed_row_sum,
+    )
+    rows_priced_by_rule = all(
+        _money_value(row.get("estimated_support_cost"))
+        == support_cost_usd(_ticket_count(row))
+        for row in rows
+    )
+    add(
+        "money.rows.each_priced_by_rule",
+        rows_priced_by_rule,
+        expected=True,
+        actual=rows_priced_by_rule,
+    )
+
+    window = tax_data.get("source_date_window")
+    if isinstance(window, Mapping) and window:
+        expected_annualized = annualized_support_cost_usd(
+            headline_repeat,
+            _int(window.get("source_window_days")),
+        )
+        add(
+            "money.support_tax.annualized_support_cost.matches_rule",
+            _money_value(tax_data.get("annualized_support_cost"))
+            == expected_annualized,
+            expected=expected_annualized,
+            actual=_money_value(tax_data.get("annualized_support_cost")),
+        )
+    else:
+        expected_run_rate = support_cost_usd(headline_repeat * 12)
+        add(
+            "money.support_tax.annualized_run_rate.matches_rule",
+            _money_value(tax_data.get("annualized_run_rate_support_cost"))
+            == expected_run_rate,
+            expected=expected_run_rate,
+            actual=_money_value(tax_data.get("annualized_run_rate_support_cost")),
+        )
+
+
+def _money_value(value: Any) -> float:
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return -1.0
 
 
 def _add_evidence_export_assertions(
@@ -4864,14 +4969,20 @@ def _source_count(item: Mapping[str, Any]) -> int:
     return source_count or _int(item.get("ticket_count"))
 
 
+def _is_billed_repeat_item(item: Mapping[str, Any]) -> bool:
+    # THE billed-repeat rule. A question asked once is not a repeat:
+    # resolution-scoped items can still carry a single ticket, and they
+    # stay in the report as drafted answers, but they do not count as
+    # repeat work (#1481). The money reconciliation guard applies this
+    # same function -- never a re-hardcoded threshold (P5-7).
+    return _ticket_count(item) >= 2
+
+
 def _repeat_ticket_count(items: Sequence[Mapping[str, Any]]) -> int:
-    # A question asked once is not a repeat: resolution-scoped items can
-    # still carry a single ticket, and they stay in the report as drafted
-    # answers, but they do not count as repeat work (#1481).
     return sum(
         _ticket_count(item)
         for item in items
-        if _ticket_count(item) >= 2
+        if _is_billed_repeat_item(item)
     )
 
 
