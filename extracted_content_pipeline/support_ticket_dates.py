@@ -47,16 +47,20 @@ def infer_support_ticket_date_convention(values: Iterable[Any]) -> str:
     day_first_evidence = 0
     month_first_evidence = 0
     for value in values:
-        match = _NUMERIC_DATE_RE.match(_clean(value))
+        text = _clean(value)
+        match = _NUMERIC_DATE_RE.match(text)
         if not match:
             continue
         first, second = int(match.group(1)), int(match.group(2))
+        # Evidence must PARSE under the convention it implies. Malformed
+        # cells (99/01, 00/13, mixed separators 13/01-2026, impossible days
+        # like 30/02) prove nothing and must not decide the upload.
         if 12 < first <= 31 and 1 <= second <= 12:
-            day_first_evidence += 1
+            if _parses_with(text, _DAY_FIRST_FORMATS):
+                day_first_evidence += 1
         elif 12 < second <= 31 and 1 <= first <= 12:
-            month_first_evidence += 1
-        # Malformed cells (99/01, 00/13) prove nothing: they cannot parse
-        # under either convention and must not decide the upload.
+            if _parses_with(text, _MONTH_FIRST_FORMATS):
+                month_first_evidence += 1
     if day_first_evidence and month_first_evidence:
         return DATE_CONVENTION_AMBIGUOUS
     if day_first_evidence:
@@ -110,6 +114,16 @@ def parse_support_ticket_source_date(
             except ValueError:
                 continue
     return None
+
+
+def _parses_with(text: str, formats: tuple[str, ...]) -> bool:
+    for fmt in formats:
+        try:
+            datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        return True
+    return False
 
 
 def _clean(value: Any) -> str:

@@ -342,6 +342,7 @@ def build_support_ticket_input_package(
         })
     source_date_signal_count = 0
     junk_excluded_counts: dict[str, int] = {}
+    raw_date_values: list[Any] = []
     for index, row in enumerate(raw_rows[:max_rows], start=1):
         if not isinstance(row, Mapping):
             warnings.append({
@@ -351,6 +352,11 @@ def build_support_ticket_input_package(
             })
             continue
         row_lookup = _SupportTicketRowLookup(row)
+        # The date convention is a property of the EXPORT, not of admission:
+        # a row excluded later (junk auto-reply, missing text) still proves
+        # how the export tool wrote dates. Only the count of evidence is
+        # used; excluded rows' values never egress.
+        raw_date_values.append(row_lookup.first_value(_DATE_KEYS))
         normalized = _normalize_ticket_row(row_lookup, row_index=index)
         junk_reason = normalized.pop("_junk_reason", None) if normalized else None
         if junk_reason:
@@ -427,9 +433,7 @@ def build_support_ticket_input_package(
                 "clusters."
             ),
         })
-    date_convention = infer_support_ticket_date_convention(
-        row.get("created_at") for row in normalized_rows
-    )
+    date_convention = infer_support_ticket_date_convention(raw_date_values)
     if date_convention == DATE_CONVENTION_AMBIGUOUS:
         warnings.append({
             "code": "support_ticket_date_convention_ambiguous",

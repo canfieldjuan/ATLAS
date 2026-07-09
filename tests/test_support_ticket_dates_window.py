@@ -200,3 +200,43 @@ def test_refused_dates_do_not_leak_to_source_material() -> None:
     # boundary refused to interpret must not be re-guessed downstream.
     assert "01/13/2026" not in payload
     assert "13/01/2026" not in payload
+
+
+# Round-3 refinements: evidence must parse under the convention it implies,
+# and excluded rows still prove the export's convention.
+
+
+def test_unparseable_plausible_cells_are_not_evidence() -> None:
+    # Mixed separators and impossible days regex-match and look plausible
+    # but parse under no format -- they must not decide the upload.
+    assert infer_support_ticket_date_convention(
+        ["13/01-2026", "02/01/2026"]
+    ) == DATE_CONVENTION_UNKNOWN
+    assert infer_support_ticket_date_convention(
+        ["30/02/2026"]
+    ) == DATE_CONVENTION_UNKNOWN
+    package = build_support_ticket_input_package(
+        _rows(["13/01-2026", "02/01/2026"])
+    )
+    import json
+
+    payload = json.dumps(package.inputs, default=str)
+    # The US default holds when the only "day-first proof" was malformed.
+    assert "2026-02-01" in payload
+    assert "2026-01-02" not in payload
+
+
+def test_excluded_rows_still_prove_the_convention() -> None:
+    import json
+
+    rows = _rows(["02/01/2026", "03/01/2026"])
+    # A dated row with no customer wording is excluded from the report but
+    # still proves the export writes dates day-first.
+    rows.append({"id": "x1", "created_at": "13/01/2026"})
+    package = build_support_ticket_input_package(rows)
+    payload = json.dumps(package.inputs, default=str)
+    assert package.metadata["support_ticket_date_convention"] == (
+        DATE_CONVENTION_DAY_FIRST
+    )
+    assert "2026-01-02" in payload  # Jan 2, not Feb 1
+    assert "2026-02-01" not in payload
