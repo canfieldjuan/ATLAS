@@ -229,3 +229,41 @@ def test_generator_prefix_on_first_body_line_is_junk() -> None:
     assert support_ticket_row_is_junk(
         "", "Undeliverable: your message\ndetails follow"
     ) == JUNK_REASON_BOUNCE
+
+
+# Round-2 review refinements: mid-line questions veto, line-preserved
+# comments, anchored delivery-failed subjects, labeled subject lines.
+
+
+def test_question_before_trailing_text_vetoes_body_junk() -> None:
+    assert support_ticket_row_is_junk(
+        "Template help",
+        "I am out of the office until Monday.\nWhy is it not sending? Thanks",
+    ) is None
+
+
+def test_multiline_comment_auto_reply_is_gated() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "id": "c1",
+            "subject": "Re: help",
+            "comments": ["Hello,\nI am out of the office until Monday.\nBest,\nBob"],
+        }
+    ])
+    assert package.metadata["junk_excluded_count"] == 1
+
+
+def test_delivery_failed_prose_subject_is_admitted() -> None:
+    assert support_ticket_row_is_junk(
+        "Delivery has failed to these recipients when sending invoices",
+        "our invoices bounce",
+    ) is None
+    assert support_ticket_row_is_junk(
+        "Delivery has failed to these recipients or groups:", "x"
+    ) == JUNK_REASON_BOUNCE
+
+
+def test_labeled_subject_line_in_text_export_is_junk() -> None:
+    assert support_ticket_row_is_junk(
+        "", "Subject: Automatic reply: Out of Office\nI am away."
+    ) == JUNK_REASON_AUTO_REPLY

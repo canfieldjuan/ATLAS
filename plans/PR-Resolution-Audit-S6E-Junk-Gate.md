@@ -72,6 +72,17 @@ admitted); any interrogative line vetoes body-shape junk so mixed tickets
 quoting a template stay admitted; generator prefixes are also checked on
 the first body line for subject-in-text exports.
 
+Round-2 review refinements (all four verified failing first): a question
+ANYWHERE in a line vetoes body-shape junk ("Why is it not sending? Thanks");
+comments reach the gate line-preserved per raw comment (`_raw_comment_texts`)
+instead of pre-compacted, so multiline comment-only auto-replies classify;
+the delivery-has-failed subject branch is anchored to the exact DSN sentence
+so customer prose stays admitted; labeled subject lines
+("Subject: Automatic reply: ...") in text exports classify. The
+maturity-sweep ratchet's new-file finding is accepted via its documented
+baseline flow: the module scores on regex density, and its behavior is
+pinned by 34 both-direction tests.
+
 Review-loop guard (the #2053 lesson): if review exceeds ~3 rounds of novel
 junk-PHRASING probes, residuals are class-waived against this closed-rule
 contract (structural position/shape rules; vocabulary is deliberately not
@@ -81,7 +92,7 @@ enumerable) rather than extended per spelling.
 
 Slice phase: Vertical slice
 
-Max files: 7
+Max files: 8
 
 1. `extracted_content_pipeline/support_ticket_junk.py` -- the gate module.
 2. `extracted_content_pipeline/support_ticket_input_package.py` -- wiring +
@@ -93,7 +104,10 @@ Max files: 7
 6. `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` --
    tracker discipline: S6B #2053 ticked merged; ledger row 5 marked in
    progress with this slice.
-7. This plan doc.
+7. `tests/maturity_sweep/baseline_extracted_content_pipeline.json` --
+   ratchet acceptance for the new module via the sweep's documented
+   baseline flow.
+8. This plan doc.
 
 ### Files touched
 
@@ -103,6 +117,7 @@ Max files: 7
 - `extracted_content_pipeline/support_ticket_junk.py`
 - `plans/PR-Resolution-Audit-S6E-Junk-Gate.md`
 - `scripts/run_extracted_pipeline_checks.sh`
+- `tests/maturity_sweep/baseline_extracted_content_pipeline.json`
 - `tests/test_support_ticket_junk.py`
 
 ### Review Contract
@@ -176,9 +191,10 @@ into `junk_excluded_counts`, drops the rows before clustering, and reports
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 4 |
 | `extracted_content_pipeline/manifest.json` | 3 |
-| `extracted_content_pipeline/support_ticket_input_package.py` | 40 |
-| `extracted_content_pipeline/support_ticket_junk.py` | 149 |
-| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 184 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 61 |
+| `extracted_content_pipeline/support_ticket_junk.py` | 154 |
+| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 200 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_junk.py` | 231 |
-| **Total** | **612** |
+| `tests/maturity_sweep/baseline_extracted_content_pipeline.json` | 28 |
+| `tests/test_support_ticket_junk.py` | 269 |
+| **Total** | **720** |

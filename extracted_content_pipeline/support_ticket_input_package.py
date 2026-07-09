@@ -620,19 +620,16 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     if not text:
         return {}
     raw_body = _first_text(row, _TEXT_KEYS)
-    comment_text = _comments_text(row)
-    gate_body = "\n".join(
-        part
-        for part in (
-            support_ticket_plain_text_lines(raw_body),
-            support_ticket_plain_text_lines(comment_text),
-        )
-        if part
+    raw_comments = _raw_comment_texts(row)
+    gate_parts = [support_ticket_plain_text_lines(raw_body)]
+    gate_parts.extend(
+        support_ticket_plain_text_lines(comment) for comment in raw_comments
     )
+    gate_body = "\n".join(part for part in gate_parts if part)
     junk_reason = support_ticket_row_is_junk(
         source_title,
         gate_body,
-        had_source_text=bool(raw_body.strip() or comment_text.strip()),
+        had_source_text=bool(raw_body.strip() or any(raw_comments)),
     )
     if junk_reason:
         # Junk rows (auto-replies, bounces, no-new-content) must not count
@@ -764,6 +761,30 @@ def _ticket_text(row: Mapping[str, Any], *, source_title: str) -> str:
     if comments:
         parts.append(comments)
     return support_ticket_plain_text("\n".join(parts))
+
+
+def _raw_comment_texts(row: Mapping[str, Any]) -> list[str]:
+    """Public comment texts with their line structure intact for the junk
+    gate; `_comments_text` compacts per comment, which erases the line
+    boundaries the assertion patterns key on."""
+
+    texts: list[str] = []
+    for key in _PUBLIC_COMMENT_KEYS:
+        comments = _first_value(row, (key,))
+        if isinstance(comments, Mapping):
+            comments = (comments,)
+        elif isinstance(comments, str):
+            comments = (comments,)
+        elif not isinstance(comments, Sequence) or isinstance(
+            comments,
+            (bytes, bytearray),
+        ):
+            continue
+        for item in comments:
+            text = _comment_text(item)
+            if text:
+                texts.append(text)
+    return texts
 
 
 def _comments_text(row: Mapping[str, Any]) -> str:

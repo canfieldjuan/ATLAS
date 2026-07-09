@@ -33,6 +33,7 @@ JUNK_REASONS = (
 # about the feature ("Out of office not working") does not carry it.
 _AUTO_REPLY_SUBJECT_RE = re.compile(
     r"^\s*(?:\[[^\]]{1,40}\]\s*)*"
+    r"(?:(?:subject|fw|fwd|re)\s*[:\uFF1A]\s*)*"
     r"(?:automatic\s+reply|auto[\s_-]*reply|autoreply|auto[\s_-]*response"
     r"|automated\s+(?:reply|response)|out\s+of\s+(?:the\s+)?office"
     r"|abwesenheitsnotiz|reponse\s+automatique)"
@@ -41,11 +42,13 @@ _AUTO_REPLY_SUBJECT_RE = re.compile(
 )
 _BOUNCE_SUBJECT_RE = re.compile(
     r"^\s*(?:\[[^\]]{1,40}\]\s*)*"
+    r"(?:(?:subject|fw|fwd|re)\s*[:\uFF1A]\s*)*"
     r"(?:(?:undeliverable|undelivered\s+mail|returned\s+mail"
     r"|failure\s+notice|mail\s+delivery\s+(?:failed|failure|subsystem))"
     r"\s*[:\uFF1A]"
     r"|delivery\s+status\s+notification\s*(?:\([^)]*\))?\s*$"
-    r"|delivery\s+has\s+failed\s+to\s+these\s+recipients)",
+    r"|delivery\s+has\s+failed\s+to\s+these\s+recipients\s*"
+    r"(?:or\s+groups)?\s*[:.]?\s*$)",
     re.IGNORECASE,
 )
 
@@ -126,7 +129,9 @@ def support_ticket_row_is_junk(
             return JUNK_REASON_AUTO_REPLY
         if _BOUNCE_SUBJECT_RE.match(lines[0]):
             return JUNK_REASON_BOUNCE
-    if any(line.endswith("?") for line in lines):
+    if any("?" in line for line in lines):
+        # An interrogative anywhere means a customer is asking something;
+        # residual junk that quotes questions is quantified by diagnostics.
         return None
     for line in lines:
         for pattern in _AUTO_REPLY_LINE_RES:
