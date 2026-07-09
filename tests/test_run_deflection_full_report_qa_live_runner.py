@@ -66,6 +66,7 @@ def _report_model() -> dict[str, object]:
                     "assisted_contact_cost": 13.5,
                     "estimated_support_cost": 108.0,
                     "source_date_window": {},
+                    "annualized_run_rate_support_cost": 1296.0,
                     "drafted_answer_count": 1,
                     "no_proven_answer_count": 1,
                     "ticket_source_count": 8,
@@ -87,8 +88,18 @@ def _report_model() -> dict[str, object]:
                 "priority": 30,
                 "data": {
                     "rows": [
-                        {"rank": 1, "question": "How do I export attribution reports?"},
-                        {"rank": 2, "question": "How do I invite teammates?"},
+                        {
+                            "rank": 1,
+                            "question": "How do I export attribution reports?",
+                            "ticket_count": 5,
+                            "estimated_support_cost": 67.5,
+                        },
+                        {
+                            "rank": 2,
+                            "question": "How do I invite teammates?",
+                            "ticket_count": 3,
+                            "estimated_support_cost": 40.5,
+                        },
                     ],
                 },
             },

@@ -19,7 +19,10 @@ from extracted_content_pipeline.deflection_report_access import (
     deflection_delta_read_payload,
     stored_deflection_report_model,
 )
-from extracted_content_pipeline.deflection_money import format_support_cost_usd
+from extracted_content_pipeline.deflection_money import (
+    format_support_cost_usd,
+    signed_support_cost_delta_usd,
+)
 from extracted_content_pipeline.faq_deflection_report import (
     deflection_report_email_action_rows,
 )
@@ -1647,7 +1650,14 @@ def _signed_email_money(value: float) -> str:
 
 
 def _whole_dollar_money(value: float) -> str:
-    return f"${float(value):,.0f}"
+    # f-string float formatting rounds half-even; money rounds half-up
+    # (the canonical deflection_money rule), so quantize before display.
+    from decimal import Decimal, ROUND_HALF_UP
+
+    dollars = Decimal(str(abs(signed_support_cost_delta_usd(value)))).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
+    return f"${dollars:,}"
 
 
 def _signed_count(value: int) -> str:

@@ -33,6 +33,7 @@ def _report_model() -> dict[str, object]:
                     "assisted_contact_cost": 13.5,
                     "estimated_support_cost": 108.0,
                     "source_date_window": {},
+                    "annualized_run_rate_support_cost": 1296.0,
                     "drafted_answer_count": 1,
                     "no_proven_answer_count": 1,
                     "ticket_source_count": 8,
@@ -50,7 +51,7 @@ def _report_model() -> dict[str, object]:
             },
             {
                 "id": "ranked_questions",
-                "data": {"rows": [{"rank": 1}, {"rank": 2}]},
+                "data": {"rows": [{"rank": 1, "ticket_count": 5, "estimated_support_cost": 67.5}, {"rank": 2, "ticket_count": 3, "estimated_support_cost": 40.5}]},
             },
             {
                 "id": "priority_fix_queue",
@@ -102,7 +103,7 @@ def _report_model() -> dict[str, object]:
             },
             {
                 "id": "question_details",
-                "data": {"rows": [{"rank": 1}, {"rank": 2}]},
+                "data": {"rows": [{"rank": 1, "ticket_count": 5, "estimated_support_cost": 67.5}, {"rank": 2, "ticket_count": 3, "estimated_support_cost": 40.5}]},
             },
             {
                 "id": "complete_evidence",
