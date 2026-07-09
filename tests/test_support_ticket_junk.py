@@ -399,3 +399,44 @@ def test_prose_before_subject_label_does_not_junk() -> None:
         "Subject: Automatic reply: Out of Office\n"
         "Why is this happening?",
     ) is None
+
+
+# Round-7 refinements: compact headers, bounded limited-access tails,
+# body-over-comment gating, and subject assertions deferring to body voice.
+
+
+def test_compact_header_lines_are_header_shaped() -> None:
+    assert support_ticket_row_is_junk(
+        "", "From:Mail Delivery Subsystem\nSubject: Undeliverable: your message"
+    ) == JUNK_REASON_BOUNCE
+
+
+def test_limited_access_tail_is_bounded() -> None:
+    assert support_ticket_row_is_junk(
+        "Settings",
+        "I will have limited access to email auto-reply setting is not working",
+    ) is None
+    assert support_ticket_row_is_junk(
+        "Re: help", "I will have limited access to email until 7/20."
+    ) == JUNK_REASON_AUTO_REPLY
+
+
+def test_auto_ack_comment_does_not_junk_a_real_ticket() -> None:
+    package = build_support_ticket_input_package([{
+        "id": "r1",
+        "subject": "Login broken",
+        "description": "Login is broken for our team.",
+        "comments": ["We received your ticket and will get back to you soon."],
+    }])
+    assert package.metadata["junk_excluded_count"] == 0
+    assert package.inputs["included_ticket_row_count"] == 1
+
+
+def test_machine_subject_defers_to_customer_body_voice() -> None:
+    assert support_ticket_row_is_junk(
+        "Your message could not be delivered",
+        "Why are our invoices bouncing?",
+    ) is None
+    assert support_ticket_row_is_junk(
+        "Your message could not be delivered", ""
+    ) == JUNK_REASON_BOUNCE

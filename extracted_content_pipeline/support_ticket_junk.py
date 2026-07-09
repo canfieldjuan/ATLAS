@@ -69,7 +69,10 @@ _AUTO_REPLY_LINE_RES = (
     ),
     re.compile(
         r"^i\s+(?:will\s+)?have\s+(?:limited|no)\s+access\s+to\s+"
-        r"(?:my\s+)?e?mail\b[^?]*$",
+        r"(?:my\s+)?e?mail"
+        r"(?:\s*[.!]?\s*$|\s+(?:until|through|till|thru|from|during"
+        r"|while|this|next|today|tomorrow"
+        r"|and\s+(?:will|won'?t|shall|cannot|can'?t|may))\b[^?]*$)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -90,7 +93,7 @@ _AUTO_REPLY_LINE_RES = (
     ),
 )
 _SUBJECT_LABEL_RE = re.compile(r"^\s*subject\s*[:\uFF1A]", re.IGNORECASE)
-_HEADER_LINE_RE = re.compile(r"^[a-z][a-z0-9-]*\s*[:\uFF1A]\s", re.IGNORECASE)
+_HEADER_LINE_RE = re.compile(r"^[a-z][a-z0-9-]*[:\uFF1A]\s?", re.IGNORECASE)
 
 _BOUNCE_LINE_RES = (
     re.compile(
@@ -131,14 +134,6 @@ def support_ticket_row_is_junk(
         return JUNK_REASON_AUTO_REPLY
     if _BOUNCE_SUBJECT_RE.match(subject or ""):
         return JUNK_REASON_BOUNCE
-    subject_line = (subject or "").strip()
-    if subject_line:
-        for pattern in _AUTO_REPLY_LINE_RES:
-            if pattern.match(subject_line):
-                return JUNK_REASON_AUTO_REPLY
-        for pattern in _BOUNCE_LINE_RES:
-            if pattern.match(subject_line):
-                return JUNK_REASON_BOUNCE
     lines = [line.strip() for line in (body_lines or "").split("\n") if line.strip()]
     if lines:
         if _AUTO_REPLY_SUBJECT_RE.match(lines[0]):
@@ -173,6 +168,17 @@ def support_ticket_row_is_junk(
         for line in lines
     ):
         return None
+    # Machine assertions in the SUBJECT classify only once body voice has
+    # been heard: a machine-shaped subject with a real customer question in
+    # the body is a customer ticket.
+    subject_line = (subject or "").strip()
+    if subject_line:
+        for pattern in _AUTO_REPLY_LINE_RES:
+            if pattern.match(subject_line):
+                return JUNK_REASON_AUTO_REPLY
+        for pattern in _BOUNCE_LINE_RES:
+            if pattern.match(subject_line):
+                return JUNK_REASON_BOUNCE
     for line in lines:
         for pattern in _AUTO_REPLY_LINE_RES:
             if pattern.match(line):

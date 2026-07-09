@@ -621,10 +621,16 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         return {}
     raw_body = _first_text(row, _TEXT_KEYS)
     raw_comments = _raw_comment_texts(row)
-    gate_parts = [support_ticket_plain_text_lines(raw_body)]
-    gate_parts.extend(
-        support_ticket_plain_text_lines(comment) for comment in raw_comments
-    )
+    body_part = support_ticket_plain_text_lines(raw_body)
+    if body_part:
+        # A row with real customer body text is judged on that body; a
+        # generated auto-ack COMMENT must not junk a real ticket.
+        gate_parts = [body_part]
+    else:
+        gate_parts = [
+            support_ticket_plain_text_lines(comment)
+            for comment in raw_comments
+        ]
     gate_body = "\n".join(part for part in gate_parts if part)
     junk_reason = support_ticket_row_is_junk(
         source_title,
