@@ -93,6 +93,19 @@ then 404'd the report-model route -- the gate now runs that SAME
 projection (lazy import; deflection_report_access imports this module).
 Both checks reuse canonical readers; no hand-written field lists.
 
+Round-3 refinements (cap round; both verified failing first): (1) the
+stored projection silently DROPS invalid sections rather than returning
+None, so breaking one required section passed the None-check while the
+paid report-model route lost that section -- the gate now runs the SAME
+scorecard on the projected model paid readers see (failing ids prefixed
+`stored_projection:`); (2) stripping the volatile linkage keys from the
+export-integrity comparison accepted exports that OMIT them entirely --
+the keys are now normalized to a presence/type marker instead of
+removed, so omission and non-string corruption fail while the
+scrub-volatile hash content stays ignored. Residual (accepted by
+construction): a tampered-but-well-typed hash value is indistinguishable
+from a legitimate scrub re-derivation.
+
 Review-loop guard: HARD cap of 3 Codex rounds counted by ROUNDS; at
 cap, fix what is written, resolve/waive remaining threads, merge on
 required-green.
@@ -201,8 +214,8 @@ in the detail.
 | File | LOC |
 |---|---:|
 | `extracted_content_pipeline/api/control_surfaces.py` | 8 |
-| `extracted_content_pipeline/faq_deflection_report.py` | 107 |
-| `plans/PR-Resolution-Audit-S8a-Runtime-QA-Gate.md` | 208 |
-| `tests/test_content_ops_deflection_report.py` | 130 |
+| `extracted_content_pipeline/faq_deflection_report.py` | 129 |
+| `plans/PR-Resolution-Audit-S8a-Runtime-QA-Gate.md` | 221 |
+| `tests/test_content_ops_deflection_report.py` | 174 |
 | `tests/test_extracted_content_deflection_submit.py` | 220 |
-| **Total** | **673** |
+| **Total** | **752** |

@@ -1921,22 +1921,33 @@ def check_deflection_report_artifact_qa(
     ):
         failing.append("evidence_export.matches_stored_artifact")
     # 2. Paid read surfaces project the stored model through
-    #    stored_deflection_report_model(); an artifact that projection
-    #    rejects would persist, take payment, then 404 the report-model
-    #    route. Imported lazily: deflection_report_access imports this
-    #    module at top level.
+    #    stored_deflection_report_model(), which silently DROPS invalid
+    #    sections -- a non-None projection can still be missing required
+    #    sections. Run the same scorecard on the projection paid readers
+    #    will actually see. Imported lazily: deflection_report_access
+    #    imports this module at top level.
     from .deflection_report_access import stored_deflection_report_model
 
-    if stored_deflection_report_model(payload) is None:
-        failing.append("model.stored_projection.readable")
+    projected = stored_deflection_report_model(payload)
+    projected_scorecard = build_deflection_full_report_qa_scorecard(
+        projected if isinstance(projected, Mapping) else {},
+        evidence_export=evidence_export,
+    )
+    failing.extend(
+        "stored_projection:" + _text(assertion.get("id"))
+        for assertion in projected_scorecard.get("assertions", ())
+        if isinstance(assertion, Mapping) and not assertion.get("ok")
+    )
     if failing:
         raise DeflectionReportQAGateError(failing, scorecard)
     return scorecard
 
 
-# Content-hash linkage keys are re-derived from (possibly PII-scrubbed) text,
-# so they legitimately differ between the stored export and a fresh
-# derivation; every other field must match exactly.
+# Content-hash linkage keys (paid delta-matching contract) are re-derived
+# from possibly PII-scrubbed text, so their VALUES legitimately differ
+# between the stored export and a fresh derivation -- but the fields must
+# still be present as non-empty strings. Every other field must match
+# exactly.
 _EXPORT_INTEGRITY_VOLATILE_KEYS = frozenset({"cluster_id", "repeat_key"})
 
 
@@ -1944,20 +1955,31 @@ def _export_integrity_view(export: Mapping[str, Any] | None) -> str:
     if not isinstance(export, Mapping):
         return ""
 
-    def strip(value: Any) -> Any:
+    def normalize(value: Any) -> Any:
         if isinstance(value, Mapping):
             return {
-                key: strip(item)
+                key: (
+                    _volatile_key_marker(item)
+                    if key in _EXPORT_INTEGRITY_VOLATILE_KEYS
+                    else normalize(item)
+                )
                 for key, item in value.items()
-                if key not in _EXPORT_INTEGRITY_VOLATILE_KEYS
             }
         if isinstance(value, Sequence) and not isinstance(
             value, (str, bytes, bytearray)
         ):
-            return [strip(item) for item in value]
+            return [normalize(item) for item in value]
         return value
 
-    return json.dumps(strip(export), sort_keys=True, default=str)
+    return json.dumps(normalize(export), sort_keys=True, default=str)
+
+
+def _volatile_key_marker(value: Any) -> str:
+    # Omitting the key entirely still mismatches (the canonical derivation
+    # always carries it); this marker only ignores the hash CONTENT.
+    if isinstance(value, str) and value.strip():
+        return "<volatile:str>"
+    return "<volatile:invalid>"
 
 
 def build_deflection_full_report_qa_deterministic_harness(

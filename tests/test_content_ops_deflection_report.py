@@ -7451,6 +7451,50 @@ def test_qa_gate_refuses_a_model_paid_readers_cannot_project() -> None:
     with pytest.raises(DeflectionReportQAGateError) as exc_info:
         check_deflection_report_artifact_qa(drifted)
 
-    assert "model.stored_projection.readable" in (
+    # Round 3 upgraded the None-check to a full scorecard on the projected
+    # model; an unprojectable model now fails its section assertions.
+    assert any(
+        failing_id.startswith("stored_projection:")
+        for failing_id in exc_info.value.failing_assertion_ids
+    )
+
+
+# Round-3 review refinements (cap round): the projection paid readers see
+# is itself scorecard-checked, and linkage keys must be present even
+# though their hash content is scrub-volatile.
+
+
+def test_qa_gate_refuses_a_projection_that_drops_a_required_section() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    model = json.loads(json.dumps(drifted["report_model"], default=str))
+    for section in model["sections"]:
+        if section["id"] == "ranked_questions":
+            # The stored projection silently drops this section; the paid
+            # report-model route would then be missing it.
+            section["priority"] = "high"
+    drifted["report_model"] = model
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "stored_projection:model.section.ranked_questions.present" in (
+        exc_info.value.failing_assertion_ids
+    )
+
+
+def test_qa_gate_refuses_an_export_missing_linkage_keys() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    export = json.loads(json.dumps(drifted["evidence_export"], default=str))
+    for element in list(export["questions"]) + list(export["evidence_rows"]):
+        element.pop("cluster_id", None)
+        element.pop("repeat_key", None)
+    drifted["evidence_export"] = export
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "evidence_export.matches_stored_artifact" in (
         exc_info.value.failing_assertion_ids
     )
