@@ -57,7 +57,8 @@ _BOUNCE_SUBJECT_RE = re.compile(
 # first-person assertions and never match these anchored shapes.
 _AUTO_REPLY_LINE_RES = (
     re.compile(
-        r"^i\s+(?:am|will\s+be)\s+(?:currently\s+)?"
+        r"^i(?:\s+am|['\u2019]m|\s+will\s+be|['\u2019]ll\s+be)\s+"
+        r"(?:currently\s+)?"
         r"(?:out\s+of\s+(?:the\s+)?office|away\s+from\s+(?:my\s+)?"
         r"(?:desk|email|the\s+office)|on\s+(?:vacation|leave|holiday|pto))\b"
         r"[^?]*$",
@@ -80,10 +81,13 @@ _AUTO_REPLY_LINE_RES = (
     ),
     re.compile(
         r"^i\s+(?:will\s+)?(?:be\s+)?return(?:ing)?\s+"
-        r"(?:to\s+the\s+office\s+)?on\s+\S+[^?]*$",
+        r"(?:to\s+the\s+office|from\s+(?:leave|vacation|holiday|pto))\s+"
+        r"on\s+\S+[^?]*$",
         re.IGNORECASE,
     ),
 )
+_SUBJECT_LABEL_RE = re.compile(r"^\s*subject\s*[:\uFF1A]", re.IGNORECASE)
+
 _BOUNCE_LINE_RES = (
     re.compile(
         r"^(?:your\s+)?message\s+(?:could\s+not|couldn't|was\s+not|wasn't)\s+"
@@ -129,6 +133,18 @@ def support_ticket_row_is_junk(
             return JUNK_REASON_AUTO_REPLY
         if _BOUNCE_SUBJECT_RE.match(lines[0]):
             return JUNK_REASON_BOUNCE
+        # Text exports often carry a leading header block (From:/To:/
+        # Subject:); a Subject:-labeled generator prefix anywhere in it is
+        # definitive. Unlabeled prefixes stay first-line-only so quoted
+        # replies deeper in a body cannot junk the row.
+        for line in lines[1:5]:
+            if _SUBJECT_LABEL_RE.match(line) and (
+                _AUTO_REPLY_SUBJECT_RE.match(line)
+                or _BOUNCE_SUBJECT_RE.match(line)
+            ):
+                if _AUTO_REPLY_SUBJECT_RE.match(line):
+                    return JUNK_REASON_AUTO_REPLY
+                return JUNK_REASON_BOUNCE
     if any("?" in line for line in lines):
         # An interrogative anywhere means a customer is asking something;
         # residual junk that quotes questions is quantified by diagnostics.

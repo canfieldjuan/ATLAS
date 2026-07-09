@@ -83,6 +83,16 @@ maturity-sweep ratchet's new-file finding is accepted via its documented
 baseline flow: the module scores on regex density, and its behavior is
 pinned by 34 both-direction tests.
 
+Round-3 review refinements (all three verified failing first; shape
+corrections, not phrasing probes): contracted first-person forms (I'm /
+I'll be) join the same assertion shape; return-on-date lines require office/
+leave context so real evidence ("I will return on Tuesday with the debug
+logs") stays admitted; Subject:-labeled generator prefixes are scanned in
+the leading header block (first 5 lines) for header-order text exports,
+while unlabeled prefixes stay first-line-only so deep quoted replies cannot
+junk a row. The review-loop cap is now REACHED: further phrasing-only probes
+are class-waived per the guard below.
+
 Review-loop guard (the #2053 lesson): if review exceeds ~3 rounds of novel
 junk-PHRASING probes, residuals are class-waived against this closed-rule
 contract (structural position/shape rules; vocabulary is deliberately not
@@ -192,9 +202,9 @@ into `junk_excluded_counts`, drops the rows before clustering, and reports
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 4 |
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 61 |
-| `extracted_content_pipeline/support_ticket_junk.py` | 154 |
-| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 200 |
+| `extracted_content_pipeline/support_ticket_junk.py` | 170 |
+| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 210 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/maturity_sweep/baseline_extracted_content_pipeline.json` | 28 |
-| `tests/test_support_ticket_junk.py` | 269 |
-| **Total** | **720** |
+| `tests/test_support_ticket_junk.py` | 310 |
+| **Total** | **787** |

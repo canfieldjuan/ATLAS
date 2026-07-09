@@ -267,3 +267,44 @@ def test_labeled_subject_line_in_text_export_is_junk() -> None:
     assert support_ticket_row_is_junk(
         "", "Subject: Automatic reply: Out of Office\nI am away."
     ) == JUNK_REASON_AUTO_REPLY
+
+
+# Round-3 review refinements: contracted first-person forms, office-context
+# return lines, and header-block subject scanning.
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "I'm out of the office until Monday with limited access to email",
+        "I'll be away from my desk this week",
+    ],
+)
+def test_contracted_first_person_assertions_are_junk(line: str) -> None:
+    assert support_ticket_row_is_junk("Re: help", line) == JUNK_REASON_AUTO_REPLY
+
+
+def test_return_lines_need_office_context() -> None:
+    assert support_ticket_row_is_junk(
+        "Update", "I will return on Tuesday with the debug logs."
+    ) is None
+    assert support_ticket_row_is_junk(
+        "Re: help", "I will return to the office on Monday."
+    ) == JUNK_REASON_AUTO_REPLY
+
+
+def test_header_block_subject_lines_are_scanned() -> None:
+    assert support_ticket_row_is_junk(
+        "",
+        "From: Mail Delivery Subsystem\n"
+        "Subject: Undeliverable: your message\n"
+        "Diagnostic-Code: smtp 550",
+    ) == JUNK_REASON_BOUNCE
+
+
+def test_deep_unlabeled_prefixes_do_not_junk_the_row() -> None:
+    assert support_ticket_row_is_junk(
+        "Setup question",
+        "here is what my customers see\nsome context\nmore context\n"
+        "extra line\nAutomatic reply: Out of Office",
+    ) is None
