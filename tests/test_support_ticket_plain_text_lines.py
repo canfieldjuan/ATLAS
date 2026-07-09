@@ -509,3 +509,29 @@ def test_newline_still_bounds_regex_candidates() -> None:
     assert support_ticket_plain_text(
         "<script>a = b / 2\n<p>Real</p>"
     ) == "Real"
+
+
+# Round-10 refinements: paired excluded bodies after leading text, code
+# comparisons rejected as recovery boundaries, boolean-attribute tags.
+
+
+def test_paired_excluded_bodies_after_leading_text_are_excluded() -> None:
+    assert support_ticket_plain_text_lines(
+        "My new question<blockquote>On Mon Bob wrote: reset</blockquote>"
+    ) == "My new question"
+    assert support_ticket_plain_text("Real<script>x</script>") == "Real"
+
+
+def test_mention_with_trailing_prose_still_preserved() -> None:
+    text = "How do I write <blockquote>hello</blockquote> in the editor?"
+    assert support_ticket_plain_text(text) == text
+
+
+def test_tag_shaped_comparisons_are_not_recovery_boundaries() -> None:
+    assert support_ticket_plain_text("<p>a</p><script>if (x<p>y) {}") == "a"
+
+
+def test_boolean_attribute_tags_are_recoverable() -> None:
+    assert support_ticket_plain_text_lines(
+        "<script>x;<p hidden>Real</p>"
+    ) == "Real"

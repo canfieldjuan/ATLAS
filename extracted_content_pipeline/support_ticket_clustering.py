@@ -45,6 +45,13 @@ _HTML_EXCLUDED_TAG_RE = re.compile(
     r"</?(script|style|blockquote)\b[^>]*>",
     re.IGNORECASE,
 )
+# A paired excluded element that CLOSES the body ("Real<script>x</script>",
+# "question<blockquote>quoted</blockquote>") is markup; a mention keeps
+# trailing prose ("... <blockquote>hello</blockquote> in the editor?").
+_HTML_EXCLUDED_TAG_AT_END_RE = re.compile(
+    r"<(script|style|blockquote)\b[^>]*>.*?</\1\s*>\s*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
 _HTML_CUSTOM_TAG_RE = re.compile(
     r"</?[a-z][a-z0-9:-]*-[a-z0-9:-]*(?:\s+[^<>]*)?/?>",
     re.IGNORECASE,
@@ -461,17 +468,36 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
     candidates = [
         match.start()
         for pattern in (
-            _HTML_SIGNAL_RE,
+            _HTML_RECOVERY_TAG_RE,
             _HTML_CUSTOM_TAG_RE,
             _HTML_EXCLUDED_TAG_RE,
         )
         for match in pattern.finditer(buffered)
     ]
     for position in sorted(candidates):
-        if not any(lo <= position <= hi for lo, hi in masked):
-            return position
+        if any(lo <= position <= hi for lo, hi in masked):
+            continue
+        # Tag-shaped code such as comparisons (if (x<p>y)) is not markup:
+        # a real tag follows a code/markup boundary, not an identifier.
+        preceding = buffered[position - 1] if position > 0 else ""
+        if preceding and not (
+            preceding.isspace() or preceding in ";{}()>,=&|!?:/"
+        ):
+            continue
+        return position
     return None
 
+
+# Recovery-only tag shape: like _HTML_SIGNAL_RE but attributes may be bare
+# booleans (<p hidden>), which real fragments use and code rarely does.
+_HTML_RECOVERY_ATTR_RE = (
+    r"(?:\s+[a-z_:][a-z0-9_:.-]*"
+    r"(?:\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]+))?)"
+)
+_HTML_RECOVERY_TAG_RE = re.compile(
+    rf"</?{_HTML_TAG_NAMES_RE}(?:{_HTML_RECOVERY_ATTR_RE})*\s*/?>",
+    re.IGNORECASE,
+)
 
 _JS_EXPRESSION_KEYWORDS = frozenset({
     "return", "typeof", "case", "in", "of", "delete", "void", "throw",
@@ -669,6 +695,7 @@ def _looks_like_html(text: str) -> bool:
     return bool(
         _HTML_SIGNAL_RE.search(text)
         or _HTML_EXCLUDED_TAG_AT_START_RE.search(text)
+        or _HTML_EXCLUDED_TAG_AT_END_RE.search(text)
         or _HTML_CUSTOM_TAG_RE.search(text)
     )
 

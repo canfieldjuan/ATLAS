@@ -141,6 +141,14 @@ context so `return /x/ / 2` reads as division; unterminated regex candidates
 at EOF are masked -- the newline reset bounds the mask to at most the final
 line, so the round-5 no-mask rationale is superseded safely.
 
+Round-10 refinements (each verified failing first): a paired excluded element
+that CLOSES the body ("Real<script>x</script>",
+"question<blockquote>quoted</blockquote>") is markup while mentions keep
+trailing prose; recovery candidates must follow a code/markup boundary
+character, so tag-shaped comparisons (`if (x<p>y)`) are never boundaries; a
+recovery-only tag shape tolerates boolean attributes (`<p hidden>`), which
+real fragments use and code rarely does.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -244,8 +252,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 362 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 251 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 389 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 259 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 511 |
-| **Total** | **1139** |
+| `tests/test_support_ticket_plain_text_lines.py` | 537 |
+| **Total** | **1200** |
