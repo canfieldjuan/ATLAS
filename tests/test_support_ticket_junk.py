@@ -308,3 +308,21 @@ def test_deep_unlabeled_prefixes_do_not_junk_the_row() -> None:
         "here is what my customers see\nsome context\nmore context\n"
         "extra line\nAutomatic reply: Out of Office",
     ) is None
+
+
+# Round-4 refinement: bounce assertions classify before the question veto.
+
+
+def test_bounce_quoting_an_interrogative_subject_is_still_a_bounce() -> None:
+    assert support_ticket_row_is_junk(
+        "Re: something",
+        "Your message could not be delivered to the recipient.\n"
+        "Subject: Why can't I login?",
+    ) == JUNK_REASON_BOUNCE
+
+
+def test_customer_question_about_bounces_still_passes() -> None:
+    assert support_ticket_row_is_junk(
+        "Bounce troubleshooting",
+        "Why do my customers see Your message could not be delivered?",
+    ) is None

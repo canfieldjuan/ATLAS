@@ -93,6 +93,11 @@ while unlabeled prefixes stay first-line-only so deep quoted replies cannot
 junk a row. The review-loop cap is now REACHED: further phrasing-only probes
 are class-waived per the guard below.
 
+Round-4 refinement (structural ordering, verified failing first): bounce
+assertions classify BEFORE the question veto -- a DSN quoting the original
+interrogative subject is still a bounce; customer questions about bounces
+still pass.
+
 Review-loop guard (the #2053 lesson): if review exceeds ~3 rounds of novel
 junk-PHRASING probes, residuals are class-waived against this closed-rule
 contract (structural position/shape rules; vocabulary is deliberately not
@@ -202,9 +207,9 @@ into `junk_excluded_counts`, drops the rows before clustering, and reports
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 4 |
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 61 |
-| `extracted_content_pipeline/support_ticket_junk.py` | 170 |
-| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 210 |
+| `extracted_content_pipeline/support_ticket_junk.py` | 174 |
+| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 215 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/maturity_sweep/baseline_extracted_content_pipeline.json` | 28 |
-| `tests/test_support_ticket_junk.py` | 310 |
-| **Total** | **787** |
+| `tests/test_support_ticket_junk.py` | 328 |
+| **Total** | **814** |

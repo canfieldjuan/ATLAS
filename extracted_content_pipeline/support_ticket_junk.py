@@ -145,6 +145,13 @@ def support_ticket_row_is_junk(
                 if _AUTO_REPLY_SUBJECT_RE.match(line):
                     return JUNK_REASON_AUTO_REPLY
                 return JUNK_REASON_BOUNCE
+    # Bounce assertions are machine statements: a DSN quoting the original
+    # (often interrogative) subject is still a bounce, so bounce lines
+    # classify BEFORE the question veto.
+    for line in lines:
+        for pattern in _BOUNCE_LINE_RES:
+            if pattern.match(line):
+                return JUNK_REASON_BOUNCE
     if any("?" in line for line in lines):
         # An interrogative anywhere means a customer is asking something;
         # residual junk that quotes questions is quantified by diagnostics.
@@ -153,9 +160,6 @@ def support_ticket_row_is_junk(
         for pattern in _AUTO_REPLY_LINE_RES:
             if pattern.match(line):
                 return JUNK_REASON_AUTO_REPLY
-        for pattern in _BOUNCE_LINE_RES:
-            if pattern.match(line):
-                return JUNK_REASON_BOUNCE
     if had_source_text and not lines and not (subject or "").strip():
         return JUNK_REASON_NO_NEW_CONTENT
     return None
