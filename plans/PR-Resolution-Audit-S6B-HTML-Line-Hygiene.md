@@ -106,6 +106,16 @@ paired-only detection family, so lone mentions in prose stay customer wording
 while quote-to-EOF inside real HTML stays excluded; the drift-guard test
 accepts either detector family.
 
+Round-6 refinements (each verified failing first; the mention-vs-markup rule
+is now POSITION-based, dissolving the paired-vs-unpaired contradiction across
+rounds 3-6): an excluded tag at the START of the body is markup intent
+(`<script>alert(1)` excludes, `<blockquote>quoted prior reply` is all-quote)
+while mid-prose mentions -- lone OR paired -- are customer wording ("How do I
+write <blockquote>hello</blockquote> in the editor?"); EOF recovery candidates
+include excluded-tag positions so re-extraction opens the scope instead of
+starting inside an excluded body; regex literals after expression keywords
+(`return /.../;`) are masked via a bounded JS keyword set.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -209,8 +219,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 290 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 216 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 310 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 226 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 344 |
-| **Total** | **865** |
+| `tests/test_support_ticket_plain_text_lines.py` | 383 |
+| **Total** | **934** |

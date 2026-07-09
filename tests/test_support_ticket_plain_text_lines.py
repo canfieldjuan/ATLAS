@@ -13,7 +13,7 @@ import pytest
 
 from extracted_content_pipeline.support_ticket_clustering import (
     _BLOCK_TAG_NAMES,
-    _HTML_SCRIPT_STYLE_PAIRED_RE,
+    _HTML_EXCLUDED_TAG_RE,
     _HTML_TAG_NAMES_RE,
     support_ticket_plain_text,
     support_ticket_plain_text_lines,
@@ -144,11 +144,11 @@ def test_customer_wording_about_auto_reply_is_untouched() -> None:
 
 def test_every_block_tag_is_in_the_detector_families() -> None:
     # Drift guard: line extraction and HTML detection share tag families --
-    # either the bare signal families or the paired-only family.
+    # either the bare signal families or the excluded-tag family.
     for tag in sorted(_BLOCK_TAG_NAMES):
         bare = re.fullmatch(_HTML_TAG_NAMES_RE, tag, re.IGNORECASE)
-        paired = _HTML_SCRIPT_STYLE_PAIRED_RE.search(f"<{tag}>x</{tag}>")
-        assert bare or paired, tag
+        excluded = _HTML_EXCLUDED_TAG_RE.fullmatch(f"<{tag}>")
+        assert bare or excluded, tag
 
 
 # Round-1 review refinements: script/style are detector signals, EOF
@@ -342,3 +342,42 @@ def test_end_tag_slash_in_buffer_is_not_a_regex() -> None:
     assert support_ticket_plain_text_lines(
         "<blockquote><script>x</blockquote><p>Real</p>"
     ) == "Real"
+
+
+# Round-6 refinements: position-based detection for excluded tags (start of
+# body = markup intent, mid-prose = customer wording), recovery respects
+# excluded bodies, and keyword-position regex literals are masked.
+
+
+def test_body_starting_with_unclosed_script_is_excluded() -> None:
+    assert support_ticket_plain_text_lines("<script>alert(1)") == ""
+
+
+def test_body_starting_with_unclosed_blockquote_is_all_quote() -> None:
+    assert support_ticket_plain_text_lines("<blockquote>quoted prior reply") == ""
+    # The compact API keeps the row via the all-quote fallback.
+    assert support_ticket_plain_text(
+        "<blockquote>quoted prior reply"
+    ) == "quoted prior reply"
+
+
+def test_paired_blockquote_mention_mid_prose_is_preserved() -> None:
+    text = "How do I write <blockquote>hello</blockquote> in the editor?"
+    assert support_ticket_plain_text(text) == text
+
+
+def test_recovery_does_not_start_inside_excluded_bodies() -> None:
+    assert support_ticket_plain_text(
+        "<p>x</p><script>y;<blockquote>quoted junk</blockquote><p>Real</p>"
+    ) == "x Real"
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<script>return /<p>tpl<\\/p>/;<p>Real</p>",
+        "<script>let r = new RegExp(x); return /<p>t<\\/p>/;<p>Real</p>",
+    ],
+)
+def test_keyword_position_regex_literals_are_masked(html: str) -> None:
+    assert support_ticket_plain_text(html) == "Real"

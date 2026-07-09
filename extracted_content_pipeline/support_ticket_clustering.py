@@ -28,13 +28,19 @@ _HTML_SIGNAL_RE = re.compile(
     rf"</?{_HTML_TAG_NAMES_RE}(?:{_HTML_ATTR_RE})*\s*/?>",
     re.IGNORECASE,
 )
-# A LONE <script>/<style>/<blockquote> in prose ("How do I add <script> to
-# the page?") is customer wording, not markup; only a paired open+close is an
-# HTML signal. Inside a document detected via other tags, an unclosed
-# blockquote still excludes to EOF (a quote to end-of-message is a quote).
-_HTML_SCRIPT_STYLE_PAIRED_RE = re.compile(
-    r"<(script|style|blockquote)\b[^>]*>.*?</\1\s*>",
-    re.IGNORECASE | re.DOTALL,
+# Excluded tags mentioned MID-PROSE ("How do I add <script> to the page?",
+# "How do I write <blockquote>hello</blockquote> in the editor?") are
+# customer wording, not markup. A body that STARTS with an excluded tag
+# ("<script>alert(1)", "<blockquote>quoted prior reply") is markup intent:
+# script-only bodies exclude, quote-to-EOF bodies are all-quote. Inside a
+# document detected via other tags, exclusion applies as usual.
+_HTML_EXCLUDED_TAG_AT_START_RE = re.compile(
+    r"\A\s*<(script|style|blockquote)\b",
+    re.IGNORECASE,
+)
+_HTML_EXCLUDED_TAG_RE = re.compile(
+    r"</?(script|style|blockquote)\b[^>]*>",
+    re.IGNORECASE,
 )
 _HTML_CUSTOM_TAG_RE = re.compile(
     r"</?[a-z][a-z0-9:-]*-[a-z0-9:-]*(?:\s+[^<>]*)?/?>",
@@ -433,13 +439,23 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
     masked = _code_literal_regions(buffered)
     candidates = [
         match.start()
-        for pattern in (_HTML_SIGNAL_RE, _HTML_CUSTOM_TAG_RE)
+        for pattern in (
+            _HTML_SIGNAL_RE,
+            _HTML_CUSTOM_TAG_RE,
+            _HTML_EXCLUDED_TAG_RE,
+        )
         for match in pattern.finditer(buffered)
     ]
     for position in sorted(candidates):
         if not any(lo <= position <= hi for lo, hi in masked):
             return position
     return None
+
+
+_JS_EXPRESSION_KEYWORDS = frozenset({
+    "return", "typeof", "case", "in", "of", "delete", "void", "throw",
+    "do", "else", "yield", "await", "instanceof", "new",
+})
 
 
 def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
@@ -461,6 +477,7 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
     length = len(buffered)
     prev = ""
     prev2 = ""
+    word = ""
     while i < length:
         ch = buffered[i]
         nxt = buffered[i + 1] if i + 1 < length else ""
@@ -473,17 +490,20 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
             elif ch == "/" and nxt == "*":
                 state, start = "/*", i
                 i += 1
-            elif (
-                ch == "/"
-                and prev != "<"  # "</tag>" is markup, never a regex
-                and prev not in ")]}\"'`"
-                and not prev.isalnum()
-                and not (prev in "+-" and prev2 == prev)
+            elif ch == "/" and (
+                word in _JS_EXPRESSION_KEYWORDS
+                or (
+                    prev != "<"  # "</tag>" is markup, never a regex
+                    and prev not in ")]}\"'`"
+                    and not prev.isalnum()
+                    and not (prev in "+-" and prev2 == prev)
+                )
             ):
                 # Expression-position slash: candidate regex literal.
                 state, start = "re", i
                 in_char_class = False
             if state is None and not ch.isspace():
+                word = word + ch if (ch.isalnum() or ch in "$_") else ""
                 prev2, prev = prev, ch
         elif state == "re":
             if ch == "\\":
@@ -596,7 +616,7 @@ def _compact_lines(text: str) -> str:
 def _looks_like_html(text: str) -> bool:
     return bool(
         _HTML_SIGNAL_RE.search(text)
-        or _HTML_SCRIPT_STYLE_PAIRED_RE.search(text)
+        or _HTML_EXCLUDED_TAG_AT_START_RE.search(text)
         or _HTML_CUSTOM_TAG_RE.search(text)
     )
 
