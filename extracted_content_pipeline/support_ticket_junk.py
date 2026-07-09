@@ -33,7 +33,7 @@ JUNK_REASONS = (
 # about the feature ("Out of office not working") does not carry it.
 _AUTO_REPLY_SUBJECT_RE = re.compile(
     r"^\s*(?:\[[^\]]{1,40}\]\s*)*"
-    r"(?:(?:subject|fw|fwd|re)\s*[:\uFF1A]\s*)*"
+    r"(?:subject\s*[:\uFF1A]\s*)?"
     r"(?:automatic\s+reply|auto[\s_-]*reply|autoreply|auto[\s_-]*response"
     r"|automated\s+(?:reply|response)|out\s+of\s+(?:the\s+)?office"
     r"|abwesenheitsnotiz|reponse\s+automatique)"
@@ -42,7 +42,7 @@ _AUTO_REPLY_SUBJECT_RE = re.compile(
 )
 _BOUNCE_SUBJECT_RE = re.compile(
     r"^\s*(?:\[[^\]]{1,40}\]\s*)*"
-    r"(?:(?:subject|fw|fwd|re)\s*[:\uFF1A]\s*)*"
+    r"(?:subject\s*[:\uFF1A]\s*)?"
     r"(?:(?:undeliverable|undelivered\s+mail|returned\s+mail"
     r"|failure\s+notice|mail\s+delivery\s+(?:failed|failure|subsystem))"
     r"\s*[:\uFF1A]"
@@ -60,7 +60,10 @@ _AUTO_REPLY_LINE_RES = (
         r"^i(?:\s+am|['\u2019]m|\s+will\s+be|['\u2019]ll\s+be)\s+"
         r"(?:currently\s+)?"
         r"(?:out\s+of\s+(?:the\s+)?office|away\s+from\s+(?:my\s+)?"
-        r"(?:desk|email|the\s+office)|on\s+(?:vacation|leave|holiday|pto))\b"
+        r"(?:desk|email|the\s+office)|on\s+(?:vacation|leave|holiday|pto))"
+        r"(?:\s*[.,!]|\s+(?:until|through|till|thru|from|starting"
+        r"|beginning|on|this|next|for|all|today|tomorrow|and|with(?:out)?"
+        r"|returning|back)\b)"
         r"[^?]*$",
         re.IGNORECASE,
     ),
@@ -145,21 +148,22 @@ def support_ticket_row_is_junk(
                 if _AUTO_REPLY_SUBJECT_RE.match(line):
                     return JUNK_REASON_AUTO_REPLY
                 return JUNK_REASON_BOUNCE
-    # Bounce assertions are machine statements: a DSN quoting the original
-    # (often interrogative) subject is still a bounce, so bounce lines
-    # classify BEFORE the question veto.
-    for line in lines:
-        for pattern in _BOUNCE_LINE_RES:
-            if pattern.match(line):
-                return JUNK_REASON_BOUNCE
-    if any("?" in line for line in lines):
-        # An interrogative anywhere means a customer is asking something;
-        # residual junk that quotes questions is quantified by diagnostics.
+    # Question VOICE is the discriminator: an UNLABELED question is the
+    # customer speaking (veto -- the row is a real ticket even if it quotes
+    # an OOO template or bounce text), while a "Subject:"-labeled question
+    # is machine mail quoting the customer's original subject and does not
+    # veto. Residual junk quoting questions is quantified by diagnostics.
+    if any(
+        "?" in line and not _SUBJECT_LABEL_RE.match(line) for line in lines
+    ):
         return None
     for line in lines:
         for pattern in _AUTO_REPLY_LINE_RES:
             if pattern.match(line):
                 return JUNK_REASON_AUTO_REPLY
+        for pattern in _BOUNCE_LINE_RES:
+            if pattern.match(line):
+                return JUNK_REASON_BOUNCE
     if had_source_text and not lines and not (subject or "").strip():
         return JUNK_REASON_NO_NEW_CONTENT
     return None

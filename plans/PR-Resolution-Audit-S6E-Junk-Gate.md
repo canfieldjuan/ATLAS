@@ -98,6 +98,18 @@ assertions classify BEFORE the question veto -- a DSN quoting the original
 interrogative subject is still a bounce; customer questions about bounces
 still pass.
 
+Round-5 refinements (all four verified failing first; rounds 4-5 demanded
+opposite verdicts on adjacent bounce/question shapes, dissolved by ONE rule):
+question VOICE is the discriminator -- an UNLABELED question is the customer
+speaking and vetoes body-shape junk (mixed troubleshooting/template tickets
+admit), while a "Subject:"-labeled question is machine mail quoting the
+customer's original subject and does not veto (DSNs and OOO bodies quoting
+the original subject classify). Also: OOO assertions require a temporal/
+access/punctuation continuation so descriptive feature reports ("I am out of
+the office auto-reply setting is not working") admit; re/fw labels removed
+from generator-subject tolerance so customer replies to auto-reply subjects
+admit (only the "Subject:" header label remains).
+
 Review-loop guard (the #2053 lesson): if review exceeds ~3 rounds of novel
 junk-PHRASING probes, residuals are class-waived against this closed-rule
 contract (structural position/shape rules; vocabulary is deliberately not
@@ -207,9 +219,9 @@ into `junk_excluded_counts`, drops the rows before clustering, and reports
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 4 |
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 61 |
-| `extracted_content_pipeline/support_ticket_junk.py` | 174 |
-| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 215 |
+| `extracted_content_pipeline/support_ticket_junk.py` | 178 |
+| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 227 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/maturity_sweep/baseline_extracted_content_pipeline.json` | 28 |
-| `tests/test_support_ticket_junk.py` | 328 |
-| **Total** | **814** |
+| `tests/test_support_ticket_junk.py` | 362 |
+| **Total** | **864** |

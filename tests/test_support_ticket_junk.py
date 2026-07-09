@@ -326,3 +326,37 @@ def test_customer_question_about_bounces_still_passes() -> None:
         "Bounce troubleshooting",
         "Why do my customers see Your message could not be delivered?",
     ) is None
+
+
+# Round-5 refinements: first-line assertion precedence, temporal OOO tails,
+# and reply-label narrowing.
+
+
+def test_leading_assertion_beats_quoted_question() -> None:
+    assert support_ticket_row_is_junk(
+        "Re: something",
+        "I am out of the office until Monday.\nSubject: Why can't I login?",
+    ) == JUNK_REASON_AUTO_REPLY
+
+
+def test_customer_context_before_bounce_line_is_admitted() -> None:
+    assert support_ticket_row_is_junk(
+        "Email issue",
+        "Customer reports seeing this error:\n"
+        "Your message could not be delivered to the recipient.\n"
+        "How do we fix this?",
+    ) is None
+
+
+def test_descriptive_ooo_feature_report_is_admitted() -> None:
+    assert support_ticket_row_is_junk(
+        "Settings issue",
+        "I am out of the office auto-reply setting is not working",
+    ) is None
+
+
+def test_customer_reply_to_auto_reply_subject_is_admitted() -> None:
+    assert support_ticket_row_is_junk(
+        "Re: Automatic reply: Out of Office",
+        "Why is my auto-reply not sending?",
+    ) is None
