@@ -1883,14 +1883,24 @@ def check_deflection_report_artifact_qa(
     modifies the artifact.
     """
 
-    try:
+    if isinstance(artifact, Mapping):
+        # Score the export that will actually be STORED. A mapping artifact
+        # is the persisted payload itself; re-deriving a fresh export here
+        # would let a drifted or missing embedded evidence_export ride
+        # through the gate unvalidated.
+        raw_export = artifact.get("evidence_export")
         evidence_export: Mapping[str, Any] | None = (
-            build_deflection_evidence_export(artifact)
+            raw_export if isinstance(raw_export, Mapping) else None
         )
-    except Exception:
-        # An artifact the export builder cannot even read must not pass a
-        # gate whose job is refusing malformed paid output.
-        evidence_export = None
+    else:
+        # A DeflectionReportArtifact embeds the derived export in as_dict(),
+        # so deriving is exactly what will be stored.
+        try:
+            evidence_export = build_deflection_evidence_export(artifact)
+        except Exception:
+            # An artifact the export builder cannot even read must not pass
+            # a gate whose job is refusing malformed paid output.
+            evidence_export = None
     model = _artifact_report_model(artifact)
     scorecard = build_deflection_full_report_qa_scorecard(
         model if isinstance(model, Mapping) else {},

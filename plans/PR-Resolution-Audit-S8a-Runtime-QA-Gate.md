@@ -69,6 +69,17 @@ assertion ids (`model.schema_version`,
 `evidence_export.evidence_rows.length`); the delivery loop already
 fail-closes typed exceptions via incident + `_mark_failed`.
 
+Round-1 review refinement (verified failing first): the gate scored a
+FRESHLY DERIVED evidence export while `DeflectionReportArtifact.as_dict`
+embeds one in the persisted payload (and the process contract requires
+it for paid artifacts) -- so a drifted or missing embedded
+evidence_export rode through the gate unvalidated. The gate now scores
+the export that will actually be stored: for a mapping artifact it reads
+the embedded `evidence_export` (missing/non-mapping fails closed); it
+derives only for a DeflectionReportArtifact object, whose as_dict embeds
+exactly that derivation. The PII-scrub test stops replacing the real
+embedded export (its rows already carry the planted PII).
+
 Review-loop guard: HARD cap of 3 Codex rounds counted by ROUNDS; at
 cap, fix what is written, resolve/waive remaining threads, merge on
 required-green.
@@ -177,8 +188,8 @@ in the detail.
 | File | LOC |
 |---|---:|
 | `extracted_content_pipeline/api/control_surfaces.py` | 8 |
-| `extracted_content_pipeline/faq_deflection_report.py` | 53 |
-| `plans/PR-Resolution-Audit-S8a-Runtime-QA-Gate.md` | 184 |
-| `tests/test_content_ops_deflection_report.py` | 57 |
-| `tests/test_extracted_content_deflection_submit.py` | 225 |
-| **Total** | **527** |
+| `extracted_content_pipeline/faq_deflection_report.py` | 63 |
+| `plans/PR-Resolution-Audit-S8a-Runtime-QA-Gate.md` | 195 |
+| `tests/test_content_ops_deflection_report.py` | 89 |
+| `tests/test_extracted_content_deflection_submit.py` | 220 |
+| **Total** | **575** |

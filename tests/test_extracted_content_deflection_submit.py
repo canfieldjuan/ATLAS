@@ -1329,15 +1329,10 @@ async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
             items=(pii_item,),
         )
     ).as_dict()
-    unsafe_artifact["evidence_export"] = {
-        "schema_version": DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
-        "evidence_rows": [
-            {
-                "source_id": "4829103",
-                "evidence_quote": "jane.doe@acme.com called 555-123-4567.",
-            }
-        ],
-    }
+    # The real builder embeds the derived evidence_export, and its rows
+    # carry the same PII (source ids, quotes) as the item above; the QA
+    # gate scores that STORED export, so the test must not replace it.
+    assert "jane.doe" in json.dumps(unsafe_artifact["evidence_export"])
 
     gated = await api_module._gate_deflection_report_artifacts(
         {

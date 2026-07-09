@@ -7381,3 +7381,35 @@ def test_qa_gate_refuses_a_missing_required_section() -> None:
 def test_qa_gate_fails_closed_on_an_unreadable_artifact() -> None:
     with pytest.raises(DeflectionReportQAGateError):
         check_deflection_report_artifact_qa({})
+
+
+# Round-1 review refinement: the gate scores the export that will be
+# STORED, not a fresh derivation -- a drifted or missing embedded
+# evidence_export must not ride through.
+
+
+def test_qa_gate_refuses_a_drifted_embedded_evidence_export() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    drifted["evidence_export"] = {
+        "schema_version": "bad",
+        "summary": {},
+        "questions": [],
+        "evidence_rows": [],
+    }
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "evidence_export.schema_version" in exc_info.value.failing_assertion_ids
+
+
+def test_qa_gate_refuses_a_missing_embedded_evidence_export() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    scrubbed = scrub_deflection_report_payload(artifact.as_dict())
+    scrubbed.pop("evidence_export", None)
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(scrubbed)
+
+    assert "evidence_export.present" in exc_info.value.failing_assertion_ids
