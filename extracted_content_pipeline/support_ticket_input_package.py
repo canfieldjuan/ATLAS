@@ -620,10 +620,19 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     if not text:
         return {}
     raw_body = _first_text(row, _TEXT_KEYS)
+    comment_text = _comments_text(row)
+    gate_body = "\n".join(
+        part
+        for part in (
+            support_ticket_plain_text_lines(raw_body),
+            support_ticket_plain_text_lines(comment_text),
+        )
+        if part
+    )
     junk_reason = support_ticket_row_is_junk(
         source_title,
-        support_ticket_plain_text_lines(raw_body),
-        had_source_text=bool(raw_body.strip()),
+        gate_body,
+        had_source_text=bool(raw_body.strip() or comment_text.strip()),
     )
     if junk_reason:
         # Junk rows (auto-replies, bounces, no-new-content) must not count

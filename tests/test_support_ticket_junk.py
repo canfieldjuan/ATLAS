@@ -169,3 +169,63 @@ def test_all_quote_rows_count_as_no_new_content() -> None:
     assert support_ticket_row_is_junk(
         "Re: export question", "", had_source_text=True
     ) is None
+
+
+# Round-1 review refinements: comment-only rows in scope, bounce regex,
+# colon-only generator delimiters, question-line veto, body-only prefixes.
+
+
+def test_comment_only_junk_rows_are_gated() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "id": f"c{i}",
+            "subject": "Re: help",
+            "comments": [
+                "I am out of the office until Monday with limited access "
+                "to email."
+            ],
+        }
+        for i in range(3)
+    ])
+    assert package.metadata["junk_excluded_count"] == 3
+
+
+def test_was_not_delivered_bounce_body_matches() -> None:
+    assert support_ticket_row_is_junk(
+        "Re: x", "Your message was not delivered to the recipient."
+    ) == JUNK_REASON_BOUNCE
+
+
+@pytest.mark.parametrize(
+    ("subject", "body"),
+    [
+        ("Out of office - not working", "my replies are not sending"),
+        ("Auto reply - setup question", "how to configure the auto reply"),
+        (
+            "Undeliverable emails are not reaching customers",
+            "our outbound emails keep bouncing",
+        ),
+    ],
+)
+def test_customer_separators_are_not_generator_delimiters(
+    subject: str, body: str,
+) -> None:
+    assert support_ticket_row_is_junk(subject, body) is None
+
+
+def test_mixed_ticket_quoting_a_template_is_admitted() -> None:
+    assert support_ticket_row_is_junk(
+        "Template help",
+        "Template we configured:\n"
+        "I am out of the office until Monday.\n"
+        "Why is it not sending?",
+    ) is None
+
+
+def test_generator_prefix_on_first_body_line_is_junk() -> None:
+    assert support_ticket_row_is_junk(
+        "", "Automatic reply: Out of Office\nI am away."
+    ) == JUNK_REASON_AUTO_REPLY
+    assert support_ticket_row_is_junk(
+        "", "Undeliverable: your message\ndetails follow"
+    ) == JUNK_REASON_BOUNCE

@@ -36,14 +36,16 @@ _AUTO_REPLY_SUBJECT_RE = re.compile(
     r"(?:automatic\s+reply|auto[\s_-]*reply|autoreply|auto[\s_-]*response"
     r"|automated\s+(?:reply|response)|out\s+of\s+(?:the\s+)?office"
     r"|abwesenheitsnotiz|reponse\s+automatique)"
-    r"\s*[:\(\[-]",
+    r"\s*[:\uFF1A]",
     re.IGNORECASE,
 )
 _BOUNCE_SUBJECT_RE = re.compile(
     r"^\s*(?:\[[^\]]{1,40}\]\s*)*"
-    r"(?:undeliverable|undelivered\s+mail|delivery\s+status\s+notification"
-    r"|mail\s+delivery\s+(?:failed|failure|subsystem)|returned\s+mail"
-    r"|failure\s+notice|delivery\s+has\s+failed)\b",
+    r"(?:(?:undeliverable|undelivered\s+mail|returned\s+mail"
+    r"|failure\s+notice|mail\s+delivery\s+(?:failed|failure|subsystem))"
+    r"\s*[:\uFF1A]"
+    r"|delivery\s+status\s+notification\s*(?:\([^)]*\))?\s*$"
+    r"|delivery\s+has\s+failed\s+to\s+these\s+recipients)",
     re.IGNORECASE,
 )
 
@@ -82,7 +84,7 @@ _AUTO_REPLY_LINE_RES = (
 _BOUNCE_LINE_RES = (
     re.compile(
         r"^(?:your\s+)?message\s+(?:could\s+not|couldn't|was\s+not|wasn't)\s+"
-        r"be?\s*delivered\b[^?]*$",
+        r"(?:be\s+)?delivered\b[^?]*$",
         re.IGNORECASE,
     ),
     re.compile(
@@ -101,10 +103,17 @@ def support_ticket_row_is_junk(
     """Classify a normalized row as junk, or return None to admit it.
 
     ``subject`` is the admitted title text; ``body_lines`` is the
-    line-preserving admitted body (``support_ticket_plain_text_lines``).
+    line-preserving admitted body (``support_ticket_plain_text_lines``),
+    including public comment text so comment-only rows are in scope.
     ``had_source_text`` marks rows whose raw source had text so that a body
     emptied by hygiene (an all-quote row) counts as no-new-content instead
     of being confused with a legitimately empty row.
+
+    A row containing ANY interrogative line is a customer asking something
+    -- quoted auto-reply templates inside a real question stay admitted --
+    so body-shape rules apply only to question-free rows. Generator subject
+    prefixes are definitive, and are also checked on the first body line
+    for exports that land the email subject in the text column.
     """
 
     if _AUTO_REPLY_SUBJECT_RE.match(subject or ""):
@@ -112,6 +121,13 @@ def support_ticket_row_is_junk(
     if _BOUNCE_SUBJECT_RE.match(subject or ""):
         return JUNK_REASON_BOUNCE
     lines = [line.strip() for line in (body_lines or "").split("\n") if line.strip()]
+    if lines:
+        if _AUTO_REPLY_SUBJECT_RE.match(lines[0]):
+            return JUNK_REASON_AUTO_REPLY
+        if _BOUNCE_SUBJECT_RE.match(lines[0]):
+            return JUNK_REASON_BOUNCE
+    if any(line.endswith("?") for line in lines):
+        return None
     for line in lines:
         for pattern in _AUTO_REPLY_LINE_RES:
             if pattern.match(line):

@@ -61,6 +61,17 @@ so this slice commits an equivalent F2 acceptance test.
   - Zendesk `_AUTO_ACK_PATTERNS` (comment-level auto-ack filtering; separate
     concern, untouched).
 
+Round-1 review refinements (all six verified failing first; correctness
+gaps, not phrasing probes): comment-only rows join the gate's body input
+(public comment text was admitted by `_ticket_text` but invisible to the
+gate); the was-not-delivered bounce line matches (`(?:be\s+)?` was
+mandatory); generator delimiters are colon-only so customer separators
+("Out of office - not working") stay admitted; bounce subjects need their
+generator delimiter ("Undeliverable emails are not reaching customers"
+admitted); any interrogative line vetoes body-shape junk so mixed tickets
+quoting a template stay admitted; generator prefixes are also checked on
+the first body line for subject-in-text exports.
+
 Review-loop guard (the #2053 lesson): if review exceeds ~3 rounds of novel
 junk-PHRASING probes, residuals are class-waived against this closed-rule
 contract (structural position/shape rules; vocabulary is deliberately not
@@ -165,9 +176,9 @@ into `junk_excluded_counts`, drops the rows before clustering, and reports
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 4 |
 | `extracted_content_pipeline/manifest.json` | 3 |
-| `extracted_content_pipeline/support_ticket_input_package.py` | 31 |
-| `extracted_content_pipeline/support_ticket_junk.py` | 133 |
-| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 175 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 40 |
+| `extracted_content_pipeline/support_ticket_junk.py` | 149 |
+| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 184 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_junk.py` | 171 |
-| **Total** | **518** |
+| `tests/test_support_ticket_junk.py` | 231 |
+| **Total** | **612** |
