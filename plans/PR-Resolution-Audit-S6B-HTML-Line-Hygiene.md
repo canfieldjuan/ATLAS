@@ -116,6 +116,15 @@ include excluded-tag positions so re-extraction opens the scope instead of
 starting inside an excluded body; regex literals after expression keywords
 (`return /.../;`) are masked via a bounded JS keyword set.
 
+Round-7 refinements (each verified failing first): property-access keywords
+(`obj.return / 2`) are division, and whitespace-completed words are tracked so
+infix keywords (`x in /re/`) open regexes; the markup exception applies only
+to a slash ADJACENT to `<` (`</tag>`), so a spaced less-than (`y < /re/`)
+opens a regex; the CDATA unwind consumes each swallowed close tag once, so
+nested same-name scopes are not over-popped; the start rule tolerates leading
+bracketed ticket metadata (`[External] <script>...`) using the module's
+existing metadata prefix shape.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -219,8 +228,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 310 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 226 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 329 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 235 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 383 |
-| **Total** | **934** |
+| `tests/test_support_ticket_plain_text_lines.py` | 429 |
+| **Total** | **1008** |

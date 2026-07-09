@@ -381,3 +381,49 @@ def test_recovery_does_not_start_inside_excluded_bodies() -> None:
 )
 def test_keyword_position_regex_literals_are_masked(html: str) -> None:
     assert support_ticket_plain_text(html) == "Real"
+
+
+# Round-7 refinements: property-access keywords, spaced less-than regexes,
+# single-consumption CDATA unwind, and metadata-prefixed excluded bodies.
+
+
+def test_property_access_keyword_is_division() -> None:
+    assert support_ticket_plain_text(
+        "<script>obj.return / 2;<p>Real</p>"
+    ) == "Real"
+
+
+def test_infix_keyword_opens_regex() -> None:
+    assert support_ticket_plain_text(
+        "<script>if (x in /<p>t<\\/p>/.exec(y)) {}<p>Real</p>"
+    ) == "Real"
+
+
+def test_spaced_less_than_opens_regex_but_end_tags_stay_markup() -> None:
+    assert support_ticket_plain_text(
+        "<script>x = y < /<p>tpl<\\/p>/;<p>Real</p>"
+    ) == "Real"
+    assert support_ticket_plain_text_lines(
+        "<blockquote><script>x</blockquote><p>Real</p>"
+    ) == "Real"
+
+
+def test_cdata_unwind_consumes_each_close_tag_once() -> None:
+    assert support_ticket_plain_text_lines(
+        "<blockquote>outer<blockquote><script>x</blockquote></script>"
+        "<p>Still quoted</p></blockquote><p>Real</p>"
+    ) == "Real"
+
+
+def test_metadata_prefixed_excluded_bodies_are_detected() -> None:
+    assert support_ticket_plain_text_lines(
+        "[External] <script>x</script>"
+    ) == "[External]"
+    assert support_ticket_plain_text_lines(
+        "[Fwd] <blockquote>quoted reply"
+    ) == "[Fwd]"
+
+
+def test_metadata_prefixed_prose_mention_is_preserved() -> None:
+    text = "[Urgent] How do I add <script> to the page?"
+    assert support_ticket_plain_text(text) == text

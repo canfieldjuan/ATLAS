@@ -35,7 +35,7 @@ _HTML_SIGNAL_RE = re.compile(
 # script-only bodies exclude, quote-to-EOF bodies are all-quote. Inside a
 # document detected via other tags, exclusion applies as usual.
 _HTML_EXCLUDED_TAG_AT_START_RE = re.compile(
-    r"\A\s*<(script|style|blockquote)\b",
+    r"\A\s*(?:\[[^\]\n]{1,80}\]\s*)*<(script|style|blockquote)\b",
     re.IGNORECASE,
 )
 _HTML_EXCLUDED_TAG_RE = re.compile(
@@ -368,19 +368,23 @@ class _HTMLTextExtractor(HTMLParser):
                     # treated as still-quoted.
                     buffered = "".join(self._pending)
                     masked = _code_literal_regions(buffered)
+                    available: dict[str, int] = {}
                     while self._skip_stack:
                         scope = self._skip_stack[-1]
-                        found = False
-                        for match in re.finditer(
-                            rf"</{scope}\s*>", buffered, re.IGNORECASE
-                        ):
-                            if not any(
-                                lo <= match.start() <= hi for lo, hi in masked
-                            ):
-                                found = True
-                                break
-                        if not found:
+                        if scope not in available:
+                            available[scope] = sum(
+                                1
+                                for match in re.finditer(
+                                    rf"</{scope}\s*>", buffered, re.IGNORECASE
+                                )
+                                if not any(
+                                    lo <= match.start() <= hi
+                                    for lo, hi in masked
+                                )
+                            )
+                        if available[scope] <= 0:
                             break
+                        available[scope] -= 1
                         self._skip_stack.pop()
                 if not self._skip_stack:
                     # Scope closed properly: excluded content stays excluded.
@@ -478,6 +482,7 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
     prev = ""
     prev2 = ""
     word = ""
+    prev_word = ""
     while i < length:
         ch = buffered[i]
         nxt = buffered[i + 1] if i + 1 < length else ""
@@ -491,9 +496,11 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
                 state, start = "/*", i
                 i += 1
             elif ch == "/" and (
-                word in _JS_EXPRESSION_KEYWORDS
+                (word or prev_word) in _JS_EXPRESSION_KEYWORDS
                 or (
-                    prev != "<"  # "</tag>" is markup, never a regex
+                    # "</tag>" (slash ADJACENT to <) is markup; a spaced
+                    # "< /" is a less-than operator before a regex.
+                    not (prev == "<" and i > 0 and buffered[i - 1] == "<")
                     and prev not in ")]}\"'`"
                     and not prev.isalnum()
                     and not (prev in "+-" and prev2 == prev)
@@ -502,9 +509,21 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
                 # Expression-position slash: candidate regex literal.
                 state, start = "re", i
                 in_char_class = False
-            if state is None and not ch.isspace():
-                word = word + ch if (ch.isalnum() or ch in "$_") else ""
-                prev2, prev = prev, ch
+            if state is None:
+                if ch.isspace():
+                    # Whitespace completes a word (x in /re/): remember it
+                    # for the keyword check without polluting the buffer.
+                    if word:
+                        prev_word, word = word, ""
+                elif ch.isalnum() or ch in "$_":
+                    # A word opened by "." is a property access, never an
+                    # expression keyword (obj.return / 2 is division).
+                    word = word + ch if word else ("." + ch if prev == "." else ch)
+                    prev2, prev = prev, ch
+                else:
+                    word = ""
+                    prev_word = ""
+                    prev2, prev = prev, ch
         elif state == "re":
             if ch == "\\":
                 i += 1
