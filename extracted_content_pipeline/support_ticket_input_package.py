@@ -27,7 +27,11 @@ from .support_ticket_context_contract import (
     UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD,
     support_ticket_topic_filter,
 )
-from .support_ticket_dates import parse_support_ticket_source_date
+from .support_ticket_dates import (
+    DATE_CONVENTION_AMBIGUOUS,
+    infer_support_ticket_date_convention,
+    parse_support_ticket_source_date,
+)
 from .support_ticket_junk import support_ticket_row_is_junk
 from .support_ticket_privacy import (
     support_ticket_comment_is_private,
@@ -423,12 +427,24 @@ def build_support_ticket_input_package(
                 "clusters."
             ),
         })
+    date_convention = infer_support_ticket_date_convention(
+        row.get("created_at") for row in normalized_rows
+    )
+    if date_convention == DATE_CONVENTION_AMBIGUOUS:
+        warnings.append({
+            "code": "support_ticket_date_convention_ambiguous",
+            "message": (
+                "Numeric ticket dates contradict each other (both day-first "
+                "and month-first evidence); ambiguous dates were left "
+                "unparsed rather than guessed."
+            ),
+        })
+    _normalize_row_created_dates(normalized_rows, convention=date_convention)
     date_diagnostics = _source_date_diagnostics(
         normalized_rows, source_date_signal_count=source_date_signal_count
     )
-    has_valid_date_window = (
-        bool(normalized_rows) and date_diagnostics["missing_count"] == 0
-    )
+    date_diagnostics["date_convention"] = date_convention
+    has_valid_date_window = _date_window_is_valid(date_diagnostics)
     if (
         normalized_rows
         and not has_valid_date_window
@@ -1023,8 +1039,41 @@ def _clip_text(value: str, *, max_chars: int) -> str:
     return f"{trimmed}..."
 
 
+# A window stays valid while at least this share of included rows carry a
+# parseable date: one blank export cell must not flip the report onto the
+# dateless x12 run-rate basis, while sparse dates must not fake a window.
+DATE_WINDOW_MIN_COVERAGE = 0.9
+
+
+def _date_window_is_valid(diagnostics: Mapping[str, Any]) -> bool:
+    included = int(diagnostics.get("included_count") or 0)
+    dated = int(diagnostics.get("dated_count") or 0)
+    if included <= 0:
+        return False
+    return dated / included >= DATE_WINDOW_MIN_COVERAGE
+
+
 def _all_rows_have_dates(rows: Sequence[Mapping[str, Any]]) -> bool:
     return bool(rows) and _source_date_diagnostics(rows)["missing_count"] == 0
+
+
+def _normalize_row_created_dates(
+    rows: Sequence[dict[str, Any]],
+    *,
+    convention: str,
+) -> None:
+    """Rewrite parseable created_at values to ISO once, at admission.
+
+    Downstream consumers (markdown recency, sorting) re-parse row dates;
+    canonicalizing here means the upload-level convention decision is made
+    exactly once and can never transpose later.
+    """
+
+    for row in rows:
+        raw = row.get("created_at")
+        parsed = parse_support_ticket_source_date(raw, convention=convention)
+        if parsed is not None:
+            row["created_at"] = parsed.isoformat()
 
 
 def _source_date_diagnostics(
