@@ -7413,3 +7413,44 @@ def test_qa_gate_refuses_a_missing_embedded_evidence_export() -> None:
         check_deflection_report_artifact_qa(scrubbed)
 
     assert "evidence_export.present" in exc_info.value.failing_assertion_ids
+
+
+# Round-2 review refinements: same-count element drift and paid-reader
+# projection readability.
+
+
+def test_qa_gate_refuses_a_same_count_drifted_export() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    good = drifted["evidence_export"]
+    # Same schema version, same summary counts, same array lengths -- but
+    # the elements themselves are junk.
+    drifted["evidence_export"] = {
+        "schema_version": good["schema_version"],
+        "summary": good["summary"],
+        "questions": [{} for _ in good["questions"]],
+        "evidence_rows": [{} for _ in good["evidence_rows"]],
+    }
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "evidence_export.matches_stored_artifact" in (
+        exc_info.value.failing_assertion_ids
+    )
+
+
+def test_qa_gate_refuses_a_model_paid_readers_cannot_project() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    model = json.loads(json.dumps(drifted["report_model"], default=str))
+    for section in model["sections"]:
+        section["priority"] = "high"  # stored projection requires an int
+    drifted["report_model"] = model
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "model.stored_projection.readable" in (
+        exc_info.value.failing_assertion_ids
+    )

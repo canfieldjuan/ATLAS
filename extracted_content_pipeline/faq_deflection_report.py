@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -1883,37 +1884,80 @@ def check_deflection_report_artifact_qa(
     modifies the artifact.
     """
 
-    if isinstance(artifact, Mapping):
-        # Score the export that will actually be STORED. A mapping artifact
-        # is the persisted payload itself; re-deriving a fresh export here
-        # would let a drifted or missing embedded evidence_export ride
-        # through the gate unvalidated.
-        raw_export = artifact.get("evidence_export")
-        evidence_export: Mapping[str, Any] | None = (
-            raw_export if isinstance(raw_export, Mapping) else None
-        )
-    else:
-        # A DeflectionReportArtifact embeds the derived export in as_dict(),
-        # so deriving is exactly what will be stored.
-        try:
-            evidence_export = build_deflection_evidence_export(artifact)
-        except Exception:
-            # An artifact the export builder cannot even read must not pass
-            # a gate whose job is refusing malformed paid output.
-            evidence_export = None
-    model = _artifact_report_model(artifact)
+    # Gate exactly the payload shape that will be stored: as_dict() for an
+    # artifact object is byte-for-byte what the persist path receives.
+    payload = (
+        artifact.as_dict()
+        if isinstance(artifact, DeflectionReportArtifact)
+        else artifact
+    )
+    if not isinstance(payload, Mapping):
+        raise DeflectionReportQAGateError(["artifact.readable"])
+    raw_export = payload.get("evidence_export")
+    evidence_export: Mapping[str, Any] | None = (
+        raw_export if isinstance(raw_export, Mapping) else None
+    )
+    model = _artifact_report_model(payload)
     scorecard = build_deflection_full_report_qa_scorecard(
         model if isinstance(model, Mapping) else {},
         evidence_export=evidence_export,
     )
-    if not scorecard.get("ok"):
-        failing = [
-            _text(assertion.get("id"))
-            for assertion in scorecard.get("assertions", ())
-            if isinstance(assertion, Mapping) and not assertion.get("ok")
-        ]
+    failing = [
+        _text(assertion.get("id"))
+        for assertion in scorecard.get("assertions", ())
+        if isinstance(assertion, Mapping) and not assertion.get("ok")
+    ]
+    # Beyond the count-level scorecard, both checks reuse the CANONICAL
+    # readers rather than a hand-written field list:
+    # 1. The stored export must be the derivation of the stored artifact --
+    #    a same-count export whose elements drifted must not be sold.
+    try:
+        canonical_export = build_deflection_evidence_export(payload)
+    except Exception:
+        canonical_export = None
+    if canonical_export is None or (
+        _export_integrity_view(evidence_export)
+        != _export_integrity_view(canonical_export)
+    ):
+        failing.append("evidence_export.matches_stored_artifact")
+    # 2. Paid read surfaces project the stored model through
+    #    stored_deflection_report_model(); an artifact that projection
+    #    rejects would persist, take payment, then 404 the report-model
+    #    route. Imported lazily: deflection_report_access imports this
+    #    module at top level.
+    from .deflection_report_access import stored_deflection_report_model
+
+    if stored_deflection_report_model(payload) is None:
+        failing.append("model.stored_projection.readable")
+    if failing:
         raise DeflectionReportQAGateError(failing, scorecard)
     return scorecard
+
+
+# Content-hash linkage keys are re-derived from (possibly PII-scrubbed) text,
+# so they legitimately differ between the stored export and a fresh
+# derivation; every other field must match exactly.
+_EXPORT_INTEGRITY_VOLATILE_KEYS = frozenset({"cluster_id", "repeat_key"})
+
+
+def _export_integrity_view(export: Mapping[str, Any] | None) -> str:
+    if not isinstance(export, Mapping):
+        return ""
+
+    def strip(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                key: strip(item)
+                for key, item in value.items()
+                if key not in _EXPORT_INTEGRITY_VOLATILE_KEYS
+            }
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            return [strip(item) for item in value]
+        return value
+
+    return json.dumps(strip(export), sort_keys=True, default=str)
 
 
 def build_deflection_full_report_qa_deterministic_harness(

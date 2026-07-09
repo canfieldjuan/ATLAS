@@ -80,6 +80,19 @@ derives only for a DeflectionReportArtifact object, whose as_dict embeds
 exactly that derivation. The PII-scrub test stops replacing the real
 embedded export (its rows already carry the planted PII).
 
+Round-2 review refinements (both verified failing first): (1) a
+same-count export whose ELEMENTS drifted (junk questions/rows with
+matching lengths) passed the count-level scorecard -- the gate now
+requires the stored export to equal the canonical derivation of the
+stored artifact, excluding only the content-hash linkage keys
+(cluster_id, repeat_key) that legitimately change when re-derived from
+scrubbed text; (2) paid read surfaces project the stored model through
+stored_deflection_report_model(), and an artifact that projection
+rejects (e.g. non-integer section priority) persisted, took payment,
+then 404'd the report-model route -- the gate now runs that SAME
+projection (lazy import; deflection_report_access imports this module).
+Both checks reuse canonical readers; no hand-written field lists.
+
 Review-loop guard: HARD cap of 3 Codex rounds counted by ROUNDS; at
 cap, fix what is written, resolve/waive remaining threads, merge on
 required-green.
@@ -188,8 +201,8 @@ in the detail.
 | File | LOC |
 |---|---:|
 | `extracted_content_pipeline/api/control_surfaces.py` | 8 |
-| `extracted_content_pipeline/faq_deflection_report.py` | 63 |
-| `plans/PR-Resolution-Audit-S8a-Runtime-QA-Gate.md` | 195 |
-| `tests/test_content_ops_deflection_report.py` | 89 |
+| `extracted_content_pipeline/faq_deflection_report.py` | 107 |
+| `plans/PR-Resolution-Audit-S8a-Runtime-QA-Gate.md` | 208 |
+| `tests/test_content_ops_deflection_report.py` | 130 |
 | `tests/test_extracted_content_deflection_submit.py` | 220 |
-| **Total** | **575** |
+| **Total** | **673** |
