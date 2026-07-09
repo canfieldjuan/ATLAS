@@ -61,10 +61,10 @@ _AUTO_REPLY_LINE_RES = (
         r"(?:currently\s+)?"
         r"(?:out\s+of\s+(?:the\s+)?office|away\s+from\s+(?:my\s+)?"
         r"(?:desk|email|the\s+office)|on\s+(?:vacation|leave|holiday|pto))"
-        r"(?:\s*[.,!]|\s+(?:until|through|till|thru|from|starting"
-        r"|beginning|on|this|next|for|all|today|tomorrow|and|with(?:out)?"
-        r"|returning|back)\b)"
-        r"[^?]*$",
+        r"(?:\s*[.!]?\s*$|\s+(?:until|through|till|thru|from|starting"
+        r"|beginning|on|this|next|for|all|today|tomorrow|with(?:out)?"
+        r"|returning|back"
+        r"|and\s+(?:will|won'?t|shall|cannot|can'?t|may))\b[^?]*$)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -90,6 +90,7 @@ _AUTO_REPLY_LINE_RES = (
     ),
 )
 _SUBJECT_LABEL_RE = re.compile(r"^\s*subject\s*[:\uFF1A]", re.IGNORECASE)
+_HEADER_LINE_RE = re.compile(r"^[a-z][a-z0-9-]*\s*[:\uFF1A]\s", re.IGNORECASE)
 
 _BOUNCE_LINE_RES = (
     re.compile(
@@ -130,6 +131,14 @@ def support_ticket_row_is_junk(
         return JUNK_REASON_AUTO_REPLY
     if _BOUNCE_SUBJECT_RE.match(subject or ""):
         return JUNK_REASON_BOUNCE
+    subject_line = (subject or "").strip()
+    if subject_line:
+        for pattern in _AUTO_REPLY_LINE_RES:
+            if pattern.match(subject_line):
+                return JUNK_REASON_AUTO_REPLY
+        for pattern in _BOUNCE_LINE_RES:
+            if pattern.match(subject_line):
+                return JUNK_REASON_BOUNCE
     lines = [line.strip() for line in (body_lines or "").split("\n") if line.strip()]
     if lines:
         if _AUTO_REPLY_SUBJECT_RE.match(lines[0]):
@@ -137,10 +146,15 @@ def support_ticket_row_is_junk(
         if _BOUNCE_SUBJECT_RE.match(lines[0]):
             return JUNK_REASON_BOUNCE
         # Text exports often carry a leading header block (From:/To:/
-        # Subject:); a Subject:-labeled generator prefix anywhere in it is
-        # definitive. Unlabeled prefixes stay first-line-only so quoted
-        # replies deeper in a body cannot junk the row.
-        for line in lines[1:5]:
+        # Subject:); a Subject:-labeled generator prefix inside it is
+        # definitive -- but only while every preceding line is
+        # header-shaped, so customer prose mentioning "Subject: ..." never
+        # junks a row. Unlabeled prefixes stay first-line-only.
+        for index, line in enumerate(lines[1:5], start=1):
+            if not all(
+                _HEADER_LINE_RE.match(previous) for previous in lines[:index]
+            ):
+                break
             if _SUBJECT_LABEL_RE.match(line) and (
                 _AUTO_REPLY_SUBJECT_RE.match(line)
                 or _BOUNCE_SUBJECT_RE.match(line)
@@ -154,7 +168,9 @@ def support_ticket_row_is_junk(
     # is machine mail quoting the customer's original subject and does not
     # veto. Residual junk quoting questions is quantified by diagnostics.
     if any(
-        "?" in line and not _SUBJECT_LABEL_RE.match(line) for line in lines
+        _line_has_customer_question(line)
+        and not _SUBJECT_LABEL_RE.match(line)
+        for line in lines
     ):
         return None
     for line in lines:
@@ -167,6 +183,18 @@ def support_ticket_row_is_junk(
     if had_source_text and not lines and not (subject or "").strip():
         return JUNK_REASON_NO_NEW_CONTENT
     return None
+
+
+def _line_has_customer_question(line: str) -> bool:
+    """A '?' counts as customer voice only outside URL tokens."""
+
+    for token in line.split():
+        if "?" not in token:
+            continue
+        if "://" in token or token.lower().startswith("www."):
+            continue
+        return True
+    return False
 
 
 __all__ = [

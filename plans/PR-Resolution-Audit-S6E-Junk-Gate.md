@@ -110,6 +110,20 @@ the office auto-reply setting is not working") admit; re/fw labels removed
 from generator-subject tolerance so customer replies to auto-reply subjects
 admit (only the "Subject:" header label remains).
 
+Round-6 (4 fixed, 1 waived): OOO continuations are bounded (temporal/access
+words, end punctuation, or 'and'+modal -- 'and will respond' continues the
+assertion while 'and the auto-reply is broken' is a customer report); URL
+query strings do not count as customer questions; machine assertions in the
+SUBJECT classify subject-only rows; the header-block Subject: scan requires
+every preceding line to be header-shaped so customer prose mentioning
+'Subject: ...' never junks a row. WAIVED (undecidable voice, per the guard
+below): a mixed template ticket whose customer context is IMPERATIVE rather
+than interrogative ('Template we configured: ... Please fix this
+auto-reply.') classifies as junk -- it is structurally identical to the
+greeting-wrapped machine OOO ('Hello, / I am out... / Best, / Bob') that
+must classify, imperative-vs-redirect verb discrimination is content
+judgment, and the fail direction is quantified in junk_excluded_reasons.
+
 Review-loop guard (the #2053 lesson): if review exceeds ~3 rounds of novel
 junk-PHRASING probes, residuals are class-waived against this closed-rule
 contract (structural position/shape rules; vocabulary is deliberately not
@@ -219,9 +233,9 @@ into `junk_excluded_counts`, drops the rows before clustering, and reports
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 4 |
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/support_ticket_input_package.py` | 61 |
-| `extracted_content_pipeline/support_ticket_junk.py` | 178 |
-| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 227 |
+| `extracted_content_pipeline/support_ticket_junk.py` | 206 |
+| `plans/PR-Resolution-Audit-S6E-Junk-Gate.md` | 241 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/maturity_sweep/baseline_extracted_content_pipeline.json` | 28 |
-| `tests/test_support_ticket_junk.py` | 362 |
-| **Total** | **864** |
+| `tests/test_support_ticket_junk.py` | 401 |
+| **Total** | **945** |

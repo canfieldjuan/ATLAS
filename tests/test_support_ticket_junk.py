@@ -360,3 +360,42 @@ def test_customer_reply_to_auto_reply_subject_is_admitted() -> None:
         "Re: Automatic reply: Out of Office",
         "Why is my auto-reply not sending?",
     ) is None
+
+
+# Round-6 refinements: bounded OOO continuations, URL-safe question voice,
+# subject-only assertions, and header-shape-guarded subject scanning.
+
+
+def test_comma_and_feature_report_is_admitted() -> None:
+    assert support_ticket_row_is_junk(
+        "Settings", "I am out of the office, and the auto-reply is not sending"
+    ) is None
+    assert support_ticket_row_is_junk(
+        "Re: help", "I am out of the office."
+    ) == JUNK_REASON_AUTO_REPLY
+
+
+def test_url_query_strings_are_not_customer_questions() -> None:
+    assert support_ticket_row_is_junk(
+        "Re: help",
+        "I am out of the office until Monday.\n"
+        "https://help.example.com/contact?id=12",
+    ) == JUNK_REASON_AUTO_REPLY
+
+
+def test_subject_only_machine_assertions_classify() -> None:
+    assert support_ticket_row_is_junk(
+        "Your message could not be delivered", ""
+    ) == JUNK_REASON_BOUNCE
+    assert support_ticket_row_is_junk(
+        "I am out of the office until Monday", ""
+    ) == JUNK_REASON_AUTO_REPLY
+
+
+def test_prose_before_subject_label_does_not_junk() -> None:
+    assert support_ticket_row_is_junk(
+        "Auto reply help",
+        "I need help with auto replies\n"
+        "Subject: Automatic reply: Out of Office\n"
+        "Why is this happening?",
+    ) is None
