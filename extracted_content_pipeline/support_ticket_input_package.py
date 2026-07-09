@@ -441,7 +441,9 @@ def build_support_ticket_input_package(
         })
     _normalize_row_created_dates(normalized_rows, convention=date_convention)
     date_diagnostics = _source_date_diagnostics(
-        normalized_rows, source_date_signal_count=source_date_signal_count
+        normalized_rows,
+        source_date_signal_count=source_date_signal_count,
+        convention=date_convention,
     )
     date_diagnostics["date_convention"] = date_convention
     has_valid_date_window = _date_window_is_valid(date_diagnostics)
@@ -553,6 +555,9 @@ def build_support_ticket_input_package(
         "ticket_status_present_count": ticket_status_present_count,
         "ticket_status_summary": ticket_status_summary,
         "source_id_fallback_count": len(source_id_fallback_rows),
+        "support_ticket_date_convention": date_diagnostics.get(
+            "date_convention", "unknown"
+        ),
         "junk_excluded_count": sum(junk_excluded_counts.values()),
         "junk_excluded_reasons": dict(sorted(junk_excluded_counts.items())),
         "csat_present": csat_present_count > 0,
@@ -1080,6 +1085,7 @@ def _source_date_diagnostics(
     rows: Sequence[Mapping[str, Any]],
     *,
     source_date_signal_count: int | None = None,
+    convention: str = "unknown",
 ) -> dict[str, Any]:
     # The date-column-present signal is supplied out-of-band (computed during
     # row normalization) so it never has to ride on the row dicts. When it is
@@ -1092,7 +1098,9 @@ def _source_date_diagnostics(
     for index, row in enumerate(rows, start=1):
         if source_date_signal_count is None and _clean(row.get("created_at")) != "":
             fallback_signal_count += 1
-        if parse_support_ticket_source_date(row.get("created_at")) is not None:
+        if parse_support_ticket_source_date(
+            row.get("created_at"), convention=convention
+        ) is not None:
             dated_count += 1
             continue
         source_id = _clean(row.get("source_id")) or f"row-{index}"
@@ -1119,6 +1127,7 @@ def _date_window_disabled_warning(diagnostics: Mapping[str, Any]) -> dict[str, A
     missing_count = int(diagnostics.get("missing_count") or 0)
     return {
         "code": "support_ticket_date_window_disabled",
+        "date_convention": diagnostics.get("date_convention", "unknown"),
         "message": (
             "Disabled the dated support-ticket source window because "
             f"{missing_count} of {included_count} included ticket rows did not "

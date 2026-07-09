@@ -1323,6 +1323,7 @@ def test_support_ticket_input_package_warns_when_date_column_is_blank() -> None:
     assert package.warnings == (
         {
             "code": "support_ticket_date_window_disabled",
+            "date_convention": "unknown",  # S7: convention in diagnostics
             "message": (
                 "Disabled the dated support-ticket source window because "
                 "1 of 1 included ticket rows did not include a parseable "
@@ -1378,6 +1379,7 @@ def test_support_ticket_input_package_omits_window_filter_without_parseable_row_
     assert package.warnings == (
         {
             "code": "support_ticket_date_window_disabled",
+            "date_convention": "unknown",  # S7: convention in diagnostics
             "message": (
                 "Disabled the dated support-ticket source window because "
                 "1 of 1 included ticket rows did not include a parseable "
@@ -1411,6 +1413,7 @@ def test_support_ticket_input_package_omits_window_filter_for_mixed_date_rows() 
     assert package.warnings == (
         {
             "code": "support_ticket_date_window_disabled",
+            "date_convention": "unknown",  # S7: convention in diagnostics
             "message": (
                 "Disabled the dated support-ticket source window because "
                 "1 of 2 included ticket rows did not include a parseable "

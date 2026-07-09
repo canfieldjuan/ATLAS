@@ -51,10 +51,12 @@ def infer_support_ticket_date_convention(values: Iterable[Any]) -> str:
         if not match:
             continue
         first, second = int(match.group(1)), int(match.group(2))
-        if first > 12 and second <= 12:
+        if 12 < first <= 31 and 1 <= second <= 12:
             day_first_evidence += 1
-        elif second > 12 and first <= 12:
+        elif 12 < second <= 31 and 1 <= first <= 12:
             month_first_evidence += 1
+        # Malformed cells (99/01, 00/13) prove nothing: they cannot parse
+        # under either convention and must not decide the upload.
     if day_first_evidence and month_first_evidence:
         return DATE_CONVENTION_AMBIGUOUS
     if day_first_evidence:

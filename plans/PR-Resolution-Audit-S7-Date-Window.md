@@ -54,6 +54,15 @@ and is deliberately not here.
     clustering (S5) logic.
   - Final-output scrubber grammar; product shape.
 
+Round-1 review refinements (all three verified failing first): diagnostics
+parse under the SAME inferred convention as normalization, so an ambiguous
+upload cannot keep its window via the US default on raw numeric values;
+inference evidence requires a PLAUSIBLE date under the implied convention
+(field in 13..31 paired with 1..12), so malformed cells (99/01, 00/13)
+prove nothing; the convention is emitted in package metadata
+(`support_ticket_date_convention`) and the window-disabled warning. Four
+exact-dict warning pins updated for the new diagnostic key.
+
 Review-loop guard: HARD cap of 3 Codex rounds counted by ROUNDS (the
 operator-backed rule after #2053/#2054); at cap, fix what is written,
 resolve/waive remaining threads, merge on required-green.
@@ -62,7 +71,7 @@ resolve/waive remaining threads, merge on required-green.
 
 Slice phase: Vertical slice
 
-Max files: 7
+Max files: 8
 
 1. `extracted_content_pipeline/support_ticket_dates.py` -- inference +
    convention-aware parsing.
@@ -77,7 +86,9 @@ Max files: 7
 6. `tests/maturity_sweep/baseline_extracted_content_pipeline.json` --
    ratchet acceptance (the dates module grew with the inference machinery;
    behavior pinned by 15 dedicated both-direction tests).
-7. This plan doc.
+7. `tests/test_smoke_content_ops_gate_a_live_quality.py` -- one exact-dict
+   warning pin updated for the new diagnostic key.
+8. This plan doc.
 
 ### Files touched
 
@@ -87,6 +98,7 @@ Max files: 7
 - `scripts/run_extracted_pipeline_checks.sh`
 - `tests/maturity_sweep/baseline_extracted_content_pipeline.json`
 - `tests/test_extracted_support_ticket_input_package.py`
+- `tests/test_smoke_content_ops_gate_a_live_quality.py`
 - `tests/test_support_ticket_dates_window.py`
 
 ### Review Contract
@@ -157,11 +169,12 @@ rule with dated/included >= `DATE_WINDOW_MIN_COVERAGE`.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/support_ticket_dates.py` | 98 |
-| `extracted_content_pipeline/support_ticket_input_package.py` | 57 |
-| `plans/PR-Resolution-Audit-S7-Date-Window.md` | 167 |
+| `extracted_content_pipeline/support_ticket_dates.py` | 100 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 70 |
+| `plans/PR-Resolution-Audit-S7-Date-Window.md` | 180 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/maturity_sweep/baseline_extracted_content_pipeline.json` | 3 |
-| `tests/test_extracted_support_ticket_input_package.py` | 6 |
-| `tests/test_support_ticket_dates_window.py` | 144 |
-| **Total** | **476** |
+| `tests/test_extracted_support_ticket_input_package.py` | 9 |
+| `tests/test_smoke_content_ops_gate_a_live_quality.py` | 1 |
+| `tests/test_support_ticket_dates_window.py` | 186 |
+| **Total** | **550** |

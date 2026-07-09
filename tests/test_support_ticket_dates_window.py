@@ -142,3 +142,45 @@ def test_diagnostics_report_convention_and_counts() -> None:
     # 2/3 dated is below threshold: window disabled with counts, no content.
     assert package.inputs["has_dated_window"] is False
     assert warning and warning[0].get("missing_or_unparseable_date_count") == 1
+
+
+# Round-1 review refinements: convention-consistent diagnostics, plausible
+# inference evidence, and emitted convention diagnostics.
+
+
+def test_ambiguous_upload_cannot_keep_the_window_via_the_us_default() -> None:
+    package = build_support_ticket_input_package(
+        _rows(["01/13/2026"] * 9 + ["13/01/2026"])
+    )
+    assert package.inputs["has_dated_window"] is False
+    codes = [w.get("code") for w in package.warnings]
+    assert "support_ticket_date_convention_ambiguous" in codes
+
+
+def test_malformed_cells_are_not_inference_evidence() -> None:
+    assert infer_support_ticket_date_convention(
+        ["99/01/2026", "02/01/2026"]
+    ) == DATE_CONVENTION_UNKNOWN
+    assert infer_support_ticket_date_convention(
+        ["00/13/2026"]
+    ) == DATE_CONVENTION_UNKNOWN
+    assert infer_support_ticket_date_convention(
+        ["99/01/2026", "13/01/2026"]
+    ) == DATE_CONVENTION_DAY_FIRST
+
+
+def test_convention_is_emitted_in_diagnostics() -> None:
+    package = build_support_ticket_input_package(
+        _rows(["13/01/2026", "02/01/2026", "05/01/2026"])
+    )
+    assert package.metadata["support_ticket_date_convention"] == (
+        DATE_CONVENTION_DAY_FIRST
+    )
+    disabled = build_support_ticket_input_package(
+        _rows(["01/13/2026"] * 9 + ["13/01/2026"])
+    )
+    warning = next(
+        w for w in disabled.warnings
+        if w.get("code") == "support_ticket_date_window_disabled"
+    )
+    assert warning["date_convention"] == DATE_CONVENTION_AMBIGUOUS
