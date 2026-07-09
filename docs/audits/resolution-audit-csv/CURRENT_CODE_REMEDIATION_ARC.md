@@ -43,7 +43,7 @@ Minimum true before paid reports ship:
 | 2 | Header/data-loss admission (C1/H4/C2) | S1 #2026 | MOSTLY (dup-header/encoding closed; terse-first-row + missing-ID residual) |
 | 3 | Money reconciliation (P5-2) | S4 #2031 | DISPLAY-only (buyer-visible cents change needs approval; P5-7 model guard -> S8) |
 | 4 | PII private/internal notes | S6A #2046 | MERGED 2026-07-08 -- CLOSED |
-| 5 | Junk/auto-reply/OOO gate (F2, incl HTML M6) | S6B #2043 (line plumbing) + S6E #2049 (detection rules) | OPEN -- scoping gap RESOLVED by the S6E split |
+| 5 | Junk/auto-reply/OOO gate (F2, incl HTML M6) | S6B #2053 MERGED (line plumbing) + S6E #2049 (detection rules, PR open) | IN PROGRESS |
 | 6 | Date transposition/window (C3/M7) | S7 | OPEN |
 | 7 | Fail-closed runtime guard (P5-7 + scorecard) | S8 | OPEN (scorecard zero runtime callers) |
 
@@ -405,7 +405,7 @@ These are not coding-start items until the operator approves the product shape:
   CONDITIONAL -- closes only with the default-OFF embedding booster ON+calibrated.
 - [ ] S5 clustering calibration (real-corpus + booster on/off decision) PR linked here.
 - [x] S6A private/internal admission boundary PR linked here: #2046 (merged 2026-07-08; issue #2042 closed; closed token-stem predicate + ~335-case grammar sweep, 46 reviewer findings resolved across 9 rounds).
-- [ ] S6B HTML line-preserving hygiene PR linked here (issue #2043). F2 junk-DETECTION split to S6E (#2049) per the ledger scoping flag.
+- [x] S6B HTML line-preserving hygiene PR linked here: #2053 (merged 2026-07-09; issue #2043 closed; line seam + blockquote exclusion + no-data-loss; 12 review rounds, 45 findings -- see PR for the review-loop lesson).
 - [ ] S6E junk/auto-reply/OOO detection gate PR linked here (issue #2049; after S6B).
 - [ ] S6D-M9 status-synonym micro-slice PR linked here (issue #2050; independent).
 - [ ] S6C scalar history signature/quoted-reply cleanup PR linked here (issue #2044).
