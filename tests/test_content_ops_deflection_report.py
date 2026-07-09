@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 from extracted_content_pipeline.faq_deflection_report import (
+    DeflectionReportQAGateError,
+    check_deflection_report_artifact_qa,
     DEFAULT_DEFLECTION_REPORT_TITLE,
     DEFAULT_DEFLECTION_SNAPSHOT_TITLE,
     DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
@@ -7324,3 +7326,58 @@ def test_deflection_report_cli_rejects_malformed_intent_rule(
         "--intent-rule must use topic=keyword,keyword with at least one keyword"
     )
     assert not output.exists()
+
+
+# S8a: the QA scorecard wired as a fail-closed runtime gate.
+
+
+def test_qa_gate_passes_a_healthy_artifact_and_does_not_modify_it() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    scrubbed = scrub_deflection_report_payload(artifact.as_dict())
+    before = json.dumps(scrubbed, sort_keys=True, default=str)
+
+    scorecard = check_deflection_report_artifact_qa(scrubbed)
+
+    assert scorecard["ok"] is True
+    assert scorecard["assertions"]
+    # The gate gates; it never edits the artifact.
+    assert json.dumps(scrubbed, sort_keys=True, default=str) == before
+    # The raw (pre-scrub) artifact object passes too.
+    assert check_deflection_report_artifact_qa(artifact)["ok"] is True
+
+
+def test_qa_gate_refuses_a_drifted_schema_version() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    drifted["report_model"] = dict(drifted["report_model"])
+    drifted["report_model"]["schema_version"] = "deflection.v999"
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "model.schema_version" in exc_info.value.failing_assertion_ids
+    assert "deflection_report_qa_gate_failed" in str(exc_info.value)
+    assert exc_info.value.scorecard.get("ok") is False
+
+
+def test_qa_gate_refuses_a_missing_required_section() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    model = dict(drifted["report_model"])
+    model["sections"] = [
+        section for section in model["sections"]
+        if section.get("id") != "ranked_questions"
+    ]
+    drifted["report_model"] = model
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "model.section.ranked_questions.present" in (
+        exc_info.value.failing_assertion_ids
+    )
+
+
+def test_qa_gate_fails_closed_on_an_unreadable_artifact() -> None:
+    with pytest.raises(DeflectionReportQAGateError):
+        check_deflection_report_artifact_qa({})

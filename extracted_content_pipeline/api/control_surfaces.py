@@ -82,6 +82,7 @@ from ..faq_deflection_report import (
     DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
     DEFLECTION_REPORT_SCHEMA_VERSION,
     build_deflection_snapshot,
+    check_deflection_report_artifact_qa,
     deflection_report_model_contract_shape,
     scrub_deflection_report_payload,
 )
@@ -3770,6 +3771,13 @@ async def _gate_deflection_report_artifacts(
             )
         try:
             scrubbed_artifact = scrub_deflection_report_payload(artifact)
+            # Fail-closed QA gate (S8a): a drifted artifact must never be
+            # persisted -- once stored it can be paid for, and delivery
+            # would then refuse an already-purchased report. The gate only
+            # gates; the persisted payload stays exactly the scrubbed
+            # artifact. DeflectionReportQAGateError is a ValueError, so the
+            # handler below turns it into the 502 with the assertion ids.
+            check_deflection_report_artifact_qa(scrubbed_artifact)
             snapshot = build_deflection_snapshot(
                 scrubbed_artifact,
                 top_n=top_n,

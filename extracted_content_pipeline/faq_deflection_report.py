@@ -1855,6 +1855,57 @@ def build_deflection_full_report_qa_scorecard(
     }
 
 
+class DeflectionReportQAGateError(ValueError):
+    """A report artifact failed the runtime QA gate (fail-closed)."""
+
+    def __init__(
+        self,
+        failing_assertion_ids: Sequence[str],
+        scorecard: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.failing_assertion_ids = tuple(failing_assertion_ids)
+        self.scorecard = dict(scorecard) if isinstance(scorecard, Mapping) else {}
+        joined = ", ".join(self.failing_assertion_ids) or "unknown"
+        super().__init__(f"deflection_report_qa_gate_failed: {joined}")
+
+
+def check_deflection_report_artifact_qa(
+    artifact: DeflectionReportArtifact | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Run the QA scorecard as a runtime gate; raise on any failed assertion.
+
+    Called at the persist boundary, where the artifact was just built by
+    the current code and must match the current schema exactly. (Delivery
+    deliberately stays tolerant: persisted artifacts may straddle schema
+    versions across deploys.) The scorecard stays the single source of
+    truth for what is asserted; this gate only derives the inputs from the
+    artifact and turns ``ok == False`` into a typed error. It never
+    modifies the artifact.
+    """
+
+    try:
+        evidence_export: Mapping[str, Any] | None = (
+            build_deflection_evidence_export(artifact)
+        )
+    except Exception:
+        # An artifact the export builder cannot even read must not pass a
+        # gate whose job is refusing malformed paid output.
+        evidence_export = None
+    model = _artifact_report_model(artifact)
+    scorecard = build_deflection_full_report_qa_scorecard(
+        model if isinstance(model, Mapping) else {},
+        evidence_export=evidence_export,
+    )
+    if not scorecard.get("ok"):
+        failing = [
+            _text(assertion.get("id"))
+            for assertion in scorecard.get("assertions", ())
+            if isinstance(assertion, Mapping) and not assertion.get("ok")
+        ]
+        raise DeflectionReportQAGateError(failing, scorecard)
+    return scorecard
+
+
 def build_deflection_full_report_qa_deterministic_harness(
     report_model: DeflectionStructuredReport | Mapping[str, Any],
     *,
@@ -5569,11 +5620,13 @@ __all__ = [
     "DEFLECTION_REPORT_SECTION_REGISTRY",
     "DeflectionSnapshot",
     "DeflectionReportArtifact",
+    "DeflectionReportQAGateError",
     "DeflectionReportSection",
     "DeflectionReportSectionDefinition",
     "DeflectionStructuredReport",
     "FAQDeflectionReportService",
     "build_deflection_report_model",
+    "check_deflection_report_artifact_qa",
     "build_deflection_snapshot",
     "build_deflection_report_artifact",
     "build_deflection_full_report_qa_deterministic_harness",
