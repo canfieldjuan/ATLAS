@@ -36,6 +36,7 @@ _HTML_SIGNAL_RE = re.compile(
 # document detected via other tags, exclusion applies as usual.
 _HTML_EXCLUDED_TAG_AT_START_RE = re.compile(
     r"\A\s*(?:(?:\[[^\]\n]{1,80}\]|<!doctype[^>]*>|<!--.*?-->"
+    r"|<title[^>]*>[^<]*</title\s*>"
     r"|</?(?:html|head|body|meta|title|link)[^>]*>)\s*)*"
     r"<(script|style|blockquote)\b",
     re.IGNORECASE | re.DOTALL,
@@ -557,16 +558,22 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
             elif ch == "/" and not in_char_class:
                 masked.append((start, i))
                 state = None
-                # A closed regex is a value: a following slash is division.
+                # A closed regex is a value and consumes any keyword
+                # context: a following slash is division.
                 prev2, prev = "", ")"
+                word = ""
+                prev_word = ""
         elif state in "'\"`":
             if ch == "\\":
                 i += 1
             elif ch == state:
                 masked.append((start, i))
                 state = None
-                # A closed literal is a value: a following slash is division.
+                # A closed literal is a value and consumes any keyword
+                # context: a following slash is division.
                 prev2, prev = "", ch
+                word = ""
+                prev_word = ""
         elif state == "//":
             if ch == "\n":
                 masked.append((start, i))
@@ -583,9 +590,10 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
                 i += 2
         i += 1
     if state == "re":
-        # Unclosed single-line regex candidate at EOF: treat as division,
-        # masking nothing, rather than swallowing the buffer.
-        pass
+        # Unterminated regex candidate at EOF: mask it. The newline reset
+        # already bounds candidates to one line, so this can swallow at
+        # most the final line, never the buffer.
+        masked.append((start, length - 1))
     elif state is not None:
         # Unterminated string/comment runs to EOF: everything after it is
         # still code context, never recoverable ticket text.

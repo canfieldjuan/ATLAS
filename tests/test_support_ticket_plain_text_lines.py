@@ -471,3 +471,41 @@ def test_prologs_before_excluded_only_bodies_are_detected(
     html: str, expected: str,
 ) -> None:
     assert support_ticket_plain_text_lines(html) == expected
+
+
+# Round-9 refinements: titled prologs, keyword context consumed by closed
+# literals, and unterminated regex candidates masked at EOF (newline-bounded).
+
+
+def test_titled_prologs_before_excluded_bodies_are_detected() -> None:
+    # The script is excluded; the title text is data, not machinery.
+    assert support_ticket_plain_text_lines(
+        "<title>Forwarded</title><script>x</script>"
+    ) == "Forwarded"
+    assert support_ticket_plain_text_lines(
+        "<head><title>Forwarded</title></head><blockquote>old"
+    ) == "Forwarded"
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<script>return /x/ / 2;<p>Real</p>",
+        '<script>return "x" / 2;<p>Real</p>',
+    ],
+)
+def test_closed_literals_consume_keyword_context(html: str) -> None:
+    assert support_ticket_plain_text(html) == "Real"
+
+
+def test_unterminated_regex_at_eof_is_masked() -> None:
+    assert support_ticket_plain_text("<script>var r=/<p>template") == ""
+    assert support_ticket_plain_text(
+        "<p>before</p><script>var r=/<p>template"
+    ) == "before"
+
+
+def test_newline_still_bounds_regex_candidates() -> None:
+    assert support_ticket_plain_text(
+        "<script>a = b / 2\n<p>Real</p>"
+    ) == "Real"
