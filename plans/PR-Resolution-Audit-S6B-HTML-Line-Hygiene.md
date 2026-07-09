@@ -149,6 +149,24 @@ character, so tag-shaped comparisons (`if (x<p>y)`) are never boundaries; a
 recovery-only tag shape tolerates boolean attributes (`<p hidden>`), which
 real fragments use and code rarely does.
 
+Round-11 (3 fixed, 2 waived; the waivers mark the semantic boundary of
+lexical rules): unwind counts NET closes (a balanced pair inside the buffer
+cannot close a pre-existing outer scope); control-flow parens (if/for/while/
+switch/catch headers) put a following slash in expression position while
+value parens divide; known HTML boolean attributes (a bounded spec list)
+are valid tag shapes in the main detector while arbitrary words are not
+("a<b and c>d" stays prose). WAIVED as semantically undecidable at a lexical
+boundary: (1) a paired excluded element ending a syntax question ("How do I
+write <blockquote>hello</blockquote>") is excluded by the paired-at-EOF rule
+that round 10 required for "question<blockquote>quoted</blockquote>" -- the
+two are formally identical, and the product fail direction (quote/PII
+leakage worse than a truncated syntax example) keeps the exclusion; (2) an
+UNPAIRED excluded tag after leading text ("My new question<blockquote>On Mon
+Bob wrote:") stays preserved by the mention rule rounds 3/5 required for
+"How do I add <script> to the page?" -- also formally identical; the
+admitted reply-chain text is exactly the line-level pattern the S6E junk
+gate (#2049) detects downstream.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -252,8 +270,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 389 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 259 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 429 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 277 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 537 |
-| **Total** | **1200** |
+| `tests/test_support_ticket_plain_text_lines.py` | 564 |
+| **Total** | **1285** |

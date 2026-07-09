@@ -535,3 +535,30 @@ def test_boolean_attribute_tags_are_recoverable() -> None:
     assert support_ticket_plain_text_lines(
         "<script>x;<p hidden>Real</p>"
     ) == "Real"
+
+
+# Round-11 refinements: balanced-pair unwind counting, control-flow regex
+# consequents, and known boolean attributes in the main detector.
+
+
+def test_balanced_inner_pair_does_not_close_the_outer_quote() -> None:
+    assert support_ticket_plain_text_lines(
+        "<blockquote><script>x<blockquote>inner</blockquote><p>Rest</p>"
+    ) == ""
+
+
+def test_control_flow_paren_opens_regex_but_value_paren_divides() -> None:
+    assert support_ticket_plain_text(
+        "<script>if (ok) /<p>tpl<\\/p>/.test(x);<p>Real</p>"
+    ) == "Real"
+    assert support_ticket_plain_text(
+        "<script>var d=(a+b) / 2;<p>Real</p>"
+    ) == "Real"
+
+
+def test_known_boolean_attributes_detect_in_the_main_seam() -> None:
+    assert support_ticket_plain_text_lines("<p hidden>Real") == "Real"
+    # Arbitrary words are still not attributes: prose stays prose.
+    assert support_ticket_plain_text(
+        "If a<b and c>d then fail"
+    ) == "If a<b and c>d then fail"

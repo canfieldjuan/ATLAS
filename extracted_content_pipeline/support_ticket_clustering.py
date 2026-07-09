@@ -20,9 +20,15 @@ _HTML_TAG_NAMES_RE = (
     r"img|ins|li|main|mark|nav|ol|p|pre|s|section|small|span|strike|strong|"
     r"sub|sup|table|tbody|td|tfoot|th|thead|time|tr|u|ul)"
 )
+_HTML_BOOLEAN_ATTRS_RE = (
+    r"(?:hidden|disabled|checked|selected|readonly|required|multiple|"
+    r"autofocus|autoplay|controls|loop|muted|open|reversed|async|defer|"
+    r"novalidate|itemscope|contenteditable|spellcheck|translate|inert)"
+)
 _HTML_ATTR_RE = (
-    r"(?:\s+[a-z_:][a-z0-9_:.-]*\s*=\s*"
-    r"(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]+))"
+    r"(?:\s+(?:[a-z_:][a-z0-9_:.-]*\s*=\s*"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]+)"
+    rf"|{_HTML_BOOLEAN_ATTRS_RE}\b))"
 )
 _HTML_SIGNAL_RE = re.compile(
     rf"</?{_HTML_TAG_NAMES_RE}(?:{_HTML_ATTR_RE})*\s*/?>",
@@ -394,7 +400,7 @@ class _HTMLTextExtractor(HTMLParser):
         while self._skip_stack:
             scope = self._skip_stack[-1]
             if scope not in available:
-                available[scope] = sum(
+                closes = sum(
                     1
                     for match in re.finditer(
                         rf"</{scope}\s*>", buffered, re.IGNORECASE
@@ -403,6 +409,18 @@ class _HTMLTextExtractor(HTMLParser):
                         lo <= match.start() <= hi for lo, hi in masked
                     )
                 )
+                opens = sum(
+                    1
+                    for match in re.finditer(
+                        rf"<{scope}\b[^>]*(?<!/)>", buffered, re.IGNORECASE
+                    )
+                    if not any(
+                        lo <= match.start() <= hi for lo, hi in masked
+                    )
+                )
+                # A close belonging to a balanced pair INSIDE the buffer
+                # cannot close a pre-existing outer scope.
+                available[scope] = max(0, closes - opens)
             if available[scope] <= 0:
                 break
             available[scope] -= 1
@@ -503,6 +521,7 @@ _JS_EXPRESSION_KEYWORDS = frozenset({
     "return", "typeof", "case", "in", "of", "delete", "void", "throw",
     "do", "else", "yield", "await", "instanceof", "new",
 })
+_JS_CONTROL_KEYWORDS = frozenset({"if", "for", "while", "switch", "catch"})
 
 
 def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
@@ -526,6 +545,8 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
     prev2 = ""
     word = ""
     prev_word = ""
+    paren_stack: list[bool] = []
+    control_paren_just_closed = False
     while i < length:
         ch = buffered[i]
         nxt = buffered[i + 1] if i + 1 < length else ""
@@ -543,6 +564,7 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
                 i += 3
             elif ch == "/" and (
                 (word or prev_word) in _JS_EXPRESSION_KEYWORDS
+                or control_paren_just_closed
                 or (
                     # "</tag>" (slash ADJACENT to <) is markup; a spaced
                     # "< /" is a less-than operator before a regex.
@@ -567,6 +589,20 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
                     word = word + ch if word else ("." + ch if prev == "." else ch)
                     prev2, prev = prev, ch
                 else:
+                    if ch == "(":
+                        # Remember whether this paren is a control-flow
+                        # header: its close puts a slash in expression
+                        # position (if (ok) /re/) unlike a value paren.
+                        paren_stack.append(
+                            (word or prev_word) in _JS_CONTROL_KEYWORDS
+                        )
+                        control_paren_just_closed = False
+                    elif ch == ")":
+                        control_paren_just_closed = (
+                            paren_stack.pop() if paren_stack else False
+                        )
+                    elif not ch.isspace():
+                        control_paren_just_closed = False
                     word = ""
                     prev_word = ""
                     prev2, prev = prev, ch
