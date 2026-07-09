@@ -240,3 +240,64 @@ def test_excluded_rows_still_prove_the_convention() -> None:
     )
     assert "2026-01-02" in payload  # Jan 2, not Feb 1
     assert "2026-02-01" not in payload
+
+
+# S9 (#2056): the window is anchored to the data's own recency, closing
+# the stale-upload zero-source path.
+
+
+def test_stale_upload_keeps_its_sources_via_the_emitted_anchor() -> None:
+    from datetime import date, timedelta
+
+    from extracted_content_pipeline.ticket_faq_markdown import (
+        build_ticket_faq_markdown,
+    )
+
+    stale = (date.today() - timedelta(days=180)).isoformat()
+    package = build_support_ticket_input_package(
+        _rows([stale] * 5), window_days=30
+    )
+    assert package.inputs["faq_window_days"] == 30
+    assert package.inputs["faq_as_of_date"] == stale
+    source_rows = [
+        {
+            "source_id": f"r{i}",
+            "source_type": "support_ticket",
+            "source_title": "Cannot reset my password",
+            "text": "I cannot reset my password from the login page.",
+            "created_at": stale,
+        }
+        for i in range(5)
+    ]
+    # The defect: without the anchor the builder falls back to
+    # date.today() and drops every source of a stale-but-valid upload.
+    empty = build_ticket_faq_markdown(source_rows, window_days=30)
+    assert empty.ticket_source_count == 0
+    anchored = build_ticket_faq_markdown(
+        source_rows,
+        window_days=package.inputs["faq_window_days"],
+        as_of_date=package.inputs["faq_as_of_date"],
+    )
+    assert anchored.ticket_source_count == 5
+    assert len(anchored.items) == 1
+
+
+def test_anchor_is_the_newest_parsed_date() -> None:
+    package = build_support_ticket_input_package(
+        _rows(["2026-01-05", "2026-01-20", "2026-01-11"])
+    )
+    assert package.inputs["faq_as_of_date"] == "2026-01-20"
+    # And it passes the generation-plan YYYY-MM-DD validation rule.
+    from datetime import date
+
+    assert date.fromisoformat(package.inputs["faq_as_of_date"])
+
+
+def test_no_anchor_without_a_valid_window() -> None:
+    dateless = build_support_ticket_input_package(_rows(["", "", ""]))
+    assert "faq_window_days" not in dateless.inputs
+    assert "faq_as_of_date" not in dateless.inputs
+    sparse = build_support_ticket_input_package(
+        _rows(["2026-01-05"] * 8 + ["", ""])
+    )
+    assert "faq_as_of_date" not in sparse.inputs

@@ -539,6 +539,12 @@ def build_support_ticket_input_package(
     }
     if has_valid_date_window:
         inputs["faq_window_days"] = window_days
+        latest_source_date = date_diagnostics.get("latest_source_date")
+        if latest_source_date is not None:
+            # Anchor the window to the DATA's own recency. The downstream
+            # builder falls back to date.today() without an anchor, which
+            # empties a stale-but-valid upload's report (#2056).
+            inputs["faq_as_of_date"] = latest_source_date.isoformat()
 
     metadata: dict[str, Any] = {
         "source": "support_ticket_input_package",
@@ -1106,14 +1112,18 @@ def _source_date_diagnostics(
     # (the warning trigger), not for the missing_count window gate.
     dated_count = 0
     fallback_signal_count = 0
+    latest_source_date = None
     missing_source_ids: list[str] = []
     for index, row in enumerate(rows, start=1):
         if source_date_signal_count is None and _clean(row.get("created_at")) != "":
             fallback_signal_count += 1
-        if parse_support_ticket_source_date(
+        parsed = parse_support_ticket_source_date(
             row.get("created_at"), convention=convention
-        ) is not None:
+        )
+        if parsed is not None:
             dated_count += 1
+            if latest_source_date is None or parsed > latest_source_date:
+                latest_source_date = parsed
             continue
         source_id = _clean(row.get("source_id")) or f"row-{index}"
         missing_source_ids.append(source_id)
@@ -1121,6 +1131,7 @@ def _source_date_diagnostics(
         "included_count": len(rows),
         "dated_count": dated_count,
         "missing_count": len(rows) - dated_count,
+        "latest_source_date": latest_source_date,
         "source_date_signal_count": (
             source_date_signal_count
             if source_date_signal_count is not None
