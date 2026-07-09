@@ -13,6 +13,7 @@ import pytest
 
 from extracted_content_pipeline.support_ticket_clustering import (
     _BLOCK_TAG_NAMES,
+    _HTML_SCRIPT_STYLE_PAIRED_RE,
     _HTML_TAG_NAMES_RE,
     support_ticket_plain_text,
     support_ticket_plain_text_lines,
@@ -142,9 +143,12 @@ def test_customer_wording_about_auto_reply_is_untouched() -> None:
 
 
 def test_every_block_tag_is_in_the_detector_families() -> None:
-    # Drift guard: line extraction and HTML detection share tag families.
+    # Drift guard: line extraction and HTML detection share tag families --
+    # either the bare signal families or the paired-only family.
     for tag in sorted(_BLOCK_TAG_NAMES):
-        assert re.fullmatch(_HTML_TAG_NAMES_RE, tag, re.IGNORECASE), tag
+        bare = re.fullmatch(_HTML_TAG_NAMES_RE, tag, re.IGNORECASE)
+        paired = _HTML_SCRIPT_STYLE_PAIRED_RE.search(f"<{tag}>x</{tag}>")
+        assert bare or paired, tag
 
 
 # Round-1 review refinements: script/style are detector signals, EOF
@@ -292,4 +296,49 @@ def test_malformed_script_inside_blockquote_recovers_tail() -> None:
 def test_quoted_text_before_nested_malformed_script_stays_excluded() -> None:
     assert support_ticket_plain_text_lines(
         "<blockquote>quoted<script>x</blockquote><p>Real</p>"
+    ) == "Real"
+
+
+# Round-5 refinements: postfix division, char classes, single-line regexes,
+# CDATA-swallowed close-tag unwinding, and lone blockquote mentions.
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        ("<script>a++ / 2;<p>Real</p>", "Real"),
+        ("<script>b-- / 2;<p>Real</p>", "Real"),
+    ],
+)
+def test_postfix_division_is_not_a_regex(html: str, expected: str) -> None:
+    assert support_ticket_plain_text(html) == expected
+
+
+def test_regex_character_class_slash_does_not_close_the_regex() -> None:
+    assert support_ticket_plain_text(
+        "<script>var r=/[/]<p>x<\\/p>/;<p>Real</p>"
+    ) == "Real"
+
+
+def test_regex_candidates_cannot_span_lines() -> None:
+    assert support_ticket_plain_text(
+        "<script>a = b / 2\n<p>Real</p>"
+    ) == "Real"
+
+
+def test_cdata_swallowed_close_tags_are_unwound() -> None:
+    assert support_ticket_plain_text_lines(
+        "<blockquote><script>x</blockquote></script><p>Real</p>"
+    ) == "Real"
+
+
+def test_lone_blockquote_mention_stays_customer_wording() -> None:
+    assert support_ticket_plain_text(
+        "How do I add <blockquote> to my template?"
+    ) == "How do I add <blockquote> to my template?"
+
+
+def test_end_tag_slash_in_buffer_is_not_a_regex() -> None:
+    assert support_ticket_plain_text_lines(
+        "<blockquote><script>x</blockquote><p>Real</p>"
     ) == "Real"

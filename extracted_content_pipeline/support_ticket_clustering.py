@@ -15,7 +15,7 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _LEADING_BRACKETED_METADATA_RE = re.compile(r"^(?:\[[^\]\n]{1,80}\]\s*)+")
 _HTML_TAG_NAMES_RE = (
-    r"(?:a|abbr|article|aside|b|blockquote|body|br|button|cite|code|dd|"
+    r"(?:a|abbr|article|aside|b|body|br|button|cite|code|dd|"
     r"del|div|dl|dt|em|figcaption|figure|footer|h[1-6]|header|hr|html|i|"
     r"img|ins|li|main|mark|nav|ol|p|pre|s|section|small|span|strike|strong|"
     r"sub|sup|table|tbody|td|tfoot|th|thead|time|tr|u|ul)"
@@ -28,10 +28,12 @@ _HTML_SIGNAL_RE = re.compile(
     rf"</?{_HTML_TAG_NAMES_RE}(?:{_HTML_ATTR_RE})*\s*/?>",
     re.IGNORECASE,
 )
-# A LONE <script>/<style> in prose ("How do I add <script> to the page?")
-# is customer wording, not markup; only a paired open+close is an HTML signal.
+# A LONE <script>/<style>/<blockquote> in prose ("How do I add <script> to
+# the page?") is customer wording, not markup; only a paired open+close is an
+# HTML signal. Inside a document detected via other tags, an unclosed
+# blockquote still excludes to EOF (a quote to end-of-message is a quote).
 _HTML_SCRIPT_STYLE_PAIRED_RE = re.compile(
-    r"<(script|style)\b[^>]*>.*?</\1\s*>",
+    r"<(script|style|blockquote)\b[^>]*>.*?</\1\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 _HTML_CUSTOM_TAG_RE = re.compile(
@@ -352,6 +354,28 @@ class _HTMLTextExtractor(HTMLParser):
         if self._skip_stack:
             if lowered == self._skip_stack[-1]:
                 self._skip_stack.pop()
+                if self._skip_stack and lowered in {"script", "style"}:
+                    # CDATA may have swallowed outer scopes' close tags
+                    # (<blockquote><script>x</blockquote></script>): unwind
+                    # any remaining scope whose close tag sits in the buffer
+                    # outside code literals, so later real markup is not
+                    # treated as still-quoted.
+                    buffered = "".join(self._pending)
+                    masked = _code_literal_regions(buffered)
+                    while self._skip_stack:
+                        scope = self._skip_stack[-1]
+                        found = False
+                        for match in re.finditer(
+                            rf"</{scope}\s*>", buffered, re.IGNORECASE
+                        ):
+                            if not any(
+                                lo <= match.start() <= hi for lo, hi in masked
+                            ):
+                                found = True
+                                break
+                        if not found:
+                            break
+                        self._skip_stack.pop()
                 if not self._skip_stack:
                     # Scope closed properly: excluded content stays excluded.
                     self._pending.clear()
@@ -401,16 +425,42 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
     """First HTML-signal offset outside string literals and comments.
 
     Script/CSS code embeds markup in quoted templates ('<p>x</p>'),
-    template literals, and comments; those are code, not lost ticket text.
-    Only markup in plain code context marks where real trailing HTML began.
+    template literals, regex literals, and comments; those are code, not
+    lost ticket text. Only markup in plain code context marks where real
+    trailing HTML began.
+    """
+
+    masked = _code_literal_regions(buffered)
+    candidates = [
+        match.start()
+        for pattern in (_HTML_SIGNAL_RE, _HTML_CUSTOM_TAG_RE)
+        for match in pattern.finditer(buffered)
+    ]
+    for position in sorted(candidates):
+        if not any(lo <= position <= hi for lo, hi in masked):
+            return position
+    return None
+
+
+def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
+    """Mask string/template/regex literals and comments in script text.
+
+    Regex-literal handling is deliberately bounded: a slash opens a regex
+    only in expression position (not after a value: alphanumerics, closing
+    brackets/braces, closed literals, or postfix ++/--), a slash inside a
+    character class does not close it, and a candidate that reaches a
+    newline was division all along (JS regex literals cannot span lines),
+    so a misread slash can never mask to EOF.
     """
 
     masked: list[tuple[int, int]] = []
     state: str | None = None
     start = 0
+    in_char_class = False
     i = 0
     length = len(buffered)
-    last_code_char = ""
+    prev = ""
+    prev2 = ""
     while i < length:
         ch = buffered[i]
         nxt = buffered[i + 1] if i + 1 < length else ""
@@ -425,21 +475,31 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
                 i += 1
             elif (
                 ch == "/"
-                and last_code_char not in ")]}\"'`"
-                and not last_code_char.isalnum()
+                and prev != "<"  # "</tag>" is markup, never a regex
+                and prev not in ")]}\"'`"
+                and not prev.isalnum()
+                and not (prev in "+-" and prev2 == prev)
             ):
-                # JS regex literal: a slash in expression position (after an
-                # operator/opening context, not after a value) opens /.../.
+                # Expression-position slash: candidate regex literal.
                 state, start = "re", i
+                in_char_class = False
             if state is None and not ch.isspace():
-                last_code_char = ch
+                prev2, prev = prev, ch
         elif state == "re":
             if ch == "\\":
                 i += 1
-            elif ch == "/":
+            elif ch == "\n":
+                # JS regex literals cannot span lines: this was division.
+                state = None
+                prev2, prev = "", "/"
+            elif ch == "[":
+                in_char_class = True
+            elif ch == "]":
+                in_char_class = False
+            elif ch == "/" and not in_char_class:
                 masked.append((start, i))
                 state = None
-                last_code_char = "/"
+                prev2, prev = "", "/"
         elif state in "'\"`":
             if ch == "\\":
                 i += 1
@@ -447,7 +507,7 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
                 masked.append((start, i))
                 state = None
                 # A closed literal is a value: a following slash is division.
-                last_code_char = ch
+                prev2, prev = "", ch
         elif state == "//":
             if ch == "\n":
                 masked.append((start, i))
@@ -458,19 +518,15 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
                 state = None
                 i += 1
         i += 1
-    if state is not None:
-        # Unterminated literal/comment runs to EOF: everything after it is
+    if state == "re":
+        # Unclosed single-line regex candidate at EOF: treat as division,
+        # masking nothing, rather than swallowing the buffer.
+        pass
+    elif state is not None:
+        # Unterminated string/comment runs to EOF: everything after it is
         # still code context, never recoverable ticket text.
         masked.append((start, length - 1))
-    candidates = [
-        match.start()
-        for pattern in (_HTML_SIGNAL_RE, _HTML_CUSTOM_TAG_RE)
-        for match in pattern.finditer(buffered)
-    ]
-    for position in sorted(candidates):
-        if not any(lo <= position <= hi for lo, hi in masked):
-            return position
-    return None
+    return masked
 
 
 def _extract_html_text(text: str, *, exclude_blockquote: bool) -> str:

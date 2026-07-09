@@ -94,6 +94,18 @@ buffering/recovery key on the CDATA condition (top of skip stack is
 script/style), so a malformed script nested inside a blockquote still
 recovers the swallowed tail while quoted text before it stays excluded.
 
+Round-5 refinements (each verified failing first; the scanner is now bounded
+by JS lexical facts rather than heuristics): postfix `++`/`--` are value
+positions (division); a slash inside a regex character class does not close
+it; a regex candidate that reaches a newline was division all along (JS regex
+literals cannot span lines), so a misread slash can never mask to EOF; a
+slash after `<` is markup, never a regex; close tags swallowed as CDATA
+unwind their scopes when the script closes (checked outside code literals),
+so later real markup is not treated as still-quoted; `blockquote` joins the
+paired-only detection family, so lone mentions in prose stay customer wording
+while quote-to-EOF inside real HTML stays excluded; the drift-guard test
+accepts either detector family.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -197,8 +209,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 232 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 204 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 290 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 216 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 295 |
-| **Total** | **746** |
+| `tests/test_support_ticket_plain_text_lines.py` | 344 |
+| **Total** | **865** |
