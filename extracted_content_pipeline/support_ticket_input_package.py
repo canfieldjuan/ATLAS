@@ -20,6 +20,7 @@ from .support_ticket_clustering import (
     support_ticket_cluster_quality,
     support_ticket_cluster_summary,
     support_ticket_plain_text,
+    support_ticket_plain_text_lines,
 )
 from .support_ticket_context_contract import (
     SUPPORT_TICKET_DEFAULT_TOPIC,
@@ -27,6 +28,7 @@ from .support_ticket_context_contract import (
     support_ticket_topic_filter,
 )
 from .support_ticket_dates import parse_support_ticket_source_date
+from .support_ticket_junk import support_ticket_row_is_junk
 from .support_ticket_privacy import (
     support_ticket_comment_is_private,
     support_ticket_row_is_private,
@@ -335,6 +337,7 @@ def build_support_ticket_input_package(
             "message": "No support-ticket source rows were provided.",
         })
     source_date_signal_count = 0
+    junk_excluded_counts: dict[str, int] = {}
     for index, row in enumerate(raw_rows[:max_rows], start=1):
         if not isinstance(row, Mapping):
             warnings.append({
@@ -345,6 +348,12 @@ def build_support_ticket_input_package(
             continue
         row_lookup = _SupportTicketRowLookup(row)
         normalized = _normalize_ticket_row(row_lookup, row_index=index)
+        junk_reason = normalized.pop("_junk_reason", None) if normalized else None
+        if junk_reason:
+            junk_excluded_counts[junk_reason] = (
+                junk_excluded_counts.get(junk_reason, 0) + 1
+            )
+            continue
         if normalized:
             normalized_rows.append(normalized)
             # Carry the date-column-present signal out-of-band rather than
@@ -403,6 +412,16 @@ def build_support_ticket_input_package(
             ),
             "row_count": cluster_diagnostics["token_set_row_count"],
             "max_token_set_rows": cluster_diagnostics["max_token_set_rows"],
+        })
+    if junk_excluded_counts:
+        warnings.append({
+            "code": "support_ticket_junk_excluded",
+            "count": sum(junk_excluded_counts.values()),
+            "reasons": dict(sorted(junk_excluded_counts.items())),
+            "message": (
+                "Excluded auto-generated/no-content rows from billed "
+                "clusters."
+            ),
         })
     date_diagnostics = _source_date_diagnostics(
         normalized_rows, source_date_signal_count=source_date_signal_count
@@ -518,6 +537,8 @@ def build_support_ticket_input_package(
         "ticket_status_present_count": ticket_status_present_count,
         "ticket_status_summary": ticket_status_summary,
         "source_id_fallback_count": len(source_id_fallback_rows),
+        "junk_excluded_count": sum(junk_excluded_counts.values()),
+        "junk_excluded_reasons": dict(sorted(junk_excluded_counts.items())),
         "csat_present": csat_present_count > 0,
         "csat_present_count": csat_present_count,
         "csat_score_count": len(csat_scores),
@@ -598,6 +619,28 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     text = _ticket_text(row, source_title=source_title)
     if not text:
         return {}
+    raw_body = _first_text(row, _TEXT_KEYS)
+    raw_comments = _raw_comment_texts(row)
+    body_part = support_ticket_plain_text_lines(raw_body)
+    if body_part:
+        # A row with real customer body text is judged on that body; a
+        # generated auto-ack COMMENT must not junk a real ticket.
+        gate_parts = [body_part]
+    else:
+        gate_parts = [
+            support_ticket_plain_text_lines(comment)
+            for comment in raw_comments
+        ]
+    gate_body = "\n".join(part for part in gate_parts if part)
+    junk_reason = support_ticket_row_is_junk(
+        source_title,
+        gate_body,
+        had_source_text=bool(raw_body.strip() or any(raw_comments)),
+    )
+    if junk_reason:
+        # Junk rows (auto-replies, bounces, no-new-content) must not count
+        # toward billed clusters (F2); the caller counts the bounded reason.
+        return {"_junk_reason": junk_reason}
     source_id = _first_text(row, _SOURCE_ID_KEYS)
     source_id_fallback = not source_id
     if source_id_fallback:
@@ -724,6 +767,30 @@ def _ticket_text(row: Mapping[str, Any], *, source_title: str) -> str:
     if comments:
         parts.append(comments)
     return support_ticket_plain_text("\n".join(parts))
+
+
+def _raw_comment_texts(row: Mapping[str, Any]) -> list[str]:
+    """Public comment texts with their line structure intact for the junk
+    gate; `_comments_text` compacts per comment, which erases the line
+    boundaries the assertion patterns key on."""
+
+    texts: list[str] = []
+    for key in _PUBLIC_COMMENT_KEYS:
+        comments = _first_value(row, (key,))
+        if isinstance(comments, Mapping):
+            comments = (comments,)
+        elif isinstance(comments, str):
+            comments = (comments,)
+        elif not isinstance(comments, Sequence) or isinstance(
+            comments,
+            (bytes, bytearray),
+        ):
+            continue
+        for item in comments:
+            text = _comment_text(item)
+            if text:
+                texts.append(text)
+    return texts
 
 
 def _comments_text(row: Mapping[str, Any]) -> str:

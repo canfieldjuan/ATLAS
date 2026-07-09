@@ -141,6 +141,7 @@ pytest \
   tests/test_support_ticket_privacy.py \
   tests/test_support_ticket_privacy_sweep.py \
   tests/test_support_ticket_plain_text_lines.py \
+  tests/test_support_ticket_junk.py \
   tests/test_resolution_audit_s5_clustering_spike.py \
   tests/test_extracted_support_ticket_input_package.py \
   tests/test_extracted_support_ticket_zendesk_export.py \
