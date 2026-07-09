@@ -167,6 +167,20 @@ Bob wrote:") stays preserved by the mention rule rounds 3/5 required for
 admitted reply-chain text is exactly the line-level pattern the S6E junk
 gate (#2049) detects downstream.
 
+Round-12 (7 findings fixed; one round-11 pin superseded by a single
+documented rule): recovery candidates and unwind OPEN-counting share the
+statement-boundary rule (a real tag follows newline/;{}>/ before intra-line
+whitespace, never an identifier -- kills spaced comparisons `if (x <p> y)`);
+unwind CLOSE tags always count (a</b is not valid JS, and swallowed closes
+legitimately follow code text); ties between quote-leak and data-loss resolve
+toward admitting possible customer text (quoted-reply patterns are S6E's
+layer), superseding the round-11 balanced-pair expectation for
+text-preceded opens; the control-flow flag is one-shot; `<!--` behaves as a
+line comment in script text; the tail after a properly-closed script whose
+buffer swallowed the outer close is re-emitted; a block-closing brace puts a
+following slash in expression position while object braces divide; `<base>`
+joins the prolog scaffold.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -270,8 +284,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 429 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 277 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 499 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 291 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 564 |
-| **Total** | **1285** |
+| `tests/test_support_ticket_plain_text_lines.py` | 625 |
+| **Total** | **1430** |

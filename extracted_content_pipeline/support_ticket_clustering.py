@@ -43,7 +43,7 @@ _HTML_SIGNAL_RE = re.compile(
 _HTML_EXCLUDED_TAG_AT_START_RE = re.compile(
     r"\A\s*(?:(?:\[[^\]\n]{1,80}\]|<!doctype[^>]*>|<!--.*?-->"
     r"|<title[^>]*>[^<]*</title\s*>"
-    r"|</?(?:html|head|body|meta|title|link)[^>]*>)\s*)*"
+    r"|</?(?:html|head|body|meta|title|link|base)[^>]*>)\s*)*"
     r"<(script|style|blockquote)\b",
     re.IGNORECASE | re.DOTALL,
 )
@@ -380,10 +380,25 @@ class _HTMLTextExtractor(HTMLParser):
                     # CDATA may have swallowed outer scopes' close tags
                     # (<blockquote><script>x</blockquote></script>): unwind
                     # scopes whose close tags sit in the buffer outside code
-                    # literals, then drop the buffer -- a closed scope's
-                    # content is excluded and must never leak into a later
+                    # literals. If the unwind empties the stack, the tail
+                    # AFTER the last swallowed close is real markup the
+                    # parser never saw -- re-emit it. Then drop the buffer:
+                    # a closed scope's content never leaks into a later
                     # malformed scope's recovery.
-                    self._unwind_swallowed_scopes("".join(self._pending))
+                    buffered = "".join(self._pending)
+                    tail_from = self._unwind_swallowed_scopes(buffered)
+                    if tail_from is not None and not self._skip_stack:
+                        tail = buffered[tail_from:]
+                        if tail.strip():
+                            recovered = _extract_html_text(
+                                tail,
+                                exclude_blockquote=(
+                                    "blockquote" in self._excluded
+                                ),
+                            )
+                            if recovered.strip():
+                                self.parts.append("\n")
+                                self.parts.append(recovered)
                     self._pending.clear()
                 if not self._skip_stack:
                     self.parts.append(
@@ -392,23 +407,36 @@ class _HTMLTextExtractor(HTMLParser):
             return
         self.parts.append("\n" if lowered in _BLOCK_TAG_NAMES else " ")
 
-    def _unwind_swallowed_scopes(self, buffered: str) -> None:
+    def _unwind_swallowed_scopes(self, buffered: str) -> int | None:
+        """Pop scopes whose close tags the buffer swallowed.
+
+        Returns the end offset just past the last consumed close tag, or
+        None when nothing was unwound. Comparison-shaped tags (preceded by
+        identifiers, not statement boundaries) count for neither opens nor
+        closes.
+        """
+
         if not self._skip_stack or not buffered:
-            return
+            return None
         masked = _code_literal_regions(buffered)
         available: dict[str, int] = {}
+        ends: dict[str, list[int]] = {}
+        last_end: int | None = None
         while self._skip_stack:
             scope = self._skip_stack[-1]
             if scope not in available:
-                closes = sum(
-                    1
+                # Close tags are never comparisons (a</b is not valid JS),
+                # so only the mask filters them; OPENS also need the
+                # statement-boundary rule to skip comparison shapes.
+                close_matches = [
+                    match
                     for match in re.finditer(
                         rf"</{scope}\s*>", buffered, re.IGNORECASE
                     )
                     if not any(
                         lo <= match.start() <= hi for lo, hi in masked
                     )
-                )
+                ]
                 opens = sum(
                     1
                     for match in re.finditer(
@@ -417,14 +445,19 @@ class _HTMLTextExtractor(HTMLParser):
                     if not any(
                         lo <= match.start() <= hi for lo, hi in masked
                     )
+                    and _statement_boundary_precedes(buffered, match.start())
                 )
                 # A close belonging to a balanced pair INSIDE the buffer
                 # cannot close a pre-existing outer scope.
-                available[scope] = max(0, closes - opens)
+                available[scope] = max(0, len(close_matches) - opens)
+                ends[scope] = [match.end() for match in close_matches]
             if available[scope] <= 0:
                 break
             available[scope] -= 1
+            if ends[scope]:
+                last_end = ends[scope][len(ends[scope]) - available[scope] - 1]
             self._skip_stack.pop()
+        return last_end
 
     def handle_data(self, data: str) -> None:
         if self._skip_stack:
@@ -495,15 +528,25 @@ def _first_markup_outside_code_literals(buffered: str) -> int | None:
     for position in sorted(candidates):
         if any(lo <= position <= hi for lo, hi in masked):
             continue
-        # Tag-shaped code such as comparisons (if (x<p>y)) is not markup:
-        # a real tag follows a code/markup boundary, not an identifier.
-        preceding = buffered[position - 1] if position > 0 else ""
-        if preceding and not (
-            preceding.isspace() or preceding in ";{}()>,=&|!?:/"
-        ):
+        # Tag-shaped code such as comparisons (if (x<p>y), if (x <p> y))
+        # is not markup: a real tag follows a STATEMENT boundary -- a
+        # newline, or ;{}>/ before at most intra-line whitespace -- never
+        # an identifier or expression operator.
+        if not _statement_boundary_precedes(buffered, position):
             continue
         return position
     return None
+
+
+def _statement_boundary_precedes(buffered: str, position: int) -> bool:
+    i = position - 1
+    while i >= 0 and buffered[i] in " \t":
+        i -= 1
+    if i < 0:
+        return True
+    if buffered[i] == "\n":
+        return True
+    return buffered[i] in ";{}>/"
 
 
 # Recovery-only tag shape: like _HTML_SIGNAL_RE but attributes may be bare
@@ -546,7 +589,9 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
     word = ""
     prev_word = ""
     paren_stack: list[bool] = []
+    brace_stack: list[bool] = []
     control_paren_just_closed = False
+    block_just_closed = False
     while i < length:
         ch = buffered[i]
         nxt = buffered[i + 1] if i + 1 < length else ""
@@ -565,6 +610,7 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
             elif ch == "/" and (
                 (word or prev_word) in _JS_EXPRESSION_KEYWORDS
                 or control_paren_just_closed
+                or block_just_closed
                 or (
                     # "</tag>" (slash ADJACENT to <) is markup; a spaced
                     # "< /" is a less-than operator before a regex.
@@ -577,6 +623,7 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
                 # Expression-position slash: candidate regex literal.
                 state, start = "re", i
                 in_char_class = False
+                control_paren_just_closed = False
             if state is None:
                 if ch.isspace():
                     # Whitespace completes a word (x in /re/): remember it
@@ -597,12 +644,31 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
                             (word or prev_word) in _JS_CONTROL_KEYWORDS
                         )
                         control_paren_just_closed = False
+                        block_just_closed = False
                     elif ch == ")":
                         control_paren_just_closed = (
                             paren_stack.pop() if paren_stack else False
                         )
+                        block_just_closed = False
+                    elif ch == "{":
+                        # A block brace (after a control header, statement
+                        # boundary, or start) closes into statement
+                        # position; an object-literal brace is a value.
+                        brace_stack.append(
+                            control_paren_just_closed
+                            or prev in ";{}"
+                            or prev == ""
+                        )
+                        control_paren_just_closed = False
+                        block_just_closed = False
+                    elif ch == "}":
+                        block_just_closed = (
+                            brace_stack.pop() if brace_stack else False
+                        )
+                        control_paren_just_closed = False
                     elif not ch.isspace():
                         control_paren_just_closed = False
+                        block_just_closed = False
                     word = ""
                     prev_word = ""
                     prev2, prev = prev, ch
@@ -646,7 +712,11 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
                 state = None
                 i += 1
         elif state == "<!--":
-            if buffered[i:i + 3] == "-->":
+            # In script text "<!--" behaves as a line comment.
+            if ch == "\n":
+                masked.append((start, i))
+                state = None
+            elif buffered[i:i + 3] == "-->":
                 masked.append((start, i + 2))
                 state = None
                 i += 2

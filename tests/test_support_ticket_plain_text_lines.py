@@ -542,9 +542,22 @@ def test_boolean_attribute_tags_are_recoverable() -> None:
 
 
 def test_balanced_inner_pair_does_not_close_the_outer_quote() -> None:
+    # A statement-boundary-preceded open pairs with its close and cannot
+    # close the pre-existing outer quote.
+    assert support_ticket_plain_text_lines(
+        "<blockquote><script>x;<blockquote>inner</blockquote><p>Rest</p>"
+    ) == ""
+
+
+def test_text_preceded_open_resolves_toward_data_preservation() -> None:
+    # "x<blockquote>" is comparison-shaped (identical prefix to code like
+    # if (x<blockquote>y)), so it does not count as an open; the close then
+    # unwinds the outer quote and the tail is admitted. Ties between
+    # quote-leak and data-loss resolve toward admitting possible customer
+    # text; quoted-reply patterns are the S6E junk gate's layer.
     assert support_ticket_plain_text_lines(
         "<blockquote><script>x<blockquote>inner</blockquote><p>Rest</p>"
-    ) == ""
+    ) == "Rest"
 
 
 def test_control_flow_paren_opens_regex_but_value_paren_divides() -> None:
@@ -562,3 +575,51 @@ def test_known_boolean_attributes_detect_in_the_main_seam() -> None:
     assert support_ticket_plain_text(
         "If a<b and c>d then fail"
     ) == "If a<b and c>d then fail"
+
+
+# Round-12 refinements: statement-boundary recovery, one-shot control
+# context, line-comment semantics, unwind counting, tail recovery on close,
+# block-close regexes, and base prologs.
+
+
+def test_spaced_comparisons_are_not_recovery_boundaries() -> None:
+    assert support_ticket_plain_text_lines(
+        "<script>if (x <p> y) {}<p>Real</p>"
+    ) == "Real"
+
+
+def test_control_context_is_consumed_by_its_regex() -> None:
+    assert support_ticket_plain_text(
+        "<script>if (ok) /x/; var d = a / 2;<p>Real</p>"
+    ) == "Real"
+
+
+def test_html_comment_in_script_ends_at_newline() -> None:
+    assert support_ticket_plain_text_lines(
+        "<script><!-- <p>template</p>\n<p>Real</p>"
+    ) == "Real"
+
+
+def test_comparison_shaped_open_does_not_block_unwind() -> None:
+    assert support_ticket_plain_text_lines(
+        "<blockquote><script>if (x<blockquote>y) {}</blockquote></script>"
+        "<p>Real</p>"
+    ) == "Real"
+
+
+def test_tail_after_proper_script_close_is_recovered() -> None:
+    assert support_ticket_plain_text_lines(
+        "<blockquote><script>x</blockquote><p>Real</p></script>done"
+    ) == "Real\ndone"
+
+
+def test_regex_statement_after_block_close_is_masked() -> None:
+    assert support_ticket_plain_text(
+        "<script>if (ok) {} /<p>tpl<\\/p>/.test(x);<p>Real</p>"
+    ) == "Real"
+
+
+def test_base_prolog_before_excluded_only_body() -> None:
+    assert support_ticket_plain_text_lines(
+        '<base href="https://x.example/"><script>alert(1)'
+    ) == ""
