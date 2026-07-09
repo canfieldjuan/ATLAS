@@ -1076,9 +1076,17 @@ def _normalize_row_created_dates(
 
     for row in rows:
         raw = row.get("created_at")
+        if raw in (None, ""):
+            continue
         parsed = parse_support_ticket_source_date(raw, convention=convention)
         if parsed is not None:
             row["created_at"] = parsed.isoformat()
+        else:
+            # Downstream consumers re-parse row dates with their own
+            # defaults; a raw value this boundary refused to interpret
+            # (ambiguous or malformed) must not leak out to be guessed at.
+            # The invariant: created_at is canonical ISO or absent.
+            row.pop("created_at", None)
 
 
 def _source_date_diagnostics(

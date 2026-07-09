@@ -63,6 +63,11 @@ prove nothing; the convention is emitted in package metadata
 (`support_ticket_date_convention`) and the window-disabled warning. Four
 exact-dict warning pins updated for the new diagnostic key.
 
+Round-2 refinement (verified failing first): the ISO invariant is total --
+a created_at value the boundary refused to interpret (ambiguous or
+malformed) is REMOVED at admission, so downstream re-parsers with their own
+defaults can never guess at it. created_at is canonical ISO or absent.
+
 Review-loop guard: HARD cap of 3 Codex rounds counted by ROUNDS (the
 operator-backed rule after #2053/#2054); at cap, fix what is written,
 resolve/waive remaining threads, merge on required-green.
@@ -170,11 +175,11 @@ rule with dated/included >= `DATE_WINDOW_MIN_COVERAGE`.
 | File | LOC |
 |---|---:|
 | `extracted_content_pipeline/support_ticket_dates.py` | 100 |
-| `extracted_content_pipeline/support_ticket_input_package.py` | 70 |
-| `plans/PR-Resolution-Audit-S7-Date-Window.md` | 180 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 78 |
+| `plans/PR-Resolution-Audit-S7-Date-Window.md` | 185 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/maturity_sweep/baseline_extracted_content_pipeline.json` | 3 |
 | `tests/test_extracted_support_ticket_input_package.py` | 9 |
 | `tests/test_smoke_content_ops_gate_a_live_quality.py` | 1 |
-| `tests/test_support_ticket_dates_window.py` | 186 |
-| **Total** | **550** |
+| `tests/test_support_ticket_dates_window.py` | 202 |
+| **Total** | **579** |

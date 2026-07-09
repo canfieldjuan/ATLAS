@@ -184,3 +184,19 @@ def test_convention_is_emitted_in_diagnostics() -> None:
         if w.get("code") == "support_ticket_date_window_disabled"
     )
     assert warning["date_convention"] == DATE_CONVENTION_AMBIGUOUS
+
+
+# Round-2 refinement: unparseable created_at values never leak downstream.
+
+
+def test_refused_dates_do_not_leak_to_source_material() -> None:
+    import json
+
+    package = build_support_ticket_input_package(
+        _rows(["01/13/2026"] * 9 + ["13/01/2026"])
+    )
+    payload = json.dumps(package.inputs, default=str)
+    # The invariant: created_at is canonical ISO or absent -- a value this
+    # boundary refused to interpret must not be re-guessed downstream.
+    assert "01/13/2026" not in payload
+    assert "13/01/2026" not in payload
