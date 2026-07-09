@@ -427,3 +427,47 @@ def test_metadata_prefixed_excluded_bodies_are_detected() -> None:
 def test_metadata_prefixed_prose_mention_is_preserved() -> None:
     text = "[Urgent] How do I add <script> to the page?"
     assert support_ticket_plain_text(text) == text
+
+
+# Round-8 refinements: per-scope buffer lifetime, regex-close as value,
+# legacy HTML comments in scripts, recovery under open quotes, and prologs.
+
+
+def test_closed_script_buffer_never_leaks_into_later_recovery() -> None:
+    html = (
+        "<blockquote><script>var a='<p>old junk</p>';</script>q</blockquote>"
+        "<p>mid</p><script>y;<p>Real</p>"
+    )
+    assert support_ticket_plain_text_lines(html) == "mid\nReal"
+    assert "old junk" not in support_ticket_plain_text(html)
+
+
+def test_division_after_closed_regex_literal() -> None:
+    assert support_ticket_plain_text(
+        "<script>var r=/x/; var d = r / 2;<p>Real</p>"
+    ) == "Real"
+
+
+def test_legacy_html_comments_in_scripts_are_masked() -> None:
+    assert support_ticket_plain_text_lines(
+        "<script><!-- <p>template</p> -->\nvar x;<p>Real</p>"
+    ) == "Real"
+
+
+def test_no_recovery_while_an_outer_quote_stays_open() -> None:
+    assert support_ticket_plain_text_lines(
+        "<p>before</p><blockquote><script>x<p>quoted-tail</p>"
+    ) == "before"
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        ("<!doctype html><script>x</script>", ""),
+        ("<!-- fwd --><blockquote>quoted reply", ""),
+    ],
+)
+def test_prologs_before_excluded_only_bodies_are_detected(
+    html: str, expected: str,
+) -> None:
+    assert support_ticket_plain_text_lines(html) == expected

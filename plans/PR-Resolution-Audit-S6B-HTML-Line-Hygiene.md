@@ -125,6 +125,15 @@ nested same-name scopes are not over-popped; the start rule tolerates leading
 bracketed ticket metadata (`[External] <script>...`) using the module's
 existing metadata prefix shape.
 
+Round-8 refinements (each verified failing first): CDATA buffers live per
+scope -- a closed script's buffer is dropped immediately (after the swallowed
+close-tag unwind, now a shared helper), so it can never leak into a later
+malformed scope's recovery; EOF recovery is skipped while a non-CDATA scope
+(unclosed blockquote) remains open, keeping quoted tails excluded; a closed
+regex literal is a value predecessor (following slash is division); legacy
+HTML comments (`<!-- -->`) in script bodies are masked; the start rule
+tolerates doctype/comment/html-scaffold prologs before excluded-only bodies.
+
 ## Scope (this PR)
 
 Ownership lane: resolution-audit-csv
@@ -228,8 +237,8 @@ each line, drops empties.
 | File | LOC |
 |---|---:|
 | `docs/audits/resolution-audit-csv/CURRENT_CODE_REMEDIATION_ARC.md` | 14 |
-| `extracted_content_pipeline/support_ticket_clustering.py` | 329 |
-| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 235 |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 354 |
+| `plans/PR-Resolution-Audit-S6B-HTML-Line-Hygiene.md` | 244 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_support_ticket_plain_text_lines.py` | 429 |
-| **Total** | **1008** |
+| `tests/test_support_ticket_plain_text_lines.py` | 473 |
+| **Total** | **1086** |

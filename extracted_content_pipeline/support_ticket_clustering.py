@@ -35,8 +35,10 @@ _HTML_SIGNAL_RE = re.compile(
 # script-only bodies exclude, quote-to-EOF bodies are all-quote. Inside a
 # document detected via other tags, exclusion applies as usual.
 _HTML_EXCLUDED_TAG_AT_START_RE = re.compile(
-    r"\A\s*(?:\[[^\]\n]{1,80}\]\s*)*<(script|style|blockquote)\b",
-    re.IGNORECASE,
+    r"\A\s*(?:(?:\[[^\]\n]{1,80}\]|<!doctype[^>]*>|<!--.*?-->"
+    r"|</?(?:html|head|body|meta|title|link)[^>]*>)\s*)*"
+    r"<(script|style|blockquote)\b",
+    re.IGNORECASE | re.DOTALL,
 )
 _HTML_EXCLUDED_TAG_RE = re.compile(
     r"</?(script|style|blockquote)\b[^>]*>",
@@ -360,40 +362,43 @@ class _HTMLTextExtractor(HTMLParser):
         if self._skip_stack:
             if lowered == self._skip_stack[-1]:
                 self._skip_stack.pop()
-                if self._skip_stack and lowered in {"script", "style"}:
+                if lowered in {"script", "style"}:
                     # CDATA may have swallowed outer scopes' close tags
                     # (<blockquote><script>x</blockquote></script>): unwind
-                    # any remaining scope whose close tag sits in the buffer
-                    # outside code literals, so later real markup is not
-                    # treated as still-quoted.
-                    buffered = "".join(self._pending)
-                    masked = _code_literal_regions(buffered)
-                    available: dict[str, int] = {}
-                    while self._skip_stack:
-                        scope = self._skip_stack[-1]
-                        if scope not in available:
-                            available[scope] = sum(
-                                1
-                                for match in re.finditer(
-                                    rf"</{scope}\s*>", buffered, re.IGNORECASE
-                                )
-                                if not any(
-                                    lo <= match.start() <= hi
-                                    for lo, hi in masked
-                                )
-                            )
-                        if available[scope] <= 0:
-                            break
-                        available[scope] -= 1
-                        self._skip_stack.pop()
-                if not self._skip_stack:
-                    # Scope closed properly: excluded content stays excluded.
+                    # scopes whose close tags sit in the buffer outside code
+                    # literals, then drop the buffer -- a closed scope's
+                    # content is excluded and must never leak into a later
+                    # malformed scope's recovery.
+                    self._unwind_swallowed_scopes("".join(self._pending))
                     self._pending.clear()
+                if not self._skip_stack:
                     self.parts.append(
                         "\n" if lowered in _BLOCK_TAG_NAMES else " "
                     )
             return
         self.parts.append("\n" if lowered in _BLOCK_TAG_NAMES else " ")
+
+    def _unwind_swallowed_scopes(self, buffered: str) -> None:
+        if not self._skip_stack or not buffered:
+            return
+        masked = _code_literal_regions(buffered)
+        available: dict[str, int] = {}
+        while self._skip_stack:
+            scope = self._skip_stack[-1]
+            if scope not in available:
+                available[scope] = sum(
+                    1
+                    for match in re.finditer(
+                        rf"</{scope}\s*>", buffered, re.IGNORECASE
+                    )
+                    if not any(
+                        lo <= match.start() <= hi for lo, hi in masked
+                    )
+                )
+            if available[scope] <= 0:
+                break
+            available[scope] -= 1
+            self._skip_stack.pop()
 
     def handle_data(self, data: str) -> None:
         if self._skip_stack:
@@ -417,6 +422,17 @@ class _HTMLTextExtractor(HTMLParser):
             # An unclosed blockquote is a quote to EOF and stays excluded.
             if self._skip_stack[-1] in {"script", "style"}:
                 buffered = "".join(self._pending)
+                # The buffer may hold swallowed close tags of outer scopes;
+                # unwind them first. If a non-CDATA scope (an unclosed
+                # blockquote) still remains, the tail is quoted content and
+                # stays excluded.
+                self._skip_stack.pop()
+                self._unwind_swallowed_scopes(buffered)
+                if any(
+                    scope not in {"script", "style"}
+                    for scope in self._skip_stack
+                ):
+                    return "".join(self.parts)
                 start = _first_markup_outside_code_literals(buffered)
                 if start is not None:
                     recovered = _extract_html_text(
@@ -495,6 +511,9 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
             elif ch == "/" and nxt == "*":
                 state, start = "/*", i
                 i += 1
+            elif ch == "<" and buffered[i:i + 4] == "<!--":
+                state, start = "<!--", i
+                i += 3
             elif ch == "/" and (
                 (word or prev_word) in _JS_EXPRESSION_KEYWORDS
                 or (
@@ -538,7 +557,8 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
             elif ch == "/" and not in_char_class:
                 masked.append((start, i))
                 state = None
-                prev2, prev = "", "/"
+                # A closed regex is a value: a following slash is division.
+                prev2, prev = "", ")"
         elif state in "'\"`":
             if ch == "\\":
                 i += 1
@@ -556,6 +576,11 @@ def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
                 masked.append((start, i + 1))
                 state = None
                 i += 1
+        elif state == "<!--":
+            if buffered[i:i + 3] == "-->":
+                masked.append((start, i + 2))
+                state = None
+                i += 2
         i += 1
     if state == "re":
         # Unclosed single-line regex candidate at EOF: treat as division,
