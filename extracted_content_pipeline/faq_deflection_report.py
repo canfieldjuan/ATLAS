@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -1853,6 +1854,132 @@ def build_deflection_full_report_qa_scorecard(
         "counts": _json_ready(counts),
         "assertions": assertions,
     }
+
+
+class DeflectionReportQAGateError(ValueError):
+    """A report artifact failed the runtime QA gate (fail-closed)."""
+
+    def __init__(
+        self,
+        failing_assertion_ids: Sequence[str],
+        scorecard: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.failing_assertion_ids = tuple(failing_assertion_ids)
+        self.scorecard = dict(scorecard) if isinstance(scorecard, Mapping) else {}
+        joined = ", ".join(self.failing_assertion_ids) or "unknown"
+        super().__init__(f"deflection_report_qa_gate_failed: {joined}")
+
+
+def check_deflection_report_artifact_qa(
+    artifact: DeflectionReportArtifact | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Run the QA scorecard as a runtime gate; raise on any failed assertion.
+
+    Called at the persist boundary, where the artifact was just built by
+    the current code and must match the current schema exactly. (Delivery
+    deliberately stays tolerant: persisted artifacts may straddle schema
+    versions across deploys.) The scorecard stays the single source of
+    truth for what is asserted; this gate only derives the inputs from the
+    artifact and turns ``ok == False`` into a typed error. It never
+    modifies the artifact.
+    """
+
+    # Gate exactly the payload shape that will be stored: as_dict() for an
+    # artifact object is byte-for-byte what the persist path receives.
+    payload = (
+        artifact.as_dict()
+        if isinstance(artifact, DeflectionReportArtifact)
+        else artifact
+    )
+    if not isinstance(payload, Mapping):
+        raise DeflectionReportQAGateError(["artifact.readable"])
+    raw_export = payload.get("evidence_export")
+    evidence_export: Mapping[str, Any] | None = (
+        raw_export if isinstance(raw_export, Mapping) else None
+    )
+    model = _artifact_report_model(payload)
+    scorecard = build_deflection_full_report_qa_scorecard(
+        model if isinstance(model, Mapping) else {},
+        evidence_export=evidence_export,
+    )
+    failing = [
+        _text(assertion.get("id"))
+        for assertion in scorecard.get("assertions", ())
+        if isinstance(assertion, Mapping) and not assertion.get("ok")
+    ]
+    # Beyond the count-level scorecard, both checks reuse the CANONICAL
+    # readers rather than a hand-written field list:
+    # 1. The stored export must be the derivation of the stored artifact --
+    #    a same-count export whose elements drifted must not be sold.
+    try:
+        canonical_export = build_deflection_evidence_export(payload)
+    except Exception:
+        canonical_export = None
+    if canonical_export is None or (
+        _export_integrity_view(evidence_export)
+        != _export_integrity_view(canonical_export)
+    ):
+        failing.append("evidence_export.matches_stored_artifact")
+    # 2. Paid read surfaces project the stored model through
+    #    stored_deflection_report_model(), which silently DROPS invalid
+    #    sections -- a non-None projection can still be missing required
+    #    sections. Run the same scorecard on the projection paid readers
+    #    will actually see. Imported lazily: deflection_report_access
+    #    imports this module at top level.
+    from .deflection_report_access import stored_deflection_report_model
+
+    projected = stored_deflection_report_model(payload)
+    projected_scorecard = build_deflection_full_report_qa_scorecard(
+        projected if isinstance(projected, Mapping) else {},
+        evidence_export=evidence_export,
+    )
+    failing.extend(
+        "stored_projection:" + _text(assertion.get("id"))
+        for assertion in projected_scorecard.get("assertions", ())
+        if isinstance(assertion, Mapping) and not assertion.get("ok")
+    )
+    if failing:
+        raise DeflectionReportQAGateError(failing, scorecard)
+    return scorecard
+
+
+# Content-hash linkage keys (paid delta-matching contract) are re-derived
+# from possibly PII-scrubbed text, so their VALUES legitimately differ
+# between the stored export and a fresh derivation -- but the fields must
+# still be present as non-empty strings. Every other field must match
+# exactly.
+_EXPORT_INTEGRITY_VOLATILE_KEYS = frozenset({"cluster_id", "repeat_key"})
+
+
+def _export_integrity_view(export: Mapping[str, Any] | None) -> str:
+    if not isinstance(export, Mapping):
+        return ""
+
+    def normalize(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                key: (
+                    _volatile_key_marker(item)
+                    if key in _EXPORT_INTEGRITY_VOLATILE_KEYS
+                    else normalize(item)
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            return [normalize(item) for item in value]
+        return value
+
+    return json.dumps(normalize(export), sort_keys=True, default=str)
+
+
+def _volatile_key_marker(value: Any) -> str:
+    # Omitting the key entirely still mismatches (the canonical derivation
+    # always carries it); this marker only ignores the hash CONTENT.
+    if isinstance(value, str) and value.strip():
+        return "<volatile:str>"
+    return "<volatile:invalid>"
 
 
 def build_deflection_full_report_qa_deterministic_harness(
@@ -5569,11 +5696,13 @@ __all__ = [
     "DEFLECTION_REPORT_SECTION_REGISTRY",
     "DeflectionSnapshot",
     "DeflectionReportArtifact",
+    "DeflectionReportQAGateError",
     "DeflectionReportSection",
     "DeflectionReportSectionDefinition",
     "DeflectionStructuredReport",
     "FAQDeflectionReportService",
     "build_deflection_report_model",
+    "check_deflection_report_artifact_qa",
     "build_deflection_snapshot",
     "build_deflection_report_artifact",
     "build_deflection_full_report_qa_deterministic_harness",
