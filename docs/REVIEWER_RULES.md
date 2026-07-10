@@ -205,6 +205,19 @@ If the guard protects security, billing, data deletion, customer-visible
 output, or CI/release gates, missing boundary proof is BLOCKER. Otherwise it is
 at least MAJOR.
 
+**Open-input guards additionally require class-closure** (`docs/GUARD_CLASS_CLOSURE.md`,
+`AGENTS.md` section 3k.1). When the guard's input space is open -- free text,
+nested/recursive structures, producer-supplied keys/values -- boundary probes
+alone are not enough: they prove the sampled inputs, not the class. Before LGTM,
+require and state (a) a **fail-closed choke point** (admit only on affirmative
+recognition; every unrecognized/unresolved/malformed shape rejects by
+construction, not via a per-input branch whose fall-through is unsafe), and (b) a
+**grammar-derived property test** (generated inputs, derived expected values) --
+not a fixture list of the reported strings. A string-scoped fix with
+string-scoped fixtures is an automatic "needs the class fix," even when every
+listed input passes. Confirmed fail-opens in money/auth/PII/safety guards block
+regardless of review-round count.
+
 ---
 
 ## Path-based rule triggers
