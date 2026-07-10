@@ -51,12 +51,19 @@ _GUARD_PATH_STEMS = (
 )
 
 # Content signals that the code decides an admit/reject verdict.
-_VERDICT_DEF_RE = re.compile(
-    r"^\+\s*def\s+("
+_GUARD_NAME_FRAGMENT = (
     r"[a-z0-9_]*is_(?:private|public|blocked|allowed|safe|valid)"
     r"|[a-z0-9_]*_(?:marker|verdict|admit|reject|classif[a-z]*|sanitiz[a-z]*)"
     r"|(?:is|has|should|can)_[a-z0-9_]+"
     r"|[a-z0-9_]*(?:validate|classify|admit|reject|scrub|redact)[a-z0-9_]*"
+)
+# Matches a verdict def on an ADDED line, sync or async -- or in a -U0 hunk
+# header (`@@ ... @@ def is_private(...)`), which is how git names the
+# ENCLOSING function when a PR edits the body of an existing guard without
+# adding a new def. One shared name fragment so the alternatives cannot drift.
+_VERDICT_DEF_RE = re.compile(
+    r"^(?:\+\s*|@@[^@\n]*@@\s*.*?)(?:async\s+)?def\s+("
+    + _GUARD_NAME_FRAGMENT +
     r")\s*\(",
     re.MULTILINE,
 )
@@ -86,9 +93,16 @@ def _is_test_path(path: str) -> bool:
 
 
 def _added_lines(diff_hunk: str) -> str:
-    """Return only the added (``+``) lines of a unified-diff hunk body."""
+    """Return the added (``+``) lines plus ``@@`` hunk headers.
+
+    The -U0 hunk header carries the enclosing function signature, which is
+    the only diff-visible evidence when a PR edits an existing guard's body
+    without adding a new def.
+    """
     return "\n".join(
-        line for line in diff_hunk.splitlines() if line.startswith("+") and not line.startswith("+++")
+        line
+        for line in diff_hunk.splitlines()
+        if (line.startswith("+") and not line.startswith("+++")) or line.startswith("@@")
     )
 
 

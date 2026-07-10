@@ -184,3 +184,19 @@ def test_stem_tied_property_test_suppresses_guard_finding() -> None:
         "tests/test_privacy_guard.py": "+from hypothesis import given\n+@given(st.text())\n+def test_privacy_guard_closed(s): ...\n",
     })
     assert findings == []
+
+
+def test_async_guard_def_is_detected() -> None:
+    added = "+async def classify_payload(value):\n+    if isinstance(value, str):\n+        return False\n"
+    assert mod.file_is_guard_shaped("pkg/handlers.py", added) is True
+
+
+def test_body_edit_inside_existing_guard_is_detected_via_hunk_header() -> None:
+    # -U0 headers name the enclosing function even when no new def is added.
+    added = "@@ -40,0 +41,2 @@ def is_private(value):\n+    if isinstance(value, str):\n+        return value in _DENY\n"
+    assert mod.file_is_guard_shaped("pkg/rules.py", added) is True
+
+
+def test_hunk_header_of_non_guard_function_is_not_a_verdict() -> None:
+    added = "@@ -10,0 +11,1 @@ def render_report(rows):\n+    total = sum(rows)\n"
+    assert mod.file_is_guard_shaped("pkg/report.py", added) is False
