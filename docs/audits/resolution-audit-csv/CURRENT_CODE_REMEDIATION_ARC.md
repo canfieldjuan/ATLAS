@@ -42,7 +42,7 @@ Minimum true before paid reports ship:
 | 1 | Fragmentation undercount (F1/F3/F6) | S5 #2033 | CONDITIONAL (booster ON+calibrated; default OFF) |
 | 2 | Header/data-loss admission (C1/H4/C2) | S1 #2026 | MOSTLY (dup-header/encoding closed; terse-first-row + missing-ID residual) |
 | 3 | Money reconciliation (P5-2) | S4 #2031 | DISPLAY-only (buyer-visible cents change needs approval; P5-7 model guard -> S8) |
-| 4 | PII private/internal notes | S6A #2046 | MERGED 2026-07-08 -- CLOSED |
+| 4 | PII private/internal notes | S6A #2046 + follow-up #2060 | REOPENED -- structured-marker semantics + generic execute authority |
 | 5 | Junk/auto-reply/OOO gate (F2, incl HTML M6) | S6B #2053 MERGED (line plumbing) + S6E #2049 (detection rules, PR open) | IN PROGRESS |
 | 6 | Date transposition/window (C3/M7) | S7 | OPEN |
 | 7 | Fail-closed runtime guard (P5-7 + scorecard) | S8 | OPEN (scorecard zero runtime callers) |
@@ -63,6 +63,13 @@ precondition for S8).
   cap -- unbounded parse memory (deferred).
 - S5 #2033: fixed overmerge/fabrication/order-dependence; F1 undercount remains
   conditional on the default-OFF embedding booster (above).
+- S6A #2046: five post-merge classifier findings remain live on current main.
+  Nested private assertions, object-wrapped false publication flags, and
+  conjunction phrases can admit private text; neutral structured labels and
+  requester/client/end-user labels can drop public text. Generic `/execute`
+  also restores raw `source_material` over the provider-filtered package.
+  Remediation is serialized under #2060 as S6A.1 classifier semantics then
+  S6A.2 authoritative source admission.
 - Verified safe: S1 `_source_id_fallback` marker stripped by the `_public_ticket_row`
   allowlist (`:448`) -- no buyer-facing leak.
 
@@ -76,8 +83,8 @@ precondition for S8).
 
 ### Sequencing
 
-verify F1 booster || merge S6A (#2046) -> S6B (+junk rules / S6E) || S7 date-parse
--> S6C || S6D -> S8 (last; the fail-closed gate). ~9-13 dev-days, parallelizable.
+verify F1 booster || close S6A follow-up #2060 (S6A.1 -> S6A.2). Historical
+sequencing for S6B-S8 remains below; live GitHub issue state is authoritative.
 
 ## Gaps In The Existing Issue Body
 
@@ -307,9 +314,10 @@ Confirmed components:
 - Subject/body/comments are concatenated.
 - HTML is compacted to text, but signatures, quoted chains, junk auto-replies,
   and low-ratio embedded NULs are not governed by one explicit chokepoint.
-- `_comment_text` only skips comments where `public is False`; private/internal
-  markers such as `is_private`, `is_internal`, or string `"false"` can still
-  flow into ticket text.
+- Package rows and Zendesk comments share `support_ticket_privacy.py`, but its
+  structured decision representation still loses nested polarity and diverges
+  between scalar and object labels; generic `/execute` can also restore raw
+  source material after provider filtering (#2060).
 - Status values outside the small resolved/open/reopened/cancelled sets
   normalize to `other`, so resolved outcome evidence can be undercounted.
 - The final report scrubber exists for scrubbed paths, but CLI/customer-facing
@@ -320,7 +328,9 @@ Expected fix:
 - Add one ticket-text hygiene chokepoint before clustering.
 - Test junk auto-reply, signature, quoted thread, NUL, and near-miss legitimate
   customer wording.
-- Add private/internal comment fixtures and status synonym fixtures.
+- Close #2060 with class-level private/public marker fixtures plus real submit
+  and generic execute persisted-artifact proofs; keep status synonyms in their
+  existing independent slice.
 - Keep final-output scrub tests intact.
 
 ### S7 - Date Parsing And Date Window Policy
@@ -404,7 +414,10 @@ These are not coding-start items until the operator approves the product shape:
 - [x] S5 clustering first implementation PR linked here: #2033. F1 undercount
   CONDITIONAL -- closes only with the default-OFF embedding booster ON+calibrated.
 - [ ] S5 clustering calibration (real-corpus + booster on/off decision) PR linked here.
-- [x] S6A private/internal admission boundary PR linked here: #2046 (merged 2026-07-08; issue #2042 closed; closed token-stem predicate + ~335-case grammar sweep, 46 reviewer findings resolved across 9 rounds).
+- [x] Historical S6A private/internal admission boundary linked here: #2046
+  (merged 2026-07-08; issue #2042 closed).
+- [ ] S6A post-merge remediation #2060: S6A.1 structured privacy semantics and
+  S6A.2 authoritative source admission both merged.
 - [x] S6B HTML line-preserving hygiene PR linked here: #2053 (merged 2026-07-09; issue #2043 closed; line seam + blockquote exclusion + no-data-loss; 12 review rounds, 45 findings -- see PR for the review-loop lesson).
 - [ ] S6E junk/auto-reply/OOO detection gate PR linked here (issue #2049; after S6B).
 - [ ] S6D-M9 status-synonym micro-slice PR linked here (issue #2050; independent).
