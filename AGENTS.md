@@ -930,6 +930,39 @@ not after a full review round. Chasing the symptom one layer at a time -- fix
 the named case, ship, get bounced one layer deeper, repeat -- is the
 tail-chasing this gate exists to stop.
 
+### 3k.1. Guard class-closure (open-input guards)
+
+For a guard / validator / sanitizer / classifier / gate / denylist /
+parser-admission rule / safety or privacy checker whose input space is **open**
+(free text, nested/recursive structures, producer-supplied keys/values), the
+root cause of a reported leak or over-scrub is almost never the reported input
+-- it is an **open default**: a per-input branch whose fall-through lands on the
+unsafe verdict. Fixing the reported string closes nothing; the next string in
+the same class is reported next round (the S6A privacy guard ran this loop 9+
+rounds). The root-cause fix for these surfaces is codified in
+`docs/GUARD_CLASS_CLOSURE.md` and is mandatory before merge:
+
+1. **A fail-closed choke point** -- admit only on affirmative recognition of a
+   safe value; every unrecognized/unresolved/malformed/novel shape reaches the
+   safe verdict by construction through one decision point. "Reject known-bad,
+   admit the rest" is banned on open input; it must be "admit known-good, reject
+   the rest."
+2. **Class-closure, not string-closure** -- the diff closes the reported input's
+   grammar/vocabulary/shape-family/container variants in one place, not a branch
+   or token per reported string.
+3. **A grammar-derived property test** -- generate inputs from the vocabulary
+   (tokens x modifiers x container shapes x key families) and assert against a
+   spec-derived semantic oracle, not only representation parity with the base
+   case (parity over a wrong base stays green while the class is still broken);
+   a fixture list of the reported strings does not satisfy this. This
+   strengthens §3j from "5-10 unseen cases" to "the generated class" for
+   open-input guards, and is the acceptance gate reviewers require before LGTM.
+
+The reviewer enforcement of this gate lives in the guard boundary-probe section
+of `docs/REVIEWER_RULES.md`; the scope caveat (documented neutral/data-column
+families keep their admit policy -- the choke point governs the safety verdict,
+not every field's text) is in `docs/GUARD_CLASS_CLOSURE.md`.
+
 ### 3l. PR fix mode (constrain the fix loop)
 
 A **fix loop** -- iterating on red CI or review comments on an already-open PR
