@@ -1,0 +1,46 @@
+name: Guard Class-Closure Lint
+
+# Advisory lint for docs/GUARD_CLASS_CLOSURE.md / AGENTS.md 3k.1: surfaces a
+# warning when a PR changes a guard over an open input space (privacy/safety
+# classifier, sanitizer, parser-admission rule) without a co-changed
+# property/generative test. Advisory-first (never blocks); promote to required
+# with --strict after an advisory-proving period. Reads only the diff and file
+# contents (no execution of PR code), so pull_request (PR-ref) is safe here.
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/guard_class_closure.yml"
+      - "scripts/check_guard_class_closure.py"
+      - "tests/test_check_guard_class_closure.py"
+
+jobs:
+  guard-class-closure-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Test the detector
+        run: python -m pytest tests/test_check_guard_class_closure.py -q
+
+      - name: Guard class-closure lint (advisory)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          python scripts/check_guard_class_closure.py --base "origin/${{ github.base_ref }}"
