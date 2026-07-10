@@ -145,6 +145,10 @@ Parked hardening: none.
   reports state correctly and exits ACTIONABLE on review threads + red
   required context (observed live on this PR's own round 1).
 - `scripts/audit_plan_doc.py` on this plan -- OK.
+- Round 3: required-context/app-pin extraction moved to the origin/main
+  trusted ref; readiness blocks on unsettled required reruns; runbook gains
+  the claude-review trust-boundary and wake-path pre-flight items; gate
+  behavior tests waived to #2065 under the review cap.
 - `git diff --name-status` -- two new files + additive edits to `AGENTS.md`,
   `CLAUDE.md`, `.gitignore`, and the audit scan list + this plan; no code
   paths.
@@ -156,9 +160,9 @@ Parked hardening: none.
 | `.gitignore` | 3 |
 | `AGENTS.md` | 18 |
 | `CLAUDE.md` | 12 |
-| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 154 |
-| `plans/PR-Overnight-Arc-Workflow.md` | 164 |
+| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 165 |
+| `plans/PR-Overnight-Arc-Workflow.md` | 168 |
 | `scripts/audit_pr_watcher_safety.py` | 9 |
-| `scripts/watch_owned_pr.sh` | 87 |
+| `scripts/watch_owned_pr.sh` | 96 |
 | `tests/test_audit_pr_watcher_safety.py` | 27 |
-| **Total** | **474** |
+| **Total** | **498** |

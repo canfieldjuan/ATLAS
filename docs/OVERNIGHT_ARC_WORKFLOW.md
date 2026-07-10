@@ -38,6 +38,11 @@ it.
    assigned per the operator's standing autonomous-arc rules -- merge-on-green
    authority for THIS arc's PRs, hardened-path defaults, defer-do-not-ask.
    Plus any per-night limits (files not to touch, stop-after-N-PRs).
+   Trust boundary (AGENTS 3c.1.8): `claude-review` is forgeable by any token
+   with status-write on the repo, so when builder and reviewer share a GitHub
+   identity it is a coordination signal, not a defense -- the operator must
+   not grant merge authority on its strength alone; a distinct reviewer
+   identity is the precondition for treating it as a real gate.
 5. **Mechanics armed:**
    - Fresh session for the arc (one arc per session; long-lived sessions
      degrade -- model fallback, compaction damage).
@@ -45,6 +50,12 @@ it.
      (`git worktree add worktrees/<slice> -b claude/pr-<slice> origin/main`);
      never build on the shared main checkout.
    - Owned-PR watcher available: `scripts/watch_owned_pr.sh` (see section 5).
+   - **Wake path verified for the builder surface** (AGENTS 3c.1.2): a
+     watcher process does not wake an agent by itself. Claude Code native
+     mode wakes on background-task completion; Codex/local CLI mode needs an
+     external wake bridge. If the surface has no working wake path, do NOT
+     launch the overnight arc from it -- the night would stall at the first
+     watcher exit.
 
 ## 2. The night loop
 
