@@ -28,6 +28,22 @@ def _write_state(
             "title": f"{state} PR",
             "state": pr_state,
             "headRefOid": "abc123",
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": "",
+            "isDraft": False,
+        },
+        "readiness": {
+            "version": 1,
+            "evaluated_head_sha": "abc123",
+            "required_check_count": 3,
+            "required_checks_complete": True,
+            "required_check_failures": [],
+            "required_check_pending": [],
+            "review_threads_complete": True,
+            "review_thread_pages_fetched": 1,
+            "unresolved_review_threads": [],
+            "review_decision": "",
+            "merge_state_status": "CLEAN",
         },
     }
     if extra:
@@ -94,6 +110,40 @@ def test_ready_snapshot_with_pending_checks_reports_pending(tmp_path: Path) -> N
     assert "Still pending" in result.stdout
     assert "Ready for active-agent merge decision" not in result.stdout
     assert "pending=maturity-sweep" in result.stdout
+
+
+def test_ready_snapshot_without_readiness_proof_reports_attention(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    path = state_dir / "legacy-ready.json"
+    _write_state(path, state="ready_for_human_merge")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("readiness")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _run(state_dir)
+
+    assert "Needs active-agent attention" in result.stdout
+    assert "Ready for active-agent merge decision" not in result.stdout
+    assert "readiness proof is missing" in result.stdout
+
+
+def test_outdated_but_unresolved_thread_reports_attention(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    path = state_dir / "outdated-thread.json"
+    _write_state(path, state="ready_for_human_merge")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["readiness"]["unresolved_review_threads"] = [
+        {"id": "T1", "isOutdated": True}
+    ]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _run(state_dir)
+
+    assert "Needs active-agent attention" in result.stdout
+    assert "Ready for active-agent merge decision" not in result.stdout
+    assert "unresolved review threads remain: 1" in result.stdout
 
 
 def test_ignores_wake_bridge_handoff_json(tmp_path: Path) -> None:
@@ -177,13 +227,41 @@ def test_reports_unreadable_state_file_path_and_summary(tmp_path: Path) -> None:
     assert "unreadable watcher JSON" in result.stdout
 
 
-def test_uses_stored_closed_state_when_github_refresh_is_unavailable(tmp_path: Path) -> None:
+def test_github_refresh_failure_fails_closed_instead_of_using_stored_ready_state(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    _write_state(state_dir / "stale.json", state="ready_for_human_merge", pr_state="MERGED")
+    _write_state(state_dir / "ready.json", state="ready_for_human_merge")
 
     result = _run(state_dir, skip_github=False, env={"PATH": ""})
 
     assert result.returncode == 0
-    assert "Stale/closed watcher state to clean up" in result.stdout
+    assert "Needs active-agent attention" in result.stdout
     assert "Ready for active-agent merge decision" not in result.stdout
+    assert "github_refresh_error=live GitHub refresh failed" in result.stdout
+
+
+def test_live_github_head_change_invalidates_stored_readiness(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    _write_state(state_dir / "ready.json", state="ready_for_human_merge")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' "
+        "'{\"state\":\"OPEN\",\"headRefOid\":\"new-head\","
+        "\"mergeStateStatus\":\"CLEAN\",\"reviewDecision\":\"\","
+        "\"isDraft\":false}'\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+
+    result = _run(state_dir, skip_github=False, env={"PATH": str(bin_dir)})
+
+    assert result.returncode == 0
+    assert "Needs active-agent attention" in result.stdout
+    assert "Ready for active-agent merge decision" not in result.stdout
+    assert "evaluated head SHA does not match PR head" in result.stdout

@@ -71,22 +71,102 @@ def _truthy(value: Any) -> bool:
     return bool(value)
 
 
+def attention_blockers(status: dict[str, Any]) -> list[str]:
+    """Return snapshot details that require active-agent attention."""
+    blockers: list[str] = []
+    for key in ("head_mismatch", "worktree_dirty", "merge_error", "check_failures"):
+        if _truthy(status.get(key)):
+            blockers.append(key)
+    if status.get("reconciliation_exit_code") not in {None, 0}:
+        blockers.append("reconciliation_exit_code")
+    for key in ("view_error", "checks_error", "reviews_error", "review_threads_error"):
+        if _truthy(status.get(key)):
+            blockers.append(key)
+    return blockers
+
+
+def _non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def readiness_blockers(status: dict[str, Any]) -> list[str]:
+    """Validate the evidence required to promote a watcher snapshot to ready."""
+    blockers = attention_blockers(status)
+    proof = status.get("readiness")
+    if not isinstance(proof, dict):
+        return [*blockers, "readiness proof is missing or not an object"]
+    if proof.get("version") != 1 or isinstance(proof.get("version"), bool):
+        blockers.append("readiness proof version must be 1")
+
+    pr = status.get("pr")
+    if not isinstance(pr, dict):
+        return [*blockers, "PR metadata is missing or not an object"]
+    if pr.get("state") != "OPEN":
+        blockers.append("PR state must be OPEN")
+    if pr.get("isDraft") is not False:
+        blockers.append("PR draft state must be explicitly false")
+
+    pr_head = pr.get("headRefOid")
+    evaluated_head = proof.get("evaluated_head_sha")
+    if not isinstance(pr_head, str) or not pr_head:
+        blockers.append("PR head SHA is missing")
+    if not isinstance(evaluated_head, str) or not evaluated_head:
+        blockers.append("evaluated head SHA is missing")
+    elif evaluated_head != pr_head:
+        blockers.append("evaluated head SHA does not match PR head")
+
+    required_count = proof.get("required_check_count")
+    if not _non_negative_int(required_count) or required_count < 1:
+        blockers.append("required check count must be at least 1")
+    if proof.get("required_checks_complete") is not True:
+        blockers.append("required checks are not complete")
+    for key, label in (
+        ("required_check_failures", "required check failures"),
+        ("required_check_pending", "required checks pending"),
+    ):
+        values = proof.get(key)
+        if not isinstance(values, list):
+            blockers.append(f"{label} must be a list")
+        elif values:
+            blockers.append(f"{label}: {len(values)}")
+
+    if proof.get("review_threads_complete") is not True:
+        blockers.append("review-thread pagination is incomplete")
+    pages = proof.get("review_thread_pages_fetched")
+    if not _non_negative_int(pages) or pages < 1:
+        blockers.append("review-thread pages fetched must be at least 1")
+    unresolved = proof.get("unresolved_review_threads")
+    if not isinstance(unresolved, list):
+        blockers.append("unresolved review threads must be a list")
+    elif unresolved:
+        blockers.append(f"unresolved review threads remain: {len(unresolved)}")
+
+    if "review_decision" not in proof or "reviewDecision" not in pr:
+        blockers.append("review decision evidence is missing")
+    else:
+        proof_decision = str(proof.get("review_decision") or "").upper()
+        pr_decision = str(pr.get("reviewDecision") or "").upper()
+        if proof_decision != pr_decision:
+            blockers.append("review decision does not match PR metadata")
+        if proof_decision == "CHANGES_REQUESTED":
+            blockers.append("review decision has changes requested")
+
+    proof_merge = proof.get("merge_state_status")
+    pr_merge = pr.get("mergeStateStatus")
+    if proof_merge != pr_merge:
+        blockers.append("merge state does not match PR metadata")
+    if proof_merge != "CLEAN":
+        blockers.append("merge state must be CLEAN")
+    return blockers
+
+
 def classify_wake(status: dict[str, Any], *, source: str, status_error: str | None = None) -> str:
     """Classify the bridge wake without granting merge authority."""
     if status_error:
         return "invalid-snapshot"
 
     state = str(status.get("state") or "unknown")
-    has_failure_flag = any(
-        [
-            _truthy(status.get("head_mismatch")),
-            _truthy(status.get("worktree_dirty")),
-            _truthy(status.get("merge_error")),
-            _truthy(status.get("check_failures")),
-            status.get("reconciliation_exit_code") not in {None, 0},
-        ]
-    )
-    if has_failure_flag:
+    if attention_blockers(status):
         return "attention"
 
     if state == "closed":
@@ -98,7 +178,7 @@ def classify_wake(status: dict[str, Any], *, source: str, status_error: str | No
     if state == "pending" or _truthy(status.get("check_pending")):
         return "pending"
     if source == "scheduled" and state == "ready_for_human_merge":
-        return "scheduled-ready"
+        return "scheduled-ready" if not readiness_blockers(status) else "attention"
     if state in {"attention", "review_changed"}:
         return "attention"
     return "attention"
@@ -134,6 +214,7 @@ def build_prompt(
     state = str(status.get("state") or "unknown")
     next_poll = str(status.get("next_poll_at") or "unknown")
     reconciliation_code = status.get("reconciliation_exit_code")
+    ready_blockers = readiness_blockers(status) if state == "ready_for_human_merge" else []
     session_state_label = session_state or "SESSION_STATE.local.md"
     session_state_shell = shlex.quote(session_state_label)
 
@@ -175,6 +256,12 @@ def build_prompt(
         lines.extend([
             "Watcher snapshot problem:",
             f"- {status_error}",
+            "",
+        ])
+    if ready_blockers:
+        lines.extend([
+            "Watcher readiness blockers:",
+            *(f"- {blocker}" for blocker in ready_blockers),
             "",
         ])
 
@@ -274,6 +361,9 @@ def write_handoff(
         "pr": status.get("pr", {}),
         "watcher_state": status.get("state", "unknown"),
         "status_error": status_error,
+        "readiness_blockers": readiness_blockers(status)
+        if status.get("state") == "ready_for_human_merge"
+        else [],
         "prompt_path": str(handoff_md_path),
     }
     handoff_json_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

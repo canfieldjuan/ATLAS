@@ -138,11 +138,36 @@ Wake-source rules:
   as inspection/fix handoffs only; scheduled green-confirmation is still the
   only wake source that may proceed to merge consideration after live guards.
 - `--source scheduled` may classify `ready_for_human_merge` as
-  `scheduled-ready`, which is only permission to run the AGENTS merge guards.
-  The resumed builder still needs explicit standing merge authorization in
-  this session's state file before merging.
+  `scheduled-ready` only when the snapshot carries a version-1 readiness proof
+  for the same open, non-draft head: at least one required check, all required
+  checks complete/green, complete review-thread pagination, zero unresolved
+  threads (including outdated threads), no changes-requested decision, and a
+  clean merge state. Missing or contradictory proof becomes `attention` and
+  lists its blockers. `scheduled-ready` is still only permission to run the
+  AGENTS merge guards; the resumed builder also needs explicit standing merge
+  authorization in this session's state file before merging.
 - Pending states write a handoff but do not run the optional command by default.
   Do not replace the watcher timer with an in-chat polling loop.
+
+The version-1 snapshot proof is:
+
+```json
+{
+  "readiness": {
+    "version": 1,
+    "evaluated_head_sha": "<same as pr.headRefOid>",
+    "required_check_count": 3,
+    "required_checks_complete": true,
+    "required_check_failures": [],
+    "required_check_pending": [],
+    "review_threads_complete": true,
+    "review_thread_pages_fetched": 1,
+    "unresolved_review_threads": [],
+    "review_decision": "<same as pr.reviewDecision>",
+    "merge_state_status": "CLEAN"
+  }
+}
+```
 
 This gives the two-hook shape without making the watcher merge-capable: event
 hooks can call the bridge with `--source event`; the 30-minute green-confirmation
@@ -152,7 +177,10 @@ timer can call it with `--source scheduled`.
 
 - No auto-merge. Truthy watcher auto-merge config is unsafe and must surface as
   attention, not an action path.
-- A green PR becomes `ready_for_human_merge`; it does not merge itself.
+- A local producer may label a PR `ready_for_human_merge`, but the bridge and
+  reporter fail closed unless the versioned readiness proof above is complete.
+  Legacy snapshots therefore remain attention-only until their producer is
+  upgraded. No watcher snapshot merges by itself.
 - Local review runs `scripts/audit_pr_watcher_safety.py`; unsafe watcher configs
   or watcher source merge commands are blocking.
 - Codex/local active builders must run `scripts/report_pr_watcher_state.py` on
@@ -289,7 +317,7 @@ systemctl --user disable --now "atlas-pr-watch@${SESSION_ID}.timer"
 | `pending` | At least one check is still pending | Record the next poll; do not ask the operator to babysit CI |
 | `attention` | Red/canceled check, failed AI reconciliation, or status details such as `head_mismatch: true` | Inspect the owned PR, fix the root cause in-scope, push, update watcher config head SHA. If `head_mismatch` is true, follow the stop/fetch/inspect branch before any force-push or merge |
 | `review_changed` | New review/comment activity since last poll | Inspect comments before any merge decision |
-| `ready_for_human_merge` | Checks are green and AI reconciliation passes on the scheduled timer wake | Run `scripts/report_pr_watcher_state.py`, then report readiness or perform the active-builder guarded merge only when explicitly authorized |
+| `ready_for_human_merge` | The snapshot label and version-1 proof agree: same open/non-draft head, required checks complete/green, all thread pages fetched, zero unresolved threads, no changes requested, clean merge state | Run `scripts/report_pr_watcher_state.py`; missing/contradictory proof is reported as attention. Otherwise report readiness or perform the active-builder guarded merge only when explicitly authorized and after fresh live guards |
 
 ## Prompt For Other Builder Sessions
 

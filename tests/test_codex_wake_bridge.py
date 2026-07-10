@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import pytest
 import sys
 
 
@@ -72,6 +73,9 @@ def _write_fixture(
             "headRefName": "claude/pr-codex-wake-bridge",
             "headRefOid": "abc123",
             "mergeStateStatus": "CLEAN",
+            "reviewDecision": "",
+            "isDraft": False,
+            "state": "OPEN",
         },
         "check_failures": [],
         "check_pending": [],
@@ -79,6 +83,19 @@ def _write_fixture(
         "worktree_dirty": False,
         "reconciliation_exit_code": 0,
         "reconciliation_summary": "OK: no open automated-review threads.",
+        "readiness": {
+            "version": 1,
+            "evaluated_head_sha": "abc123",
+            "required_check_count": 3,
+            "required_checks_complete": True,
+            "required_check_failures": [],
+            "required_check_pending": [],
+            "review_threads_complete": True,
+            "review_thread_pages_fetched": 1,
+            "unresolved_review_threads": [],
+            "review_decision": "",
+            "merge_state_status": "CLEAN",
+        },
     }
     if extra_status:
         status.update(extra_status)
@@ -205,6 +222,158 @@ def test_failure_flags_override_scheduled_ready(tmp_path: Path) -> None:
     assert payload["wake_kind"] == "attention"
     assert "Attention wake" in prompt
     assert "If head_mismatch is true" in prompt
+
+
+@pytest.mark.parametrize(
+    "error_field",
+    ["view_error", "checks_error", "reviews_error", "review_threads_error"],
+)
+def test_github_read_errors_override_scheduled_ready(
+    tmp_path: Path,
+    error_field: str,
+) -> None:
+    config_dir, state_dir, watcher_id = _write_fixture(
+        tmp_path,
+        extra_status={error_field: "API unavailable"},
+    )
+
+    code = bridge.main([
+        watcher_id,
+        "--source",
+        "scheduled",
+        "--config-dir",
+        str(config_dir),
+        "--state-dir",
+        str(state_dir),
+    ])
+
+    assert code == 0
+    payload, prompt = _read_handoff(state_dir, watcher_id)
+    assert payload["wake_kind"] == "attention"
+    assert error_field in payload["readiness_blockers"]
+    assert "Do not merge" in prompt
+
+
+@pytest.mark.parametrize(
+    ("proof_patch", "pr_patch", "expected"),
+    [
+        (None, {}, "readiness proof is missing"),
+        ({"version": 2}, {}, "version must be 1"),
+        ({"evaluated_head_sha": ""}, {}, "evaluated head SHA is missing"),
+        ({"evaluated_head_sha": "new-head"}, {}, "does not match PR head"),
+        ({"required_check_count": 0}, {}, "count must be at least 1"),
+        ({"required_checks_complete": False}, {}, "checks are not complete"),
+        ({"required_check_failures": ["unit"]}, {}, "check failures: 1"),
+        ({"required_check_failures": "unit"}, {}, "failures must be a list"),
+        ({"required_check_pending": ["unit"]}, {}, "checks pending: 1"),
+        ({"required_check_pending": "unit"}, {}, "pending must be a list"),
+        ({"review_threads_complete": False}, {}, "pagination is incomplete"),
+        ({"review_thread_pages_fetched": 0}, {}, "pages fetched must be at least 1"),
+        ({"unresolved_review_threads": "T1"}, {}, "threads must be a list"),
+        (
+            {"unresolved_review_threads": [{"id": "T1", "isOutdated": True}]},
+            {},
+            "unresolved review threads remain: 1",
+        ),
+        (
+            {"review_decision": "CHANGES_REQUESTED"},
+            {"reviewDecision": "CHANGES_REQUESTED"},
+            "has changes requested",
+        ),
+        (
+            {"review_decision": "APPROVED"},
+            {},
+            "review decision does not match PR metadata",
+        ),
+        (
+            {"merge_state_status": "DIRTY"},
+            {"mergeStateStatus": "DIRTY"},
+            "merge state must be CLEAN",
+        ),
+        (
+            {},
+            {"mergeStateStatus": "DIRTY"},
+            "merge state does not match PR metadata",
+        ),
+        ({}, {"isDraft": True}, "draft state must be explicitly false"),
+        ({}, {"state": "CLOSED"}, "PR state must be OPEN"),
+    ],
+)
+def test_incomplete_or_contradictory_ready_proof_fails_closed(
+    tmp_path: Path,
+    proof_patch: dict[str, object] | None,
+    pr_patch: dict[str, object],
+    expected: str,
+) -> None:
+    config_dir, state_dir, watcher_id = _write_fixture(tmp_path)
+    status_path = state_dir / f"{watcher_id}.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    if proof_patch is None:
+        status.pop("readiness")
+    else:
+        status["readiness"].update(proof_patch)
+    status["pr"].update(pr_patch)
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+
+    code = bridge.main([
+        watcher_id,
+        "--source",
+        "scheduled",
+        "--config-dir",
+        str(config_dir),
+        "--state-dir",
+        str(state_dir),
+    ])
+
+    assert code == 0
+    payload, prompt = _read_handoff(state_dir, watcher_id)
+    assert payload["wake_kind"] == "attention"
+    assert any(expected in str(item) for item in payload["readiness_blockers"])
+    assert expected in prompt
+    assert "Attention wake" in prompt
+    assert "Do not merge" in prompt
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("readiness", [], "readiness proof is missing or not an object"),
+        ("pr", [], "PR metadata is missing or not an object"),
+    ],
+)
+def test_malformed_readiness_objects_fail_closed(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    expected: str,
+) -> None:
+    _config_dir, state_dir, watcher_id = _write_fixture(tmp_path)
+    status = json.loads((state_dir / f"{watcher_id}.json").read_text(encoding="utf-8"))
+    status[field] = value
+
+    assert expected in bridge.readiness_blockers(status)
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "expected"),
+    [
+        ("pr", "headRefOid", "PR head SHA is missing"),
+        ("readiness", "review_decision", "review decision evidence is missing"),
+        ("pr", "reviewDecision", "review decision evidence is missing"),
+        ("readiness", "merge_state_status", "merge state must be CLEAN"),
+    ],
+)
+def test_missing_readiness_evidence_fails_closed(
+    tmp_path: Path,
+    section: str,
+    field: str,
+    expected: str,
+) -> None:
+    _config_dir, state_dir, watcher_id = _write_fixture(tmp_path)
+    status = json.loads((state_dir / f"{watcher_id}.json").read_text(encoding="utf-8"))
+    status[section].pop(field)
+
+    assert expected in bridge.readiness_blockers(status)
 
 
 def test_malformed_status_fails_closed_to_attention_handoff(tmp_path: Path) -> None:
