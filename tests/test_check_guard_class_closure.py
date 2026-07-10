@@ -136,3 +136,21 @@ def test_ignore_globs_opt_out() -> None:
         ignore_globs=["extracted_content_pipeline/*_privacy.py"],
     )
     assert findings == []
+
+
+# --- failure branches (raise paths) ------------------------------------------
+
+
+def test_git_failure_raises_system_exit() -> None:
+    with pytest.raises(SystemExit, match="git .* failed"):
+        mod._git(["rev-parse", "--verify", "definitely-not-a-ref-xyz"])
+
+
+def test_bad_ignore_globs_config_raises_system_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bad = tmp_path / "guard_class_closure_ignore.json"
+    bad.write_text('{"ignore_globs": "not-a-list"}', encoding="utf-8")
+    monkeypatch.setattr(mod, "CONFIG_PATH", bad)
+    with pytest.raises(SystemExit, match="ignore_globs must be a list"):
+        mod.load_ignore_globs()
