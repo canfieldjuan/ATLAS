@@ -119,7 +119,19 @@ future required enrollment. The workflow runs the detector tests and the lint on
   (operator policy flip; same shape as the unit-gate enrollment).
 - A semantic check that the property test asserts against a spec oracle (not
   just parity) -- the lint can see a property test exists but not that its
-  oracle is independent; that stays a reviewer judgment for now.
+  oracle is independent; that stays a reviewer judgment for now. The same
+  limitation covers gaming-by-shape: a two-item `@pytest.mark.parametrize`
+  fixture list carries the parametrize signal without being generative; only
+  the deferred semantic check (or the reviewer) can tell them apart.
+- Trusted-base execution of the detector in CI (checkout base, fetch the PR
+  head only as data) -- REQUIRED before any `--strict`/required promotion,
+  since a PR can edit the detector in its own checkout; impossible on this PR
+  because the script does not exist on main yet. While advisory, a gamed lint
+  only silences an advisory warning.
+- Non-Python guard surfaces (TypeScript/JS sanitizers, e.g.
+  `atlas-intel-ui/src/lib/`): the verdict/open-input content signals are
+  Python-shaped, so the transport is scoped to `.py` and the docs state
+  Python-first; extending signals to TS is a follow-up lane.
 
 Parked hardening: none.
 

@@ -6,7 +6,10 @@ name: Guard Class-Closure Lint
 # property/generative test. Advisory-first (never blocks); promote to required
 # with --strict after an advisory-proving period. The job checks out and runs
 # the PR's own detector + tests, which is fine under pull_request: the token
-# is read-only and no secrets beyond it are exposed.
+# is read-only and no secrets beyond it are exposed. A PR can therefore edit
+# the detector in its own checkout -- acceptable ONLY while advisory (gaming
+# it silences a warning, gates nothing); trusted-base execution is a named
+# precondition for --strict/required promotion (see the plan's Deferred).
 
 permissions:
   contents: read

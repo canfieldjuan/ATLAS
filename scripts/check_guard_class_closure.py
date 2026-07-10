@@ -121,6 +121,22 @@ def diff_has_property_test(test_added: Mapping[str, str]) -> bool:
     return any(_PROPERTY_TEST_RE.search(added) for added in test_added.values())
 
 
+def guard_has_property_test(guard_path: str, test_added: Mapping[str, str]) -> bool:
+    """True if a property/generative test is tied to THIS guard.
+
+    Evidence must both carry a property signal AND reference the guard's
+    module stem (in the test path or its added lines), so an unrelated
+    property test elsewhere in the same PR cannot suppress a guard finding.
+    """
+    stem = PurePosixPath(guard_path).stem.lower()
+    for test_path, added in test_added.items():
+        if not _PROPERTY_TEST_RE.search(added):
+            continue
+        if stem in test_path.lower() or stem in added.lower():
+            return True
+    return False
+
+
 def scan_diff(
     added_by_file: Mapping[str, str],
     *,
@@ -132,7 +148,6 @@ def scan_diff(
     adds no property/generative test.
     """
     test_added = {p: a for p, a in added_by_file.items() if _is_test_path(p)}
-    has_property_test = diff_has_property_test(test_added)
 
     findings: list[Finding] = []
     for path, added in sorted(added_by_file.items()):
@@ -142,7 +157,9 @@ def scan_diff(
             continue
         if not file_is_guard_shaped(path, added):
             continue
-        if has_property_test:
+        # Evidence is per-guard: an unrelated property test in the same PR
+        # must not suppress this guard's finding.
+        if guard_has_property_test(path, test_added):
             continue
         findings.append(
             Finding(

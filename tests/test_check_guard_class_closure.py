@@ -168,3 +168,19 @@ def test_bare_fixture_loop_is_not_a_property_test() -> None:
 def test_generative_product_loop_is_a_property_test() -> None:
     gen = "+import itertools\n+for k, v in itertools.product(KEYS, VALUES):\n+    assert guard({k: v})\n"
     assert mod.diff_has_property_test({"tests/t.py": gen}) is True
+
+
+def test_unrelated_property_test_does_not_suppress_guard_finding() -> None:
+    findings = mod.scan_diff({
+        "pkg/privacy_guard.py": "+def is_private(v):\n+    return _verdict(v)\n",
+        "tests/test_other_helper.py": "+from hypothesis import given\n+@given(st.text())\n+def test_helper(s): ...\n",
+    })
+    assert [f.path for f in findings] == ["pkg/privacy_guard.py"]
+
+
+def test_stem_tied_property_test_suppresses_guard_finding() -> None:
+    findings = mod.scan_diff({
+        "pkg/privacy_guard.py": "+def is_private(v):\n+    return _verdict(v)\n",
+        "tests/test_privacy_guard.py": "+from hypothesis import given\n+@given(st.text())\n+def test_privacy_guard_closed(s): ...\n",
+    })
+    assert findings == []
