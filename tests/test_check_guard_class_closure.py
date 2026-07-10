@@ -154,3 +154,17 @@ def test_bad_ignore_globs_config_raises_system_exit(
     monkeypatch.setattr(mod, "CONFIG_PATH", bad)
     with pytest.raises(SystemExit, match="ignore_globs must be a list"):
         mod.load_ignore_globs()
+
+
+def test_bare_fixture_loop_is_not_a_property_test() -> None:
+    # Trailing and mid-diff plain loops must both be rejected (the old regex
+    # was order-dependent: a trailing bare loop falsely counted).
+    trailing = "+def test_cases():\n+    for case in FIXTURE_CASES:"
+    mid = "+for case in CASES:\n+    assert guard(case)\n+\n+def other(): ...\n"
+    assert mod.diff_has_property_test({"tests/t.py": trailing}) is False
+    assert mod.diff_has_property_test({"tests/t.py": mid}) is False
+
+
+def test_generative_product_loop_is_a_property_test() -> None:
+    gen = "+import itertools\n+for k, v in itertools.product(KEYS, VALUES):\n+    assert guard({k: v})\n"
+    assert mod.diff_has_property_test({"tests/t.py": gen}) is True

@@ -70,11 +70,13 @@ _OPEN_INPUT_RE = re.compile(
 
 # --- Property-test signals ---------------------------------------------------
 
+# A bare for-loop is NOT a property signal: a plain loop over a fixture list
+# is exactly the shape the lint exists to reject, and the old trailing-loop
+# alternative (no MULTILINE) was order-dependent noise in both directions.
 _PROPERTY_TEST_RE = re.compile(
     r"@pytest\.mark\.parametrize"
     r"|itertools\.product|\bproduct\("
     r"|\bhypothesis\b|@given\b"
-    r"|for\s+\w+\s+in\s+\w+.*:\s*$"
 )
 
 

@@ -4,8 +4,9 @@ name: Guard Class-Closure Lint
 # warning when a PR changes a guard over an open input space (privacy/safety
 # classifier, sanitizer, parser-admission rule) without a co-changed
 # property/generative test. Advisory-first (never blocks); promote to required
-# with --strict after an advisory-proving period. Reads only the diff and file
-# contents (no execution of PR code), so pull_request (PR-ref) is safe here.
+# with --strict after an advisory-proving period. The job checks out and runs
+# the PR's own detector + tests, which is fine under pull_request: the token
+# is read-only and no secrets beyond it are exposed.
 
 permissions:
   contents: read
@@ -44,8 +45,14 @@ jobs:
       - name: Test the detector
         run: python -m pytest tests/test_check_guard_class_closure.py -q --noconftest
 
+      # The PR body is passed via env (not interpolated into the script) so a
+      # crafted body cannot inject shell; the file feeds the waiver marker check.
       - name: Guard class-closure lint (advisory)
         if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          ATLAS_CURRENT_PR_BODY_FILE: /tmp/pr_body_for_waiver.md
         run: |
+          printf '%s' "$PR_BODY" > "$ATLAS_CURRENT_PR_BODY_FILE"
           git fetch --no-tags origin "${{ github.base_ref }}"
           python scripts/check_guard_class_closure.py --base "origin/${{ github.base_ref }}"
