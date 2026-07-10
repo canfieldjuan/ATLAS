@@ -11,6 +11,11 @@ same treatment `docs/PR_RECONSTRUCTION_PROTOCOL.md` got for the review
 protocol, and adds the one missing piece of machinery (a portable status-only
 owned-PR watcher) that every builder session has been rewriting inline.
 
+Diff-budget note: ~423 LOC, marginally over the 400 soft cap after review
+round 1 added the watcher-safety enrollment and fail-closed watcher fixes;
+the runbook + its watcher + the contract wiring must land together or the
+workflow is codified in a state its own verification cannot prove.
+
 ### Problem-derived contract
 
 - Root cause: post-compaction context is rebuilt only from the compaction
@@ -25,7 +30,10 @@ owned-PR watcher) that every builder session has been rewriting inline.
   on (`scripts/watch_owned_pr.sh`), which must be status-only under the
   existing watcher-safety rule.
 - Must not change: merge-gate semantics (the AGENTS 3c.1.8 two-gate rule is
-  referenced, not altered), required checks, `scripts/audit_pr_watcher_safety.py`,
+  referenced, not altered), required checks, the watcher-safety audit's
+  detection semantics (its scan list is EXTENDED -- review round 1 proved the
+  new watcher and runbook were not covered, so the audit passed vacuously;
+  enrollment is required for the plan's own verification claim to be true),
   existing AGENTS/CLAUDE content (edits additive only), any code paths,
   tests, or product surfaces.
 
@@ -39,14 +47,21 @@ Slice phase: Workflow/process
    operator is present), night-loop deltas over the AGENTS section 3 builder
    contract, true-blocker channel, mandatory morning report, kickoff prompt.
 2. Add `scripts/watch_owned_pr.sh` -- portable single-PR watcher; status-only
-   (reports MERGED/CLOSED, HEAD-MOVED, ACTIONABLE, MERGE-READY and exits);
-   gates MERGE-READY on required checks + review threads + the
-   `claude-review` commit status per AGENTS section 3c.1.8.
+   (reports MERGED/CLOSED, HEAD-MOVED, ACTIONABLE, MERGE-READY and exits).
+   MERGE-READY is presence-based and fail-closed: every required
+   branch-protection context (read at runtime from
+   `scripts/check_required_status_checks.py`) present and success, plus the
+   `claude-review` commit status, 0 unresolved threads (fail closed on
+   unfetched thread pages), and no CHANGES_REQUESTED review decision
+   (AGENTS section 3c.1.8). Definite negatives exit on any cycle.
 3. Wire `AGENTS.md`: new section 3c.2 naming the runbook as governing for
    assigned overnight arcs.
 4. Wire `CLAUDE.md` Compact Instructions: add the overnight baton to the
    preserve-verbatim list so a compacted overnight session resumes from the
    baton and re-reads the runbook.
+5. Enroll the new watcher and runbook in `scripts/audit_pr_watcher_safety.py`
+   (REPO_DOCS + repo watcher sources) and add `worktrees/` to `.gitignore` so
+   the runbook worktree convention leaves the shared checkout clean.
 
 ### Review Contract
 
@@ -58,9 +73,12 @@ Slice phase: Workflow/process
         `gh pr merge`, no delete-branch, status-only messaging).
   - [ ] `AGENTS.md` 3c.2 and the `CLAUDE.md` compact-instructions bullet
         reference the runbook; edits are additive only.
-  - [ ] MERGE-READY in the script requires required checks green AND
-        `claude-review` commit status success AND 0 unresolved threads AND
-        no CHANGES_REQUESTED (both merge gates, AGENTS 3c.1.8).
+  - [ ] MERGE-READY requires EVERY canonical required context (from
+        `scripts/check_required_status_checks.py`, incl. diff-budget) present
+        and success AND `claude-review` success AND 0 unresolved threads
+        (fail closed on unfetched pages) AND no CHANGES_REQUESTED.
+  - [ ] `scripts/audit_pr_watcher_safety.py` actually scans the new watcher
+        and runbook (enrolled, not vacuous).
 - Reachability proof: process/docs + a standalone operator-run script; no
   runtime, API, UI, billing, or product surface. Proof is the rendered docs,
   the watcher-safety audit output, and a live one-cycle smoke of the script
@@ -70,14 +88,18 @@ Slice phase: Workflow/process
 - Risk areas: none at runtime. The watcher is status-only by construction and
   is covered by the existing watcher-safety audit; it holds no merge
   authority.
-- Reviewer rules triggered: R1.
+- Reviewer rules triggered: R1, R2, R10 (the watcher-safety audit is a gate
+  predicate; its scan list is extended and the extension is itself exercised
+  by the audit run in Verification).
 
 ### Files touched
 
+- `.gitignore`
 - `AGENTS.md`
 - `CLAUDE.md`
 - `docs/OVERNIGHT_ARC_WORKFLOW.md`
 - `plans/PR-Overnight-Arc-Workflow.md`
+- `scripts/audit_pr_watcher_safety.py`
 - `scripts/watch_owned_pr.sh`
 
 ## Mechanism
@@ -110,20 +132,26 @@ Parked hardening: none.
 
 ## Verification
 
-- `scripts/audit_pr_watcher_safety.py` -- OK (no merge authority granted).
-- bash -n on `scripts/watch_owned_pr.sh` -- OK; live one-cycle smoke against an
-  open PR reports state correctly.
+- `scripts/audit_pr_watcher_safety.py` -- OK, and now actually scans the new
+  watcher + runbook (enrolled in round 1; the pre-enrollment pass was
+  vacuous).
+- bash -n on `scripts/watch_owned_pr.sh` -- OK; live smoke against an open PR
+  reports state correctly and exits ACTIONABLE on review threads + red
+  required context (observed live on this PR's own round 1).
 - `scripts/audit_plan_doc.py` on this plan -- OK.
-- `git diff --name-status` -- two new files + two additive doc edits + this
-  plan; no code paths.
+- `git diff --name-status` -- two new files + additive edits to `AGENTS.md`,
+  `CLAUDE.md`, `.gitignore`, and the audit scan list + this plan; no code
+  paths.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
+| `.gitignore` | 3 |
 | `AGENTS.md` | 18 |
 | `CLAUDE.md` | 12 |
-| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 147 |
-| `plans/PR-Overnight-Arc-Workflow.md` | 129 |
-| `scripts/watch_owned_pr.sh` | 56 |
-| **Total** | **362** |
+| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 154 |
+| `plans/PR-Overnight-Arc-Workflow.md` | 157 |
+| `scripts/audit_pr_watcher_safety.py` | 9 |
+| `scripts/watch_owned_pr.sh` | 77 |
+| **Total** | **430** |

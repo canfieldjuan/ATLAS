@@ -126,11 +126,18 @@ there is something to act on:
 - `MERGED/CLOSED` -- terminal; stop watching.
 - `HEAD-MOVED` -- the branch advanced past the armed SHA; reconcile, re-arm
   on the new head.
-- `ACTIONABLE` -- red required check, unresolved review threads,
-  CHANGES_REQUESTED, or a failed `claude-review` status; go fix, push, re-arm.
-- `MERGE-READY` -- required green + threads clear + `claude-review` success
-  + mergeable (both merge gates per AGENTS.md 3c.1.8 and
-  `docs/REVIEWER_MERGE_GATE.md`); run the pre-merge checklist (clean tree,
+- `ACTIONABLE` -- a red required context, unresolved review threads (counts
+  fail closed when more thread pages exist than fetched), a
+  CHANGES_REQUESTED review decision, or a failed `claude-review` status.
+  Definite negatives exit on any cycle, including the first.
+- `MERGE-READY` -- readiness is presence-based and fail-closed: EVERY
+  required branch-protection context (read at runtime from
+  `scripts/check_required_status_checks.py`, so the gate cannot drift from
+  the canonical list) must be present and reporting success, plus
+  `claude-review` status success, 0 unresolved threads, no
+  CHANGES_REQUESTED, and mergeable (both merge gates per AGENTS.md 3c.1.8
+  and `docs/REVIEWER_MERGE_GATE.md`). A context that has not started yet
+  keeps readiness false. Run the pre-merge checklist (clean tree,
   local==remote, threads still 0), merge, alert.
 
 The watcher itself never merges and never holds merge authority (AGENTS

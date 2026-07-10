@@ -117,3 +117,6 @@ requirements.freeze.bak
 
 # Read-only audit scratch (fixtures, sweeps, profiling) — not shipped
 _audit_scratch/
+
+# repo-internal git worktrees (AGENTS worktree convention)
+worktrees/

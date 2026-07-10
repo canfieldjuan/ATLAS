@@ -4,8 +4,15 @@
 # is something to act on:
 #   MERGED/CLOSED - PR reached terminal state (stop watching)
 #   HEAD-MOVED    - branch advanced past the SHA this watch was armed on
-#   ACTIONABLE    - red required check / unresolved review threads / CHANGES_REQUESTED
-#   MERGE-READY   - required green + 0 unresolved threads + no CHANGES_REQUESTED + mergeable
+#   ACTIONABLE    - red required context / unresolved review threads /
+#                   CHANGES_REQUESTED review decision / failed claude-review
+#   MERGE-READY   - EVERY required context present and success + claude-review
+#                   success + 0 unresolved threads (no unfetched pages) +
+#                   review decision not CHANGES_REQUESTED + mergeable
+# Required contexts are read from scripts/check_required_status_checks.py
+# (DEFAULT_REQUIRED_CONTEXTS) so the gate cannot drift from the canonical
+# list; MERGE-READY requires their PRESENCE with success, so a context that
+# has not started yet fails closed instead of reading as green.
 # The watcher never merges and holds no merge authority (AGENTS.md 3c.1.1);
 # it reports state and exits fast so the builder session acts.
 #
@@ -22,35 +29,49 @@ CYCLES="${CYCLES:-32}"
 TOK="$(grep -m1 '^GITHUB_ACCESS_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2-)"
 [ -n "$TOK" ] || TOK="${GH_TOKEN:-}"
 [ -n "$TOK" ] || { echo "no GITHUB_ACCESS_TOKEN in $ROOT/.env and no GH_TOKEN set" >&2; exit 2; }
-# Required checks; everything else is advisory (state once, do not gate).
-REQ_FILTER='select((.name=="live-reconciliation" or (.name|startswith("Gitleaks"))) and .conclusion!="success" and .conclusion!="skipped" and .status=="completed")'
-echo "owned-pr watcher armed: $REPO#$PR @ ${SHA:0:9} $(date '+%F %H:%M')"
+# Canonical required contexts (branch protection), read from the checker that
+# owns them; falls back to the documented four if extraction fails.
+mapfile -t REQ_CONTEXTS < <(sed -n '/^DEFAULT_REQUIRED_CONTEXTS = (/,/^)/p' \
+  "$ROOT/scripts/check_required_status_checks.py" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"')
+if [ "${#REQ_CONTEXTS[@]}" -eq 0 ]; then
+  REQ_CONTEXTS=("live-reconciliation" "diff-budget" "Gitleaks PR secret scan" "Gitleaks baseline growth guard")
+fi
+REQ_JSON=$(printf '%s\n' "${REQ_CONTEXTS[@]}" | jq -R . | jq -cs .)
+REQ_TOTAL=${#REQ_CONTEXTS[@]}
+echo "owned-pr watcher armed: $REPO#$PR @ ${SHA:0:9} $(date '+%F %H:%M') (required contexts: ${REQ_CONTEXTS[*]})"
 for i in $(seq 0 "$CYCLES"); do
   [ "$i" -gt 0 ] && sleep 1740
   CUR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null) || { echo "cycle $i: API error, retrying"; continue; }
   if [ "$CUR" != "$SHA" ]; then echo "HEAD-MOVED: ${SHA:0:9} -> ${CUR:0:9} (new push; reconcile + re-arm on new head)"; exit 0; fi
-  ST=$(GH_TOKEN="$TOK" gh api graphql -f query="{ repository(owner:\"$OWNER\",name:\"$NAME\"){ pullRequest(number:$PR){ state merged mergeable reviewThreads(first:100){ nodes{ isResolved } } reviews(last:30){ nodes{ state } } } } }" 2>/dev/null)
+  ST=$(GH_TOKEN="$TOK" gh api graphql -f query="{ repository(owner:\"$OWNER\",name:\"$NAME\"){ pullRequest(number:$PR){ state merged mergeable reviewDecision reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ isResolved } } } } }" 2>/dev/null)
   STATE=$(echo "$ST" | jq -r '.data.repository.pullRequest | .state + (if .merged then "/merged" else "" end)')
   MERGEABLE=$(echo "$ST" | jq -r '.data.repository.pullRequest.mergeable')
+  DECISION=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewDecision // "NONE"')
   UNRES=$(echo "$ST" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length')
-  CHREQ=$(echo "$ST" | jq '[.data.repository.pullRequest.reviews.nodes[]|select(.state=="CHANGES_REQUESTED")]|length')
+  MORE=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+  # Fail closed when more thread pages exist than we fetched.
+  [ "$MORE" = "true" ] && UNRES="${UNRES}+unfetched-pages"
   CR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null)
+  LATEST=$(echo "$CR" | jq '[.check_runs[]]|group_by(.name)|map(sort_by(.started_at)|last)')
   PEND=$(echo "$CR" | jq '[.check_runs[]|select(.status!="completed")]|length')
-  REQRED=$(echo "$CR" | jq "[[.check_runs[]]|group_by(.name)|map(sort_by(.started_at)|last)|.[]|$REQ_FILTER]|length")
-  # claude-review is a per-SHA commit STATUS (not a check-run); absent or
-  # failure is not clean (AGENTS.md 3c.1.8, docs/REVIEWER_MERGE_GATE.md).
+  REQRED=$(echo "$LATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required")))]|length')
+  REQGREEN=$(echo "$LATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and .conclusion=="success")]|length')
+  # claude-review is a per-SHA commit STATUS (not a check-run); the combined
+  # endpoint returns the latest status per context. Absent or failure is not
+  # clean (AGENTS.md 3c.1.8, docs/REVIEWER_MERGE_GATE.md).
   CLREV=$(GH_TOKEN="$TOK" gh api "repos/$REPO/commits/$SHA/status" --jq '([.statuses[]|select(.context=="claude-review")]|last|.state) // "absent"' 2>/dev/null || echo "absent")
-  echo "cycle $i $(date +%H:%M): state=$STATE pending=$PEND req-red=$REQRED threads=$UNRES chreq=$CHREQ claude-review=$CLREV mergeable=$MERGEABLE"
+  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED pending=$PEND threads=$UNRES decision=$DECISION claude-review=$CLREV mergeable=$MERGEABLE"
   case "$STATE" in MERGED/merged|CLOSED) echo "TERMINAL: PR $STATE"; exit 0;; esac
-  if [ "$i" -gt 0 ]; then # give checks one cycle to start before judging
-    if [ "$REQRED" -gt 0 ] || [ "$UNRES" -gt 0 ] || [ "$CHREQ" -gt 0 ] || [ "$CLREV" = "failure" ]; then
-      echo "ACTIONABLE: req-red=$REQRED threads=$UNRES chreq=$CHREQ claude-review=$CLREV -> reconcile/fix, push, re-arm"; exit 0
-    fi
-    if [ "$PEND" -eq 0 ] && [ "$MERGEABLE" = "MERGEABLE" ] && [ "$CLREV" = "success" ]; then
-      echo "MERGE-READY: required green + threads clear + claude-review success + mergeable."
-      echo "-> pre-merge checklist first (clean tree, local==remote, re-verify threads=0), then merge + alert."
-      exit 0
-    fi
+  # Definite negatives are actionable on ANY cycle, including the first.
+  if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ] || [ "$DECISION" = "CHANGES_REQUESTED" ] || [ "$CLREV" = "failure" ]; then
+    echo "ACTIONABLE: req-red=$REQRED threads=$UNRES decision=$DECISION claude-review=$CLREV -> reconcile/fix, push, re-arm"; exit 0
+  fi
+  # Readiness is presence-based: every required context must be reporting
+  # success (a not-yet-started context keeps this false, so no early race).
+  if [ "$REQGREEN" -eq "$REQ_TOTAL" ] && [ "$MERGEABLE" = "MERGEABLE" ] && [ "$CLREV" = "success" ]; then
+    echo "MERGE-READY: all $REQ_TOTAL required contexts success + threads clear + claude-review success + mergeable."
+    echo "-> pre-merge checklist first (clean tree, local==remote, re-verify threads=0), then merge + alert."
+    exit 0
   fi
 done
 echo "watch window elapsed; re-arm to continue"
