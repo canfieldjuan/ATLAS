@@ -54,21 +54,25 @@ for i in $(seq 0 "$CYCLES"); do
   [ "$i" -gt 0 ] && sleep 1740
   CUR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null) || { echo "cycle $i: API error, retrying"; continue; }
   if [ "$CUR" != "$SHA" ]; then echo "HEAD-MOVED: ${SHA:0:9} -> ${CUR:0:9} (new push; reconcile + re-arm on new head)"; exit 0; fi
-  ST=$(GH_TOKEN="$TOK" gh api graphql -f query="{ repository(owner:\"$OWNER\",name:\"$NAME\"){ pullRequest(number:$PR){ state merged mergeable reviewDecision reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ isResolved } } } } }" 2>/dev/null)
+  ST=$(GH_TOKEN="$TOK" gh api graphql -f query="{ repository(owner:\"$OWNER\",name:\"$NAME\"){ pullRequest(number:$PR){ state merged mergeable mergeStateStatus reviewDecision reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ isResolved } } } } }" 2>/dev/null)
   STATE=$(echo "$ST" | jq -r '.data.repository.pullRequest | .state + (if .merged then "/merged" else "" end)')
   MERGEABLE=$(echo "$ST" | jq -r '.data.repository.pullRequest.mergeable')
+  MSTATE=$(echo "$ST" | jq -r '.data.repository.pullRequest.mergeStateStatus // "UNKNOWN"')
   DECISION=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewDecision // "NONE"')
   UNRES=$(echo "$ST" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length')
   MORE=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
   # Fail closed when more thread pages exist than we fetched.
   [ "$MORE" = "true" ] && UNRES="${UNRES}+unfetched-pages"
-  CR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null)
+  # --paginate + re-wrap: required contexts beyond the first 100 runs stay visible
+  CR=$(GH_TOKEN="$TOK" gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null | jq -s '{check_runs:[.[].check_runs[]]}')
   PEND=$(echo "$CR" | jq '[.check_runs[]|select(.status!="completed")]|length')
   # App-pin BEFORE picking the latest run per name, so a same-named run from
   # another app can neither green the gate nor mask the genuine run.
   REQLATEST=$(echo "$CR" | jq --argjson app "$REQ_APP_ID" '[.check_runs[]|select(.app.id==$app)]|group_by(.name)|map(sort_by(.started_at)|last)')
-  REQRED=$(echo "$REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required")))]|length')
-  REQGREEN=$(echo "$REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and .conclusion=="success")]|length')
+  REQRED=$(echo "$REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")))]|length')
+  # Green mirrors branch-protection semantics: neutral/skipped required checks
+  # count as passing on the server, so the advisory gate matches the enforcer.
+  REQGREEN=$(echo "$REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("success","neutral","skipped")))]|length')
   # A rerun of a required check creates a fresh queued run beside the old
   # completed one; ANY not-completed run of a required name (across all runs,
   # not just the latest-pick) blocks readiness until it settles.
@@ -79,7 +83,7 @@ for i in $(seq 0 "$CYCLES"); do
   # makes the selection order-independent regardless of endpoint ordering.
   # Absent or failure is not clean (AGENTS.md 3c.1.8, docs/REVIEWER_MERGE_GATE.md).
   CLREV=$(GH_TOKEN="$TOK" gh api "repos/$REPO/commits/$SHA/status" --jq '([.statuses[]|select(.context=="claude-review")]|sort_by(.created_at)|last|.state) // "absent"' 2>/dev/null || echo "absent")
-  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND threads=$UNRES decision=$DECISION claude-review=$CLREV mergeable=$MERGEABLE"
+  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND threads=$UNRES decision=$DECISION claude-review=$CLREV mergeable=$MERGEABLE merge-state=$MSTATE"
   case "$STATE" in MERGED/merged|CLOSED) echo "TERMINAL: PR $STATE"; exit 0;; esac
   # Definite negatives are actionable on ANY cycle, including the first.
   if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ] || [ "$DECISION" = "CHANGES_REQUESTED" ] || [ "$CLREV" = "failure" ]; then
@@ -87,8 +91,9 @@ for i in $(seq 0 "$CYCLES"); do
   fi
   # Readiness is presence-based: every required context must be reporting
   # success (a not-yet-started context keeps this false, so no early race).
-  if [ "$REQGREEN" -eq "$REQ_TOTAL" ] && [ "$REQUNSETTLED" -eq 0 ] && [ "$MERGEABLE" = "MERGEABLE" ] && [ "$CLREV" = "success" ]; then
-    echo "MERGE-READY: all $REQ_TOTAL required contexts success + threads clear + claude-review success + mergeable."
+  if [ "$REQGREEN" -eq "$REQ_TOTAL" ] && [ "$REQUNSETTLED" -eq 0 ] && [ "$MERGEABLE" = "MERGEABLE" ] \
+     && { [ "$MSTATE" = "CLEAN" ] || [ "$MSTATE" = "UNSTABLE" ]; } && [ "$CLREV" = "success" ]; then
+    echo "MERGE-READY: all $REQ_TOTAL required contexts green + threads clear + claude-review success + merge-state $MSTATE."
     echo "-> pre-merge checklist first (clean tree, local==remote, re-verify threads=0), then merge + alert."
     exit 0
   fi

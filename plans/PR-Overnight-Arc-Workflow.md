@@ -163,6 +163,6 @@ Parked hardening: none.
 | `docs/OVERNIGHT_ARC_WORKFLOW.md` | 165 |
 | `plans/PR-Overnight-Arc-Workflow.md` | 168 |
 | `scripts/audit_pr_watcher_safety.py` | 9 |
-| `scripts/watch_owned_pr.sh` | 96 |
+| `scripts/watch_owned_pr.sh` | 101 |
 | `tests/test_audit_pr_watcher_safety.py` | 27 |
-| **Total** | **498** |
+| **Total** | **503** |
