@@ -577,6 +577,24 @@ review. Local watcher executables and configs are status-only: truthy
 auto-merge config, PR merge commands, delete-branch merge cleanup, or equivalent
 merge behavior in watcher infrastructure is a blocking workflow defect.
 
+### 3c.2. Overnight arc protocol
+
+When the operator assigns an **unattended overnight arc** (a long-running
+coding task expected to run to merged-or-blocked with zero operator contact),
+the governing runbook is `docs/OVERNIGHT_ARC_WORKFLOW.md`. It wraps this
+section's watcher rules with: a mandatory interactive **pre-flight** (task
+readiness contract plus all clarifying questions asked while the operator is
+still present), the **night-loop deltas** (never wait on the operator; defer
+operator-only choices as issues; watcher-driven waiting via
+`scripts/watch_owned_pr.sh`, which is status-only per the watcher-safety rule
+above; bot-review round cap with the fail-closed-guard exception), the
+**true-blocker escalation channel**, and a mandatory **morning report**. The
+overnight baton (active arc task/contract, current slice, owned PR + head
+SHA, watcher armed-state, morning-report accumulator) is compaction handoff
+data per the `CLAUDE.md` compact instructions; a compacted overnight session
+re-reads the runbook and verifies the baton against `git`/`gh` state before
+proceeding.
+
 ### 3d. Thin-slice and hardening triage
 
 Every plan names a slice phase in `Scope (this PR)`, and the PR body

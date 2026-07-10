@@ -1415,8 +1415,16 @@ When compacting this conversation, preserve verbatim (do not summarize away):
   baton: owned PR number, branch, latest head SHA, last observed check/review
   state, next 30-minute poll time, and whether autonomous merge/next-slice
   continuation is authorized.
+- For an assigned **overnight arc** (`docs/OVERNIGHT_ARC_WORKFLOW.md`, AGENTS
+  §3c.2), the full **overnight baton**: the arc task and its pre-flight
+  contract (or contract issue #), authorization granted at pre-flight, current
+  slice and remaining slices, owned PR + head SHA + watcher armed-state, the
+  morning-report accumulator so far (merged PRs, filed issues, waivers,
+  verification run), and the instruction to RE-READ `docs/OVERNIGHT_ARC_WORKFLOW.md`
+  and verify this baton against `git`/`gh` state before proceeding.
 
 These are the fields a post-compaction resume needs to continue a fix loop
 without re-exploring or touching files outside the declared scope (see
-`AGENTS.md` §3l) or to resume a long-running PR watcher (see `AGENTS.md`
-§3c.1). When in doubt, keep the baton and drop narrative.
+`AGENTS.md` §3l), to resume a long-running PR watcher (see `AGENTS.md`
+§3c.1), or to continue an overnight arc mid-night (see `AGENTS.md` §3c.2).
+When in doubt, keep the baton and drop narrative.
