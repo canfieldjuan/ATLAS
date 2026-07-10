@@ -19,6 +19,13 @@ REPO_DOCS = (
     "docs/long_running_agent_monitoring_spec.md",
     "docs/long_running_session_watcher_handoff.md",
     "docs/autonomous_coding_repo_playbook.md",
+    "docs/OVERNIGHT_ARC_WORKFLOW.md",
+)
+
+# Watcher executables tracked in the repo itself (scanned in every mode,
+# including --repo-only, because they ship with the checkout).
+REPO_WATCHER_SOURCES = (
+    "scripts/watch_owned_pr.sh",
 )
 
 TRUTHY = {"1", "true", "yes", "on", "enabled"}
@@ -158,6 +165,8 @@ def build_findings(
     repo_only: bool,
 ) -> list[Finding]:
     findings = audit_repo_docs(repo_root)
+    for rel_path in REPO_WATCHER_SOURCES:
+        findings.extend(audit_watcher_source(repo_root / rel_path))
     if not repo_only:
         findings.extend(audit_watcher_source(watcher_bin))
         findings.extend(audit_watcher_source(watcher_wrapper))
