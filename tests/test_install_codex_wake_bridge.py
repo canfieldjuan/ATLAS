@@ -39,15 +39,18 @@ def test_install_writes_wrapper_and_systemd_dropin(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     wrapper = bin_dir / "atlas-pr-watch-and-wake"
     bridge = bin_dir / "atlas-codex-wake-bridge"
+    watcher = bin_dir / "atlas-pr-watch"
     dropin = systemd_dir / "atlas-pr-watch@.service.d" / "wake-bridge.conf"
     wrapper_text = wrapper.read_text(encoding="utf-8")
-    assert wrapper_text == installer._wrapper_text(bridge)
+    assert wrapper_text == installer._wrapper_text(watcher, bridge)
     assert bridge.read_text(encoding="utf-8") == (ROOT / "scripts" / "codex_wake_bridge.py").read_text(encoding="utf-8")
+    assert watcher.read_text(encoding="utf-8") == (ROOT / "scripts" / "pr_watcher.py").read_text(encoding="utf-8")
     assert dropin.read_text(encoding="utf-8") == installer._dropin_text(wrapper)
     assert os.access(wrapper, os.X_OK)
     assert os.access(bridge, os.X_OK)
+    assert os.access(watcher, os.X_OK)
     assert "invalid watcher id" in wrapper_text
-    assert "atlas-pr-watch" in wrapper_text
+    assert str(watcher) in wrapper_text
     assert str(bridge) in wrapper_text
     assert "scripts/codex_wake_bridge.py" not in wrapper_text
     assert 'cd "$REPO_DIR"' not in wrapper_text
@@ -61,10 +64,13 @@ def test_check_mode_fails_when_dropin_points_at_default_wrapper_with_custom_bin_
     systemd_dir = tmp_path / "systemd"
     wrapper = bin_dir / "atlas-pr-watch-and-wake"
     bridge = bin_dir / "atlas-codex-wake-bridge"
+    watcher = bin_dir / "atlas-pr-watch"
     wrapper.parent.mkdir(parents=True)
-    wrapper.write_text(installer._wrapper_text(bridge), encoding="utf-8")
+    wrapper.write_text(installer._wrapper_text(watcher, bridge), encoding="utf-8")
     bridge.write_text(installer._bridge_text(), encoding="utf-8")
+    watcher.write_text(installer._watcher_text(), encoding="utf-8")
     bridge.chmod(bridge.stat().st_mode | stat.S_IXUSR)
+    watcher.chmod(watcher.stat().st_mode | stat.S_IXUSR)
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
     dropin = systemd_dir / "atlas-pr-watch@.service.d" / "wake-bridge.conf"
     dropin.parent.mkdir(parents=True)
@@ -95,8 +101,9 @@ def test_dropin_uses_absolute_quoted_wrapper_for_relative_bin_dir(tmp_path: Path
     assert result.returncode == 0, result.stdout + result.stderr
     wrapper = (tmp_path / "relative bin" / "atlas-pr-watch-and-wake").resolve(strict=False)
     bridge = (tmp_path / "relative bin" / "atlas-codex-wake-bridge").resolve(strict=False)
+    watcher = (tmp_path / "relative bin" / "atlas-pr-watch").resolve(strict=False)
     dropin = systemd_dir / "atlas-pr-watch@.service.d" / "wake-bridge.conf"
-    assert wrapper.read_text(encoding="utf-8") == installer._wrapper_text(bridge)
+    assert wrapper.read_text(encoding="utf-8") == installer._wrapper_text(watcher, bridge)
     assert dropin.read_text(encoding="utf-8") == installer._dropin_text(wrapper)
     assert f'ExecStart="{wrapper}" %i' in dropin.read_text(encoding="utf-8")
 
@@ -141,15 +148,36 @@ def test_check_mode_passes_after_install(tmp_path: Path) -> None:
     assert "ok:" in result.stdout
 
 
+def test_check_mode_fails_when_installed_watcher_drifts(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    systemd_dir = tmp_path / "systemd"
+    assert _run("--bin-dir", str(bin_dir), "--systemd-dir", str(systemd_dir)).returncode == 0
+    (bin_dir / "atlas-pr-watch").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    result = _run(
+        "--check",
+        "--bin-dir",
+        str(bin_dir),
+        "--systemd-dir",
+        str(systemd_dir),
+    )
+
+    assert result.returncode == 1
+    assert f"content drift: {bin_dir / 'atlas-pr-watch'}" in result.stdout
+
+
 def test_check_mode_fails_when_systemd_still_calls_bare_watcher(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     systemd_dir = tmp_path / "systemd"
     wrapper = bin_dir / "atlas-pr-watch-and-wake"
     bridge = bin_dir / "atlas-codex-wake-bridge"
+    watcher = bin_dir / "atlas-pr-watch"
     wrapper.parent.mkdir(parents=True)
-    wrapper.write_text(installer._wrapper_text(bridge), encoding="utf-8")
+    wrapper.write_text(installer._wrapper_text(watcher, bridge), encoding="utf-8")
     bridge.write_text(installer._bridge_text(), encoding="utf-8")
+    watcher.write_text(installer._watcher_text(), encoding="utf-8")
     bridge.chmod(bridge.stat().st_mode | stat.S_IXUSR)
+    watcher.chmod(watcher.stat().st_mode | stat.S_IXUSR)
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
     dropin = systemd_dir / "atlas-pr-watch@.service.d" / "wake-bridge.conf"
     dropin.parent.mkdir(parents=True)
@@ -172,10 +200,13 @@ def test_check_mode_fails_when_wrapper_is_not_executable(tmp_path: Path) -> None
     systemd_dir = tmp_path / "systemd"
     wrapper = bin_dir / "atlas-pr-watch-and-wake"
     bridge = bin_dir / "atlas-codex-wake-bridge"
+    watcher = bin_dir / "atlas-pr-watch"
     wrapper.parent.mkdir(parents=True)
-    wrapper.write_text(installer._wrapper_text(bridge), encoding="utf-8")
+    wrapper.write_text(installer._wrapper_text(watcher, bridge), encoding="utf-8")
     bridge.write_text(installer._bridge_text(), encoding="utf-8")
+    watcher.write_text(installer._watcher_text(), encoding="utf-8")
     bridge.chmod(bridge.stat().st_mode | stat.S_IXUSR)
+    watcher.chmod(watcher.stat().st_mode | stat.S_IXUSR)
     dropin = systemd_dir / "atlas-pr-watch@.service.d" / "wake-bridge.conf"
     dropin.parent.mkdir(parents=True)
     dropin.write_text(installer._dropin_text(wrapper), encoding="utf-8")
