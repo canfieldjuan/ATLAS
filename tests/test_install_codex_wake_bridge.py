@@ -40,11 +40,20 @@ def test_install_writes_wrapper_and_systemd_dropin(tmp_path: Path) -> None:
     wrapper = bin_dir / "atlas-pr-watch-and-wake"
     bridge = bin_dir / "atlas-codex-wake-bridge"
     watcher = bin_dir / "atlas-pr-watch"
+    reconciliation_dir = bin_dir / installer.RECONCILIATION_LIB_DIR
+    reconciliation_checker = reconciliation_dir / installer.RECONCILIATION_CHECKER_NAME
+    reconciliation_audit = reconciliation_dir / installer.RECONCILIATION_AUDIT_NAME
     dropin = systemd_dir / "atlas-pr-watch@.service.d" / "wake-bridge.conf"
     wrapper_text = wrapper.read_text(encoding="utf-8")
     assert wrapper_text == installer._wrapper_text(watcher, bridge)
     assert bridge.read_text(encoding="utf-8") == (ROOT / "scripts" / "codex_wake_bridge.py").read_text(encoding="utf-8")
     assert watcher.read_text(encoding="utf-8") == (ROOT / "scripts" / "pr_watcher.py").read_text(encoding="utf-8")
+    assert reconciliation_checker.read_text(encoding="utf-8") == (
+        ROOT / "scripts" / installer.RECONCILIATION_CHECKER_NAME
+    ).read_text(encoding="utf-8")
+    assert reconciliation_audit.read_text(encoding="utf-8") == (
+        ROOT / "scripts" / installer.RECONCILIATION_AUDIT_NAME
+    ).read_text(encoding="utf-8")
     assert dropin.read_text(encoding="utf-8") == installer._dropin_text(wrapper)
     assert os.access(wrapper, os.X_OK)
     assert os.access(bridge, os.X_OK)
@@ -164,6 +173,34 @@ def test_check_mode_fails_when_installed_watcher_drifts(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert f"content drift: {bin_dir / 'atlas-pr-watch'}" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        Path(installer.RECONCILIATION_LIB_DIR) / installer.RECONCILIATION_CHECKER_NAME,
+        Path(installer.RECONCILIATION_LIB_DIR) / installer.RECONCILIATION_AUDIT_NAME,
+    ],
+)
+def test_check_mode_fails_when_installed_reconciliation_source_drifts(
+    tmp_path: Path,
+    relative_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    systemd_dir = tmp_path / "systemd"
+    assert _run("--bin-dir", str(bin_dir), "--systemd-dir", str(systemd_dir)).returncode == 0
+    (bin_dir / relative_path).write_text("# drifted\n", encoding="utf-8")
+
+    result = _run(
+        "--check",
+        "--bin-dir",
+        str(bin_dir),
+        "--systemd-dir",
+        str(systemd_dir),
+    )
+
+    assert result.returncode == 1
+    assert f"content drift: {bin_dir / relative_path}" in result.stdout
 
 
 def test_check_mode_fails_when_systemd_still_calls_bare_watcher(tmp_path: Path) -> None:

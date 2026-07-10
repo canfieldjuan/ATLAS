@@ -31,8 +31,9 @@ without failure-branch proof.
   install and verify that exact source through the existing wake-bridge
   installer; fetch all checks plus the actual required subset, paginate every
   review-thread page, retain unresolved outdated threads, re-read the head
-  after collection, run reconciliation, and atomically write the existing
-  snapshot with the version-1 proof; make every API, schema, pagination,
+  after collection, run reconciliation from an installed trusted copy, and
+  atomically write the existing snapshot with the version-1 proof; make every
+  API, schema, pagination,
   required-set, head-race, review, and merge-state failure non-ready; enroll
   the installed entrypoint and negative fixtures in dedicated CI.
 - Must not change: do not add GitHub mutation or merge commands, do not change
@@ -63,6 +64,9 @@ Max files: 7
   - [ ] The existing installer writes and `--check` verifies an executable
         `atlas-pr-watch` byte-for-byte from repository source; its wrapper calls
         that installed path rather than assuming `~/.local/bin`.
+  - [ ] The installer writes and verifies the reconciliation checker plus its
+        parser dependency, and the watcher never executes reconciliation code
+        from the watched PR worktree.
   - [ ] A one-shot poll fetches the same open, non-draft head before and after
         collection, branch protection's required-context inventory, all check
         runs, the currently reported required runs, every review-thread page,
@@ -79,6 +83,8 @@ Max files: 7
         diagnosable snapshot fields or a non-zero producer error.
   - [ ] Snapshot replacement is atomic, and untrusted PR text written to the
         session-state/log receipt cannot inject multiline control text.
+  - [ ] New review/comment activity produces `review_changed` even when checks
+        are pending, so attention events are not silently swallowed.
   - [ ] The dedicated workflow path filters and pytest command execute the new
         producer tests plus every modified installer test.
 - Reachability proof: install into temporary bin/systemd directories, execute
@@ -110,7 +116,7 @@ existing per-session config, performs argument-vector-only `gh` calls, and
 keeps all GitHub access behind the subprocess transport. It reads PR metadata,
 branch protection's required-context policy, all checks, currently reported
 required checks, flat review activity, and paginated GraphQL review threads;
-runs the existing reconciliation checker; reads PR metadata again; and
+runs the installed trusted reconciliation checker; reads PR metadata again; and
 classifies only a stable observation. Comparing policy contexts with reported
 required runs prevents a required job that has not materialized from vanishing
 from the proof. The proof stores the initial evaluated head, required-check
@@ -125,8 +131,9 @@ file plus `os.replace`, so concurrent reporters never see half a snapshot.
 Human-readable receipts collapse GitHub-controlled fields to one line before
 updating the local session state/log.
 
-The existing installer copies the watcher, bridge, and wrapper as one versioned
-installation and verifies exact content plus executability. The
+The existing installer copies the watcher, bridge, reconciliation checker and
+parser dependency, and wrapper as one versioned installation and verifies
+exact content plus executability. The
 installed-entrypoint test proves the actual executable path reaches a
 version-1 state file.
 
@@ -163,9 +170,9 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_codex_wake_bridge.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - 148 passed.
+- `python -m pytest tests/test_codex_wake_bridge.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - 152 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` - ratchet passed; the new producer scores 4 with no new brittleness above baseline.
-- Temporary `install_codex_wake_bridge.py` install + `--check`, installed watcher/bridge `--help`, and installed-source watcher safety audit - passed.
+- Temporary `install_codex_wake_bridge.py` install + `--check`, installed watcher/bridge/reconciliation-checker `--help`, and installed-source watcher safety audit - passed.
 - `python scripts/audit_pr_watcher_safety.py --repo-root . --repo-only` - passed for the audit's current registered surfaces.
 - `python scripts/audit_workflow_security_posture.py .github/workflows` - passed with pre-existing warnings only.
 - `python scripts/sync_pr_plan.py plans/PR-Watcher-Live-Readiness-Producer.md --check` - passed.
@@ -177,10 +184,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/codex_wake_bridge_checks.yml` | 3 |
-| `docs/long_running_session_watcher_handoff.md` | 38 |
-| `plans/PR-Watcher-Live-Readiness-Producer.md` | 186 |
-| `scripts/install_codex_wake_bridge.py` | 52 |
-| `scripts/pr_watcher.py` | 736 |
-| `tests/test_install_codex_wake_bridge.py` | 43 |
-| `tests/test_pr_watcher.py` | 711 |
-| **Total** | **1769** |
+| `docs/long_running_session_watcher_handoff.md` | 45 |
+| `plans/PR-Watcher-Live-Readiness-Producer.md` | 193 |
+| `scripts/install_codex_wake_bridge.py` | 77 |
+| `scripts/pr_watcher.py` | 743 |
+| `tests/test_install_codex_wake_bridge.py` | 80 |
+| `tests/test_pr_watcher.py` | 773 |
+| **Total** | **1914** |

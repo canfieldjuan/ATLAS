@@ -274,10 +274,11 @@ EOF
 ```
 
 Install the repo-owned watcher producer, bridge wrapper, trusted bridge copy,
-and systemd drop-in through the installer. The wrapper invokes the installed
-watcher and bridge copies rather than executing either script from the watched
-PR worktree. One systemd template can safely serve multiple sessions without
-baking one worktree path into every timer.
+AI-reconciliation checker and parser dependency, and systemd drop-in through
+the installer. The watcher and wrapper invoke those installed copies rather
+than executing scripts from the watched PR worktree. One systemd template can
+safely serve multiple sessions without baking one worktree path into every
+timer.
 
 ```bash
 python scripts/install_codex_wake_bridge.py --reload-systemd
@@ -315,9 +316,9 @@ systemctl --user disable --now "atlas-pr-watch@${SESSION_ID}.timer"
 
 | State | Meaning | Builder action |
 |---|---|---|
-| `pending` | At least one check is still pending | Record the next poll; do not ask the operator to babysit CI |
+| `pending` | At least one check is still pending and no new review/comment activity was observed | Record the next poll; do not ask the operator to babysit CI |
 | `attention` | Red/canceled check, failed AI reconciliation, or status details such as `head_mismatch: true` | Inspect the owned PR, fix the root cause in-scope, push, update watcher config head SHA. If `head_mismatch` is true, follow the stop/fetch/inspect branch before any force-push or merge |
-| `review_changed` | New review/comment activity since last poll | Inspect comments before any merge decision |
+| `review_changed` | New review/comment activity since last poll, including while checks are pending | Inspect comments before any merge decision |
 | `ready_for_human_merge` | The snapshot label and version-1 proof agree: same open/non-draft head, required checks complete/green, all thread pages fetched, zero unresolved threads, no changes requested, clean merge state | Run `scripts/report_pr_watcher_state.py`; missing/contradictory proof is reported as attention. Otherwise report readiness or perform the active-builder guarded merge only when explicitly authorized and after fresh live guards |
 
 The installed producer reads branch protection's required-context inventory,
@@ -328,6 +329,8 @@ the observed set. A changed head, empty/malformed required policy, unreported
 required context, incomplete pagination, unresolved thread (including
 outdated), or GitHub read error cannot produce a ready proof. The JSON snapshot
 is replaced atomically so the bridge/reporter cannot consume a partial file.
+Live AI reconciliation runs from the exact checker and parser sources installed
+beside the watcher; it never executes the watched PR worktree's checker.
 
 ## Prompt For Other Builder Sessions
 

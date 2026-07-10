@@ -30,6 +30,11 @@ SAFE_WATCHER_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 VALID_CHECK_EXIT_CODES = {0, 1, 8}
 MAX_THREAD_PAGES = 50
 COMMAND_TIMEOUT_SECONDS = 60
+RECONCILIATION_LIB_DIR = "atlas-pr-watch-lib"
+RECONCILIATION_CHECKER_NAME = "check_ai_reconciliation_live.py"
+TRUSTED_RECONCILIATION_CHECKER = (
+    Path(__file__).resolve().parent / RECONCILIATION_LIB_DIR / RECONCILIATION_CHECKER_NAME
+)
 
 THREADS_QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
@@ -187,6 +192,8 @@ def _required_contexts(payload: dict[str, Any]) -> tuple[set[str], str | None]:
         if not isinstance(context, str) or not context:
             return set(), f"required-status check {index} has no context"
         contexts.add(context)
+    if not contexts:
+        return set(), "required-status policy has no contexts/checks"
     return contexts, None
 
 
@@ -398,12 +405,12 @@ def _classify(
         return "attention"
     if str(pr.get("reviewDecision") or "").upper() == "CHANGES_REQUESTED":
         return "attention"
+    if review_changed:
+        return "review_changed"
     if pending or required_pending:
         return "pending"
     if pr.get("mergeStateStatus") != "CLEAN":
         return "attention"
-    if review_changed:
-        return "review_changed"
     return "ready_for_human_merge"
 
 
@@ -460,7 +467,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     )
     reconciliation_command = [
         sys.executable,
-        "scripts/check_ai_reconciliation_live.py",
+        str(TRUSTED_RECONCILIATION_CHECKER),
         "--pr",
         pr_text,
         "--repo",

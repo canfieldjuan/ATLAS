@@ -95,9 +95,11 @@ class FakeRun:
         self.thread_pages = list(thread_pages or [_response(_thread_page())])
         self.reconciliation = reconciliation
         self.git_status = git_status
+        self.commands: list[list[str]] = []
 
     def __call__(self, command, *, cwd: Path):
         args = list(command)
+        self.commands.append(args)
         if args[:3] == ["gh", "pr", "view"] and "--comments" not in args:
             return self.pr_responses.pop(0)
         if args[:3] == ["gh", "pr", "checks"]:
@@ -108,7 +110,11 @@ class FakeRun:
             return self.reviews
         if args[:3] == ["gh", "api", "graphql"]:
             return self.thread_pages.pop(0)
-        if len(args) > 1 and args[0] == sys.executable and args[1] == "scripts/check_ai_reconciliation_live.py":
+        if (
+            len(args) > 1
+            and args[0] == sys.executable
+            and Path(args[1]).name == watcher.RECONCILIATION_CHECKER_NAME
+        ):
             return self.reconciliation
         if args[:3] == ["git", "status", "--porcelain"]:
             return self.git_status
@@ -153,7 +159,8 @@ def _produce(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: FakeRun, *, 
 
 
 def test_valid_snapshot_is_ready_and_accepted_by_consumer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    status = _produce(tmp_path, monkeypatch, FakeRun())
+    fake = FakeRun()
+    status = _produce(tmp_path, monkeypatch, fake)
 
     assert status["state"] == "ready_for_human_merge"
     assert status["readiness"] == {
@@ -170,6 +177,22 @@ def test_valid_snapshot_is_ready_and_accepted_by_consumer(tmp_path: Path, monkey
         "merge_state_status": "CLEAN",
     }
     assert wake_bridge.readiness_blockers(status) == []
+    reconciliation_commands = [
+        command
+        for command in fake.commands
+        if len(command) > 1 and Path(command[1]).name == watcher.RECONCILIATION_CHECKER_NAME
+    ]
+    assert reconciliation_commands == [
+        [
+            sys.executable,
+            str(watcher.TRUSTED_RECONCILIATION_CHECKER),
+            "--pr",
+            "7",
+            "--repo",
+            "owner/repo",
+        ]
+    ]
+    assert watcher.TRUSTED_RECONCILIATION_CHECKER.parent.name == watcher.RECONCILIATION_LIB_DIR
 
 
 def test_invalid_repo_config_raises_before_transport(tmp_path: Path) -> None:
@@ -227,6 +250,45 @@ def test_empty_required_policy_cannot_be_ready(
     assert status["state"] == "attention"
     assert status["readiness"]["required_check_count"] == 0
     assert "required check count must be at least 1" in wake_bridge.readiness_blockers(status)
+
+
+def test_reported_required_row_cannot_mask_empty_policy_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            required_checks=_response([_check("reported-only")]),
+            required_policy=_response({"contexts": [], "checks": []}),
+        ),
+    )
+
+    assert status["state"] == "attention"
+    assert status["readiness"]["required_check_count"] == 1
+    assert status["readiness"]["required_checks_complete"] is False
+    assert "required-status policy has no contexts/checks" in status["checks_error"]
+    assert wake_bridge.readiness_blockers(status)
+
+
+def test_review_change_is_actionable_while_checks_are_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            all_checks=_response([_check("required-a", "pending")]),
+            required_checks=_response([_check("required-a", "pending")]),
+            reviews=_response({"comments": [{"id": "new-review"}], "reviews": []}),
+        ),
+    )
+
+    assert status["review_changed"] is True
+    assert status["check_pending"] == ["required-a"]
+    assert status["state"] == "review_changed"
 
 
 @pytest.mark.parametrize("malformed", [["not-an-object"], [{"name": "x"}], [{"bucket": "pass"}]])
