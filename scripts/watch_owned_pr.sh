@@ -38,6 +38,12 @@ if [ "${#REQ_CONTEXTS[@]}" -eq 0 ]; then
 fi
 REQ_JSON=$(printf '%s\n' "${REQ_CONTEXTS[@]}" | jq -R . | jq -cs .)
 REQ_TOTAL=${#REQ_CONTEXTS[@]}
+# Required contexts are pinned to the GitHub Actions app (same pin as
+# check_required_status_checks.py) so a same-named check published by any
+# other app can neither green nor red the required gate.
+REQ_APP_ID=$(grep -oE '^GITHUB_ACTIONS_APP_ID = [0-9]+' \
+  "$ROOT/scripts/check_required_status_checks.py" 2>/dev/null | grep -oE '[0-9]+')
+[ -n "$REQ_APP_ID" ] || REQ_APP_ID=15368
 echo "owned-pr watcher armed: $REPO#$PR @ ${SHA:0:9} $(date '+%F %H:%M') (required contexts: ${REQ_CONTEXTS[*]})"
 for i in $(seq 0 "$CYCLES"); do
   [ "$i" -gt 0 ] && sleep 1740
@@ -52,14 +58,18 @@ for i in $(seq 0 "$CYCLES"); do
   # Fail closed when more thread pages exist than we fetched.
   [ "$MORE" = "true" ] && UNRES="${UNRES}+unfetched-pages"
   CR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null)
-  LATEST=$(echo "$CR" | jq '[.check_runs[]]|group_by(.name)|map(sort_by(.started_at)|last)')
   PEND=$(echo "$CR" | jq '[.check_runs[]|select(.status!="completed")]|length')
-  REQRED=$(echo "$LATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required")))]|length')
-  REQGREEN=$(echo "$LATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and .conclusion=="success")]|length')
+  # App-pin BEFORE picking the latest run per name, so a same-named run from
+  # another app can neither green the gate nor mask the genuine run.
+  REQLATEST=$(echo "$CR" | jq --argjson app "$REQ_APP_ID" '[.check_runs[]|select(.app.id==$app)]|group_by(.name)|map(sort_by(.started_at)|last)')
+  REQRED=$(echo "$REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required")))]|length')
+  REQGREEN=$(echo "$REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and .conclusion=="success")]|length')
   # claude-review is a per-SHA commit STATUS (not a check-run); the combined
-  # endpoint returns the latest status per context. Absent or failure is not
-  # clean (AGENTS.md 3c.1.8, docs/REVIEWER_MERGE_GATE.md).
-  CLREV=$(GH_TOKEN="$TOK" gh api "repos/$REPO/commits/$SHA/status" --jq '([.statuses[]|select(.context=="claude-review")]|last|.state) // "absent"' 2>/dev/null || echo "absent")
+  # endpoint returns the latest status per context (verified live: a SHA with
+  # pending-then-success returned only the success entry). sort_by(created_at)
+  # makes the selection order-independent regardless of endpoint ordering.
+  # Absent or failure is not clean (AGENTS.md 3c.1.8, docs/REVIEWER_MERGE_GATE.md).
+  CLREV=$(GH_TOKEN="$TOK" gh api "repos/$REPO/commits/$SHA/status" --jq '([.statuses[]|select(.context=="claude-review")]|sort_by(.created_at)|last|.state) // "absent"' 2>/dev/null || echo "absent")
   echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED pending=$PEND threads=$UNRES decision=$DECISION claude-review=$CLREV mergeable=$MERGEABLE"
   case "$STATE" in MERGED/merged|CLOSED) echo "TERMINAL: PR $STATE"; exit 0;; esac
   # Definite negatives are actionable on ANY cycle, including the first.

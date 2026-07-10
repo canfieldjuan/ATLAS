@@ -78,7 +78,12 @@ Slice phase: Workflow/process
         and success AND `claude-review` success AND 0 unresolved threads
         (fail closed on unfetched pages) AND no CHANGES_REQUESTED.
   - [ ] `scripts/audit_pr_watcher_safety.py` actually scans the new watcher
-        and runbook (enrolled, not vacuous).
+        and runbook (enrolled, not vacuous), with regression tests proving a
+        repo watcher source containing a merge command FAILS the audit.
+  - [ ] Required-context counting is app-pinned (GitHub Actions app id from
+        `scripts/check_required_status_checks.py`) BEFORE latest-run
+        selection, so a same-named check from another app can neither green
+        the gate nor mask the genuine run.
 - Reachability proof: process/docs + a standalone operator-run script; no
   runtime, API, UI, billing, or product surface. Proof is the rendered docs,
   the watcher-safety audit output, and a live one-cycle smoke of the script
@@ -101,6 +106,7 @@ Slice phase: Workflow/process
 - `plans/PR-Overnight-Arc-Workflow.md`
 - `scripts/audit_pr_watcher_safety.py`
 - `scripts/watch_owned_pr.sh`
+- `tests/test_audit_pr_watcher_safety.py`
 
 ## Mechanism
 
@@ -151,7 +157,8 @@ Parked hardening: none.
 | `AGENTS.md` | 18 |
 | `CLAUDE.md` | 12 |
 | `docs/OVERNIGHT_ARC_WORKFLOW.md` | 154 |
-| `plans/PR-Overnight-Arc-Workflow.md` | 157 |
+| `plans/PR-Overnight-Arc-Workflow.md` | 164 |
 | `scripts/audit_pr_watcher_safety.py` | 9 |
-| `scripts/watch_owned_pr.sh` | 77 |
-| **Total** | **430** |
+| `scripts/watch_owned_pr.sh` | 87 |
+| `tests/test_audit_pr_watcher_safety.py` | 27 |
+| **Total** | **474** |
