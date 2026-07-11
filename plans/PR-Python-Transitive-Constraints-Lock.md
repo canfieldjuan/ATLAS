@@ -32,6 +32,12 @@ indivisible while changed executable symbols remain small.
   dependencies but let pip choose every transitive version at install time.
   Python 3.10 and 3.11 do not resolve identical valid graphs, and no committed
   artifact or CI check records and enforces those interpreter-specific choices.
+- Review-finding root cause: the first workflow draft copied an unverified
+  checkout SHA instead of the repository-standard action pin, omitted the
+  repo-level pytest plugin required by `tests/conftest.py`, and did not trigger
+  on the Dockerfile guarded by its own contract test. Separately, two avoidable
+  compiler constructs crossed the scripts maturity ratchet. These are wiring
+  defects in the enforcement surface, not defects in the generated lock.
 - Correct fix must touch/change: generate one deterministic root/ASR constraints
   artifact from real Python 3.10 and 3.11 x86_64 Linux resolutions; represent
   common pins once and divergent cells with explicit `python_version` markers;
@@ -83,6 +89,8 @@ Max files: 10
         existing pip install step reads `requirements.txt`.
   - [ ] Regeneration with uv 0.10.10 for Python 3.10 and 3.11 x86_64 Linux is
         byte-identical to the committed artifact.
+  - [ ] The constraints workflow uses the repository-standard checkout SHA,
+        installs the repo pytest plugin, and triggers when Dockerfile changes.
   - [ ] Existing root-requirements consumers are re-triggered by the digest
         line, and focused 3.10/3.11 resolver plus aggregate-gate evidence is
         green.
@@ -132,6 +140,8 @@ graphs, then audit the real files and root Docker copy boundary. The Dockerfile
 copies both pip inputs in one layer without changing its install command. A
 dedicated workflow installs uv 0.10.10 and runs `--check`; the digest line makes
 every accepted artifact update also touch the already-enrolled root requirements path.
+The workflow reuses the checkout SHA established across the repository and
+installs `pytest-asyncio` because repo-level test collection imports that plugin.
 
 ## Intentional
 
@@ -191,20 +201,33 @@ on reopened issue #2040.
 - `git diff --check` -- passed.
 - Plan sync/check, plan/code consistency, ASCII policy, and exact direct-
   requirement diff audit -- passed.
-- Pending at push: guarded pre-push local review.
+- Review-head diagnosis: invalid checkout SHA reproduced from Actions logs;
+  three live threads cover that SHA, pytest plugin enrollment, and Dockerfile
+  path enrollment. Maturity score 9 localizes to two compiler constructs plus
+  an advisory happy-path heuristic.
+- Focused post-review run -- 61 passed; regeneration and whitespace checks
+  passed at the unchanged lock digest.
+- Clean Python 3.11 venv with only `uv==0.10.10`, `pytest==9.1.1`, and
+  `pytest-asyncio==1.4.0` -- constraints contract suite: 9 passed.
+- Repository checkout-pin scan -- the corrected v7 SHA appears in 25 workflows;
+  workflow YAML parsing passed.
+- Exact phase-c4 maturity ratchet command -- passed with no new brittleness
+  above baseline after replacing the fixed parent index and assertion guard.
+- Body reconciliation/override audit and final plan sync -- passed.
+- Pending at update push: guarded pre-push local review.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/python_constraints_checks.yml` | 39 |
+| `.github/workflows/python_constraints_checks.yml` | 41 |
 | `Dockerfile` | 4 |
 | `constraints.root-asr.txt` | 297 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Python-Transitive-Constraints-Lock.md` | 210 |
+| `plans/PR-Python-Transitive-Constraints-Lock.md` | 233 |
 | `plans/archive/PR-NeMo-Requirements-Dedup.md` | 0 |
 | `requirements.asr.txt` | 2 |
 | `requirements.txt` | 3 |
-| `scripts/compile_root_asr_constraints.py` | 173 |
-| `tests/test_compile_root_asr_constraints.py` | 131 |
-| **Total** | **862** |
+| `scripts/compile_root_asr_constraints.py` | 174 |
+| `tests/test_compile_root_asr_constraints.py` | 133 |
+| **Total** | **890** |

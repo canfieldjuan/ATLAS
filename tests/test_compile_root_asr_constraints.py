@@ -113,12 +113,14 @@ def test_constraints_regeneration_is_enrolled_in_ci() -> None:
         ROOT / ".github/workflows/python_constraints_checks.yml"
     ).read_text(encoding="utf-8")
 
-    assert 'uv==0.10.10 pytest==9.1.1' in workflow
+    assert 'uv==0.10.10 pytest==9.1.1 pytest-asyncio==1.4.0' in workflow
+    assert "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" in workflow
     assert "python scripts/compile_root_asr_constraints.py --check" in workflow
     assert (
         "python -m pytest tests/test_compile_root_asr_constraints.py -q" in workflow
     )
     assert workflow.count('"constraints.root-asr.txt"') == 2
+    assert workflow.count('"Dockerfile"') == 2
 
 
 def test_root_docker_image_copies_constraints_before_install() -> None:

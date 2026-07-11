@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parent.parent
 CONSTRAINTS_NAME = "constraints.root-asr.txt"
 DIGEST_PREFIX = "# constraints-root-asr-sha256: "
 INCLUDE_LINE = f"-c {CONSTRAINTS_NAME}"
@@ -53,7 +53,8 @@ def merge_resolutions(py310: dict[str, str], py311: dict[str, str]) -> list[str]
         line310 = py310.get(name)
         line311 = py311.get(name)
         if line310 == line311:
-            assert line310 is not None
+            if line310 is None:
+                raise RuntimeError(f"resolver union lost project {name!r}")
             merged.append(line310)
             continue
         if line310 is not None:
