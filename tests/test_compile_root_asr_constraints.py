@@ -5,6 +5,7 @@ import importlib.util
 import re
 from collections import defaultdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -86,7 +87,27 @@ def test_real_lock_is_consumed_and_digest_bound() -> None:
 
     lock_text = lock_bytes.decode("utf-8")
     assert NEMO_SHA in lock_text
+    assert f"# Package upload cutoff: {MODULE.EXCLUDE_NEWER}." in lock_text
     assert not re.search(r"(?m)^[A-Za-z0-9_.-]+(?:\[[^]]+\])?$", lock_text)
+
+
+def test_uv_resolution_applies_fixed_upload_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_: object) -> SimpleNamespace:
+        commands.append(command)
+        output = Path(command[command.index("--output-file") + 1])
+        output.write_text("example==1.0\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    assert MODULE._uv_resolution("uv", "3.11", tmp_path) == "example==1.0\n"
+    command = commands[0]
+    assert command[command.index("--exclude-newer") + 1] == MODULE.EXCLUDE_NEWER
 
 
 def test_real_lock_marker_cells_are_canonical_and_non_overlapping() -> None:

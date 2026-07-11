@@ -38,6 +38,11 @@ indivisible while changed executable symbols remain small.
   on the Dockerfile guarded by its own contract test. Separately, two avoidable
   compiler constructs crossed the scripts maturity ratchet. These are wiring
   defects in the enforcement surface, not defects in the generated lock.
+- Current-head review root cause: regeneration selected the latest compatible
+  packages from the live index, so `--check` could drift after an unrelated
+  package release even though the committed lock remained reproducible. A
+  deterministic regeneration oracle must freeze both resolver semantics and
+  the package-upload horizon used to produce the original graph.
 - Correct fix must touch/change: generate one deterministic root/ASR constraints
   artifact from real Python 3.10 and 3.11 x86_64 Linux resolutions; represent
   common pins once and divergent cells with explicit `python_version` markers;
@@ -91,6 +96,9 @@ Max files: 10
         byte-identical to the committed artifact.
   - [ ] The constraints workflow uses the repository-standard checkout SHA,
         installs the repo pytest plugin, and triggers when Dockerfile changes.
+  - [ ] Regeneration applies a fixed package-upload cutoff at or after the
+        original resolver run and records it in the generated header, so later
+        index churn cannot change `--check` output.
   - [ ] Existing root-requirements consumers are re-triggered by the digest
         line, and focused 3.10/3.11 resolver plus aggregate-gate evidence is
         green.
@@ -129,6 +137,9 @@ twice: Python 3.10 and Python 3.11 on x86_64 manylinux. It parses each concrete
 cells emit once; packages or versions that differ emit two mutually exclusive
 `python_version < '3.11'` / `python_version >= '3.11'` branches. A stable header
 records the tool version and regeneration command.
+The uv command also applies `--exclude-newer 2026-07-11T07:55:25Z`, the
+published initial lock commit time after both resolver probes completed. This
+keeps the original package cells eligible while excluding all later uploads.
 
 After writing the artifact, the compiler hashes its exact bytes and updates the
 single digest comment beside the `-c` include in `requirements.txt`.
@@ -151,6 +162,9 @@ installs `pytest-asyncio` because repo-level test collection imports that plugin
 - uv resolves with the repository's default index behavior. CPU-only or CUDA-
   specific `--torch-backend` flags are rejected because existing pip consumers
   do not select those indexes and a lock must describe the deployed resolver.
+- The fixed upload cutoff changes only regeneration eligibility, not the
+  committed package cells; dependency upgrades move it deliberately in the
+  same reviewed lock-refresh diff.
 - Local development remains explicit: root-only installs constrain the root
   graph; ASR auto-start still requires installing `requirements.asr.txt`, as
   documented and reviewed on #2072.
@@ -214,7 +228,20 @@ on reopened issue #2040.
 - Exact phase-c4 maturity ratchet command -- passed with no new brittleness
   above baseline after replacing the fixed parent index and assertion guard.
 - Body reconciliation/override audit and final plan sync -- passed.
-- Pending at update push: guarded pre-push local review.
+- Current-head review diagnosis: Codex P2 correctly identified that live index
+  churn could make an unrelated trigger fail byte-comparison regeneration.
+- Cutoff test-first run: invocation-level test passed and the real-file test
+  failed on the missing generated cutoff header; after regeneration, the
+  constraints contract suite passed 10 tests in the clean workflow venv.
+- Cutoff regeneration -- every package cell is byte-identical to the prior
+  lock; only the generated header and bound digest changed to
+  `ac6cba91aa64f463b352688054aabac327c64c3640793bcec77ca7804751369b`.
+- Full focused post-cutoff run -- 62 passed with the same pre-existing Torch
+  warning; regeneration check and whitespace checks passed.
+- Exact phase-c4 maturity ratchet after the cutoff change -- passed with no new
+  brittleness above baseline.
+- Cutoff body reconciliation, plan sync, and local policy audits -- passed.
+- Pending at cutoff update push: guarded local review.
 
 ## Estimated diff size
 
@@ -222,12 +249,12 @@ on reopened issue #2040.
 |---|---:|
 | `.github/workflows/python_constraints_checks.yml` | 41 |
 | `Dockerfile` | 4 |
-| `constraints.root-asr.txt` | 297 |
+| `constraints.root-asr.txt` | 298 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Python-Transitive-Constraints-Lock.md` | 233 |
+| `plans/PR-Python-Transitive-Constraints-Lock.md` | 260 |
 | `plans/archive/PR-NeMo-Requirements-Dedup.md` | 0 |
 | `requirements.asr.txt` | 2 |
 | `requirements.txt` | 3 |
-| `scripts/compile_root_asr_constraints.py` | 174 |
-| `tests/test_compile_root_asr_constraints.py` | 133 |
-| **Total** | **890** |
+| `scripts/compile_root_asr_constraints.py` | 178 |
+| `tests/test_compile_root_asr_constraints.py` | 154 |
+| **Total** | **943** |
