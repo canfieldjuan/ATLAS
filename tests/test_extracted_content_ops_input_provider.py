@@ -114,6 +114,114 @@ def test_merge_input_package_keeps_explicit_request_inputs_authoritative() -> No
     assert preview.can_run is True
 
 
+def test_merge_input_package_keeps_declared_provider_input_authoritative() -> None:
+    normalized_source = _source_material()
+    raw_source = [{"source_id": "raw-private", "text": "private raw text"}]
+    package = ContentOpsInputPackage(
+        provider="ticket_import",
+        inputs={
+            "source_material": normalized_source,
+            "offer": "Provider offer",
+        },
+        authoritative_input_keys=("source_material",),
+        outputs=("faq_markdown",),
+    )
+
+    payload = merge_content_ops_input_package(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "source_material": raw_source,
+                "offer": "Operator offer",
+            },
+        },
+        package,
+    )
+
+    assert payload["outputs"] == ["landing_page"]
+    assert payload["inputs"]["source_material"] == normalized_source
+    assert payload["inputs"]["offer"] == "Operator offer"
+
+
+def test_input_package_preserves_existing_positional_outputs_argument() -> None:
+    package = ContentOpsInputPackage(
+        "ticket_import",
+        {"source_material": _source_material()},
+        ("faq_markdown", "landing_page"),
+    )
+
+    assert package.outputs == ("faq_markdown", "landing_page")
+    assert package.authoritative_input_keys == ()
+
+
+def test_bare_string_authority_normalizes_and_blocks_reinjection() -> None:
+    normalized_source = _source_material()
+    package = ContentOpsInputPackage(
+        provider="ticket_import",
+        inputs={"source_material": normalized_source},
+        authoritative_input_keys="source_material",
+    )
+
+    payload = merge_content_ops_input_package(
+        {
+            "inputs": {
+                "source_material": [{"text": "PRIVATE RAW REINJECTION"}],
+            },
+        },
+        package,
+    )
+
+    assert package.authoritative_input_keys == ("source_material",)
+    assert payload["inputs"]["source_material"] == normalized_source
+
+
+def test_mapping_package_round_trips_authoritative_input_keys() -> None:
+    package = ContentOpsInputPackage(
+        provider="ticket_import",
+        inputs={"source_material": []},
+        authoritative_input_keys=("source_material",),
+    )
+
+    serialized = package.as_dict()
+    payload = content_ops_payload_from_input_package(
+        serialized,
+        request_payload={
+            "inputs": {
+                "source_material": [{"text": "raw private fallback"}],
+                "offer": "Operator offer",
+            },
+        },
+    )
+
+    assert serialized["authoritative_input_keys"] == ["source_material"]
+    assert payload["inputs"] == {
+        "source_material": [],
+        "offer": "Operator offer",
+    }
+    assert "authoritative_input_keys" not in payload["input_provider"]
+
+
+def test_absent_authoritative_key_does_not_delete_caller_input() -> None:
+    package = ContentOpsInputPackage(
+        provider="ticket_import",
+        inputs={"offer": "Provider offer"},
+        authoritative_input_keys=("source_material",),
+    )
+
+    payload = merge_content_ops_input_package(
+        {
+            "inputs": {
+                "source_material": [{"text": "caller-owned generic source"}],
+            },
+        },
+        package,
+    )
+
+    assert payload["inputs"]["source_material"] == [
+        {"text": "caller-owned generic source"}
+    ]
+
+
 def test_merge_input_package_preserves_explicit_account_usage_budget() -> None:
     package = ContentOpsInputPackage(
         provider="ticket_import",

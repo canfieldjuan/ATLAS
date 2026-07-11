@@ -368,6 +368,7 @@ class _AtlasSupportTicketInputProvider:
         return ContentOpsInputPackage(
             provider=package.provider,
             inputs=package.inputs,
+            authoritative_input_keys=package.authoritative_input_keys,
             outputs=package.outputs,
             target_mode=package.target_mode,
             ingestion_profile=package.ingestion_profile,
