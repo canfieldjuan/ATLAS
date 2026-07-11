@@ -856,6 +856,84 @@ async def test_live_execute_route_returns_faq_deflection_report_artifact() -> No
     assert artifact["faq_result"]["markdown"].startswith("# Hosted FAQ Source")
 
 
+async def test_live_execute_route_excludes_reinjected_private_row_from_source_accounting() -> None:
+    # Regression for the authoritative source-admission fix (#2071) at the
+    # report-accounting layer. The support-ticket input provider filters the
+    # private row and marks source_material authoritative; the caller re-submits
+    # the raw rows (including the private one) as inputs.source_material. Before
+    # #2071 the raw value overrode the provider's filtered value, so the rejected
+    # private row was counted as a third source and produced a false
+    # "appeared only once" singleton warning. The private text itself is scrubbed
+    # by the #2061 classifier regardless; this test guards the source COUNT and
+    # the singleton warning, which is the accounting #2071 fixed (3 -> 2). The
+    # existing submit-path test only asserts included_row_count and content
+    # exclusion, not the report-accounting count on the execute path.
+    private_sentinel = "PRIVATE RAW WORKAROUND MUST NOT REACH THE REPORT"
+    public_question = "How do I export an attribution report?"
+    public_resolution = "Open Analytics, choose Attribution, then download the CSV."
+    source_material: list[dict[str, Any]] = [
+        {
+            "ticket_id": f"public-{index}",
+            "source_type": "support_ticket",
+            "subject": public_question,
+            "message": public_question,
+            "resolution_text": public_resolution,
+        }
+        for index in (1, 2)
+    ]
+    source_material.append({
+        "ticket_id": "private-1",
+        "source_type": "support_ticket",
+        "subject": "Internal attribution workaround",
+        "description": private_sentinel,
+        "public_comment": {"body": {"text": private_sentinel, "status": "kept private"}},
+    })
+
+    store = InMemoryDeflectionReportArtifactStore()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        input_provider=build_content_ops_input_provider(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService(),
+        ),
+        scope_provider=lambda: TenantScope(
+            account_id="acct-faq-privacy",
+            user_id="user-faq",
+        ),
+        deflection_report_store_provider=lambda: store,
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "outputs": ["faq_deflection_report"],
+        "limit": 3,
+        "require_quality_gates": False,
+        "inputs": {"source_material": source_material},
+    })
+
+    assert payload["status"] == "completed"
+    # The provider admitted only the two public rows; the private row was filtered
+    # before merge and the caller's re-injection did not restore it.
+    assert payload["input_provider"]["metadata"]["included_row_count"] == 2
+
+    record = await store.get_artifact_record(
+        account_id="acct-faq-privacy",
+        request_id=payload["request_id"],
+    )
+    assert record is not None
+    assert record.artifact is not None
+    artifact = record.artifact
+
+    # Core #2071 regression: the rejected private row is not counted as a source.
+    assert artifact["summary"]["ticket_source_count"] == 2
+    markdown = artifact["markdown"]
+    assert "Ticket sources represented: 2" in markdown
+    # ...and it does not trigger the false singleton warning.
+    assert "appeared only once" not in markdown
+    # Defense in depth: the private text never reaches the persisted artifact.
+    assert private_sentinel not in json.dumps(artifact, default=str)
+
+
 async def test_live_execute_route_handles_bulk_faq_deflection_report() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     router = create_content_ops_control_surface_router(
