@@ -1,6 +1,6 @@
 # Plan archive index
 
-1390 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1392 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1239,6 +1239,7 @@
 - [PR-Plans-Check-Wiring](archive/PR-Plans-Check-Wiring.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Post-575-Extraction-State-Closeout](archive/PR-Post-575-Extraction-State-Closeout.md)
 - [PR-Post-586-Content-Ops-Closeout](archive/PR-Post-586-Content-Ops-Closeout.md)
+- [PR-Pre-Push-Caller-Hints-Timeout](archive/PR-Pre-Push-Caller-Hints-Timeout.md) - lane: workflow/pre-push-audit-performance | phase: Workflow/process
 - [PR-Producer-Fidelity-Fixture-Factory](archive/PR-Producer-Fidelity-Fixture-Factory.md) - lane: Workflow/process | phase: Robust testing
 - [PR-Product-Gap-Company-Organization-Alias](archive/PR-Product-Gap-Company-Organization-Alias.md) - lane: deflection/product-gap-hardening | phase: Production hardening
 - [PR-Product-Gap-Owner-Lane-Precedence](archive/PR-Product-Gap-Owner-Lane-Precedence.md) - lane: deflection/product-gap-hardening | phase: Production hardening
@@ -1291,6 +1292,7 @@
 - [PR-Resolution-Audit-S4-Synthesis](archive/PR-Resolution-Audit-S4-Synthesis.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-S5-Clustering-Implementation](archive/PR-Resolution-Audit-S5-Clustering-Implementation.md) - lane: resolution-audit-csv | phase: Vertical slice
 - [PR-Resolution-Audit-S5-Clustering-Spike](archive/PR-Resolution-Audit-S5-Clustering-Spike.md) - lane: resolution-audit-csv | phase: Functional validation
+- [PR-Resolution-Audit-S6A-Structured-Privacy-Semantics](archive/PR-Resolution-Audit-S6A-Structured-Privacy-Semantics.md) - lane: resolution-audit/privacy-admission | phase: Vertical slice
 - [PR-Resolution-Audit-Self-Correction](archive/PR-Resolution-Audit-Self-Correction.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-Zendesk-Writeback](archive/PR-Resolution-Audit-Zendesk-Writeback.md) - lane: content-ops/resolution-audit-zendesk-writeback | phase: Vertical slice
 - [PR-Retired-Failure-Detector-Workflow](archive/PR-Retired-Failure-Detector-Workflow.md) - lane: workflow/retired-failure-detectors | phase: Workflow/process

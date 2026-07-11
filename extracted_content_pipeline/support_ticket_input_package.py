@@ -584,6 +584,7 @@ def build_support_ticket_input_package(
         )
     return ContentOpsInputPackage(
         provider=_clean(provider) or "support_ticket_upload",
+        authoritative_input_keys=("source_material",),
         outputs=_normalize_outputs(outputs),
         target_mode="vendor_retention",
         ingestion_profile="existing_evidence",

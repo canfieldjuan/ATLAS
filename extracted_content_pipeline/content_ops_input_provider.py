@@ -40,7 +40,10 @@ class ContentOpsInputPackage:
 
     ``inputs`` is the only field that flows into ``ContentOpsRequest.inputs``.
     Request-level fields are defaults: explicit values from the caller's request
-    payload win when ``merge_content_ops_input_package`` is used.
+    payload win when ``merge_content_ops_input_package`` is used. Nested input
+    values follow the same rule unless their exact key is present in
+    ``authoritative_input_keys`` and in ``inputs``; those values are normalized
+    admission results owned by the provider.
     """
 
     provider: str
@@ -50,11 +53,22 @@ class ContentOpsInputPackage:
     ingestion_profile: str = "existing_evidence"
     metadata: Mapping[str, Any] = field(default_factory=dict)
     warnings: Sequence[Mapping[str, Any]] = ()
+    authoritative_input_keys: Sequence[str] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "authoritative_input_keys",
+            _string_tuple(self.authoritative_input_keys),
+        )
 
     def as_dict(self) -> JsonDict:
         return {
             "provider": self.provider,
             "inputs": dict(self.inputs),
+            "authoritative_input_keys": [
+                str(key) for key in self.authoritative_input_keys
+            ],
             "outputs": [str(output) for output in self.outputs],
             "target_mode": self.target_mode,
             "ingestion_profile": self.ingestion_profile,
@@ -83,7 +97,8 @@ def content_ops_payload_from_input_package(
     """Return a plain payload accepted by ``request_from_mapping``.
 
     ``request_payload`` is optional caller/operator input. When present, its
-    request-level fields and nested ``inputs`` values override provider defaults.
+    request-level fields and nested ``inputs`` values override provider defaults
+    except for exact keys the package produced and declared authoritative.
     """
 
     normalized_package = _normalize_package(package)
@@ -99,10 +114,16 @@ def content_ops_payload_from_input_package(
         if value is None:
             continue
         if key == "inputs":
-            payload["inputs"] = {
-                **dict(payload["inputs"]),
-                **_inputs_mapping(value),
+            provider_inputs = dict(payload["inputs"])
+            authoritative_keys = {
+                str(item)
+                for item in normalized_package.authoritative_input_keys
+                if str(item) in provider_inputs
             }
+            for input_key, input_value in _inputs_mapping(value).items():
+                if input_key not in authoritative_keys:
+                    provider_inputs[input_key] = input_value
+            payload["inputs"] = provider_inputs
         elif key in _REQUEST_KEYS:
             payload[key] = value
     return _drop_empty_request_defaults(payload)
@@ -131,6 +152,9 @@ def _normalize_package(
     return ContentOpsInputPackage(
         provider=provider,
         inputs=_inputs_mapping(package.get("inputs")),
+        authoritative_input_keys=_string_tuple(
+            package.get("authoritative_input_keys")
+        ),
         outputs=_string_tuple(package.get("outputs")),
         target_mode=_clean_text(package.get("target_mode")) or "vendor_retention",
         ingestion_profile=_clean_text(package.get("ingestion_profile"))
