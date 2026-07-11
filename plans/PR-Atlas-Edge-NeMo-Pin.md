@@ -84,8 +84,8 @@ Max files: 6
   - [ ] Contract negatives reject an unpinned Edge declaration, a different
         version, a second Edge declaration, and reuse of the root/ASR git source.
   - [ ] The Edge STT missing-dependency message points operators at
-        `pip install -r atlas_edge/requirements.txt` and no live Edge source
-        advertises a floating NeMo install.
+        the pinned `atlas_edge/requirements.txt` install surface and no live
+        Edge source advertises a floating NeMo install.
   - [ ] uv 0.10.10 resolves the real Edge requirement set with the fixed
         `2026-07-11T07:55:25Z` upload horizon for Python 3.10 and 3.11 on
         `aarch64-manylinux_2_28`, selecting NeMo 2.6.2 and Torch 2.13.0 on both
@@ -195,8 +195,8 @@ Parked hardening: none.
   runtime still advertised the floating command, then passed 13 after the
   remediation used the pinned Edge requirements file.
 - `python -m pytest tests/atlas_edge -q` -- 144 passed.
-- `python -m py_compile atlas_edge/pipeline/stt.py
-  tests/test_nemo_requirements_ownership.py` -- passed; the multiline class
+- Python byte-compilation of `atlas_edge/pipeline/stt.py` and
+  `tests/test_nemo_requirements_ownership.py` -- passed; the multiline class
   sweep found no live floating NeMo install command under `atlas_edge`.
 - uv 0.10.10 against the real pinned file and fixed upload horizon on
   `aarch64-manylinux_2_28` -- Python 3.10 resolved 202 cells and Python 3.11
