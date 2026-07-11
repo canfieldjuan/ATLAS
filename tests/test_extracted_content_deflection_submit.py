@@ -2233,6 +2233,67 @@ async def test_deflection_submit_accepts_full_thread_multipart_json_upload() -> 
 
 
 @pytest.mark.asyncio
+async def test_deflection_submit_excludes_nested_private_comments_from_stored_artifact() -> None:
+    private_sentinel = "PRIVATE NESTED WORKAROUND MUST NOT REACH THE REPORT"
+    public_question = "How do I export an attribution report?"
+    public_comment_sentinel = "Where can I download the attribution CSV export?"
+    tickets = []
+    for ticket_id in (101, 102):
+        requester_id = ticket_id * 10
+        tickets.append({
+            "ticket": {
+                "id": ticket_id,
+                "requester_id": requester_id,
+                "subject": "Attribution export help",
+                "description": public_question,
+                "status": "open",
+            },
+            "comments": [
+                {
+                    "author_id": requester_id,
+                    "visibility": "requester",
+                    "plain_body": public_comment_sentinel,
+                },
+                {
+                    "author_id": 999,
+                    "visibility": {"private": {"value": True}},
+                    "plain_body": private_sentinel,
+                },
+            ],
+        })
+    artifact_data = json.dumps({"tickets": tickets}).encode("utf-8")
+    store = InMemoryDeflectionReportArtifactStore()
+    submit = _route(_router(store), "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "json_file": _Upload(artifact_data, filename="zendesk-thread.json"),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+        "importer_mode": "full_thread",
+    })
+
+    payload = await submit.endpoint(request)
+    request_id = payload["request_id"]
+    snapshot = await store.get_snapshot(
+        account_id="acct-portfolio-submit",
+        request_id=request_id,
+    )
+    record = await store.get_artifact_record(
+        account_id="acct-portfolio-submit",
+        request_id=request_id,
+    )
+
+    assert payload["status"] == "completed"
+    assert payload["input_provider"]["metadata"]["included_row_count"] == 2
+    assert snapshot is not None
+    assert record is not None
+    assert public_comment_sentinel in json.dumps(record.artifact)
+    assert private_sentinel not in json.dumps(payload)
+    assert private_sentinel not in json.dumps(snapshot)
+    assert private_sentinel not in json.dumps(record.artifact)
+
+
+@pytest.mark.asyncio
 async def test_deflection_submit_full_thread_upload_limit_caps_parse_and_diagnostics() -> None:
     router = _router(InMemoryDeflectionReportArtifactStore())
     submit = _route(router, "/ops/deflection-reports/submit", "POST")

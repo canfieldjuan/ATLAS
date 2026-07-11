@@ -568,6 +568,24 @@ def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None
     assert package.inputs["has_dated_window"] is False
 
 
+def test_support_ticket_public_comment_markers_preserve_mixed_content_list() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "public-comment-list",
+            "subject": "How do I export invoices?",
+            "public_comments": [
+                {"visibility": "requester", "body": "Open Billing."},
+                {"body": "Choose Export CSV."},
+            ],
+        }
+    ])
+
+    assert package.metadata["included_row_count"] == 1
+    assert package.inputs["source_material"][0]["text"] == (
+        "How do I export invoices? Open Billing. Choose Export CSV."
+    )
+
+
 def test_support_ticket_input_package_surfaces_explicit_resolution_evidence() -> None:
     package = build_support_ticket_input_package([
         {
@@ -1940,6 +1958,26 @@ def test_zendesk_full_thread_rows_load_from_json_file() -> None:
     assert result.warnings == ()
 
 
+def test_zendesk_json_exponent_overflow_access_marker_fails_closed() -> None:
+    private_sentinel = "PRIVATE EXPONENT OVERFLOW MUST NOT BE ADMITTED"
+    result = load_zendesk_full_thread_rows_from_json_bytes(
+        (
+            '{"tickets":['
+            '{"ticket":{"id":"overflow-private","subject":"Internal",'
+            '"description":"'
+            + private_sentinel
+            + '","access":1e309}},'
+            '{"ticket":{"id":"public-control","subject":"Export invoices",'
+            '"description":"Where do invoice exports live?"}}]}'
+        ).encode("utf-8")
+    )
+
+    assert result.warnings == ()
+    assert result.source_row_count == 2
+    assert [row["ticket_id"] for row in result.rows] == ["public-control"]
+    assert private_sentinel not in json.dumps(result.rows)
+
+
 def test_zendesk_full_thread_rows_cap_admitted_rows_and_preserve_source_count() -> None:
     result = load_zendesk_full_thread_rows_from_json_bytes(
         ZENDESK_THREAD_SAMPLE.read_bytes(),
@@ -2079,6 +2117,221 @@ def test_zendesk_full_thread_rows_skip_private_comment_marker_variants(
     assert "Internal billing flag" not in json.dumps(result.rows)
 
 
+@pytest.mark.parametrize("private_marker", [
+    {"private_note": {"value": True}},
+    {"private_note": {}},
+    {"private_note": {"body": ""}},
+    {"private_note": {"text": ["", None]}},
+    {"internal_notes": {"message": {"text": ""}}},
+    {"private_note": {"foo": "bar"}},
+    {"private_note": {"value": "billing role"}},
+    {"internal_notes": [{"metadata": "billing role"}]},
+    {"private_note": ["private"]},
+    {"private_note": ("true",)},
+    {"public_comment": ["false"]},
+    {"internal_notes": ["2e3"]},
+    {"public": {"name": "public", "value": "2e3"}},
+    {"visible": {"label": "public", "status": "Infinity"}},
+    {"external": {"public": True, "value": 5}},
+    {"published": "not published"},
+    {"published": "never published"},
+    {"published": "unpublished"},
+    {"unpublished": True},
+    {"unpublic": True},
+    {"published_status": "not published"},
+    {"customer_facing_label": False},
+    {"customer_facing": "not customer facing"},
+    {"privacy": {"value": True}},
+    {"published": "private"},
+    {"customer_facing": "confidential"},
+    {"published": {"value": "private"}},
+    {"published": {"label": "public", "value": "Infinity"}},
+    {"customer_facing": ["public", "NaN"]},
+    {"published": {"label": "public", "value": "not published"}},
+    {"published": {"label": "public", "value": "kept private"}},
+    {"published": {"label": "public", "value": "2026-02-30"}},
+    {"published": {"label": "public", "value": "unpublished"}},
+    {"published": {"label": "public", "value": "notpublished"}},
+    {"published": {"label": "public", "value": "nonpublished"}},
+    {"unpublished_status": True},
+    {"unpublishedStatus": True},
+    {"unpublished_label": True},
+    {"published": {"label": "public", "value": "2026-13-01Z"}},
+    {"public": {"label": "public", "value": "not publicly visible"}},
+    {"access": 5},
+    {"access": "2e3"},
+    {"access": "1e0"},
+    {"audience": {"value": "-1e2"}},
+    {"access": "Infinity"},
+    {"access": "qNaN"},
+    {"published": {"label": "public", "value": "qNaN"}},
+    {"visibility": {"label": "public", "value": "1e0"}},
+    {"access": "internalAndPrivate"},
+    {"private_note": [{"value": True}]},
+    {"private_note": ["0e0"]},
+    {"visibility": {"label": "public", "privacy": True}},
+    {"visibility": {"name": "public", "value": "2e3"}},
+    {"public_comment": {"value": False, "body": "private content"}},
+    {
+        "public_comment": {
+            "public": True,
+            "value": False,
+            "body": "private content",
+        },
+    },
+    {"public_comment": {"value": [], "body": "private content"}},
+    {
+        "public_comments": [{
+            "body": {"private": True, "text": "private nested content"},
+        }],
+    },
+    {
+        "public_comment": {
+            "body": {
+                "text": "private nested content",
+                "status": "kept private",
+            },
+        },
+    },
+    {"visibility": {"published": "2026-07-09"}},
+    {"private": "end user"},
+    {"hidden": "visible to end user"},
+    {"visibility": {"private": "end user"}},
+    {"visibility": {"hidden": "visible to end user"}},
+    {"published": "kept private"},
+    {"published": "no longer public"},
+    {"published": "withheld from public"},
+    {"customer_facing": "not made public"},
+    {"published": "not exposed"},
+    {"visibility": "not private"},
+    {"visibility": "made public"},
+    {"visibility": "open to public"},
+    {"visibility": "shared with customer"},
+])
+def test_support_ticket_input_package_rejects_structured_private_content_columns(
+    private_marker: dict[str, object],
+) -> None:
+    private_sentinel = "PRIVATE STRUCTURED CONTENT MUST NOT BE ADMITTED"
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "private-structured",
+            "subject": "Internal workaround",
+            "description": private_sentinel,
+            **private_marker,
+        },
+        {
+            "ticket_id": "public-control",
+            "subject": "How do I export invoices?",
+            "description": "Where do invoice exports live?",
+        },
+    ])
+
+    assert package.metadata["included_row_count"] == 1
+    assert package.inputs["source_material"][0]["source_id"] == "public-control"
+    assert private_sentinel not in json.dumps(package.as_dict())
+
+
+@pytest.mark.parametrize(
+    "public_marker",
+    [
+        {"public_comments": ["customer question", ""]},
+        {"public_comments": [{"body": "customer question"}, {"body": ""}]},
+        {
+            "public_comments": [
+                {"body": "customer question"},
+                {"body": "&copy;"},
+            ],
+        },
+        {
+            "public_comments": [
+                {"body": "customer question"},
+                {"public": True},
+            ],
+        },
+        {"visibility": ["requester", ""]},
+        {"visibility": [None, "requester"]},
+        {"published": ["2026-07-09", ""]},
+        {"published": [None, "2026-07-09"]},
+        {"published": ["2026-07-09", []]},
+        {"access": ["billing role", ""]},
+        {"access": ["billing role", ()]},
+        {"audience": [None, "partner workspace"]},
+        {"visibility": ["requester", [[], ()]]},
+        {"type": ["billing role", frozenset()]},
+    ],
+)
+def test_support_ticket_input_package_ignores_blank_marker_placeholders(
+    public_marker: dict[str, object],
+) -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "public-with-placeholder",
+        "subject": "How do I export invoices?",
+        "description": "Where do invoice exports live?",
+        **public_marker,
+    }])
+
+    assert package.metadata["included_row_count"] == 1
+    assert package.inputs["source_material"][0]["source_id"] == (
+        "public-with-placeholder"
+    )
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("has_access", 2),
+        ("has_access", "2e3"),
+        ("hasAccess", -7),
+        ("has-access", {"value": 3}),
+        ("has access", ["internal", 2]),
+        ("HAS_ACCESS", {"nested": {"value": False}}),
+    ],
+)
+def test_support_ticket_input_package_keeps_has_access_data_columns(
+    column: str,
+    value: object,
+) -> None:
+    public_body = "HAS ACCESS DATA COLUMN MUST NOT DROP THIS ROW"
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "has-access-data",
+            "subject": "How do I export invoices?",
+            "description": public_body,
+            column: value,
+        }
+    ])
+
+    assert package.metadata["included_row_count"] == 1
+    assert package.inputs["source_material"][0]["source_id"] == "has-access-data"
+    assert public_body in json.dumps(package.as_dict())
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("access", "kept private"),
+        ("audience", "no longer public"),
+        ("type", "withheld from public"),
+        ("kind", "shared with customer"),
+    ],
+)
+def test_support_ticket_input_package_keeps_neutral_data_family_text(
+    key: str,
+    value: str,
+) -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "neutral-data-family",
+        "subject": "How do I export invoices?",
+        "description": "Where do invoice exports live?",
+        key: {"value": [value]},
+    }])
+
+    assert package.metadata["included_row_count"] == 1
+    assert package.inputs["source_material"][0]["source_id"] == (
+        "neutral-data-family"
+    )
+
+
 @pytest.mark.parametrize("public_marker", [
     {},
     {"public": True},
@@ -2087,7 +2340,30 @@ def test_zendesk_full_thread_rows_skip_private_comment_marker_variants(
     {"is_public": "yes"},
     {"visibility": "public"},
     {"visibility": {"name": "public"}},
+    {"visibility": {"name": "public", "value": "billing role"}},
+    {"visibility": "visible to end user"},
+    {"published": "2026-07-09"},
+    {"published": "2026-07-09Z"},
+    {"published": "2026-07-09T12:34+0000"},
+    {"published": 5},
+    {"published": "2e3"},
+    {"published": ["public", "2026-07-09"]},
+    {"published": ["2026-07-09+00:00", "public"]},
+    {"unpublished": False},
+    {"published_status": "2026-07-09"},
+    {"customer_facing_label": 5},
+    {"published": {"label": "public", "value": "billing role"}},
+    {"public_comments": [{
+        "body": {"public": True, "text": "customer text"},
+    }]},
+    {"access": "partner workspace"},
+    {"access": {"value": True}},
+    {"access": [True]},
+    {"type": {"value": [False]}},
+    {"visibility": ["requester"]},
     {"privacy": {"label": "customer"}},
+    {"private": "public"},
+    {"visibility": {"public": "end user"}},
 ])
 def test_zendesk_full_thread_rows_keep_public_comment_marker_variants(
     public_marker: dict[str, object],
