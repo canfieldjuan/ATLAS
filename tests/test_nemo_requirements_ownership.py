@@ -47,6 +47,13 @@ def test_atlas_edge_owns_one_pinned_nemo_release() -> None:
     )
 
 
+def test_edge_missing_nemo_guidance_uses_pinned_requirements() -> None:
+    stt_source = (ROOT / "atlas_edge/pipeline/stt.py").read_text(encoding="utf-8")
+
+    assert "pip install -r atlas_edge/requirements.txt" in stt_source
+    assert "pip install nemo_toolkit" not in stt_source
+
+
 @pytest.mark.parametrize(
     ("root_requirements", "asr_requirements"),
     [

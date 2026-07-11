@@ -37,15 +37,21 @@ installing a known-vulnerable fallback.
   direct NeMo-source drift; it does not claim to fix the broader transitive
   graph, whose correct root is the missing accepted hardware/JetPack/Torch
   install contract.
+- Review-finding root cause: the original plan treated the requirements file as
+  the complete install contract but missed the runtime's ImportError remediation,
+  which independently instructed operators to install the floating distribution.
+  A pinned owner is not closed while its failure path advertises a bypass.
 - Correct fix must touch/change: replace only the Edge NeMo declaration with the
   first release that fixes the known NeMo CVEs and that the newer aarch64 Python
   3.10/3.11 resolver accepts without choosing a vendor Torch wheel; extend the existing NeMo ownership contract
-  test so unpinned, moved-version, duplicate, or cross-surface authority fails;
+  test so unpinned, moved-version, duplicate, cross-surface authority, or
+  floating runtime guidance fails; point the missing-dependency remediation at
+  the pinned Edge requirements file;
   execute real aarch64 resolver probes; archive this session's merged #2074
   plan and refresh the plan index.
 - Must not change: any other Edge dependency name/order/specifier; Torch source
-  or version; root/standalone-ASR requirements or constraints; Edge runtime,
-  Parakeet model/defaults, hardware claims, or product behavior; package indexes;
+  or version; root/standalone-ASR requirements or constraints; Edge inference
+  behavior, Parakeet model/defaults, hardware claims, or product behavior; package indexes;
   Resolution Audit or Content Ops lanes; buyer-visible product shape; or the
   existing dirty files in the protected main checkout.
 
@@ -59,10 +65,12 @@ Slice phase: Production hardening
 2. Extend the existing NeMo requirements contract with positive and negative
    Edge pin cases, and prove the real requirement set resolves on conservative
    Linux aarch64 for Python 3.10 and 3.11.
-3. Archive only this session's merged
+3. Make the live missing-NeMo remediation install the pinned Edge requirements
+   surface rather than advertising a floating package command.
+4. Archive only this session's merged
    `PR-Python-Transitive-Constraints-Lock.md` and rebuild `plans/INDEX.md`.
 
-Max files: 5
+Max files: 6
 
 ### Review Contract
 
@@ -75,6 +83,9 @@ Max files: 5
         git SHA remain unchanged.
   - [ ] Contract negatives reject an unpinned Edge declaration, a different
         version, a second Edge declaration, and reuse of the root/ASR git source.
+  - [ ] The Edge STT missing-dependency message points operators at
+        `pip install -r atlas_edge/requirements.txt` and no live Edge source
+        advertises a floating NeMo install.
   - [ ] uv 0.10.10 resolves the real Edge requirement set with the fixed
         `2026-07-11T07:55:25Z` upload horizon for Python 3.10 and 3.11 on
         `aarch64-manylinux_2_28`, selecting NeMo 2.6.2 and Torch 2.13.0 on both
@@ -98,6 +109,7 @@ Max files: 5
 
 ### Files touched
 
+- `atlas_edge/pipeline/stt.py`
 - `atlas_edge/requirements.txt`
 - `plans/INDEX.md`
 - `plans/PR-Atlas-Edge-NeMo-Pin.md`
@@ -117,8 +129,10 @@ floor.
 Extend `tests/test_nemo_requirements_ownership.py` rather than creating a second
 requirements parser. The existing normalized distribution-name helper reads the
 real Edge file, asserts one exact Edge owner, and parameterized negative cases
-prove the contract rejects the drift shapes. The root/ASR assertion remains a
-separate authority because its git SHA describes a different deployment.
+prove the contract rejects the drift shapes. A focused real-source assertion
+also binds the ImportError remediation to that requirements authority and
+rejects the old floating command. The root/ASR assertion remains a separate
+authority because its git SHA describes a different deployment.
 
 Local uv probes provide the executable dependency-boundary proof without
 installing foreign-architecture wheels. The merged #2074 plan move follows the
@@ -139,7 +153,8 @@ worktree-first teardown contract and has no runtime effect.
   silently backtracking across known CVEs.
 - The runtime and README mismatch is evidence that a platform decision is
   missing, not permission to change Edge product/runtime shape in a dependency
-  PR. This slice leaves both untouched.
+  PR. This slice leaves inference/model behavior untouched and changes only the
+  operator guidance required to preserve the dependency contract.
 
 ## Deferred
 
@@ -169,10 +184,20 @@ Parked hardening: none.
 - Pre-plan rejection probe: substituting the root/ASR git SHA failed resolution
   because it identifies NeMo 3.1.0, which requires `torch>=2.6` and has no
   matching conservative-aarch64 wheel in the generic index.
+- Review reproduction: `rg` found the sole live bypass at
+  `atlas_edge/pipeline/stt.py:93`, which printed floating
+  `pip install nemo_toolkit[asr]`; reconciliation and `claude-review` correctly
+  failed on that incomplete ownership boundary.
 - Test-first focused contract: `python -m pytest
   tests/test_nemo_requirements_ownership.py -q` failed 1 / passed 11 against the
   floating Edge line, then passed 12 after the secure pin.
+- Review-fix test first: the same focused file failed 1 / passed 12 while the
+  runtime still advertised the floating command, then passed 13 after the
+  remediation used the pinned Edge requirements file.
 - `python -m pytest tests/atlas_edge -q` -- 144 passed.
+- `python -m py_compile atlas_edge/pipeline/stt.py
+  tests/test_nemo_requirements_ownership.py` -- passed; the multiline class
+  sweep found no live floating NeMo install command under `atlas_edge`.
 - uv 0.10.10 against the real pinned file and fixed upload horizon on
   `aarch64-manylinux_2_28` -- Python 3.10 resolved 202 cells and Python 3.11
   resolved 196; both selected NeMo 2.6.2 and Torch 2.13.0 from the generic
@@ -180,8 +205,8 @@ Parked hardening: none.
 - `uvx pip-audit -r atlas_edge/requirements.txt --progress-spinner off` -- no
   NeMo advisory remains; command exits 1 on the ten pre-existing Transformer
   4.53.3 advisories recorded on #2040.
-- Exact non-NeMo Edge requirements comparison and forbidden root/ASR/runtime
-  diff -- byte-identical / no diff.
+- Exact non-NeMo Edge requirements comparison and forbidden root/ASR diff --
+  byte-identical / no diff; Edge STT changed only the ImportError guidance.
 - `scripts/check_ascii_python.sh` via Bash -- passed.
 - `git diff --check` and `python scripts/sync_pr_plan.py
   plans/PR-Atlas-Edge-NeMo-Pin.md origin/main --check` -- passed after plan
@@ -192,9 +217,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
+| `atlas_edge/pipeline/stt.py` | 3 |
 | `atlas_edge/requirements.txt` | 2 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Atlas-Edge-NeMo-Pin.md` | 200 |
+| `plans/PR-Atlas-Edge-NeMo-Pin.md` | 226 |
 | `plans/archive/PR-Python-Transitive-Constraints-Lock.md` | 0 |
-| `tests/test_nemo_requirements_ownership.py` | 30 |
-| **Total** | **235** |
+| `tests/test_nemo_requirements_ownership.py` | 37 |
+| **Total** | **271** |
