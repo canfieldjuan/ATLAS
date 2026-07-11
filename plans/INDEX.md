@@ -1,6 +1,6 @@
 # Plan archive index
 
-1393 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1394 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1225,6 +1225,7 @@
 - [PR-Maturity-Sweep-Report-Validation-Tighten](archive/PR-Maturity-Sweep-Report-Validation-Tighten.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Robust-Gate](archive/PR-Maturity-Sweep-Robust-Gate.md) - lane: ci/maturity-sweep | phase: Production hardening (CI enforcement)
 - [PR-Mobile-NPM-Security-Patches](archive/PR-Mobile-NPM-Security-Patches.md) - lane: security/dependencies | phase: Production hardening
+- [PR-NeMo-Requirements-Dedup](archive/PR-NeMo-Requirements-Dedup.md) - lane: dependency-hardening/python-requirements | phase: Production hardening
 - [PR-Negatives-Presence-Gate](archive/PR-Negatives-Presence-Gate.md) - lane: workflow/negatives-presence-gate | phase: Workflow/process
 - [PR-Npm-Package-CI-Enrollment](archive/PR-Npm-Package-CI-Enrollment.md) - lane: security/dependencies | phase: Workflow/process
 - [PR-Npm-Security-Patch-Batch](archive/PR-Npm-Security-Patch-Batch.md) - lane: security/dependencies | phase: Production hardening
