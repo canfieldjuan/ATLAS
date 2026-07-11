@@ -116,6 +116,14 @@ This composes with the boundary-probe rule in `docs/REVIEWER_RULES.md` (probe
 both error directions) and `AGENTS.md` section 3k (root cause, not symptom): here the
 root cause is the open default, and closing it is the choke point.
 
+An **advisory CI lint** (`scripts/check_guard_class_closure.py`, workflow
+`Guard Class-Closure Lint`) surfaces a warning when a PR changes a Python guard-shaped
+file over open input without a co-changed property/generative test. It is
+heuristic and advisory-first (warns, never blocks); it does not replace the
+reviewer bar above, it makes the omission visible on every PR. Opt a
+false-positive path out in `scripts/guard_class_closure_config.json` (optional -- absent means no ignores; create it only when an opt-out is needed) or waive
+inline with a `guard-class-closure: waived` marker in the PR body.
+
 ## Relationship to the review-round cap
 
 The Codex/bot review-round cap is a circuit-breaker for **noise** -- a reviewer
