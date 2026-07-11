@@ -1913,6 +1913,134 @@ def test_support_ticket_input_package_without_status_or_csat_is_unchanged() -> N
     assert package.metadata["csat_score_average"] is None
 
 
+@pytest.mark.parametrize(
+    "history_key",
+    ("ticket_history", "history", "conversation_history"),
+)
+def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
+    history_key: str,
+) -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": f"s6c-{history_key}",
+        "subject": "Refund receipt",
+        history_key: (
+            "Where can I download the refund receipt?\n"
+            "--\n"
+            "Jane Agent\n"
+            "I still cannot find the receipt after following the steps."
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "Where can I download the refund receipt?" in text
+    assert "I still cannot find the receipt after following the steps." in text
+    assert "Jane Agent" not in text
+
+
+@pytest.mark.parametrize(
+    ("transcript", "kept", "removed"),
+    [
+        (
+            "Initial export question.\n--\nJane Agent\n\n"
+            "Export remains broken after the retry.",
+            ("Initial export question.", "Export remains broken after the retry."),
+            ("Jane Agent",),
+        ),
+        (
+            "Initial export question.\n--\nJane Agent\nSupport team\n"
+            "ExampleCo\n555-1212\nConfidentiality footer\n\n"
+            "This email cannot be disclosed outside ExampleCo.\n"
+            "ExampleCo legal department\n"
+            "Can I retry the export now?",
+            ("Initial export question.", "Can I retry the export now?"),
+            (
+                "Jane Agent",
+                "Support team",
+                "555-1212",
+                "Confidentiality footer",
+                "cannot be disclosed",
+                "ExampleCo legal department",
+            ),
+        ),
+        (
+            "Initial export question.\n"
+            "On Mon, Agent <agent@example.com> wrote:\n\n"
+            "old unprefixed answer\n> old second paragraph\n\n"
+            "Customer: the export still fails.",
+            ("Initial export question.", "Customer: the export still fails."),
+            ("old unprefixed answer", "old second paragraph", "agent@example.com"),
+        ),
+        (
+            "Initial export question.\n"
+            "On 2026-07-10 at 09:15 Agent wrote:\n"
+            "Please retry the export from settings.\n"
+            "The issue is fixed now.\n"
+            "Can I retry the export now?",
+            ("Initial export question.", "Can I retry the export now?"),
+            ("Please retry", "The issue is fixed"),
+        ),
+        (
+            "Initial export question.\nSent from my Android phone\nJane Agent\n"
+            "Please resend the export link.",
+            ("Initial export question.", "Please resend the export link."),
+            ("Sent from my Android phone", "Jane Agent"),
+        ),
+        (
+            "Initial export question.\n"
+            "On 10 Jul 2026 Agent <agent@example.com> wrote:\n"
+            "old answer\nStill unable to export the report.",
+            ("Initial export question.", "Still unable to export the report."),
+            ("old answer", "agent@example.com"),
+        ),
+        (
+            "On the checkout page it wrote:\n"
+            "Card failed. How do I retry checkout?",
+            ("On the checkout page it wrote:", "Card failed. How do I retry checkout?"),
+            (),
+        ),
+        (
+            "Initial export question.\n"
+            "On Mon, Agent <agent@example.com> wrote:\n"
+            "I am out of the office until Monday.\n"
+            "Still unable to export the report.",
+            ("Initial export question.", "Still unable to export the report."),
+            ("out of the office", "agent@example.com"),
+        ),
+    ],
+)
+def test_s6c_scalar_history_state_machine_handles_boundary_compositions(
+    transcript: str,
+    kept: tuple[str, ...],
+    removed: tuple[str, ...],
+) -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "s6c-matrix",
+        "subject": "Export report",
+        "ticket_history": transcript,
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    for expected in kept:
+        assert expected in text
+    for excluded in removed:
+        assert excluded not in text
+
+
+def test_s6c_non_history_scalar_comment_keeps_existing_one_message_behavior() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "s6c-ordinary-comment",
+        "subject": "Export report",
+        "comments": (
+            "On the checkout page it wrote:\n"
+            "Card failed. How do I retry checkout?"
+        ),
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "On the checkout page it wrote:" in text
+    assert "Card failed. How do I retry checkout?" in text
+
+
 def test_zendesk_full_thread_rows_preserve_public_roles_and_drop_private_notes() -> None:
     result = load_zendesk_full_thread_rows_from_json_bytes(
         ZENDESK_THREAD_SAMPLE.read_bytes()

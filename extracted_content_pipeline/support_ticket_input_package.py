@@ -97,6 +97,42 @@ _QUESTION_STARTS = (
     "where ",
     "why ",
 )
+_HISTORY_BLANK_LINE_RE = re.compile(r"\n[ \t]*\n+")
+_HISTORY_SIGNATURE_BOUNDARY_RE = re.compile(r"^\s*(?:--+|__+)\s*$")
+_HISTORY_MOBILE_SIGNATURE_RE = re.compile(
+    r"^\s*sent from my (?:iphone|ipad|android(?: phone| device)?|mobile device)"
+    r"\.?\s*$",
+    re.IGNORECASE,
+)
+_HISTORY_QUOTED_REPLY_HEADER_RE = re.compile(
+    r"^\s*on\s+"
+    r"(?:(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|"
+    r"\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,4})?\b|"
+    r"\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)"
+    r"[a-z]*\b|"
+    r".{0,120}\b\d{1,2}:\d{2}\b|"
+    r".{0,120}<[^>]+@[^>]+>|"
+    r".{0,120}\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)"
+    r".{0,160}\s+wrote:\s*$",
+    re.IGNORECASE,
+)
+_HISTORY_CUSTOMER_MESSAGE_BOUNDARY_RE = re.compile(
+    r"^(?:"
+    r"(?:customer|requester|user)\s*[:\-]|"
+    r"(?:can|could|do|does|how|is|should|what|when|where|why)\s+"
+    r"(?:i|we|my|our)\b|"
+    r"(?:i|we|my|our)\b.*\b(?:cannot|can't|couldn't|didn't|"
+    r"doesn't|error|fail(?:ed|s|ing)?|issue|need|problem|still|unable)\b|"
+    r"still\b"
+    r")",
+    re.IGNORECASE,
+)
+_HISTORY_FOOTER_RE = re.compile(
+    r"\b(?:confidential(?:ity)?|disclos(?:e|ed|ure)|intended recipient|"
+    r"privileged|unauthorized|do not (?:copy|distribute))\b",
+    re.IGNORECASE,
+)
 
 _SOURCE_ID_KEYS = ("source_id", "ticket_id", "id", "case_id", "conversation_id")
 _SOURCE_TITLE_KEYS = (
@@ -145,6 +181,11 @@ _PUBLIC_COMMENT_KEYS = (
     "history",
     "conversation_history",
 )
+_SCALAR_HISTORY_KEYS = frozenset({
+    "ticket_history",
+    "history",
+    "conversation_history",
+})
 _RESOLUTION_TEXT_KEYS = (
     "resolution",
     "resolution_text",
@@ -812,6 +853,11 @@ def _raw_comment_texts(row: Mapping[str, Any]) -> list[str]:
         if isinstance(comments, Mapping):
             comments = (comments,)
         elif isinstance(comments, str):
+            if key in _SCALAR_HISTORY_KEYS:
+                text = _scalar_history_text(comments)
+                if text:
+                    texts.append(text)
+                continue
             comments = (comments,)
         elif not isinstance(comments, Sequence) or isinstance(
             comments,
@@ -832,6 +878,11 @@ def _comments_text(row: Mapping[str, Any]) -> str:
         if isinstance(comments, Mapping):
             comments = (comments,)
         elif isinstance(comments, str):
+            if key in _SCALAR_HISTORY_KEYS:
+                text = _scalar_history_text(comments)
+                if text:
+                    parts.append(text)
+                continue
             comments = (comments,)
         elif not isinstance(comments, Sequence) or isinstance(
             comments,
@@ -843,6 +894,78 @@ def _comments_text(row: Mapping[str, Any]) -> str:
             if text:
                 parts.append(support_ticket_plain_text(text))
     return support_ticket_plain_text("\n".join(parts))
+
+
+def _scalar_history_text(value: Any) -> str:
+    """Admit new messages while excluding scalar transcript quote/footer runs."""
+
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not raw.strip():
+        return ""
+    blank_marker = "ATLAS_HISTORY_BLANK_BOUNDARY"
+    while blank_marker in raw:
+        blank_marker += "_"
+    marked = _HISTORY_BLANK_LINE_RE.sub(f"\n{blank_marker}\n", raw)
+    lines = support_ticket_plain_text_lines(marked).splitlines()
+
+    admitted: list[str] = []
+    skip_mode = ""
+    signature_blank_seen = False
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line == blank_marker:
+            if skip_mode == "signature":
+                signature_blank_seen = True
+            continue
+        if not line:
+            continue
+        if skip_mode:
+            if line.startswith(">"):
+                continue
+            if skip_mode == "signature" and _HISTORY_FOOTER_RE.search(line):
+                signature_blank_seen = False
+                continue
+            if not _history_line_starts_message(
+                line,
+                skip_mode=skip_mode,
+                signature_blank_seen=signature_blank_seen,
+            ):
+                continue
+            skip_mode = ""
+            signature_blank_seen = False
+        if (
+            _HISTORY_SIGNATURE_BOUNDARY_RE.fullmatch(line)
+            or _HISTORY_MOBILE_SIGNATURE_RE.fullmatch(line)
+        ):
+            skip_mode = "signature"
+            signature_blank_seen = False
+            continue
+        if _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(line):
+            skip_mode = "quote"
+            signature_blank_seen = False
+            continue
+        if line.startswith(">"):
+            continue
+        admitted.append(line)
+    return support_ticket_plain_text("\n".join(admitted))
+
+
+def _history_line_starts_message(
+    line: str,
+    *,
+    skip_mode: str,
+    signature_blank_seen: bool,
+) -> bool:
+    if _HISTORY_CUSTOMER_MESSAGE_BOUNDARY_RE.match(line):
+        return True
+    if skip_mode != "signature":
+        return False
+    words = re.findall(r"[A-Za-z0-9]+", line)
+    return bool(
+        signature_blank_seen
+        or ("?" in line and len(words) >= 2)
+        or re.match(r"^please\b", line, re.IGNORECASE)
+    )
 
 
 def _comment_text(item: Any) -> str:
