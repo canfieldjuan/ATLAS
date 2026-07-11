@@ -90,7 +90,8 @@ class ParakeetSTTService:
 
             except ImportError:
                 logger.error(
-                    "NeMo not installed. Install with: pip install nemo_toolkit[asr]"
+                    "NeMo not installed. Install with: "
+                    "pip install -r atlas_edge/requirements.txt"
                 )
                 raise
             except Exception as e:
