@@ -1925,8 +1925,9 @@ def _s6c_history_text(history_key: str, transcript: str) -> str:
 def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
     history_keys = ("ticket_history", "history", "conversation_history")
     quote_markers = ("", "> ", ">> ")
-    for history_key, header_marker, body_marker, has_email in product(
-        history_keys, quote_markers, quote_markers, (False, True)
+    for history_key, separator, header_marker, body_marker, has_email in product(
+        history_keys, ("\n", "<br>", "<br/>"), quote_markers, quote_markers,
+        (False, True),
     ):
         sender = "Jos\u00e9 Garc\u00eda"
         if has_email:
@@ -1934,7 +1935,7 @@ def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
         reply_evidence = bool(header_marker or body_marker or has_email)
         text = _s6c_history_text(
             history_key,
-            f"Current question.\n{header_marker}On Monday, {sender} wrote:\n"
+            f"Current question.{separator}{header_marker}On Monday, {sender} wrote:{separator}"
             f"{body_marker}Old reply body.",
         )
         assert "Current question." in text
@@ -1953,7 +1954,9 @@ def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
         excluded = (
             "On Monday, Agent <agent@example.com> wrote:\nOld reply body."
             if mode == "quote"
-            else "--\nJos\u00e9 Garc\u00eda\nSupport Manager\njose@example.com\nFooter"
+            else "--\nThanks,\nJos\u00e9 Garc\u00eda\nSupport Lead\nRegional Team\n"
+                 "Customer Operations\nExport Escalations\nNorth America\n"
+                 "jose@example.com\nFooter"
         )
         text = _s6c_history_text(
             history_key, f"Current question.\n{excluded}{boundary}"
@@ -1963,12 +1966,15 @@ def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
         assert "jose@example.com" not in text
         assert ("Later customer message." in text) is resumes
 
-    for history_key, quote_marker, date_header in product(
-        history_keys, quote_markers, ("Sent", "Date")
+    header_runs = ((), ("To", "Cc", "Bcc", "Reply-To", "X-Trace"))
+    for history_key, quote_marker, date_header, extra_headers in product(
+        history_keys, quote_markers, ("Sent", "Date"), header_runs
     ):
+        extra = "".join(f"{quote_marker}{name}: value\n" for name in extra_headers)
         transcript = (
             f"Current question.\n{quote_marker}-----Original Message-----\n"
             f"{quote_marker}From: Agent <agent@example.com>\n"
+            f"{extra}"
             f"{quote_marker}{date_header}: Thursday\n"
             f"{quote_marker}Subject: Old reply\n{quote_marker}Old body."
         )
@@ -1990,20 +1996,14 @@ def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
         text = _s6c_history_text(history_key, transcript)
         assert transcript.splitlines()[-1] in text
 
-    long_signature = (
-        "Current question.\n--\nThanks,\nJos\u00e9 Garc\u00eda\nSupport Lead\n"
-        "Regional Team\nCustomer Operations\nExport Escalations\nNorth America\n"
-        "jose@example.com\nConfidential footer.\n\nLater customer message."
-    )
     mobile_signature = (
         "Current question.\nSent from my Android phone, please excuse typos\n"
         "Jos\u00e9 Garc\u00eda\n\nLater customer message."
     )
-    for transcript in (long_signature, mobile_signature):
-        text = _s6c_history_text("ticket_history", transcript)
-        assert "Current question." in text
-        assert "Jos\u00e9 Garc\u00eda" not in text
-        assert "Later customer message." in text
+    text = _s6c_history_text("ticket_history", mobile_signature)
+    assert "Current question." in text
+    assert "Jos\u00e9 Garc\u00eda" not in text
+    assert "Later customer message." in text
 
 
 def test_s6c_scalar_history_preserves_lines_for_junk_admission() -> None:

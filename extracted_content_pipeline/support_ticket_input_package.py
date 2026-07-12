@@ -117,6 +117,7 @@ _HISTORY_ORIGINAL_MESSAGE_RE = re.compile(r"^\s*-{2,}\s*original message\s*-{2,}
 _HISTORY_QUOTED_REPLY_HEADER_RE = re.compile(
     r"^\s*on\s+(?P<history_reply_prefix>[^\n]{1,280})\s+wrote:\s*$", re.I)
 _HISTORY_QUOTE_PREFIX_RE = re.compile(r"^\s*(?:>\s*)+(?P<history_quoted_line>.*)$")
+_HISTORY_ANGLE_EMAIL_RE = re.compile(r"<[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}>")
 _HISTORY_REPLY_DATE_RE = re.compile(
     r"(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|"
     r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|"
@@ -125,6 +126,8 @@ _HISTORY_REPLY_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 _HISTORY_REPLY_EMAIL_RE = re.compile(r"<[^>]+@[^>]+>|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.I)
+_HISTORY_MAIL_HEADER_RE = re.compile(r"^(?P<history_header_name>[A-Za-z][A-Za-z-]{0,40}):")
+_HISTORY_MAIL_HEADER_LOOKAHEAD = 12
 _HISTORY_PERSON_TOKEN = r"[^\W\d_][^\W\d_.'\u2019-]*"
 _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE = re.compile(r"^(?:customer|requester|user)\s*:", re.I)
 _HISTORY_SIGNATURE_PERSON_RE = re.compile(
@@ -922,6 +925,9 @@ def _scalar_history_text(value: Any) -> str:
         blank_marker += "_"
     marked = _HISTORY_HTML_BLANK_RE.sub(f"\n{blank_marker}\n", raw)
     marked = _HISTORY_BLANK_LINE_RE.sub(f"\n{blank_marker}\n", marked)
+    marked = _HISTORY_ANGLE_EMAIL_RE.sub(
+        lambda match: match.group(0).replace("<", "&lt;").replace(">", "&gt;"), marked
+    )
     lines = support_ticket_plain_text_lines(marked).splitlines()
 
     admitted: list[str] = []
@@ -974,15 +980,20 @@ def _history_line_is_reply_header(
 ) -> bool:
     probe, header_is_quoted = _history_line_probe(line)
     if _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(probe):
-        tail: list[str] = []
-        for item in lines[line_index + 1 : line_index + 5]:
+        from_seen = timestamp_seen = False
+        for item in lines[
+            line_index + 1 : line_index + 1 + _HISTORY_MAIL_HEADER_LOOKAHEAD
+        ]:
             if item.strip() == blank_marker:
-                continue
+                break
             tail_probe, _ = _history_line_probe(item.strip())
-            tail.append(tail_probe.lower())
-        return any(item.startswith("from:") for item in tail) and any(
-            item.startswith(("sent:", "date:")) for item in tail
-        )
+            header_match = _HISTORY_MAIL_HEADER_RE.match(tail_probe)
+            if not header_match:
+                break
+            header_name = header_match.group("history_header_name").lower()
+            from_seen = from_seen or header_name == "from"
+            timestamp_seen = timestamp_seen or header_name in {"sent", "date"}
+        return from_seen and timestamp_seen
     match = _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(probe)
     if not match:
         return False
