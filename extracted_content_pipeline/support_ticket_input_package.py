@@ -116,6 +116,7 @@ _HISTORY_MOBILE_SIGNATURE_RE = re.compile(
 _HISTORY_ORIGINAL_MESSAGE_RE = re.compile(r"^\s*-{2,}\s*original message\s*-{2,}\s*$", re.I)
 _HISTORY_QUOTED_REPLY_HEADER_RE = re.compile(
     r"^\s*on\s+(?P<history_reply_prefix>[^\n]{1,280})\s+wrote:\s*$", re.I)
+_HISTORY_QUOTE_PREFIX_RE = re.compile(r"^\s*(?:>\s*)+(?P<history_quoted_line>.*)$")
 _HISTORY_REPLY_DATE_RE = re.compile(
     r"(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|"
     r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|"
@@ -125,43 +126,25 @@ _HISTORY_REPLY_DATE_RE = re.compile(
 )
 _HISTORY_REPLY_EMAIL_RE = re.compile(r"<[^>]+@[^>]+>|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.I)
 _HISTORY_PERSON_TOKEN = r"[^\W\d_][^\W\d_.'\u2019-]*"
-_HISTORY_REPLY_TIME_SENDER_RE = re.compile(
-    r"\b\d{1,2}:\d{2}\b(?:\s*[AaPp][Mm])?[\s,]+"
-    r"[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){1,3}\s*$")
-_HISTORY_REPLY_NAME_SENDER_RE = re.compile(
-    r",\s*[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){1,3}\s*$")
-_HISTORY_REPLY_NON_PERSON_SENDER_RE = re.compile(r"(?:^|[\s,])(?:i|we|you|he|she|it|they|this|that|these|those|a|an|the|my|our|your|his|her|its|their)(?:\s+\S+)*\s*$", re.I)
 _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE = re.compile(r"^(?:customer|requester|user)\s*:", re.I)
-_HISTORY_CUSTOMER_VOICE_RE = re.compile(
-    r"^(?:"
-    r"(?:can|could|do|does|how|is|should|what|when|where|why)\s+"
-    r"(?:i|we)\b|"
-    r"(?:i|we)\b.{0,200}\b(?:error|fail(?:ed|s|ing)?|issue|problem|unable|cannot|can['\u2019]?t|couldn['\u2019]?t)\b"
-    r")",
-    re.IGNORECASE,
+_HISTORY_SIGNATURE_PERSON_RE = re.compile(
+    rf"^{_HISTORY_PERSON_TOKEN}(?:\s+{_HISTORY_PERSON_TOKEN}){{0,3}}$"
 )
-_HISTORY_POST_SIGNATURE_REQUEST_RE = re.compile(r"^(?:can|could|will|would)\s+you\b.{0,160}\?\s*$", re.I)
-_HISTORY_POST_SIGNATURE_NEED_RE = re.compile(
-    r"^(?:i|we)\s+need\s+(?:(?!to\b)(?:the|a|an|my|our)\b|(?:help|assistance)\s+with\b).{1,160}$",
-    re.IGNORECASE,
+_HISTORY_VALEDICTION_RE = re.compile(
+    r"^(?:thanks|thank you|best|regards|sincerely|cheers)[,!]?$", re.I
 )
-_HISTORY_POST_SIGNATURE_FAILURE_RE = re.compile(
-    r"\b(?:still|remains?|keeps?)\b.{0,80}\b"
-    r"(?:broken|fail(?:ed|s|ing)?|stuck|unavailable|unable|error)\b",
-    re.IGNORECASE,
-)
-_HISTORY_SIGNATURE_PERSON_RE = re.compile(rf"^{_HISTORY_PERSON_TOKEN}(?:\s+{_HISTORY_PERSON_TOKEN}){{0,3}}$")
-_HISTORY_SIGNATURE_COMPANY_RE = re.compile(
-    r"^(?:[A-Z][A-Za-z&.'-]*[A-Z][A-Za-z&.'-]*|[A-Z][A-Za-z&.'-]*"
-    r"(?:\s+[A-Z][A-Za-z&.'-]*){0,3}\s+(?:Inc|LLC|Ltd|Corp|Company))\.?$")
-_HISTORY_VALEDICTION_RE = re.compile(r"^(?:thanks|thank you|best|regards|sincerely|cheers)[,!]?$", re.I)
 _HISTORY_SIGNATURE_LOOKAHEAD = 10
-_HISTORY_SIGNATURE_MAX_ROLES = 2
 _HISTORY_SIGNATURE_CONTACT_RE = re.compile(
     r"[\w.+-]+@"
     r"[\w.-]+\.[a-z]{2,}|https?://|www\.|(?:^|\s)\+?\d[\d .()/-]{6,}\d(?:\s|$)",
     re.IGNORECASE,
 )
+_HISTORY_EVENT_POLICY = {
+    "blank": ("", False),
+    "quote": ("quote", False),
+    "signature": ("signature", False),
+    "customer": ("", True),
+}
 
 _SOURCE_ID_KEYS = ("source_id", "ticket_id", "id", "case_id", "conversation_id")
 _SOURCE_TITLE_KEYS = (
@@ -943,119 +926,110 @@ def _scalar_history_text(value: Any) -> str:
 
     admitted: list[str] = []
     skip_mode = ""
-    signature_blank_seen = False
     for line_index, raw_line in enumerate(lines):
         line = raw_line.strip()
-        if line == blank_marker:
-            if skip_mode == "signature":
-                signature_blank_seen = True
-            continue
-        if not line:
-            continue
-        if _history_line_is_reply_header(lines, line_index=line_index, line=line):
-            skip_mode = "quote"
-            signature_blank_seen = False
-            continue
-        if skip_mode:
-            if not _history_line_starts_message(
-                line,
-                skip_mode=skip_mode,
-                signature_blank_seen=signature_blank_seen,
-            ):
-                continue
-            skip_mode = ""
-            signature_blank_seen = False
-        if _history_line_starts_signature(
+        event = _history_line_event(
             lines, line_index=line_index, line=line, blank_marker=blank_marker
-        ):
-            skip_mode = "signature"
-            signature_blank_seen = False
-            continue
-        admitted.append(line)
+        )
+        policy = _HISTORY_EVENT_POLICY.get(event)
+        if policy:
+            skip_mode, emit = policy
+        else:
+            emit = not skip_mode
+        if emit:
+            admitted.append(line)
     return "\n".join(admitted)
 
 
+def _history_line_event(
+    lines: Sequence[str], *, line_index: int, line: str, blank_marker: str
+) -> str:
+    if not line or line == blank_marker:
+        return "blank"
+    probe, _ = _history_line_probe(line)
+    if _history_line_is_reply_header(
+        lines, line_index=line_index, line=line, blank_marker=blank_marker
+    ):
+        return "quote"
+    if _history_line_starts_signature(
+        lines, line_index=line_index, line=line, blank_marker=blank_marker
+    ):
+        return "signature"
+    if _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(probe):
+        return "customer"
+    return "text"
+
+
+def _history_line_probe(line: str) -> tuple[str, bool]:
+    """Return detection text without mutating customer-visible quote markers."""
+
+    match = _HISTORY_QUOTE_PREFIX_RE.fullmatch(line)
+    if not match:
+        return line.strip(), False
+    return match.group("history_quoted_line").strip(), True
+
+
 def _history_line_is_reply_header(
-    lines: Sequence[str], *, line_index: int, line: str
+    lines: Sequence[str], *, line_index: int, line: str, blank_marker: str
 ) -> bool:
-    if _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(line):
-        tail = [item.strip().lower() for item in lines[line_index + 1 : line_index + 5]]
-        return any(item.startswith("from:") for item in tail) and any(item.startswith(("sent:", "date:")) for item in tail)
-    match = _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(line)
+    probe, header_is_quoted = _history_line_probe(line)
+    if _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(probe):
+        tail: list[str] = []
+        for item in lines[line_index + 1 : line_index + 5]:
+            if item.strip() == blank_marker:
+                continue
+            tail_probe, _ = _history_line_probe(item.strip())
+            tail.append(tail_probe.lower())
+        return any(item.startswith("from:") for item in tail) and any(
+            item.startswith(("sent:", "date:")) for item in tail
+        )
+    match = _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(probe)
     if not match:
         return False
     prefix = match.group("history_reply_prefix")
-    sender_match = not _HISTORY_REPLY_NON_PERSON_SENDER_RE.search(prefix) and (
-        _HISTORY_REPLY_EMAIL_RE.search(prefix)
-        or _HISTORY_REPLY_TIME_SENDER_RE.search(prefix)
-        or _HISTORY_REPLY_NAME_SENDER_RE.search(prefix)
-    )
-    return bool(_HISTORY_REPLY_DATE_RE.search(prefix) and sender_match)
+    if not _HISTORY_REPLY_DATE_RE.search(prefix):
+        return False
+    if header_is_quoted or _HISTORY_REPLY_EMAIL_RE.search(prefix):
+        return True
+    for item in lines[line_index + 1 : line_index + 4]:
+        candidate = item.strip()
+        if not candidate or candidate == blank_marker:
+            continue
+        _, candidate_is_quoted = _history_line_probe(candidate)
+        return candidate_is_quoted
+    return False
 
 
 def _history_line_starts_signature(
     lines: Sequence[str], *, line_index: int, line: str, blank_marker: str
 ) -> bool:
-    if _HISTORY_MOBILE_SIGNATURE_RE.fullmatch(line):
+    probe, _ = _history_line_probe(line)
+    if _HISTORY_MOBILE_SIGNATURE_RE.fullmatch(probe):
         return True
-    if not _HISTORY_SIGNATURE_BOUNDARY_RE.fullmatch(line):
+    if not _HISTORY_SIGNATURE_BOUNDARY_RE.fullmatch(probe):
         return False
     tail = lines[line_index + 1 : line_index + 1 + _HISTORY_SIGNATURE_LOOKAHEAD]
-    semantic: list[tuple[int, str, bool]] = []
-    blank_before = False
-    for relative_index, item in enumerate(tail):
+    signature_head_seen = False
+    for item in tail:
         candidate = item.strip()
         if candidate == blank_marker:
-            blank_before = True
-        elif candidate:
-            semantic.append((relative_index, candidate, blank_before))
-            blank_before = False
-
-    tokens = iter(semantic)
-    relative_index, first, blank_before = next(tokens, (-1, "", False))
-    if _HISTORY_VALEDICTION_RE.fullmatch(first):
-        relative_index, first, blank_before = next(tokens, (-1, "", False))
-    if not (_HISTORY_SIGNATURE_PERSON_RE.fullmatch(first) and
-            all(token[:1].isupper() for token in first.split())):
-        return False
-    role_lines = 0
-    for relative_index, candidate, blank_before in tokens:
-        offset = line_index + 1 + relative_index
-        if _HISTORY_SIGNATURE_CONTACT_RE.search(candidate) or _HISTORY_SIGNATURE_COMPANY_RE.fullmatch(candidate):
-            return True
-        if _history_line_is_reply_header(lines, line_index=offset, line=candidate):
-            return True
-        if _history_line_starts_message(
-            candidate, skip_mode="signature", signature_blank_seen=blank_before
-        ):
-            return True
-        if role_lines < _HISTORY_SIGNATURE_MAX_ROLES and _HISTORY_SIGNATURE_PERSON_RE.fullmatch(candidate) and \
-                all(token[:1].isupper() for token in candidate.split()):
-            role_lines += 1
+            return False
+        candidate_probe, _ = _history_line_probe(candidate)
+        if _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(candidate_probe):
+            return False
+        if not signature_head_seen and _HISTORY_VALEDICTION_RE.fullmatch(candidate_probe):
             continue
-        return False
+        if not signature_head_seen:
+            signature_head_seen = bool(
+                _HISTORY_SIGNATURE_PERSON_RE.fullmatch(candidate_probe)
+                and all(token[:1].isupper() for token in candidate_probe.split())
+            )
+            if not signature_head_seen:
+                return False
+            continue
+        if _HISTORY_SIGNATURE_CONTACT_RE.search(candidate_probe):
+            return True
     return False
-
-
-def _history_line_starts_message(
-    line: str, *, skip_mode: str, signature_blank_seen: bool
-) -> bool:
-    if skip_mode == "quote":
-        return False
-    if (
-        _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(line)
-        or _HISTORY_CUSTOMER_VOICE_RE.match(line)
-    ):
-        return True
-    return bool(
-        skip_mode == "signature"
-        and signature_blank_seen
-        and (
-            _HISTORY_POST_SIGNATURE_FAILURE_RE.search(line)
-            or _HISTORY_POST_SIGNATURE_REQUEST_RE.match(line)
-            or _HISTORY_POST_SIGNATURE_NEED_RE.match(line)
-        )
-    )
 
 
 def _comment_text(item: Any) -> str:

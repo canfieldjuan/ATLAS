@@ -1924,56 +1924,64 @@ def _s6c_history_text(history_key: str, transcript: str) -> str:
 
 def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
     history_keys = ("ticket_history", "history", "conversation_history")
-    sender_oracle = (
-        (", Jane Agent", "quote"), (", Jane Agent <jane@example.com>", "quote"), (" Jane Agent <jane@example.com>", "quote"),
-        (", 09:15 Jane Agent", "quote"), (" 09:15 Jane Agent", "quote"),
-        (", 09:15 I", "content"), (" 09:15 I", "content"),
-        (", 09:15 We", "content"), (" 09:15 We", "content"),
-        (", I", "content"), (" I", "content"), (", We", "content"),
-        (" We", "content"), (", It", "content"), (" 09:15 It", "content"), (", The System", "content"),
-    )
-    for history_key, date_text, (sender, role) in product(
-        history_keys, ("Monday", "Jul 10, 2026"), sender_oracle
+    quote_markers = ("", "> ", ">> ")
+    for history_key, header_marker, body_marker, has_email in product(
+        history_keys, quote_markers, quote_markers, (False, True)
     ):
+        sender = "Jos\u00e9 Garc\u00eda"
+        if has_email:
+            sender += " <jose@example.com>"
+        reply_evidence = bool(header_marker or body_marker or has_email)
         text = _s6c_history_text(
             history_key,
-            f"Current question.\nOn {date_text}{sender} wrote:\nOld reply body.",
+            f"Current question.\n{header_marker}On Monday, {sender} wrote:\n"
+            f"{body_marker}Old reply body.",
         )
         assert "Current question." in text
-        old_is_content = "Old reply body." in text
-        assert old_is_content is (role == "content")
-    blanks = ("", "\n", "\u00a0\n", "<div>&nbsp;</div>")
-    terminal_oracle = (
-        ("jane@example.com", "signature"), ("ExampleCo", "signature"),
-        ("Customer: new export issue.", "content"),
+        assert ("Old reply body." not in text) is reply_evidence
+
+    boundary_oracle = (
+        ("\nLater customer message.", False),
+        ("\n\nLater customer message.", True),
+        ("\n\u00a0\nLater customer message.", True),
+        ("\n<div>&nbsp;</div>\nLater customer message.", True),
+        ("\nCustomer: Later customer message.", True),
     )
-    followup_oracle = (
-        ("Export remains broken after retry.", "content"), ("I need help with the export.", "content"),
-        ("We need assistance with the export.", "content"),
-        ("We still reserve all rights under this agreement.", "signature"),
-    )
-    for values in product(
-        history_keys, ("", "Thanks,\n"), ("Jane Agent", "Jane", "Jos\u00e9 Garc\u00eda"), blanks, blanks,
-        ("", "Support Manager\n", "Customer Success\nRegional Support\n", "Acme\n"),
-        terminal_oracle, followup_oracle,
+    for history_key, mode, (boundary, resumes) in product(
+        history_keys, ("quote", "signature"), boundary_oracle
     ):
-        (history_key, valediction, signature_head, leading_blank,
-         evidence_blank, role_lines, terminal, followup) = values
-        terminal_text, terminal_role, followup_text, followup_role = (*terminal, *followup)
+        excluded = (
+            "On Monday, Agent <agent@example.com> wrote:\nOld reply body."
+            if mode == "quote"
+            else "--\nJos\u00e9 Garc\u00eda\nSupport Manager\njose@example.com\nFooter"
+        )
+        text = _s6c_history_text(
+            history_key, f"Current question.\n{excluded}{boundary}"
+        )
+        assert "Current question." in text
+        assert "Old reply body." not in text
+        assert "jose@example.com" not in text
+        assert ("Later customer message." in text) is resumes
+
+    for history_key, quote_marker, date_header in product(
+        history_keys, quote_markers, ("Sent", "Date")
+    ):
         transcript = (
-            f"Current question.\n--\n{valediction}{leading_blank}{signature_head}\n"
-            f"{role_lines}{evidence_blank}{terminal_text}\n\n"
-            f"{followup_text}"
+            f"Current question.\n{quote_marker}-----Original Message-----\n"
+            f"{quote_marker}From: Agent <agent@example.com>\n"
+            f"{quote_marker}{date_header}: Thursday\n"
+            f"{quote_marker}Subject: Old reply\n{quote_marker}Old body."
         )
         text = _s6c_history_text(history_key, transcript)
         assert "Current question." in text
-        for signature_line in (signature_head, *role_lines.splitlines()):
-            assert signature_line not in text
-        verdict = (signature_head in text, terminal_text in text, followup_text in text)
-        followup_is_content = terminal_role == "content" or followup_role == "content"
-        assert verdict == (False, terminal_role == "content", followup_is_content)
+        assert "agent@example.com" not in text
+        assert "Old body." not in text
+
     ordinary = (
         "On Monday wrote:\nError 501. How do I fix it?",
+        "On Monday, Jos\u00e9 Garc\u00eda wrote:\nOld-looking customer prose.",
+        "On Monday, System Agent wrote:\nSystem Agent is the feature name.",
+        "> Customer supplied this comparison line.",
         "--\nhttps://api.example.com/webhook returns 500.", "--\n+1 555 121 2121 disconnects during export.",
         "--\nSteps To Reproduce\nOpen reports.\nTeam members see error 500.",
         "--\nJane Agent\nSupport Manager\nOpen reports.",
@@ -1981,17 +1989,21 @@ def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
     for history_key, transcript in product(history_keys, ordinary):
         text = _s6c_history_text(history_key, transcript)
         assert transcript.splitlines()[-1] in text
-    anchors = (
-        ("Current question.\nSent from my Android phone, please excuse typos\n"
-         "Jane Agent\n\nCan you send the export link?", "Sent from my Android"),
-        *(("Current question.\n-----Original Message-----\nFrom: Agent <agent@example.com>\n"
-           f"{header}: Thursday\nSubject: Old reply\nCustomer: old export issue.", "agent@example.com")
-          for header in ("Sent", "Date")),
+
+    long_signature = (
+        "Current question.\n--\nThanks,\nJos\u00e9 Garc\u00eda\nSupport Lead\n"
+        "Regional Team\nCustomer Operations\nExport Escalations\nNorth America\n"
+        "jose@example.com\nConfidential footer.\n\nLater customer message."
     )
-    for transcript, removed in anchors:
+    mobile_signature = (
+        "Current question.\nSent from my Android phone, please excuse typos\n"
+        "Jos\u00e9 Garc\u00eda\n\nLater customer message."
+    )
+    for transcript in (long_signature, mobile_signature):
         text = _s6c_history_text("ticket_history", transcript)
         assert "Current question." in text
-        assert removed not in text
+        assert "Jos\u00e9 Garc\u00eda" not in text
+        assert "Later customer message." in text
 
 
 def test_s6c_scalar_history_preserves_lines_for_junk_admission() -> None:
