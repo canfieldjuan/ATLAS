@@ -974,7 +974,13 @@ instance-patching a shared decision, not fixing it. This is distinct from the
 bot-round *noise* cap (see 4a and `docs/OVERNIGHT_ARC_WORKFLOW.md`): there the
 findings are formally-identical re-litigation of a green contract; here the
 findings are real, and each patch shifts the boundary and exposes the adjacent
-case.
+case. It also composes with the overnight hard 3-round cap
+(`docs/OVERNIGHT_ARC_WORKFLOW.md`): the cap bounds *how many rounds* you spend;
+3k.2 constrains *how you stop*. The cap's "fix verified findings, waive the rest,
+merge on required-green" is legitimate only as 3k.2 option (b) -- a deliberate
+bounded-residual waiver reconciled *after* the seam analysis, not a blind
+cap-and-ship of the next patch's residual. The cap's money/auth/PII fail-open
+exception is unchanged and still blocks past the cap.
 
 When this trips, the next push may NOT add another example-scoped patch (another
 token, regex, vocabulary row, or oracle fixture). It must carry a **Decision-Seam

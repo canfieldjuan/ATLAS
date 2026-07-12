@@ -118,14 +118,18 @@ Parked hardening: none.
 
 ## Verification
 
-- run sync_pr_plan.py, the plan/body consumer gates, and ASCII check before push.
+- `python scripts/sync_pr_plan.py --check plans/PR-Builder-Convergence-Discipline.md origin/main` -- passed ("plan already in sync").
+- `python scripts/audit_pr_body.py <body-file>` -- passed ("pr body audit: PASS").
+- Non-ASCII scan (`grep -nP '[^\x00-\x7F]'`) of the three edited docs -- additions are ASCII (`--`, `->`, ASCII quotes); markdown is not gated by the Python ASCII check regardless.
+- Managed pre-push hook (git diff --check, plan/body sync, reviewer-rule mapping, local review) -- passed on push.
+- Docs-only slice: no test suite applies; cross-references resolve to real sections (`GUARD_CLASS_CLOSURE.md`, `AGENTS.md` 3k.2, R13, `OVERNIGHT_ARC_WORKFLOW.md`).
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | 39 |
-| `docs/GUARD_CLASS_CLOSURE.md` | 55 |
+| `AGENTS.md` | 45 |
+| `docs/GUARD_CLASS_CLOSURE.md` | 64 |
 | `docs/REVIEWER_RULES.md` | 12 |
-| `plans/PR-Builder-Convergence-Discipline.md` | 131 |
-| **Total** | **237** |
+| `plans/PR-Builder-Convergence-Discipline.md` | 135 |
+| **Total** | **256** |

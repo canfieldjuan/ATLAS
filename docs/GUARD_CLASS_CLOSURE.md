@@ -110,7 +110,7 @@ Requirement 1 says "admit known-good, reject the rest." That assumes the
 known-good set is *recognizable* -- that you can write the allowlist. Some guards
 fail a level deeper: the decision requires classifying membership in an **open
 semantic category** -- is this token a person name, a real sender, an intent, a
-language, "is this junk." There BOTH lists fail. The denylist of non-members is
+language, "is this junk." Then both lists fail. The denylist of non-members is
 unbounded (reject-known-bad leaks), and the allowlist of members is *also*
 unbounded (admit-known-good cannot be written either). No grammar over the
 category closes it, because the category is open on both sides. A property test
@@ -163,7 +163,14 @@ because the evidence signals are finite even when the category is not.
 
 For a triggering PR, the reviewer **blocks** until all three hold, and states
 before LGTM: the choke-point location, the class and invariant it enforces, and
-that the acceptance test is grammar-derived (not a fixture list). A string-scoped
+that the acceptance test is grammar-derived (not a fixture list). For an
+**open-category** guard (see the section above), the three requirements hold in
+their *evidence-gated* form: the choke point recognizes bounded structural
+evidence with an asymmetric-safe default, and the acceptance test is the
+evidence-keyed generative oracle. There the reviewer must NOT demand a
+member-enumerating allowlist or a member-keyed property test -- the open category
+cannot satisfy either, and requiring them re-creates the enumeration loop this
+document exists to stop. A string-scoped
 fix with string-scoped fixtures is an automatic "needs the class fix," even when
 every listed input now passes.
 
