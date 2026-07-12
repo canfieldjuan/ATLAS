@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from itertools import product
 import json
 from pathlib import Path
 
@@ -1913,163 +1914,119 @@ def test_support_ticket_input_package_without_status_or_csat_is_unchanged() -> N
     assert package.metadata["csat_score_average"] is None
 
 
-@pytest.mark.parametrize("history_key", ("ticket_history", "history", "conversation_history"))
-def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
-    history_key: str,
-) -> None:
+def _s6c_history_text(history_key: str, transcript: str) -> str:
     package = build_support_ticket_input_package([{
-        "ticket_id": f"s6c-{history_key}",
-        "subject": "Refund receipt",
-        history_key: (
-            "Where can I download the refund receipt?\n"
-            "--\n"
-            "Jane Agent\n"
-            "I still cannot find the receipt after following the steps."
-        ),
+        "ticket_id": "s6c-grammar", "subject": "Export report",
+        history_key: transcript,
     }])
-
-    text = package.inputs["source_material"][0]["text"]
-    assert "Where can I download the refund receipt?" in text
-    assert "I still cannot find the receipt after following the steps." in text
-    assert "Jane Agent" not in text
+    return package.inputs["source_material"][0]["text"]
 
 
-@pytest.mark.parametrize(
-    ("transcript", "kept", "removed"),
-    [
-        (
-            "Initial export question.\n--\nJane Agent\n\u00a0\n"
-            "Export remains broken after the retry.",
-            ("Initial export question.", "Export remains broken after the retry."),
-            ("Jane Agent",),
-        ),
-        (
-            "Initial export question.\n--\nJane Smith\nExampleCo\nSupport team\n"
-            "ExampleCo\n555-1212\nConfidentiality footer\n\n"
-            "This email cannot be disclosed outside ExampleCo.\n"
-            "Anything else?\n"
-            "Please consider the environment before printing this email.\n"
-            "ExampleCo legal department\n"
-            "Our company cannot be held liable for errors.\n"
-            "Cannot be held liable for errors in this email.\n"
-            "I cannot disclose the account number here but export still fails.\n"
-            "--\nJoe Agent\n\nConfidentiality notice.\n"
-            "Export remains broken after retry.",
-            ("Initial export question.", "I cannot disclose the account", "Export remains broken"),
-            ("Jane Smith", "cannot be disclosed", "Anything else?", "Cannot be held"),
-        ),
-        (
-            "Initial export question.\n"
-            "On Mon, Agent <agent@example.com> wrote:\n\n"
-            "old unprefixed answer\n> old second paragraph\n\n"
-            "Customer: old export issue.",
-            ("Initial export question.",),
-            ("old unprefixed answer", "old second paragraph", "Customer: old"),
-        ),
-        (
-            "Initial export question.\n"
-            "On 2026-07-10 at 09:15 Agent wrote:\n"
-            "User-Agent: MailClient\n"
-            "Can I reset my password?\n"
-            "old details\n"
-            "Customer: old export issue.",
-            ("Initial export question.",),
-            ("User-Agent", "Can I reset", "old details", "Customer: old"),
-        ),
-        (
-            "Initial export question.\n"
-            "Sent from my Android phone, please excuse typos\nJane Agent\n\n"
-            "Can you send the export link?\n--\nJane Smith\n\n"
-            "I need the export link.",
-            ("Initial export question.", "Can you send the export link?", "I need the export link."),
-            ("Sent from my Android phone", "Jane Agent", "Jane Smith"),
-        ),
-        (
-            "Initial export question.\n"
-            "On 10 Jul 2026 Agent <agent@example.com> wrote:\n"
-            "old answer\nStill unable to export the old report.\n"
-            "Customer: old export issue.",
-            ("Initial export question.",),
-            ("old answer", "old report", "Customer: old"),
-        ),
-        (
-            "On 2026-07-10 at 09:15 it wrote:\nError 500. How do I fix it?\n--\n"
-            "Team members see error 500.\n> 100 errors per hour should notify us.",
-            ("09:15 it wrote:", "Error 500.", "Team members", "> 100 errors"),
-            (),
-        ),
-        (
-            "Initial export question.\n"
-            "On Mon, Agent <agent@example.com> wrote:\n"
-            "I am out of the office until Monday.\n"
-            "Still unable to export the old report.\n"
-            "Customer: old export issue.",
-            ("Initial export question.",),
-            ("out of the office", "old report", "Customer: old"),
-        ),
-        (
-            "Initial export question.<br>--<br>Jane Agent<br><br>"
-            "Export remains broken after retry.",
-            ("Initial export question.", "Export remains broken after retry."),
-            ("Jane Agent",),
-        ),
-        (
-            "Initial export question.<p>--</p><p>Jane Agent</p>"
-            "<div><br></div><p>Export remains broken.</p><p>--</p>"
-            "<p>Joe Agent</p><div>&nbsp;&#xA0;</div><p>Report remains broken.</p>",
-            ("Initial export question.", "Export remains broken.", "Report remains broken."),
-            ("Jane Agent", "Joe Agent"),
-        ),
-        (
-            "Current question.\n-----Original Message-----\n"
-            "From: Agent <agent@example.com>\nSent: Thursday\n"
-            "To: Customer <customer@example.com>\nSubject: Old reply\n"
-            "Please retry from settings.\n"
-            "Customer: old export issue.",
-            ("Current question.",),
-            ("agent@example.com", "Thursday", "Old reply", "Customer: old"),
-        ),
-        (
-            "Current question.\n--\nJane Agent\n"
-            "On Mon, Customer <customer@example.com> wrote:\n"
-            "Customer: old issue details.",
-            ("Current question.",),
-            ("Jane Agent", "customer@example.com", "old issue details"),
-        ),
-    ],
-)
-def test_s6c_scalar_history_state_machine_handles_boundary_compositions(
-    transcript: str,
-    kept: tuple[str, ...],
-    removed: tuple[str, ...],
-) -> None:
-    package = build_support_ticket_input_package([{
-        "ticket_id": "s6c-matrix", "subject": "Export report",
-        "ticket_history": transcript,
-    }])
-
-    text = package.inputs["source_material"][0]["text"]
-    for expected in kept:
-        assert expected in text
-    for excluded in removed:
-        assert excluded not in text
+def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
+    history_keys = ("ticket_history", "history", "conversation_history")
+    sender_oracle = (
+        ("Jane Agent", "quote"),
+        ("Jane Agent <jane@example.com>", "quote"),
+        ("09:15 Jane Agent", "quote"),
+        ("I", "content"),
+        ("We", "content"),
+        ("it", "content"),
+        ("the system", "content"),
+    )
+    reply_parity: dict[str, bool] = {}
+    for history_key, date_text, (sender, role) in product(
+        history_keys, ("Monday", "Jul 10, 2026"), sender_oracle
+    ):
+        text = _s6c_history_text(
+            history_key,
+            f"Current question.\nOn {date_text}, {sender} wrote:\nOld reply body.",
+        )
+        assert "Current question." in text
+        old_is_content = "Old reply body." in text
+        assert old_is_content is reply_parity.setdefault(role, old_is_content)
+        assert old_is_content is (role == "content")
+    blanks = ("", "\n", "\u00a0\n", "<div>&nbsp;</div>")
+    terminal_oracle = (
+        ("jane@example.com", "signature"),
+        ("ExampleCo", "signature"),
+        ("Customer: new export issue.", "content"),
+    )
+    followup_oracle = (
+        ("Export remains broken after retry.", "content"),
+        ("I need help with the export.", "content"),
+        ("We need assistance with the export.", "content"),
+        ("We still reserve all rights under this agreement.", "signature"),
+    )
+    signature_parity: dict[tuple[str, str], tuple[bool, bool, bool]] = {}
+    for values in product(
+        history_keys, ("", "Thanks,\n"), blanks, blanks,
+        ("", "Support Manager\n", "Customer Success\nRegional Support\n"),
+        terminal_oracle, followup_oracle,
+    ):
+        (history_key, valediction, leading_blank, evidence_blank,
+         role_lines, terminal, followup) = values
+        terminal_text, terminal_role, followup_text, followup_role = (*terminal, *followup)
+        transcript = (
+            f"Current question.\n--\n{valediction}{leading_blank}Jane Agent\n"
+            f"{role_lines}{evidence_blank}{terminal_text}\n\n"
+            f"{followup_text}"
+        )
+        text = _s6c_history_text(history_key, transcript)
+        assert "Current question." in text
+        for signature_line in ("Jane Agent", *role_lines.splitlines()):
+            assert signature_line not in text
+        verdict = (
+            "Jane Agent" in text, terminal_text in text,
+            followup_text in text,
+        )
+        roles_key = (terminal_role, followup_role)
+        assert verdict == signature_parity.setdefault(roles_key, verdict)
+        followup_is_content = terminal_role == "content" or followup_role == "content"
+        assert verdict == (False, terminal_role == "content", followup_is_content)
+    ordinary = (
+        "On Monday wrote:\nError 501. How do I fix it?",
+        "--\nhttps://api.example.com/webhook returns 500.",
+        "--\n+1 555 121 2121 disconnects during export.",
+        "--\nSteps To Reproduce\nOpen reports.\nTeam members see error 500.",
+        "--\nJane Agent\nSupport Manager\nOpen reports.",
+    )
+    for history_key, transcript in product(history_keys, ordinary):
+        text = _s6c_history_text(history_key, transcript)
+        assert transcript.splitlines()[-1] in text
+    anchors = (
+        ("Current question.\nSent from my Android phone, please excuse typos\n"
+         "Jane Agent\n\nCan you send the export link?", "Sent from my Android"),
+        ("Current question.\n-----Original Message-----\nFrom: Agent <agent@example.com>\n"
+         "Sent: Thursday\nSubject: Old reply\nCustomer: old export issue.", "agent@example.com"),
+    )
+    for transcript, removed in anchors:
+        text = _s6c_history_text("ticket_history", transcript)
+        assert "Current question." in text
+        assert removed not in text
 
 
 def test_s6c_scalar_history_preserves_lines_for_junk_admission() -> None:
-    package = build_support_ticket_input_package([{
-        "ticket_id": "s6c-junk-lines",
-        "subject": "Status update",
-        "ticket_history": "Hello,\nI am out of the office until Monday.\nBest,\nJane",
-    }])
+    rows = [
+        {"ticket_id": "s6c-junk-lines", "subject": "Automatic reply: Status update",
+         "ticket_history": "On Mon, Agent <agent@example.com> wrote:\nPlease retry."},
+    ]
+    rows.extend(
+        {"ticket_id": f"s6c-all-quote-{history_key}-{bool(subject)}", "subject": subject,
+         history_key: "On Mon, Agent <agent@example.com> wrote:\nPlease retry."}
+        for history_key, subject in product(
+            ("ticket_history", "history", "conversation_history"), ("", "Export issue"))
+    )
+    package = build_support_ticket_input_package(rows)
 
     assert package.inputs["source_material"] == []
-    assert package.metadata["junk_excluded_reasons"] == {"auto_reply": 1}
+    assert package.metadata["junk_excluded_reasons"] == {
+        "auto_reply": 1, "no_new_content": 6,
+    }
 
 
 def test_s6c_non_history_scalar_comment_keeps_existing_one_message_behavior() -> None:
     package = build_support_ticket_input_package([{
-        "ticket_id": "s6c-ordinary-comment",
-        "subject": "Export report",
+        "ticket_id": "s6c-ordinary-comment", "subject": "Export report",
         "comments": "On the checkout page it wrote:\nCard failed. How do I retry checkout?",
     }])
 
