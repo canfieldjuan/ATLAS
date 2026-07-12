@@ -7,7 +7,7 @@ Issue #2044 splits scalar-transcript cleanup from paused evidence PR #2037. `_co
 ### Problem-derived contract
 
 - Root cause: one-message compaction erased transcript structure; within the replacement scanner, token-level regex matches still act as semantic line roles without sufficient delimiter, sender, container, or neighboring-line evidence.
-- Correct fix: classify bounded blanks, reply headers, role labels, signatures, customer cues, and footers before applying mode policy; require delimiter-safe roles, date-plus-sender quotes, contextual dash signatures, and operational customer voice; feed one line-preserved result to the junk gate and compact only emitted output.
+- Correct fix: classify Unicode blanks, sender-bearing reply headers, signature-tail shapes, and operational customer cues before mode policy; make quoted tails terminal, preserve ordinary `>`/dash details, and feed one line-preserved result to the junk gate before compacting output.
 - Proof: exercise `build_support_ticket_input_package` with positive, negative, composed, and held-out transcript shapes.
 - Must not change: ordinary bodies/comments, structured-comment privacy, S6B/S6E/S6D semantics, resolution evidence, or customer-facing product shape.
 
@@ -21,7 +21,7 @@ Max files: 3
 
 ### Review Contract
 
-- Acceptance: real customer details and post-footer requests survive; header/footer near-matches and old-reply tails do not; repeated HTML blanks normalize; ordinary bodies/comments retain behavior.
+- Acceptance: customer thresholds/details and bounded post-footer requests survive; senderless/header/footer near-matches and every old-reply tail do not; Unicode/HTML blanks normalize; ordinary bodies/comments retain behavior.
 - Affected surfaces: scalar-history normalization and its package tests only.
 - Risks: false resume publishes old/footer text; false skip loses customer text.
 - Reviewer rules triggered: R1, R2, R10, R13, R14, including a boundary probe.
@@ -35,12 +35,12 @@ Max files: 3
 
 ## Mechanism
 
-Before S6B extraction, the sanitizer marks bounded text/HTML blanks. Canonical line classifiers use delimiter-safe roles, date-plus-sender reply evidence, and bounded lookahead for ambiguous dash signatures. Mode policy then applies terminal quote and customer-before-footer transitions without clearing a witnessed blank. It returns lines for S6E, then final assembly compacts once.
+Before S6B extraction, the sanitizer marks Unicode/HTML blanks. Reply headers require date plus email or time-followed-by-name evidence and enter terminal quote mode. Ambiguous dashes inspect only the immediate tail for name/contact shape, never vocabulary. Signature mode admits bounded requests/failures without accepting legal disclaimers; normal mode preserves `>` lines.
 
 ## Intentional
 
 - Structured comment containers retain their privacy/text path; no shared hygiene framework or customer-facing shape change is added.
-- `On ... wrote:` needs date plus time/email evidence; arbitrary `wrote:` prose, quote blanks, and bare questions prove no boundary, while signature blanks remain only one part of a customer-shaped resume rule.
+- `On ... wrote:` needs date plus real sender evidence and is terminal; arbitrary `wrote:` prose, quote labels/blanks/questions prove no new boundary, while signature blanks remain only one part of a customer-shaped resume rule.
 
 ## Deferred
 
@@ -63,7 +63,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/support_ticket_input_package.py` | 167 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 164 |
 | `plans/PR-Resolution-Audit-S6C-Scalar-History.md` | 69 |
-| `tests/test_extracted_support_ticket_input_package.py` | 163 |
-| **Total** | **399** |
+| `tests/test_extracted_support_ticket_input_package.py` | 165 |
+| **Total** | **398** |

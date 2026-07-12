@@ -1938,32 +1938,33 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
     ("transcript", "kept", "removed"),
     [
         (
-            "Initial export question.\n--\nJane Agent\n\n"
+            "Initial export question.\n--\nJane Agent\n\u00a0\n"
             "Export remains broken after the retry.",
             ("Initial export question.", "Export remains broken after the retry."),
             ("Jane Agent",),
         ),
         (
-            "Initial export question.\n--\nJane Agent\nSupport team\n"
+            "Initial export question.\n--\nJane Smith\nExampleCo\nSupport team\n"
             "ExampleCo\n555-1212\nConfidentiality footer\n\n"
             "This email cannot be disclosed outside ExampleCo.\n"
             "Anything else?\n"
             "Please consider the environment before printing this email.\n"
             "ExampleCo legal department\n"
             "Our company cannot be held liable for errors.\n"
+            "Cannot be held liable for errors in this email.\n"
             "I cannot disclose the account number here but export still fails.\n"
             "--\nJoe Agent\n\nConfidentiality notice.\n"
             "Export remains broken after retry.",
             ("Initial export question.", "I cannot disclose the account", "Export remains broken"),
-            ("Jane Agent", "cannot be disclosed", "Anything else?", "Our company cannot"),
+            ("Jane Smith", "cannot be disclosed", "Anything else?", "Cannot be held"),
         ),
         (
             "Initial export question.\n"
             "On Mon, Agent <agent@example.com> wrote:\n\n"
             "old unprefixed answer\n> old second paragraph\n\n"
-            "Customer: the export still fails.",
-            ("Initial export question.", "Customer: the export still fails."),
-            ("old unprefixed answer", "old second paragraph", "agent@example.com"),
+            "Customer: old export issue.",
+            ("Initial export question.",),
+            ("old unprefixed answer", "old second paragraph", "Customer: old"),
         ),
         (
             "Initial export question.\n"
@@ -1971,29 +1972,30 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
             "User-Agent: MailClient\n"
             "Can I reset my password?\n"
             "old details\n"
-            "Customer: current export still fails.",
-            ("Initial export question.", "Customer: current export still fails."),
-            ("User-Agent", "MailClient", "Can I reset", "old details"),
+            "Customer: old export issue.",
+            ("Initial export question.",),
+            ("User-Agent", "Can I reset", "old details", "Customer: old"),
         ),
         (
             "Initial export question.\n"
             "Sent from my Android phone, please excuse typos\nJane Agent\n\n"
-            "Can you send the export link?",
-            ("Initial export question.", "Can you send the export link?"),
-            ("Sent from my Android phone", "Jane Agent"),
+            "Can you send the export link?\n--\nJane Smith\n\n"
+            "I need the export link.",
+            ("Initial export question.", "Can you send the export link?", "I need the export link."),
+            ("Sent from my Android phone", "Jane Agent", "Jane Smith"),
         ),
         (
             "Initial export question.\n"
             "On 10 Jul 2026 Agent <agent@example.com> wrote:\n"
             "old answer\nStill unable to export the old report.\n"
-            "Customer: current export still fails.",
-            ("Initial export question.", "Customer: current export still fails."),
-            ("old answer", "old report", "agent@example.com"),
+            "Customer: old export issue.",
+            ("Initial export question.",),
+            ("old answer", "old report", "Customer: old"),
         ),
         (
-            "On Monday it wrote:\nError 500. How do I fix it?\n--\n"
-            "Steps to reproduce:\nOpen reports.",
-            ("On Monday it wrote:", "Error 500.", "Steps to reproduce:", "Open reports."),
+            "On 2026-07-10 at 09:15 it wrote:\nError 500. How do I fix it?\n--\n"
+            "Team members see error 500.\n> 100 errors per hour should notify us.",
+            ("09:15 it wrote:", "Error 500.", "Team members", "> 100 errors"),
             (),
         ),
         (
@@ -2001,9 +2003,9 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
             "On Mon, Agent <agent@example.com> wrote:\n"
             "I am out of the office until Monday.\n"
             "Still unable to export the old report.\n"
-            "Customer: current export still fails.",
-            ("Initial export question.", "Customer: current export still fails."),
-            ("out of the office", "old report", "agent@example.com"),
+            "Customer: old export issue.",
+            ("Initial export question.",),
+            ("out of the office", "old report", "Customer: old"),
         ),
         (
             "Initial export question.<br>--<br>Jane Agent<br><br>"
@@ -2023,9 +2025,9 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
             "From: Agent <agent@example.com>\nSent: Thursday\n"
             "To: Customer <customer@example.com>\nSubject: Old reply\n"
             "Please retry from settings.\n"
-            "Customer: current export still fails.",
-            ("Current question.", "Customer: current export still fails."),
-            ("agent@example.com", "Thursday", "Old reply", "Please retry"),
+            "Customer: old export issue.",
+            ("Current question.",),
+            ("agent@example.com", "Thursday", "Old reply", "Customer: old"),
         ),
         (
             "Current question.\n--\nJane Agent\n"

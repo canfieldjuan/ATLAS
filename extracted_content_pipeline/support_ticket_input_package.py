@@ -97,7 +97,7 @@ _QUESTION_STARTS = (
     "where ",
     "why ",
 )
-_HISTORY_BLANK_LINE_RE = re.compile(r"\n[ \t]*\n+")
+_HISTORY_BLANK_LINE_RE = re.compile(r"\n[^\S\r\n]*\n+")
 _HISTORY_HTML_BLANK_RE = re.compile(
     r"(?:<br\s*/?>\s*){2,}|"
     r"<(?P<history_blank_tag>p|div)\b[^>]*>\s*"
@@ -113,20 +113,21 @@ _HISTORY_MOBILE_SIGNATURE_RE = re.compile(
     r"\.?\s*$",
     re.IGNORECASE,
 )
-_HISTORY_ORIGINAL_MESSAGE_RE = re.compile(
-    r"^\s*-{2,}\s*original message\s*-{2,}\s*$", re.IGNORECASE)
+_HISTORY_ORIGINAL_MESSAGE_RE = re.compile(r"^\s*-{2,}\s*original message\s*-{2,}\s*$", re.I)
 _HISTORY_QUOTED_REPLY_HEADER_RE = re.compile(
-    r"^\s*on\s+"
-    r"(?=[^\n]{0,240}(?:(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|"
+    r"^\s*on\s+(?P<history_reply_prefix>[^\n]{1,280})\s+wrote:\s*$", re.I)
+_HISTORY_REPLY_DATE_RE = re.compile(
+    r"(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|"
     r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|"
     r"\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,4})?\b|\d{1,2}\s+"
-    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b))"
-    r"(?=[^\n]{0,260}(?:\b\d{1,2}:\d{2}\b|<[^>]+@[^>]+>|"
-    r"\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b))[^\n]{1,280}\s+wrote:\s*$",
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b",
     re.IGNORECASE,
 )
-_HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE = re.compile(
-    r"^(?:customer|requester|user)\s*:", re.IGNORECASE)
+_HISTORY_REPLY_EMAIL_RE = re.compile(r"<[^>]+@[^>]+>|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.I)
+_HISTORY_REPLY_TIME_SENDER_RE = re.compile(
+    r"\b\d{1,2}:\d{2}\b(?:\s*[AaPp][Mm])?[\s,]+"
+    r"[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3}\s*$")
+_HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE = re.compile(r"^(?:customer|requester|user)\s*:", re.I)
 _HISTORY_CUSTOMER_VOICE_RE = re.compile(
     r"^(?:"
     r"(?:can|could|do|does|how|is|should|what|when|where|why)\s+"
@@ -135,16 +136,19 @@ _HISTORY_CUSTOMER_VOICE_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
-_HISTORY_POST_SIGNATURE_REQUEST_RE = re.compile(
-    r"^(?:can|could|will|would)\s+you\b.{0,160}\?\s*$", re.IGNORECASE)
-_HISTORY_POST_SIGNATURE_FAILURE_RE = re.compile(
-    r"\b(?:still|remains?|keeps?)\b.{0,80}\b"
-    r"(?:broken|fail(?:ed|s|ing)?|stuck|unavailable|unable|error)\b|"
-    r"^\s*(?:cannot|can't|unable to)\b",
+_HISTORY_POST_SIGNATURE_REQUEST_RE = re.compile(r"^(?:can|could|will|would)\s+you\b.{0,160}\?\s*$", re.I)
+_HISTORY_POST_SIGNATURE_NEED_RE = re.compile(
+    r"^(?:i|we)\s+need\s+(?!to\b)(?:the|a|an|my|our)\b.{1,160}$",
     re.IGNORECASE,
 )
-_HISTORY_SIGNATURE_EVIDENCE_RE = re.compile(
-    r"\b(?:agent|support|team|telephone|phone|mobile)\b|[\w.+-]+@"
+_HISTORY_POST_SIGNATURE_FAILURE_RE = re.compile(
+    r"\b(?:still|remains?|keeps?)\b.{0,80}\b"
+    r"(?:broken|fail(?:ed|s|ing)?|stuck|unavailable|unable|error)\b",
+    re.IGNORECASE,
+)
+_HISTORY_SIGNATURE_NAME_RE = re.compile(r"^[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){1,3}$")
+_HISTORY_SIGNATURE_CONTACT_RE = re.compile(
+    r"[\w.+-]+@"
     r"[\w.-]+\.[a-z]{2,}|https?://|www\.|(?:^|\s)\+?\d[\d .()/-]{6,}\d(?:\s|$)",
     re.IGNORECASE,
 )
@@ -927,7 +931,6 @@ def _scalar_history_text(value: Any) -> str:
     admitted: list[str] = []
     skip_mode = ""
     signature_blank_seen = False
-    quote_allows_labeled_resume = True
     for line_index, raw_line in enumerate(lines):
         line = raw_line.strip()
         if line == blank_marker:
@@ -936,25 +939,15 @@ def _scalar_history_text(value: Any) -> str:
             continue
         if not line:
             continue
-        if (
-            _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(line)
-            or _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(line)
-        ):
-            if skip_mode == "signature":
-                quote_allows_labeled_resume = False
-            elif skip_mode != "quote":
-                quote_allows_labeled_resume = True
+        if _history_line_is_reply_header(line):
             skip_mode = "quote"
             signature_blank_seen = False
             continue
         if skip_mode:
-            if line.startswith(">"):
-                continue
             if not _history_line_starts_message(
                 line,
                 skip_mode=skip_mode,
                 signature_blank_seen=signature_blank_seen,
-                quote_allows_labeled_resume=quote_allows_labeled_resume,
             ):
                 continue
             skip_mode = ""
@@ -963,15 +956,23 @@ def _scalar_history_text(value: Any) -> str:
             skip_mode = "signature"
             signature_blank_seen = False
             continue
-        if line.startswith(">"):
-            continue
         admitted.append(line)
     return "\n".join(admitted)
 
 
-def _history_line_starts_signature(
-    lines: Sequence[str], *, line_index: int, line: str
-) -> bool:
+def _history_line_is_reply_header(line: str) -> bool:
+    if _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(line):
+        return True
+    match = _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(line)
+    if not match:
+        return False
+    prefix = match.group("history_reply_prefix")
+    return bool(_HISTORY_REPLY_DATE_RE.search(prefix) and (
+        _HISTORY_REPLY_EMAIL_RE.search(prefix) or _HISTORY_REPLY_TIME_SENDER_RE.search(prefix)
+    ))
+
+
+def _history_line_starts_signature(lines: Sequence[str], *, line_index: int, line: str) -> bool:
     if _HISTORY_MOBILE_SIGNATURE_RE.fullmatch(line):
         return True
     if not _HISTORY_SIGNATURE_BOUNDARY_RE.fullmatch(line):
@@ -980,23 +981,18 @@ def _history_line_starts_signature(
         candidate = candidate.strip()
         if not candidate or candidate.startswith("ATLAS_HISTORY_BLANK_BOUNDARY"):
             break
-        if _HISTORY_SIGNATURE_EVIDENCE_RE.search(candidate):
-            return True
+        return bool(
+            _HISTORY_SIGNATURE_NAME_RE.fullmatch(candidate)
+            or _HISTORY_SIGNATURE_CONTACT_RE.search(candidate)
+        )
     return False
 
 
 def _history_line_starts_message(
-    line: str,
-    *,
-    skip_mode: str,
-    signature_blank_seen: bool,
-    quote_allows_labeled_resume: bool,
+    line: str, *, skip_mode: str, signature_blank_seen: bool
 ) -> bool:
     if skip_mode == "quote":
-        return bool(
-            quote_allows_labeled_resume
-            and _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(line)
-        )
+        return False
     if (
         _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(line)
         or _HISTORY_CUSTOMER_VOICE_RE.match(line)
@@ -1008,6 +1004,7 @@ def _history_line_starts_message(
         and (
             _HISTORY_POST_SIGNATURE_FAILURE_RE.search(line)
             or _HISTORY_POST_SIGNATURE_REQUEST_RE.match(line)
+            or _HISTORY_POST_SIGNATURE_NEED_RE.match(line)
         )
     )
 
