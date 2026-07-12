@@ -101,7 +101,8 @@ _HISTORY_BLANK_LINE_RE = re.compile(r"\n[ \t]*\n+")
 _HISTORY_HTML_BLANK_RE = re.compile(
     r"(?:<br\s*/?>\s*){2,}|"
     r"<(?P<history_blank_tag>p|div)\b[^>]*>\s*"
-    r"(?:(?:&nbsp;|&#160;)|<br\s*/?>)?\s*</(?P=history_blank_tag)>",
+    r"(?:(?:&nbsp;|&#(?:160|x0*a0);|<br\s*/?>)\s*)*"
+    r"</(?P=history_blank_tag)>",
     re.IGNORECASE,
 )
 _HISTORY_SIGNATURE_BOUNDARY_RE = re.compile(r"^\s*(?:--+|__+)\s*$")
@@ -113,48 +114,38 @@ _HISTORY_MOBILE_SIGNATURE_RE = re.compile(
     re.IGNORECASE,
 )
 _HISTORY_ORIGINAL_MESSAGE_RE = re.compile(
-    r"^\s*-{2,}\s*original message\s*-{2,}\s*$",
-    re.IGNORECASE,
-)
+    r"^\s*-{2,}\s*original message\s*-{2,}\s*$", re.IGNORECASE)
 _HISTORY_QUOTED_REPLY_HEADER_RE = re.compile(
     r"^\s*on\s+"
-    r"(?:(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|"
+    r"(?=[^\n]{0,240}(?:(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|"
     r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|"
-    r"\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,4})?\b|"
-    r"\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)"
-    r"[a-z]*\b|"
-    r".{0,120}\b\d{1,2}:\d{2}\b|"
-    r".{0,120}<[^>]+@[^>]+>|"
-    r".{0,120}\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)"
-    r".{0,160}\s+wrote:\s*$",
+    r"\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,4})?\b|\d{1,2}\s+"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b))"
+    r"(?=[^\n]{0,260}(?:\b\d{1,2}:\d{2}\b|<[^>]+@[^>]+>|"
+    r"\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b))[^\n]{1,280}\s+wrote:\s*$",
     re.IGNORECASE,
 )
 _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE = re.compile(
-    r"^(?:customer|requester|user)\s*[:\-]",
-    re.IGNORECASE,
-)
+    r"^(?:customer|requester|user)\s*:", re.IGNORECASE)
 _HISTORY_CUSTOMER_VOICE_RE = re.compile(
     r"^(?:"
     r"(?:can|could|do|does|how|is|should|what|when|where|why)\s+"
-    r"(?:i|we|my|our)\b|"
-    r"(?:i|we|my|our)\b.*\b(?:cannot|can't|couldn't|didn't|"
-    r"doesn't|error|fail(?:ed|s|ing)?|issue|need|problem|still|unable)\b"
+    r"(?:i|we)\b|"
+    r"(?:i|we)\b.{0,200}\b(?:error|fail(?:ed|s|ing)?|issue|problem|still|unable)\b"
     r")",
     re.IGNORECASE,
 )
 _HISTORY_POST_SIGNATURE_REQUEST_RE = re.compile(
-    r"^(?:can|could|will|would)\s+you\b.{0,160}\?\s*$",
-    re.IGNORECASE,
-)
+    r"^(?:can|could|will|would)\s+you\b.{0,160}\?\s*$", re.IGNORECASE)
 _HISTORY_POST_SIGNATURE_FAILURE_RE = re.compile(
     r"\b(?:still|remains?|keeps?)\b.{0,80}\b"
     r"(?:broken|fail(?:ed|s|ing)?|stuck|unavailable|unable|error)\b|"
     r"^\s*(?:cannot|can't|unable to)\b",
     re.IGNORECASE,
 )
-_HISTORY_FOOTER_RE = re.compile(
-    r"\b(?:confidential(?:ity)?|disclos(?:e|ed|ure)|intended recipient|"
-    r"privileged|unauthorized|do not (?:copy|distribute))\b",
+_HISTORY_SIGNATURE_EVIDENCE_RE = re.compile(
+    r"\b(?:agent|support|team|telephone|phone|mobile)\b|[\w.+-]+@"
+    r"[\w.-]+\.[a-z]{2,}|https?://|www\.|(?:^|\s)\+?\d[\d .()/-]{6,}\d(?:\s|$)",
     re.IGNORECASE,
 )
 
@@ -937,7 +928,7 @@ def _scalar_history_text(value: Any) -> str:
     skip_mode = ""
     signature_blank_seen = False
     quote_allows_labeled_resume = True
-    for raw_line in lines:
+    for line_index, raw_line in enumerate(lines):
         line = raw_line.strip()
         if line == blank_marker:
             if skip_mode == "signature":
@@ -965,15 +956,10 @@ def _scalar_history_text(value: Any) -> str:
                 signature_blank_seen=signature_blank_seen,
                 quote_allows_labeled_resume=quote_allows_labeled_resume,
             ):
-                if skip_mode == "signature" and _HISTORY_FOOTER_RE.search(line):
-                    signature_blank_seen = False
                 continue
             skip_mode = ""
             signature_blank_seen = False
-        if (
-            _HISTORY_SIGNATURE_BOUNDARY_RE.fullmatch(line)
-            or _HISTORY_MOBILE_SIGNATURE_RE.fullmatch(line)
-        ):
+        if _history_line_starts_signature(lines, line_index=line_index, line=line):
             skip_mode = "signature"
             signature_blank_seen = False
             continue
@@ -981,6 +967,22 @@ def _scalar_history_text(value: Any) -> str:
             continue
         admitted.append(line)
     return "\n".join(admitted)
+
+
+def _history_line_starts_signature(
+    lines: Sequence[str], *, line_index: int, line: str
+) -> bool:
+    if _HISTORY_MOBILE_SIGNATURE_RE.fullmatch(line):
+        return True
+    if not _HISTORY_SIGNATURE_BOUNDARY_RE.fullmatch(line):
+        return False
+    for candidate in lines[line_index + 1 : line_index + 5]:
+        candidate = candidate.strip()
+        if not candidate or candidate.startswith("ATLAS_HISTORY_BLANK_BOUNDARY"):
+            break
+        if _HISTORY_SIGNATURE_EVIDENCE_RE.search(candidate):
+            return True
+    return False
 
 
 def _history_line_starts_message(

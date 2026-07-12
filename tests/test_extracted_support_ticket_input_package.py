@@ -1950,9 +1950,12 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
             "Anything else?\n"
             "Please consider the environment before printing this email.\n"
             "ExampleCo legal department\n"
-            "I cannot disclose the account number here but export still fails.",
-            ("Initial export question.", "I cannot disclose the account number here but export still fails."),
-            ("Jane Agent", "cannot be disclosed", "Anything else?", "consider the environment"),
+            "Our company cannot be held liable for errors.\n"
+            "I cannot disclose the account number here but export still fails.\n"
+            "--\nJoe Agent\n\nConfidentiality notice.\n"
+            "Export remains broken after retry.",
+            ("Initial export question.", "I cannot disclose the account", "Export remains broken"),
+            ("Jane Agent", "cannot be disclosed", "Anything else?", "Our company cannot"),
         ),
         (
             "Initial export question.\n"
@@ -1965,11 +1968,12 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
         (
             "Initial export question.\n"
             "On 2026-07-10 at 09:15 Agent wrote:\n"
+            "User-Agent: MailClient\n"
             "Can I reset my password?\n"
             "old details\n"
             "Customer: current export still fails.",
             ("Initial export question.", "Customer: current export still fails."),
-            ("Can I reset", "old details"),
+            ("User-Agent", "MailClient", "Can I reset", "old details"),
         ),
         (
             "Initial export question.\n"
@@ -1987,9 +1991,9 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
             ("old answer", "old report", "agent@example.com"),
         ),
         (
-            "On the checkout page it wrote:\n"
-            "Card failed. How do I retry checkout?",
-            ("On the checkout page it wrote:", "Card failed. How do I retry checkout?"),
+            "On Monday it wrote:\nError 500. How do I fix it?\n--\n"
+            "Steps to reproduce:\nOpen reports.",
+            ("On Monday it wrote:", "Error 500.", "Steps to reproduce:", "Open reports."),
             (),
         ),
         (
@@ -2010,7 +2014,7 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
         (
             "Initial export question.<p>--</p><p>Jane Agent</p>"
             "<div><br></div><p>Export remains broken.</p><p>--</p>"
-            "<p>Joe Agent</p><div>&nbsp;</div><p>Report remains broken.</p>",
+            "<p>Joe Agent</p><div>&nbsp;&#xA0;</div><p>Report remains broken.</p>",
             ("Initial export question.", "Export remains broken.", "Report remains broken."),
             ("Jane Agent", "Joe Agent"),
         ),
