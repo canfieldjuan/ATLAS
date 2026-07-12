@@ -963,6 +963,45 @@ of `docs/REVIEWER_RULES.md`; the scope caveat (documented neutral/data-column
 families keep their admit policy -- the choke point governs the safety verdict,
 not every field's text) is in `docs/GUARD_CLASS_CLOSURE.md`.
 
+### 3k.2. Convergence circuit-breaker (stop instance-patching a seam)
+
+Section 3k.1 is the fix for open-input guards; this is the process guardrail for
+when a fix loop is NOT converging. On a PR where each push closes the reported
+review threads but the next push opens a comparable count of **same-class**
+findings on the **same file / decision** -- the thread count is flat or rising
+over 3 consecutive pushes, not trending to zero -- the builder is
+instance-patching a shared decision, not fixing it. This is distinct from the
+bot-round *noise* cap (see 4a and `docs/OVERNIGHT_ARC_WORKFLOW.md`): there the
+findings are formally-identical re-litigation of a green contract; here the
+findings are real, and each patch shifts the boundary and exposes the adjacent
+case.
+
+When this trips, the next push may NOT add another example-scoped patch (another
+token, regex, vocabulary row, or oracle fixture). It must carry a **Decision-Seam
+Analysis** in the plan / PR body:
+
+1. **Name the one decision** all the open threads share (the seam) -- e.g. "the
+   single admit/skip verdict for a transcript line."
+2. **State why that decision is wrong** -- over-broad, under-broad, or an open
+   category it cannot enumerate. If the recognizer itself is open, evidence-gate
+   it per `docs/GUARD_CLASS_CLOSURE.md` (do not enumerate the category).
+3. **Do exactly one of:** (a) fix the seam structurally with a stated default
+   direction, and for asymmetric error costs the cheap-error default; (b) waive
+   the bounded residual explicitly (<= status-quo, recorded in *Deferred*) and
+   reconcile the threads as accepted-not-fixing; or (c) re-scope or park the
+   slice. Adding the next instance patch is none of these and is rejected at
+   review.
+
+**Why:** Resolution Audit S6C (#2076) ran ~9 rounds and ~35 findings this way --
+each round fixed the cited senders and the next round reported new same-class
+senders, and every miss dropped a customer question. The round count alone was
+not the signal (the bot-noise cap did not apply -- the findings were real); the
+signal was that the findings were *the same decision re-litigated*. Naming the
+seam and evidence-gating it converged in one push after nine that did not. The
+builder pattern this catches -- close each cited example with the narrowest local
+patch, never abstract to the generating decision -- is a recurring failure mode,
+not a one-off.
+
 ### 3l. PR fix mode (constrain the fix loop)
 
 A **fix loop** -- iterating on red CI or review comments on an already-open PR

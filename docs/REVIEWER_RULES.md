@@ -161,6 +161,18 @@ practical, use multiple unseen fixtures plus a short explanation of the
 generalized mechanism. Generated or unseen cases must be diverse enough to
 exercise the class, not trivial near-duplicates that satisfy the easy path.
 
+**Open-category exception (evidence-gate, do not enumerate).** When the class is
+an *open semantic category* the guard cannot enumerate on either side (person
+names, senders, intent, language, is-junk), neither a denylist nor a
+member-allowlist closes it, and a property test over category members does not
+either. Require an evidence-gated choke point with an asymmetric-safe default per
+`docs/GUARD_CLASS_CLOSURE.md`, and a generated oracle keyed on the evidence
+signal, not on category members. **Block if:** a diff answers a same-class
+finding with the next member patch (token, regex, vocabulary row, oracle
+fixture) while the thread history shows the class is open and not converging --
+that is the `AGENTS.md` 3k.2 convergence circuit-breaker, and the next push owes
+a Decision-Seam Analysis, not another example.
+
 ### R14 - Verify against the codebase, not the PR story
 Review verdicts must be based on the checked-out PR head and the current
 codebase, not the PR description, issue summary, builder claims, or prior

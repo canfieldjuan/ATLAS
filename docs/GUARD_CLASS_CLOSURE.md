@@ -104,6 +104,61 @@ strings, not the class. The suite must be able to fail the whole open class at
 once, so a regression is caught by construction instead of by the next review
 round.
 
+## When the recognizer itself is open (evidence-gated closure)
+
+Requirement 1 says "admit known-good, reject the rest." That assumes the
+known-good set is *recognizable* -- that you can write the allowlist. Some guards
+fail a level deeper: the decision requires classifying membership in an **open
+semantic category** -- is this token a person name, a real sender, an intent, a
+language, "is this junk." There BOTH lists fail. The denylist of non-members is
+unbounded (reject-known-bad leaks), and the allowlist of members is *also*
+unbounded (admit-known-good cannot be written either). No grammar over the
+category closes it, because the category is open on both sides. A property test
+over category members (requirement 3) still cannot converge, because the member
+set it samples is itself infinite.
+
+**Do not recognize the category. Gate on bounded, mechanical evidence, and
+default the ambiguous case to the asymmetric-safe side.** Replace "is X a real
+sender?" (NER, unbounded) with "does this line carry structural corroboration?"
+(an email in the header position, a quote marker, a confirmed header block --
+finite and checkable). Act only on positive evidence; when evidence is absent the
+input is ordinary content and takes the safe default. This closes the expensive
+class by construction: any member the recognizer would have argued about --
+including ones no one enumerated -- lands on the safe default.
+
+Worked example (Resolution Audit S6C, #2076): a transcript sanitizer tried to
+decide "is `<X>` a sender?" to drop quoted replies. Nine rounds of denylist and
+then allowlist edits chased an open set of non-person senders --
+`I` -> `We` -> `It` -> `The System` -> `Our Team` -> `Support Team` / `Acme
+Corp` / `Billing Department` -- each patch shipped, each exposed the next, and
+every miss dropped a real customer question. The converging fix recognized NO
+senders: it skipped a reply only with an email in the header, a `>` quote block,
+or a `From:`+`Sent:` header, and defaulted every other line to content. A
+brand-new Unicode sender the design never saw (`Jose Garcia Team`) then kept its
+question by construction. Enumeration ran nine rounds and never closed;
+evidence-gating closed in one.
+
+### Asymmetric error cost: bias the default, close only the expensive side
+
+When the two error directions cost differently -- dropping a customer question is
+product-breaking; keeping an old signature is <= the status-quo leak -- the
+default MUST fall to the cheap-error side, and only the **expensive-error class**
+must be closed by construction. The cheap-error residual is accepted and stated
+(bounded, <= status-quo), not chased. The acceptance bar is "<= status-quo in the
+expensive direction," not "perfect in both." Trying to be precise in both
+directions on an open category is what generates the endless rounds: every time
+you tighten the cheap side you re-open the expensive one. Pick the safe default
+from the cost asymmetry first, then gate the exceptions on evidence.
+
+**Evidence-keyed, not membership-keyed (oracle refinement of requirement 3).**
+When the class is an open category, the generated oracle must be keyed on the
+*evidence signal* the guard acts on (`has-email x has-quote-marker x
+has-header-block -> skip/keep`), NOT on a list of category members (sender
+strings). An oracle that enumerates members and grows a row per reported member
+is a fixture matrix wearing a `product()` costume -- it converges no better than
+the denylist it tests. The evidence-keyed oracle is finite and independent
+because the evidence signals are finite even when the category is not.
+
 ## Reviewer bar (enforced)
 
 For a triggering PR, the reviewer **blocks** until all three hold, and states
