@@ -97,6 +97,57 @@ _QUESTION_STARTS = (
     "where ",
     "why ",
 )
+_HISTORY_BLANK_LINE_RE = re.compile(r"\n[^\S\r\n]*\n+")
+_HISTORY_HTML_BLANK_RE = re.compile(
+    r"(?:<br\s*/?>\s*){2,}|"
+    r"<(?P<history_blank_tag>p|div)\b[^>]*>\s*"
+    r"(?:(?:&nbsp;|&#(?:160|x0*a0);|<br\s*/?>)\s*)*"
+    r"</(?P=history_blank_tag)>",
+    re.IGNORECASE,
+)
+_HISTORY_SIGNATURE_BOUNDARY_RE = re.compile(r"^\s*(?:--+|__+)\s*$")
+_HISTORY_MOBILE_SIGNATURE_RE = re.compile(
+    r"^\s*sent from my (?:iphone|ipad|android(?: phone| device)?|mobile device)"
+    r"(?:\s*[,;-]\s*(?:please\s+)?(?:excuse|pardon)"
+    r"(?:\s+(?:any|the))?\s+(?:typos?|errors?))?"
+    r"\.?\s*$",
+    re.IGNORECASE,
+)
+_HISTORY_ORIGINAL_MESSAGE_RE = re.compile(r"^\s*-{2,}\s*original message\s*-{2,}\s*$", re.I)
+_HISTORY_QUOTED_REPLY_HEADER_RE = re.compile(
+    r"^\s*on\s+(?P<history_reply_prefix>[^\n]{1,280})\s+wrote:\s*$", re.I)
+_HISTORY_QUOTE_PREFIX_RE = re.compile(r"^\s*(?:>\s*)+(?P<history_quoted_line>.*)$")
+_HISTORY_ANGLE_EMAIL_RE = re.compile(r"<[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}>")
+_HISTORY_REPLY_DATE_RE = re.compile(
+    r"(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|"
+    r"\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,4})?\b|\d{1,2}\s+"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b",
+    re.IGNORECASE,
+)
+_HISTORY_REPLY_EMAIL_RE = re.compile(r"<[^>]+@[^>]+>|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.I)
+_HISTORY_MAIL_HEADER_RE = re.compile(r"^(?P<history_header_name>[A-Za-z][A-Za-z-]{0,40}):")
+_HISTORY_MAIL_HEADER_LOOKAHEAD = 12
+_HISTORY_PERSON_TOKEN = r"[^\W\d_][^\W\d_.'\u2019-]*"
+_HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE = re.compile(r"^(?:customer|requester|user)\s*:", re.I)
+_HISTORY_SIGNATURE_PERSON_RE = re.compile(
+    rf"^{_HISTORY_PERSON_TOKEN}(?:\s+{_HISTORY_PERSON_TOKEN}){{0,3}}$"
+)
+_HISTORY_VALEDICTION_RE = re.compile(
+    r"^(?:thanks|thank you|best|regards|sincerely|cheers)[,!]?$", re.I
+)
+_HISTORY_SIGNATURE_LOOKAHEAD = 10
+_HISTORY_SIGNATURE_CONTACT_RE = re.compile(
+    r"[\w.+-]+@"
+    r"[\w.-]+\.[a-z]{2,}|https?://|www\.|(?:^|\s)\+?\d[\d .()/-]{6,}\d(?:\s|$)",
+    re.IGNORECASE,
+)
+_HISTORY_EVENT_POLICY = {
+    "blank": ("", False),
+    "quote": ("quote", False),
+    "signature": ("signature", False),
+    "customer": ("", True),
+}
 
 _SOURCE_ID_KEYS = ("source_id", "ticket_id", "id", "case_id", "conversation_id")
 _SOURCE_TITLE_KEYS = (
@@ -145,6 +196,9 @@ _PUBLIC_COMMENT_KEYS = (
     "history",
     "conversation_history",
 )
+_SCALAR_HISTORY_KEYS = frozenset((
+    "ticket_history", "history", "conversation_history",
+))
 _RESOLUTION_TEXT_KEYS = (
     "resolution",
     "resolution_text",
@@ -649,10 +703,9 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         return {}
     source_title = support_ticket_plain_text(_first_text(row, _SOURCE_TITLE_KEYS))
     text = _ticket_text(row, source_title=source_title)
-    if not text:
-        return {}
     raw_body = _first_text(row, _TEXT_KEYS)
     raw_comments = _raw_comment_texts(row)
+    raw_scalar_history = any(isinstance(value := _first_value(row, (key,)), str) and value.strip() for key in _SCALAR_HISTORY_KEYS)
     body_part = support_ticket_plain_text_lines(raw_body)
     if body_part:
         # A row with real customer body text is judged on that body; a
@@ -667,12 +720,18 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     junk_reason = support_ticket_row_is_junk(
         source_title,
         gate_body,
-        had_source_text=bool(raw_body.strip() or any(raw_comments)),
+        had_source_text=bool(raw_body.strip() or any(raw_comments) or raw_scalar_history),
     )
+    explicit_evidence = _first_text(row, _RESOLUTION_TEXT_KEYS) or _evidence_text(
+        _first_value(row, _MEASURED_OUTCOME_KEYS))
+    if junk_reason is None and raw_scalar_history and not gate_body and not explicit_evidence:
+        junk_reason = support_ticket_row_is_junk("", "", had_source_text=True)
     if junk_reason:
         # Junk rows (auto-replies, bounces, no-new-content) must not count
         # toward billed clusters (F2); the caller counts the bounded reason.
         return {"_junk_reason": junk_reason}
+    if not text:
+        return {}
     source_id = _first_text(row, _SOURCE_ID_KEYS)
     source_id_fallback = not source_id
     if source_id_fallback:
@@ -812,6 +871,11 @@ def _raw_comment_texts(row: Mapping[str, Any]) -> list[str]:
         if isinstance(comments, Mapping):
             comments = (comments,)
         elif isinstance(comments, str):
+            if key in _SCALAR_HISTORY_KEYS:
+                text = _scalar_history_text(comments)
+                if text:
+                    texts.append(text)
+                continue
             comments = (comments,)
         elif not isinstance(comments, Sequence) or isinstance(
             comments,
@@ -832,6 +896,11 @@ def _comments_text(row: Mapping[str, Any]) -> str:
         if isinstance(comments, Mapping):
             comments = (comments,)
         elif isinstance(comments, str):
+            if key in _SCALAR_HISTORY_KEYS:
+                text = _scalar_history_text(comments)
+                if text:
+                    parts.append(text)
+                continue
             comments = (comments,)
         elif not isinstance(comments, Sequence) or isinstance(
             comments,
@@ -843,6 +912,135 @@ def _comments_text(row: Mapping[str, Any]) -> str:
             if text:
                 parts.append(support_ticket_plain_text(text))
     return support_ticket_plain_text("\n".join(parts))
+
+
+def _scalar_history_text(value: Any) -> str:
+    """Admit new messages while excluding scalar transcript quote/footer runs."""
+
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not raw.strip():
+        return ""
+    blank_marker = "ATLAS_HISTORY_BLANK_BOUNDARY"
+    while blank_marker in raw:
+        blank_marker += "_"
+    marked = _HISTORY_HTML_BLANK_RE.sub(f"\n{blank_marker}\n", raw)
+    marked = _HISTORY_BLANK_LINE_RE.sub(f"\n{blank_marker}\n", marked)
+    marked = _HISTORY_ANGLE_EMAIL_RE.sub(
+        lambda match: match.group(0).replace("<", "&lt;").replace(">", "&gt;"), marked
+    )
+    lines = support_ticket_plain_text_lines(marked).splitlines()
+
+    admitted: list[str] = []
+    skip_mode = ""
+    for line_index, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        event = _history_line_event(
+            lines, line_index=line_index, line=line, blank_marker=blank_marker
+        )
+        policy = _HISTORY_EVENT_POLICY.get(event)
+        if policy:
+            skip_mode, emit = policy
+        else:
+            emit = not skip_mode
+        if emit:
+            admitted.append(line)
+    return "\n".join(admitted)
+
+
+def _history_line_event(
+    lines: Sequence[str], *, line_index: int, line: str, blank_marker: str
+) -> str:
+    if not line or line == blank_marker:
+        return "blank"
+    probe, _ = _history_line_probe(line)
+    if _history_line_is_reply_header(
+        lines, line_index=line_index, line=line, blank_marker=blank_marker
+    ):
+        return "quote"
+    if _history_line_starts_signature(
+        lines, line_index=line_index, line=line, blank_marker=blank_marker
+    ):
+        return "signature"
+    if _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(probe):
+        return "customer"
+    return "text"
+
+
+def _history_line_probe(line: str) -> tuple[str, bool]:
+    """Return detection text without mutating customer-visible quote markers."""
+
+    match = _HISTORY_QUOTE_PREFIX_RE.fullmatch(line)
+    if not match:
+        return line.strip(), False
+    return match.group("history_quoted_line").strip(), True
+
+
+def _history_line_is_reply_header(
+    lines: Sequence[str], *, line_index: int, line: str, blank_marker: str
+) -> bool:
+    probe, header_is_quoted = _history_line_probe(line)
+    if _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(probe):
+        from_seen = timestamp_seen = False
+        for item in lines[
+            line_index + 1 : line_index + 1 + _HISTORY_MAIL_HEADER_LOOKAHEAD
+        ]:
+            if item.strip() == blank_marker:
+                break
+            tail_probe, _ = _history_line_probe(item.strip())
+            header_match = _HISTORY_MAIL_HEADER_RE.match(tail_probe)
+            if not header_match:
+                break
+            header_name = header_match.group("history_header_name").lower()
+            from_seen = from_seen or header_name == "from"
+            timestamp_seen = timestamp_seen or header_name in {"sent", "date"}
+        return from_seen and timestamp_seen
+    match = _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(probe)
+    if not match:
+        return False
+    prefix = match.group("history_reply_prefix")
+    if not _HISTORY_REPLY_DATE_RE.search(prefix):
+        return False
+    if header_is_quoted or _HISTORY_REPLY_EMAIL_RE.search(prefix):
+        return True
+    for item in lines[line_index + 1 : line_index + 4]:
+        candidate = item.strip()
+        if not candidate or candidate == blank_marker:
+            continue
+        _, candidate_is_quoted = _history_line_probe(candidate)
+        return candidate_is_quoted
+    return False
+
+
+def _history_line_starts_signature(
+    lines: Sequence[str], *, line_index: int, line: str, blank_marker: str
+) -> bool:
+    probe, _ = _history_line_probe(line)
+    if _HISTORY_MOBILE_SIGNATURE_RE.fullmatch(probe):
+        return True
+    if not _HISTORY_SIGNATURE_BOUNDARY_RE.fullmatch(probe):
+        return False
+    tail = lines[line_index + 1 : line_index + 1 + _HISTORY_SIGNATURE_LOOKAHEAD]
+    signature_head_seen = False
+    for item in tail:
+        candidate = item.strip()
+        if candidate == blank_marker:
+            return False
+        candidate_probe, _ = _history_line_probe(candidate)
+        if _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(candidate_probe):
+            return False
+        if not signature_head_seen and _HISTORY_VALEDICTION_RE.fullmatch(candidate_probe):
+            continue
+        if not signature_head_seen:
+            signature_head_seen = bool(
+                _HISTORY_SIGNATURE_PERSON_RE.fullmatch(candidate_probe)
+                and all(token[:1].isupper() for token in candidate_probe.split())
+            )
+            if not signature_head_seen:
+                return False
+            continue
+        if _HISTORY_SIGNATURE_CONTACT_RE.search(candidate_probe):
+            return True
+    return False
 
 
 def _comment_text(item: Any) -> str:

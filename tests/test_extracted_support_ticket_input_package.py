@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from itertools import product
 import json
 from pathlib import Path
 
@@ -1911,6 +1912,135 @@ def test_support_ticket_input_package_without_status_or_csat_is_unchanged() -> N
     assert package.metadata["csat_present_count"] == 0
     assert package.metadata["csat_score_count"] == 0
     assert package.metadata["csat_score_average"] is None
+
+
+def _s6c_history_text(history_key: str, transcript: str) -> str:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "s6c-grammar", "subject": "Export report",
+        history_key: transcript,
+    }])
+    return package.inputs["source_material"][0]["text"]
+
+
+def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
+    history_keys = ("ticket_history", "history", "conversation_history")
+    quote_markers = ("", "> ", ">> ")
+    for history_key, separator, header_marker, body_marker, has_email in product(
+        history_keys, ("\n", "<br>", "<br/>"), quote_markers, quote_markers,
+        (False, True),
+    ):
+        sender = "Jos\u00e9 Garc\u00eda"
+        if has_email:
+            sender += " <jose@example.com>"
+        reply_evidence = bool(header_marker or body_marker or has_email)
+        text = _s6c_history_text(
+            history_key,
+            f"Current question.{separator}{header_marker}On Monday, {sender} wrote:{separator}"
+            f"{body_marker}Old reply body.",
+        )
+        assert "Current question." in text
+        assert ("Old reply body." not in text) is reply_evidence
+
+    boundary_oracle = (
+        ("\nLater customer message.", False),
+        ("\n\nLater customer message.", True),
+        ("\n\u00a0\nLater customer message.", True),
+        ("\n<div>&nbsp;</div>\nLater customer message.", True),
+        ("\nCustomer: Later customer message.", True),
+    )
+    for history_key, mode, (boundary, resumes) in product(
+        history_keys, ("quote", "signature"), boundary_oracle
+    ):
+        excluded = (
+            "On Monday, Agent <agent@example.com> wrote:\nOld reply body."
+            if mode == "quote"
+            else "--\nThanks,\nJos\u00e9 Garc\u00eda\nSupport Lead\nRegional Team\n"
+                 "Customer Operations\nExport Escalations\nNorth America\n"
+                 "jose@example.com\nFooter"
+        )
+        text = _s6c_history_text(
+            history_key, f"Current question.\n{excluded}{boundary}"
+        )
+        assert "Current question." in text
+        assert "Old reply body." not in text
+        assert "jose@example.com" not in text
+        assert ("Later customer message." in text) is resumes
+
+    header_runs = ((), ("To", "Cc", "Bcc", "Reply-To", "X-Trace"))
+    for history_key, quote_marker, date_header, extra_headers in product(
+        history_keys, quote_markers, ("Sent", "Date"), header_runs
+    ):
+        extra = "".join(f"{quote_marker}{name}: value\n" for name in extra_headers)
+        transcript = (
+            f"Current question.\n{quote_marker}-----Original Message-----\n"
+            f"{quote_marker}From: Agent <agent@example.com>\n"
+            f"{extra}"
+            f"{quote_marker}{date_header}: Thursday\n"
+            f"{quote_marker}Subject: Old reply\n{quote_marker}Old body."
+        )
+        text = _s6c_history_text(history_key, transcript)
+        assert "Current question." in text
+        assert "agent@example.com" not in text
+        assert "Old body." not in text
+
+    ordinary = (
+        "On Monday wrote:\nError 501. How do I fix it?",
+        "On Monday, Jos\u00e9 Garc\u00eda wrote:\nOld-looking customer prose.",
+        "On Monday, System Agent wrote:\nSystem Agent is the feature name.",
+        "> Customer supplied this comparison line.",
+        "--\nhttps://api.example.com/webhook returns 500.", "--\n+1 555 121 2121 disconnects during export.",
+        "--\nSteps To Reproduce\nOpen reports.\nTeam members see error 500.",
+        "--\nJane Agent\nSupport Manager\nOpen reports.",
+    )
+    for history_key, transcript in product(history_keys, ordinary):
+        text = _s6c_history_text(history_key, transcript)
+        assert transcript.splitlines()[-1] in text
+
+    mobile_signature = (
+        "Current question.\nSent from my Android phone, please excuse typos\n"
+        "Jos\u00e9 Garc\u00eda\n\nLater customer message."
+    )
+    text = _s6c_history_text("ticket_history", mobile_signature)
+    assert "Current question." in text
+    assert "Jos\u00e9 Garc\u00eda" not in text
+    assert "Later customer message." in text
+
+
+def test_s6c_scalar_history_preserves_lines_for_junk_admission() -> None:
+    rows = [{"ticket_id": "s6c-junk-lines", "subject": "Automatic reply: Status update",
+             "ticket_history": "On Mon, Agent <agent@example.com> wrote:\nPlease retry."}]
+    rows.extend(
+        {"ticket_id": f"s6c-all-quote-{history_key}-{bool(subject)}", "subject": subject,
+         history_key: "On Mon, Agent <agent@example.com> wrote:\nPlease retry."}
+        for history_key, subject in product(
+            ("ticket_history", "history", "conversation_history"), ("", "Export issue"))
+    )
+    evidence = (("resolution_text", "Refund issued."), ("measured_outcome", "Saved 2 hours."))
+    rows.extend(
+        {"ticket_id": f"s6c-evidence-{history_key}-{key}", "subject": "Export issue",
+         history_key: "On Mon, Agent <agent@example.com> wrote:\nPlease retry.", key: value}
+        for history_key, (key, value) in product(
+            ("ticket_history", "history", "conversation_history"), evidence)
+    )
+    package = build_support_ticket_input_package(rows)
+
+    assert len(package.inputs["source_material"]) == 6
+    assert {(row.get("resolution_text"), row.get("measured_outcome")) for row in package.inputs[
+            "source_material"]} == {
+        ("Refund issued.", None), (None, "Saved 2 hours."),
+    }
+    assert package.metadata["junk_excluded_reasons"] == {"auto_reply": 1, "no_new_content": 6}
+
+
+def test_s6c_non_history_scalar_comment_keeps_existing_one_message_behavior() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "s6c-ordinary-comment", "subject": "Export report",
+        "comments": "On the checkout page it wrote:\nCard failed. How do I retry checkout?",
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "On the checkout page it wrote:" in text
+    assert "Card failed. How do I retry checkout?" in text
 
 
 def test_zendesk_full_thread_rows_preserve_public_roles_and_drop_private_notes() -> None:
