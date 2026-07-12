@@ -98,10 +98,21 @@ _QUESTION_STARTS = (
     "why ",
 )
 _HISTORY_BLANK_LINE_RE = re.compile(r"\n[ \t]*\n+")
+_HISTORY_HTML_BLANK_RE = re.compile(
+    r"(?:<br\s*/?>\s*){2,}|"
+    r"<p\b[^>]*>\s*(?:(?:&nbsp;|&#160;)|<br\s*/?>)?\s*</p>",
+    re.IGNORECASE,
+)
 _HISTORY_SIGNATURE_BOUNDARY_RE = re.compile(r"^\s*(?:--+|__+)\s*$")
 _HISTORY_MOBILE_SIGNATURE_RE = re.compile(
     r"^\s*sent from my (?:iphone|ipad|android(?: phone| device)?|mobile device)"
+    r"(?:\s*[,;-]\s*(?:please\s+)?(?:excuse|pardon)"
+    r"(?:\s+(?:any|the))?\s+(?:typos?|errors?))?"
     r"\.?\s*$",
+    re.IGNORECASE,
+)
+_HISTORY_ORIGINAL_MESSAGE_RE = re.compile(
+    r"^\s*-{2,}\s*original message\s*-{2,}\s*$",
     re.IGNORECASE,
 )
 _HISTORY_QUOTED_REPLY_HEADER_RE = re.compile(
@@ -123,9 +134,14 @@ _HISTORY_CUSTOMER_MESSAGE_BOUNDARY_RE = re.compile(
     r"(?:can|could|do|does|how|is|should|what|when|where|why)\s+"
     r"(?:i|we|my|our)\b|"
     r"(?:i|we|my|our)\b.*\b(?:cannot|can't|couldn't|didn't|"
-    r"doesn't|error|fail(?:ed|s|ing)?|issue|need|problem|still|unable)\b|"
-    r"still\b"
+    r"doesn't|error|fail(?:ed|s|ing)?|issue|need|problem|still|unable)\b"
     r")",
+    re.IGNORECASE,
+)
+_HISTORY_POST_SIGNATURE_FAILURE_RE = re.compile(
+    r"\b(?:still|remains?|keeps?)\b.{0,80}\b"
+    r"(?:broken|fail(?:ed|s|ing)?|stuck|unavailable|unable|error)\b|"
+    r"^\s*(?:cannot|can't|unable to)\b",
     re.IGNORECASE,
 )
 _HISTORY_FOOTER_RE = re.compile(
@@ -905,7 +921,8 @@ def _scalar_history_text(value: Any) -> str:
     blank_marker = "ATLAS_HISTORY_BLANK_BOUNDARY"
     while blank_marker in raw:
         blank_marker += "_"
-    marked = _HISTORY_BLANK_LINE_RE.sub(f"\n{blank_marker}\n", raw)
+    marked = _HISTORY_HTML_BLANK_RE.sub(f"\n{blank_marker}\n", raw)
+    marked = _HISTORY_BLANK_LINE_RE.sub(f"\n{blank_marker}\n", marked)
     lines = support_ticket_plain_text_lines(marked).splitlines()
 
     admitted: list[str] = []
@@ -940,14 +957,17 @@ def _scalar_history_text(value: Any) -> str:
             skip_mode = "signature"
             signature_blank_seen = False
             continue
-        if _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(line):
+        if (
+            _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(line)
+            or _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(line)
+        ):
             skip_mode = "quote"
             signature_blank_seen = False
             continue
         if line.startswith(">"):
             continue
         admitted.append(line)
-    return support_ticket_plain_text("\n".join(admitted))
+    return "\n".join(admitted)
 
 
 def _history_line_starts_message(
@@ -958,13 +978,10 @@ def _history_line_starts_message(
 ) -> bool:
     if _HISTORY_CUSTOMER_MESSAGE_BOUNDARY_RE.match(line):
         return True
-    if skip_mode != "signature":
-        return False
-    words = re.findall(r"[A-Za-z0-9]+", line)
     return bool(
-        signature_blank_seen
-        or ("?" in line and len(words) >= 2)
-        or re.match(r"^please\b", line, re.IGNORECASE)
+        skip_mode == "signature"
+        and signature_blank_seen
+        and _HISTORY_POST_SIGNATURE_FAILURE_RE.search(line)
     )
 
 

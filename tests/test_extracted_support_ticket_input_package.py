@@ -1950,6 +1950,8 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
             "Initial export question.\n--\nJane Agent\nSupport team\n"
             "ExampleCo\n555-1212\nConfidentiality footer\n\n"
             "This email cannot be disclosed outside ExampleCo.\n"
+            "Anything else?\n"
+            "Please consider the environment before printing this email.\n"
             "ExampleCo legal department\n"
             "Can I retry the export now?",
             ("Initial export question.", "Can I retry the export now?"),
@@ -1959,6 +1961,8 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
                 "555-1212",
                 "Confidentiality footer",
                 "cannot be disclosed",
+                "Anything else?",
+                "consider the environment",
                 "ExampleCo legal department",
             ),
         ),
@@ -1980,17 +1984,22 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
             ("Please retry", "The issue is fixed"),
         ),
         (
-            "Initial export question.\nSent from my Android phone\nJane Agent\n"
-            "Please resend the export link.",
-            ("Initial export question.", "Please resend the export link."),
+            "Initial export question.\n"
+            "Sent from my Android phone, please excuse typos\nJane Agent\n"
+            "Can I get the export link resent?",
+            ("Initial export question.", "Can I get the export link resent?"),
             ("Sent from my Android phone", "Jane Agent"),
         ),
         (
             "Initial export question.\n"
             "On 10 Jul 2026 Agent <agent@example.com> wrote:\n"
-            "old answer\nStill unable to export the report.",
-            ("Initial export question.", "Still unable to export the report."),
-            ("old answer", "agent@example.com"),
+            "old answer\nStill unable to export the old report.\n"
+            "Customer: I am still unable to export the current report.",
+            (
+                "Initial export question.",
+                "Customer: I am still unable to export the current report.",
+            ),
+            ("old answer", "old report", "agent@example.com"),
         ),
         (
             "On the checkout page it wrote:\n"
@@ -2002,9 +2011,37 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
             "Initial export question.\n"
             "On Mon, Agent <agent@example.com> wrote:\n"
             "I am out of the office until Monday.\n"
-            "Still unable to export the report.",
-            ("Initial export question.", "Still unable to export the report."),
-            ("out of the office", "agent@example.com"),
+            "Still unable to export the old report.\n"
+            "Customer: I am still unable to export the current report.",
+            (
+                "Initial export question.",
+                "Customer: I am still unable to export the current report.",
+            ),
+            ("out of the office", "old report", "agent@example.com"),
+        ),
+        (
+            "Initial export question.<br>--<br>Jane Agent<br><br>"
+            "Export remains broken after retry.",
+            ("Initial export question.", "Export remains broken after retry."),
+            ("Jane Agent",),
+        ),
+        (
+            "Initial export question.<p>--</p><p>Jane Agent</p>"
+            "<p><br></p><p>Export remains broken after retry.</p>",
+            ("Initial export question.", "Export remains broken after retry."),
+            ("Jane Agent",),
+        ),
+        (
+            "Current question.\n-----Original Message-----\n"
+            "From: Agent <agent@example.com>\nSent: Thursday\n"
+            "To: Customer <customer@example.com>\nSubject: Old reply\n"
+            "Please retry from settings.\n"
+            "Customer: I still cannot export the current report.",
+            (
+                "Current question.",
+                "Customer: I still cannot export the current report.",
+            ),
+            ("agent@example.com", "Thursday", "Old reply", "Please retry"),
         ),
     ],
 )
@@ -2024,6 +2061,19 @@ def test_s6c_scalar_history_state_machine_handles_boundary_compositions(
         assert expected in text
     for excluded in removed:
         assert excluded not in text
+
+
+def test_s6c_scalar_history_preserves_lines_for_junk_admission() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "s6c-junk-lines",
+        "subject": "Status update",
+        "ticket_history": (
+            "Hello,\nI am out of the office until Monday.\nBest,\nJane"
+        ),
+    }])
+
+    assert package.inputs["source_material"] == []
+    assert package.metadata["junk_excluded_reasons"] == {"auto_reply": 1}
 
 
 def test_s6c_non_history_scalar_comment_keeps_existing_one_message_behavior() -> None:
