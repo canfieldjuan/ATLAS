@@ -1925,13 +1925,12 @@ def _s6c_history_text(history_key: str, transcript: str) -> str:
 def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
     history_keys = ("ticket_history", "history", "conversation_history")
     sender_oracle = (
-        (", Jane Agent", "quote"), (", Jane Agent <jane@example.com>", "quote"),
-        (" Jane Agent <jane@example.com>", "quote"),
+        (", Jane Agent", "quote"), (", Jane Agent <jane@example.com>", "quote"), (" Jane Agent <jane@example.com>", "quote"),
         (", 09:15 Jane Agent", "quote"), (" 09:15 Jane Agent", "quote"),
         (", 09:15 I", "content"), (" 09:15 I", "content"),
         (", 09:15 We", "content"), (" 09:15 We", "content"),
         (", I", "content"), (" I", "content"), (", We", "content"),
-        (" We", "content"), (", it", "content"), (", the system", "content"),
+        (" We", "content"), (", It", "content"), (" 09:15 It", "content"), (", The System", "content"),
     )
     for history_key, date_text, (sender, role) in product(
         history_keys, ("Monday", "Jul 10, 2026"), sender_oracle
@@ -1954,23 +1953,23 @@ def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
         ("We still reserve all rights under this agreement.", "signature"),
     )
     for values in product(
-        history_keys, ("", "Thanks,\n"), blanks, blanks,
+        history_keys, ("", "Thanks,\n"), ("Jane Agent", "Jane", "Jos\u00e9 Garc\u00eda"), blanks, blanks,
         ("", "Support Manager\n", "Customer Success\nRegional Support\n", "Acme\n"),
         terminal_oracle, followup_oracle,
     ):
-        (history_key, valediction, leading_blank, evidence_blank,
-         role_lines, terminal, followup) = values
+        (history_key, valediction, signature_head, leading_blank,
+         evidence_blank, role_lines, terminal, followup) = values
         terminal_text, terminal_role, followup_text, followup_role = (*terminal, *followup)
         transcript = (
-            f"Current question.\n--\n{valediction}{leading_blank}Jane Agent\n"
+            f"Current question.\n--\n{valediction}{leading_blank}{signature_head}\n"
             f"{role_lines}{evidence_blank}{terminal_text}\n\n"
             f"{followup_text}"
         )
         text = _s6c_history_text(history_key, transcript)
         assert "Current question." in text
-        for signature_line in ("Jane Agent", *role_lines.splitlines()):
+        for signature_line in (signature_head, *role_lines.splitlines()):
             assert signature_line not in text
-        verdict = ("Jane Agent" in text, terminal_text in text, followup_text in text)
+        verdict = (signature_head in text, terminal_text in text, followup_text in text)
         followup_is_content = terminal_role == "content" or followup_role == "content"
         assert verdict == (False, terminal_role == "content", followup_is_content)
     ordinary = (
@@ -1985,8 +1984,9 @@ def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
     anchors = (
         ("Current question.\nSent from my Android phone, please excuse typos\n"
          "Jane Agent\n\nCan you send the export link?", "Sent from my Android"),
-        ("Current question.\n-----Original Message-----\nFrom: Agent <agent@example.com>\n"
-         "Sent: Thursday\nSubject: Old reply\nCustomer: old export issue.", "agent@example.com"),
+        *(("Current question.\n-----Original Message-----\nFrom: Agent <agent@example.com>\n"
+           f"{header}: Thursday\nSubject: Old reply\nCustomer: old export issue.", "agent@example.com")
+          for header in ("Sent", "Date")),
     )
     for transcript, removed in anchors:
         text = _s6c_history_text("ticket_history", transcript)

@@ -124,12 +124,13 @@ _HISTORY_REPLY_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 _HISTORY_REPLY_EMAIL_RE = re.compile(r"<[^>]+@[^>]+>|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.I)
+_HISTORY_PERSON_TOKEN = r"[^\W\d_][^\W\d_.'\u2019-]*"
 _HISTORY_REPLY_TIME_SENDER_RE = re.compile(
     r"\b\d{1,2}:\d{2}\b(?:\s*[AaPp][Mm])?[\s,]+"
-    r"[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3}\s*$")
+    r"[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){1,3}\s*$")
 _HISTORY_REPLY_NAME_SENDER_RE = re.compile(
     r",\s*[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){1,3}\s*$")
-_HISTORY_REPLY_PRONOUN_SENDER_RE = re.compile(r"(?:^|[\s,])(?:I|We)\s*$", re.I)
+_HISTORY_REPLY_NON_PERSON_SENDER_RE = re.compile(r"(?:^|[\s,])(?:i|we|you|he|she|it|they|this|that|these|those|a|an|the|my|our|your|his|her|its|their)(?:\s+\S+)*\s*$", re.I)
 _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE = re.compile(r"^(?:customer|requester|user)\s*:", re.I)
 _HISTORY_CUSTOMER_VOICE_RE = re.compile(
     r"^(?:"
@@ -149,8 +150,7 @@ _HISTORY_POST_SIGNATURE_FAILURE_RE = re.compile(
     r"(?:broken|fail(?:ed|s|ing)?|stuck|unavailable|unable|error)\b",
     re.IGNORECASE,
 )
-_HISTORY_SIGNATURE_NAME_RE = re.compile(r"^[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){1,3}$")
-_HISTORY_SIGNATURE_IDENTITY_RE = re.compile(r"^[A-Z][A-Za-z&.'-]{1,79}$")
+_HISTORY_SIGNATURE_PERSON_RE = re.compile(rf"^{_HISTORY_PERSON_TOKEN}(?:\s+{_HISTORY_PERSON_TOKEN}){{0,3}}$")
 _HISTORY_SIGNATURE_COMPANY_RE = re.compile(
     r"^(?:[A-Z][A-Za-z&.'-]*[A-Z][A-Za-z&.'-]*|[A-Z][A-Za-z&.'-]*"
     r"(?:\s+[A-Z][A-Za-z&.'-]*){0,3}\s+(?:Inc|LLC|Ltd|Corp|Company))\.?$")
@@ -980,12 +980,12 @@ def _history_line_is_reply_header(
 ) -> bool:
     if _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(line):
         tail = [item.strip().lower() for item in lines[line_index + 1 : line_index + 5]]
-        return any(item.startswith("from:") for item in tail) and any(item.startswith("sent:") for item in tail)
+        return any(item.startswith("from:") for item in tail) and any(item.startswith(("sent:", "date:")) for item in tail)
     match = _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(line)
     if not match:
         return False
     prefix = match.group("history_reply_prefix")
-    sender_match = not _HISTORY_REPLY_PRONOUN_SENDER_RE.search(prefix) and (
+    sender_match = not _HISTORY_REPLY_NON_PERSON_SENDER_RE.search(prefix) and (
         _HISTORY_REPLY_EMAIL_RE.search(prefix)
         or _HISTORY_REPLY_TIME_SENDER_RE.search(prefix)
         or _HISTORY_REPLY_NAME_SENDER_RE.search(prefix)
@@ -1015,7 +1015,8 @@ def _history_line_starts_signature(
     relative_index, first, blank_before = next(tokens, (-1, "", False))
     if _HISTORY_VALEDICTION_RE.fullmatch(first):
         relative_index, first, blank_before = next(tokens, (-1, "", False))
-    if not _HISTORY_SIGNATURE_NAME_RE.fullmatch(first):
+    if not (_HISTORY_SIGNATURE_PERSON_RE.fullmatch(first) and
+            all(token[:1].isupper() for token in first.split())):
         return False
     role_lines = 0
     for relative_index, candidate, blank_before in tokens:
@@ -1028,9 +1029,8 @@ def _history_line_starts_signature(
             candidate, skip_mode="signature", signature_blank_seen=blank_before
         ):
             return True
-        if role_lines < _HISTORY_SIGNATURE_MAX_ROLES and (
-            _HISTORY_SIGNATURE_NAME_RE.fullmatch(candidate) or
-            _HISTORY_SIGNATURE_IDENTITY_RE.fullmatch(candidate)):
+        if role_lines < _HISTORY_SIGNATURE_MAX_ROLES and _HISTORY_SIGNATURE_PERSON_RE.fullmatch(candidate) and \
+                all(token[:1].isupper() for token in candidate.split()):
             role_lines += 1
             continue
         return False
