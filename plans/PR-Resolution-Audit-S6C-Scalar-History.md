@@ -6,8 +6,8 @@ Issue #2044 splits scalar-transcript cleanup from paused evidence PR #2037. `_co
 
 ### Problem-derived contract
 
-- Root cause: one-message compaction erased transcript structure; the first generated oracle closed under-exclusion but under-modeled over-exclusion roles, allowing pronoun senders, contact-first details, legal footers, help requests, and titled hygiene-empty rows to receive the wrong semantic verdict.
-- Correct fix: keep bounded reply/signature grammars and one skip policy, while extending the independent oracle across sender arity, contact-first detail, operational continuation versus footer, and hygiene-empty title variants; narrow grammar decisions to those semantic roles.
+- Root cause: one-message compaction erased transcript structure; the generated oracle still tested sender and admission rules on only one matching production, allowing parallel timestamped-pronoun and explicit-evidence paths to receive the wrong semantic verdict.
+- Correct fix: keep bounded reply/signature grammars and one skip policy, while applying pronoun, explicit-evidence, and bounded identity-line rules across every history alias and matching production; narrow grammar decisions to those semantic roles.
 - Proof: exercise `build_support_ticket_input_package` with the full generated parity/semantic cross-product plus titled/untitled all-quote admission outcomes.
 - Must not change: ordinary bodies/comments, structured-comment privacy, S6B/S6E/S6D semantics, resolution evidence, or customer-facing product shape.
 
@@ -21,7 +21,7 @@ Max files: 3
 
 ### Review Contract
 
-- Acceptance: headings/contact-first details survive; reply senders require real person evidence; operational help/failure resumes while legal footer prose stays skipped; signature sequences compose across blanks/roles; titled and untitled all-quote rows count as no-new-content; ordinary comments retain behavior.
+- Acceptance: headings/contact-first details survive; every reply-sender production requires real person evidence; explicit evidence keeps quote-empty rows; bounded company lines compose only with signature evidence; ordinary comments retain behavior.
 - Affected surfaces/risks: scalar-history normalization/tests only; false resume publishes old/footer text and false skip loses customer text.
 - Reviewer rules triggered: R1, R2, R10, R13, R14 with a boundary probe; reachability uses package-entrypoint emitted text or junk-gate results.
 
@@ -33,12 +33,12 @@ Max files: 3
 
 ## Mechanism
 
-Before S6B extraction, the sanitizer marks Unicode/HTML blanks. A reply grammar requires date plus email, time/name, or delimiter/multi-token-person evidence. A signature grammar requires person context before contact/company evidence, ignores identity blanks, and feeds one skip policy whose continuation roles separate operational requests/failures from footer prose. Hygiene-empty scalar history clears title only for junk admission.
+Before S6B extraction, the sanitizer marks Unicode/HTML blanks. A reply grammar requires date plus email or non-pronoun time/name and delimiter/multi-token-person evidence. A signature grammar scans bounded identity lines for contact/company evidence and feeds one skip policy. Hygiene-empty scalar history clears title only when no explicit evidence keeps the row.
 
 ## Intentional
 
 - Structured comment containers retain their privacy/text path; no shared hygiene framework or customer-facing shape change is added.
-- `On ... wrote:` needs date plus grammar-recognized sender evidence and is terminal; pronoun/single-token prose remains content. Contact-first details and role lines never prove a signature alone; bounded person plus terminal evidence must confirm it.
+- `On ... wrote:` needs date plus grammar-recognized non-pronoun sender evidence and is terminal. Contact-first details and role/company lines never prove a signature alone; bounded person plus terminal evidence must confirm it.
 
 ## Deferred
 
@@ -48,7 +48,7 @@ Parked hardening: none.
 
 ## Verification
 
-- Commands: focused scalar-history pytest — 2 passed/244 deselected with 3,521 generated parity/semantic/admission cases; owning file — 246 passed; exact maturity ratchet — passed.
+- Commands: focused scalar-history pytest — 2 passed/244 deselected with 4,727 generated parity/semantic/admission cases; owning file — 246 passed; exact maturity ratchet — passed.
 - Commands: validate_extracted_content_pipeline.sh — passed; forbid/audit-standalone/ASCII audits — clean; CI enrollment — 201 tests enrolled.
 - Command: bash scripts/run_extracted_pipeline_checks.sh — 10,732 passed, 21 skipped; one pre-existing pynvml warning.
 
@@ -56,7 +56,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/support_ticket_input_package.py` | 213 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 219 |
 | `plans/PR-Resolution-Audit-S6C-Scalar-History.md` | 62 |
-| `tests/test_extracted_support_ticket_input_package.py` | 122 |
-| **Total** | **397** |
+| `tests/test_extracted_support_ticket_input_package.py` | 118 |
+| **Total** | **399** |

@@ -129,6 +129,7 @@ _HISTORY_REPLY_TIME_SENDER_RE = re.compile(
     r"[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3}\s*$")
 _HISTORY_REPLY_NAME_SENDER_RE = re.compile(
     r",\s*[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){1,3}\s*$")
+_HISTORY_REPLY_PRONOUN_SENDER_RE = re.compile(r"(?:^|[\s,])(?:I|We)\s*$", re.I)
 _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE = re.compile(r"^(?:customer|requester|user)\s*:", re.I)
 _HISTORY_CUSTOMER_VOICE_RE = re.compile(
     r"^(?:"
@@ -149,6 +150,7 @@ _HISTORY_POST_SIGNATURE_FAILURE_RE = re.compile(
     re.IGNORECASE,
 )
 _HISTORY_SIGNATURE_NAME_RE = re.compile(r"^[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){1,3}$")
+_HISTORY_SIGNATURE_IDENTITY_RE = re.compile(r"^[A-Z][A-Za-z&.'-]{1,79}$")
 _HISTORY_SIGNATURE_COMPANY_RE = re.compile(
     r"^(?:[A-Z][A-Za-z&.'-]*[A-Z][A-Za-z&.'-]*|[A-Z][A-Za-z&.'-]*"
     r"(?:\s+[A-Z][A-Za-z&.'-]*){0,3}\s+(?:Inc|LLC|Ltd|Corp|Company))\.?$")
@@ -734,7 +736,9 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         gate_body,
         had_source_text=bool(raw_body.strip() or any(raw_comments) or raw_scalar_history),
     )
-    if junk_reason is None and raw_scalar_history and not gate_body:
+    explicit_evidence = _first_text(row, _RESOLUTION_TEXT_KEYS) or _evidence_text(
+        _first_value(row, _MEASURED_OUTCOME_KEYS))
+    if junk_reason is None and raw_scalar_history and not gate_body and not explicit_evidence:
         junk_reason = support_ticket_row_is_junk("", "", had_source_text=True)
     if junk_reason:
         # Junk rows (auto-replies, bounces, no-new-content) must not count
@@ -981,7 +985,7 @@ def _history_line_is_reply_header(
     if not match:
         return False
     prefix = match.group("history_reply_prefix")
-    sender_match = (
+    sender_match = not _HISTORY_REPLY_PRONOUN_SENDER_RE.search(prefix) and (
         _HISTORY_REPLY_EMAIL_RE.search(prefix)
         or _HISTORY_REPLY_TIME_SENDER_RE.search(prefix)
         or _HISTORY_REPLY_NAME_SENDER_RE.search(prefix)
@@ -1024,7 +1028,9 @@ def _history_line_starts_signature(
             candidate, skip_mode="signature", signature_blank_seen=blank_before
         ):
             return True
-        if role_lines < _HISTORY_SIGNATURE_MAX_ROLES and _HISTORY_SIGNATURE_NAME_RE.fullmatch(candidate):
+        if role_lines < _HISTORY_SIGNATURE_MAX_ROLES and (
+            _HISTORY_SIGNATURE_NAME_RE.fullmatch(candidate) or
+            _HISTORY_SIGNATURE_IDENTITY_RE.fullmatch(candidate)):
             role_lines += 1
             continue
         return False

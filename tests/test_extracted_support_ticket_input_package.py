@@ -1925,42 +1925,37 @@ def _s6c_history_text(history_key: str, transcript: str) -> str:
 def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
     history_keys = ("ticket_history", "history", "conversation_history")
     sender_oracle = (
-        ("Jane Agent", "quote"),
-        ("Jane Agent <jane@example.com>", "quote"),
-        ("09:15 Jane Agent", "quote"),
-        ("I", "content"),
-        ("We", "content"),
-        ("it", "content"),
-        ("the system", "content"),
+        (", Jane Agent", "quote"), (", Jane Agent <jane@example.com>", "quote"),
+        (" Jane Agent <jane@example.com>", "quote"),
+        (", 09:15 Jane Agent", "quote"), (" 09:15 Jane Agent", "quote"),
+        (", 09:15 I", "content"), (" 09:15 I", "content"),
+        (", 09:15 We", "content"), (" 09:15 We", "content"),
+        (", I", "content"), (" I", "content"), (", We", "content"),
+        (" We", "content"), (", it", "content"), (", the system", "content"),
     )
-    reply_parity: dict[str, bool] = {}
     for history_key, date_text, (sender, role) in product(
         history_keys, ("Monday", "Jul 10, 2026"), sender_oracle
     ):
         text = _s6c_history_text(
             history_key,
-            f"Current question.\nOn {date_text}, {sender} wrote:\nOld reply body.",
+            f"Current question.\nOn {date_text}{sender} wrote:\nOld reply body.",
         )
         assert "Current question." in text
         old_is_content = "Old reply body." in text
-        assert old_is_content is reply_parity.setdefault(role, old_is_content)
         assert old_is_content is (role == "content")
     blanks = ("", "\n", "\u00a0\n", "<div>&nbsp;</div>")
     terminal_oracle = (
-        ("jane@example.com", "signature"),
-        ("ExampleCo", "signature"),
+        ("jane@example.com", "signature"), ("ExampleCo", "signature"),
         ("Customer: new export issue.", "content"),
     )
     followup_oracle = (
-        ("Export remains broken after retry.", "content"),
-        ("I need help with the export.", "content"),
+        ("Export remains broken after retry.", "content"), ("I need help with the export.", "content"),
         ("We need assistance with the export.", "content"),
         ("We still reserve all rights under this agreement.", "signature"),
     )
-    signature_parity: dict[tuple[str, str], tuple[bool, bool, bool]] = {}
     for values in product(
         history_keys, ("", "Thanks,\n"), blanks, blanks,
-        ("", "Support Manager\n", "Customer Success\nRegional Support\n"),
+        ("", "Support Manager\n", "Customer Success\nRegional Support\n", "Acme\n"),
         terminal_oracle, followup_oracle,
     ):
         (history_key, valediction, leading_blank, evidence_blank,
@@ -1975,18 +1970,12 @@ def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
         assert "Current question." in text
         for signature_line in ("Jane Agent", *role_lines.splitlines()):
             assert signature_line not in text
-        verdict = (
-            "Jane Agent" in text, terminal_text in text,
-            followup_text in text,
-        )
-        roles_key = (terminal_role, followup_role)
-        assert verdict == signature_parity.setdefault(roles_key, verdict)
+        verdict = ("Jane Agent" in text, terminal_text in text, followup_text in text)
         followup_is_content = terminal_role == "content" or followup_role == "content"
         assert verdict == (False, terminal_role == "content", followup_is_content)
     ordinary = (
         "On Monday wrote:\nError 501. How do I fix it?",
-        "--\nhttps://api.example.com/webhook returns 500.",
-        "--\n+1 555 121 2121 disconnects during export.",
+        "--\nhttps://api.example.com/webhook returns 500.", "--\n+1 555 121 2121 disconnects during export.",
         "--\nSteps To Reproduce\nOpen reports.\nTeam members see error 500.",
         "--\nJane Agent\nSupport Manager\nOpen reports.",
     )
@@ -2006,22 +1995,29 @@ def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
 
 
 def test_s6c_scalar_history_preserves_lines_for_junk_admission() -> None:
-    rows = [
-        {"ticket_id": "s6c-junk-lines", "subject": "Automatic reply: Status update",
-         "ticket_history": "On Mon, Agent <agent@example.com> wrote:\nPlease retry."},
-    ]
+    rows = [{"ticket_id": "s6c-junk-lines", "subject": "Automatic reply: Status update",
+             "ticket_history": "On Mon, Agent <agent@example.com> wrote:\nPlease retry."}]
     rows.extend(
         {"ticket_id": f"s6c-all-quote-{history_key}-{bool(subject)}", "subject": subject,
          history_key: "On Mon, Agent <agent@example.com> wrote:\nPlease retry."}
         for history_key, subject in product(
             ("ticket_history", "history", "conversation_history"), ("", "Export issue"))
     )
+    evidence = (("resolution_text", "Refund issued."), ("measured_outcome", "Saved 2 hours."))
+    rows.extend(
+        {"ticket_id": f"s6c-evidence-{history_key}-{key}", "subject": "Export issue",
+         history_key: "On Mon, Agent <agent@example.com> wrote:\nPlease retry.", key: value}
+        for history_key, (key, value) in product(
+            ("ticket_history", "history", "conversation_history"), evidence)
+    )
     package = build_support_ticket_input_package(rows)
 
-    assert package.inputs["source_material"] == []
-    assert package.metadata["junk_excluded_reasons"] == {
-        "auto_reply": 1, "no_new_content": 6,
+    assert len(package.inputs["source_material"]) == 6
+    assert {(row.get("resolution_text"), row.get("measured_outcome")) for row in package.inputs[
+            "source_material"]} == {
+        ("Refund issued.", None), (None, "Saved 2 hours."),
     }
+    assert package.metadata["junk_excluded_reasons"] == {"auto_reply": 1, "no_new_content": 6}
 
 
 def test_s6c_non_history_scalar_comment_keeps_existing_one_message_behavior() -> None:
