@@ -100,7 +100,8 @@ _QUESTION_STARTS = (
 _HISTORY_BLANK_LINE_RE = re.compile(r"\n[ \t]*\n+")
 _HISTORY_HTML_BLANK_RE = re.compile(
     r"(?:<br\s*/?>\s*){2,}|"
-    r"<p\b[^>]*>\s*(?:(?:&nbsp;|&#160;)|<br\s*/?>)?\s*</p>",
+    r"<(?P<history_blank_tag>p|div)\b[^>]*>\s*"
+    r"(?:(?:&nbsp;|&#160;)|<br\s*/?>)?\s*</(?P=history_blank_tag)>",
     re.IGNORECASE,
 )
 _HISTORY_SIGNATURE_BOUNDARY_RE = re.compile(r"^\s*(?:--+|__+)\s*$")
@@ -128,14 +129,21 @@ _HISTORY_QUOTED_REPLY_HEADER_RE = re.compile(
     r".{0,160}\s+wrote:\s*$",
     re.IGNORECASE,
 )
-_HISTORY_CUSTOMER_MESSAGE_BOUNDARY_RE = re.compile(
+_HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE = re.compile(
+    r"^(?:customer|requester|user)\s*[:\-]",
+    re.IGNORECASE,
+)
+_HISTORY_CUSTOMER_VOICE_RE = re.compile(
     r"^(?:"
-    r"(?:customer|requester|user)\s*[:\-]|"
     r"(?:can|could|do|does|how|is|should|what|when|where|why)\s+"
     r"(?:i|we|my|our)\b|"
     r"(?:i|we|my|our)\b.*\b(?:cannot|can't|couldn't|didn't|"
     r"doesn't|error|fail(?:ed|s|ing)?|issue|need|problem|still|unable)\b"
     r")",
+    re.IGNORECASE,
+)
+_HISTORY_POST_SIGNATURE_REQUEST_RE = re.compile(
+    r"^(?:can|could|will|would)\s+you\b.{0,160}\?\s*$",
     re.IGNORECASE,
 )
 _HISTORY_POST_SIGNATURE_FAILURE_RE = re.compile(
@@ -928,6 +936,7 @@ def _scalar_history_text(value: Any) -> str:
     admitted: list[str] = []
     skip_mode = ""
     signature_blank_seen = False
+    quote_allows_labeled_resume = True
     for raw_line in lines:
         line = raw_line.strip()
         if line == blank_marker:
@@ -936,17 +945,28 @@ def _scalar_history_text(value: Any) -> str:
             continue
         if not line:
             continue
+        if (
+            _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(line)
+            or _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(line)
+        ):
+            if skip_mode == "signature":
+                quote_allows_labeled_resume = False
+            elif skip_mode != "quote":
+                quote_allows_labeled_resume = True
+            skip_mode = "quote"
+            signature_blank_seen = False
+            continue
         if skip_mode:
             if line.startswith(">"):
-                continue
-            if skip_mode == "signature" and _HISTORY_FOOTER_RE.search(line):
-                signature_blank_seen = False
                 continue
             if not _history_line_starts_message(
                 line,
                 skip_mode=skip_mode,
                 signature_blank_seen=signature_blank_seen,
+                quote_allows_labeled_resume=quote_allows_labeled_resume,
             ):
+                if skip_mode == "signature" and _HISTORY_FOOTER_RE.search(line):
+                    signature_blank_seen = False
                 continue
             skip_mode = ""
             signature_blank_seen = False
@@ -955,13 +975,6 @@ def _scalar_history_text(value: Any) -> str:
             or _HISTORY_MOBILE_SIGNATURE_RE.fullmatch(line)
         ):
             skip_mode = "signature"
-            signature_blank_seen = False
-            continue
-        if (
-            _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(line)
-            or _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(line)
-        ):
-            skip_mode = "quote"
             signature_blank_seen = False
             continue
         if line.startswith(">"):
@@ -975,13 +988,25 @@ def _history_line_starts_message(
     *,
     skip_mode: str,
     signature_blank_seen: bool,
+    quote_allows_labeled_resume: bool,
 ) -> bool:
-    if _HISTORY_CUSTOMER_MESSAGE_BOUNDARY_RE.match(line):
+    if skip_mode == "quote":
+        return bool(
+            quote_allows_labeled_resume
+            and _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(line)
+        )
+    if (
+        _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(line)
+        or _HISTORY_CUSTOMER_VOICE_RE.match(line)
+    ):
         return True
     return bool(
         skip_mode == "signature"
         and signature_blank_seen
-        and _HISTORY_POST_SIGNATURE_FAILURE_RE.search(line)
+        and (
+            _HISTORY_POST_SIGNATURE_FAILURE_RE.search(line)
+            or _HISTORY_POST_SIGNATURE_REQUEST_RE.match(line)
+        )
     )
 
 

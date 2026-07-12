@@ -1913,10 +1913,7 @@ def test_support_ticket_input_package_without_status_or_csat_is_unchanged() -> N
     assert package.metadata["csat_score_average"] is None
 
 
-@pytest.mark.parametrize(
-    "history_key",
-    ("ticket_history", "history", "conversation_history"),
-)
+@pytest.mark.parametrize("history_key", ("ticket_history", "history", "conversation_history"))
 def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
     history_key: str,
 ) -> None:
@@ -1953,18 +1950,9 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
             "Anything else?\n"
             "Please consider the environment before printing this email.\n"
             "ExampleCo legal department\n"
-            "Can I retry the export now?",
-            ("Initial export question.", "Can I retry the export now?"),
-            (
-                "Jane Agent",
-                "Support team",
-                "555-1212",
-                "Confidentiality footer",
-                "cannot be disclosed",
-                "Anything else?",
-                "consider the environment",
-                "ExampleCo legal department",
-            ),
+            "I cannot disclose the account number here but export still fails.",
+            ("Initial export question.", "I cannot disclose the account number here but export still fails."),
+            ("Jane Agent", "cannot be disclosed", "Anything else?", "consider the environment"),
         ),
         (
             "Initial export question.\n"
@@ -1977,28 +1965,25 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
         (
             "Initial export question.\n"
             "On 2026-07-10 at 09:15 Agent wrote:\n"
-            "Please retry the export from settings.\n"
-            "The issue is fixed now.\n"
-            "Can I retry the export now?",
-            ("Initial export question.", "Can I retry the export now?"),
-            ("Please retry", "The issue is fixed"),
+            "Can I reset my password?\n"
+            "old details\n"
+            "Customer: current export still fails.",
+            ("Initial export question.", "Customer: current export still fails."),
+            ("Can I reset", "old details"),
         ),
         (
             "Initial export question.\n"
-            "Sent from my Android phone, please excuse typos\nJane Agent\n"
-            "Can I get the export link resent?",
-            ("Initial export question.", "Can I get the export link resent?"),
+            "Sent from my Android phone, please excuse typos\nJane Agent\n\n"
+            "Can you send the export link?",
+            ("Initial export question.", "Can you send the export link?"),
             ("Sent from my Android phone", "Jane Agent"),
         ),
         (
             "Initial export question.\n"
             "On 10 Jul 2026 Agent <agent@example.com> wrote:\n"
             "old answer\nStill unable to export the old report.\n"
-            "Customer: I am still unable to export the current report.",
-            (
-                "Initial export question.",
-                "Customer: I am still unable to export the current report.",
-            ),
+            "Customer: current export still fails.",
+            ("Initial export question.", "Customer: current export still fails."),
             ("old answer", "old report", "agent@example.com"),
         ),
         (
@@ -2012,11 +1997,8 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
             "On Mon, Agent <agent@example.com> wrote:\n"
             "I am out of the office until Monday.\n"
             "Still unable to export the old report.\n"
-            "Customer: I am still unable to export the current report.",
-            (
-                "Initial export question.",
-                "Customer: I am still unable to export the current report.",
-            ),
+            "Customer: current export still fails.",
+            ("Initial export question.", "Customer: current export still fails."),
             ("out of the office", "old report", "agent@example.com"),
         ),
         (
@@ -2027,21 +2009,26 @@ def test_s6c_scalar_history_aliases_exclude_footer_and_keep_followup(
         ),
         (
             "Initial export question.<p>--</p><p>Jane Agent</p>"
-            "<p><br></p><p>Export remains broken after retry.</p>",
-            ("Initial export question.", "Export remains broken after retry."),
-            ("Jane Agent",),
+            "<div><br></div><p>Export remains broken.</p><p>--</p>"
+            "<p>Joe Agent</p><div>&nbsp;</div><p>Report remains broken.</p>",
+            ("Initial export question.", "Export remains broken.", "Report remains broken."),
+            ("Jane Agent", "Joe Agent"),
         ),
         (
             "Current question.\n-----Original Message-----\n"
             "From: Agent <agent@example.com>\nSent: Thursday\n"
             "To: Customer <customer@example.com>\nSubject: Old reply\n"
             "Please retry from settings.\n"
-            "Customer: I still cannot export the current report.",
-            (
-                "Current question.",
-                "Customer: I still cannot export the current report.",
-            ),
+            "Customer: current export still fails.",
+            ("Current question.", "Customer: current export still fails."),
             ("agent@example.com", "Thursday", "Old reply", "Please retry"),
+        ),
+        (
+            "Current question.\n--\nJane Agent\n"
+            "On Mon, Customer <customer@example.com> wrote:\n"
+            "Customer: old issue details.",
+            ("Current question.",),
+            ("Jane Agent", "customer@example.com", "old issue details"),
         ),
     ],
 )
@@ -2051,8 +2038,7 @@ def test_s6c_scalar_history_state_machine_handles_boundary_compositions(
     removed: tuple[str, ...],
 ) -> None:
     package = build_support_ticket_input_package([{
-        "ticket_id": "s6c-matrix",
-        "subject": "Export report",
+        "ticket_id": "s6c-matrix", "subject": "Export report",
         "ticket_history": transcript,
     }])
 
@@ -2067,9 +2053,7 @@ def test_s6c_scalar_history_preserves_lines_for_junk_admission() -> None:
     package = build_support_ticket_input_package([{
         "ticket_id": "s6c-junk-lines",
         "subject": "Status update",
-        "ticket_history": (
-            "Hello,\nI am out of the office until Monday.\nBest,\nJane"
-        ),
+        "ticket_history": "Hello,\nI am out of the office until Monday.\nBest,\nJane",
     }])
 
     assert package.inputs["source_material"] == []
@@ -2080,10 +2064,7 @@ def test_s6c_non_history_scalar_comment_keeps_existing_one_message_behavior() ->
     package = build_support_ticket_input_package([{
         "ticket_id": "s6c-ordinary-comment",
         "subject": "Export report",
-        "comments": (
-            "On the checkout page it wrote:\n"
-            "Card failed. How do I retry checkout?"
-        ),
+        "comments": "On the checkout page it wrote:\nCard failed. How do I retry checkout?",
     }])
 
     text = package.inputs["source_material"][0]["text"]

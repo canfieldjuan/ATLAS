@@ -6,8 +6,8 @@ Issue #2044 splits scalar-transcript cleanup from paused evidence PR #2037. `_co
 
 ### Problem-derived contract
 
-- Root cause: one-message compaction runs before a multi-message scalar history can distinguish customer text from signatures, footers, and quoted history.
-- Correct fix: sanitize only the three scalar-history aliases; preserve plain/HTML blanks; recognize bounded signature, mobile, `On ... wrote:`, and Outlook separators; use mode-specific resume evidence; feed one line-preserved result to the junk gate and compact only emitted output.
+- Root cause: one-message compaction erased transcript structure; within the replacement scanner, shared resume predicates and late separator checks still let quote/signature modes cross semantic boundaries.
+- Correct fix: sanitize only the three scalar-history aliases; normalize text/HTML block blanks; recognize separators before resumes; make quote resumes explicit and signature resumes customer-shaped; make a quote tail entered from a signature terminal; feed one line-preserved result to the junk gate and compact only emitted output.
 - Proof: exercise `build_support_ticket_input_package` with positive, negative, composed, and held-out transcript shapes.
 - Must not change: ordinary bodies/comments, structured-comment privacy, S6B/S6E/S6D semantics, resolution evidence, or customer-facing product shape.
 
@@ -23,7 +23,7 @@ Max files: 3
 
 ### Review Contract
 
-- Acceptance: later customer messages survive; signature/footer and old-reply runs do not; false `wrote:` near-matches remain; ordinary bodies and non-history comments retain behavior.
+- Acceptance: real post-signature customer requests survive; signature/footer and composed old-reply tails do not; quote questions cannot self-resume; ordinary bodies/comments retain behavior.
 - Affected surfaces: scalar-history normalization and its package tests only.
 - Risks: false resume publishes old/footer text; false skip loses customer text.
 - Reviewer rules triggered: R1, R2, R10, R13, R14, including a boundary probe.
@@ -37,13 +37,13 @@ Max files: 3
 
 ## Mechanism
 
-Before S6B extraction, the sanitizer marks text/HTML blanks. A two-mode scanner skips signatures or quoted history: quote mode resumes only on explicit/first-person customer evidence; signature mode also admits a bounded failure cue after a blank. It returns lines for S6E, then final assembly compacts once.
+Before S6B extraction, the sanitizer marks text/HTML block blanks. Separators transition before resume checks. Quote mode resumes only on explicit transcript roles, and becomes terminal when entered from a signature; signature mode checks explicit/customer-shaped post-blank cues before footer suppression. It returns lines for S6E, then final assembly compacts once.
 
 ## Intentional
 
 - Structured comment containers keep their existing privacy/text path.
 - `On ... wrote:` needs date/time/email evidence; Outlook uses its anchored separator; arbitrary `wrote:` prose is not a boundary.
-- Quote blanks prove nothing; signature blanks are only one part of the stronger resume rule.
+- Quote blanks and bare questions prove nothing; signature blanks are only one part of a customer-shaped resume rule.
 - No shared hygiene framework or customer-facing output-shape change is added.
 
 ## Deferred
@@ -55,20 +55,20 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: pytest -q tests/test_extracted_support_ticket_input_package.py -k 's6c_scalar_history' — 15 passed, 244 deselected.
-- Command: pytest -q tests/test_extracted_support_ticket_input_package.py — 259 passed.
+- Command: pytest -q tests/test_extracted_support_ticket_input_package.py -k 's6c_scalar_history' — 16 passed, 244 deselected.
+- Command: pytest -q tests/test_extracted_support_ticket_input_package.py — 260 passed.
 - Command: bash scripts/validate_extracted_content_pipeline.sh — passed.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline — clean.
 - Command: python scripts/audit_extracted_standalone.py --fail-on-debt — zero findings.
 - Command: bash scripts/check_ascii_python.sh — passed.
 - Command: python scripts/audit_extracted_pipeline_ci_enrollment.py — 201 tests enrolled.
-- Command: bash scripts/run_extracted_pipeline_checks.sh — 10,745 passed, 21 skipped; one pre-existing pynvml warning.
+- Command: bash scripts/run_extracted_pipeline_checks.sh — 10,746 passed, 21 skipped; one pre-existing pynvml warning.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/support_ticket_input_package.py` | 140 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 165 |
 | `plans/PR-Resolution-Audit-S6C-Scalar-History.md` | 74 |
-| `tests/test_extracted_support_ticket_input_package.py` | 178 |
-| **Total** | **392** |
+| `tests/test_extracted_support_ticket_input_package.py` | 159 |
+| **Total** | **398** |
