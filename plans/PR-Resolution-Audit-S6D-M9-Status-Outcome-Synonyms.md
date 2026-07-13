@@ -23,10 +23,13 @@ section 1g explicitly permits on the next branch.
   raw value as exactly one of a recognized unseparated alias, a canonical
   ordered multi-word lifecycle phrase, or a recognized leading phrase followed
   by the bounded macro-suffix grammar. Every other punctuation/whitespace word
-  boundary must return `other`. Preserve the explicit legacy spelling
-  `Re-opened`, keep `reopened` precedence, and prove package plus direct
-  FAQ/report entrypoints across every canonical bucket, grammar separator,
-  exact punctuated synonym, and negative near-match/prefix/ordering case.
+  boundary must return `other`. Exact phrases may have only internal allowed
+  delimiters (no wrapper punctuation); macro admission must scan candidates for
+  a nonblank suffix after a recognized leading phrase, so a punctuated compound
+  leader remains recognized. Preserve the explicit legacy spelling `Re-opened`,
+  keep `reopened` precedence, and prove package plus direct FAQ/report
+  entrypoints across every canonical bucket, grammar separator, exact
+  punctuated synonym, and negative near-match/prefix/ordering case.
 - Must not change: the bucket set (`resolved`, `open`, `reopened`, `cancelled`,
   `other`), raw `ticket_status`, row admission, evidence tiers, CSAT, report
   fields, downstream outcome semantics, or customer-facing product shape.
@@ -49,8 +52,9 @@ Max files: 6
   canonical-sequence punctuation-normalized compounds retain behavior; a
   recognized leading status plus the bounded macro separator maps to its
   existing bucket; whitespace-only, one-sided, compact, and unknown-leading
-  word boundaries stay `other`; `reopened` remains distinct and wins when
-  leading.
+  word boundaries, wrapper punctuation, and empty suffixes stay `other`;
+  punctuated multi-word leaders retain their bucket before a nonblank suffix;
+  `reopened` remains distinct and wins when leading.
 - Affected surfaces/risks: support-ticket row normalization, package metadata,
   and direct FAQ/report `outcome_diagnostics` status/reopened counts; false
   positives overstate resolved/reopened outcomes, while false negatives retain
@@ -74,13 +78,16 @@ Max files: 6
 The normalizer has one lexical admission decision: a raw value is accepted only
 as an exact unseparated lifecycle alias, the explicit legacy `Re-opened`
 spelling, an ordered token sequence in the canonical phrase table, or a
-recognized leading phrase followed by the bounded macro separator. The suffix
-never participates in leading fallback. Every other multi-token or
-separator-bearing value is `other`; no punctuation/whitespace erasure can reach
-the bucket table first. Tests implement an independent grammar oracle and
-generate canonical phrases plus malformed prefix/compact/one-sided/whitespace
-products through the real package entrypoint, then exercise representative
-direct-report diagnostics.
+recognized leading phrase followed by a bounded separator and nonblank suffix.
+Canonical phrase syntax permits delimiters only between its words, rejecting
+wrapper punctuation. The macro parser inspects each bounded separator until a
+recognized prefix is found, preserving a punctuated compound leader instead of
+splitting at its first word. Every other multi-token or separator-bearing value
+is `other`; no punctuation/whitespace erasure can reach the bucket table first.
+Tests implement an independent grammar oracle and generate canonical phrases,
+compound leaders plus suffixes, and malformed
+prefix/compact/one-sided/whitespace/wrapper/empty-suffix products through the
+real package entrypoint, then exercise representative direct-report diagnostics.
 
 ## Intentional
 
@@ -90,6 +97,9 @@ direct-report diagnostics.
   bounded macro grammar alone admits a free-form suffix. Whitespace-only,
   arbitrary prefixes, one-sided/compact malformed compounds, suffix-token
   search, and fuzzy/LLM classification are intentionally rejected.
+- A macro delimiter without nonblank suffix text is malformed, not a status;
+  phrase punctuation is allowed only between canonical words, never as a
+  leading or trailing wrapper.
 - The exact-compound reference table models existing ordered lifecycle aliases,
   not new status buckets or a suffix-admission list; an unknown sequence forces
   leading-only classification.
@@ -121,10 +131,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/support_ticket_input_package.py` | 75 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 84 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Resolution-Audit-S6D-M9-Status-Outcome-Synonyms.md` | 130 |
+| `plans/PR-Resolution-Audit-S6D-M9-Status-Outcome-Synonyms.md` | 140 |
 | `plans/archive/PR-Resolution-Audit-S6C-Scalar-History.md` | 0 |
-| `tests/test_content_ops_deflection_report.py` | 35 |
-| `tests/test_extracted_support_ticket_input_package.py` | 76 |
-| **Total** | **319** |
+| `tests/test_content_ops_deflection_report.py` | 43 |
+| `tests/test_extracted_support_ticket_input_package.py` | 94 |
+| **Total** | **364** |

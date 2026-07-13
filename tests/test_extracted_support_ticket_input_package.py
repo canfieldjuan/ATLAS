@@ -1829,6 +1829,21 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
         for tokens, state in exact_phrase_states.items()
         for separator in exact_phrase_separators
     }
+    compound_leader_statuses = {
+        f"{separator.join(tokens)} - Macro {index}": state
+        for index, ((tokens, state), separator) in enumerate(
+            product(exact_phrase_states.items(), exact_phrase_separators), start=1
+        )
+    }
+    wrapped_phrase_statuses = {
+        f"{prefix}{' '.join(tokens)}{suffix}": "other"
+        for tokens in exact_phrase_states
+        for prefix, suffix in (("#", ""), ("(", ")"), ("[", "]"))
+    }
+    empty_suffix_statuses = {
+        f"{leading}{separator}".rstrip(): "other"
+        for (leading, _), separator in product(leading_roles, macro_separators)
+    }
     statuses = {
         f"{leading}{separator}Macro {index}": state
         for index, ((leading, state), separator) in enumerate(
@@ -1836,6 +1851,9 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
         )
     }
     statuses.update(exact_phrase_statuses)
+    statuses.update(compound_leader_statuses)
+    statuses.update(wrapped_phrase_statuses)
+    statuses.update(empty_suffix_statuses)
     statuses.update({
         f"{prefix}{leading}": "other"
         for prefix, (leading, _) in product(separator_prefixes, leading_roles)

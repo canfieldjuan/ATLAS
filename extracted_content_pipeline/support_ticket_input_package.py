@@ -366,9 +366,9 @@ _STATUS_BUCKET_VALUES = (
     ("cancelled", _CANCELLED_STATUS_VALUES),
     ("open", _OPEN_STATUS_VALUES),
 )
-# Exact word sequences for existing multi-word lifecycle aliases. Split input
-# may use the full normalized key only when its words match one of these
-# canonical sequences in order; unknown word boundaries stay fail-closed.
+# Exact word sequences for existing multi-word lifecycle aliases. A phrase may
+# use the full normalized key only when its words and internal delimiters match
+# this grammar; unknown or wrapped word boundaries stay fail-closed.
 _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES = frozenset({
     ("awaiting", "customer"),
     ("customer", "response"),
@@ -389,6 +389,9 @@ _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES = frozenset({
 # are deliberately finite: arbitrary punctuation must not turn unknown words
 # into a lifecycle alias.
 _STATUS_EXACT_LEGACY_SPELLING_KEYS = {"re-opened": "reopened"}
+_STATUS_EXACT_COMPOUND_PHRASE_RE = re.compile(
+    r"[a-z0-9]+(?:[ \t:|/>-]+[a-z0-9]+)+", re.IGNORECASE,
+)
 _STATUS_MACRO_SUFFIX_SEPARATOR_RE = re.compile(r":\s*|\s+(?:[-|/>])\s+")
 
 
@@ -1228,7 +1231,10 @@ def _status_state_for_exact_phrase(raw: str) -> str:
         token, = tokens
         if phrase.lower() == token:
             return _status_state_for_key(token)
-    if tokens in _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES:
+    if (
+        _STATUS_EXACT_COMPOUND_PHRASE_RE.fullmatch(phrase)
+        and tokens in _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES
+    ):
         return _status_state_for_key("".join(tokens))
     return "other"
 
@@ -1244,9 +1250,12 @@ def _normalize_status_state(value: Any) -> str:
     if exact_state != "other":
         return exact_state
 
-    leading, *trailing = _STATUS_MACRO_SUFFIX_SEPARATOR_RE.split(raw, maxsplit=1)
-    if trailing:
-        return _status_state_for_exact_phrase(leading)
+    for separator in _STATUS_MACRO_SUFFIX_SEPARATOR_RE.finditer(raw):
+        if not _clean(raw[separator.end():]):
+            continue
+        leading_state = _status_state_for_exact_phrase(raw[:separator.start()])
+        if leading_state != "other":
+            return leading_state
     return "other"
 
 
