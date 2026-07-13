@@ -124,11 +124,11 @@ the open-category exception, and the asymmetric-safe default, and it opens with 
 "single source" note (pointer set = "every doc that names the bar," not a list).
 An earlier revision's block-exception-set / cap / waive reconciliation was
 reverted -- it generated a finding per round without converging -- and deferred.
-`REVIEWER_RULES.md`'s guard-LGTM gate, `AGENTS.md` 3k.1, and the
-`OVERNIGHT_ARC_WORKFLOW.md` cap now carry short pointers to it instead of copies,
-so the bar or the set changes in exactly one file. 3k.2 (the convergence
-circuit-breaker) is the second canonical statement; the OVERNIGHT cap points to
-it for how-you-stop.
+`REVIEWER_RULES.md`'s guard-LGTM gate, `AGENTS.md` 3k.1, and
+`docs/SESSION_BOOTSTRAP.md` now carry short pointers to it instead of copies, so
+the bar changes in exactly one file. The overnight runbook is unchanged -- the
+block-set / cap reconciliation was reverted (above), so 3k.2 stays the pure
+convergence circuit-breaker.
 
 ## Intentional
 
@@ -162,7 +162,7 @@ Parked hardening: none.
 - `python scripts/audit_pr_body.py <body-file>` -- passed ("pr body audit: PASS").
 - Non-ASCII scan (`git diff origin/main -- <f> | grep '^+' | grep -P '[^\x00-\x7F]'`) of the added lines in all four edited docs -- `AGENTS.md`, `docs/GUARD_CLASS_CLOSURE.md`, `docs/REVIEWER_RULES.md`, and `docs/SESSION_BOOTSTRAP.md` -- reports 0 non-ASCII each (additions use `--`, `->`, ASCII quotes, and spell "section 3k.1" rather than the section-sign); markdown is not gated by the Python ASCII check regardless.
 - Managed pre-push hook (git diff --check, plan/body sync, reviewer-rule mapping, local review) -- passed on push.
-- Docs-only slice: no test suite applies; cross-references resolve to real sections (`GUARD_CLASS_CLOSURE.md`, `AGENTS.md` 3k.2, R13, `OVERNIGHT_ARC_WORKFLOW.md`).
+- Docs-only slice: no test suite applies; cross-references resolve to real sections (`GUARD_CLASS_CLOSURE.md`, `AGENTS.md` 3k.1/3k.2, R13, `docs/SESSION_BOOTSTRAP.md`).
 - Single-source proof: the bar is stated once in `docs/GUARD_CLASS_CLOSURE.md`; the guard-LGTM gate and `AGENTS.md` 3k.1 carry pointers with no numbered re-listing; a search for "block-exception" across the docs returns none (the reverted concept).
 
 ## Estimated diff size
