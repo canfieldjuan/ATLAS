@@ -360,6 +360,32 @@ _OPEN_STATUS_VALUES = frozenset({
     "investigating",
     "active",
 })
+_STATUS_BUCKET_VALUES = (
+    ("reopened", _REOPENED_STATUS_VALUES),
+    ("resolved", _RESOLVED_STATUS_VALUES),
+    ("cancelled", _CANCELLED_STATUS_VALUES),
+    ("open", _OPEN_STATUS_VALUES),
+)
+# Exact word sequences for existing multi-word lifecycle aliases. Split input
+# may use the full normalized key only when its words match one of these
+# canonical sequences in order; unknown word boundaries stay fail-closed.
+_STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES = frozenset({
+    ("awaiting", "customer"),
+    ("customer", "response"),
+    ("in", "progress"),
+    ("in", "review"),
+    ("on", "hold"),
+    ("pending", "customer"),
+    ("pending", "customer", "approval"),
+    ("pending", "customer", "response"),
+    ("pending", "deployment"),
+    ("resolved", "under", "monitoring"),
+    ("testing", "monitoring"),
+    ("to", "do"),
+    ("under", "review"),
+    ("waiting", "on", "customer"),
+})
+_STATUS_SUFFIX_SEPARATOR_RE = re.compile(r":\s*|\s+(?:[-|/>])\s+")
 
 
 def build_support_ticket_input_package(
@@ -1181,17 +1207,25 @@ def _measured_outcome_examples(
 
 
 def _normalize_status_state(value: Any) -> str:
-    key = _key(value)
-    if not key:
+    raw = _clean(value)
+    if not raw:
         return ""
-    if key in _REOPENED_STATUS_VALUES:
-        return "reopened"
-    if key in _RESOLVED_STATUS_VALUES:
-        return "resolved"
-    if key in _CANCELLED_STATUS_VALUES:
-        return "cancelled"
-    if key in _OPEN_STATUS_VALUES:
-        return "open"
+    if raw.startswith((":", "-", "|", "/", ">")):
+        return "other"
+    full_key = _key(raw)
+    leading, *trailing = _STATUS_SUFFIX_SEPARATOR_RE.split(raw, maxsplit=1)
+    keys = (full_key,)
+    if trailing:
+        compound_tokens = tuple(re.findall(r"[a-z0-9]+", raw.lower()))
+        keys = (
+            (full_key,)
+            if compound_tokens in _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES
+            else ()
+        ) + (_key(leading),)
+    for key in dict.fromkeys(keys):
+        for state, accepted_values in _STATUS_BUCKET_VALUES:
+            if key in accepted_values:
+                return state
     return "other"
 
 

@@ -1,6 +1,6 @@
 # Plan archive index
 
-1395 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1396 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1296,6 +1296,7 @@
 - [PR-Resolution-Audit-S5-Clustering-Spike](archive/PR-Resolution-Audit-S5-Clustering-Spike.md) - lane: resolution-audit-csv | phase: Functional validation
 - [PR-Resolution-Audit-S6A-Structured-Privacy-Semantics](archive/PR-Resolution-Audit-S6A-Structured-Privacy-Semantics.md) - lane: resolution-audit/privacy-admission | phase: Vertical slice
 - [PR-Resolution-Audit-S6A2-Authoritative-Source-Admission](archive/PR-Resolution-Audit-S6A2-Authoritative-Source-Admission.md) - lane: resolution-audit/privacy-admission | phase: Production hardening
+- [PR-Resolution-Audit-S6C-Scalar-History](archive/PR-Resolution-Audit-S6C-Scalar-History.md) - lane: resolution-audit-csv | phase: Production hardening
 - [PR-Resolution-Audit-Self-Correction](archive/PR-Resolution-Audit-Self-Correction.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-Zendesk-Writeback](archive/PR-Resolution-Audit-Zendesk-Writeback.md) - lane: content-ops/resolution-audit-zendesk-writeback | phase: Vertical slice
 - [PR-Retired-Failure-Detector-Workflow](archive/PR-Retired-Failure-Detector-Workflow.md) - lane: workflow/retired-failure-detectors | phase: Workflow/process

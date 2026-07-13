@@ -1793,11 +1793,39 @@ def test_support_ticket_input_package_preserves_support_platform_provenance() ->
 
 
 def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
+    leading_roles = (
+        ("Solved", "resolved"),
+        ("Pending Customer", "open"),
+        ("reopened", "reopened"),
+        ("Cancelled", "cancelled"),
+    )
+    separators = (": ", " - ", " | ", " / ", " > ")
+    separator_prefixes = (
+        ":", ": ", "-", "- ", "|", "| ", "/", "/ ", ">", "> ",
+    )
+    compound_statuses = {
+        separator.join(tokens): next(
+            state
+            for state, accepted_values in support_ticket_input_package._STATUS_BUCKET_VALUES
+            if "".join(tokens) in accepted_values
+        )
+        for tokens in support_ticket_input_package._STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES
+        for separator in separators
+    }
     statuses = {
+        f"{leading}{separator}Macro {index}": state
+        for index, ((leading, state), separator) in enumerate(
+            product(leading_roles, separators), start=1
+        )
+    }
+    statuses.update(compound_statuses)
+    statuses.update({
+        f"{prefix}{leading}": "other"
+        for prefix, (leading, _) in product(separator_prefixes, leading_roles)
+    })
+    statuses.update({
         "done": "resolved",
-        "Solved": "resolved",
         "In Progress": "open",
-        "Pending Customer": "open",
         "Pending Customer Approval": "open",
         "Pending Customer Response": "open",
         "Awaiting Customer": "open",
@@ -1808,7 +1836,15 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
         "Escalated": "other",
         "Customer Escalation": "other",
         "Pending Vendor Approval": "other",
-    }
+        "closedeal": "other",
+        "unresolved": "other",
+        "Macro - Solved": "other",
+        "Customer Escalation: resolved": "other",
+        "Re: solved": "other",
+        "Re: opened": "other",
+        "Can: celled": "other",
+        "Reopened - Solved macro": "reopened",
+    })
     package = build_support_ticket_input_package([
         {
             "ticket_id": f"t-{index}",
@@ -1823,10 +1859,10 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
         for row in package.inputs["source_material"]
     }
     assert got == statuses
-    # the reopened bucket is the churn signal #1419/#1466 consume; keep it distinct
-    assert package.metadata["ticket_status_summary"]["reopened"] == 1
-    assert package.metadata["ticket_status_summary"]["open"] == 7
-    assert package.metadata["ticket_status_summary"]["other"] == 3
+    expected_summary: dict[str, int] = {}
+    for state in statuses.values():
+        expected_summary[state] = expected_summary.get(state, 0) + 1
+    assert package.metadata["ticket_status_summary"] == expected_summary
 
 
 def test_support_ticket_csat_parses_numeric_only_and_averages_numeric() -> None:
