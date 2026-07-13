@@ -10,13 +10,14 @@ stays open and the next input in that class is reported next round.
 requirements below), the open-category evidence-gated exception, the
 asymmetric-safe default, and the fail-open **block-exception set** (money / auth
 / PII / safety -- guards where a confirmed fail-open blocks regardless of
-review-round count). `AGENTS.md` 3k.1 / 3k.2, `docs/REVIEWER_RULES.md`, and
-`docs/OVERNIGHT_ARC_WORKFLOW.md` POINT here; they must not restate these
-normatively. Parallel restatements are exactly what drifted across three review
-rounds on #2077 (the open-category exception missing in one gate; the block set
-written `money/auth/PII` in one place and `money/auth/PII/safety` in another). To
-change the bar or the block set, edit only this file; the others carry a pointer,
-not a copy.
+review-round count). **Every** doc that names any of these -- the reviewer rules,
+`AGENTS.md` 3k, the overnight runbook, the session bootstrap prompt, and any
+future one -- carries a POINTER here, never a copy, and must not restate them
+normatively. The pointer set is deliberately stated as "every such doc," not an
+enumerated list: an enumerated list is itself a restatement that drifts (a copy
+gets missed in one doc, or the block set is written two different ways -- exactly
+what happened across the review rounds on #2077). To change the bar or the block
+set, edit only this file.
 
 ## When this applies (trigger)
 
@@ -205,6 +206,7 @@ demanding opposite verdicts on formally-identical shapes, where the PR's actual
 contract was green from round 0-1. It is **not** satisfied by cap-and-waive when
 the findings are a real open class in a guard in the block-exception set defined
 above (money / auth / PII / safety): those block regardless of round count. On these surfaces the convergence tool is this
-discipline -- the choke point plus the grammar-derived property test close the
-class in one pass -- not another round of spot patches and not waiving the
-residual to reach green.
+discipline -- the choke point plus the grammar- or evidence-derived property test
+(the evidence-gated form when the recognizer is an open category, per the section
+above) close the class in one pass -- not another round of spot patches and not
+waiving the residual to reach green.

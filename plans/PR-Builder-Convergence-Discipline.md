@@ -82,6 +82,15 @@ Max files: 6
         cap.
   - [ ] `REVIEWER_RULES.md` R13 gains the open-category exception with a block
         condition pointing at the 3k.2 circuit-breaker.
+  - [ ] Single source: `GUARD_CLASS_CLOSURE.md` is the sole canonical statement
+        of the bar, the open-category exception, the asymmetric-safe default, and
+        the block-exception set; its "single source" note states the pointer set
+        as "every such doc," not an enumerated list.
+  - [ ] No un-pointered restatement remains: the block-set / bar literal appears
+        only in the canonical doc (exhaustive repo grep), and no numbered
+        requirement re-listing survives in `REVIEWER_RULES.md`, `AGENTS.md` 3k.1,
+        `docs/OVERNIGHT_ARC_WORKFLOW.md`, or `docs/SESSION_BOOTSTRAP.md`; the
+        cap-relationship paragraph references the grammar- or evidence-derived bar.
   - [ ] No runtime/product/test code changes; existing requirements, rule
         numbering, and the noise-cap semantics are untouched.
 - Reachability proof: N/A -- documentation/process rules; verified by rendered
@@ -152,7 +161,7 @@ Parked hardening: none.
 
 - `python scripts/sync_pr_plan.py --check plans/PR-Builder-Convergence-Discipline.md origin/main` -- passed ("plan already in sync").
 - `python scripts/audit_pr_body.py <body-file>` -- passed ("pr body audit: PASS").
-- Non-ASCII scan (`git diff origin/main -- <f> | grep '^+' | grep -P '[^\x00-\x7F]'`) of the added lines in all four edited docs -- `AGENTS.md`, `docs/GUARD_CLASS_CLOSURE.md`, `docs/OVERNIGHT_ARC_WORKFLOW.md`, `docs/REVIEWER_RULES.md` -- reports 0 non-ASCII each (additions use `--`, `->`, ASCII quotes); markdown is not gated by the Python ASCII check regardless.
+- Non-ASCII scan (`git diff origin/main -- <f> | grep '^+' | grep -P '[^\x00-\x7F]'`) of the added lines in all five edited docs -- `AGENTS.md`, `docs/GUARD_CLASS_CLOSURE.md`, `docs/OVERNIGHT_ARC_WORKFLOW.md`, `docs/REVIEWER_RULES.md`, and `docs/SESSION_BOOTSTRAP.md` -- reports 0 non-ASCII each (additions use `--`, `->`, ASCII quotes, and spell "section 3k.1" rather than the section-sign); markdown is not gated by the Python ASCII check regardless.
 - Managed pre-push hook (git diff --check, plan/body sync, reviewer-rule mapping, local review) -- passed on push.
 - Docs-only slice: no test suite applies; cross-references resolve to real sections (`GUARD_CLASS_CLOSURE.md`, `AGENTS.md` 3k.2, R13, `OVERNIGHT_ARC_WORKFLOW.md`).
 - Single-source proof: the block-set literal now appears in only one file, the canonical `docs/GUARD_CLASS_CLOSURE.md` (its definition plus the drift example); every secondary doc (`docs/REVIEWER_RULES.md`, `AGENTS.md`, `docs/OVERNIGHT_ARC_WORKFLOW.md`) uses the block-exception-set pointer, and no numbered requirement re-listing remains in the guard-LGTM gate or AGENTS 3k.1.
@@ -162,9 +171,9 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `AGENTS.md` | 77 |
-| `docs/GUARD_CLASS_CLOSURE.md` | 81 |
+| `docs/GUARD_CLASS_CLOSURE.md` | 89 |
 | `docs/OVERNIGHT_ARC_WORKFLOW.md` | 11 |
 | `docs/REVIEWER_RULES.md` | 39 |
 | `docs/SESSION_BOOTSTRAP.md` | 2 |
-| `plans/PR-Builder-Convergence-Discipline.md` | 170 |
-| **Total** | **380** |
+| `plans/PR-Builder-Convergence-Discipline.md` | 179 |
+| **Total** | **397** |
