@@ -171,7 +171,7 @@ Parked hardening: none.
 |---|---:|
 | `AGENTS.md` | 70 |
 | `docs/GUARD_CLASS_CLOSURE.md` | 74 |
-| `docs/REVIEWER_RULES.md` | 34 |
+| `docs/REVIEWER_RULES.md` | 33 |
 | `docs/SESSION_BOOTSTRAP.md` | 2 |
 | `plans/PR-Builder-Convergence-Discipline.md` | 177 |
-| **Total** | **357** |
+| **Total** | **356** |

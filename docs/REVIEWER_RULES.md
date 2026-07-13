@@ -165,9 +165,8 @@ exercise the class, not trivial near-duplicates that satisfy the easy path.
 an *open semantic category* the guard cannot enumerate on either side (person
 names, senders, intent, language, is-junk), neither a denylist nor a
 member-allowlist closes it, and a property test over category members does not
-either. Require an evidence-gated choke point with an asymmetric-safe default per
-`docs/GUARD_CLASS_CLOSURE.md`, and a generated oracle keyed on the evidence
-signal, not on category members. **Block if:** a diff answers a same-class
+either. Require that the fix meets the open-category form defined canonically in
+`docs/GUARD_CLASS_CLOSURE.md` (do not restate it here). **Block if:** a diff answers a same-class
 finding with the next member patch (token, regex, vocabulary row, oracle
 fixture) while the thread history shows the class is open and not converging --
 that is the `AGENTS.md` 3k.2 convergence circuit-breaker, and the next push owes
