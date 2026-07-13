@@ -38,7 +38,7 @@ occurrence is caught by rule instead of by nine rounds of review.
 Ownership lane: workflow/review-discipline
 Slice phase: Workflow/process
 
-Max files: 5
+Max files: 6
 
 1. Add "When the recognizer itself is open (evidence-gated closure)" plus the
    asymmetric-cost default and the evidence-keyed oracle refinement to
@@ -57,8 +57,10 @@ Max files: 5
    designate `docs/GUARD_CLASS_CLOSURE.md` the sole canonical source for the
    guard-closure bar, the open-category exception, the asymmetric-safe default,
    and the fail-open block-exception set (money/auth/PII/safety); replace the
-   parallel re-listings in `docs/REVIEWER_RULES.md`, `AGENTS.md` 3k.1, and
-   `docs/OVERNIGHT_ARC_WORKFLOW.md` with short pointers, so no secondary doc
+   parallel re-listings in `docs/REVIEWER_RULES.md`, `AGENTS.md` 3k.1,
+   `docs/OVERNIGHT_ARC_WORKFLOW.md`, and (review-surfaced, +1 file)
+   `docs/SESSION_BOOTSTRAP.md` (which new builders read first) with short
+   pointers, so no secondary doc
    restates the normative content and none can drift from the source. This
    removes ~37 lines of restatement; the requirements themselves are unchanged in
    the canonical doc.
@@ -95,6 +97,7 @@ Max files: 5
 - `docs/GUARD_CLASS_CLOSURE.md`
 - `docs/OVERNIGHT_ARC_WORKFLOW.md`
 - `docs/REVIEWER_RULES.md`
+- `docs/SESSION_BOOTSTRAP.md`
 - `plans/PR-Builder-Convergence-Discipline.md`
 
 ## Mechanism
@@ -162,5 +165,6 @@ Parked hardening: none.
 | `docs/GUARD_CLASS_CLOSURE.md` | 81 |
 | `docs/OVERNIGHT_ARC_WORKFLOW.md` | 11 |
 | `docs/REVIEWER_RULES.md` | 39 |
-| `plans/PR-Builder-Convergence-Discipline.md` | 166 |
-| **Total** | **374** |
+| `docs/SESSION_BOOTSTRAP.md` | 2 |
+| `plans/PR-Builder-Convergence-Discipline.md` | 170 |
+| **Total** | **380** |
