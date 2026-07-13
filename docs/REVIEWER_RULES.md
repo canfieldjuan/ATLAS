@@ -230,6 +230,16 @@ string-scoped fixtures is an automatic "needs the class fix," even when every
 listed input passes. Confirmed fail-opens in money/auth/PII/safety guards block
 regardless of review-round count.
 
+**Open-category exception carries into this gate too.** When the guard's
+recognizer rests on an open semantic category no list closes (person names,
+senders, intent, is-junk -- see R13 and the open-category section of
+`docs/GUARD_CLASS_CLOSURE.md`), requirements (a) and (b) hold in their
+*evidence-gated* form: the choke point recognizes bounded structural evidence
+with an asymmetric-safe default, and the property test is evidence-keyed. Do NOT
+block such a fix for lacking a member allowlist or a member-keyed grammar test --
+the open category cannot satisfy either, and demanding them re-creates the
+enumeration loop (`AGENTS.md` 3k.2).
+
 ---
 
 ## Path-based rule triggers

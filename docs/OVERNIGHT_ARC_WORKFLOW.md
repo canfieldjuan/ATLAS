@@ -79,7 +79,13 @@ overnight deltas:
   4a.1), merge on required-green. EXCEPTION: confirmed fail-open findings in
   money/auth/PII guards block past the cap; the move there is a structural
   acceptance bar (a fail-closed invariant + a generative property test), not
-  a fourth round of spot patches.
+  a fourth round of spot patches. Beyond that money/auth/PII exception, the
+  cap's "waive the rest, merge on green" is legitimate only as `AGENTS.md` 3k.2
+  option (b) -- a deliberate bounded-residual waiver taken *after* the
+  Decision-Seam Analysis, not a blind cap-and-ship of the next patch's residual.
+  When the loop is the same decision re-litigated (or an open-category recognizer
+  no list closes), the convergent move is the seam fix / evidence-gate per
+  `docs/GUARD_CLASS_CLOSURE.md`, not a capped waiver.
 - **Guard-shaped slices** (validator/sanitizer/privacy/cap): self-apply the
   reviewer boundary probe BEFORE pushing -- both error directions (fail-open
   AND over-reject), boundary values, at least one negative test. Cheaper than

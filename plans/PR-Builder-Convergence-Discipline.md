@@ -38,13 +38,21 @@ occurrence is caught by rule instead of by nine rounds of review.
 Ownership lane: workflow/review-discipline
 Slice phase: Workflow/process
 
-Max files: 4
+Max files: 5
 
 1. Add "When the recognizer itself is open (evidence-gated closure)" plus the
    asymmetric-cost default and the evidence-keyed oracle refinement to
    `docs/GUARD_CLASS_CLOSURE.md`.
 2. Add `AGENTS.md` 3k.2 convergence circuit-breaker + Decision-Seam Analysis.
 3. Add the open-category exception to `docs/REVIEWER_RULES.md` R13.
+4. Review-driven root-cause widening (+1 file): the exception and the 3k.2
+   cap-reconciliation must land in EVERY canonical statement, not only the ones
+   first edited, or a doc that restates the un-reconciled bar (or the OVERNIGHT
+   runbook, which declares itself canonical / wins-on-conflict) reopens the
+   conflict. The complete enumerable set -- `GUARD_CLASS_CLOSURE.md`,
+   `REVIEWER_RULES.md` (R13 + the guard-LGTM gate), `AGENTS.md` (3k.1 + 3k.2),
+   and `docs/OVERNIGHT_ARC_WORKFLOW.md` -- is reconciled in one pass so no
+   statement is left un-reconciled.
 
 ### Review Contract
 
@@ -76,6 +84,7 @@ Max files: 4
 
 - `AGENTS.md`
 - `docs/GUARD_CLASS_CLOSURE.md`
+- `docs/OVERNIGHT_ARC_WORKFLOW.md`
 - `docs/REVIEWER_RULES.md`
 - `plans/PR-Builder-Convergence-Discipline.md`
 
@@ -128,8 +137,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | 45 |
+| `AGENTS.md` | 51 |
 | `docs/GUARD_CLASS_CLOSURE.md` | 64 |
-| `docs/REVIEWER_RULES.md` | 12 |
-| `plans/PR-Builder-Convergence-Discipline.md` | 135 |
-| **Total** | **256** |
+| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 8 |
+| `docs/REVIEWER_RULES.md` | 22 |
+| `plans/PR-Builder-Convergence-Discipline.md` | 145 |
+| **Total** | **290** |

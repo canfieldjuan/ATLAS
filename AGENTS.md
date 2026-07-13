@@ -961,7 +961,11 @@ rounds). The root-cause fix for these surfaces is codified in
 The reviewer enforcement of this gate lives in the guard boundary-probe section
 of `docs/REVIEWER_RULES.md`; the scope caveat (documented neutral/data-column
 families keep their admit policy -- the choke point governs the safety verdict,
-not every field's text) is in `docs/GUARD_CLASS_CLOSURE.md`.
+not every field's text) is in `docs/GUARD_CLASS_CLOSURE.md`. When the recognizer
+itself rests on an **open category** no list closes (person names, senders,
+intent), requirements 1 and 3 hold in their evidence-gated form (evidence choke
+point + evidence-keyed oracle) per that same doc, and a non-converging loop on
+one decision is governed by 3k.2 below.
 
 ### 3k.2. Convergence circuit-breaker (stop instance-patching a seam)
 
