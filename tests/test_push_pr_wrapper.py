@@ -3,12 +3,13 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from shutil import copy2
+from shutil import copy2, which
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "push_pr.sh"
 AUDIT_SCRIPT = REPO_ROOT / "scripts" / "audit_pr_body.py"
+CHANGE_POLICY_SCRIPT = REPO_ROOT / "scripts" / "_pr_change_policy.py"
 
 
 def test_push_pr_dry_run_without_managed_hook_runs_wrapper_review(tmp_path: Path) -> None:
@@ -105,6 +106,52 @@ def test_push_pr_dry_run_with_non_executable_managed_hook_keeps_wrapper_review(
     assert f"ATLAS_CURRENT_PR_BODY_FILE={body}" in result.stdout
     assert f"--current-pr-body-file {body}" in result.stdout
     assert "managed pre-push hook will run local PR review once" not in result.stdout
+
+
+def test_push_pr_docs_only_dry_run_does_not_fetch_or_audit(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_docs_only_body(repo)
+
+    result = subprocess.run(
+        ["bash", "scripts/push_pr.sh", str(body), "-u", "origin", "HEAD"],
+        cwd=repo,
+        env={**os.environ, "ATLAS_PUSH_PR_DRY_RUN": "1"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "DRY RUN: git fetch --quiet origin main" in result.stdout
+
+
+def test_push_pr_refreshes_before_docs_only_body_audit(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_docs_only_body(repo)
+    order_log = repo / "order.log"
+    _write_body_audit_recorder(repo)
+    _write_local_review(repo)
+    fake_bin = _write_fake_git(repo, order_log)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_GIT_TOPLEVEL": str(repo),
+        "FAKE_GIT_LOG": str(order_log),
+        "ORDER_LOG": str(order_log),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/push_pr.sh", str(body), "-u", "origin", "HEAD"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = order_log.read_text(encoding="utf-8").splitlines()
+    assert lines.index("git fetch --quiet origin main") < lines.index("body-audit")
 
 
 def test_push_pr_refreshes_base_before_wrapper_review_and_push(tmp_path: Path) -> None:
@@ -261,7 +308,10 @@ def test_push_pr_rejects_invalid_body_before_fetch_review_or_push(tmp_path: Path
 
     assert result.returncode == 1
     assert "missing required section: ## Cold diff reconstruction" in result.stdout
-    assert order_log.read_text(encoding="utf-8") == ""
+    lines = order_log.read_text(encoding="utf-8").splitlines()
+    assert "git fetch --quiet origin main" in lines
+    assert "git push -u origin HEAD" not in lines
+    assert not any(line.startswith("local-review ") for line in lines)
 
 
 def _write_fixture_repo(tmp_path: Path) -> Path:
@@ -269,20 +319,30 @@ def _write_fixture_repo(tmp_path: Path) -> Path:
     (repo / "scripts").mkdir(parents=True)
     copy2(SCRIPT, repo / "scripts" / "push_pr.sh")
     copy2(AUDIT_SCRIPT, repo / "scripts" / "audit_pr_body.py")
+    copy2(CHANGE_POLICY_SCRIPT, repo / "scripts" / "_pr_change_policy.py")
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "base")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "remote", "add", "origin", str(repo))
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     return repo
 
 
 def _write_body(repo: Path) -> Path:
     body = repo / "body.md"
     _write_plan(repo)
+    (repo / "scripts" / "example.py").write_text("print('changed')\n", encoding="utf-8")
+    _git(repo, "add", "plans/PR-Test.md", "scripts/example.py")
+    _git(repo, "commit", "-qm", "planned change")
     body.write_text(_valid_body(), encoding="utf-8")
     return body
 
 
 def _write_invalid_body(repo: Path) -> Path:
+    _write_body(repo)
     body = repo / "body-invalid.md"
-    _write_plan(repo)
     body.write_text(
         _valid_body().replace(
             "## Cold diff reconstruction\n"
@@ -293,6 +353,17 @@ def _write_invalid_body(repo: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    return body
+
+
+def _write_docs_only_body(repo: Path) -> Path:
+    doc = repo / "docs" / "example.md"
+    doc.parent.mkdir()
+    doc.write_text("# docs only\n", encoding="utf-8")
+    _git(repo, "add", "docs/example.md")
+    _git(repo, "commit", "-qm", "docs only")
+    body = repo / "body-docs-only.md"
+    body.write_text("Docs-only: true\n\nCorrect a documentation typo.\n", encoding="utf-8")
     return body
 
 
@@ -342,6 +413,16 @@ def _write_local_review(repo: Path) -> None:
     review.chmod(0o755)
 
 
+def _write_body_audit_recorder(repo: Path) -> None:
+    (repo / "scripts" / "audit_pr_body.py").write_text(
+        "from os import environ\n"
+        "from pathlib import Path\n"
+        "with Path(environ['ORDER_LOG']).open('a', encoding='utf-8') as handle:\n"
+        "    handle.write('body-audit\\n')\n",
+        encoding="utf-8",
+    )
+
+
 def _write_managed_hook(repo: Path, *, executable: bool = True) -> None:
     hook = repo / ".git" / "hooks" / "pre-push"
     hook.write_text(
@@ -356,6 +437,8 @@ def _write_fake_git(repo: Path, order_log: Path) -> Path:
     fake_bin = repo / "fake-bin"
     fake_bin.mkdir()
     git = fake_bin / "git"
+    real_git = which("git")
+    assert real_git is not None
     git.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
@@ -382,10 +465,19 @@ def _write_fake_git(repo: Path, order_log: Path) -> Path:
         "    exit 0\n"
         "    ;;\n"
         "esac\n"
-        "printf 'unexpected git invocation: %s\\n' \"$*\" >&2\n"
-        "exit 99\n",
+        f"exec {real_git!r} \"$@\"\n",
         encoding="utf-8",
     )
     git.chmod(0o755)
     order_log.write_text("", encoding="utf-8")
     return fake_bin
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )

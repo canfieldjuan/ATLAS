@@ -46,6 +46,12 @@ def test_new_pr_plan_creates_agents_plan_skeleton(tmp_path: Path) -> None:
     assert "- Root cause:" in text
     assert "- Correct fix must touch/change:" in text
     assert "- Must not change:" in text
+    assert "### Review Contract" in text
+    assert "- Acceptance criteria:" in text
+    assert "- Reachability proof:" in text
+    assert "- Affected surfaces:" in text
+    assert "- Risk areas:" in text
+    assert "- Reviewer rules triggered:" in text
     assert "### Files touched" in text
     assert "| **Total** | **0** |" in text
 

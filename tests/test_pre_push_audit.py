@@ -38,9 +38,73 @@ def test_pre_push_audit_runs_plan_auditors_for_touched_plan(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Plan shape: plans/PR-Wrapper-Smoke.md" in result.stdout
+    assert "Plan admission" in result.stdout
+    assert "required branch-added plan: plans/PR-Wrapper-Smoke.md" in result.stdout
     assert "Plan files touched: plans/PR-Wrapper-Smoke.md" in result.stdout
     assert "Plan diff size: plans/PR-Wrapper-Smoke.md" in result.stdout
     assert "all checks passed" in result.stdout
+
+
+def test_pre_push_audit_rejects_planless_non_markdown_diff(tmp_path):
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test User")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "base")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "remote", "add", "origin", str(repo))
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+    (repo / "scripts" / "wrapper_smoke.py").write_text("print('changed')\n", encoding="utf-8")
+    _git(repo, "add", "scripts/wrapper_smoke.py")
+    _git(repo, "commit", "-m", "unplanned code change")
+
+    result = subprocess.run(
+        ["bash", str(repo / "scripts" / "pre_push_audit.sh")],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(repo)},
+    )
+
+    assert result.returncode == 1
+    assert "Plan admission" in result.stdout
+    assert "must add exactly one" in result.stdout
+
+
+def test_pre_push_audit_explicitly_allows_markdown_only_diff(tmp_path):
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test User")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "base")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "remote", "add", "origin", str(repo))
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+    (repo / "docs").mkdir()
+    (repo / "docs" / "example.md").write_text("# docs only\n", encoding="utf-8")
+    _git(repo, "add", "docs/example.md")
+    _git(repo, "commit", "-m", "docs change")
+
+    result = subprocess.run(
+        ["bash", str(repo / "scripts" / "pre_push_audit.sh")],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(repo)},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Markdown-only diff is explicitly exempt" in result.stdout
 
 
 def test_pre_push_audit_ignores_deleted_working_tree_plan(tmp_path):
@@ -116,6 +180,7 @@ def _write_fixture_repo(repo: Path) -> None:
     (repo / "scripts").mkdir(parents=True)
     for name in (
         "_audit_repo_root.py",
+        "_pr_change_policy.py",
         "audit_claude_md_claims.py",
         "audit_extracted_manifests.py",
         "audit_mcp_port_assignments.py",
@@ -123,6 +188,8 @@ def _write_fixture_repo(repo: Path) -> None:
         "audit_plan_doc.py",
         "audit_plan_doc_files_touched.py",
         "audit_plan_doc_diff_size.py",
+        "audit_pr_plan_presence.py",
+        "audit_pr_watcher_safety.py",
         "audit_ui_test_enrollment.py",
         "pre_push_audit.sh",
     ):
@@ -279,7 +346,24 @@ def _plan_text(*, total_loc: int) -> str:
 
 Test fixture.
 
+### Problem-derived contract
+
+- Root cause: fixture.
+- Correct fix must touch/change: fixture.
+- Must not change: fixture.
+
 ## Scope (this PR)
+
+Ownership lane: dev-workflow/fixture
+Slice phase: Workflow/process
+
+### Review Contract
+
+- Acceptance criteria: fixture.
+- Reachability proof: N/A -- fixture only.
+- Affected surfaces: fixture.
+- Risk areas: fixture.
+- Reviewer rules triggered: R2, R10.
 
 ### Files touched
 

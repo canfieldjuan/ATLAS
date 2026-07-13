@@ -33,7 +33,12 @@ NEXT_HEADING_RE = re.compile(r"^\s*#+\s+\S")
 TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
 RULE_ID_RE = re.compile(r"\bR\d{1,2}\b")
-DECLARED_LINE_RE = re.compile(r"reviewer rules triggered\s*:\s*(.*)", re.IGNORECASE)
+REVIEW_CONTRACT_HEADING_RE = re.compile(r"^\s*###\s+Review Contract\s*$", re.IGNORECASE)
+REVIEW_CONTRACT_END_RE = re.compile(r"^\s*(?:##|###)\s+\S")
+DECLARED_LINE_RE = re.compile(
+    r"(?:reviewer rules triggered|triggered reviewer rules|rule mapping)\s*:\s*(.*)",
+    re.IGNORECASE,
+)
 # Filler words that describe a glob rather than naming a separate trigger
 # surface; a comma-segment made only of these is not surfaced as prose.
 PROSE_FILLER = {"migrations", "synced", "files", "etc"}
@@ -138,14 +143,34 @@ def required_rules(changed_files: Sequence[str], glob_rows) -> dict[str, list[st
     return triggered
 
 
+def review_contract_text(plan_text: str) -> str:
+    """Return the single Review Contract body, or an empty string if absent."""
+
+    lines = plan_text.splitlines()
+    start: int | None = None
+    for idx, line in enumerate(lines):
+        if REVIEW_CONTRACT_HEADING_RE.match(line):
+            start = idx
+            break
+    if start is None:
+        return ""
+
+    body: list[str] = []
+    for line in lines[start + 1:]:
+        if REVIEW_CONTRACT_END_RE.match(line):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
 def declared_rules(plan_text: str) -> set[str]:
-    """Collect rule ids from the "Reviewer rules triggered" bullet.
+    """Collect rule ids from a labeled bullet inside the Review Contract.
 
     The bullet often wraps across several lines (80-col plans), so gather the
     match line plus its indented continuation lines until the next bullet,
     blank line, heading, or table.
     """
-    lines = plan_text.splitlines()
+    lines = review_contract_text(plan_text).splitlines()
     for idx, line in enumerate(lines):
         match = DECLARED_LINE_RE.search(line)
         if not match:
@@ -226,7 +251,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"changed files: {len(changed_files)}")
 
     if not plans:
-        print("no changed plan doc found; skipped (plan-less PR is out of scope)")
+        print(
+            "no changed plan doc found; plan-admission audit decides whether this "
+            "is an explicit docs-only or Dependabot exemption"
+        )
         return 0
 
     drift = False

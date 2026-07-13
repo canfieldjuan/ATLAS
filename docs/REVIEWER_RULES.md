@@ -250,10 +250,11 @@ these for the paths it touches:
 | Review comments that name a defect class ("all X", "class of Y", "same failure mode") | R13 (held-out/propertied proof that the class, not only the example, is fixed) |
 | All reviewer verdicts | R14 (checked-out PR-head and codebase-backed verification) |
 
-Phase 1 of this convention is documentation + reviewer discipline. A later
-slice adds a mechanical audit that derives the required rule IDs from the diff
-and fails when the plan's triggered-rules line omits one (see
-`AGENTS.md` 4 and the workflow-redesign issue).
+`scripts/audit_review_rules_triggered.py` is the mechanical audit for
+machine-matchable path triggers. Local review and trusted-base CI run it for
+each changed plan, and it fails when the Review Contract's rule declaration
+omits a triggered rule. Prose-only trigger rows remain explicit advisory
+findings because no path glob can safely derive them.
 
 ---
 

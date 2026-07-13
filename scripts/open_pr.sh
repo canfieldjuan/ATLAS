@@ -36,7 +36,11 @@ if [ ! -f "$body_file" ]; then
     exit 2
 fi
 
-python scripts/audit_pr_body.py "$body_file"
+body_audit_args=(--base-ref origin/main)
+if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
+    body_audit_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
+fi
+python scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
 
 for arg in "$@"; do
     case "$arg" in

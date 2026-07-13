@@ -116,6 +116,16 @@ Slice phase: $phase
 1. TODO: Name the narrow behavior this PR changes.
 2. TODO: Name the proof this PR adds.
 
+### Review Contract
+
+- Acceptance criteria: TODO: List the outcomes the reviewer checks one by one.
+- Reachability proof: TODO: Name the real entrypoint and observable effect, or
+  N/A with a reason for a surface-free change.
+- Affected surfaces: TODO: Name the modules, workflows, contracts, and callers
+  in scope.
+- Risk areas: TODO: Name the regression or boundary risks the reviewer probes.
+- Reviewer rules triggered: TODO: List the applicable R1-R14 rule IDs.
+
 ### Files touched
 
 - TODO: run \`python scripts/sync_pr_plan.py $plan_rel\` after implementation.
