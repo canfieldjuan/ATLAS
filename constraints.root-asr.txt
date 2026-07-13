@@ -269,7 +269,7 @@ tqdm==4.68.4
 trafilatura==2.1.0
 transformers==4.57.6
 triton==3.7.1
-twilio==6.43.0
+twilio==9.10.9
 typer==0.26.8
 typing-extensions==4.16.0
 typing-inspection==0.4.2
