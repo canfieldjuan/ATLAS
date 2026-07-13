@@ -3,7 +3,7 @@
 ## Why this slice exists
 
 The Resolution Audit S6 sanitizer arc generated the repo's longest review
-threads: #2053 (55), #2076 (55), #2061 (52), #2046 (51), #2054 (31), all one
+threads: #2053 (55), #2076 (55), #2061 (52), #2046 (51), #2054 (31), all in one
 subsystem. #2037 was the origin -- it did the whole sanitizer in one +1262
 change and drew ~24 findings across four open-input classes at once, then
 paused. The team already sliced it into S6A/A.1/B/C/E, yet each slice still ran
@@ -109,13 +109,16 @@ Parked hardening: none.
 
 ## Verification
 
-- run sync_pr_plan.py, the plan/body consumer gates, and the ASCII scan before
-  push.
+- Plan/body sync (`scripts/sync_pr_plan.py --check`) -- passed ("plan already in sync").
+- Plan/code consistency (`scripts/audit_plan_code_consistency.py`) -- passed (all 3 path claims exist on disk; 0 function claims).
+- PR body contract (`scripts/audit_pr_body.py`) -- passed ("pr body audit: PASS").
+- Non-ASCII scan of the added lines in `AGENTS.md` -- 0 non-ASCII (additions use `--`, `->`, ASCII quotes).
+- Managed pre-push hook (git diff --check, plan/body sync, reviewer-rule mapping, local review) -- passed on push.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `AGENTS.md` | 37 |
-| `plans/PR-Open-Input-Evidence-Gate-Slice.md` | 121 |
-| **Total** | **158** |
+| `plans/PR-Open-Input-Evidence-Gate-Slice.md` | 124 |
+| **Total** | **161** |
