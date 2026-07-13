@@ -995,6 +995,43 @@ builder pattern this catches -- close each cited example with the narrowest loca
 patch, never abstract to the generating decision -- is a recurring failure mode,
 not a one-off.
 
+### 3k.3. Open-input work: evidence-gate at plan time, one class per slice
+
+3k.1 defines the closure bar and 3k.2 the non-convergence breaker; this is the
+BEFORE-code gate that stops an open-input guard from generating the bar's
+findings in the first place. It applies to a PR whose core change is a guard /
+sanitizer / classifier / parser-admission / privacy-marker / boundary-detector
+over free text or producer-supplied structure (the Resolution Audit S6 class).
+
+1. **Plan-stage method gate (primary).** Before any code, the plan names three
+   things: the single choke-point decision the guard makes; how ambiguous,
+   unrecognized, or malformed input reaches the safe verdict *by default*; and
+   the bounded evidence the recognizer keys on. A plan that instead lists shapes
+   to handle -- a denylist, a case table, "handle these examples" -- is rejected
+   at the plan stage, before the enumeration is written. Reject the enumerative
+   method when it is cheapest to reject: on the plan, not after 50 review
+   comments. The evidence-gate mechanics (fail-closed / evidence-gated choke
+   point, evidence-keyed oracle, asymmetric-safe default, open-category form)
+   live in `docs/GUARD_CLASS_CLOSURE.md`; the plan points to them, it does not
+   restate them.
+2. **One class per slice (surface bound).** An open-input PR handles ONE class or
+   decision. A change that touches several open-input classes at once (HTML
+   sanitizing AND quote/signature boundaries AND privacy-marker detection AND
+   auto-reply detection) is split, one class per slice, so a single PR's blast
+   radius is bounded to that class's findings.
+
+**Why:** the S6 sanitizer arc. #2037 did the whole sanitizer in one +1262 change
+and drew ~24 findings across four open-input classes at once, then paused. It was
+sliced into S6A/A.1/B/C/E -- yet each slice still ran ~50 review threads (#2053,
+#2061, #2046, #2076, #2054), because slicing bounds surface but each slice was
+still built by enumeration. #2076 fell to a handful of rounds only when it
+switched to evidence-gating; #2061 the same. So slicing alone distributes the
+comments (~24 became ~244 across five PRs); evidence-gating is the lever that
+collapses a class to one choke point. Gate the method at plan time (primary);
+slice for surface (secondary). The general form -- pick the structural solution
+over the enumerative one, which is also the smaller diff -- is why the
+evidence-gated rewrite shrank both the code and the thread count together.
+
 ### 3l. PR fix mode (constrain the fix loop)
 
 A **fix loop** -- iterating on red CI or review comments on an already-open PR
