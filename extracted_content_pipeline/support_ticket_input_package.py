@@ -385,7 +385,11 @@ _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES = frozenset({
     ("under", "review"),
     ("waiting", "on", "customer"),
 })
-_STATUS_SUFFIX_SEPARATOR_RE = re.compile(r":\s*|\s+(?:[-|/>])\s+")
+# Exact spellings retained from the prior punctuation-erasing normalizer. They
+# are deliberately finite: arbitrary punctuation must not turn unknown words
+# into a lifecycle alias.
+_STATUS_EXACT_LEGACY_SPELLING_KEYS = {"re-opened": "reopened"}
+_STATUS_MACRO_SUFFIX_SEPARATOR_RE = re.compile(r":\s*|\s+(?:[-|/>])\s+")
 
 
 def build_support_ticket_input_package(
@@ -1206,26 +1210,43 @@ def _measured_outcome_examples(
     return examples
 
 
+def _status_state_for_key(key: str) -> str:
+    for state, accepted_values in _STATUS_BUCKET_VALUES:
+        if key in accepted_values:
+            return state
+    return "other"
+
+
+def _status_state_for_exact_phrase(raw: str) -> str:
+    phrase = _clean(raw)
+    legacy_key = _STATUS_EXACT_LEGACY_SPELLING_KEYS.get(phrase.lower())
+    if legacy_key:
+        return _status_state_for_key(legacy_key)
+
+    tokens = tuple(re.findall(r"[a-z0-9]+", phrase.lower()))
+    if len(tokens) == 1:
+        token, = tokens
+        if phrase.lower() == token:
+            return _status_state_for_key(token)
+    if tokens in _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES:
+        return _status_state_for_key("".join(tokens))
+    return "other"
+
+
 def _normalize_status_state(value: Any) -> str:
     raw = _clean(value)
     if not raw:
         return ""
     if raw.startswith((":", "-", "|", "/", ">")):
         return "other"
-    full_key = _key(raw)
-    leading, *trailing = _STATUS_SUFFIX_SEPARATOR_RE.split(raw, maxsplit=1)
-    keys = (full_key,)
+
+    exact_state = _status_state_for_exact_phrase(raw)
+    if exact_state != "other":
+        return exact_state
+
+    leading, *trailing = _STATUS_MACRO_SUFFIX_SEPARATOR_RE.split(raw, maxsplit=1)
     if trailing:
-        compound_tokens = tuple(re.findall(r"[a-z0-9]+", raw.lower()))
-        keys = (
-            (full_key,)
-            if compound_tokens in _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES
-            else ()
-        ) + (_key(leading),)
-    for key in dict.fromkeys(keys):
-        for state, accepted_values in _STATUS_BUCKET_VALUES:
-            if key in accepted_values:
-                return state
+        return _status_state_for_exact_phrase(leading)
     return "other"
 
 

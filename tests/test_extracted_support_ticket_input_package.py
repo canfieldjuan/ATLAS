@@ -1793,45 +1793,62 @@ def test_support_ticket_input_package_preserves_support_platform_provenance() ->
 
 
 def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
+    exact_phrase_states = {
+        ("awaiting", "customer"): "open",
+        ("customer", "response"): "open",
+        ("in", "progress"): "open",
+        ("in", "review"): "open",
+        ("on", "hold"): "open",
+        ("pending", "customer"): "open",
+        ("pending", "customer", "approval"): "open",
+        ("pending", "customer", "response"): "open",
+        ("pending", "deployment"): "open",
+        ("resolved", "under", "monitoring"): "resolved",
+        ("testing", "monitoring"): "open",
+        ("to", "do"): "open",
+        ("under", "review"): "open",
+        ("waiting", "on", "customer"): "open",
+    }
     leading_roles = (
         ("Solved", "resolved"),
         ("Pending Customer", "open"),
         ("reopened", "reopened"),
         ("Cancelled", "cancelled"),
     )
-    separators = (": ", " - ", " | ", " / ", " > ")
+    exact_phrase_separators = (" ", "-", "|", "/", ">", ":", " - ", " | ", " / ", " > ")
+    macro_separators = (":", ": ", " - ", " | ", " / ", " > ")
     separator_prefixes = (
         ":", ": ", "-", "- ", "|", "| ", "/", "/ ", ">", "> ",
     )
-    compound_statuses = {
-        separator.join(tokens): next(
-            state
-            for state, accepted_values in support_ticket_input_package._STATUS_BUCKET_VALUES
-            if "".join(tokens) in accepted_values
-        )
-        for tokens in support_ticket_input_package._STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES
-        for separator in separators
+    malformed_word_boundaries = (
+        " ", "  ", "-", "- ", " -", "|", "| ", " |", "/", "/ ", " /", ">", "> ", " >",
+    )
+    malformed_pairs = (("Re", "solved"), ("Re", "opened"), ("Can", "celled"), ("Sol", "ved"))
+    exact_phrase_statuses = {
+        separator.join(tokens): state
+        for tokens, state in exact_phrase_states.items()
+        for separator in exact_phrase_separators
     }
     statuses = {
         f"{leading}{separator}Macro {index}": state
         for index, ((leading, state), separator) in enumerate(
-            product(leading_roles, separators), start=1
+            product(leading_roles, macro_separators), start=1
         )
     }
-    statuses.update(compound_statuses)
+    statuses.update(exact_phrase_statuses)
     statuses.update({
         f"{prefix}{leading}": "other"
         for prefix, (leading, _) in product(separator_prefixes, leading_roles)
     })
     statuses.update({
+        f"{left}{boundary}{right}": "other"
+        for (left, right), boundary in product(malformed_pairs, malformed_word_boundaries)
+        if (left, boundary, right) != ("Re", "-", "opened")
+    })
+    statuses.update({
         "done": "resolved",
-        "In Progress": "open",
-        "Pending Customer Approval": "open",
-        "Pending Customer Response": "open",
-        "Awaiting Customer": "open",
-        "Customer Response": "open",
-        "Waiting on Customer": "open",
         "reopened": "reopened",
+        "Re-opened": "reopened",
         "Cancelled": "cancelled",
         "Escalated": "other",
         "Customer Escalation": "other",
@@ -1840,9 +1857,6 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
         "unresolved": "other",
         "Macro - Solved": "other",
         "Customer Escalation: resolved": "other",
-        "Re: solved": "other",
-        "Re: opened": "other",
-        "Can: celled": "other",
         "Reopened - Solved macro": "reopened",
     })
     package = build_support_ticket_input_package([

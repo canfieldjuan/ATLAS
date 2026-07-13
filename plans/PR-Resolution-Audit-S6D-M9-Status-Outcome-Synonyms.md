@@ -13,17 +13,20 @@ section 1g explicitly permits on the next branch.
 ### Problem-derived contract
 
 - Root cause: `_normalize_status_state()` uses a punctuation-erasing full key
-  without modeling whether separator tokens are a supported exact lifecycle
-  phrase or an arbitrary compound. It can therefore rescue unknown leaders
-  (`Re: solved`) while the FAQ/report direct-raw caller inherits the same
-  misclassification into outcome diagnostics and reopened-risk counts.
-- Correct fix must touch/change: reject a bounded separator at position zero;
-  preserve legacy full-key exact matching without a bounded compound separator;
-  and for split input admit the full key only when its ordered word sequence
-  matches the canonical exact-compound reference table, otherwise try only a
-  recognized leading segment. Keep `reopened` precedence and prove package plus
-  direct FAQ/report entrypoints across every canonical bucket, supported separators, exact
-  punctuated synonyms, and negative near-match/prefix/ordering cases.
+  without one lexical admission decision. Its earlier split-only table gate
+  leaves whitespace-only, compact, and one-sided separator forms on the broad
+  whole-value path, where unknown leaders (`Re solved`, `Re/Solved`, and
+  `Can- celled`) reconstruct lifecycle keys. The FAQ/report direct-raw caller
+  inherits that misclassification into outcome diagnostics and reopened-risk
+  counts.
+- Correct fix must touch/change: reject a separator at position zero; model the
+  raw value as exactly one of a recognized unseparated alias, a canonical
+  ordered multi-word lifecycle phrase, or a recognized leading phrase followed
+  by the bounded macro-suffix grammar. Every other punctuation/whitespace word
+  boundary must return `other`. Preserve the explicit legacy spelling
+  `Re-opened`, keep `reopened` precedence, and prove package plus direct
+  FAQ/report entrypoints across every canonical bucket, grammar separator,
+  exact punctuated synonym, and negative near-match/prefix/ordering case.
 - Must not change: the bucket set (`resolved`, `open`, `reopened`, `cancelled`,
   `other`), raw `ticket_status`, row admission, evidence tiers, CSAT, report
   fields, downstream outcome semantics, or customer-facing product shape.
@@ -42,11 +45,12 @@ Max files: 6
 
 ### Review Contract
 
-- Acceptance: legacy exact statuses and canonical-sequence punctuation-normalized
-  compounds retain behavior; a recognized leading status plus an explicit
-  separator maps to its existing bucket; compact/spaced prefixes, unknown
-  leaders, concatenated near-matches, and negations stay `other`; `reopened`
-  remains distinct and wins when leading.
+- Acceptance: exact single aliases (including explicit `Re-opened`) and
+  canonical-sequence punctuation-normalized compounds retain behavior; a
+  recognized leading status plus the bounded macro separator maps to its
+  existing bucket; whitespace-only, one-sided, compact, and unknown-leading
+  word boundaries stay `other`; `reopened` remains distinct and wins when
+  leading.
 - Affected surfaces/risks: support-ticket row normalization, package metadata,
   and direct FAQ/report `outcome_diagnostics` status/reopened counts; false
   positives overstate resolved/reopened outcomes, while false negatives retain
@@ -67,23 +71,25 @@ Max files: 6
 
 ## Mechanism
 
-The normalizer first rejects `:`, `-`, `|`, `/`, or `>` at position zero, with
-or without following whitespace. Values without the bounded compound grammar
-retain existing full-key normalization. For split values, the full key is
-allowed only when the ordered words match the reference table of existing
-multi-word lifecycle aliases; otherwise only the leading segment is considered.
-The suffix never participates in this fallback. No substring search occurs, so
-`closedeal`, `unresolved`, `Re: solved`, and `Customer Escalation: resolved`
-cannot inherit a lifecycle state. Tests generate every reference-table sequence
-across supported separators, then exercise direct-report and prefix boundaries.
+The normalizer has one lexical admission decision: a raw value is accepted only
+as an exact unseparated lifecycle alias, the explicit legacy `Re-opened`
+spelling, an ordered token sequence in the canonical phrase table, or a
+recognized leading phrase followed by the bounded macro separator. The suffix
+never participates in leading fallback. Every other multi-token or
+separator-bearing value is `other`; no punctuation/whitespace erasure can reach
+the bucket table first. Tests implement an independent grammar oracle and
+generate canonical phrases plus malformed prefix/compact/one-sided/whitespace
+products through the real package entrypoint, then exercise representative
+direct-report diagnostics.
 
 ## Intentional
 
 - Unknown and malformed compound vocabulary still maps to `other`; this slice
   prefers safe undercount over guessing from a status word anywhere in text.
-- Separators are bounded and status must lead. Whitespace-only concatenation,
-  arbitrary prefixes, suffix-token search, and fuzzy/LLM classification are
-  intentionally rejected.
+- Only recognized canonical phrases may use arbitrary word delimiters; the
+  bounded macro grammar alone admits a free-form suffix. Whitespace-only,
+  arbitrary prefixes, one-sided/compact malformed compounds, suffix-token
+  search, and fuzzy/LLM classification are intentionally rejected.
 - The exact-compound reference table models existing ordered lifecycle aliases,
   not new status buckets or a suffix-admission list; an unknown sequence forces
   leading-only classification.
@@ -115,10 +121,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/support_ticket_input_package.py` | 54 |
+| `extracted_content_pipeline/support_ticket_input_package.py` | 75 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Resolution-Audit-S6D-M9-Status-Outcome-Synonyms.md` | 124 |
+| `plans/PR-Resolution-Audit-S6D-M9-Status-Outcome-Synonyms.md` | 130 |
 | `plans/archive/PR-Resolution-Audit-S6C-Scalar-History.md` | 0 |
-| `tests/test_content_ops_deflection_report.py` | 32 |
-| `tests/test_extracted_support_ticket_input_package.py` | 50 |
-| **Total** | **263** |
+| `tests/test_content_ops_deflection_report.py` | 35 |
+| `tests/test_extracted_support_ticket_input_package.py` | 76 |
+| **Total** | **319** |

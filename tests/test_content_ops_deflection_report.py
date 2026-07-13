@@ -5537,6 +5537,9 @@ def test_outcome_diagnostics_normalize_direct_raw_compound_statuses() -> None:
             row("direct-compound-3", "ticket_status", "Re: solved"),
             row("direct-compound-4", "ticket_status", "Re: opened"),
             row("direct-compound-5", "ticket_status", "Can: celled"),
+            row("direct-compound-6", "ticket_status", "Re -solved"),
+            row("direct-compound-7", "ticket_status", "Re solved"),
+            row("direct-compound-8", "ticket_status", "Re/Solved"),
         ],
         max_items=1,
     )
@@ -5544,10 +5547,10 @@ def test_outcome_diagnostics_normalize_direct_raw_compound_statuses() -> None:
     diagnostics = result.items[0]["outcome_diagnostics"]
 
     assert diagnostics == {
-        "diagnostic_ticket_count": 5,
+        "diagnostic_ticket_count": 8,
         "outcome_risk_ticket_count": 1,
         "reopened_ticket_count": 1,
-        "ticket_status_summary": {"other": 3, "reopened": 1, "resolved": 1},
+        "ticket_status_summary": {"other": 6, "reopened": 1, "resolved": 1},
     }
 
 
