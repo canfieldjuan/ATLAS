@@ -1848,9 +1848,15 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
         for phrase in semantic_phrase_states
         for prefix, suffix in (("#", ""), ("(", ")"), ("[", "]"))
     }
-    empty_suffix_statuses = {
-        f"{leading}{separator}".rstrip(): "other"
-        for leading, separator in product(semantic_one_word_states, macro_separators)
+    punctuation_only_suffixes = {
+        "".join(suffix)
+        for suffix_length in range(3)
+        for suffix in product((":", "-", "|", "/", ">", "_"), repeat=suffix_length)
+    }
+    suffix_without_content_statuses = {
+        f"{leading}{separator}{suffix}".rstrip(): "other"
+        for leading in (*semantic_one_word_states, *semantic_phrase_states)
+        for separator, suffix in product(macro_separators, punctuation_only_suffixes)
     }
     malformed_partition_statuses = {}
     for alias in semantic_one_word_states:
@@ -1872,7 +1878,7 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
     statuses.update(exact_phrase_statuses)
     statuses.update(compound_leader_statuses)
     statuses.update(wrapped_phrase_statuses)
-    statuses.update(empty_suffix_statuses)
+    statuses.update(suffix_without_content_statuses)
     statuses.update({
         f"{prefix}{leading}": "other"
         for prefix, leading in product(separator_prefixes, semantic_one_word_states)
@@ -1889,6 +1895,7 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
         "Macro - Solved": "other",
         "Customer Escalation: resolved": "other",
         "Reopened - Solved macro": "reopened",
+        "Resolved: Réponse 7": "resolved",
     })
     package = build_support_ticket_input_package([
         {

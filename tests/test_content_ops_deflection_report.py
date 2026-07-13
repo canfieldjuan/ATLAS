@@ -5533,7 +5533,7 @@ def test_outcome_diagnostics_normalize_direct_raw_compound_statuses() -> None:
     result = build_ticket_faq_markdown(
         [
             row("direct-compound-1", "ticket_status", "Reopened: Escalation macro"),
-            row("direct-compound-2", "status", "Solved - Refund macro"),
+            row("direct-compound-2", "status", "Solved - Réponse 7"),
             row("direct-compound-3", "ticket_status", "Re: solved"),
             row("direct-compound-4", "ticket_status", "Re: opened"),
             row("direct-compound-5", "ticket_status", "Can: celled"),
@@ -5543,6 +5543,9 @@ def test_outcome_diagnostics_normalize_direct_raw_compound_statuses() -> None:
             row("direct-compound-9", "ticket_status", "#Pending Customer"),
             row("direct-compound-10", "ticket_status", "Under - Review - Escalation macro"),
             row("direct-compound-11", "ticket_status", "Solved:"),
+            row("direct-compound-12", "ticket_status", "Solved::"),
+            row("direct-compound-13", "ticket_status", "Open - -"),
+            row("direct-compound-14", "ticket_status", "Reopened: |"),
         ],
         max_items=1,
     )
@@ -5550,12 +5553,12 @@ def test_outcome_diagnostics_normalize_direct_raw_compound_statuses() -> None:
     diagnostics = result.items[0]["outcome_diagnostics"]
 
     assert diagnostics == {
-        "diagnostic_ticket_count": 11,
+        "diagnostic_ticket_count": 14,
         "outcome_risk_ticket_count": 1,
         "reopened_ticket_count": 1,
         "ticket_status_summary": {
             "open": 1,
-            "other": 8,
+            "other": 11,
             "reopened": 1,
             "resolved": 1,
         },

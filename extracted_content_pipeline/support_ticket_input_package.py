@@ -1251,7 +1251,7 @@ def _normalize_status_state(value: Any) -> str:
         return exact_state
 
     for separator in _STATUS_MACRO_SUFFIX_SEPARATOR_RE.finditer(raw):
-        if not _clean(raw[separator.end():]):
+        if not any(character.isalnum() for character in raw[separator.end():]):
             continue
         leading_state = _status_state_for_exact_phrase(raw[:separator.start()])
         if leading_state != "other":
