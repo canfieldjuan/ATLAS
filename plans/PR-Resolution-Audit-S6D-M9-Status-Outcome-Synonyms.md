@@ -26,10 +26,14 @@ section 1g explicitly permits on the next branch.
   boundary must return `other`. Exact phrases may have only internal allowed
   delimiters (no wrapper punctuation); macro admission must scan candidates for
   a nonblank suffix after a recognized leading phrase, so a punctuated compound
-  leader remains recognized. Preserve the explicit legacy spelling `Re-opened`,
-  keep `reopened` precedence, and prove package plus direct FAQ/report
-  entrypoints across every canonical bucket, grammar separator, exact
-  punctuated synonym, and negative near-match/prefix/ordering case.
+  leader remains recognized. Preserve underscores only as internal delimiters
+  of a recognized canonical phrase. The test oracle must define semantic status
+  aliases separately from runtime tables and generate every split of each
+  one-word alias across the malformed-boundary grammar. Preserve the explicit
+  legacy spelling `Re-opened`, keep `reopened` precedence, and prove package
+  plus direct FAQ/report entrypoints across every canonical bucket, grammar
+  separator, exact punctuated synonym, and negative near-match/prefix/ordering
+  case.
 - Must not change: the bucket set (`resolved`, `open`, `reopened`, `cancelled`,
   `other`), raw `ticket_status`, row admission, evidence tiers, CSAT, report
   fields, downstream outcome semantics, or customer-facing product shape.
@@ -53,8 +57,8 @@ Max files: 6
   recognized leading status plus the bounded macro separator maps to its
   existing bucket; whitespace-only, one-sided, compact, and unknown-leading
   word boundaries, wrapper punctuation, and empty suffixes stay `other`;
-  punctuated multi-word leaders retain their bucket before a nonblank suffix;
-  `reopened` remains distinct and wins when leading.
+  punctuated or snake_case multi-word leaders retain their bucket before a
+  nonblank suffix; `reopened` remains distinct and wins when leading.
 - Affected surfaces/risks: support-ticket row normalization, package metadata,
   and direct FAQ/report `outcome_diagnostics` status/reopened counts; false
   positives overstate resolved/reopened outcomes, while false negatives retain
@@ -84,8 +88,10 @@ wrapper punctuation. The macro parser inspects each bounded separator until a
 recognized prefix is found, preserving a punctuated compound leader instead of
 splitting at its first word. Every other multi-token or separator-bearing value
 is `other`; no punctuation/whitespace erasure can reach the bucket table first.
-Tests implement an independent grammar oracle and generate canonical phrases,
-compound leaders plus suffixes, and malformed
+Underscore is one such internal delimiter only for a recognized phrase. Tests
+implement a semantic alias oracle separate from runtime tables, then generate
+canonical phrases, compound leaders plus suffixes, every internal split of each
+one-word alias across the malformed-boundary grammar, and
 prefix/compact/one-sided/whitespace/wrapper/empty-suffix products through the
 real package entrypoint, then exercise representative direct-report diagnostics.
 
@@ -100,6 +106,8 @@ real package entrypoint, then exercise representative direct-report diagnostics.
 - A macro delimiter without nonblank suffix text is malformed, not a status;
   phrase punctuation is allowed only between canonical words, never as a
   leading or trailing wrapper.
+- Snake_case is retained only where it joins an ordered canonical phrase; an
+  underscore cannot rescue an unknown prefix or single-word partition.
 - The exact-compound reference table models existing ordered lifecycle aliases,
   not new status buckets or a suffix-admission list; an unknown sequence forces
   leading-only classification.
@@ -133,8 +141,8 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/support_ticket_input_package.py` | 84 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Resolution-Audit-S6D-M9-Status-Outcome-Synonyms.md` | 140 |
+| `plans/PR-Resolution-Audit-S6D-M9-Status-Outcome-Synonyms.md` | 148 |
 | `plans/archive/PR-Resolution-Audit-S6C-Scalar-History.md` | 0 |
 | `tests/test_content_ops_deflection_report.py` | 43 |
-| `tests/test_extracted_support_ticket_input_package.py` | 94 |
-| **Total** | **364** |
+| `tests/test_extracted_support_ticket_input_package.py` | 105 |
+| **Total** | **383** |

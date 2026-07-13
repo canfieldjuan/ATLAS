@@ -390,7 +390,7 @@ _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES = frozenset({
 # into a lifecycle alias.
 _STATUS_EXACT_LEGACY_SPELLING_KEYS = {"re-opened": "reopened"}
 _STATUS_EXACT_COMPOUND_PHRASE_RE = re.compile(
-    r"[a-z0-9]+(?:[ \t:|/>-]+[a-z0-9]+)+", re.IGNORECASE,
+    r"[a-z0-9]+(?:[ \t_:|/>-]+[a-z0-9]+)+", re.IGNORECASE,
 )
 _STATUS_MACRO_SUFFIX_SEPARATOR_RE = re.compile(r":\s*|\s+(?:[-|/>])\s+")
 
