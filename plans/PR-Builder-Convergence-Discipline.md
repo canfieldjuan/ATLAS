@@ -129,7 +129,7 @@ Parked hardening: none.
 
 - `python scripts/sync_pr_plan.py --check plans/PR-Builder-Convergence-Discipline.md origin/main` -- passed ("plan already in sync").
 - `python scripts/audit_pr_body.py <body-file>` -- passed ("pr body audit: PASS").
-- Non-ASCII scan (`grep -nP '[^\x00-\x7F]'`) of the three edited docs -- additions are ASCII (`--`, `->`, ASCII quotes); markdown is not gated by the Python ASCII check regardless.
+- Non-ASCII scan (`git diff origin/main -- <f> | grep '^+' | grep -P '[^\x00-\x7F]'`) of the added lines in all four edited docs -- `AGENTS.md`, `docs/GUARD_CLASS_CLOSURE.md`, `docs/OVERNIGHT_ARC_WORKFLOW.md`, `docs/REVIEWER_RULES.md` -- reports 0 non-ASCII each (additions use `--`, `->`, ASCII quotes); markdown is not gated by the Python ASCII check regardless.
 - Managed pre-push hook (git diff --check, plan/body sync, reviewer-rule mapping, local review) -- passed on push.
 - Docs-only slice: no test suite applies; cross-references resolve to real sections (`GUARD_CLASS_CLOSURE.md`, `AGENTS.md` 3k.2, R13, `OVERNIGHT_ARC_WORKFLOW.md`).
 
@@ -139,7 +139,7 @@ Parked hardening: none.
 |---|---:|
 | `AGENTS.md` | 51 |
 | `docs/GUARD_CLASS_CLOSURE.md` | 64 |
-| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 8 |
+| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 10 |
 | `docs/REVIEWER_RULES.md` | 22 |
 | `plans/PR-Builder-Convergence-Discipline.md` | 145 |
-| **Total** | **290** |
+| **Total** | **292** |
