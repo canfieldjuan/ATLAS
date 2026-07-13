@@ -939,29 +939,61 @@ root cause of a reported leak or over-scrub is almost never the reported input
 -- it is an **open default**: a per-input branch whose fall-through lands on the
 unsafe verdict. Fixing the reported string closes nothing; the next string in
 the same class is reported next round (the S6A privacy guard ran this loop 9+
-rounds). The root-cause fix for these surfaces is codified in
-`docs/GUARD_CLASS_CLOSURE.md` and is mandatory before merge:
-
-1. **A fail-closed choke point** -- admit only on affirmative recognition of a
-   safe value; every unrecognized/unresolved/malformed/novel shape reaches the
-   safe verdict by construction through one decision point. "Reject known-bad,
-   admit the rest" is banned on open input; it must be "admit known-good, reject
-   the rest."
-2. **Class-closure, not string-closure** -- the diff closes the reported input's
-   grammar/vocabulary/shape-family/container variants in one place, not a branch
-   or token per reported string.
-3. **A grammar-derived property test** -- generate inputs from the vocabulary
-   (tokens x modifiers x container shapes x key families) and assert against a
-   spec-derived semantic oracle, not only representation parity with the base
-   case (parity over a wrong base stays green while the class is still broken);
-   a fixture list of the reported strings does not satisfy this. This
-   strengthens §3j from "5-10 unseen cases" to "the generated class" for
-   open-input guards, and is the acceptance gate reviewers require before LGTM.
+rounds). The root-cause fix -- a fail-closed / evidence-gated choke point,
+class-closure (not string-closure), a grammar- or evidence-derived property
+test, plus the open-category exception and the asymmetric-safe default -- is
+defined canonically in `docs/GUARD_CLASS_CLOSURE.md`. It is mandatory before
+merge, it is the acceptance gate reviewers require before LGTM, and it
+strengthens section 3j from "5-10 unseen cases" to "the generated class" for
+open-input guards. The requirements are **not re-listed here**: that doc is the
+single source, so this section cannot drift from it (three review rounds on #2077
+were spent reconciling parallel restatements).
 
 The reviewer enforcement of this gate lives in the guard boundary-probe section
 of `docs/REVIEWER_RULES.md`; the scope caveat (documented neutral/data-column
 families keep their admit policy -- the choke point governs the safety verdict,
-not every field's text) is in `docs/GUARD_CLASS_CLOSURE.md`.
+not every field's text) and the open-category evidence-gated form both live in
+`docs/GUARD_CLASS_CLOSURE.md`. A non-converging loop on one decision is governed
+by 3k.2 below.
+
+### 3k.2. Convergence circuit-breaker (stop instance-patching a seam)
+
+Section 3k.1 is the fix for open-input guards; this is the process guardrail for
+when a fix loop is NOT converging. On a PR where each push closes the reported
+review threads but the next push opens a comparable count of **same-class**
+findings on the **same file / decision** -- the thread count is flat or rising
+over 3 consecutive pushes, not trending to zero -- the builder is
+instance-patching a shared decision, not fixing it. This is distinct from the
+bot-round *noise* cap (see 4a and `docs/OVERNIGHT_ARC_WORKFLOW.md`): there the
+findings are formally-identical re-litigation of a green contract; here the
+findings are real, and each patch shifts the boundary and exposes the adjacent
+case.
+
+When this trips, the next push may NOT add another example-scoped patch (another
+token, regex, vocabulary row, or oracle fixture). It must carry a **Decision-Seam
+Analysis** in the plan / PR body:
+
+1. **Name the one decision** all the open threads share (the seam) -- e.g. "the
+   single admit/skip verdict for a transcript line."
+2. **State why that decision is wrong** -- over-broad, under-broad, or an open
+   category it cannot enumerate. If the recognizer itself is open, evidence-gate
+   it per `docs/GUARD_CLASS_CLOSURE.md` (do not enumerate the category).
+3. **Do exactly one of:** (a) fix the seam structurally with a stated default
+   direction, and for asymmetric error costs the cheap-error default; (b) waive
+   the bounded residual explicitly (<= status-quo, recorded in *Deferred*) and
+   reconcile the threads as accepted-not-fixing; or (c) re-scope or park the
+   slice. Adding the next instance patch is none of these and is rejected at
+   review.
+
+**Why:** Resolution Audit S6C (#2076) ran ~9 rounds and ~35 findings this way --
+each round fixed the cited senders and the next round reported new same-class
+senders, and every miss dropped a customer question. The round count alone was
+not the signal (the bot-noise cap did not apply -- the findings were real); the
+signal was that the findings were *the same decision re-litigated*. Naming the
+seam and evidence-gating it converged in one push after nine that did not. The
+builder pattern this catches -- close each cited example with the narrowest local
+patch, never abstract to the generating decision -- is a recurring failure mode,
+not a one-off.
 
 ### 3l. PR fix mode (constrain the fix loop)
 

@@ -161,6 +161,17 @@ practical, use multiple unseen fixtures plus a short explanation of the
 generalized mechanism. Generated or unseen cases must be diverse enough to
 exercise the class, not trivial near-duplicates that satisfy the easy path.
 
+**Open-category exception (evidence-gate, do not enumerate).** When the class is
+an *open semantic category* the guard cannot enumerate on either side (person
+names, senders, intent, language, is-junk), neither a denylist nor a
+member-allowlist closes it, and a property test over category members does not
+either. Require that the fix meets the open-category form defined canonically in
+`docs/GUARD_CLASS_CLOSURE.md` (do not restate it here). **Block if:** a diff answers a same-class
+finding with the next member patch (token, regex, vocabulary row, oracle
+fixture) while the thread history shows the class is open and not converging --
+that is the `AGENTS.md` 3k.2 convergence circuit-breaker, and the next push owes
+a Decision-Seam Analysis, not another example.
+
 ### R14 - Verify against the codebase, not the PR story
 Review verdicts must be based on the checked-out PR head and the current
 codebase, not the PR description, issue summary, builder claims, or prior
@@ -205,18 +216,16 @@ If the guard protects security, billing, data deletion, customer-visible
 output, or CI/release gates, missing boundary proof is BLOCKER. Otherwise it is
 at least MAJOR.
 
-**Open-input guards additionally require class-closure** (`docs/GUARD_CLASS_CLOSURE.md`,
-`AGENTS.md` section 3k.1). When the guard's input space is open -- free text,
-nested/recursive structures, producer-supplied keys/values -- boundary probes
-alone are not enough: they prove the sampled inputs, not the class. Before LGTM,
-require and state (a) a **fail-closed choke point** (admit only on affirmative
-recognition; every unrecognized/unresolved/malformed shape rejects by
-construction, not via a per-input branch whose fall-through is unsafe), and (b) a
-**grammar-derived property test** (generated inputs, derived expected values) --
-not a fixture list of the reported strings. A string-scoped fix with
-string-scoped fixtures is an automatic "needs the class fix," even when every
-listed input passes. Confirmed fail-opens in money/auth/PII/safety guards block
-regardless of review-round count.
+**Open-input guards additionally require class-closure.** When the guard's input
+space is open -- free text, nested/recursive structures, producer-supplied
+keys/values -- boundary probes alone are not enough: they prove the sampled
+inputs, not the class. Before LGTM, require and state that the guard meets the
+class-closure bar defined canonically in `docs/GUARD_CLASS_CLOSURE.md` (its
+open-category exception evidence-gates instead of enumerating; see also R13 and
+`AGENTS.md` 3k.2 for a non-converging loop). Block until it holds; the
+requirements are not restated here -- that doc is the single source. Confirmed
+fail-opens in money/auth/PII/safety guards block regardless of review-round
+count.
 
 ---
 
