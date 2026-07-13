@@ -7,17 +7,14 @@ input passes, so the diff looks correct, while the *class* the input belongs to
 stays open and the next input in that class is reported next round.
 
 **This document is the single source** for the guard-closure bar (the three
-requirements below), the open-category evidence-gated exception, the
-asymmetric-safe default, and the fail-open **block-exception set** (money / auth
-/ PII / safety -- guards where a confirmed fail-open blocks regardless of
-review-round count). **Every** doc that names any of these -- the reviewer rules,
-`AGENTS.md` 3k, the overnight runbook, the session bootstrap prompt, and any
-future one -- carries a POINTER here, never a copy, and must not restate them
-normatively. The pointer set is deliberately stated as "every such doc," not an
-enumerated list: an enumerated list is itself a restatement that drifts (a copy
-gets missed in one doc, or the block set is written two different ways -- exactly
-what happened across the review rounds on #2077). To change the bar or the block
-set, edit only this file.
+requirements below), the open-category evidence-gated exception, and the
+asymmetric-safe default. **Every** doc that names them -- the reviewer rules,
+`AGENTS.md` 3k, the session bootstrap prompt, and any future one -- carries a
+POINTER here, never a copy, and must not restate them normatively. The pointer
+set is stated as "every such doc," not an enumerated list, because an enumerated
+list is itself a restatement that drifts (a copy gets missed in one doc -- which
+is what happened across the review rounds on #2077). To change the bar, edit only
+this file.
 
 ## When this applies (trigger)
 
@@ -204,9 +201,9 @@ inline with a `guard-class-closure: waived` marker in the PR body.
 The Codex/bot review-round cap is a circuit-breaker for **noise** -- a reviewer
 demanding opposite verdicts on formally-identical shapes, where the PR's actual
 contract was green from round 0-1. It is **not** satisfied by cap-and-waive when
-the findings are a real open class in a guard in the block-exception set defined
-above (money / auth / PII / safety): those block regardless of round count. On these surfaces the convergence tool is this
-discipline -- the choke point plus the grammar- or evidence-derived property test
-(the evidence-gated form when the recognizer is an open category, per the section
-above) close the class in one pass -- not another round of spot patches and not
-waiving the residual to reach green.
+the findings are a real open class in a money / auth / PII guard (the same set
+`docs/OVERNIGHT_ARC_WORKFLOW.md` names as blocking past the cap): those block
+regardless of round count. On these surfaces the convergence tool is this
+discipline -- the choke point plus the grammar-derived property test close the
+class in one pass -- not another round of spot patches and not waiving the
+residual to reach green.

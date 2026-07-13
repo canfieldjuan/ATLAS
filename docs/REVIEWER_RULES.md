@@ -221,17 +221,12 @@ at least MAJOR.
 space is open -- free text, nested/recursive structures, producer-supplied
 keys/values -- boundary probes alone are not enough: they prove the sampled
 inputs, not the class. Before LGTM, require and state that the guard meets the
-class-closure bar defined canonically in `docs/GUARD_CLASS_CLOSURE.md`: a
-fail-closed / evidence-gated choke point and a grammar- or evidence-derived
-property test, including the open-category exception (evidence-gate; do NOT
-demand a member allowlist or member-keyed grammar test the open category cannot
-satisfy) and the asymmetric-safe default. A string-scoped fix with string-scoped
-fixtures is an automatic "needs the class fix," even when every listed input
-passes. Confirmed fail-opens in the block-exception set (canonical:
-`docs/GUARD_CLASS_CLOSURE.md`) block regardless of review-round count. The
-requirements and the block set are not restated here -- that doc is the single
-source; see R13's open-category exception and `AGENTS.md` 3k.2 for a
-non-converging loop.
+class-closure bar defined canonically in `docs/GUARD_CLASS_CLOSURE.md` (its
+open-category exception evidence-gates instead of enumerating; see also R13 and
+`AGENTS.md` 3k.2 for a non-converging loop). Block until it holds; the
+requirements are not restated here -- that doc is the single source. Confirmed
+fail-opens in money/auth/PII/safety guards block regardless of review-round
+count.
 
 ---
 

@@ -38,32 +38,26 @@ occurrence is caught by rule instead of by nine rounds of review.
 Ownership lane: workflow/review-discipline
 Slice phase: Workflow/process
 
-Max files: 6
+Max files: 5
 
 1. Add "When the recognizer itself is open (evidence-gated closure)" plus the
    asymmetric-cost default and the evidence-keyed oracle refinement to
    `docs/GUARD_CLASS_CLOSURE.md`.
 2. Add `AGENTS.md` 3k.2 convergence circuit-breaker + Decision-Seam Analysis.
 3. Add the open-category exception to `docs/REVIEWER_RULES.md` R13.
-4. Review-driven root-cause widening (+1 file): the exception and the 3k.2
-   cap-reconciliation must land in EVERY canonical statement, not only the ones
-   first edited, or a doc that restates the un-reconciled bar (or the OVERNIGHT
-   runbook, which declares itself canonical / wins-on-conflict) reopens the
-   conflict. The complete enumerable set -- `GUARD_CLASS_CLOSURE.md`,
-   `REVIEWER_RULES.md` (R13 + the guard-LGTM gate), `AGENTS.md` (3k.1 + 3k.2),
-   and `docs/OVERNIGHT_ARC_WORKFLOW.md` -- is reconciled in one pass so no
-   statement is left un-reconciled.
-5. Single-source structure (the convergent fix for the three-round drift):
+4. Single-source the BAR (the convergent fix for the review-driven drift):
    designate `docs/GUARD_CLASS_CLOSURE.md` the sole canonical source for the
-   guard-closure bar, the open-category exception, the asymmetric-safe default,
-   and the fail-open block-exception set (money/auth/PII/safety); replace the
-   parallel re-listings in `docs/REVIEWER_RULES.md`, `AGENTS.md` 3k.1,
-   `docs/OVERNIGHT_ARC_WORKFLOW.md`, and (review-surfaced, +1 file)
-   `docs/SESSION_BOOTSTRAP.md` (which new builders read first) with short
-   pointers, so no secondary doc
-   restates the normative content and none can drift from the source. This
-   removes ~37 lines of restatement; the requirements themselves are unchanged in
-   the canonical doc.
+   guard-closure bar, the open-category exception, and the asymmetric-safe
+   default; the reviewer rules, `AGENTS.md` 3k.1, and `docs/SESSION_BOOTSTRAP.md`
+   carry short pointers (stated as "every doc that names the bar," not an
+   enumerated list), not copies.
+5. Re-scope (per the 3k.2 circuit-breaker this PR codifies): an earlier revision
+   also named a "block-exception set" and reconciled the cap / waive-option
+   semantics across the overnight runbook and 3k.2. That cross-cutting
+   reconciliation generated a consistency finding every review round without
+   converging, so it was reverted -- the overnight runbook is unchanged -- and
+   deferred as a separate concern. This PR keeps the core plus the bar
+   single-source only.
 
 ### Review Contract
 
@@ -82,15 +76,15 @@ Max files: 6
         cap.
   - [ ] `REVIEWER_RULES.md` R13 gains the open-category exception with a block
         condition pointing at the 3k.2 circuit-breaker.
-  - [ ] Single source: `GUARD_CLASS_CLOSURE.md` is the sole canonical statement
-        of the bar, the open-category exception, the asymmetric-safe default, and
-        the block-exception set; its "single source" note states the pointer set
-        as "every such doc," not an enumerated list.
-  - [ ] No un-pointered restatement remains: the block-set / bar literal appears
-        only in the canonical doc (exhaustive repo grep), and no numbered
-        requirement re-listing survives in `REVIEWER_RULES.md`, `AGENTS.md` 3k.1,
-        `docs/OVERNIGHT_ARC_WORKFLOW.md`, or `docs/SESSION_BOOTSTRAP.md`; the
-        cap-relationship paragraph references the grammar- or evidence-derived bar.
+  - [ ] Single source of the bar: `GUARD_CLASS_CLOSURE.md` is the sole canonical
+        statement of the bar, the open-category exception, and the asymmetric-safe
+        default; its "single source" note states the pointer set as "every such
+        doc," not an enumerated list.
+  - [ ] The reviewer guard-LGTM gate and `AGENTS.md` 3k.1 are pointers, not
+        copies -- no numbered requirement re-listing survives in either.
+  - [ ] No block-exception-set / cap / waive reconciliation is introduced; the
+        `docs/OVERNIGHT_ARC_WORKFLOW.md` runbook and the cap semantics are
+        unchanged (a search for "block-exception" across the docs returns none).
   - [ ] No runtime/product/test code changes; existing requirements, rule
         numbering, and the noise-cap semantics are untouched.
 - Reachability proof: N/A -- documentation/process rules; verified by rendered
@@ -104,7 +98,6 @@ Max files: 6
 
 - `AGENTS.md`
 - `docs/GUARD_CLASS_CLOSURE.md`
-- `docs/OVERNIGHT_ARC_WORKFLOW.md`
 - `docs/REVIEWER_RULES.md`
 - `docs/SESSION_BOOTSTRAP.md`
 - `plans/PR-Builder-Convergence-Discipline.md`
@@ -125,11 +118,12 @@ wrong, then fix the seam / waive the bounded residual / re-scope). `REVIEWER_RUL
 R13 gains the open-category exception so reviewers block a member-patch response
 to a non-converging open class. The #2076 arc is the cited episode throughout.
 
-Single source: after review showed the same normative content restated in four
-docs kept drifting (the open-category exception missing in one gate; the block
-set written two different ways), `GUARD_CLASS_CLOSURE.md` is made the sole
-canonical source for the bar, the open-category exception, the asymmetric-safe
-default, and the block-exception set, and it opens with a "single source" note.
+Single source: after review showed the same bar restated across docs kept
+drifting, `GUARD_CLASS_CLOSURE.md` is made the sole canonical source for the bar,
+the open-category exception, and the asymmetric-safe default, and it opens with a
+"single source" note (pointer set = "every doc that names the bar," not a list).
+An earlier revision's block-exception-set / cap / waive reconciliation was
+reverted -- it generated a finding per round without converging -- and deferred.
 `REVIEWER_RULES.md`'s guard-LGTM gate, `AGENTS.md` 3k.1, and the
 `OVERNIGHT_ARC_WORKFLOW.md` cap now carry short pointers to it instead of copies,
 so the bar or the set changes in exactly one file. 3k.2 (the convergence
@@ -155,25 +149,29 @@ it for how-you-stop.
   pushed SHA; warn when not trending to zero). Separable follow-up; needs the
   thread-history producer.
 
+- Block-exception-set / cap / waive-option reconciliation across the docs
+  (overnight runbook + 3k.2): reverted from this PR as a separate cross-cutting
+  concern; open a follow-up only if the pre-existing minor phrasing differences
+  (money/auth/PII vs money/auth/PII/safety) prove worth reconciling.
+
 Parked hardening: none.
 
 ## Verification
 
 - `python scripts/sync_pr_plan.py --check plans/PR-Builder-Convergence-Discipline.md origin/main` -- passed ("plan already in sync").
 - `python scripts/audit_pr_body.py <body-file>` -- passed ("pr body audit: PASS").
-- Non-ASCII scan (`git diff origin/main -- <f> | grep '^+' | grep -P '[^\x00-\x7F]'`) of the added lines in all five edited docs -- `AGENTS.md`, `docs/GUARD_CLASS_CLOSURE.md`, `docs/OVERNIGHT_ARC_WORKFLOW.md`, `docs/REVIEWER_RULES.md`, and `docs/SESSION_BOOTSTRAP.md` -- reports 0 non-ASCII each (additions use `--`, `->`, ASCII quotes, and spell "section 3k.1" rather than the section-sign); markdown is not gated by the Python ASCII check regardless.
+- Non-ASCII scan (`git diff origin/main -- <f> | grep '^+' | grep -P '[^\x00-\x7F]'`) of the added lines in all four edited docs -- `AGENTS.md`, `docs/GUARD_CLASS_CLOSURE.md`, `docs/REVIEWER_RULES.md`, and `docs/SESSION_BOOTSTRAP.md` -- reports 0 non-ASCII each (additions use `--`, `->`, ASCII quotes, and spell "section 3k.1" rather than the section-sign); markdown is not gated by the Python ASCII check regardless.
 - Managed pre-push hook (git diff --check, plan/body sync, reviewer-rule mapping, local review) -- passed on push.
 - Docs-only slice: no test suite applies; cross-references resolve to real sections (`GUARD_CLASS_CLOSURE.md`, `AGENTS.md` 3k.2, R13, `OVERNIGHT_ARC_WORKFLOW.md`).
-- Single-source proof: the block-set literal now appears in only one file, the canonical `docs/GUARD_CLASS_CLOSURE.md` (its definition plus the drift example); every secondary doc (`docs/REVIEWER_RULES.md`, `AGENTS.md`, `docs/OVERNIGHT_ARC_WORKFLOW.md`) uses the block-exception-set pointer, and no numbered requirement re-listing remains in the guard-LGTM gate or AGENTS 3k.1.
+- Single-source proof: the bar is stated once in `docs/GUARD_CLASS_CLOSURE.md`; the guard-LGTM gate and `AGENTS.md` 3k.1 carry pointers with no numbered re-listing; a search for "block-exception" across the docs returns none (the reverted concept).
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | 77 |
-| `docs/GUARD_CLASS_CLOSURE.md` | 89 |
-| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 11 |
-| `docs/REVIEWER_RULES.md` | 39 |
+| `AGENTS.md` | 70 |
+| `docs/GUARD_CLASS_CLOSURE.md` | 74 |
+| `docs/REVIEWER_RULES.md` | 34 |
 | `docs/SESSION_BOOTSTRAP.md` | 2 |
-| `plans/PR-Builder-Convergence-Discipline.md` | 179 |
-| **Total** | **397** |
+| `plans/PR-Builder-Convergence-Discipline.md` | 177 |
+| **Total** | **357** |
