@@ -77,9 +77,10 @@ overnight deltas:
   narrative. Hard 3-round bot-review cap counted by rounds: at cap, fix
   verified findings, waive the rest with reasons in the PR body (AGENTS
   4a.1), merge on required-green. EXCEPTION: confirmed fail-open findings in
-  money/auth/PII/safety guards block past the cap; the move there is a structural
+  a guard in the block-exception set (canonical: `docs/GUARD_CLASS_CLOSURE.md`)
+  block past the cap; the move there is a structural
   acceptance bar (a fail-closed invariant + a generative property test), not
-  a fourth round of spot patches. Beyond that money/auth/PII exception, the
+  a fourth round of spot patches. Beyond that block-exception set, the
   cap's "waive the rest, merge on green" is legitimate only as `AGENTS.md` 3k.2
   option (b) -- a deliberate bounded-residual waiver taken *after* the
   Decision-Seam Analysis, not a blind cap-and-ship of the next patch's residual.

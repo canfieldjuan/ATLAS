@@ -939,33 +939,22 @@ root cause of a reported leak or over-scrub is almost never the reported input
 -- it is an **open default**: a per-input branch whose fall-through lands on the
 unsafe verdict. Fixing the reported string closes nothing; the next string in
 the same class is reported next round (the S6A privacy guard ran this loop 9+
-rounds). The root-cause fix for these surfaces is codified in
-`docs/GUARD_CLASS_CLOSURE.md` and is mandatory before merge:
-
-1. **A fail-closed choke point** -- admit only on affirmative recognition of a
-   safe value; every unrecognized/unresolved/malformed/novel shape reaches the
-   safe verdict by construction through one decision point. "Reject known-bad,
-   admit the rest" is banned on open input; it must be "admit known-good, reject
-   the rest."
-2. **Class-closure, not string-closure** -- the diff closes the reported input's
-   grammar/vocabulary/shape-family/container variants in one place, not a branch
-   or token per reported string.
-3. **A grammar-derived property test** -- generate inputs from the vocabulary
-   (tokens x modifiers x container shapes x key families) and assert against a
-   spec-derived semantic oracle, not only representation parity with the base
-   case (parity over a wrong base stays green while the class is still broken);
-   a fixture list of the reported strings does not satisfy this. This
-   strengthens §3j from "5-10 unseen cases" to "the generated class" for
-   open-input guards, and is the acceptance gate reviewers require before LGTM.
+rounds). The root-cause fix -- a fail-closed / evidence-gated choke point,
+class-closure (not string-closure), a grammar- or evidence-derived property
+test, plus the open-category exception and the asymmetric-safe default -- is
+defined canonically in `docs/GUARD_CLASS_CLOSURE.md`. It is mandatory before
+merge, it is the acceptance gate reviewers require before LGTM, and it
+strengthens section 3j from "5-10 unseen cases" to "the generated class" for
+open-input guards. The requirements are **not re-listed here**: that doc is the
+single source, so this section cannot drift from it (three review rounds on #2077
+were spent reconciling parallel restatements).
 
 The reviewer enforcement of this gate lives in the guard boundary-probe section
 of `docs/REVIEWER_RULES.md`; the scope caveat (documented neutral/data-column
 families keep their admit policy -- the choke point governs the safety verdict,
-not every field's text) is in `docs/GUARD_CLASS_CLOSURE.md`. When the recognizer
-itself rests on an **open category** no list closes (person names, senders,
-intent), requirements 1 and 3 hold in their evidence-gated form (evidence choke
-point + evidence-keyed oracle) per that same doc, and a non-converging loop on
-one decision is governed by 3k.2 below.
+not every field's text) and the open-category evidence-gated form both live in
+`docs/GUARD_CLASS_CLOSURE.md`. A non-converging loop on one decision is governed
+by 3k.2 below.
 
 ### 3k.2. Convergence circuit-breaker (stop instance-patching a seam)
 
@@ -983,8 +972,9 @@ case. It also composes with the overnight hard 3-round cap
 3k.2 constrains *how you stop*. The cap's "fix verified findings, waive the rest,
 merge on required-green" is legitimate only as 3k.2 option (b) -- a deliberate
 bounded-residual waiver reconciled *after* the seam analysis, not a blind
-cap-and-ship of the next patch's residual. The cap's money/auth/PII fail-open
-exception is unchanged and still blocks past the cap.
+cap-and-ship of the next patch's residual. The cap's fail-open exception for the
+block-exception set (canonical: `docs/GUARD_CLASS_CLOSURE.md`) is unchanged and
+still blocks past the cap.
 
 When this trips, the next push may NOT add another example-scoped patch (another
 token, regex, vocabulary row, or oracle fixture). It must carry a **Decision-Seam

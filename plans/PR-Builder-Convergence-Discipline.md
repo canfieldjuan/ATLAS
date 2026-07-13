@@ -53,6 +53,15 @@ Max files: 5
    `REVIEWER_RULES.md` (R13 + the guard-LGTM gate), `AGENTS.md` (3k.1 + 3k.2),
    and `docs/OVERNIGHT_ARC_WORKFLOW.md` -- is reconciled in one pass so no
    statement is left un-reconciled.
+5. Single-source structure (the convergent fix for the three-round drift):
+   designate `docs/GUARD_CLASS_CLOSURE.md` the sole canonical source for the
+   guard-closure bar, the open-category exception, the asymmetric-safe default,
+   and the fail-open block-exception set (money/auth/PII/safety); replace the
+   parallel re-listings in `docs/REVIEWER_RULES.md`, `AGENTS.md` 3k.1, and
+   `docs/OVERNIGHT_ARC_WORKFLOW.md` with short pointers, so no secondary doc
+   restates the normative content and none can drift from the source. This
+   removes ~37 lines of restatement; the requirements themselves are unchanged in
+   the canonical doc.
 
 ### Review Contract
 
@@ -104,6 +113,17 @@ wrong, then fix the seam / waive the bounded residual / re-scope). `REVIEWER_RUL
 R13 gains the open-category exception so reviewers block a member-patch response
 to a non-converging open class. The #2076 arc is the cited episode throughout.
 
+Single source: after review showed the same normative content restated in four
+docs kept drifting (the open-category exception missing in one gate; the block
+set written two different ways), `GUARD_CLASS_CLOSURE.md` is made the sole
+canonical source for the bar, the open-category exception, the asymmetric-safe
+default, and the block-exception set, and it opens with a "single source" note.
+`REVIEWER_RULES.md`'s guard-LGTM gate, `AGENTS.md` 3k.1, and the
+`OVERNIGHT_ARC_WORKFLOW.md` cap now carry short pointers to it instead of copies,
+so the bar or the set changes in exactly one file. 3k.2 (the convergence
+circuit-breaker) is the second canonical statement; the OVERNIGHT cap points to
+it for how-you-stop.
+
 ## Intentional
 
 - Extend, do not duplicate: the "oracle is not a fixture matrix" and "fix the
@@ -132,14 +152,15 @@ Parked hardening: none.
 - Non-ASCII scan (`git diff origin/main -- <f> | grep '^+' | grep -P '[^\x00-\x7F]'`) of the added lines in all four edited docs -- `AGENTS.md`, `docs/GUARD_CLASS_CLOSURE.md`, `docs/OVERNIGHT_ARC_WORKFLOW.md`, `docs/REVIEWER_RULES.md` -- reports 0 non-ASCII each (additions use `--`, `->`, ASCII quotes); markdown is not gated by the Python ASCII check regardless.
 - Managed pre-push hook (git diff --check, plan/body sync, reviewer-rule mapping, local review) -- passed on push.
 - Docs-only slice: no test suite applies; cross-references resolve to real sections (`GUARD_CLASS_CLOSURE.md`, `AGENTS.md` 3k.2, R13, `OVERNIGHT_ARC_WORKFLOW.md`).
+- Single-source proof: the block-set literal now appears in only one file, the canonical `docs/GUARD_CLASS_CLOSURE.md` (its definition plus the drift example); every secondary doc (`docs/REVIEWER_RULES.md`, `AGENTS.md`, `docs/OVERNIGHT_ARC_WORKFLOW.md`) uses the block-exception-set pointer, and no numbered requirement re-listing remains in the guard-LGTM gate or AGENTS 3k.1.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | 51 |
-| `docs/GUARD_CLASS_CLOSURE.md` | 64 |
-| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 10 |
-| `docs/REVIEWER_RULES.md` | 22 |
-| `plans/PR-Builder-Convergence-Discipline.md` | 145 |
-| **Total** | **292** |
+| `AGENTS.md` | 77 |
+| `docs/GUARD_CLASS_CLOSURE.md` | 81 |
+| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 11 |
+| `docs/REVIEWER_RULES.md` | 39 |
+| `plans/PR-Builder-Convergence-Discipline.md` | 166 |
+| **Total** | **374** |

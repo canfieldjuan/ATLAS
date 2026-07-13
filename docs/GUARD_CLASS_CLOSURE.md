@@ -6,6 +6,18 @@ fix on these surfaces, and the symptom fix is invisible per-round: every listed
 input passes, so the diff looks correct, while the *class* the input belongs to
 stays open and the next input in that class is reported next round.
 
+**This document is the single source** for the guard-closure bar (the three
+requirements below), the open-category evidence-gated exception, the
+asymmetric-safe default, and the fail-open **block-exception set** (money / auth
+/ PII / safety -- guards where a confirmed fail-open blocks regardless of
+review-round count). `AGENTS.md` 3k.1 / 3k.2, `docs/REVIEWER_RULES.md`, and
+`docs/OVERNIGHT_ARC_WORKFLOW.md` POINT here; they must not restate these
+normatively. Parallel restatements are exactly what drifted across three review
+rounds on #2077 (the open-category exception missing in one gate; the block set
+written `money/auth/PII` in one place and `money/auth/PII/safety` in another). To
+change the bar or the block set, edit only this file; the others carry a pointer,
+not a copy.
+
 ## When this applies (trigger)
 
 Any change to a guard / validator / sanitizer / classifier / gate / denylist /
@@ -191,9 +203,8 @@ inline with a `guard-class-closure: waived` marker in the PR body.
 The Codex/bot review-round cap is a circuit-breaker for **noise** -- a reviewer
 demanding opposite verdicts on formally-identical shapes, where the PR's actual
 contract was green from round 0-1. It is **not** satisfied by cap-and-waive when
-the findings are a real open class in a money / auth / PII guard (the same set
-`docs/OVERNIGHT_ARC_WORKFLOW.md` names as blocking past the cap): those block
-regardless of round count. On these surfaces the convergence tool is this
+the findings are a real open class in a guard in the block-exception set defined
+above (money / auth / PII / safety): those block regardless of round count. On these surfaces the convergence tool is this
 discipline -- the choke point plus the grammar-derived property test close the
 class in one pass -- not another round of spot patches and not waiving the
 residual to reach green.

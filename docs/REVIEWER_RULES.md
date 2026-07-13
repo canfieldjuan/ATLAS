@@ -217,28 +217,21 @@ If the guard protects security, billing, data deletion, customer-visible
 output, or CI/release gates, missing boundary proof is BLOCKER. Otherwise it is
 at least MAJOR.
 
-**Open-input guards additionally require class-closure** (`docs/GUARD_CLASS_CLOSURE.md`,
-`AGENTS.md` section 3k.1). When the guard's input space is open -- free text,
-nested/recursive structures, producer-supplied keys/values -- boundary probes
-alone are not enough: they prove the sampled inputs, not the class. Before LGTM,
-require and state (a) a **fail-closed choke point** (admit only on affirmative
-recognition; every unrecognized/unresolved/malformed shape rejects by
-construction, not via a per-input branch whose fall-through is unsafe), and (b) a
-**grammar-derived property test** (generated inputs, derived expected values) --
-not a fixture list of the reported strings. A string-scoped fix with
-string-scoped fixtures is an automatic "needs the class fix," even when every
-listed input passes. Confirmed fail-opens in money/auth/PII/safety guards block
-regardless of review-round count.
-
-**Open-category exception carries into this gate too.** When the guard's
-recognizer rests on an open semantic category no list closes (person names,
-senders, intent, is-junk -- see R13 and the open-category section of
-`docs/GUARD_CLASS_CLOSURE.md`), requirements (a) and (b) hold in their
-*evidence-gated* form: the choke point recognizes bounded structural evidence
-with an asymmetric-safe default, and the property test is evidence-keyed. Do NOT
-block such a fix for lacking a member allowlist or a member-keyed grammar test --
-the open category cannot satisfy either, and demanding them re-creates the
-enumeration loop (`AGENTS.md` 3k.2).
+**Open-input guards additionally require class-closure.** When the guard's input
+space is open -- free text, nested/recursive structures, producer-supplied
+keys/values -- boundary probes alone are not enough: they prove the sampled
+inputs, not the class. Before LGTM, require and state that the guard meets the
+class-closure bar defined canonically in `docs/GUARD_CLASS_CLOSURE.md`: a
+fail-closed / evidence-gated choke point and a grammar- or evidence-derived
+property test, including the open-category exception (evidence-gate; do NOT
+demand a member allowlist or member-keyed grammar test the open category cannot
+satisfy) and the asymmetric-safe default. A string-scoped fix with string-scoped
+fixtures is an automatic "needs the class fix," even when every listed input
+passes. Confirmed fail-opens in the block-exception set (canonical:
+`docs/GUARD_CLASS_CLOSURE.md`) block regardless of review-round count. The
+requirements and the block set are not restated here -- that doc is the single
+source; see R13's open-category exception and `AGENTS.md` 3k.2 for a
+non-converging loop.
 
 ---
 
