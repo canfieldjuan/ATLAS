@@ -5,7 +5,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: bash scripts/new_pr_plan.sh SLICE [--lane LANE] [--phase PHASE] [--force]
+Usage: bash scripts/new_pr_plan.sh SLICE --lane LANE [--phase PHASE] [--state-file PATH] [--force]
 
 Creates plans/PR-<SLICE>.md with the required AGENTS.md plan sections.
 SLICE may be passed with or without the PR- prefix.
@@ -22,8 +22,10 @@ die() {
 }
 
 slice=""
-lane="TODO-ownership-lane"
+lane=""
+lane_supplied=0
 phase="TODO-slice-phase"
+state_file=""
 force=0
 
 while [ "$#" -gt 0 ]; do
@@ -39,6 +41,12 @@ while [ "$#" -gt 0 ]; do
             shift
             [ "$#" -gt 0 ] || die "--lane requires a value"
             lane="$1"
+            lane_supplied=1
+            ;;
+        --state-file)
+            shift
+            [ "$#" -gt 0 ] || die "--state-file requires a value"
+            state_file="$1"
             ;;
         --phase)
             shift
@@ -85,6 +93,34 @@ esac
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git worktree"
 plan_rel="plans/$plan_name.md"
 plan_path="$repo_root/$plan_rel"
+
+if [ -z "$state_file" ]; then
+    state_file="${ATLAS_SESSION_STATE_FILE:-$repo_root/SESSION_STATE.local.md}"
+fi
+[ -f "$state_file" ] || die "session state file not found: $state_file"
+
+current_lane_count="$(awk '
+    /^##[[:space:]]/ { exit }
+    /^Current lane:/ { count += 1 }
+    END { print count + 0 }
+' "$state_file")"
+[ "$current_lane_count" -eq 1 ] || die "session state must contain exactly one top-level Current lane: entry: $state_file"
+current_lane="$(awk '
+    /^##[[:space:]]/ { exit }
+    /^Current lane:/ {
+        sub(/^Current lane:[[:space:]]*/, "")
+        print
+        exit
+    }
+' "$state_file")"
+[ -n "$current_lane" ] || die "session state Current lane: must be non-empty: $state_file"
+case "$current_lane" in
+    "<"*">"|TODO*|none|None)
+        die "session state Current lane: must name an assigned lane: $state_file"
+        ;;
+esac
+[ "$lane_supplied" -eq 1 ] || die "--lane is required and must match session Current lane: $current_lane"
+[ "$lane" = "$current_lane" ] || die "lane mismatch: --lane $lane does not match session Current lane: $current_lane"
 
 if [ -e "$plan_path" ] && [ "$force" -ne 1 ]; then
     die "plan already exists: $plan_rel (pass --force to overwrite)"
