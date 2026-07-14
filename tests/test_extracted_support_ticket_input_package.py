@@ -1793,22 +1793,110 @@ def test_support_ticket_input_package_preserves_support_platform_provenance() ->
 
 
 def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
-    statuses = {
-        "done": "resolved",
-        "Solved": "resolved",
+    semantic_one_word_states = {
+        alias: state
+        for state, aliases in (
+            ("reopened", "reopened reopen"),
+            ("resolved", "resolved closed done solved complete completed fixed resolvedundermonitoring"),
+            ("cancelled", "cancelled canceled rejected withdrawn void"),
+            ("open", "open new todo inprogress pending pendingcustomer pendingcustomerapproval pendingcustomerresponse awaitingcustomer customerresponse waitingoncustomer pendingdeployment waiting onhold hold underreview inreview validation monitoring testingmonitoring deployment investigating active"),
+        )
+        for alias in aliases.split()
+    }
+    semantic_phrase_states = {
+        "Awaiting Customer": "open",
+        "Customer Response": "open",
         "In Progress": "open",
+        "In Review": "open",
+        "On Hold": "open",
         "Pending Customer": "open",
         "Pending Customer Approval": "open",
         "Pending Customer Response": "open",
-        "Awaiting Customer": "open",
-        "Customer Response": "open",
+        "Pending Deployment": "open",
+        "Resolved Under Monitoring": "resolved",
+        "Testing Monitoring": "open",
+        "To Do": "open",
+        "Under Review": "open",
         "Waiting on Customer": "open",
-        "reopened": "reopened",
+    }
+    semantic_phrase_token_pairs = {
+        tuple(phrase.lower().split())
+        for phrase in semantic_phrase_states
+        if len(phrase.split()) == 2
+    }
+    exact_phrase_separators = (" ", "_", "-", "|", "/", ">", ":", " - ", " | ", " / ", " > ")
+    macro_separators = (":", ": ", " - ", " | ", " / ", " > ")
+    separator_prefixes = (
+        ":", ": ", "-", "- ", "|", "| ", "/", "/ ", ">", "> ",
+    )
+    malformed_boundaries = (
+        " ", "  ", "_", "-", "- ", " -", "|", "| ", " |", "/", "/ ", " /", ">", "> ", " >",
+    )
+    exact_phrase_statuses = {
+        separator.join(phrase.lower().split()): state
+        for phrase, state in semantic_phrase_states.items()
+        for separator in exact_phrase_separators
+    }
+    compound_leader_statuses = {
+        f"{separator.join(phrase.lower().split())} - Macro {index}": state
+        for index, ((phrase, state), separator) in enumerate(
+            product(semantic_phrase_states.items(), exact_phrase_separators), start=1
+        )
+    }
+    wrapped_phrase_statuses = {
+        f"{prefix}{phrase}{suffix}": "other"
+        for phrase in semantic_phrase_states
+        for prefix, suffix in (("#", ""), ("(", ")"), ("[", "]"))
+    }
+    punctuation_only_suffixes = {
+        "".join(suffix)
+        for suffix_length in range(3)
+        for suffix in product((":", "-", "|", "/", ">", "_"), repeat=suffix_length)
+    }
+    suffix_without_content_statuses = {
+        f"{leading}{separator}{suffix}".rstrip(): "other"
+        for leading in (*semantic_one_word_states, *semantic_phrase_states)
+        for separator, suffix in product(macro_separators, punctuation_only_suffixes)
+    }
+    malformed_partition_statuses = {}
+    for alias in semantic_one_word_states:
+        for split_at in range(1, len(alias)):
+            for boundary in malformed_boundaries:
+                candidate = f"{alias[:split_at]}{boundary}{alias[split_at:]}"
+                if (
+                    (alias[:split_at], alias[split_at:]) not in semantic_phrase_token_pairs
+                    and candidate != "re-opened"
+                ):
+                    malformed_partition_statuses[candidate] = "other"
+    statuses = {
+        f"{leading}{separator}Macro {index}": state
+        for index, ((leading, state), separator) in enumerate(
+            product(semantic_one_word_states.items(), macro_separators), start=1
+        )
+    }
+    statuses.update(semantic_one_word_states)
+    statuses.update(exact_phrase_statuses)
+    statuses.update(compound_leader_statuses)
+    statuses.update(wrapped_phrase_statuses)
+    statuses.update(suffix_without_content_statuses)
+    statuses.update({
+        f"{prefix}{leading}": "other"
+        for prefix, leading in product(separator_prefixes, semantic_one_word_states)
+    })
+    statuses.update(malformed_partition_statuses)
+    statuses.update({
+        "Re-opened": "reopened",
         "Cancelled": "cancelled",
         "Escalated": "other",
         "Customer Escalation": "other",
         "Pending Vendor Approval": "other",
-    }
+        "closedeal": "other",
+        "unresolved": "other",
+        "Macro - Solved": "other",
+        "Customer Escalation: resolved": "other",
+        "Reopened - Solved macro": "reopened",
+        "Resolved: Réponse 7": "resolved",
+    })
     package = build_support_ticket_input_package([
         {
             "ticket_id": f"t-{index}",
@@ -1816,17 +1904,17 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
             "issue_status": raw,
         }
         for index, raw in enumerate(statuses, start=1)
-    ])
+    ], max_rows=len(statuses))
 
     got = {
         row["ticket_status"]: row["ticket_status_state"]
         for row in package.inputs["source_material"]
     }
     assert got == statuses
-    # the reopened bucket is the churn signal #1419/#1466 consume; keep it distinct
-    assert package.metadata["ticket_status_summary"]["reopened"] == 1
-    assert package.metadata["ticket_status_summary"]["open"] == 7
-    assert package.metadata["ticket_status_summary"]["other"] == 3
+    expected_summary: dict[str, int] = {}
+    for state in statuses.values():
+        expected_summary[state] = expected_summary.get(state, 0) + 1
+    assert package.metadata["ticket_status_summary"] == expected_summary
 
 
 def test_support_ticket_csat_parses_numeric_only_and_averages_numeric() -> None:

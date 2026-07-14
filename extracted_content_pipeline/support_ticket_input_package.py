@@ -360,6 +360,39 @@ _OPEN_STATUS_VALUES = frozenset({
     "investigating",
     "active",
 })
+_STATUS_BUCKET_VALUES = (
+    ("reopened", _REOPENED_STATUS_VALUES),
+    ("resolved", _RESOLVED_STATUS_VALUES),
+    ("cancelled", _CANCELLED_STATUS_VALUES),
+    ("open", _OPEN_STATUS_VALUES),
+)
+# Exact word sequences for existing multi-word lifecycle aliases. A phrase may
+# use the full normalized key only when its words and internal delimiters match
+# this grammar; unknown or wrapped word boundaries stay fail-closed.
+_STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES = frozenset({
+    ("awaiting", "customer"),
+    ("customer", "response"),
+    ("in", "progress"),
+    ("in", "review"),
+    ("on", "hold"),
+    ("pending", "customer"),
+    ("pending", "customer", "approval"),
+    ("pending", "customer", "response"),
+    ("pending", "deployment"),
+    ("resolved", "under", "monitoring"),
+    ("testing", "monitoring"),
+    ("to", "do"),
+    ("under", "review"),
+    ("waiting", "on", "customer"),
+})
+# Exact spellings retained from the prior punctuation-erasing normalizer. They
+# are deliberately finite: arbitrary punctuation must not turn unknown words
+# into a lifecycle alias.
+_STATUS_EXACT_LEGACY_SPELLING_KEYS = {"re-opened": "reopened"}
+_STATUS_EXACT_COMPOUND_PHRASE_RE = re.compile(
+    r"[a-z0-9]+(?:[ \t_:|/>-]+[a-z0-9]+)+", re.IGNORECASE,
+)
+_STATUS_MACRO_SUFFIX_SEPARATOR_RE = re.compile(r":\s*|\s+(?:[-|/>])\s+")
 
 
 def build_support_ticket_input_package(
@@ -1180,18 +1213,49 @@ def _measured_outcome_examples(
     return examples
 
 
+def _status_state_for_key(key: str) -> str:
+    for state, accepted_values in _STATUS_BUCKET_VALUES:
+        if key in accepted_values:
+            return state
+    return "other"
+
+
+def _status_state_for_exact_phrase(raw: str) -> str:
+    phrase = _clean(raw)
+    legacy_key = _STATUS_EXACT_LEGACY_SPELLING_KEYS.get(phrase.lower())
+    if legacy_key:
+        return _status_state_for_key(legacy_key)
+
+    tokens = tuple(re.findall(r"[a-z0-9]+", phrase.lower()))
+    if len(tokens) == 1:
+        token, = tokens
+        if phrase.lower() == token:
+            return _status_state_for_key(token)
+    if (
+        _STATUS_EXACT_COMPOUND_PHRASE_RE.fullmatch(phrase)
+        and tokens in _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES
+    ):
+        return _status_state_for_key("".join(tokens))
+    return "other"
+
+
 def _normalize_status_state(value: Any) -> str:
-    key = _key(value)
-    if not key:
+    raw = _clean(value)
+    if not raw:
         return ""
-    if key in _REOPENED_STATUS_VALUES:
-        return "reopened"
-    if key in _RESOLVED_STATUS_VALUES:
-        return "resolved"
-    if key in _CANCELLED_STATUS_VALUES:
-        return "cancelled"
-    if key in _OPEN_STATUS_VALUES:
-        return "open"
+    if raw.startswith((":", "-", "|", "/", ">")):
+        return "other"
+
+    exact_state = _status_state_for_exact_phrase(raw)
+    if exact_state != "other":
+        return exact_state
+
+    for separator in _STATUS_MACRO_SUFFIX_SEPARATOR_RE.finditer(raw):
+        if not any(character.isalnum() for character in raw[separator.end():]):
+            continue
+        leading_state = _status_state_for_exact_phrase(raw[:separator.start()])
+        if leading_state != "other":
+            return leading_state
     return "other"
 
 

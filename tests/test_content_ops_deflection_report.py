@@ -5519,6 +5519,52 @@ def test_outcome_diagnostics_normalize_direct_raw_status_and_csat() -> None:
     assert "reopened: 1, resolved: 1" in artifact.markdown
 
 
+def test_outcome_diagnostics_normalize_direct_raw_compound_statuses() -> None:
+    def row(source_id: str, status_key: str, status: str) -> dict[str, str]:
+        return {
+            "source_id": source_id,
+            "source_type": "support_ticket",
+            "source_title": "Refund status diagnostic",
+            "text": "How do I get a duplicate charge refunded?",
+            "support_ticket_cluster": "duplicate charge refund",
+            status_key: status,
+        }
+
+    result = build_ticket_faq_markdown(
+        [
+            row("direct-compound-1", "ticket_status", "Reopened: Escalation macro"),
+            row("direct-compound-2", "status", "Solved - Réponse 7"),
+            row("direct-compound-3", "ticket_status", "Re: solved"),
+            row("direct-compound-4", "ticket_status", "Re: opened"),
+            row("direct-compound-5", "ticket_status", "Can: celled"),
+            row("direct-compound-6", "ticket_status", "Re -solved"),
+            row("direct-compound-7", "ticket_status", "Re solved"),
+            row("direct-compound-8", "ticket_status", "Re/Solved"),
+            row("direct-compound-9", "ticket_status", "#Pending Customer"),
+            row("direct-compound-10", "ticket_status", "Under - Review - Escalation macro"),
+            row("direct-compound-11", "ticket_status", "Solved:"),
+            row("direct-compound-12", "ticket_status", "Solved::"),
+            row("direct-compound-13", "ticket_status", "Open - -"),
+            row("direct-compound-14", "ticket_status", "Reopened: |"),
+        ],
+        max_items=1,
+    )
+
+    diagnostics = result.items[0]["outcome_diagnostics"]
+
+    assert diagnostics == {
+        "diagnostic_ticket_count": 14,
+        "outcome_risk_ticket_count": 1,
+        "reopened_ticket_count": 1,
+        "ticket_status_summary": {
+            "open": 1,
+            "other": 11,
+            "reopened": 1,
+            "resolved": 1,
+        },
+    }
+
+
 def test_deflection_snapshot_omits_contradictory_summary_date_window() -> None:
     snapshot = build_deflection_snapshot(
         {
