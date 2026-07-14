@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Audit a PR body against the AGENTS.md section 1b contract.
 
-The PR body must lead with ``Plan: plans/PR-<Slice-Name>.md`` and a
+Most human PR bodies must lead with ``Plan: plans/PR-<Slice-Name>.md`` and a
 ``Slice phase: <phase>`` line, then carry these ``##`` sections in order:
 Intentional, Deferred, Parked hardening, Cold diff reconstruction,
 Verification, Diff size. The referenced plan doc must exist in the checkout.
+A non-empty Markdown-only human diff may instead lead with ``Docs-only: true``
+when the caller supplies a base ref for changed-path validation. Dependabot
+keeps its explicit generated-body exemption.
 
 Intended for CI on ``pull_request`` events (the workflow writes
 ``github.event.pull_request.body`` to a file - no GitHub API call), and for
@@ -22,6 +25,15 @@ import subprocess
 import sys
 from typing import Callable, Sequence
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _pr_change_policy import (
+    ChangeKind,
+    ChangePolicyError,
+    branch_added_plan_docs,
+    classify_changes,
+    is_dependabot_author,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN_LINE_RE = re.compile(r"^Plan:\s+(?P<plan>plans/PR-[A-Za-z0-9._-]+\.md)\s*$")
@@ -35,21 +47,14 @@ REQUIRED_SECTIONS = (
     "Verification",
     "Diff size",
 )
-DEPENDABOT_AUTHORS = frozenset(
-    {
-        "app/dependabot",
-        "dependabot",
-        "dependabot[bot]",
-    }
-)
+DOCS_ONLY_RE = re.compile(r"^Docs-only:\s*true\s*$", re.IGNORECASE)
 
 
-def is_dependabot_author(author: str | None) -> bool:
-    """Return true for Dependabot identities seen in GitHub PR events."""
+def is_docs_only_body(body: str) -> bool:
+    """Return true only for the explicit planless Markdown-only body marker."""
 
-    if author is None:
-        return False
-    return author.strip() in DEPENDABOT_AUTHORS
+    first_nonempty = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    return DOCS_ONLY_RE.fullmatch(first_nonempty) is not None
 
 
 def _git_read(args: list[str], *, repo_root: Path) -> tuple[int, bytes]:
@@ -207,6 +212,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             "inspected; defaults to this script's checkout"
         ),
     )
+    parser.add_argument(
+        "--base-ref",
+        default="",
+        help=(
+            "base ref used to validate a Docs-only: true body against the "
+            "actual changed paths"
+        ),
+    )
+    parser.add_argument(
+        "--head-ref",
+        default="HEAD",
+        help=(
+            "head ref used with --base-ref for Docs-only: true validation; "
+            "trusted-base gates pass their fetched PR head"
+        ),
+    )
     parser.add_argument("body_file", help="path to a file holding the PR body")
     args = parser.parse_args(argv)
 
@@ -238,7 +259,88 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2  # infrastructure failure -- never a silent pass
         plan_exists = plan_exists_at_ref(args.plan_git_ref, repo_root=repo_root)
 
+    if is_docs_only_body(body):
+        if not args.base_ref:
+            print(
+                "pr body audit: Docs-only body requires --base-ref for changed-path validation",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            classification = classify_changes(
+                author=args.pr_author,
+                base_ref=args.base_ref,
+                head_ref=args.head_ref,
+                repo_root=repo_root,
+            )
+        except ChangePolicyError as exc:
+            print(f"pr body audit: {exc}", file=sys.stderr)
+            return 2
+        if classification.kind is not ChangeKind.DOCS_ONLY:
+            print("pr body audit: FAIL (AGENTS.md section 1b contract)")
+            print("- Docs-only: true is valid only for a non-empty Markdown-only human diff")
+            return 1
+        try:
+            plans = branch_added_plan_docs(
+                args.base_ref,
+                head_ref=args.head_ref,
+                repo_root=repo_root,
+            )
+        except ChangePolicyError as exc:
+            print(f"pr body audit: {exc}", file=sys.stderr)
+            return 2
+        if plans:
+            print("pr body audit: FAIL (AGENTS.md section 1b contract)")
+            print("- Docs-only: true is only for a Markdown-only diff with no branch-added plan")
+            return 1
+        print("pr body audit: PASS (explicit Markdown-only body exemption)")
+        return 0
+
     failures = audit_pr_body(body, root=repo_root, plan_exists=plan_exists)
+    if failures:
+        print("pr body audit: FAIL (AGENTS.md section 1b contract)")
+        for failure in failures:
+            print(f"- {failure}")
+        return 1
+
+    if args.base_ref:
+        try:
+            classification = classify_changes(
+                author=args.pr_author,
+                base_ref=args.base_ref,
+                head_ref=args.head_ref,
+                repo_root=repo_root,
+            )
+            plans = branch_added_plan_docs(
+                args.base_ref,
+                head_ref=args.head_ref,
+                repo_root=repo_root,
+            )
+        except ChangePolicyError as exc:
+            print(f"pr body audit: {exc}", file=sys.stderr)
+            return 2
+        if classification.kind in (ChangeKind.DOCS_ONLY, ChangeKind.PLAN_REQUIRED):
+            body_plan = PLAN_LINE_RE.match(
+                next(line.strip() for line in body.splitlines() if line.strip())
+            ).group("plan")
+            if len(plans) != 1:
+                if classification.kind is ChangeKind.DOCS_ONLY:
+                    failures.append(
+                        "a Markdown-only human diff with a full PR body must add "
+                        "exactly one plan; otherwise use Docs-only: true"
+                    )
+                else:
+                    failures.append(
+                        "human non-Markdown diff must add exactly one plan before its "
+                        "full PR body can be accepted"
+                    )
+            else:
+                sole_plan, = plans
+                if body_plan != sole_plan:
+                    failures.append(
+                        "Plan: line must name the sole branch-added plan for a human "
+                        f"full PR body: {sole_plan}"
+                    )
     if failures:
         print("pr body audit: FAIL (AGENTS.md section 1b contract)")
         for failure in failures:

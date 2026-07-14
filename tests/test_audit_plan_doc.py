@@ -41,6 +41,8 @@ def test_happy_path_accepts_required_sections_in_order():
         ## Why this slice exists
         ### Problem-derived contract
         ## Scope (this PR)
+        ### Review Contract
+        - Acceptance criteria: test fixture.
         ## Mechanism
         ## Intentional
         ## Deferred
@@ -51,6 +53,7 @@ def test_happy_path_accepts_required_sections_in_order():
 
     assert set(_statuses(text).values()) == {"OK"}
     assert "Problem-derived contract" in _statuses(text)
+    assert "Review Contract" in _statuses(text)
 
 
 def test_missing_problem_derived_contract_is_reported():
@@ -92,6 +95,53 @@ def test_problem_derived_contract_must_live_under_why_section():
     statuses = _statuses(text)
 
     assert statuses["Problem-derived contract"] == "MISSING"
+
+
+def test_review_contract_must_live_under_scope_section():
+    text = textwrap.dedent(
+        """\
+        # Plan
+
+        ## Why this slice exists
+        ### Problem-derived contract
+        ## Scope
+        ## Mechanism
+        ### Review Contract
+        - Acceptance criteria: misplaced.
+        ## Intentional
+        ## Deferred
+        ## Verification
+        ## Estimated diff size
+        """
+    )
+
+    assert _statuses(text)["Review Contract"] == "OUT OF SCOPE"
+
+
+def test_review_contract_must_be_nonempty_and_unique():
+    empty = textwrap.dedent(
+        """\
+        # Plan
+
+        ## Why this slice exists
+        ### Problem-derived contract
+        ## Scope
+        ### Review Contract
+        ### Files touched
+        ## Mechanism
+        ## Intentional
+        ## Deferred
+        ## Verification
+        ## Estimated diff size
+        """
+    )
+    duplicate = empty.replace(
+        "### Files touched",
+        "- Acceptance criteria: one.\n### Review Contract\n- Acceptance criteria: two.\n### Files touched",
+    )
+
+    assert _statuses(empty)["Review Contract"] == "EMPTY"
+    assert _statuses(duplicate)["Review Contract"] == "DUPLICATE"
 
 
 def test_out_of_scope_does_not_satisfy_scope():
@@ -180,6 +230,8 @@ def test_cli_accepts_valid_plan(tmp_path):
             ## Why this slice exists
             ### Problem-derived contract
             ## Scope
+            ### Review Contract
+            - Acceptance criteria: valid fixture.
             ## Mechanism
             ## Intentional
             ## Deferred

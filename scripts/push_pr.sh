@@ -48,8 +48,6 @@ if [ ! -f "$body_file" ]; then
     exit 2
 fi
 
-python scripts/audit_pr_body.py "$body_file"
-
 if [ "$#" -eq 0 ]; then
     set -- -u origin HEAD
 fi
@@ -78,6 +76,12 @@ if [ "${ATLAS_PUSH_PR_DRY_RUN:-}" = "1" ]; then
 fi
 
 refresh_base_ref
+
+body_audit_args=(--base-ref origin/main)
+if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
+    body_audit_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
+fi
+python scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
 
 if [ "$run_wrapper_review" -eq 1 ]; then
     echo "Running local PR review with PR body: $body_file"

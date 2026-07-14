@@ -286,9 +286,13 @@ is the one artifact no reviewer or CI run can see; and
 `audit_pr_session_drift.py` reads the **public** `Ownership lane:` from plan
 docs. The hole: a PR with **no plan doc**
 declares no lane and is therefore invisible to the public collision audit entirely.
-Plan-less PRs are exempt from the drift detection that makes parallel lanes safe.
-Fix (in the system's own idiom — *surface, never silently skip*, §3g): treat
-plan-less PRs as an explicit `unlaned` bucket and warn, rather than skip.
+Plan-less human code/workflow PRs are exempt from the drift detection that makes
+parallel lanes safe. Fix (in the system's own idiom — *surface, never silently
+skip*, §3g): fail plan admission for every human diff with a non-Markdown path
+unless it adds exactly one plan. The only human exemption is a non-empty diff
+of regular Git blobs whose paths have `.md` as their sole suffix, with an
+explicit `Docs-only: true` body; Dependabot keeps its separate generated-PR
+exemption.
 
 **(d) Parallel lanes manufacture a stale-merge surface the tooling is blind to.**
 Webhooks never deliver two events: **CI success** and **"your open PR now conflicts

@@ -78,6 +78,14 @@ and continue only on the technical path that does not decide that shape.
 Every non-trivial change ships as a single PR with the following
 artifacts:
 
+For a human-authored PR, any diff containing a non-Markdown path must add
+exactly one `plans/PR-*.md` file. A non-empty Markdown-only diff may omit a
+plan only when every changed path is a regular Git blob with `.md` as its sole
+suffix and its PR body begins `Docs-only: true`; it may always use the full
+plan/body contract instead. Dependabot keeps its explicit generated-PR
+exemption. These admission outcomes must be surfaced by local review and CI,
+never silently skipped.
+
 ### 1a. Plan doc (`plans/PR-<Slice-Name>.md`)
 
 Required sections, in this order:
@@ -104,7 +112,20 @@ result that proves the surface is wired.
 
 ### 1b. PR body
 
-Mirror the plan-doc framing in the PR description:
+For a non-empty human PR that intentionally carries no plan and changes only
+regular Git blobs with `.md` as their sole suffix, use this narrower body
+instead:
+
+```
+Docs-only: true
+
+<optional prose>
+```
+
+The marker is invalid for any non-Markdown or empty diff. A docs-only PR that
+does carry a plan must use the full body shape below.
+
+Otherwise, mirror the plan-doc framing in the PR description:
 
 ```
 Plan: plans/PR-<Slice-Name>.md
@@ -369,13 +390,14 @@ work is on-topic.
 
 ### 3a.2. PR-prep helpers
 
-Three scripts remove the PR-shape and failed-push friction — use them
+Four scripts remove the PR-shape and failed-push friction — use them
 rather than hand-formatting:
 
 - `bash scripts/new_pr_plan.sh <Slice> --lane <lane> --phase "<phase>"` —
-  scaffolds `plans/PR-<Slice>.md` with the required 7 sections, a
-  `### Files touched` placeholder, and a zero diff-size table. Refuses to
-  overwrite an existing plan without `--force`.
+  scaffolds `plans/PR-<Slice>.md` with the required 7 top-level sections,
+  nested Problem-derived and Review Contracts, a `### Files touched`
+  placeholder, and a zero diff-size table. Refuses to overwrite an existing
+  plan without `--force`.
 - `python scripts/sync_pr_plan.py plans/PR-<Slice>.md [base-ref]` —
   rewrites `### Files touched` and `## Estimated diff size` from the actual
   `git diff` (tracked vs merge-base plus untracked). Run after

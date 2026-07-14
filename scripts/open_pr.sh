@@ -36,7 +36,21 @@ if [ ! -f "$body_file" ]; then
     exit 2
 fi
 
-python scripts/audit_pr_body.py "$body_file"
+refresh_base_ref() {
+    echo "Refreshing origin/main before PR body audit..."
+    if ! git fetch --quiet origin main; then
+        echo "open_pr.sh: failed to refresh origin/main; fetch/rebase before opening or updating a PR" >&2
+        exit 1
+    fi
+}
+
+refresh_base_ref
+
+body_audit_args=(--base-ref origin/main)
+if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
+    body_audit_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
+fi
+python scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
 
 for arg in "$@"; do
     case "$arg" in

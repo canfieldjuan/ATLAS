@@ -141,6 +141,7 @@ git diff --name-status "$base"...HEAD || true
 if [ -n "$current_pr_body_file" ]; then
     if [ -f "$script_root/scripts/audit_pr_body.py" ]; then
         body_audit_args=("$script_root/scripts/audit_pr_body.py" --repo-root "$repo_root")
+        body_audit_args+=(--base-ref "$base_ref")
         if [ -n "$current_pr_author" ]; then
             body_audit_args+=(--pr-author "$current_pr_author")
         fi
@@ -153,7 +154,11 @@ if [ -n "$current_pr_body_file" ]; then
     fi
 fi
 
-run_check "Pre-push audit wrapper" bash "$script_root/scripts/pre_push_audit.sh" --repo-root "$repo_root" --script-root "$script_root"
+pre_push_args=("$script_root/scripts/pre_push_audit.sh" --repo-root "$repo_root" --script-root "$script_root")
+if [ -n "$current_pr_author" ]; then
+    pre_push_args+=(--pr-author "$current_pr_author")
+fi
+run_check "Pre-push audit wrapper" bash "${pre_push_args[@]}"
 
 if [ -f "$script_root/scripts/audit_extracted_pipeline_ci_enrollment.py" ]; then
     run_check "Extracted pipeline CI enrollment" \
