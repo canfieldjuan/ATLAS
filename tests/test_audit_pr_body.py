@@ -307,6 +307,54 @@ def test_docs_only_marker_passes_for_markdown_only_human_diff(tmp_path: Path) ->
     assert "explicit Markdown-only body exemption" in result.stdout
 
 
+def test_docs_only_marker_passes_for_deleted_markdown_file(tmp_path: Path) -> None:
+    repo = _git_repo_with_deleted_markdown_path(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text("Docs-only: true\n\nArchive a completed plan.\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo-root",
+            str(repo),
+            "--base-ref",
+            "origin/main",
+            str(body),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "explicit Markdown-only body exemption" in result.stdout
+
+
+def test_docs_only_marker_passes_for_archived_plan_move(tmp_path: Path) -> None:
+    repo = _git_repo_with_archived_plan_move(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text("Docs-only: true\n\nArchive a completed plan.\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo-root",
+            str(repo),
+            "--base-ref",
+            "origin/main",
+            str(body),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "explicit Markdown-only body exemption" in result.stdout
+
+
 def test_docs_only_marker_can_inspect_a_fetched_head_ref(tmp_path: Path) -> None:
     repo = _git_repo_with_changed_path(tmp_path, "docs/example.md", "# changed\n")
     _git(repo, "update-ref", "refs/remotes/origin/pr-1", "HEAD")
@@ -605,6 +653,37 @@ def _git_repo_with_changed_path(tmp_path: Path, relative_path: str, text: str) -
     changed.write_text(text, encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "change")
+    return repo
+
+
+def _git_repo_with_deleted_markdown_path(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "docs" / "example.md").write_text("# archived\n", encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "base documentation")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "remote", "add", "origin", str(repo))
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "rm", "docs/example.md")
+    _git(repo, "commit", "-qm", "archive documentation")
+    return repo
+
+
+def _git_repo_with_archived_plan_move(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    (repo / "plans").mkdir(parents=True)
+    (repo / "plans" / "PR-Completed.md").write_text("# completed\n", encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "base plan")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "remote", "add", "origin", str(repo))
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / "plans" / "archive").mkdir()
+    _git(repo, "mv", "plans/PR-Completed.md", "plans/archive/PR-Completed.md")
+    _git(repo, "commit", "-qm", "archive completed plan")
     return repo
 
 

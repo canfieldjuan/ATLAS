@@ -84,11 +84,7 @@ def changed_paths(
     """Return every path changed from the merge base through ``head_ref``."""
 
     base = _merge_base(base_ref, head_ref=head_ref, repo_root=repo_root)
-    payload = _git_stdout(
-        ["diff", "--name-only", "-z", "--no-renames", f"{base}...{head_ref}"],
-        repo_root=repo_root,
-    )
-    return tuple(sorted(path for path in payload.split("\0") if path))
+    return _diff_paths(base, head_ref=head_ref, repo_root=repo_root)
 
 
 def classify_changes(
@@ -103,35 +99,72 @@ def classify_changes(
     if is_dependabot_author(author):
         return ChangeClassification(kind=ChangeKind.DEPENDABOT, paths=())
 
+    base = _merge_base(base_ref, head_ref=head_ref, repo_root=repo_root)
     paths = changed_paths(base_ref, head_ref=head_ref, repo_root=repo_root)
     if not paths:
         return ChangeClassification(kind=ChangeKind.NO_CHANGES, paths=paths)
+    deleted = set(
+        _diff_paths(
+            base,
+            head_ref=head_ref,
+            repo_root=repo_root,
+            diff_filter="D",
+        )
+    )
     if all(
-        _is_regular_markdown_blob(path, head_ref=head_ref, repo_root=repo_root)
+        _is_regular_markdown_blob(
+            path,
+            tree_ref=base if path in deleted else head_ref,
+            repo_root=repo_root,
+        )
         for path in paths
     ):
         return ChangeClassification(kind=ChangeKind.DOCS_ONLY, paths=paths)
     return ChangeClassification(kind=ChangeKind.PLAN_REQUIRED, paths=paths)
 
 
-def _is_regular_markdown_blob(path: str, *, head_ref: str, repo_root: Path) -> bool:
+def _diff_paths(
+    base: str,
+    *,
+    head_ref: str,
+    repo_root: Path,
+    diff_filter: str | None = None,
+) -> tuple[str, ...]:
+    """Return paths changed from ``base`` through ``head_ref`` for one filter."""
+
+    args = ["diff", "--name-only", "-z", "--no-renames"]
+    if diff_filter:
+        args.append(f"--diff-filter={diff_filter}")
+    payload = _git_stdout([*args, f"{base}...{head_ref}"], repo_root=repo_root)
+    return tuple(sorted(path for path in payload.split("\0") if path))
+
+
+def _is_regular_markdown_blob(path: str, *, tree_ref: str, repo_root: Path) -> bool:
     """Return true only for a regular blob with ``.md`` as its sole suffix.
 
     Documentation-only admission is an exemption, so its proof must be as
-    strict as the branch-plan side: a symlink, deleted path, or compound name
-    such as ``install.sh.md`` is plan-required rather than silently exempt.
+    strict as the branch-plan side: a symlink or compound name such as
+    ``install.sh.md`` is plan-required rather than silently exempt. Deletions
+    are checked in the merge-base tree, where their final regular blob exists.
     """
 
-    return Path(path).suffixes == [".md"] and _is_regular_blob(
-        path, head_ref=head_ref, repo_root=repo_root
+    return Path(path).suffixes == [".md"] and _is_non_executable_blob(
+        path, tree_ref=tree_ref, repo_root=repo_root
     )
 
 
-def _is_regular_blob(path: str, *, head_ref: str, repo_root: Path) -> bool:
-    """Return true only when ``path`` is a regular blob at ``head_ref``."""
+def _is_regular_blob(path: str, *, tree_ref: str, repo_root: Path) -> bool:
+    """Return true only when ``path`` is a regular blob at ``tree_ref``."""
 
-    entry = _git_stdout(["ls-tree", head_ref, "--", path], repo_root=repo_root).strip()
+    entry = _git_stdout(["ls-tree", tree_ref, "--", path], repo_root=repo_root).strip()
     return entry.startswith("100644 blob") or entry.startswith("100755 blob")
+
+
+def _is_non_executable_blob(path: str, *, tree_ref: str, repo_root: Path) -> bool:
+    """Return true only when ``path`` is a non-executable regular blob."""
+
+    entry = _git_stdout(["ls-tree", tree_ref, "--", path], repo_root=repo_root).strip()
+    return entry.startswith("100644 blob")
 
 
 def branch_added_plan_docs(
@@ -160,7 +193,7 @@ def branch_added_plan_docs(
     for path in candidates:
         if not _is_plan_path(path):
             continue
-        if _is_regular_blob(path, head_ref=head_ref, repo_root=repo_root):
+        if _is_regular_blob(path, tree_ref=head_ref, repo_root=repo_root):
             regular.append(path)
     return tuple(regular)
 

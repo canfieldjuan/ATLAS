@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
-import os
 from pathlib import Path
 
 import pytest
@@ -70,12 +70,68 @@ def test_markdown_only_human_diff_is_explicitly_exempt(tmp_path: Path) -> None:
     assert "Markdown-only diff is explicitly exempt" in result.stdout
 
 
+def test_deleted_regular_markdown_file_is_explicitly_exempt(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "docs/example.md", "# archived\n")
+    _commit(repo, "add documentation")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "rm", "docs/example.md")
+    _commit(repo, "remove documentation")
+
+    result = _run(repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Markdown-only diff is explicitly exempt" in result.stdout
+
+
+def test_archived_plan_move_is_explicitly_exempt(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "plans/PR-Archived.md", "# Archived\n")
+    _commit(repo, "add completed plan")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / "plans" / "archive").mkdir()
+    _git(repo, "mv", "plans/PR-Archived.md", "plans/archive/PR-Archived.md")
+    _commit(repo, "archive completed plan")
+
+    result = _run(repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Markdown-only diff is explicitly exempt" in result.stdout
+
+
+def test_markdown_rename_is_explicitly_exempt(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "docs/old-name.md", "# renamed\n")
+    _commit(repo, "add documentation")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "mv", "docs/old-name.md", "docs/new-name.md")
+    _commit(repo, "rename documentation")
+
+    result = _run(repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Markdown-only diff is explicitly exempt" in result.stdout
+
+
 def test_markdown_symlink_requires_a_plan(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     docs = repo / "docs"
     docs.mkdir()
     (docs / "sneaky.md").symlink_to("../README.md")
     _commit(repo, "symlinked docs change")
+
+    result = _run(repo)
+
+    assert result.returncode == 1
+    assert "classification: plan-required" in result.stdout
+
+
+def test_executable_markdown_requires_a_plan(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    path = repo / "docs" / "example.md"
+    _write(repo, "docs/example.md", "# documentation\n")
+    os.chmod(path, 0o755)
+    _commit(repo, "executable markdown")
 
     result = _run(repo)
 

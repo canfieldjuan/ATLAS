@@ -32,6 +32,12 @@ that `open_pr.sh` used a base-dependent body audit before refreshing `origin/mai
 Both are fail-closed admission-path defects within this slice; branch-protection
 enrollment remains an external operator action.
 
+The final independent review found that the new strict exemption checked every
+changed path only in the PR head. A deleted regular Markdown file therefore
+became plan-required, blocking the contract-required merged-plan archive flow.
+Docs-only admission must validate deleted Markdown blobs against the merge base
+and added or modified non-executable Markdown blobs against the PR head.
+
 This workflow/process slice repairs those admission paths. It is justified by a
 real safety risk: an unplanned code/workflow change can receive a green
 mechanical bundle without the plan, rule, and body contracts the repository
@@ -71,8 +77,9 @@ Max files: 30
 
 1. Require exactly one branch-added plan document named under `plans/` with a
    `PR-` prefix and an MD filename suffix for human diffs with any
-   non-Markdown path, while exempting only regular Git blobs with the Markdown
-   extension as their sole suffix and Dependabot.
+   non-Markdown path, while exempting only non-executable regular Git blobs
+   with the Markdown extension as their sole suffix (at the merge base for
+   deletions and at the PR head otherwise) and Dependabot.
 2. Make a planless Markdown-only human PR use `Docs-only: true` as its first
    non-empty body line; a normal full body remains valid only when its branch
    adds the plan it names.
@@ -91,10 +98,12 @@ Max files: 30
 - Acceptance criteria:
   - [ ] A human non-Markdown diff without exactly one branch-added plan fails
         both local review and trusted-base CI with an actionable admission error.
-  - [ ] A planless docs-only human diff passes only when every changed path is
-        a regular blob with the Markdown extension as its sole suffix and its
-        body begins `Docs-only: true`; symlinks and compound shell-script
-        Markdown names require a plan.
+  - [ ] A planless docs-only human diff passes only when each added or modified
+        path is a non-executable regular PR-head blob and each deleted path is
+        a non-executable regular merge-base blob, with the Markdown extension
+        as its sole suffix, and its body begins `Docs-only: true`; symlinks,
+        executable Markdown, and compound shell-script Markdown names require
+        a plan.
   - [ ] Dependabot keeps its explicit exemption, and every exemption is printed
         rather than silently skipped.
   - [ ] A full human plan body must name the single plan added by its branch;
@@ -159,7 +168,10 @@ Max files: 30
 `scripts/_pr_change_policy.py` will resolve the merge base, list every changed
 path (including both sides of a rename), and classify it as Dependabot-exempt,
 docs-only, no-change, or plan-required. Docs-only requires each changed path to
-be a regular Git blob with the Markdown extension as its only suffix. `scripts/audit_pr_plan_presence.py`
+be a non-executable regular Git blob with the Markdown extension as its only
+suffix: deleted paths are checked at the merge base and every other path at the
+PR head.
+`scripts/audit_pr_plan_presence.py`
 consumes that result in `pre_push_audit.sh`; `scripts/audit_pr_body.py` consumes
 the same result when its caller provides a base ref and, in a trusted-base gate,
 the fetched PR-head ref. The body checker accepts an explicit docs-only marker
@@ -184,9 +196,11 @@ author so local, wrapper, and trusted-base behavior agree.
 
 ## Intentional
 
-- Only regular Git blobs with the Markdown extension as their sole suffix are
-  human plan-exempt; symlinks, compound names, `.txt`, configuration, workflow, lockfile, test,
-  asset, and source changes require a plan.
+- Only non-executable regular Git blobs with the Markdown extension as their
+  sole suffix are human plan-exempt: deletions are proven at the merge base and
+  all other paths at the PR head. Symlinks, executable or compound names,
+  `.txt`, configuration, workflow, lockfile, test, asset, and source changes
+  require a plan.
 - The Review Contract audit is structural, not a natural-language completeness
   parser, so existing freeform acceptance/reachability prose remains valid.
 - `Docs-only: true` is deliberately explicit; freeform planless human bodies
@@ -220,7 +234,7 @@ newly discovered product hardening.
 - The focused policy/body/wrapper/scaffold/plan-audit test group — 59 passed
   after the post-review repair.
 - Current-head review repair: `python -m pytest tests/test_audit_pr_plan_presence.py tests/test_audit_pr_body.py tests/test_open_pr_wrapper.py tests/test_push_pr_wrapper.py tests/test_local_pr_review.py -q` — 90 passed.
-- The exact two pytest commands enrolled in `.github/workflows/pre_push_audit.yml`, including the new admission and fixture tests — 480 passed.
+- The exact two pytest commands enrolled in `.github/workflows/pre_push_audit.yml`, including the new admission and fixture tests — 486 passed.
 - Python compilation passed for `scripts/_pr_change_policy.py`,
   `scripts/audit_pr_plan_presence.py`, `scripts/audit_plan_doc.py`,
   `scripts/audit_pr_body.py`, and `scripts/audit_review_rules_triggered.py`.
@@ -248,6 +262,10 @@ newly discovered product hardening.
   rejects a Markdown symlink, a compound shell-script Markdown name, and a
   symlinked branch plan, and
   proves `open_pr.sh` repopulates a missing `origin/main` before the body audit.
+- Final independent-review repair proves both the plan-admission and PR-body
+  routes accept a deleted regular Markdown file and the documented completed-
+  plan archive move using merge-base blobs, while a Markdown rename remains
+  exempt and symlink/executable PR-head paths remain plan-required.
 
 ## Estimated diff size
 
@@ -260,8 +278,8 @@ newly discovered product hardening.
 | `docs/REVIEWER_RULES.md` | 9 |
 | `docs/SESSION_BOOTSTRAP.md` | 4 |
 | `docs/ai_dev_operating_model.md` | 10 |
-| `plans/PR-Plan-Admission-Contract.md` | 286 |
-| `scripts/_pr_change_policy.py` | 173 |
+| `plans/PR-Plan-Admission-Contract.md` | 304 |
+| `scripts/_pr_change_policy.py` | 206 |
 | `scripts/audit_plan_doc.py` | 79 |
 | `scripts/audit_pr_body.py` | 128 |
 | `scripts/audit_pr_plan_presence.py` | 79 |
@@ -272,8 +290,8 @@ newly discovered product hardening.
 | `scripts/pre_push_audit.sh` | 19 |
 | `scripts/push_pr.sh` | 8 |
 | `tests/test_audit_plan_doc.py` | 52 |
-| `tests/test_audit_pr_body.py` | 292 |
-| `tests/test_audit_pr_plan_presence.py` | 205 |
+| `tests/test_audit_pr_body.py` | 371 |
+| `tests/test_audit_pr_plan_presence.py` | 261 |
 | `tests/test_audit_review_rules_triggered.py` | 25 |
 | `tests/test_local_pr_review.py` | 33 |
 | `tests/test_new_pr_plan.py` | 6 |
@@ -283,4 +301,4 @@ newly discovered product hardening.
 | `tests/test_pre_push_audit_workflow.py` | 7 |
 | `tests/test_push_pr_wrapper.py` | 102 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **1817** |
+| **Total** | **2003** |
