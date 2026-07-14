@@ -106,9 +106,32 @@ def classify_changes(
     paths = changed_paths(base_ref, head_ref=head_ref, repo_root=repo_root)
     if not paths:
         return ChangeClassification(kind=ChangeKind.NO_CHANGES, paths=paths)
-    if all(path.endswith(".md") for path in paths):
+    if all(
+        _is_regular_markdown_blob(path, head_ref=head_ref, repo_root=repo_root)
+        for path in paths
+    ):
         return ChangeClassification(kind=ChangeKind.DOCS_ONLY, paths=paths)
     return ChangeClassification(kind=ChangeKind.PLAN_REQUIRED, paths=paths)
+
+
+def _is_regular_markdown_blob(path: str, *, head_ref: str, repo_root: Path) -> bool:
+    """Return true only for a regular blob with ``.md`` as its sole suffix.
+
+    Documentation-only admission is an exemption, so its proof must be as
+    strict as the branch-plan side: a symlink, deleted path, or compound name
+    such as ``install.sh.md`` is plan-required rather than silently exempt.
+    """
+
+    return Path(path).suffixes == [".md"] and _is_regular_blob(
+        path, head_ref=head_ref, repo_root=repo_root
+    )
+
+
+def _is_regular_blob(path: str, *, head_ref: str, repo_root: Path) -> bool:
+    """Return true only when ``path`` is a regular blob at ``head_ref``."""
+
+    entry = _git_stdout(["ls-tree", head_ref, "--", path], repo_root=repo_root).strip()
+    return entry.startswith("100644 blob") or entry.startswith("100755 blob")
 
 
 def branch_added_plan_docs(
@@ -137,8 +160,7 @@ def branch_added_plan_docs(
     for path in candidates:
         if not _is_plan_path(path):
             continue
-        entry = _git_stdout(["ls-tree", head_ref, "--", path], repo_root=repo_root).strip()
-        if entry.startswith("100644 blob") or entry.startswith("100755 blob"):
+        if _is_regular_blob(path, head_ref=head_ref, repo_root=repo_root):
             regular.append(path)
     return tuple(regular)
 

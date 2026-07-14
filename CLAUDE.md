@@ -1111,8 +1111,9 @@ PR independently). The full contract lives in `AGENTS.md`; the highlights:
   `plans/PR-<Slice-Name>.md` with these 7 required top-level sections, in order:
   Why this slice exists / Scope / Mechanism / Intentional / Deferred /
   Verification / Estimated diff size, plus nested Problem-derived and Review
-  Contracts. A non-empty Markdown-only human diff may instead use a body
-  beginning `Docs-only: true`; every other human diff adds exactly one plan.
+  Contracts. A non-empty human diff made only of regular Git blobs with `.md`
+  as their sole suffix may instead use a body beginning `Docs-only: true`;
+  every other human diff adds exactly one plan.
 - **Diff budget:** target **<400 LOC** per PR (soft cap). Over-budget PRs
   must justify the overage in *Why this slice exists*.
 - **PR body** mirrors the plan-doc framing, with `Plan: plans/PR-<Slice>.md`

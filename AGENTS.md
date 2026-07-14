@@ -80,7 +80,8 @@ artifacts:
 
 For a human-authored PR, any diff containing a non-Markdown path must add
 exactly one `plans/PR-*.md` file. A non-empty Markdown-only diff may omit a
-plan only when its PR body begins `Docs-only: true`; it may always use the full
+plan only when every changed path is a regular Git blob with `.md` as its sole
+suffix and its PR body begins `Docs-only: true`; it may always use the full
 plan/body contract instead. Dependabot keeps its explicit generated-PR
 exemption. These admission outcomes must be surfaced by local review and CI,
 never silently skipped.
@@ -111,8 +112,9 @@ result that proves the surface is wired.
 
 ### 1b. PR body
 
-For a non-empty Markdown-only human PR that intentionally carries no plan, use
-this narrower body instead:
+For a non-empty human PR that intentionally carries no plan and changes only
+regular Git blobs with `.md` as their sole suffix, use this narrower body
+instead:
 
 ```
 Docs-only: true

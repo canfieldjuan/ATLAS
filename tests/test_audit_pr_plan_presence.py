@@ -70,6 +70,44 @@ def test_markdown_only_human_diff_is_explicitly_exempt(tmp_path: Path) -> None:
     assert "Markdown-only diff is explicitly exempt" in result.stdout
 
 
+def test_markdown_symlink_requires_a_plan(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    docs = repo / "docs"
+    docs.mkdir()
+    (docs / "sneaky.md").symlink_to("../README.md")
+    _commit(repo, "symlinked docs change")
+
+    result = _run(repo)
+
+    assert result.returncode == 1
+    assert "classification: plan-required" in result.stdout
+
+
+def test_compound_markdown_suffix_requires_a_plan(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "docs/install.sh.md", "#!/usr/bin/env bash\necho changed\n")
+    _commit(repo, "compound-suffix executable")
+
+    result = _run(repo)
+
+    assert result.returncode == 1
+    assert "classification: plan-required" in result.stdout
+
+
+def test_symlinked_branch_plan_does_not_count_toward_admission(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "scripts/example.py", "print('changed')\n")
+    plans = repo / "plans"
+    plans.mkdir()
+    (plans / "PR-Example.md").symlink_to("../README.md")
+    _commit(repo, "symlinked plan")
+
+    result = _run(repo)
+
+    assert result.returncode == 1
+    assert "branch-added plans: none" in result.stdout
+
+
 def test_source_renamed_to_markdown_is_not_docs_only(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "scripts/example.py", "print('base')\n")

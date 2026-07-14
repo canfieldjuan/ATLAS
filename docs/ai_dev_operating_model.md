@@ -289,9 +289,10 @@ declares no lane and is therefore invisible to the public collision audit entire
 Plan-less human code/workflow PRs are exempt from the drift detection that makes
 parallel lanes safe. Fix (in the system's own idiom — *surface, never silently
 skip*, §3g): fail plan admission for every human diff with a non-Markdown path
-unless it adds exactly one plan. The only human exemption is a non-empty
-Markdown-only diff with an explicit `Docs-only: true` body; Dependabot keeps its
-separate generated-PR exemption.
+unless it adds exactly one plan. The only human exemption is a non-empty diff
+of regular Git blobs whose paths have `.md` as their sole suffix, with an
+explicit `Docs-only: true` body; Dependabot keeps its separate generated-PR
+exemption.
 
 **(d) Parallel lanes manufacture a stale-merge surface the tooling is blind to.**
 Webhooks never deliver two events: **CI success** and **"your open PR now conflicts

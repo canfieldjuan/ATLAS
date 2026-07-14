@@ -175,6 +175,27 @@ def test_open_pr_accepts_explicit_docs_only_body(tmp_path: Path) -> None:
     assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
 
 
+def test_open_pr_refreshes_base_before_docs_only_audit(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_docs_only_body(repo)
+    _git(repo, "update-ref", "-d", "refs/remotes/origin/main")
+    env, log, stdin_capture = _fake_gh_env(tmp_path, view_exit=1)
+
+    result = subprocess.run(
+        ["bash", "scripts/open_pr.sh", str(body), "--title", "Docs only"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Refreshing origin/main before PR body audit" in result.stdout
+    assert log.read_text(encoding="utf-8").strip() == "pr create --title Docs only --body-file -"
+    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+
+
 def _write_fixture_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
@@ -191,8 +212,15 @@ def _write_fixture_repo(tmp_path: Path) -> Path:
     (repo / "README.md").write_text("base\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "base")
-    _git(repo, "remote", "add", "origin", str(repo))
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    remote = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "-u", "origin", "main")
     return repo
 
 

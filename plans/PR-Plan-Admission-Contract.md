@@ -25,6 +25,13 @@ existing plan instead of using the explicit `Docs-only: true` marker. This is
 the same admission root cause and requires only the body guard and its boundary
 fixtures.
 
+The latest review exposed the exemption-side mirror of that guard: path suffix
+alone classified symlinks and compound shell-script Markdown names as docs only,
+while branch-added plans already required regular Git blobs. It also found
+that `open_pr.sh` used a base-dependent body audit before refreshing `origin/main`.
+Both are fail-closed admission-path defects within this slice; branch-protection
+enrollment remains an external operator action.
+
 This workflow/process slice repairs those admission paths. It is justified by a
 real safety risk: an unplanned code/workflow change can receive a green
 mechanical bundle without the plan, rule, and body contracts the repository
@@ -47,8 +54,9 @@ from the guard would recreate a bypass in at least one real PR path.
   presence, PR-body, push/open, and local-review entrypoints; the plan scaffold
   and structural plan audit; reviewer-rule extraction; aligned workflow docs;
   focused failure-branch tests and their explicit pre-push CI enrollment; the
-  full-body/branch-plan binding; wrapper refresh ordering; Python-3.10-safe enum
-  behavior; and the unit-gate baseline shrink earned by passing tests.
+  full-body/branch-plan binding; regular-blob, single-suffix docs-only
+  classification; wrapper refresh ordering; Python-3.10-safe enum behavior; and
+  the unit-gate baseline shrink earned by passing tests.
 - Must not change: product routes, schemas, customer-visible behavior,
   migrations, GitHub branch-protection settings, Dependabot's existing body
   exemption, reviewer-status/R14 live-comment enforcement, or any maturity
@@ -63,8 +71,8 @@ Max files: 30
 
 1. Require exactly one branch-added plan document named under `plans/` with a
    `PR-` prefix and an MD filename suffix for human diffs with any
-   non-Markdown path, while explicitly passing Markdown-only and Dependabot
-   exemptions.
+   non-Markdown path, while exempting only regular Git blobs with the Markdown
+   extension as their sole suffix and Dependabot.
 2. Make a planless Markdown-only human PR use `Docs-only: true` as its first
    non-empty body line; a normal full body remains valid only when its branch
    adds the plan it names.
@@ -73,7 +81,7 @@ Max files: 30
 4. Repair the affected fixture harness and enroll all added/changed workflow
    tooling tests in both explicit pre-push-audit pytest commands.
 5. Bind full human plan bodies to the one branch-added plan, refresh the base
-   before any base-dependent body audit, preserve Python 3.10 compatibility,
+   in both wrappers before any base-dependent body audit, preserve Python 3.10 compatibility,
    remove only the three newly passing unit-gate baseline nodes, and make the
    existing open-wrapper fixture establish the base the real push-then-open
    flow supplies.
@@ -83,15 +91,17 @@ Max files: 30
 - Acceptance criteria:
   - [ ] A human non-Markdown diff without exactly one branch-added plan fails
         both local review and trusted-base CI with an actionable admission error.
-  - [ ] A Markdown-only human diff without a plan passes plan admission only
-        with a `Docs-only: true` body; a normal full plan body remains valid.
+  - [ ] A planless docs-only human diff passes only when every changed path is
+        a regular blob with the Markdown extension as its sole suffix and its
+        body begins `Docs-only: true`; symlinks and compound shell-script
+        Markdown names require a plan.
   - [ ] Dependabot keeps its explicit exemption, and every exemption is printed
         rather than silently skipped.
   - [ ] A full human plan body must name the single plan added by its branch;
         an existing but unrelated plan is rejected by the local and trusted-base
         body gates.
-  - [ ] `push_pr.sh` fetches `origin/main` before evaluating a Docs-only body,
-        and policy imports work on Python 3.10-compatible runtimes.
+  - [ ] `push_pr.sh` and `open_pr.sh` fetch `origin/main` before evaluating a
+        Docs-only body, and policy imports work on Python 3.10-compatible runtimes.
   - [ ] Unit-gate's baseline shrinks by exactly its three newly passing
         pre-push-audit nodes, without changing a maturity baseline.
   - [ ] New plan scaffolds contain a Review Contract; plan audit rejects a
@@ -148,7 +158,8 @@ Max files: 30
 
 `scripts/_pr_change_policy.py` will resolve the merge base, list every changed
 path (including both sides of a rename), and classify it as Dependabot-exempt,
-Markdown-only, no-change, or plan-required. `scripts/audit_pr_plan_presence.py`
+docs-only, no-change, or plan-required. Docs-only requires each changed path to
+be a regular Git blob with the Markdown extension as its only suffix. `scripts/audit_pr_plan_presence.py`
 consumes that result in `pre_push_audit.sh`; `scripts/audit_pr_body.py` consumes
 the same result when its caller provides a base ref and, in a trusted-base gate,
 the fetched PR-head ref. The body checker accepts an explicit docs-only marker
@@ -156,8 +167,8 @@ only for a non-empty Markdown-only human diff and otherwise requires a full
 body to name the sole branch-added plan. This keeps a plan-backed documentation
 PR valid while preventing a planless one from citing an unrelated existing plan.
 
-`push_pr.sh` refreshes `origin/main` before the base-dependent body audit so
-Docs-only validation never observes a missing or stale local base. The shared
+`push_pr.sh` and `open_pr.sh` refresh `origin/main` before the base-dependent
+body audit so Docs-only validation never observes a missing or stale local base. The shared
 policy keeps string-valued enum behavior with Python-3.10-compatible standard
 library types. The unit baseline removes only the three nodes CI reports as
 passing, so the existing ratchet shrinks rather than being expanded. The
@@ -173,8 +184,9 @@ author so local, wrapper, and trusted-base behavior agree.
 
 ## Intentional
 
-- Markdown-only is the sole human plan exemption; `.txt`, configuration,
-  workflow, lockfile, test, asset, and source changes require a plan.
+- Only regular Git blobs with the Markdown extension as their sole suffix are
+  human plan-exempt; symlinks, compound names, `.txt`, configuration, workflow, lockfile, test,
+  asset, and source changes require a plan.
 - The Review Contract audit is structural, not a natural-language completeness
   parser, so existing freeform acceptance/reachability prose remains valid.
 - `Docs-only: true` is deliberately explicit; freeform planless human bodies
@@ -194,6 +206,9 @@ author so local, wrapper, and trusted-base behavior agree.
 - Watcher readiness wording, `claude-review` trust clarification, branch
   protection reconciliation, and live R14 review-body enforcement belong to
   later status-truthfulness work.
+- Admission code is advisory until an operator enrolls `pr-body-contract` or
+  `pre-push-audit` in branch protection; this PR must not mutate that global
+  configuration.
 
 Parked hardening: none; the deferred work is a planned workflow sequence, not
 newly discovered product hardening.
@@ -204,9 +219,8 @@ newly discovered product hardening.
   and 3 stale fixture failures; this slice repairs those fixtures.
 - The focused policy/body/wrapper/scaffold/plan-audit test group — 59 passed
   after the post-review repair.
-- Current-head review repair: `python -m pytest tests/test_audit_pr_body.py -q`
-  — 40 passed.
-- The exact two pytest commands enrolled in `.github/workflows/pre_push_audit.yml`, including the new admission and fixture tests — 476 passed.
+- Current-head review repair: `python -m pytest tests/test_audit_pr_plan_presence.py tests/test_audit_pr_body.py tests/test_open_pr_wrapper.py tests/test_push_pr_wrapper.py tests/test_local_pr_review.py -q` — 90 passed.
+- The exact two pytest commands enrolled in `.github/workflows/pre_push_audit.yml`, including the new admission and fixture tests — 480 passed.
 - Python compilation passed for `scripts/_pr_change_policy.py`,
   `scripts/audit_pr_plan_presence.py`, `scripts/audit_plan_doc.py`,
   `scripts/audit_pr_body.py`, and `scripts/audit_review_rules_triggered.py`.
@@ -230,6 +244,10 @@ newly discovered product hardening.
   body passes. The focused body-audit suite and scripts-lane maturity ratchet
   pass without a baseline update after checked singleton unpacking replaced the
   newly flagged fixed index.
+- Latest CI repair proves regular-blob and single-suffix docs-only admission,
+  rejects a Markdown symlink, a compound shell-script Markdown name, and a
+  symlinked branch plan, and
+  proves `open_pr.sh` repopulates a missing `origin/main` before the body audit.
 
 ## Estimated diff size
 
@@ -237,32 +255,32 @@ newly discovered product hardening.
 |---|---:|
 | `.github/workflows/pr_body_contract.yml` | 5 |
 | `.github/workflows/pre_push_audit.yml` | 4 |
-| `AGENTS.md` | 30 |
-| `CLAUDE.md` | 6 |
+| `AGENTS.md` | 32 |
+| `CLAUDE.md` | 7 |
 | `docs/REVIEWER_RULES.md` | 9 |
 | `docs/SESSION_BOOTSTRAP.md` | 4 |
-| `docs/ai_dev_operating_model.md` | 9 |
-| `plans/PR-Plan-Admission-Contract.md` | 268 |
-| `scripts/_pr_change_policy.py` | 151 |
+| `docs/ai_dev_operating_model.md` | 10 |
+| `plans/PR-Plan-Admission-Contract.md` | 286 |
+| `scripts/_pr_change_policy.py` | 173 |
 | `scripts/audit_plan_doc.py` | 79 |
 | `scripts/audit_pr_body.py` | 128 |
 | `scripts/audit_pr_plan_presence.py` | 79 |
 | `scripts/audit_review_rules_triggered.py` | 36 |
 | `scripts/local_pr_review.sh` | 7 |
 | `scripts/new_pr_plan.sh` | 10 |
-| `scripts/open_pr.sh` | 6 |
+| `scripts/open_pr.sh` | 16 |
 | `scripts/pre_push_audit.sh` | 19 |
 | `scripts/push_pr.sh` | 8 |
 | `tests/test_audit_plan_doc.py` | 52 |
 | `tests/test_audit_pr_body.py` | 292 |
-| `tests/test_audit_pr_plan_presence.py` | 167 |
+| `tests/test_audit_pr_plan_presence.py` | 205 |
 | `tests/test_audit_review_rules_triggered.py` | 25 |
 | `tests/test_local_pr_review.py` | 33 |
 | `tests/test_new_pr_plan.py` | 6 |
-| `tests/test_open_pr_wrapper.py` | 53 |
+| `tests/test_open_pr_wrapper.py` | 81 |
 | `tests/test_pr_body_contract_workflow.py` | 15 |
 | `tests/test_pre_push_audit.py` | 84 |
 | `tests/test_pre_push_audit_workflow.py` | 7 |
 | `tests/test_push_pr_wrapper.py` | 102 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **1697** |
+| **Total** | **1817** |
