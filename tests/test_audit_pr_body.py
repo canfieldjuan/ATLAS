@@ -27,6 +27,7 @@ def _valid_body(plan: str = "plans/PR-Example.md") -> str:
     return "\n".join([
         f"Plan: {plan}",
         "Slice phase: Production hardening",
+        "Ownership lane: dev-workflow/process-gate-enrollment",
         "",
         "One-paragraph why.",
         "",
@@ -144,6 +145,78 @@ def test_missing_slice_phase_fails(tmp_path: Path) -> None:
     failures = audit_pr_body(body, root=root)
 
     assert any("Slice phase" in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    (
+        ("", "exactly one 'Ownership lane:'"),
+        ("Ownership lane: Dev Workflow", "lowercase letters"),
+        (
+            "Ownership lane: dev-workflow/process-gate-enrollment\n"
+            "Ownership lane: dev-workflow/other",
+            "exactly one 'Ownership lane:'",
+        ),
+    ),
+)
+def test_lane_header_contract_rejects_invalid_shapes(
+    tmp_path: Path, replacement: str, expected: str
+) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "Ownership lane: dev-workflow/process-gate-enrollment", replacement,
+        1,
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any(expected in failure for failure in failures)
+
+
+def test_lane_header_must_immediately_follow_slice_phase(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "Slice phase: Production hardening\nOwnership lane:",
+        "Slice phase: Production hardening\n\nOwnership lane:",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("immediately after" in failure for failure in failures)
+
+
+@pytest.mark.parametrize("fence", ("```", "~~~"))
+def test_fenced_example_cannot_supply_body_contract_structure(
+    tmp_path: Path, fence: str
+) -> None:
+    root = _write_plan(tmp_path)
+    body = "\n".join([
+        "Plan: plans/PR-Example.md",
+        "",
+        f"{fence}md",
+        *(_valid_body().splitlines()[1:]),
+        fence,
+    ])
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("missing canonical 'Slice phase" in failure for failure in failures)
+    assert "missing required section: ## Intentional" in failures
+
+
+def test_metadata_after_why_paragraph_cannot_supply_canonical_header(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "Plan: plans/PR-Example.md\nSlice phase: Production hardening\n"
+        "Ownership lane: dev-workflow/process-gate-enrollment",
+        "Plan: plans/PR-Example.md\nOne-paragraph why.\n"
+        "Slice phase: Production hardening\n"
+        "Ownership lane: dev-workflow/process-gate-enrollment",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("missing canonical 'Slice phase" in failure for failure in failures)
 
 
 def test_missing_section_fails(tmp_path: Path) -> None:

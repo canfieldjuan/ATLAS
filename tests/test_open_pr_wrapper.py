@@ -271,6 +271,7 @@ def _valid_body() -> str:
     return "\n".join([
         "Plan: plans/PR-Test.md",
         "Slice phase: Workflow/process",
+        "Ownership lane: dev-workflow/process-gate-enrollment",
         "",
         "One-paragraph why.",
         "",

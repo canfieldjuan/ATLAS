@@ -383,6 +383,7 @@ def _valid_pr_body(plan: str) -> str:
     return "\n".join([
         f"Plan: {plan}",
         "Slice phase: Production hardening",
+        "Ownership lane: dev-workflow/process-gate-enrollment",
         "",
         "One-paragraph why.",
         "",

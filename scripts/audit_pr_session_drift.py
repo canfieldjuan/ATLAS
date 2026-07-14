@@ -11,17 +11,19 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Iterable, Sequence
 
 LANE_RE = re.compile(r"^\s*Ownership lane:\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE)
 LANE_VALUE_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]*[a-z0-9]$")
+LANE_PREFIX_RE = re.compile(r"^\s*Ownership lane:\s*", re.IGNORECASE)
 SLICE_PHASE_RE = re.compile(r"^\s*Slice phase:\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE)
-SCOPE_SECTION_RE = re.compile(
-    r"^##\s+Scope(?:\s+\(this PR\))?\s*$\n?(.*?)(?=^##\s+|\Z)",
-    re.IGNORECASE | re.MULTILINE | re.DOTALL,
-)
+PR_BODY_PLAN_RE = re.compile(r"^\s*Plan:\s+plans/PR-[A-Za-z0-9._-]+\.md\s*$")
+FENCE_RE = re.compile(r"^\s*(?P<delimiter>`{3,}|~{3,})")
+SCOPE_HEADING_RE = re.compile(r"^##\s+Scope(?:\s+\(this PR\))?\s*$", re.IGNORECASE)
+SECTION_HEADING_RE = re.compile(r"^##\s+\S")
 VALID_SLICE_PHASES = frozenset(
     {
         "vertical slice",
@@ -146,6 +148,7 @@ def build_report(
         current_pr_phase_errors.extend(
             current_pr_body_errors(
                 read_text_file(current_pr_body_file),
+                branch_ownership_lanes=branch_ownership_lanes,
                 branch_slice_phases=branch_slice_phases,
                 source="current PR body",
             )
@@ -161,6 +164,13 @@ def build_report(
             if is_current_pr:
                 current_pr_body_checked = True
                 current_pr_phase_errors.extend(pr.slice_phase_errors)
+                current_pr_phase_errors.extend(
+                    compare_current_pr_body_ownership_lanes(
+                        pr.ownership_lanes,
+                        branch_ownership_lanes=branch_ownership_lanes,
+                        source="current PR body",
+                    )
+                )
                 current_pr_phase_errors.extend(
                     compare_current_pr_body_slice_phases(
                         pr.slice_phases,
@@ -237,7 +247,7 @@ def branch_ownership(plan_docs: set[str]) -> tuple[frozenset[str], tuple[str, ..
 
     for plan_doc in plan_docs:
         text = git_stdout(["show", f"HEAD:{plan_doc}"])
-        doc_lanes, doc_errors = extract_ownership_lanes(text, source=plan_doc)
+        doc_lanes, doc_errors = extract_plan_ownership_lanes(text, source=plan_doc)
         lanes.update(doc_lanes)
         errors.extend(doc_errors)
         if not doc_lanes and not doc_errors:
@@ -267,18 +277,100 @@ def collect_branch_slice_phases(plan_docs: set[str]) -> tuple[frozenset[str], tu
     return frozenset(phases), tuple(errors)
 
 
-def extract_ownership_lanes(text: str, *, source: str) -> tuple[frozenset[str], tuple[str, ...]]:
+def extract_pr_body_header_ownership_lanes(
+    text: str,
+    *,
+    source: str,
+    required: bool,
+) -> tuple[frozenset[str], tuple[str, ...]]:
+    """Read a lane only from the canonical header immediately after phase."""
+
+    lines = unfenced_lines(text)
+    header_start = canonical_body_header_start(lines)
+    if header_start is None:
+        return frozenset(), ()
+    first_nonempty_index, first_nonempty_line = header_start
+    if not PR_BODY_PLAN_RE.match(first_nonempty_line):
+        return frozenset(), ()
+    phase_line = line_after(lines, first_nonempty_index)
+    if not SLICE_PHASE_RE.match(phase_line):
+        return _missing_body_lane(source, required)
+    match = LANE_RE.match(line_after(lines, first_nonempty_index + 1))
+    if match is None:
+        return _missing_body_lane(source, required)
+
+    lane = match.group(1).strip()
+    if not LANE_VALUE_RE.match(lane):
+        return frozenset(), (
+            f"{source}: invalid Ownership lane {lane!r}; "
+            "use lowercase letters, numbers, dots, dashes, slashes, or underscores",
+        )
+    return frozenset({lane}), ()
+
+
+def _missing_body_lane(
+    source: str, required: bool
+) -> tuple[frozenset[str], tuple[str, ...]]:
+    if required:
+        return frozenset(), (f"{source}: missing canonical Ownership lane",)
+    return frozenset(), ()
+
+
+def extract_plan_ownership_lanes(text: str, *, source: str) -> tuple[frozenset[str], tuple[str, ...]]:
+    """Return the one real lane declaration a changed plan may carry.
+
+    Scope is the only declaration site. Lane-looking prose elsewhere and
+    examples in fenced code blocks must not become collision metadata.
+    """
+
     lanes: set[str] = set()
     errors: list[str] = []
-    for raw_lane in LANE_RE.findall(text):
-        lane = raw_lane.strip().lower()
-        if not LANE_VALUE_RE.match(lane):
-            errors.append(
-                f"{source}: invalid Ownership lane {raw_lane!r}; "
-                "use lowercase letters, numbers, dots, dashes, slashes, or underscores"
-            )
+    in_scope = False
+    fence_delimiter = ""
+    scope_has_content = False
+    scope_declaration_count = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        fence_match = FENCE_RE.match(line)
+        if fence_delimiter:
+            if LANE_PREFIX_RE.match(line):
+                errors.append(f"{source}: Ownership lane must not appear in a fenced code block")
+            if fence_match is not None and fence_kind(fence_match) == fence_delimiter:
+                fence_delimiter = ""
             continue
-        lanes.add(lane)
+        if fence_match is not None:
+            fence_delimiter = fence_kind(fence_match)
+            continue
+        if SECTION_HEADING_RE.match(line):
+            in_scope = SCOPE_HEADING_RE.match(line) is not None
+            scope_has_content = False
+            continue
+        if in_scope and stripped and not scope_has_content:
+            scope_has_content = True
+            if not LANE_PREFIX_RE.match(line):
+                errors.append(
+                    f"{source}: Ownership lane must be the first non-empty line in the Scope section"
+                )
+        if not LANE_PREFIX_RE.match(line):
+            continue
+        _, _, raw_lane = line.partition(":")
+        raw_lane = raw_lane.strip().strip("`").strip()
+        if not in_scope:
+            errors.append(f"{source}: Ownership lane must appear in the Scope section")
+        else:
+            scope_declaration_count += 1
+            if not LANE_VALUE_RE.match(raw_lane):
+                errors.append(
+                    f"{source}: invalid Ownership lane {raw_lane!r}; "
+                    "use lowercase letters, numbers, dots, dashes, slashes, or underscores"
+                )
+            else:
+                lanes.add(raw_lane)
+
+    if scope_declaration_count == 0 and not errors:
+        errors.append(f"{source}: missing Ownership lane")
+    elif scope_declaration_count != 1:
+        errors.append(f"{source}: Scope must declare exactly one Ownership lane")
     return frozenset(lanes), tuple(errors)
 
 
@@ -286,10 +378,29 @@ def extract_plan_slice_phases(text: str, *, source: str) -> tuple[frozenset[str]
     return extract_slice_phases(scope_section(text), source=source)
 
 
+def extract_pr_body_header_slice_phases(
+    text: str, *, source: str
+) -> tuple[frozenset[str], tuple[str, ...]]:
+    """Read a phase only from the canonical line after the body Plan line."""
+
+    lines = unfenced_lines(text)
+    header_start = canonical_body_header_start(lines)
+    if header_start is None:
+        return frozenset(), ()
+    first_nonempty_index, first_nonempty_line = header_start
+    if not PR_BODY_PLAN_RE.match(first_nonempty_line):
+        return frozenset(), ()
+    return extract_slice_phases(line_after(lines, first_nonempty_index), source=source)
+
+
 def extract_slice_phases(text: str, *, source: str) -> tuple[frozenset[str], tuple[str, ...]]:
     phases: set[str] = set()
     errors: list[str] = []
-    for raw_phase in SLICE_PHASE_RE.findall(text):
+    for line in unfenced_lines(text):
+        match = SLICE_PHASE_RE.match(line)
+        if match is None:
+            continue
+        raw_phase = match.group(1)
         phase = normalize_slice_phase(raw_phase)
         if phase not in VALID_SLICE_PHASES:
             errors.append(
@@ -304,15 +415,41 @@ def extract_slice_phases(text: str, *, source: str) -> tuple[frozenset[str], tup
 def current_pr_body_errors(
     text: str,
     *,
+    branch_ownership_lanes: frozenset[str],
     branch_slice_phases: frozenset[str],
     source: str,
 ) -> tuple[str, ...]:
-    phases, phase_errors = extract_slice_phases(text, source=source)
-    return tuple(phase_errors) + compare_current_pr_body_slice_phases(
+    lanes, lane_errors = extract_pr_body_header_ownership_lanes(
+        text,
+        source=source,
+        required=True,
+    )
+    phases, phase_errors = extract_pr_body_header_slice_phases(text, source=source)
+    return tuple(lane_errors) + tuple(phase_errors) + compare_current_pr_body_ownership_lanes(
+        lanes,
+        branch_ownership_lanes=branch_ownership_lanes,
+        source=source,
+    ) + compare_current_pr_body_slice_phases(
         phases,
         branch_slice_phases=branch_slice_phases,
         source=source,
     )
+
+
+def compare_current_pr_body_ownership_lanes(
+    lanes: frozenset[str],
+    *,
+    branch_ownership_lanes: frozenset[str],
+    source: str,
+) -> tuple[str, ...]:
+    if branch_ownership_lanes and not lanes:
+        return (f"{source}: missing Ownership lane",)
+    if branch_ownership_lanes and lanes != branch_ownership_lanes:
+        return (
+            f"{source} Ownership lane {format_values(lanes)} "
+            f"does not match branch plan lane(s) {format_values(branch_ownership_lanes)}",
+        )
+    return ()
 
 
 def compare_current_pr_body_slice_phases(
@@ -336,8 +473,58 @@ def normalize_slice_phase(value: str) -> str:
 
 
 def scope_section(text: str) -> str:
-    match = SCOPE_SECTION_RE.search(text)
-    return match.group(1) if match else ""
+    lines: list[str] = []
+    in_scope = False
+    for line in unfenced_lines(text):
+        if SECTION_HEADING_RE.match(line):
+            if SCOPE_HEADING_RE.match(line):
+                in_scope = True
+                continue
+            if in_scope:
+                break
+        if in_scope:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def unfenced_lines(text: str) -> list[str]:
+    """Return Markdown lines with fenced examples made non-structural."""
+
+    lines: list[str] = []
+    fence_delimiter = ""
+    for line in text.splitlines():
+        match = FENCE_RE.match(line)
+        if fence_delimiter:
+            lines.append("")
+            if match is not None and fence_kind(match) == fence_delimiter:
+                fence_delimiter = ""
+        elif match is not None:
+            lines.append("")
+            fence_delimiter = fence_kind(match)
+        else:
+            lines.append(line)
+    return lines
+
+
+def line_after(lines: list[str], index: int) -> str:
+    """Return one line after ``index`` without assuming it exists."""
+
+    return next(islice(lines, index + 1, index + 2), "")
+
+
+def canonical_body_header_start(lines: list[str]) -> tuple[int, str] | None:
+    """Return the first real PR-body line and its position, if present."""
+
+    for index, line in enumerate(lines):
+        if line.strip():
+            return index, line
+    return None
+
+
+def fence_kind(match: re.Match[str]) -> str:
+    """Return the delimiter family captured by ``FENCE_RE``."""
+
+    return "backtick" if match.group("delimiter").startswith("`") else "tilde"
 
 
 def load_open_pull_requests(base_ref: str) -> tuple[str, tuple[OpenPullRequest, ...], tuple[str, ...]]:
@@ -425,7 +612,11 @@ def load_open_pull_request_files(number: int, row: dict[str, Any]) -> tuple[Open
         if isinstance(item, dict)
     }
     body = str(payload.get("body", "") or "")
-    lanes, lane_errors = extract_ownership_lanes(body, source=f"PR #{number} body")
+    lanes, lane_errors = extract_pr_body_header_ownership_lanes(
+        body,
+        source=f"PR #{number} body",
+        required=False,
+    )
     phases, phase_errors = extract_slice_phases(body, source=f"PR #{number} body")
     warnings = tuple(lane_errors + phase_errors)
     return open_pr_from_row(
