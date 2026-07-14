@@ -19,6 +19,12 @@ correctly rejects its three now-passing pre-push-audit tests as stale baseline
 entries. These are direct review/CI findings in this PR's admission path, not
 new workflow scope.
 
+The subsequent current-head review found the same full-body binding omitted for
+Markdown-only diffs: a planless documentation PR could cite an unrelated
+existing plan instead of using the explicit `Docs-only: true` marker. This is
+the same admission root cause and requires only the body guard and its boundary
+fixtures.
+
 This workflow/process slice repairs those admission paths. It is justified by a
 real safety risk: an unplanned code/workflow change can receive a green
 mechanical bundle without the plan, rule, and body contracts the repository
@@ -60,8 +66,8 @@ Max files: 30
    non-Markdown path, while explicitly passing Markdown-only and Dependabot
    exemptions.
 2. Make a planless Markdown-only human PR use `Docs-only: true` as its first
-   non-empty body line; retain the full existing body contract whenever a plan
-   is supplied.
+   non-empty body line; a normal full body remains valid only when its branch
+   adds the plan it names.
 3. Scaffold and structurally enforce one non-empty `### Review Contract` inside
    `## Scope (this PR)`, then keep reviewer-rule declarations inside that block.
 4. Repair the affected fixture harness and enroll all added/changed workflow
@@ -146,9 +152,9 @@ Markdown-only, no-change, or plan-required. `scripts/audit_pr_plan_presence.py`
 consumes that result in `pre_push_audit.sh`; `scripts/audit_pr_body.py` consumes
 the same result when its caller provides a base ref and, in a trusted-base gate,
 the fetched PR-head ref. The body checker accepts an explicit docs-only marker
-only for a non-empty Markdown-only human diff and otherwise retains the existing
-plan-body validation. For a plan-required diff, it also compares the parsed
-`Plan:` path with the sole branch-added plan before it accepts the body.
+only for a non-empty Markdown-only human diff and otherwise requires a full
+body to name the sole branch-added plan. This keeps a plan-backed documentation
+PR valid while preventing a planless one from citing an unrelated existing plan.
 
 `push_pr.sh` refreshes `origin/main` before the base-dependent body audit so
 Docs-only validation never observes a missing or stale local base. The shared
@@ -198,7 +204,9 @@ newly discovered product hardening.
   and 3 stale fixture failures; this slice repairs those fixtures.
 - The focused policy/body/wrapper/scaffold/plan-audit test group — 59 passed
   after the post-review repair.
-- The exact two pytest commands enrolled in `.github/workflows/pre_push_audit.yml`, including the new admission and fixture tests — 474 passed.
+- Current-head review repair: `python -m pytest tests/test_audit_pr_body.py -q`
+  — 40 passed.
+- The exact two pytest commands enrolled in `.github/workflows/pre_push_audit.yml`, including the new admission and fixture tests — 476 passed.
 - Python compilation passed for `scripts/_pr_change_policy.py`,
   `scripts/audit_pr_plan_presence.py`, `scripts/audit_plan_doc.py`,
   `scripts/audit_pr_body.py`, and `scripts/audit_review_rules_triggered.py`.
@@ -217,9 +225,11 @@ newly discovered product hardening.
 - Post-review repair verification proved mismatched branch-plan rejection across
   six unrelated existing plan paths, refresh-before-body-audit ordering,
   string-enum behavior, and the three now-passing unit-gate nodes before the
-  guarded push. The final 38 body-audit tests and scripts-lane maturity ratchet
-  passed without a baseline update after checked singleton unpacking replaced
-  the newly flagged fixed index.
+  guarded push. Current-head review repair also proves that a planless
+  Markdown-only full body fails and a branch-plan-backed Markdown-only full
+  body passes. The focused body-audit suite and scripts-lane maturity ratchet
+  pass without a baseline update after checked singleton unpacking replaced the
+  newly flagged fixed index.
 
 ## Estimated diff size
 
@@ -232,10 +242,10 @@ newly discovered product hardening.
 | `docs/REVIEWER_RULES.md` | 9 |
 | `docs/SESSION_BOOTSTRAP.md` | 4 |
 | `docs/ai_dev_operating_model.md` | 9 |
-| `plans/PR-Plan-Admission-Contract.md` | 258 |
+| `plans/PR-Plan-Admission-Contract.md` | 268 |
 | `scripts/_pr_change_policy.py` | 151 |
 | `scripts/audit_plan_doc.py` | 79 |
-| `scripts/audit_pr_body.py` | 122 |
+| `scripts/audit_pr_body.py` | 128 |
 | `scripts/audit_pr_plan_presence.py` | 79 |
 | `scripts/audit_review_rules_triggered.py` | 36 |
 | `scripts/local_pr_review.sh` | 7 |
@@ -244,7 +254,7 @@ newly discovered product hardening.
 | `scripts/pre_push_audit.sh` | 19 |
 | `scripts/push_pr.sh` | 8 |
 | `tests/test_audit_plan_doc.py` | 52 |
-| `tests/test_audit_pr_body.py` | 217 |
+| `tests/test_audit_pr_body.py` | 292 |
 | `tests/test_audit_pr_plan_presence.py` | 167 |
 | `tests/test_audit_review_rules_triggered.py` | 25 |
 | `tests/test_local_pr_review.py` | 33 |
@@ -255,4 +265,4 @@ newly discovered product hardening.
 | `tests/test_pre_push_audit_workflow.py` | 7 |
 | `tests/test_push_pr_wrapper.py` | 102 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **1606** |
+| **Total** | **1697** |

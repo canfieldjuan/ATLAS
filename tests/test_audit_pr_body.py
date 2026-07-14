@@ -461,6 +461,59 @@ def test_full_body_accepts_the_sole_branch_added_plan(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_full_body_requires_docs_only_marker_without_a_branch_added_plan(
+    tmp_path: Path,
+) -> None:
+    repo = _git_repo_with_docs_only_diff(
+        tmp_path, existing_plan="plans/PR-Existing.md", add_plan=False
+    )
+    body = tmp_path / "body.md"
+    body.write_text(_valid_body(plan="plans/PR-Existing.md"), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo-root",
+            str(repo),
+            "--base-ref",
+            "origin/main",
+            str(body),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "Docs-only: true" in result.stdout
+
+
+def test_full_body_accepts_a_branch_added_plan_for_markdown_only_diff(tmp_path: Path) -> None:
+    repo = _git_repo_with_docs_only_diff(
+        tmp_path, existing_plan="plans/PR-Existing.md", add_plan=True
+    )
+    body = tmp_path / "body.md"
+    body.write_text(_valid_body(plan="plans/PR-Added.md"), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo-root",
+            str(repo),
+            "--base-ref",
+            "origin/main",
+            str(body),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_cli_repo_root_checks_plan_in_inspected_checkout(tmp_path: Path) -> None:
     repo = _write_plan(tmp_path / "inspected", "plans/PR-OnlyInInspected.md")
     body = tmp_path / "body.md"
@@ -571,6 +624,28 @@ def _git_repo_with_plan_required_diff(tmp_path: Path, *, existing_plan: str) -> 
     (repo / "plans" / "PR-Added.md").write_text("# added plan\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "planned code change")
+    return repo
+
+
+def _git_repo_with_docs_only_diff(
+    tmp_path: Path, *, existing_plan: str, add_plan: bool
+) -> Path:
+    repo = tmp_path / "repo"
+    (repo / existing_plan).parent.mkdir(parents=True)
+    (repo / existing_plan).write_text("# existing plan\n", encoding="utf-8")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "base")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "remote", "add", "origin", str(repo))
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "example.md").write_text("# changed\n", encoding="utf-8")
+    if add_plan:
+        (repo / "plans" / "PR-Added.md").write_text("# added plan\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "planned documentation change")
     return repo
 
 

@@ -319,21 +319,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ChangePolicyError as exc:
             print(f"pr body audit: {exc}", file=sys.stderr)
             return 2
-        if classification.kind is ChangeKind.PLAN_REQUIRED:
+        if classification.kind in (ChangeKind.DOCS_ONLY, ChangeKind.PLAN_REQUIRED):
             body_plan = PLAN_LINE_RE.match(
                 next(line.strip() for line in body.splitlines() if line.strip())
             ).group("plan")
             if len(plans) != 1:
-                failures.append(
-                    "human non-Markdown diff must add exactly one plan before its "
-                    "full PR body can be accepted"
-                )
+                if classification.kind is ChangeKind.DOCS_ONLY:
+                    failures.append(
+                        "a Markdown-only human diff with a full PR body must add "
+                        "exactly one plan; otherwise use Docs-only: true"
+                    )
+                else:
+                    failures.append(
+                        "human non-Markdown diff must add exactly one plan before its "
+                        "full PR body can be accepted"
+                    )
             else:
                 sole_plan, = plans
                 if body_plan != sole_plan:
                     failures.append(
                         "Plan: line must name the sole branch-added plan for a human "
-                        f"non-Markdown diff: {sole_plan}"
+                        f"full PR body: {sole_plan}"
                     )
     if failures:
         print("pr body audit: FAIL (AGENTS.md section 1b contract)")
