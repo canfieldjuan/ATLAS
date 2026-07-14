@@ -1756,11 +1756,21 @@ def _item_evidence_tier(
 ) -> str:
     if answer_evidence_status == "resolution_evidence":
         return "csv_full_thread_resolution_evidence"
-    for row in rows:
-        tier = _clean(row.get("support_ticket_evidence_tier"))
-        if tier:
-            return tier
-    return "csv_index_metadata_only"
+    tier_rank = {
+        "csv_index_metadata_only": 1,
+        "csv_customer_text": 2,
+        "csv_full_thread_resolution_evidence": 3,
+    }
+    tiers = [
+        tier
+        for row in rows
+        if (tier := _clean(row.get("support_ticket_evidence_tier")))
+    ]
+    return max(
+        tiers,
+        key=lambda tier: tier_rank.get(tier, 0),
+        default="csv_index_metadata_only",
+    )
 
 
 def _source_date_span(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:

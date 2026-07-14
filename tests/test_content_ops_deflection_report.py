@@ -5475,6 +5475,21 @@ def test_outcome_diagnostics_count_duplicate_evidence_by_source_ticket() -> None
     assert "Reopened tickets: 1" in artifact.markdown
 
 
+def test_direct_subject_only_question_uses_customer_evidence_tier() -> None:
+    package = build_support_ticket_input_package([
+        {"ticket_id": "metadata", "subject": "Update billing"},
+        {"ticket_id": "subject-question", "subject": "How do I update billing?"},
+    ])
+
+    result = build_ticket_faq_markdown(package.inputs["source_material"], max_items=1)
+
+    assert [row["support_ticket_evidence_tier"] for row in package.inputs["source_material"]] == [
+        "csv_index_metadata_only",
+        "csv_customer_text",
+    ]
+    assert result.items[0]["evidence_tier"] == "csv_customer_text"
+
+
 def test_outcome_diagnostics_normalize_direct_raw_status_and_csat() -> None:
     result = build_ticket_faq_markdown(
         [

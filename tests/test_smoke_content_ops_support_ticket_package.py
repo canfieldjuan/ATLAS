@@ -125,10 +125,7 @@ def test_support_ticket_package_smoke_summarizes_undated_csv_without_window_filt
         "source_id": "ticket-1",
         "source_title": "How do I change my login email?",
         "pain_category": "profile updates",
-        "text": (
-            "How do I change my login email? I cannot find where to update the "
-            "email on my account."
-        ),
+        "text": "I cannot find where to update the email on my account.",
     }
     assert summary["support_ticket_resolution_evidence_present"] is False
     assert summary["support_ticket_resolution_evidence_count"] == 0
@@ -176,8 +173,8 @@ def test_support_ticket_package_uses_zendesk_public_comments_not_internal_notes(
             "source_id": "zd-1",
             "source_title": "Refund status",
             "text": (
-                "Refund status How do I see when the duplicate charge was "
-                "refunded? I still cannot find the refund receipt."
+                "How do I see when the duplicate charge was refunded? "
+                "I still cannot find the refund receipt."
             ),
         }
     ]
@@ -492,10 +489,7 @@ def test_support_ticket_package_smoke_accepts_platform_export_fixture() -> None:
         "source_id": "fd-200",
         "source_title": "Where do I export my invoice?",
         "pain_category": "billing export",
-        "text": (
-            "Where do I export my invoice? "
-            "Where do I export my invoice before month-end?"
-        ),
+        "text": "Where do I export my invoice before month-end?",
     }
 
 
