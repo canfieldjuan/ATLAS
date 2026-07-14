@@ -97,6 +97,10 @@ plan_path="$repo_root/$plan_rel"
 if [ -z "$state_file" ]; then
     state_file="${ATLAS_SESSION_STATE_FILE:-$repo_root/SESSION_STATE.local.md}"
 fi
+case "$state_file" in
+    /*) ;;
+    *) state_file="$repo_root/$state_file" ;;
+esac
 [ -f "$state_file" ] || die "session state file not found: $state_file"
 
 current_lane_count="$(awk '

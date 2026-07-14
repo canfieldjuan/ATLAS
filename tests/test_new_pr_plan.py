@@ -28,15 +28,18 @@ def _write_state(path: Path, lane: str = "dev-workflow/test") -> Path:
 
 
 def _run_new_plan(
-    path: Path, *args: str, env: dict[str, str] | None = None
+    path: Path,
+    *args: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
-        cwd=path,
+        cwd=cwd or path,
         check=False,
         capture_output=True,
         text=True,
-        env={**os.environ, **(env or {})},
+        env={**os.environ, "ATLAS_SESSION_STATE_FILE": "", **(env or {})},
     )
 
 
@@ -264,3 +267,46 @@ def test_new_pr_plan_uses_state_file_from_environment(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "plans" / "PR-Environment-State.md").exists()
+
+
+def test_new_pr_plan_ignores_ambient_session_state_file(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    monkeypatch.setenv("ATLAS_SESSION_STATE_FILE", str(tmp_path / "wrong-state.md"))
+
+    result = _run_new_plan(tmp_path, "Ambient-State", "--lane", "dev-workflow/test")
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "plans" / "PR-Ambient-State.md").exists()
+
+
+def test_new_pr_plan_resolves_relative_state_paths_from_repo_root(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path, with_state=False)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    state = _write_state(state_dir, "dev-workflow/relative")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+
+    flag = _run_new_plan(
+        tmp_path,
+        "Relative-Flag",
+        "--lane",
+        "dev-workflow/relative",
+        "--state-file",
+        "state/SESSION_STATE.local.md",
+        cwd=nested,
+    )
+    environment = _run_new_plan(
+        tmp_path,
+        "Relative-Environment",
+        "--lane",
+        "dev-workflow/relative",
+        cwd=nested,
+        env={"ATLAS_SESSION_STATE_FILE": "state/SESSION_STATE.local.md"},
+    )
+
+    assert state.exists()
+    assert flag.returncode == 0, flag.stderr
+    assert environment.returncode == 0, environment.stderr
+    assert (tmp_path / "plans" / "PR-Relative-Flag.md").exists()
+    assert (tmp_path / "plans" / "PR-Relative-Environment.md").exists()

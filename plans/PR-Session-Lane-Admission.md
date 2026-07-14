@@ -9,6 +9,11 @@ ownership lane matches its local session state before scaffolding, but the
 runtime scaffold does not read session state at all: it accepts any `--lane` or
 emits `TODO-ownership-lane`.
 
+The current-head review found two repairs required for that new guard to mean
+what its contract says: fixture calls must not inherit a builder shell's
+unrelated `ATLAS_SESSION_STATE_FILE`, and a configured repo-relative state path
+must resolve from the discovered worktree root rather than a caller subdirectory.
+
 ### Problem-derived contract
 
 - Root cause: the only pre-PR entrypoint that creates a plan and claims an
@@ -21,7 +26,8 @@ emits `TODO-ownership-lane`.
   non-empty canonical top-level `Current lane:` value, require an explicit
   `--lane`, and reject any mismatch before creating or overwriting a plan. The
   state template/bootstrap wording and focused scaffold fixtures must name and
-  prove that contract.
+  prove that contract, including explicit control of the state-file environment
+  and worktree-root resolution for relative configured paths.
 - Must not change: PR ownership semantics after a PR exists; `--force`'s
   existing overwrite behavior after lane admission succeeds; plan shape,
   product behavior, branch protection, other sessions' state, issue queues,
@@ -39,6 +45,9 @@ Slice phase: Workflow/process
 2. Canonicalize the session-state template and bootstrap instruction on
    `Current lane:`, and add focused fixture coverage for match, missing state,
    missing/duplicate lane, mismatch, omitted `--lane`, and `--force` bypass.
+3. Resolve configured relative state paths against the worktree root and make
+   test helpers clear ambient state-file configuration unless a case explicitly
+   supplies it.
 
 ### Review Contract
 
@@ -51,6 +60,9 @@ Slice phase: Workflow/process
         writes/overwrites a plan.
   - [ ] The state-file precedence is explicit flag, then
         `ATLAS_SESSION_STATE_FILE`, then worktree-local legacy state.
+  - [ ] Both explicit and environment-supplied repo-relative state paths work
+        from a subdirectory, and fixture defaults never inherit an ambient
+        builder-session path.
   - [ ] Existing valid scaffold shape and successful `--force` replacement are
         preserved after admission succeeds.
 - Reachability proof: invoke the real shell scaffold against temporary Git
@@ -77,15 +89,18 @@ Slice phase: Workflow/process
 `new_pr_plan.sh` will parse `--state-file` before the existing slice options.
 After it resolves the repository root, it selects the explicit file, otherwise
 `ATLAS_SESSION_STATE_FILE`, otherwise `$repo_root/SESSION_STATE.local.md`. It
-reads only top-level `Current lane:` lines, rejects zero or multiple values and
-rejects a blank value. It then requires `--lane` and compares it exactly to the
-canonical value before checking an existing plan or creating its temporary
-scaffold. This makes both normal and `--force` paths fail before any write.
+resolves a configured relative path from that root, reads only top-level
+`Current lane:` lines, rejects zero or multiple values and rejects a blank
+value. It then requires `--lane` and compares it exactly to the canonical value
+before checking an existing plan or creating its temporary scaffold. This makes
+both normal and `--force` paths fail before any write.
 
 The template and bootstrap name the canonical field so future state files and
 the runtime parser agree. Tests execute the real shell CLI with temporary Git
 repositories and state files, covering successful admission and every
-failure-before-write boundary.
+failure-before-write boundary. Their helper clears ambient
+`ATLAS_SESSION_STATE_FILE` by default, so only tests that explicitly supply the
+variable exercise the environment branch.
 
 ## Intentional
 
@@ -97,6 +112,9 @@ failure-before-write boundary.
 - `--lane` is required rather than defaulting from session state, so the plan
   records the operator-assigned lane at the call site and an accidental omission
   cannot create a misleading plan.
+- A relative state-file value is intentionally worktree-relative, matching the
+  template's documented contract; caller-directory-relative values would make
+  the same session behave differently from a nested shell.
 
 ## Deferred
 
@@ -109,10 +127,10 @@ Parked hardening: none.
 
 ## Verification
 
-- Shell syntax and focused scaffold tests — 12 passed.
+- Shell syntax and focused scaffold tests — 14 passed.
 - Plan-document audit and whitespace check — passed.
 - The exact pytest command enrolled in `.github/workflows/pre_push_audit.yml`
-  — 492 passed.
+  — 494 passed.
 - Pending before push: guarded `scripts/push_pr.sh` local review with the final
   PR body.
 
@@ -122,7 +140,7 @@ Parked hardening: none.
 |---|---:|
 | `docs/SESSION_BOOTSTRAP.md` | 2 |
 | `docs/SESSION_STATE_TEMPLATE.md` | 2 |
-| `plans/PR-Session-Lane-Admission.md` | 128 |
-| `scripts/new_pr_plan.sh` | 40 |
-| `tests/test_new_pr_plan.py` | 150 |
-| **Total** | **322** |
+| `plans/PR-Session-Lane-Admission.md` | 146 |
+| `scripts/new_pr_plan.sh` | 44 |
+| `tests/test_new_pr_plan.py` | 198 |
+| **Total** | **392** |
