@@ -182,6 +182,9 @@ _TEXT_KEYS = (
     "notes",
     "summary",
 )
+_CUSTOMER_BODY_KEYS = tuple(
+    key for key in _TEXT_KEYS if key not in _SOURCE_TITLE_KEYS
+)
 _PUBLIC_COMMENT_KEYS = (
     "comments",
     "messages",
@@ -786,8 +789,12 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     measured_outcome = _evidence_text(_first_value(row, _MEASURED_OUTCOME_KEYS))
     if measured_outcome:
         normalized["measured_outcome"] = _clip_text(measured_outcome, max_chars=500)
-    if _has_customer_text(row):
-        normalized["_customer_text_present"] = True
+    admitted_customer_wording = _admitted_customer_wording(
+        row,
+        source_title=source_title,
+    )
+    if admitted_customer_wording:
+        normalized["_admitted_customer_wording"] = admitted_customer_wording
     for key in _PASSTHROUGH_KEYS:
         value = row.get(key)
         if value not in (None, "", [], {}):
@@ -831,7 +838,7 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
 def _support_ticket_row_evidence_tier(row: Mapping[str, Any]) -> str:
     if _clean(row.get("resolution_text")):
         return "csv_full_thread_resolution_evidence"
-    if row.get("_customer_text_present"):
+    if row.get("_admitted_customer_wording"):
         return "csv_customer_text"
     return "csv_index_metadata_only"
 
@@ -843,13 +850,36 @@ def _support_ticket_evidence_tier(
 ) -> str:
     if resolution_evidence_count > 0:
         return "csv_full_thread_resolution_evidence"
-    if any(row.get("_customer_text_present") for row in rows):
+    if any(row.get("_admitted_customer_wording") for row in rows):
         return "csv_customer_text"
     return "csv_index_metadata_only"
 
 
-def _has_customer_text(row: Mapping[str, Any]) -> bool:
-    return bool(_first_text(row, _TEXT_KEYS) or _comments_text(row))
+def _admitted_customer_wording(
+    row: Mapping[str, Any],
+    *,
+    source_title: str,
+) -> str:
+    parts = [
+        _first_hygiene_preserved_text(row, _CUSTOMER_BODY_KEYS),
+        *(
+            support_ticket_plain_text_lines(comment)
+            for comment in _raw_comment_texts(row)
+        ),
+    ]
+    wording = support_ticket_plain_text("\n".join(part for part in parts if part))
+    return wording or _question_like(source_title)
+
+
+def _first_hygiene_preserved_text(
+    row: Mapping[str, Any],
+    keys: Sequence[str],
+) -> str:
+    for key in keys:
+        text = support_ticket_plain_text_lines(_first_text(row, (key,)))
+        if text:
+            return text
+    return ""
 
 
 def _routing_context_value(value: Any) -> Any:
@@ -1135,7 +1165,7 @@ def _customer_wording_examples(
 ) -> list[dict[str, Any]]:
     examples: list[dict[str, Any]] = []
     for row in rows:
-        text = _compact(row.get("text"))
+        text = _compact(row.get("_admitted_customer_wording"))
         if not text:
             continue
         example = {

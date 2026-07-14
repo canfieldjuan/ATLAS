@@ -463,10 +463,7 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
         "source_id": "ticket-1",
         "source_title": "How do I change my login email?",
         "pain_category": "profile updates",
-        "text": (
-            "How do I change my login email? I cannot find where to update the "
-            "email on my account."
-        ),
+        "text": "I cannot find where to update the email on my account.",
     }
     assert "support_ticket_source_summary" not in request.inputs
     assert request.inputs["faq_questions"] == [
@@ -1014,7 +1011,10 @@ def test_support_ticket_input_package_strips_generic_provider_html_before_cluste
     assert "ignore me" not in rows[0]["text"]
     assert "answer-card" not in rows[0]["resolution_text"]
     assert "<" not in rows[0]["resolution_text"]
-    assert package.inputs["customer_wording_examples"][0]["text"] == rows[0]["text"]
+    assert package.inputs["customer_wording_examples"][0]["text"] == (
+        "How do I reset my password? Use the login screen & email link. "
+        "Customer still sees the reset error."
+    )
     assert package.inputs["faq_questions"][0] == "How do I reset my password?"
 
 
@@ -1790,6 +1790,64 @@ def test_support_ticket_input_package_preserves_support_platform_provenance() ->
     assert rows[0]["support_platform"] == "zendesk"
     assert rows[1]["support_platform"] == "help_scout"
     assert rows[2]["support_platform"] == "intercom"
+
+
+def test_support_ticket_customer_wording_uses_admitted_text() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "stripped",
+            "subject": "Account index row",
+            "description": '<img src="tracking.gif">',
+        },
+        {
+            "ticket_id": "quoted",
+            "subject": "Account index row",
+            "description": "<blockquote>Old quoted reply?</blockquote>",
+        },
+        {"ticket_id": "ordinary", "subject": "Account index row"},
+        {"ticket_id": "summary", "summary": "Account index row"},
+        {"ticket_id": "subject-question", "subject": "How do I update billing?"},
+        {
+            "ticket_id": "body",
+            "subject": "Account index row",
+            "description": "Where do I update billing?",
+        },
+        {
+            "ticket_id": "later-body",
+            "subject": "Account index row",
+            "body": "<blockquote>Old quoted reply?</blockquote>",
+            "description": "Where do I update billing after a failed export?",
+        },
+        {
+            "ticket_id": "comment",
+            "subject": "Account index row",
+            "comments": {"body": "Can I update billing details?"},
+        },
+    ])
+
+    rows = {row["source_id"]: row for row in package.inputs["source_material"]}
+
+    assert rows["stripped"]["support_ticket_evidence_tier"] == "csv_index_metadata_only"
+    assert rows["quoted"]["support_ticket_evidence_tier"] == "csv_index_metadata_only"
+    assert rows["ordinary"]["support_ticket_evidence_tier"] == "csv_index_metadata_only"
+    assert rows["summary"]["support_ticket_evidence_tier"] == "csv_index_metadata_only"
+    assert rows["subject-question"]["support_ticket_evidence_tier"] == "csv_customer_text"
+    assert rows["body"]["support_ticket_evidence_tier"] == "csv_customer_text"
+    assert rows["later-body"]["support_ticket_evidence_tier"] == "csv_customer_text"
+    assert rows["comment"]["support_ticket_evidence_tier"] == "csv_customer_text"
+    assert [example["source_id"] for example in package.inputs["customer_wording_examples"]] == [
+        "subject-question",
+        "body",
+        "later-body",
+        "comment",
+    ]
+    assert [example["text"] for example in package.inputs["customer_wording_examples"]] == [
+        "How do I update billing?",
+        "Where do I update billing?",
+        "Where do I update billing after a failed export?",
+        "Can I update billing details?",
+    ]
+    assert package.metadata["support_ticket_evidence_tier"] == "csv_customer_text"
 
 
 def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
