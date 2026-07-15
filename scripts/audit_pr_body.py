@@ -67,6 +67,15 @@ def is_docs_only_body(body: str) -> bool:
     return DOCS_ONLY_RE.fullmatch(first_nonempty) is not None
 
 
+def first_nonempty_raw_line_index(lines: list[str]) -> tuple[int, str] | None:
+    """Return the first non-empty raw line position before fence elision."""
+
+    for index, line in enumerate(lines):
+        if line.strip():
+            return index, line.strip()
+    return None
+
+
 def _git_read(args: list[str], *, repo_root: Path) -> tuple[int, bytes]:
     """Run a read-only git command. A missing or broken git binary is an
     infrastructure condition surfaced as a nonzero code (fail-closed for
@@ -188,20 +197,16 @@ def audit_pr_body(
             return plan_exists_in_worktree(plan, repo_root=root)
 
     failures: list[str] = []
+    raw_lines = body.splitlines()
+    raw_header_start = first_nonempty_raw_line_index(raw_lines)
     lines = unfenced_lines(body)
     nonempty = [line.strip() for line in lines if line.strip()]
     if not nonempty:
         return ["PR body is empty"]
 
-    first_nonempty_index = None
-    first_nonempty_line = ""
-    for index, line in enumerate(lines):
-        if line.strip():
-            first_nonempty_index = index
-            first_nonempty_line = line.strip()
-            break
-    if first_nonempty_index is None:
+    if raw_header_start is None:
         return ["PR body is empty"]
+    first_nonempty_index, first_nonempty_line = raw_header_start
     plan_match = PLAN_LINE_RE.match(first_nonempty_line)
     if plan_match is None:
         failures.append(
@@ -213,14 +218,14 @@ def audit_pr_body(
                 f"plan doc named in the PR body does not exist: {plan_match.group('plan')}"
             )
 
-    phase_line = line_after(lines, first_nonempty_index)
+    phase_line = line_after(raw_lines, first_nonempty_index)
     if not SLICE_PHASE_RE.match(phase_line.strip()):
         failures.append(
             "missing canonical 'Slice phase: <phase>' line immediately after "
             "'Plan: plans/PR-<Slice-Name>.md'"
         )
     else:
-        lane_line = line_after(lines, first_nonempty_index + 1)
+        lane_line = line_after(raw_lines, first_nonempty_index + 1)
         if not LANE_LINE_RE.match(lane_line.strip()):
             failures.append(
                 "missing canonical 'Ownership lane: <lowercase-lane>' line immediately "

@@ -518,8 +518,8 @@ def test_cli_ignores_fenced_headings_when_scoping_plan_lane(tmp_path: Path) -> N
         repo,
         "plans/PR-Fenced-Heading.md",
         "# PR-Fenced-Heading\n\n## Scope (this PR)\n\n"
-        "Ownership lane: atlas-workflow\n\n```md\n## Mechanism\n```\n"
-        "Slice phase: Workflow/process\n",
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n\n"
+        "```md\n## Mechanism\n```\n",
     )
 
     result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
@@ -563,6 +563,22 @@ def test_cli_rejects_slice_phase_after_shorter_nested_fence(
 
     assert result.returncode == 1
     assert "plans/PR-Short-Fence.md: missing Slice phase" in result.stdout
+
+
+def test_cli_rejects_scope_fence_before_lane_declaration(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Fence-Before-Lane.md",
+        "# PR-Fence-Before-Lane\n\n## Scope (this PR)\n\n"
+        "```md\nexample\n```\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 1
+    assert "Ownership lane must be the first non-empty line" in result.stdout
 
 
 def test_cli_rejects_scope_lane_after_other_scope_content(tmp_path: Path) -> None:

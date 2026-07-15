@@ -240,6 +240,40 @@ def test_shorter_nested_fence_cannot_end_outer_body_example(
     assert "missing required section: ## Intentional" in failures
 
 
+def test_fenced_content_after_incomplete_header_cannot_supply_lane(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = "\n".join([
+        "Plan: plans/PR-Example.md",
+        "Slice phase: Production hardening",
+        "",
+        "One-paragraph why.",
+        "",
+        "```md",
+        "```python",
+        "Ownership lane: dev-workflow/process-gate-enrollment",
+        "```",
+        *(_valid_body().splitlines()[6:]),
+    ])
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("Ownership lane" in failure for failure in failures)
+
+
+def test_fenced_content_before_body_header_fails(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = "\n".join([
+        "```md",
+        "example",
+        "```",
+        _valid_body(),
+    ])
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("first non-empty line" in failure for failure in failures)
+
+
 def test_metadata_after_why_paragraph_cannot_supply_canonical_header(tmp_path: Path) -> None:
     root = _write_plan(tmp_path)
     body = _valid_body().replace(

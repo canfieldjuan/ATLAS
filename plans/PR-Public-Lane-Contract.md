@@ -36,27 +36,29 @@ cannot satisfy. The overage is regression proof, not adjacent cleanup.
   collision metadata must be parsed only from the unfenced canonical lead
   blocks, not merely from a line matching the right label.
 - Correct fix must touch/change: The full-body parser must require exactly one
-  canonical `Ownership lane:` directly after `Slice phase:`. The drift parser
-  must require exactly one canonical non-fenced lane declaration in the Scope
-  section, ignore fenced headings and metadata while finding both Scope
-  declarations, reject declarations outside Scope, and compare only the
-  canonical current PR-body header lane to that plan lane. The body audit must
-  likewise ignore fenced text when locating its lead metadata and required
-  sections. Regression tests must cover valid matching metadata and missing,
-  duplicate, malformed, misplaced, fenced, and mismatched metadata. The
-  `open_pr`, `push_pr`, and local-review valid-body fixtures must use that new
-  shape because those entrypoints invoke the changed parser. `AGENTS.md` must
-  publish the new full-body shape.
-- Reviewed-head completion required: Fence walkers must recognize both
-  backtick and tilde Markdown fences; body metadata must occupy the canonical
-  lead sequence immediately after `Plan:`; and the Scope lane must be the
-  first non-fenced, non-empty Scope line with the Scope phase read from the
-  canonical lead declaration. The fix must preserve intervening fence
-  boundaries rather than making distant lines adjacent, and a shorter nested
-  fence delimiter must not close a longer outer fence. The maturity ratchet
-  must remain at its existing score through behavior-preserving guarded
-  access, and the Unit Gate baseline must only shrink for now-passing
-  session-drift entries; it must never absorb a regression. The
+  canonical `Ownership lane:` directly after `Slice phase:` by reading the raw
+  first three PR-body lines, not by searching an unfenced body. The drift
+  parser must require exactly one canonical lane declaration as the first raw
+  non-empty line in the Scope section, require the phase as the next Scope lead
+  declaration, and compare only the canonical current PR-body header lane to
+  that plan lane. Fences before either lead block must count as preceding
+  content, so fenced/prose metadata cannot be promoted by a hand-rolled
+  CommonMark tokenizer. Regression tests must cover valid matching metadata
+  and missing, duplicate, malformed, misplaced, fenced-before-lead, and
+  mismatched metadata. The `open_pr`, `push_pr`, and local-review valid-body
+  fixtures must use that new shape because those entrypoints invoke the changed
+  parser. `AGENTS.md` must publish the new full-body shape.
+- Reviewed-head completion required: Body metadata must occupy the raw
+  canonical lead sequence immediately after `Plan:`; the Scope lane must be
+  the first raw non-empty Scope line; and the Scope phase must be the next
+  Scope lead declaration. Fenced blocks before the PR-body header or Scope lead
+  declaration are preceding content, not removable whitespace. This closes the
+  repeated fence-edge review loop by making metadata admission independent of
+  the hand-rolled fence tokenizer instead of adding another delimiter case.
+  The maturity ratchet must remain at its existing score through
+  behavior-preserving guarded access, and the Unit Gate baseline must only
+  shrink for now-passing session-drift entries; it must never absorb a
+  regression. The
   machine-consumed PR body must carry the required diff-budget override
   explaining the already-justified overage.
 - Must not change: Docs-only and Dependabot exemptions; existing Plan and Slice
@@ -75,11 +77,12 @@ Slice phase: Workflow/process
    and mismatched declarations with focused failure-branch tests.
 3. Update the wrapper entrypoint fixtures that intentionally pass a valid full
    body through the changed parser.
-4. Preserve Scope state across fenced example headings, ignore fenced metadata
-   in all plan and body structural scans, and ignore peer-body prose lanes
-   unless they appear in the canonical header position.
-5. Complete the same canonical-lead rule for tilde fences, body metadata order,
-   and the first Scope line; prove those held-out forms with focused tests.
+4. Preserve Scope state across fenced example headings and ignore peer-body
+   prose lanes unless they appear in the canonical header position.
+5. Complete the same canonical-lead rule for body metadata order and the first
+   Scope/body line by parsing those lead blocks positionally from raw lines;
+   prove fenced-before-lead bypasses fail without adding a new fence-tokenizer
+   case.
 6. Clear the directly caused CI ratchets without waiving findings or adding a
    Unit Gate baseline entry.
 
@@ -87,14 +90,14 @@ Slice phase: Workflow/process
 
 - Acceptance criteria:
   - [ ] A full human body has one canonical lane directly after its phase line.
-  - [ ] A changed plan has one canonical, non-fenced lane inside Scope only.
+  - [ ] A changed plan has one canonical lane as the first raw non-empty Scope line.
   - [ ] The current body lane and plan Scope lane must match exactly.
-  - [ ] Headings or lane-looking text inside examples/prose cannot satisfy
+  - [ ] Headings or lane-looking text below the fixed lead positions cannot satisfy
         either parser.
-  - [ ] Fenced phase lines and required-section headings cannot satisfy either
-        parser's structural contract.
-  - [ ] Both Markdown fence delimiters and every canonical lead-block position
-        obey the same non-structural parsing rule.
+  - [ ] Fences before the PR-body header or Scope lead count as content and
+        fail the fixed-position contract.
+  - [ ] Existing fenced required-section behavior remains bounded to the body
+        section scanner and is not used for metadata admission.
   - [ ] Maturity and Unit Gate ratchets do not gain an unreviewed exception.
   - [ ] The open-PR and push-PR wrapper paths still accept a valid full body.
   - [ ] Docs-only and Dependabot behavior remains unchanged.
@@ -124,21 +127,21 @@ Slice phase: Workflow/process
 
 Use the existing lower-case lane grammar without normalizing aliases. The body
 audit recognises exactly one header declaration, immediately following the
-phase line, and treats it as metadata rather than prose. Both auditors walk
-Markdown structure with fenced lines excluded, so an example cannot provide a
-header, required section, Scope boundary, or phase. The drift audit then reads
-current and peer lanes from the canonical header position only and validates
-the current body lane against the plan's sole Scope lane before a PR exists or
-after it is opened. Other open PRs remain advisory inputs until the later
-`session-lane` workflow is introduced and enrolled. The wrapper and local-review
-tests supply the same valid header shape so they continue to prove each real
-local publication entrypoint.
+phase line, by reading the raw first non-empty body line and the next two raw
+physical lines. The drift audit uses the same raw header reader for current and
+peer PR bodies, then validates the current body lane against the plan's sole
+Scope lane before a PR exists or after it is opened. Other open PRs remain
+advisory inputs until the later `session-lane` workflow is introduced and
+enrolled. The wrapper and local-review tests supply the same valid header shape
+so they continue to prove each real local publication entrypoint.
 
-The completion pass treats both CommonMark fence delimiters as non-structural,
-without removing their separator position. It reads body metadata only from
-the contiguous `Plan`/phase/lane lead block, reads GitHub-loaded body phase
-metadata from that same header, and reads plan Scope phase metadata from the
-canonical Scope lead declaration rather than the whole Scope body.
+For plan metadata, the drift audit reads the raw non-empty lines after the
+Scope heading. The first such line must be `Ownership lane:` and the second
+must be `Slice phase:`. A fenced block before either declaration is therefore
+ordinary preceding content and fails the fixed-position contract; no Markdown
+fence interpretation can promote metadata from lower in the section.
+Existing fenced-section handling remains only for non-metadata body/plan
+structure such as required PR-body headings and Scope-boundary examples.
 Iterator-based guarded lookups retain the existing maturity ratchet score; the
 Unit Gate ledger removes only the two session-drift entries proven stale by
 this repair.
@@ -169,29 +172,28 @@ Parked hardening: none.
 ## Verification
 
 - Focused pytest command for the two auditors, local-review fixture, and two
-  wrapper suites — 130 passed.
+  wrapper suites — 133 passed.
 - Maturity-sweep structural scores: body auditor 5 and drift auditor 7, at or
   below their committed ratchet baselines.
-- Full Unit Gate command confirms the two session-drift nodes are now passing
-  and removed from the baseline. Local full-gate output still reports
-  unrelated environment noise: nine security baseline entries pass locally but
-  not in GitHub's previous hosted run, and `test_nemotron_stt` fails only in
-  the full local sweep while passing alone. CI remains the final hosted
-  verification after publication.
-- Local PR review command with the planned current-body file against origin/main — pending final push.
+- Exact GitHub Unit Gate session-drift regression nodes — 5 passed locally.
+- Full Unit Gate command was attempted after the parser rewrite and manually
+  interrupted after it produced no output for multiple polls; the exact
+  hosted-regression nodes above are the local focused proof, and CI remains
+  the final hosted verification after publication.
+- `bash scripts/push_pr.sh /tmp/atlas-public-lane-contract-pr-body.md` — local PR review passed and pushed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `AGENTS.md` | 1 |
-| `plans/PR-Public-Lane-Contract.md` | 197 |
-| `scripts/audit_pr_body.py` | 96 |
-| `scripts/audit_pr_session_drift.py` | 286 |
-| `tests/test_audit_pr_body.py` | 109 |
-| `tests/test_audit_pr_session_drift.py` | 319 |
+| `plans/PR-Public-Lane-Contract.md` | 199 |
+| `scripts/audit_pr_body.py` | 101 |
+| `scripts/audit_pr_session_drift.py` | 284 |
+| `tests/test_audit_pr_body.py` | 143 |
+| `tests/test_audit_pr_session_drift.py` | 335 |
 | `tests/test_local_pr_review.py` | 1 |
 | `tests/test_open_pr_wrapper.py` | 1 |
 | `tests/test_push_pr_wrapper.py` | 1 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **1014** |
+| **Total** | **1069** |

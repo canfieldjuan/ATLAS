@@ -290,8 +290,8 @@ def extract_pr_body_header_ownership_lanes(
 ) -> tuple[frozenset[str], tuple[str, ...]]:
     """Read a lane only from the canonical header immediately after phase."""
 
-    lines = unfenced_lines(text)
-    header_start = canonical_body_header_start(lines)
+    lines = text.splitlines()
+    header_start = first_nonempty_raw_line_index(lines)
     if header_start is None:
         return frozenset(), ()
     first_nonempty_index, first_nonempty_line = header_start
@@ -330,50 +330,35 @@ def extract_plan_ownership_lanes(text: str, *, source: str) -> tuple[frozenset[s
 
     lanes: set[str] = set()
     errors: list[str] = []
-    in_scope = False
-    fence_marker: FenceMarker | None = None
-    scope_has_content = False
-    scope_declaration_count = 0
-    for line in text.splitlines():
-        stripped = line.strip()
-        fence_match = FENCE_RE.match(line)
-        if fence_marker is not None:
-            if fence_match is not None and closes_fence(fence_match, fence_marker):
-                fence_marker = None
-            continue
-        if fence_match is not None:
-            fence_marker = open_fence_marker(fence_match)
-            continue
-        if SECTION_HEADING_RE.match(line):
-            in_scope = SCOPE_HEADING_RE.match(line) is not None
-            scope_has_content = False
-            continue
-        if in_scope and stripped and not scope_has_content:
-            scope_has_content = True
-            if not LANE_PREFIX_RE.match(line):
-                errors.append(
-                    f"{source}: Ownership lane must be the first non-empty line in the Scope section"
-                )
-        if not LANE_PREFIX_RE.match(line):
-            continue
-        _, _, raw_lane = line.partition(":")
-        raw_lane = raw_lane.strip().strip("`").strip()
-        if not in_scope:
-            errors.append(f"{source}: Ownership lane must appear in the Scope section")
-        else:
-            scope_declaration_count += 1
-            if not LANE_VALUE_RE.match(raw_lane):
-                errors.append(
-                    f"{source}: invalid Ownership lane {raw_lane!r}; "
-                    "use lowercase letters, numbers, dots, dashes, slashes, or underscores"
-                )
-            else:
-                lanes.add(raw_lane)
-
-    if scope_declaration_count == 0 and not errors:
+    declarations = scope_lead_lines(text)
+    declaration_iter = iter(declarations)
+    lane_line = next(declaration_iter, "")
+    if not lane_line:
         errors.append(f"{source}: missing Ownership lane")
-    elif scope_declaration_count != 1:
+        return frozenset(), tuple(errors)
+
+    if not LANE_PREFIX_RE.match(lane_line):
+        if raw_lane_before_scope(text):
+            errors.append(f"{source}: Ownership lane must appear in the Scope section")
+        errors.append(
+            f"{source}: Ownership lane must be the first non-empty line in the Scope section"
+        )
+        return frozenset(), tuple(errors)
+
+    raw_scope_lane_lines = [line for line in declarations if LANE_PREFIX_RE.match(line)]
+    if len(raw_scope_lane_lines) != 1:
         errors.append(f"{source}: Scope must declare exactly one Ownership lane")
+        return frozenset(), tuple(errors)
+
+    _, _, raw_lane = lane_line.partition(":")
+    raw_lane = raw_lane.strip().strip("`").strip()
+    if not LANE_VALUE_RE.match(raw_lane):
+        errors.append(
+            f"{source}: invalid Ownership lane {raw_lane!r}; "
+            "use lowercase letters, numbers, dots, dashes, slashes, or underscores"
+        )
+    else:
+        lanes.add(raw_lane)
     return frozenset(lanes), tuple(errors)
 
 
@@ -403,8 +388,8 @@ def extract_pr_body_header_slice_phases(
 ) -> tuple[frozenset[str], tuple[str, ...]]:
     """Read a phase only from the canonical line after the body Plan line."""
 
-    lines = unfenced_lines(text)
-    header_start = canonical_body_header_start(lines)
+    lines = text.splitlines()
+    header_start = first_nonempty_raw_line_index(lines)
     if header_start is None:
         return frozenset(), ()
     first_nonempty_index, first_nonempty_line = header_start
@@ -508,11 +493,11 @@ def scope_section(text: str) -> str:
 
 
 def scope_lead_lines(text: str) -> list[str]:
-    """Return non-empty, non-fenced lines from the Scope section in order."""
+    """Return raw non-empty lines from the Scope section in order."""
 
     lines: list[str] = []
     in_scope = False
-    for line in unfenced_lines(text):
+    for line in text.splitlines():
         if SECTION_HEADING_RE.match(line):
             if SCOPE_HEADING_RE.match(line):
                 in_scope = True
@@ -522,6 +507,17 @@ def scope_lead_lines(text: str) -> list[str]:
         if in_scope and line.strip():
             lines.append(line)
     return lines
+
+
+def raw_lane_before_scope(text: str) -> bool:
+    """Return true when a raw lane-looking line appears before Scope starts."""
+
+    for line in text.splitlines():
+        if SCOPE_HEADING_RE.match(line):
+            return False
+        if LANE_PREFIX_RE.match(line):
+            return True
+    return False
 
 
 def unfenced_lines(text: str) -> list[str]:
@@ -549,8 +545,8 @@ def line_after(lines: list[str], index: int) -> str:
     return next(islice(lines, index + 1, index + 2), "")
 
 
-def canonical_body_header_start(lines: list[str]) -> tuple[int, str] | None:
-    """Return the first real PR-body line and its position, if present."""
+def first_nonempty_raw_line_index(lines: list[str]) -> tuple[int, str] | None:
+    """Return the first non-empty raw line position before fence elision."""
 
     for index, line in enumerate(lines):
         if line.strip():
