@@ -45,7 +45,7 @@ cryptography==49.0.0
 csvw==4.1.0
 cuda-bindings==13.3.1
 cuda-pathfinder==1.5.6
-cuda-toolkit==13.0.3.0
+cuda-toolkit==13.0.2
 curated-tokenizers==0.0.9
 curated-transformers==0.1.1
 curl-cffi==0.15.0
@@ -161,7 +161,7 @@ nvidia-cusolver==12.0.4.66
 nvidia-cusparse==12.6.3.3
 nvidia-cusparselt-cu13==0.8.1
 nvidia-nccl-cu13==2.29.7
-nvidia-nvjitlink==13.3.33
+nvidia-nvjitlink==13.0.88
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.0.85
 omegaconf==2.3.0
@@ -227,7 +227,7 @@ segments==2.4.0
 sentence-transformers==5.6.0
 sentencepiece==0.2.2
 sentry-sdk==2.65.0
-setuptools==83.0.0
+setuptools==81.0.0
 sgmllib3k==1.0.0
 shellingham==1.5.4
 six==1.17.0
@@ -262,7 +262,7 @@ tld==0.13.2
 tokenizers==0.22.2
 toml==0.10.2
 toolz==1.1.0
-torch==2.13.0
+torch==2.12.1
 torchaudio==2.11.0
 torchmetrics==1.9.0
 tqdm==4.68.4

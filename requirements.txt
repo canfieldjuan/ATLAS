@@ -1,4 +1,4 @@
-# constraints-root-asr-sha256: 982308ee94fc3a5d71d5dad82b48e7876e9f109332f05c99cd605c23a02cc77d
+# constraints-root-asr-sha256: 65df406c3663333868141ca5d9d96b642b3f8d9c9546998be643cb5f0cab086a
 -c constraints.root-asr.txt
 
 fastapi==0.139.0
@@ -10,7 +10,7 @@ psutil==7.2.2
 slowapi==0.1.10
 
 # ML / AI
-torch==2.13.0
+torch==2.12.1
 torchaudio==2.11.0  # newest existing release (torchaudio trails torch; no 2.12 pairing exists); sole importer asr_server.py installs requirements.asr.txt instead
 transformers==4.57.6
 accelerate==1.14.0
