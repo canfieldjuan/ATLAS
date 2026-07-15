@@ -27,8 +27,7 @@ httpx==0.28.1
 websockets==15.0.1
 
 # Telephony (external communications)
-signalwire==2.0.4
-# twilio  # Alternative provider
+twilio>=9.10.9,<10  # SignalWire (twilio-compatible LaML API) + Twilio via the twilio SDK; signalwire SDK dropped (it froze twilio at 6.54.0)
 
 # Discovery
 zeroconf==0.150.0
