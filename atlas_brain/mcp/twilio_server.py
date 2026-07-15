@@ -113,10 +113,10 @@ def _client():
 
     if _is_signalwire():
         try:
-            from signalwire.rest import Client
+            from twilio.rest import Client
         except ImportError:
             raise RuntimeError(
-                "SignalWire package not installed. Run: pip install signalwire"
+                "Twilio package not installed. Run: pip install twilio"
             )
 
         space = comms_settings.signalwire_space
@@ -136,10 +136,12 @@ def _client():
                 "ATLAS_COMMS_SIGNALWIRE_RECORDING_TOKEN, and "
                 "ATLAS_COMMS_SIGNALWIRE_SPACE."
             )
-        _cached_client = Client(
-            account_sid, token,
-            signalwire_space_url=f"https://{space}.signalwire.com",
-        )
+        # SignalWire's LaML API is twilio-compatible; point the twilio
+        # client at the space's /api/laml root. The signalwire SDK (which
+        # only did this base_url override) was dropped -- it pinned
+        # twilio==6.54.0.
+        _cached_client = Client(account_sid, token)
+        _cached_client.api.base_url = f"https://{space}.signalwire.com/api/laml"
         return _cached_client
     else:
         try:

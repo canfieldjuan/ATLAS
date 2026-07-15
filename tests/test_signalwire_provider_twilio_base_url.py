@@ -22,7 +22,7 @@ async def test_connect_points_twilio_client_at_signalwire_space(monkeypatch):
     assert provider.is_connected
     # The twilio client's Api domain is pointed at the SignalWire space,
     # not api.twilio.com -- this is what the removed signalwire SDK did.
-    assert provider._client.api.base_url == "https://myspace.signalwire.com"
+    assert provider._client.api.base_url == "https://myspace.signalwire.com/api/laml"
 
     # messages/calls resolve to SignalWire's twilio-compatible LaML endpoint.
     msgs_url = provider._client.messages._version.absolute_url(
@@ -32,10 +32,10 @@ async def test_connect_points_twilio_client_at_signalwire_space(monkeypatch):
         "Accounts/PROJECTID/Calls.json"
     )
     assert msgs_url == (
-        "https://myspace.signalwire.com/2010-04-01/Accounts/PROJECTID/Messages.json"
+        "https://myspace.signalwire.com/api/laml/2010-04-01/Accounts/PROJECTID/Messages.json"
     )
     assert calls_url == (
-        "https://myspace.signalwire.com/2010-04-01/Accounts/PROJECTID/Calls.json"
+        "https://myspace.signalwire.com/api/laml/2010-04-01/Accounts/PROJECTID/Calls.json"
     )
 
 

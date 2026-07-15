@@ -87,14 +87,14 @@ class SignalWireProvider(TelephonyProvider):
                     "ATLAS_COMMS_SIGNALWIRE_SPACE"
                 )
 
-            # SignalWire exposes a twilio-compatible LaML REST API at
-            # https://<space>.signalwire.com/2010-04-01/... . Point the
-            # twilio client's Api domain at the space instead of
-            # api.twilio.com -- exactly what the (now removed) signalwire
-            # SDK did, minus its pin to twilio==6.54.0.
+            # SignalWire's twilio-compatible LaML REST API root is
+            # https://<space>.signalwire.com/api/laml/2010-04-01/... . Point
+            # the twilio client's Api domain there instead of api.twilio.com
+            # (the signalwire SDK, now removed, did the same base_url
+            # override but pinned twilio==6.54.0).
             self._space_url = f"https://{space}.signalwire.com"
             client = Client(project_id, api_token)
-            client.api.base_url = self._space_url
+            client.api.base_url = f"{self._space_url}/api/laml"
             self._client = client
             self._connected = True
             logger.info("SignalWire provider connected to %s", self._space_url)
