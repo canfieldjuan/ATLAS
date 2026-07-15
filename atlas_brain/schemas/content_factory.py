@@ -18,9 +18,21 @@ House style (matches atlas_brain/schemas/campaigns.py): every model opens with
 ``extra='allow'`` and ``schema_version=1``. ``extra='allow'`` lets artifacts
 written before a field was added round-trip without validation errors while the
 pipeline is still iterating; flip to ``extra='forbid'`` in a later slice once the
-shapes are stable. The artifact's type tag is stored under the JSON key
-``"schema"`` via an alias (the attribute is ``artifact_schema`` to avoid shadowing
-``BaseModel.schema``); ``populate_by_name=True`` accepts either name on input.
+shapes are stable.
+
+The artifact's type tag is stored under the JSON key ``"schema"`` via an alias
+(the attribute is ``artifact_schema`` to avoid shadowing ``BaseModel.schema``);
+``populate_by_name=True`` accepts either name on input. The tag is **required**
+on the five top-level artifacts -- this contract is the version boundary, so an
+artifact that omits its version/type tag must fail rather than be silently tagged
+on dump.
+
+Three load-bearing invariants are enforced here, not merely documented:
+  - an evidence row is inadmissible without a non-blank ``quote`` and
+    ``source_id`` (stops "writer invents research"), and a claim's ``source_id``
+    must be non-blank (stops orphan claims);
+  - an editorial audit may not recommend ``promote`` unless the deterministic
+    copy-verification verdict is ``pass`` (the model cannot self-promote).
 
 These are contracts only -- nothing here is wired into a runtime path yet. The
 Action function that writes artifacts (Phase 2.2) and the Filter that enforces
@@ -30,12 +42,17 @@ docs/schemas/ (generated, not hand-written).
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
 _BASE_CONFIG = ConfigDict(extra="allow", populate_by_name=True)
+
+# A string that must carry real content: whitespace is stripped, then a
+# non-empty result is required. Used for citation fields whose blankness would
+# silently defeat the "every claim is traceable" invariant.
+NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 Confidence = Literal["high", "medium", "low"]
 Recommendation = Literal["promote", "revise"]
@@ -47,9 +64,7 @@ class ContentBrief(BaseModel):
 
     model_config = _BASE_CONFIG
 
-    artifact_schema: Literal["content_brief.v1"] = Field(
-        "content_brief.v1", alias="schema"
-    )
+    artifact_schema: Literal["content_brief.v1"] = Field(alias="schema")
     schema_version: int = 1
     project_id: str
     request_raw: str
@@ -66,14 +81,15 @@ class ContentBrief(BaseModel):
 
 
 class EvidenceRow(BaseModel):
-    """One cited evidence row. A row without a source_id is not admissible."""
+    """One cited evidence row. A row without a usable quote + source_id is not
+    admissible -- blank strings are rejected, not just missing keys."""
 
     model_config = _BASE_CONFIG
 
     id: str
     claim_candidate: str = ""
-    quote: str
-    source_id: str
+    quote: NonEmptyStr
+    source_id: NonEmptyStr
     source_doc: Optional[str] = None
     confidence: Confidence = "medium"
 
@@ -83,9 +99,7 @@ class EvidencePacket(BaseModel):
 
     model_config = _BASE_CONFIG
 
-    artifact_schema: Literal["evidence_packet.v1"] = Field(
-        "evidence_packet.v1", alias="schema"
-    )
+    artifact_schema: Literal["evidence_packet.v1"] = Field(alias="schema")
     schema_version: int = 1
     project_id: str
     evidence: list[EvidenceRow] = Field(default_factory=list)
@@ -100,7 +114,7 @@ class Claim(BaseModel):
     model_config = _BASE_CONFIG
 
     text: str
-    source_id: str
+    source_id: NonEmptyStr
 
 
 class DraftArtifact(BaseModel):
@@ -108,7 +122,7 @@ class DraftArtifact(BaseModel):
 
     model_config = _BASE_CONFIG
 
-    artifact_schema: Literal["draft.v1"] = Field("draft.v1", alias="schema")
+    artifact_schema: Literal["draft.v1"] = Field(alias="schema")
     schema_version: int = 1
     project_id: str
     revision: int = 1
@@ -134,9 +148,7 @@ class EditorialAudit(BaseModel):
 
     model_config = _BASE_CONFIG
 
-    artifact_schema: Literal["editorial_audit.v1"] = Field(
-        "editorial_audit.v1", alias="schema"
-    )
+    artifact_schema: Literal["editorial_audit.v1"] = Field(alias="schema")
     schema_version: int = 1
     project_id: str
     draft_revision: int = 1
@@ -146,6 +158,18 @@ class EditorialAudit(BaseModel):
     copy_verification: Optional[CopyVerification] = None
     recommendation: Recommendation = "revise"
     prompt_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _promote_requires_passing_verdict(self) -> "EditorialAudit":
+        # The model cannot self-promote: a 'promote' recommendation is only valid
+        # when the deterministic copy-verification verdict is 'pass'.
+        if self.recommendation == "promote":
+            cv = self.copy_verification
+            if cv is None or cv.verdict != "pass":
+                raise ValueError(
+                    "recommendation 'promote' requires copy_verification.verdict == 'pass'"
+                )
+        return self
 
 
 class StageEntry(BaseModel):
@@ -177,7 +201,7 @@ class ArtifactManifest(BaseModel):
 
     model_config = _BASE_CONFIG
 
-    artifact_schema: Literal["manifest.v1"] = Field("manifest.v1", alias="schema")
+    artifact_schema: Literal["manifest.v1"] = Field(alias="schema")
     schema_version: int = 1
     job_id: str
     project_id: str

@@ -33,6 +33,30 @@ Slice phase: vertical slice
 Lane: Content Factory (parallel feature, epic #2109), arc Phase 2.1 (structured
 contracts). Intent: add the artifact contracts + tests, no runtime wiring.
 
+### Review Contract
+
+- Acceptance criteria:
+  - [ ] The five artifact contracts validate the Phase 1.4 artifact shapes,
+        including the real empty-evidence packet.
+  - [ ] A blank or whitespace `quote` or `source_id` on an evidence row is
+        rejected, and a claim with a blank `source_id` is rejected (no uncited
+        evidence, no orphan claim).
+  - [ ] The `schema` version/type tag is required on the five top-level
+        artifacts (the version boundary).
+  - [ ] An editorial audit cannot recommend `promote` unless
+        `copy_verification.verdict == "pass"`.
+  - [ ] The `tests/test_content_factory_schemas.py` suite passes; no runtime
+        path imports the module.
+- Reachability proof: N/A -- contracts-only change with no runtime, UI, report,
+  billing, or public-contract surface (nothing imports the module yet). Proof is
+  the test suite plus importability.
+- Affected surfaces: a new schema module (`atlas_brain/schemas/content_factory.py`)
+  and its test file; no existing file is modified.
+- Risk areas: making the `schema` tag required means any future caller must
+  include it (intended -- this is the version boundary); the added validators are
+  guard-shaped and are boundary-probed on both sides in the tests.
+- Reviewer rules triggered: R2, R14.
+
 ### Files touched
 - `atlas_brain/schemas/content_factory.py`
 - `tests/test_content_factory_schemas.py`
@@ -87,10 +111,13 @@ defaults to `pending`.
 
 | File | Lines |
 |---|---|
-| atlas_brain/schemas/content_factory.py | ~235 |
-| tests/test_content_factory_schemas.py | ~135 |
-| plans/PR-Content-Factory-Contracts.md | ~70 |
-| **Total** | **~440** |
+| atlas_brain/schemas/content_factory.py | 230 |
+| tests/test_content_factory_schemas.py | 211 |
+| plans/PR-Content-Factory-Contracts.md | 120 |
+| **Total** | **561** |
 
-Over the 400-LOC soft cap by ~40: the overage is entirely declarative schema +
-tests (no logic, no runtime path), which is low-risk to review as one unit.
+Over the 400-LOC soft cap (the overage is carried by the `Diff-budget override:`
+line in the PR body). The diff is entirely declarative schema + tests + plan --
+no logic, no runtime path -- and grew from the initial ~440 by the review-driven
+invariant guards (non-empty citations, required version tag, promote gate) and
+their tests plus the Review Contract block.

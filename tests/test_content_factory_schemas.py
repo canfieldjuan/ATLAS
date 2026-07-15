@@ -135,3 +135,77 @@ def test_manifest_default_approval_pending():
         {"schema": "manifest.v1", "job_id": "j1", "project_id": "resolution-audit"}
     )
     assert m.approval.status == "pending"
+
+
+# --- load-bearing invariants (from Codex review of #2116) ---
+
+
+def test_evidence_row_blank_quote_rejected():
+    with pytest.raises(ValidationError):
+        EvidenceRow.model_validate({"id": "e1", "quote": "", "source_id": "f#1"})
+
+
+def test_evidence_row_blank_source_id_rejected():
+    with pytest.raises(ValidationError):
+        EvidenceRow.model_validate({"id": "e1", "quote": "real quote", "source_id": ""})
+
+
+def test_evidence_row_whitespace_only_rejected():
+    with pytest.raises(ValidationError):
+        EvidenceRow.model_validate({"id": "e1", "quote": "   ", "source_id": "f#1"})
+
+
+def test_evidence_row_strips_whitespace():
+    row = EvidenceRow.model_validate(
+        {"id": "e1", "quote": "  q  ", "source_id": "  f#1 "}
+    )
+    assert row.quote == "q"
+    assert row.source_id == "f#1"
+
+
+def test_claim_blank_source_id_rejected():
+    from atlas_brain.schemas.content_factory import Claim
+
+    with pytest.raises(ValidationError):
+        Claim.model_validate({"text": "a claim", "source_id": ""})
+
+
+def test_missing_schema_tag_rejected():
+    # The version/type tag is required on top-level artifacts (version boundary).
+    with pytest.raises(ValidationError):
+        ContentBrief.model_validate({"project_id": "resolution-audit", "request_raw": "x"})
+
+
+def test_audit_promote_without_verification_rejected():
+    with pytest.raises(ValidationError):
+        EditorialAudit.model_validate(
+            {
+                "schema": "editorial_audit.v1",
+                "project_id": "resolution-audit",
+                "recommendation": "promote",
+            }
+        )
+
+
+def test_audit_promote_with_failed_verdict_rejected():
+    with pytest.raises(ValidationError):
+        EditorialAudit.model_validate(
+            {
+                "schema": "editorial_audit.v1",
+                "project_id": "resolution-audit",
+                "recommendation": "promote",
+                "copy_verification": {"verdict": "fail", "hits": ["guaranteed savings"]},
+            }
+        )
+
+
+def test_audit_promote_with_passing_verdict_accepted():
+    audit = EditorialAudit.model_validate(
+        {
+            "schema": "editorial_audit.v1",
+            "project_id": "resolution-audit",
+            "recommendation": "promote",
+            "copy_verification": {"verdict": "pass", "hits": []},
+        }
+    )
+    assert audit.recommendation == "promote"
