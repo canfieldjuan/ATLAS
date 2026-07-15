@@ -1,6 +1,6 @@
 # Plan archive index
 
-1399 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1400 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1250,6 +1250,7 @@
 - [PR-Product-Gaps-CSV-QA-Proof](archive/PR-Product-Gaps-CSV-QA-Proof.md) - lane: deflection/product-gaps-report-shape | phase: Functional validation
 - [PR-Product-Gaps-Jira-Copy-Action](archive/PR-Product-Gaps-Jira-Copy-Action.md) - lane: deflection/product-gaps-report-shape | phase: Product polish
 - [PR-Public-Landing-Page-Renderer-V1](archive/PR-Public-Landing-Page-Renderer-V1.md) - lane: content-ops/public-landing-page-renderer-v1
+- [PR-Public-Lane-Contract](archive/PR-Public-Lane-Contract.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
 - [PR-Python-Transitive-Constraints-Lock](archive/PR-Python-Transitive-Constraints-Lock.md) - lane: dependency-hardening/python-requirements | phase: Production hardening
 - [PR-Reachability-Proof-Review-Rule](archive/PR-Reachability-Proof-Review-Rule.md) - lane: workflow/process | phase: Workflow/process
 - [PR-React-Hooks-Patch-Web-Batch](archive/PR-React-Hooks-Patch-Web-Batch.md) - lane: security/dependencies | phase: Production hardening
