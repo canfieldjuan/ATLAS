@@ -345,7 +345,9 @@ def extract_plan_ownership_lanes(text: str, *, source: str) -> tuple[frozenset[s
         )
         return frozenset(), tuple(errors)
 
-    raw_scope_lane_lines = [line for line in declarations if LANE_PREFIX_RE.match(line)]
+    raw_scope_lane_lines = [
+        line for line in declarations[:2] if LANE_PREFIX_RE.match(line)
+    ]
     if len(raw_scope_lane_lines) != 1:
         errors.append(f"{source}: Scope must declare exactly one Ownership lane")
         return frozenset(), tuple(errors)

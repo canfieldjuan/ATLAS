@@ -527,6 +527,26 @@ def test_cli_ignores_fenced_headings_when_scoping_plan_lane(tmp_path: Path) -> N
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_cli_ignores_fenced_lane_example_after_scope_lead(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Fenced-Lane-In-Scope.md",
+        "# PR-Fenced-Lane-In-Scope\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n\n"
+        "### Review Contract\n\n"
+        "```md\n"
+        "Plan: plans/PR-Example.md\n"
+        "Slice phase: Workflow/process\n"
+        "Ownership lane: atlas-workflow\n"
+        "```\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.parametrize("fence", ("```", "~~~"))
 def test_cli_rejects_fenced_slice_phase_in_plan_scope(tmp_path: Path, fence: str) -> None:
     repo = _write_fixture_repo(tmp_path)

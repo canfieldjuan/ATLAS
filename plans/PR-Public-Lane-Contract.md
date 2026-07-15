@@ -43,11 +43,14 @@ cannot satisfy. The overage is regression proof, not adjacent cleanup.
   declaration, and compare only the canonical current PR-body header lane to
   that plan lane. Fences before either lead block must count as preceding
   content, so fenced/prose metadata cannot be promoted by a hand-rolled
-  CommonMark tokenizer. Regression tests must cover valid matching metadata
-  and missing, duplicate, malformed, misplaced, fenced-before-lead, and
-  mismatched metadata. The `open_pr`, `push_pr`, and local-review valid-body
-  fixtures must use that new shape because those entrypoints invoke the changed
-  parser. `AGENTS.md` must publish the new full-body shape.
+  CommonMark tokenizer. Duplicate Scope lane checks must stay bounded to the
+  lead block; fenced PR-body examples later in Scope are examples, not metadata
+  declarations. Regression tests must cover valid matching metadata and
+  missing, duplicate, malformed, misplaced, fenced-before-lead,
+  fenced-after-lead, and mismatched metadata. The `open_pr`, `push_pr`, and
+  local-review valid-body fixtures must use that new shape because those
+  entrypoints invoke the changed parser. `AGENTS.md` must publish the new
+  full-body shape.
 - Reviewed-head completion required: Body metadata must occupy the raw
   canonical lead sequence immediately after `Plan:`; the Scope lane must be
   the first raw non-empty Scope line; and the Scope phase must be the next
@@ -83,7 +86,9 @@ Slice phase: Workflow/process
    Scope/body line by parsing those lead blocks positionally from raw lines;
    prove fenced-before-lead bypasses fail without adding a new fence-tokenizer
    case.
-6. Clear the directly caused CI ratchets without waiving findings or adding a
+6. Keep duplicate Scope-lane checking bounded to the lead block so fenced
+   examples after the valid Scope metadata cannot red otherwise-valid plans.
+7. Clear the directly caused CI ratchets without waiving findings or adding a
    Unit Gate baseline entry.
 
 ### Review Contract
@@ -98,6 +103,8 @@ Slice phase: Workflow/process
         fail the fixed-position contract.
   - [ ] Existing fenced required-section behavior remains bounded to the body
         section scanner and is not used for metadata admission.
+  - [ ] Fenced PR-body examples after the Scope lead do not count as duplicate
+        Scope lane declarations.
   - [ ] Maturity and Unit Gate ratchets do not gain an unreviewed exception.
   - [ ] The open-PR and push-PR wrapper paths still accept a valid full body.
   - [ ] Docs-only and Dependabot behavior remains unchanged.
@@ -139,7 +146,9 @@ For plan metadata, the drift audit reads the raw non-empty lines after the
 Scope heading. The first such line must be `Ownership lane:` and the second
 must be `Slice phase:`. A fenced block before either declaration is therefore
 ordinary preceding content and fails the fixed-position contract; no Markdown
-fence interpretation can promote metadata from lower in the section.
+fence interpretation can promote metadata from lower in the section. Duplicate
+Scope lane checks are bounded to that same two-line lead block, so a fenced
+PR-body example later in Scope cannot red an otherwise-valid plan.
 Existing fenced-section handling remains only for non-metadata body/plan
 structure such as required PR-body headings and Scope-boundary examples.
 Iterator-based guarded lookups retain the existing maturity ratchet score; the
@@ -172,7 +181,7 @@ Parked hardening: none.
 ## Verification
 
 - Focused pytest command for the two auditors, local-review fixture, and two
-  wrapper suites — 133 passed.
+  wrapper suites — 134 passed.
 - Maturity-sweep structural scores: body auditor 5 and drift auditor 7, at or
   below their committed ratchet baselines.
 - Exact GitHub Unit Gate session-drift regression nodes — 5 passed locally.
@@ -187,13 +196,13 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `AGENTS.md` | 1 |
-| `plans/PR-Public-Lane-Contract.md` | 199 |
+| `plans/PR-Public-Lane-Contract.md` | 208 |
 | `scripts/audit_pr_body.py` | 101 |
-| `scripts/audit_pr_session_drift.py` | 284 |
+| `scripts/audit_pr_session_drift.py` | 286 |
 | `tests/test_audit_pr_body.py` | 143 |
-| `tests/test_audit_pr_session_drift.py` | 335 |
+| `tests/test_audit_pr_session_drift.py` | 355 |
 | `tests/test_local_pr_review.py` | 1 |
 | `tests/test_open_pr_wrapper.py` | 1 |
 | `tests/test_push_pr_wrapper.py` | 1 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **1069** |
+| **Total** | **1100** |
