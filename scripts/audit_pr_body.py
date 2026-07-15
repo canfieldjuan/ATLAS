@@ -43,7 +43,7 @@ SLICE_PHASE_RE = re.compile(r"^Slice phase:\s*\S.*$")
 LANE_LINE_RE = re.compile(r"^Ownership lane:\s*[a-z0-9][a-z0-9._/-]*[a-z0-9]\s*$")
 LANE_PREFIX_RE = re.compile(r"^Ownership lane:\s*")
 HEADING_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$")
-FENCE_RE = re.compile(r"^\s*(?P<delimiter>`{3,}|~{3,})")
+FENCE_RE = re.compile(r"^ {0,3}(?P<delimiter>`{3,}|~{3,})(?P<tail>.*)$")
 REQUIRED_SECTIONS = (
     "Intentional",
     "Deferred",
@@ -155,7 +155,7 @@ def unfenced_lines(body: str) -> list[str]:
             lines.append("")
             if match is not None and closes_fence(match, fence_marker):
                 fence_marker = None
-        elif match is not None:
+        elif match is not None and opens_fence(match):
             lines.append("")
             fence_marker = open_fence_marker(match)
         else:
@@ -176,12 +176,19 @@ def open_fence_marker(match: re.Match[str]) -> FenceMarker:
     return FenceMarker(is_backtick=delimiter.startswith("`"), length=len(delimiter))
 
 
+def opens_fence(match: re.Match[str]) -> bool:
+    """Return true when ``match`` is a valid Markdown opening fence."""
+
+    delimiter = match.group("delimiter")
+    return not (delimiter.startswith("`") and "`" in match.group("tail"))
+
+
 def closes_fence(match: re.Match[str], marker: FenceMarker) -> bool:
     """Return true when ``match`` closes the active Markdown fence."""
 
     delimiter = match.group("delimiter")
     same_kind = delimiter.startswith("`") if marker.is_backtick else delimiter.startswith("~")
-    return same_kind and len(delimiter) >= marker.length
+    return same_kind and len(delimiter) >= marker.length and not match.group("tail").strip()
 
 
 def audit_pr_body(

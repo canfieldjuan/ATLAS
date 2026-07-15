@@ -515,6 +515,31 @@ def test_cli_rejects_current_pr_body_lane_mismatch(tmp_path: Path) -> None:
     assert "does not match branch plan lane(s) atlas-workflow" in result.stdout
 
 
+@pytest.mark.parametrize("fence", ("```", "~~~"))
+def test_cli_rejects_scope_metadata_inside_fenced_block(
+    tmp_path: Path, fence: str
+) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Fenced-Fake-Scope.md",
+        "# PR-Fenced-Fake-Scope\n\n"
+        f"{fence}json\n"
+        "## Scope (this PR)\n"
+        "Ownership lane: leaked\n"
+        "Slice phase: Workflow/process\n"
+        f"{fence}\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 1
+    assert "plans/PR-Fenced-Fake-Scope.md: missing Ownership lane" in result.stdout
+    assert "plans/PR-Fenced-Fake-Scope.md: missing Slice phase" in result.stdout
+    assert "branch ownership lanes: none" in result.stdout
+    assert "branch slice phases: none" in result.stdout
+
+
 def test_cli_ignores_fenced_headings_when_scoping_plan_lane(tmp_path: Path) -> None:
     repo = _write_fixture_repo(tmp_path)
     _commit(
@@ -586,6 +611,74 @@ def test_cli_rejects_slice_phase_after_shorter_nested_fence(
 
     assert result.returncode == 1
     assert "plans/PR-Short-Fence.md: missing Slice phase" in result.stdout
+
+
+@pytest.mark.parametrize("fence", ("`", "~"))
+def test_cli_rejects_scope_metadata_after_inner_fence_opener(
+    tmp_path: Path, fence: str
+) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    delimiter = fence * 3
+    _commit(
+        repo,
+        "plans/PR-Inner-Fence-Opener.md",
+        "# PR-Inner-Fence-Opener\n\n"
+        f"{delimiter}md\n"
+        f"{delimiter}python\n"
+        "## Scope (this PR)\n"
+        "Ownership lane: leaked\n"
+        "Slice phase: Workflow/process\n"
+        f"{delimiter}\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 1
+    assert "plans/PR-Inner-Fence-Opener.md: missing Ownership lane" in result.stdout
+    assert "plans/PR-Inner-Fence-Opener.md: missing Slice phase" in result.stdout
+    assert "branch ownership lanes: none" in result.stdout
+    assert "branch slice phases: none" in result.stdout
+
+
+def test_cli_accepts_real_scope_after_indented_code_block_backticks(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Indented-Code-Fence-Lookalike.md",
+        "# PR-Indented-Code-Fence-Lookalike\n\n"
+        "## Why this slice exists\n\n"
+        "    ```python\n"
+        "    print('this is indented code, not a Markdown fence')\n\n"
+        "## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n"
+        "Slice phase: Workflow/process\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "branch ownership lanes: atlas-workflow" in result.stdout
+    assert "branch slice phases: workflow/process" in result.stdout
+
+
+def test_cli_accepts_real_scope_after_invalid_backtick_fence_info(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Invalid-Backtick-Fence-Info.md",
+        "# PR-Invalid-Backtick-Fence-Info\n\n"
+        "## Why this slice exists\n\n"
+        "``` `not-a-fence\n\n"
+        "## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n"
+        "Slice phase: Workflow/process\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "branch ownership lanes: atlas-workflow" in result.stdout
+    assert "branch slice phases: workflow/process" in result.stdout
 
 
 def test_cli_rejects_scope_fence_before_lane_declaration(tmp_path: Path) -> None:
