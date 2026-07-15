@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, NamedTuple, Sequence
 
 LANE_RE = re.compile(r"^\s*Ownership lane:\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE)
 LANE_VALUE_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]*[a-z0-9]$")
@@ -34,6 +34,11 @@ VALID_SLICE_PHASES = frozenset(
         "workflow/process",
     }
 )
+
+
+class FenceMarker(NamedTuple):
+    is_backtick: bool
+    length: int
 
 
 @dataclass(frozen=True)
@@ -326,20 +331,18 @@ def extract_plan_ownership_lanes(text: str, *, source: str) -> tuple[frozenset[s
     lanes: set[str] = set()
     errors: list[str] = []
     in_scope = False
-    fence_delimiter = ""
+    fence_marker: FenceMarker | None = None
     scope_has_content = False
     scope_declaration_count = 0
     for line in text.splitlines():
         stripped = line.strip()
         fence_match = FENCE_RE.match(line)
-        if fence_delimiter:
-            if LANE_PREFIX_RE.match(line):
-                errors.append(f"{source}: Ownership lane must not appear in a fenced code block")
-            if fence_match is not None and fence_kind(fence_match) == fence_delimiter:
-                fence_delimiter = ""
+        if fence_marker is not None:
+            if fence_match is not None and closes_fence(fence_match, fence_marker):
+                fence_marker = None
             continue
         if fence_match is not None:
-            fence_delimiter = fence_kind(fence_match)
+            fence_marker = open_fence_marker(fence_match)
             continue
         if SECTION_HEADING_RE.match(line):
             in_scope = SCOPE_HEADING_RE.match(line) is not None
@@ -375,7 +378,24 @@ def extract_plan_ownership_lanes(text: str, *, source: str) -> tuple[frozenset[s
 
 
 def extract_plan_slice_phases(text: str, *, source: str) -> tuple[frozenset[str], tuple[str, ...]]:
-    return extract_slice_phases(scope_section(text), source=source)
+    """Return the real Scope phase declaration, not prose or examples."""
+
+    declarations = scope_lead_lines(text)
+    declaration_iter = iter(declarations)
+    lane_line = next(declaration_iter, "")
+    phase_line = next(declaration_iter, "")
+    if not lane_line:
+        return frozenset(), (f"{source}: missing Slice phase",)
+    if not LANE_PREFIX_RE.match(lane_line):
+        return frozenset(), (f"{source}: missing Slice phase",)
+    if not phase_line:
+        return frozenset(), (f"{source}: missing Slice phase",)
+    phases, errors = extract_slice_phases(phase_line, source=source)
+    if errors:
+        return phases, errors
+    if not phases:
+        return frozenset(), (f"{source}: missing Slice phase",)
+    return phases, ()
 
 
 def extract_pr_body_header_slice_phases(
@@ -487,20 +507,37 @@ def scope_section(text: str) -> str:
     return "\n".join(lines)
 
 
+def scope_lead_lines(text: str) -> list[str]:
+    """Return non-empty, non-fenced lines from the Scope section in order."""
+
+    lines: list[str] = []
+    in_scope = False
+    for line in unfenced_lines(text):
+        if SECTION_HEADING_RE.match(line):
+            if SCOPE_HEADING_RE.match(line):
+                in_scope = True
+                continue
+            if in_scope:
+                break
+        if in_scope and line.strip():
+            lines.append(line)
+    return lines
+
+
 def unfenced_lines(text: str) -> list[str]:
     """Return Markdown lines with fenced examples made non-structural."""
 
     lines: list[str] = []
-    fence_delimiter = ""
+    fence_marker: FenceMarker | None = None
     for line in text.splitlines():
         match = FENCE_RE.match(line)
-        if fence_delimiter:
+        if fence_marker is not None:
             lines.append("")
-            if match is not None and fence_kind(match) == fence_delimiter:
-                fence_delimiter = ""
+            if match is not None and closes_fence(match, fence_marker):
+                fence_marker = None
         elif match is not None:
             lines.append("")
-            fence_delimiter = fence_kind(match)
+            fence_marker = open_fence_marker(match)
         else:
             lines.append(line)
     return lines
@@ -521,10 +558,19 @@ def canonical_body_header_start(lines: list[str]) -> tuple[int, str] | None:
     return None
 
 
-def fence_kind(match: re.Match[str]) -> str:
-    """Return the delimiter family captured by ``FENCE_RE``."""
+def open_fence_marker(match: re.Match[str]) -> FenceMarker:
+    """Return the opening fence character and minimum closing length."""
 
-    return "backtick" if match.group("delimiter").startswith("`") else "tilde"
+    delimiter = match.group("delimiter")
+    return FenceMarker(is_backtick=delimiter.startswith("`"), length=len(delimiter))
+
+
+def closes_fence(match: re.Match[str], marker: FenceMarker) -> bool:
+    """Return true when ``match`` closes the active Markdown fence."""
+
+    delimiter = match.group("delimiter")
+    same_kind = delimiter.startswith("`") if marker.is_backtick else delimiter.startswith("~")
+    return same_kind and len(delimiter) >= marker.length
 
 
 def load_open_pull_requests(base_ref: str) -> tuple[str, tuple[OpenPullRequest, ...], tuple[str, ...]]:
@@ -617,7 +663,10 @@ def load_open_pull_request_files(number: int, row: dict[str, Any]) -> tuple[Open
         source=f"PR #{number} body",
         required=False,
     )
-    phases, phase_errors = extract_slice_phases(body, source=f"PR #{number} body")
+    phases, phase_errors = extract_pr_body_header_slice_phases(
+        body,
+        source=f"PR #{number} body",
+    )
     warnings = tuple(lane_errors + phase_errors)
     return open_pr_from_row(
         number,

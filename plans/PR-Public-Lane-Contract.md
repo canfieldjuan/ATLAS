@@ -50,12 +50,15 @@ cannot satisfy. The overage is regression proof, not adjacent cleanup.
 - Reviewed-head completion required: Fence walkers must recognize both
   backtick and tilde Markdown fences; body metadata must occupy the canonical
   lead sequence immediately after `Plan:`; and the Scope lane must be the
-  first non-fenced, non-empty Scope line. The fix must preserve intervening
-  fence boundaries rather than making distant lines adjacent. The maturity
-  ratchet must remain at its existing score through behavior-preserving guarded
-  access, and the Unit Gate baseline must only shrink for a now-passing entry;
-  it must never absorb a regression. The machine-consumed PR body must carry
-  the required diff-budget override explaining the already-justified overage.
+  first non-fenced, non-empty Scope line with the Scope phase read from the
+  canonical lead declaration. The fix must preserve intervening fence
+  boundaries rather than making distant lines adjacent, and a shorter nested
+  fence delimiter must not close a longer outer fence. The maturity ratchet
+  must remain at its existing score through behavior-preserving guarded
+  access, and the Unit Gate baseline must only shrink for now-passing
+  session-drift entries; it must never absorb a regression. The
+  machine-consumed PR body must carry the required diff-budget override
+  explaining the already-justified overage.
 - Must not change: Docs-only and Dependabot exemptions; existing Plan and Slice
   phase validation; advisory peer-file overlap reporting; branch-protection
   settings; trusted workflow topology; reviewer-status publication; private
@@ -133,10 +136,12 @@ local publication entrypoint.
 
 The completion pass treats both CommonMark fence delimiters as non-structural,
 without removing their separator position. It reads body metadata only from
-the contiguous `Plan`/phase/lane lead block and reads the plan lane only from
-the first real Scope line. Iterator-based guarded lookups retain the existing
-maturity ratchet score; the Unit Gate ledger removes only its proven stale
-entry after the full suite confirms it remains passing.
+the contiguous `Plan`/phase/lane lead block, reads GitHub-loaded body phase
+metadata from that same header, and reads plan Scope phase metadata from the
+canonical Scope lead declaration rather than the whole Scope body.
+Iterator-based guarded lookups retain the existing maturity ratchet score; the
+Unit Gate ledger removes only the two session-drift entries proven stale by
+this repair.
 
 ## Intentional
 
@@ -164,11 +169,15 @@ Parked hardening: none.
 ## Verification
 
 - Focused pytest command for the two auditors, local-review fixture, and two
-  wrapper suites — 124 passed.
+  wrapper suites — 130 passed.
 - Maturity-sweep structural scores: body auditor 5 and drift auditor 7, at or
   below their committed ratchet baselines.
-- Full Unit Gate command started against the shrunk baseline; CI remains the
-  final current-head verification after publication.
+- Full Unit Gate command confirms the two session-drift nodes are now passing
+  and removed from the baseline. Local full-gate output still reports
+  unrelated environment noise: nine security baseline entries pass locally but
+  not in GitHub's previous hosted run, and `test_nemotron_stt` fails only in
+  the full local sweep while passing alone. CI remains the final hosted
+  verification after publication.
 - Local PR review command with the planned current-body file against origin/main — pending final push.
 
 ## Estimated diff size
@@ -176,13 +185,13 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `AGENTS.md` | 1 |
-| `plans/PR-Public-Lane-Contract.md` | 188 |
-| `scripts/audit_pr_body.py` | 80 |
-| `scripts/audit_pr_session_drift.py` | 231 |
-| `tests/test_audit_pr_body.py` | 73 |
-| `tests/test_audit_pr_session_drift.py` | 247 |
+| `plans/PR-Public-Lane-Contract.md` | 197 |
+| `scripts/audit_pr_body.py` | 96 |
+| `scripts/audit_pr_session_drift.py` | 286 |
+| `tests/test_audit_pr_body.py` | 109 |
+| `tests/test_audit_pr_session_drift.py` | 319 |
 | `tests/test_local_pr_review.py` | 1 |
 | `tests/test_open_pr_wrapper.py` | 1 |
 | `tests/test_push_pr_wrapper.py` | 1 |
-| `tests/unit_gate_baseline.txt` | 1 |
-| **Total** | **824** |
+| `tests/unit_gate_baseline.txt` | 3 |
+| **Total** | **1014** |

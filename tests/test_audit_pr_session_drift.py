@@ -215,6 +215,41 @@ def test_cli_fails_when_current_pr_body_slice_phase_mismatches_plan(tmp_path: Pa
     assert "does not match branch plan phase(s) workflow/process" in result.stdout
 
 
+def test_cli_fails_when_github_body_header_phase_mismatch_is_hidden_later(
+    tmp_path: Path,
+) -> None:
+    repo = _write_fixture_repo(tmp_path, branch="claude/current")
+    path = "plans/PR-Current.md"
+    _commit(
+        repo,
+        path,
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+    gh_bin = _write_fake_gh(
+        tmp_path,
+        prs=[
+            {
+                "number": 28,
+                "title": "Current PR",
+                "headRefName": "claude/current",
+                "url": "https://github.test/pr/28",
+            }
+        ],
+        files={28: [path]},
+        bodies={
+            28: "Plan: plans/PR-Current.md\nSlice phase: Robust testing\n"
+            "Ownership lane: atlas-workflow\n\nWhy.\n\n## Deferred\n"
+            "Mentioned text: Slice phase: Workflow/process\n"
+        },
+    )
+
+    result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
+
+    assert result.returncode == 1
+    assert "does not match branch plan phase(s) workflow/process" in result.stdout
+
+
 def test_cli_fails_when_required_pr_body_was_not_checked_before_pr_exists(
     tmp_path: Path,
 ) -> None:
@@ -426,7 +461,7 @@ def test_cli_rejects_ownership_lane_outside_scope(tmp_path: Path) -> None:
             "Ownership lane: atlas-workflow\n\nOwnership lane: dev-workflow/process-gate-enrollment",
             "Scope must declare exactly one Ownership lane",
         ),
-        ("```md\nOwnership lane: atlas-workflow\n```", "fenced code block"),
+        ("```md\nOwnership lane: atlas-workflow\n```", "Ownership lane must be the first non-empty line"),
         ("Ownership lane: Atlas-Workflow", "invalid Ownership lane"),
     ),
 )
@@ -507,6 +542,27 @@ def test_cli_rejects_fenced_slice_phase_in_plan_scope(tmp_path: Path, fence: str
 
     assert result.returncode == 1
     assert "plans/PR-Fenced-Phase.md: missing Slice phase" in result.stdout
+
+
+@pytest.mark.parametrize("fence", ("`", "~"))
+def test_cli_rejects_slice_phase_after_shorter_nested_fence(
+    tmp_path: Path, fence: str
+) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    opener = fence * 4
+    shorter = fence * 3
+    _commit(
+        repo,
+        "plans/PR-Short-Fence.md",
+        "# PR-Short-Fence\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\n"
+        f"{opener}md\n{shorter}\nSlice phase: Workflow/process\n{opener}\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 1
+    assert "plans/PR-Short-Fence.md: missing Slice phase" in result.stdout
 
 
 def test_cli_rejects_scope_lane_after_other_scope_content(tmp_path: Path) -> None:
@@ -616,6 +672,22 @@ def test_cli_ignores_peer_lane_found_only_in_prose(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "open PRs claim the same ownership lane" not in result.stdout
+
+
+def test_cli_ignores_fenced_lane_example_outside_scope(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Fenced-Lane-Example.md",
+        "# PR-Fenced-Lane-Example\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n\n"
+        "## Mechanism\n\n```md\nOwnership lane: atlas-workflow\n```\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ownership lane contract failed" not in result.stdout
 
 
 def test_cli_fails_when_changed_plan_doc_missing_slice_phase(tmp_path: Path) -> None:

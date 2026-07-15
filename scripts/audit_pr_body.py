@@ -25,7 +25,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Callable, Sequence
+from typing import Callable, NamedTuple, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _pr_change_policy import (
@@ -53,6 +53,11 @@ REQUIRED_SECTIONS = (
     "Diff size",
 )
 DOCS_ONLY_RE = re.compile(r"^Docs-only:\s*true\s*$", re.IGNORECASE)
+
+
+class FenceMarker(NamedTuple):
+    is_backtick: bool
+    length: int
 
 
 def is_docs_only_body(body: str) -> bool:
@@ -134,16 +139,16 @@ def unfenced_lines(body: str) -> list[str]:
     """
 
     lines: list[str] = []
-    fence_delimiter = ""
+    fence_marker: FenceMarker | None = None
     for line in body.splitlines():
         match = FENCE_RE.match(line)
-        if fence_delimiter:
+        if fence_marker is not None:
             lines.append("")
-            if match is not None and fence_kind(match) == fence_delimiter:
-                fence_delimiter = ""
+            if match is not None and closes_fence(match, fence_marker):
+                fence_marker = None
         elif match is not None:
             lines.append("")
-            fence_delimiter = fence_kind(match)
+            fence_marker = open_fence_marker(match)
         else:
             lines.append(line)
     return lines
@@ -155,10 +160,19 @@ def line_after(lines: list[str], index: int) -> str:
     return next(islice(lines, index + 1, index + 2), "")
 
 
-def fence_kind(match: re.Match[str]) -> str:
-    """Return the delimiter family captured by ``FENCE_RE``."""
+def open_fence_marker(match: re.Match[str]) -> FenceMarker:
+    """Return the opening fence character and minimum closing length."""
 
-    return "backtick" if match.group("delimiter").startswith("`") else "tilde"
+    delimiter = match.group("delimiter")
+    return FenceMarker(is_backtick=delimiter.startswith("`"), length=len(delimiter))
+
+
+def closes_fence(match: re.Match[str], marker: FenceMarker) -> bool:
+    """Return true when ``match`` closes the active Markdown fence."""
+
+    delimiter = match.group("delimiter")
+    same_kind = delimiter.startswith("`") if marker.is_backtick else delimiter.startswith("~")
+    return same_kind and len(delimiter) >= marker.length
 
 
 def audit_pr_body(

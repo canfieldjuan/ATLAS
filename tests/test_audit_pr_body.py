@@ -204,6 +204,42 @@ def test_fenced_example_cannot_supply_body_contract_structure(
     assert "missing required section: ## Intentional" in failures
 
 
+@pytest.mark.parametrize("fence", ("`", "~"))
+def test_shorter_nested_fence_cannot_end_outer_body_example(
+    tmp_path: Path, fence: str
+) -> None:
+    root = _write_plan(tmp_path)
+    opener = fence * 4
+    shorter = fence * 3
+    body = "\n".join([
+        "Plan: plans/PR-Example.md",
+        "Slice phase: Production hardening",
+        "Ownership lane: dev-workflow/process-gate-enrollment",
+        "",
+        "One-paragraph why.",
+        "",
+        f"{opener}md",
+        shorter,
+        "## Intentional",
+        "- still fenced",
+        "## Deferred",
+        "- still fenced",
+        "## Parked hardening",
+        "None.",
+        "## Cold diff reconstruction",
+        "- Gaps: none.",
+        "## Verification",
+        "- pytest passed",
+        "## Diff size",
+        "2 files, +10 / -2",
+        opener,
+    ])
+
+    failures = audit_pr_body(body, root=root)
+
+    assert "missing required section: ## Intentional" in failures
+
+
 def test_metadata_after_why_paragraph_cannot_supply_canonical_header(tmp_path: Path) -> None:
     root = _write_plan(tmp_path)
     body = _valid_body().replace(
