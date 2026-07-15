@@ -336,7 +336,10 @@ def test_cli_rejects_current_pr_body_file_missing_slice_phase(tmp_path: Path) ->
     assert "current PR body: missing Slice phase" in result.stdout
 
 
-def test_cli_accepts_current_pr_body_matching_plan_slice_phase(tmp_path: Path) -> None:
+def test_cli_accepts_current_pr_body_matching_plan_slice_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_HEAD_REF", "claude/outer-ci-branch")
     repo = _write_fixture_repo(tmp_path, branch="claude/current")
     path = "plans/PR-Current.md"
     _commit(
@@ -1071,6 +1074,7 @@ def _run_with_path(
 ) -> subprocess.CompletedProcess[str]:
     env = {
         **os.environ,
+        "GITHUB_HEAD_REF": "",
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         **(extra_env or {}),
     }

@@ -182,6 +182,10 @@ Parked hardening: none.
 
 - Focused pytest command for the two auditors, local-review fixture, and two
   wrapper suites — 134 passed.
+- Exact GitHub Unit Gate session-drift regression nodes with
+  `GITHUB_HEAD_REF=claude/pr-public-lane-contract` — 5 passed locally.
+- Session-drift file with Unit Gate-style flags and
+  `GITHUB_HEAD_REF=claude/pr-public-lane-contract` — 43 passed locally.
 - Maturity-sweep structural scores: body auditor 5 and drift auditor 7, at or
   below their committed ratchet baselines.
 - Exact GitHub Unit Gate session-drift regression nodes — 5 passed locally.
@@ -196,13 +200,13 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `AGENTS.md` | 1 |
-| `plans/PR-Public-Lane-Contract.md` | 208 |
+| `plans/PR-Public-Lane-Contract.md` | 212 |
 | `scripts/audit_pr_body.py` | 101 |
 | `scripts/audit_pr_session_drift.py` | 286 |
 | `tests/test_audit_pr_body.py` | 143 |
-| `tests/test_audit_pr_session_drift.py` | 355 |
+| `tests/test_audit_pr_session_drift.py` | 361 |
 | `tests/test_local_pr_review.py` | 1 |
 | `tests/test_open_pr_wrapper.py` | 1 |
 | `tests/test_push_pr_wrapper.py` | 1 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **1100** |
+| **Total** | **1110** |
