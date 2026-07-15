@@ -24,13 +24,14 @@ generated closure, and compatibility test all agree.
   server's Torchaudio binary pair; the resolver does not encode that ABI
   compatibility rule. Its frozen upload cutoff also makes a selected direct
   boto3 version invisible to the dual-interpreter compiler. Separately,
-  FastAPI 0.139 preserves included routers as lazy router objects, while an
-  existing structural test assumes every aggregate entry exposes `.path`.
+  FastAPI 0.139 preserves included routers as lazy router objects, while six
+  existing aggregate-router structural assertions assume every entry exposes
+  `.path`.
 - Correct fix must touch/change: Update only the selected root/ASR direct
   dependency inputs other than Torch and the resolver cutoff, regenerate
   `constraints.root-asr.txt` through `scripts/compile_root_asr_constraints.py`,
   retain the compiler's lock inclusion in both entrypoints and its digest
-  binding in the root entrypoint, and make the affected host-wiring test
+  binding in the root entrypoint, and make the affected aggregate-router tests
   inspect direct and lazily included routers. The result must solve for Python
   3.10 and 3.11 without changing ASR's existing Torch input or product route
   behavior.
@@ -53,9 +54,12 @@ Slice phase: Production hardening
    `2026-07-14T19:30:00Z`, immediately after the latest selected artifact
    (boto3 1.43.48 at 19:29:57Z; botocore 1.43.48 at 19:29:45Z), then regenerate
    the canonical root/ASR lock and requirement digests.
-3. Update only the Content Ops host-wiring test traversal for FastAPI's lazy
-   included-router representation, preserving its existing route, auth, pool,
-   and provider assertions.
+3. Update only the six aggregate-router structural assertions that the unit
+   gate proves fail under FastAPI's lazy included-router representation:
+   Content Ops input-provider wiring, tenant B2B exposure, BYOK registration,
+   LLM gateway registration, and Content Ops generated-assets host wiring.
+   Preserve each test's existing route, auth, pool, provider, and negative
+   route assertions.
 4. Prove the complete root/ASR lock graph through the real compiler, `--check`,
    its CI-enrolled contract tests, the Content Ops workflow suite under the
    selected FastAPI release, and target-Python dependency-resolution dry runs.
@@ -70,9 +74,10 @@ Slice phase: Production hardening
     lock, and the root entrypoint has the compiler-produced matching hash.
   - [ ] The root Torch input remains at 2.12.1; no new unsupported Torch /
     Torchaudio binary pair or generated CUDA change is introduced.
-  - [ ] The Content Ops host-wiring test locates routes through both direct and
-    FastAPI 0.139 lazy included-router representations without weakening its
-    existing route, auth, pool, or provider assertions.
+  - [ ] Each current aggregate-router assertion locates routes through both
+    direct and FastAPI 0.139 lazy included-router representations without
+    weakening its existing route, auth, pool, provider, or negative-route
+    assertions.
   - [ ] The root and ASR entrypoints resolve under their generated lock for the
     supported target interpreter.
   - [ ] No Thinc, spaCy, `atlas_edge`, or product/runtime change is included.
@@ -100,6 +105,10 @@ Slice phase: Production hardening
 - `requirements.txt`
 - `scripts/compile_root_asr_constraints.py`
 - `tests/test_atlas_content_ops_generated_assets_api.py`
+- `tests/test_atlas_content_ops_input_provider.py`
+- `tests/test_b2b_tenant_data_freshness.py`
+- `tests/test_byok_keys.py`
+- `tests/test_llm_gateway_router.py`
 
 ## Mechanism
 
@@ -110,9 +119,10 @@ companion package, moves `EXCLUDE_NEWER` to a verified cutoff that admits them,
 and invokes the pinned `uv` compiler for both target Python versions. The
 compiler writes one marker-aware union lock and rewrites the root entrypoint
 with its SHA-256 binding while keeping both entrypoints bound to the lock. No
-CUDA or NVIDIA cell is edited directly. The Content Ops test recursively
-inspects a FastAPI lazy include's original router only to locate the same route
-objects it already asserts; it does not alter host routing.
+CUDA or NVIDIA cell is edited directly. Each affected test recursively inspects
+a FastAPI lazy include's original router only to locate the same terminal route
+objects it already asserts; it does not alter host routing or extract a shared
+test utility outside this CI failure set.
 
 ## Intentional
 
@@ -152,12 +162,24 @@ Parked hardening: `HARDENING.md` "ASR Torch/Torchaudio compatibility baseline".
 - Run the real compiler, freshness check, contract tests, and target-Python
   resolver dry runs:
 
-    python scripts/compile_root_asr_constraints.py
-    python scripts/compile_root_asr_constraints.py --check
-    python -m pytest tests/test_compile_root_asr_constraints.py -q
-    python -m pytest tests/test_atlas_content_ops_generated_assets_api.py tests/test_content_ops_brand_voice_profiles.py tests/test_content_ops_brand_voice_profiles_api.py tests/test_content_ops_zendesk_credentials.py tests/test_content_ops_zendesk_export_api.py tests/test_setup_content_ops_zendesk_credentials.py -q
-    python -m pip install --dry-run --python-version 3.11 --only-binary=:all: -r requirements.txt
-    python -m pip install --dry-run --python-version 3.11 --only-binary=:all: -r requirements.asr.txt
+    python scripts/compile_root_asr_constraints.py                 # pass
+    python scripts/compile_root_asr_constraints.py --check         # pass
+    python -m pytest tests/test_compile_root_asr_constraints.py -q # 10 passed
+    /tmp/atlas-fastapi-compat-probe/bin/python -m pytest \
+      tests/test_atlas_content_ops_generated_assets_api.py \
+      tests/test_content_ops_brand_voice_profiles.py \
+      tests/test_content_ops_brand_voice_profiles_api.py \
+      tests/test_content_ops_zendesk_credentials.py \
+      tests/test_content_ops_zendesk_export_api.py \
+      tests/test_setup_content_ops_zendesk_credentials.py \
+      tests/test_atlas_content_ops_input_provider.py::test_api_aggregator_wires_content_ops_input_provider \
+      tests/test_atlas_content_ops_input_provider.py::test_api_preview_route_applies_support_ticket_input_provider \
+      tests/test_atlas_content_ops_input_provider.py::test_api_plan_route_applies_support_ticket_input_provider \
+      tests/test_b2b_tenant_data_freshness.py::test_api_router_exposes_only_tenant_b2b_paths \
+      tests/test_byok_keys.py::test_byok_router_registered_in_aggregator \
+      tests/test_llm_gateway_router.py::test_router_registered_in_api_aggregator -q  # 86 passed
+    python -m pip install --dry-run --python-version 3.11 --only-binary=:all: -r requirements.txt      # pass
+    python -m pip install --dry-run --python-version 3.11 --only-binary=:all: -r requirements.asr.txt  # pass
 
 - Guarded `scripts/push_pr.sh` local review immediately before push.
 
@@ -167,9 +189,13 @@ Parked hardening: `HARDENING.md` "ASR Torch/Torchaudio compatibility baseline".
 |---|---:|
 | `HARDENING.md` | 17 |
 | `constraints.root-asr.txt` | 28 |
-| `plans/PR-Dependabot-Python-Compatibility.md` | 175 |
+| `plans/PR-Dependabot-Python-Compatibility.md` | 201 |
 | `requirements.asr.txt` | 2 |
 | `requirements.txt` | 14 |
 | `scripts/compile_root_asr_constraints.py` | 2 |
 | `tests/test_atlas_content_ops_generated_assets_api.py` | 19 |
-| **Total** | **257** |
+| `tests/test_atlas_content_ops_input_provider.py` | 17 |
+| `tests/test_b2b_tenant_data_freshness.py` | 12 |
+| `tests/test_byok_keys.py` | 14 |
+| `tests/test_llm_gateway_router.py` | 14 |
+| **Total** | **340** |

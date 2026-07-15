@@ -56,14 +56,27 @@ def _fresh_api_package():
             sys.modules["atlas_brain.api"] = original
 
 
+def _router_routes(router):
+    """Yield terminal routes across FastAPI's eager and lazy include forms."""
+    for route in router.routes:
+        included_router = getattr(route, "original_router", None)
+        if included_router is not None:
+            yield from _router_routes(included_router)
+            continue
+        yield route
+
+
 def _route(api_pkg, path: str):
-    route = next((route for route in api_pkg.router.routes if route.path == path), None)
+    route = next(
+        (route for route in _router_routes(api_pkg.router) if route.path == path),
+        None,
+    )
     assert route is not None, f"Route {path!r} not mounted"
     return route
 
 
 def _router_route(router, path: str, method: str):
-    for route in router.routes:
+    for route in _router_routes(router):
         if getattr(route, "path", None) == path and method.upper() in getattr(
             route,
             "methods",
