@@ -1,8 +1,8 @@
 # Atlas Vision dependencies
 
 # Web framework
-fastapi>=0.100.0,<0.137
-uvicorn>=0.23.0
+fastapi>=0.139.0,<0.140
+uvicorn>=0.51.0
 
 # Configuration
 pydantic>=2.0.0
@@ -12,11 +12,11 @@ pydantic-settings>=2.0.0
 httpx>=0.24.0
 
 # Async support
-anyio>=3.0.0
+anyio>=4.14.2
 
 # Computer vision
 opencv-python-headless>=5.0.0.93
-numpy>=1.24.0
+numpy>=2.5.1
 
 # Discovery
 zeroconf>=0.80.0
