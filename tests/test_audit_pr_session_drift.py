@@ -6,6 +6,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -169,7 +171,10 @@ def test_cli_fails_when_current_pr_body_slice_phase_is_invalid(tmp_path: Path) -
             }
         ],
         files={21: [path]},
-        bodies={21: "Plan: plans/PR-Current.md\n\nSlice phase: Discovery\n"},
+        bodies={
+            21: "Plan: plans/PR-Current.md\nSlice phase: Discovery\n"
+            "Ownership lane: atlas-workflow\n"
+        },
     )
 
     result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
@@ -198,7 +203,45 @@ def test_cli_fails_when_current_pr_body_slice_phase_mismatches_plan(tmp_path: Pa
             }
         ],
         files={22: [path]},
-        bodies={22: "Plan: plans/PR-Current.md\n\nSlice phase: Robust testing\n"},
+        bodies={
+            22: "Plan: plans/PR-Current.md\nSlice phase: Robust testing\n"
+            "Ownership lane: atlas-workflow\n"
+        },
+    )
+
+    result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
+
+    assert result.returncode == 1
+    assert "does not match branch plan phase(s) workflow/process" in result.stdout
+
+
+def test_cli_fails_when_github_body_header_phase_mismatch_is_hidden_later(
+    tmp_path: Path,
+) -> None:
+    repo = _write_fixture_repo(tmp_path, branch="claude/current")
+    path = "plans/PR-Current.md"
+    _commit(
+        repo,
+        path,
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+    gh_bin = _write_fake_gh(
+        tmp_path,
+        prs=[
+            {
+                "number": 28,
+                "title": "Current PR",
+                "headRefName": "claude/current",
+                "url": "https://github.test/pr/28",
+            }
+        ],
+        files={28: [path]},
+        bodies={
+            28: "Plan: plans/PR-Current.md\nSlice phase: Robust testing\n"
+            "Ownership lane: atlas-workflow\n\nWhy.\n\n## Deferred\n"
+            "Mentioned text: Slice phase: Workflow/process\n"
+        },
     )
 
     result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
@@ -244,7 +287,8 @@ def test_cli_accepts_current_pr_body_file_before_pr_exists(tmp_path: Path) -> No
     )
     body = repo / "pr-body.md"
     body.write_text(
-        "Plan: plans/PR-Current.md\n\nSlice phase: Workflow/process\n",
+        "Plan: plans/PR-Current.md\nSlice phase: Workflow/process\n"
+        "Ownership lane: atlas-workflow\n",
         encoding="utf-8",
     )
 
@@ -292,7 +336,10 @@ def test_cli_rejects_current_pr_body_file_missing_slice_phase(tmp_path: Path) ->
     assert "current PR body: missing Slice phase" in result.stdout
 
 
-def test_cli_accepts_current_pr_body_matching_plan_slice_phase(tmp_path: Path) -> None:
+def test_cli_accepts_current_pr_body_matching_plan_slice_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_HEAD_REF", "claude/outer-ci-branch")
     repo = _write_fixture_repo(tmp_path, branch="claude/current")
     path = "plans/PR-Current.md"
     _commit(
@@ -312,7 +359,10 @@ def test_cli_accepts_current_pr_body_matching_plan_slice_phase(tmp_path: Path) -
             }
         ],
         files={23: [path]},
-        bodies={23: "Plan: plans/PR-Current.md\n\nSlice phase: Workflow/process\n"},
+        bodies={
+            23: "Plan: plans/PR-Current.md\nSlice phase: Workflow/process\n"
+            "Ownership lane: atlas-workflow\n"
+        },
     )
 
     result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
@@ -341,7 +391,10 @@ def test_cli_accepts_mixed_case_period_slice_phase(tmp_path: Path) -> None:
             }
         ],
         files={24: [path]},
-        bodies={24: "Plan: plans/PR-Current.md\n\nSlice phase: vertical slice.\n"},
+        bodies={
+            24: "Plan: plans/PR-Current.md\nSlice phase: vertical slice.\n"
+            "Ownership lane: atlas-workflow\n"
+        },
     )
 
     result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
@@ -386,10 +439,10 @@ def test_cli_fails_when_changed_plan_doc_missing_ownership_lane(tmp_path: Path) 
 
     assert result.returncode == 1
     assert "ownership lane contract failed" in result.stdout
-    assert "plans/PR-No-Lane.md: missing Ownership lane" in result.stdout
+    assert "Ownership lane must be the first non-empty line" in result.stdout
 
 
-def test_cli_keeps_existing_whole_doc_ownership_lane_parsing(tmp_path: Path) -> None:
+def test_cli_rejects_ownership_lane_outside_scope(tmp_path: Path) -> None:
     repo = _write_fixture_repo(tmp_path)
     _commit(
         repo,
@@ -400,9 +453,280 @@ def test_cli_keeps_existing_whole_doc_ownership_lane_parsing(tmp_path: Path) -> 
 
     result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
 
+    assert result.returncode == 1
+    assert "Ownership lane must appear in the Scope section" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("scope_lane", "expected"),
+    (
+        (
+            "Ownership lane: atlas-workflow\n\nOwnership lane: dev-workflow/process-gate-enrollment",
+            "Scope must declare exactly one Ownership lane",
+        ),
+        ("```md\nOwnership lane: atlas-workflow\n```", "Ownership lane must be the first non-empty line"),
+        ("Ownership lane: Atlas-Workflow", "invalid Ownership lane"),
+    ),
+)
+def test_cli_rejects_noncanonical_scope_lane_declarations(
+    tmp_path: Path, scope_lane: str, expected: str
+) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Bad-Lane.md",
+        "# PR-Bad-Lane\n\n## Scope (this PR)\n\n"
+        f"{scope_lane}\n\nSlice phase: Workflow/process\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 1
+    assert expected in result.stdout
+
+
+def test_cli_rejects_current_pr_body_lane_mismatch(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path, branch="claude/current")
+    _commit(
+        repo,
+        "plans/PR-Current.md",
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+    body = repo / "pr-body.md"
+    body.write_text(
+        "Plan: plans/PR-Current.md\nSlice phase: Workflow/process\n"
+        "Ownership lane: dev-workflow/process-gate-enrollment\n",
+        encoding="utf-8",
+    )
+
+    result = _run(
+        repo,
+        [
+            "python",
+            "scripts/audit_pr_session_drift.py",
+            "--skip-github",
+            "--current-pr-body-file",
+            str(body),
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "does not match branch plan lane(s) atlas-workflow" in result.stdout
+
+
+def test_cli_ignores_fenced_headings_when_scoping_plan_lane(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Fenced-Heading.md",
+        "# PR-Fenced-Heading\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n\n"
+        "```md\n## Mechanism\n```\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "branch ownership lanes: atlas-workflow" in result.stdout
-    assert "OK: no blocking drift detected" in result.stdout
+
+
+def test_cli_ignores_fenced_lane_example_after_scope_lead(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Fenced-Lane-In-Scope.md",
+        "# PR-Fenced-Lane-In-Scope\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n\n"
+        "### Review Contract\n\n"
+        "```md\n"
+        "Plan: plans/PR-Example.md\n"
+        "Slice phase: Workflow/process\n"
+        "Ownership lane: atlas-workflow\n"
+        "```\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("fence", ("```", "~~~"))
+def test_cli_rejects_fenced_slice_phase_in_plan_scope(tmp_path: Path, fence: str) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Fenced-Phase.md",
+        "# PR-Fenced-Phase\n\n## Scope (this PR)\n\n"
+        f"Ownership lane: atlas-workflow\n\n{fence}md\n"
+        f"Slice phase: Workflow/process\n{fence}\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 1
+    assert "plans/PR-Fenced-Phase.md: missing Slice phase" in result.stdout
+
+
+@pytest.mark.parametrize("fence", ("`", "~"))
+def test_cli_rejects_slice_phase_after_shorter_nested_fence(
+    tmp_path: Path, fence: str
+) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    opener = fence * 4
+    shorter = fence * 3
+    _commit(
+        repo,
+        "plans/PR-Short-Fence.md",
+        "# PR-Short-Fence\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\n"
+        f"{opener}md\n{shorter}\nSlice phase: Workflow/process\n{opener}\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 1
+    assert "plans/PR-Short-Fence.md: missing Slice phase" in result.stdout
+
+
+def test_cli_rejects_scope_fence_before_lane_declaration(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Fence-Before-Lane.md",
+        "# PR-Fence-Before-Lane\n\n## Scope (this PR)\n\n"
+        "```md\nexample\n```\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 1
+    assert "Ownership lane must be the first non-empty line" in result.stdout
+
+
+def test_cli_rejects_scope_lane_after_other_scope_content(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Late-Lane.md",
+        "# PR-Late-Lane\n\n## Scope (this PR)\n\n"
+        "Slice phase: Workflow/process\n\nOwnership lane: atlas-workflow\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 1
+    assert "Ownership lane must be the first non-empty line" in result.stdout
+
+
+def test_cli_rejects_current_body_metadata_after_why_paragraph(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path, branch="claude/current")
+    _commit(
+        repo,
+        "plans/PR-Current.md",
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+    body = repo / "pr-body.md"
+    body.write_text(
+        "Plan: plans/PR-Current.md\nWhy this slice exists.\n"
+        "Slice phase: Workflow/process\nOwnership lane: atlas-workflow\n",
+        encoding="utf-8",
+    )
+
+    result = _run(
+        repo,
+        [
+            "python",
+            "scripts/audit_pr_session_drift.py",
+            "--skip-github",
+            "--current-pr-body-file",
+            str(body),
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "current PR body: missing Ownership lane" in result.stdout
+    assert "current PR body: missing Slice phase" in result.stdout
+
+
+def test_cli_rejects_current_body_lane_found_only_in_prose(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path, branch="claude/current")
+    _commit(
+        repo,
+        "plans/PR-Current.md",
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+    body = repo / "pr-body.md"
+    body.write_text(
+        "Plan: plans/PR-Current.md\n\nSlice phase: Workflow/process\n\n"
+        "This is explanatory prose, not header metadata.\n"
+        "Ownership lane: atlas-workflow\n",
+        encoding="utf-8",
+    )
+
+    result = _run(
+        repo,
+        [
+            "python",
+            "scripts/audit_pr_session_drift.py",
+            "--skip-github",
+            "--current-pr-body-file",
+            str(body),
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "missing canonical Ownership lane" in result.stdout
+
+
+def test_cli_ignores_peer_lane_found_only_in_prose(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Current.md",
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+    gh_bin = _write_fake_gh(
+        tmp_path,
+        prs=[
+            {
+                "number": 26,
+                "title": "Prose-only peer lane",
+                "headRefName": "claude/peer",
+                "url": "https://github.test/pr/26",
+            }
+        ],
+        files={26: ["README.md"]},
+        bodies={
+            26: "Plan: plans/PR-Peer.md\n\nSlice phase: Workflow/process\n\n"
+            "This is explanatory prose, not header metadata.\n"
+            "Ownership lane: atlas-workflow\n"
+        },
+    )
+
+    result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "open PRs claim the same ownership lane" not in result.stdout
+
+
+def test_cli_ignores_fenced_lane_example_outside_scope(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _commit(
+        repo,
+        "plans/PR-Fenced-Lane-Example.md",
+        "# PR-Fenced-Lane-Example\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n\n"
+        "## Mechanism\n\n```md\nOwnership lane: atlas-workflow\n```\n",
+    )
+
+    result = _run(repo, ["python", "scripts/audit_pr_session_drift.py", "--skip-github"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ownership lane contract failed" not in result.stdout
 
 
 def test_cli_fails_when_changed_plan_doc_missing_slice_phase(tmp_path: Path) -> None:
@@ -493,7 +817,10 @@ def test_cli_fails_when_open_pr_claims_same_ownership_lane(tmp_path: Path) -> No
             }
         ],
         files={15: ["README.md"]},
-        bodies={15: "Plan: plans/PR-Other.md\n\nOwnership lane: content-ops/faq-generator\n\nSlice phase: Workflow/process\n"},
+        bodies={
+            15: "Plan: plans/PR-Other.md\nSlice phase: Workflow/process\n"
+            "Ownership lane: content-ops/faq-generator\n"
+        },
     )
 
     result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
@@ -575,7 +902,8 @@ def test_cli_warns_for_malformed_lane_in_other_pr_body(tmp_path: Path) -> None:
             }
         ],
         files={18: ["README.md"]},
-        bodies={18: "Ownership lane: Content Ops!\n\nSlice phase: Workflow/process\n"},
+        bodies={18: "Plan: plans/PR-Other.md\nSlice phase: Workflow/process\n"
+                    "Ownership lane: Content Ops!\n"},
     )
 
     result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
@@ -604,7 +932,8 @@ def test_cli_treats_other_pr_invalid_slice_phase_as_advisory(tmp_path: Path) -> 
             }
         ],
         files={77: ["README.md"]},
-        bodies={77: "Ownership lane: content-ops/other-lane\n\nSlice phase: Discovery\n"},
+        bodies={77: "Plan: plans/PR-Other.md\nSlice phase: Discovery\n"
+                    "Ownership lane: content-ops/other-lane\n"},
     )
 
     result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
@@ -637,7 +966,10 @@ def test_cli_ignores_current_pr_by_head_oid_when_detached(tmp_path: Path) -> Non
             }
         ],
         files={19: [path]},
-        bodies={19: "Ownership lane: content-ops/faq-generator\n\nSlice phase: Workflow/process\n"},
+        bodies={
+            19: "Plan: plans/PR-Current.md\nSlice phase: Workflow/process\n"
+            "Ownership lane: content-ops/faq-generator\n"
+        },
     )
 
     result = _run_with_path(repo, gh_bin, ["python", "scripts/audit_pr_session_drift.py"])
@@ -742,6 +1074,7 @@ def _run_with_path(
 ) -> subprocess.CompletedProcess[str]:
     env = {
         **os.environ,
+        "GITHUB_HEAD_REF": "",
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         **(extra_env or {}),
     }

@@ -130,6 +130,7 @@ Otherwise, mirror the plan-doc framing in the PR description:
 ```
 Plan: plans/PR-<Slice-Name>.md
 Slice phase: <phase>
+Ownership lane: <canonical-lowercase-lane>
 
 <one-paragraph why>
 
