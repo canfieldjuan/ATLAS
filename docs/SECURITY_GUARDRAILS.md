@@ -95,6 +95,18 @@ base-owned plan-admission auditor against that data worktree. Branch-protection
 enrollment remains a separate REST PATCH slice after the producer proves stable
 and the existing required contexts can be preserved.
 
+The same auditor pre-admits a future
+`.github/workflows/review_contract.yml` / `review-contract` trusted-base
+producer only when the whole workflow file matches the canonical normalized YAML
+stored in the base-owned posture auditor. This keeps the pre-admission
+fail-closed without maintaining a per-field predicate ladder: permissions,
+checkout depth, step order, run blocks, and no-plan behavior are admitted or
+rejected as one workflow-shaped unit. The workflow itself lands in a later #2104
+slice after this canonical allowlist is on `main`, for the same trusted-base
+bootstrap reason: base-owned `pre-push-audit` must already know the exact
+workflow shape before it can safely evaluate that new `pull_request_target`
+workflow as PR data.
+
 - Full-history secret scan: Gitleaks checks out the complete branch history
   (`fetch-depth: 0`) so leaked keys in old commits are in scope. The workflow
   uses `docs/security/gitleaks-baseline.json` to suppress the known historical
