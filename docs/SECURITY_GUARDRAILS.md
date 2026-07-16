@@ -87,13 +87,13 @@ data worktree. Branch-protection enrollment remains a separate REST PATCH slice
 after the producer proves stable and the existing required contexts can be
 preserved.
 
-The same auditor pre-admits a future
-`.github/workflows/plan_admission.yml` / `plan-admission` trusted-base producer
-only under that exact guard shape. The workflow itself lands in a later #2104
-slice after this allowlist is on `main`, for the same trusted-base bootstrap
-reason: base-owned `pre-push-audit` must already know the workflow/job tuple
-before it can safely evaluate that new `pull_request_target` workflow as PR
-data.
+The same auditor admits
+`.github/workflows/plan_admission.yml` / `plan-admission` only under that exact
+guard shape. The workflow is an advisory producer for #2104 burn-in: it checks
+out trusted base code, materializes the PR head as git data, and runs the
+base-owned plan-admission auditor against that data worktree. Branch-protection
+enrollment remains a separate REST PATCH slice after the producer proves stable
+and the existing required contexts can be preserved.
 
 - Full-history secret scan: Gitleaks checks out the complete branch history
   (`fetch-depth: 0`) so leaked keys in old commits are in scope. The workflow

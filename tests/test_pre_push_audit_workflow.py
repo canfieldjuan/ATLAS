@@ -61,6 +61,7 @@ def test_pre_push_audit_workflow_enrolls_plan_admission_and_body_gate_tests() ->
     text = WORKFLOW.read_text(encoding="utf-8")
 
     assert text.count("tests/test_audit_pr_plan_presence.py") == 2
+    assert text.count("tests/test_plan_admission_workflow.py") == 2
     assert text.count("tests/test_pr_body_contract_workflow.py") == 2
 
 
