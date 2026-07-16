@@ -103,7 +103,7 @@ Slice phase: Production hardening
 - Reachability proof: `scripts/compile_root_asr_constraints.py` is the real
   lock-generation entrypoint; its observable output is the canonical lock plus
   a root digest binding, then a freshness check and the CI-enrolled constraints
-  contract test verify that generated artifact. `tests/test_ollama_compat.py`
+  contract test verify that generated artifact. `tests/test_atlas_ui_root.py`
   mounts the real Ollama router and UI static surface; its observable browser,
   health, and asset responses prove the updated root wiring.
 - Affected surfaces: root requirements, ASR requirements, the dual-Python
@@ -130,10 +130,10 @@ Slice phase: Production hardening
 - `scripts/compile_root_asr_constraints.py`
 - `tests/test_atlas_content_ops_generated_assets_api.py`
 - `tests/test_atlas_content_ops_input_provider.py`
+- `tests/test_atlas_ui_root.py`
 - `tests/test_b2b_tenant_data_freshness.py`
 - `tests/test_byok_keys.py`
 - `tests/test_llm_gateway_router.py`
-- `tests/test_ollama_compat.py`
 
 ## Mechanism
 
@@ -210,7 +210,7 @@ Parked hardening: `HARDENING.md` "ASR Torch/Torchaudio compatibility baseline".
       tests/test_b2b_tenant_data_freshness.py::test_api_router_exposes_only_tenant_b2b_paths \
       tests/test_byok_keys.py::test_byok_router_registered_in_aggregator \
       tests/test_llm_gateway_router.py::test_router_registered_in_api_aggregator \
-      tests/test_ollama_compat.py -q  # 87 passed after root repair
+      tests/test_atlas_ui_root.py -q  # 87 passed after root repair
     python -m pip install --dry-run --python-version 3.11 --only-binary=:all: -r requirements.txt      # pass
     python -m pip install --dry-run --python-version 3.11 --only-binary=:all: -r requirements.asr.txt  # pass
 
@@ -230,8 +230,8 @@ Parked hardening: `HARDENING.md` "ASR Torch/Torchaudio compatibility baseline".
 | `scripts/compile_root_asr_constraints.py` | 2 |
 | `tests/test_atlas_content_ops_generated_assets_api.py` | 19 |
 | `tests/test_atlas_content_ops_input_provider.py` | 17 |
+| `tests/test_atlas_ui_root.py` | 34 |
 | `tests/test_b2b_tenant_data_freshness.py` | 12 |
 | `tests/test_byok_keys.py` | 14 |
 | `tests/test_llm_gateway_router.py` | 14 |
-| `tests/test_ollama_compat.py` | 31 |
-| **Total** | **442** |
+| **Total** | **445** |
