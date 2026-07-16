@@ -94,8 +94,8 @@ is rejected while one with gaps validates; the store/runner round-trip fixtures 
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 33 |
+| `atlas_brain/schemas/content_factory.py` | 41 |
 | `atlas_brain/services/content_factory_store.py` | 4 |
-| `plans/PR-Content-Factory-Contract-Hardening.md` | 104 |
-| `tests/test_content_factory_schemas.py` | 28 |
-| **Total** | **169** |
+| `plans/PR-Content-Factory-Contract-Hardening.md` | 101 |
+| `tests/test_content_factory_schemas.py` | 38 |
+| **Total** | **184** |

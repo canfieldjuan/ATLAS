@@ -94,6 +94,16 @@ def test_evidence_packet_without_evidence_or_gaps_rejected():
         )
 
 
+@pytest.mark.parametrize("blank_gaps", [[""], ["   "], ["real gap", ""]])
+def test_evidence_packet_blank_gap_rejected(blank_gaps):
+    # A blank/whitespace gap is not a logged gap; it must not satisfy the
+    # honest-empty-packet guard (gaps=[''] would otherwise slip past it).
+    with pytest.raises(ValidationError):
+        EvidencePacket.model_validate(
+            {"schema": "evidence_packet.v1", "project_id": "p", "gaps": blank_gaps}
+        )
+
+
 def test_evidence_row_without_source_id_is_rejected():
     # Load-bearing guard: uncited evidence must not validate.
     with pytest.raises(ValidationError):

@@ -119,7 +119,10 @@ class EvidencePacket(BaseModel):
     schema_version: int = 1
     project_id: str
     evidence: list[EvidenceRow] = Field(default_factory=list)
-    gaps: list[str] = Field(default_factory=list)
+    # Each gap must carry real content: a blank/whitespace gap is not a logged gap
+    # and would otherwise let a packet slip past the honest-empty-packet guard below
+    # with gaps=[''] -- the same blankness this contract rejects on citation fields.
+    gaps: list[NonEmptyStr] = Field(default_factory=list)
     retrieved_from: list[str] = Field(default_factory=list)
     prompt_version: Optional[str] = None
 
@@ -127,11 +130,14 @@ class EvidencePacket(BaseModel):
     def _evidence_or_gaps_required(self) -> "EvidencePacket":
         # A packet with neither evidence nor gaps is not the honest "no evidence,
         # logged gaps" result -- it is indistinguishable from a truncated/empty
-        # worker output. At least one of the two must be non-empty.
+        # worker output. At least one must be present, and a gap must be a real
+        # non-blank gap (enforced by the list[NonEmptyStr] type above), so gaps=['']
+        # cannot defeat this guard.
         if not self.evidence and not self.gaps:
             raise ValueError(
-                "an evidence packet must carry at least one evidence row or one gap; "
-                "an empty packet cannot masquerade as an honest 'no evidence' result"
+                "an evidence packet must carry at least one evidence row or one "
+                "non-blank gap; an empty packet cannot masquerade as an honest "
+                "'no evidence' result"
             )
         return self
 
