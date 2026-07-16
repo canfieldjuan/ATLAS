@@ -1,6 +1,6 @@
 # Plan archive index
 
-1402 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1403 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -968,6 +968,7 @@
 - [PR-Demand-Opportunity-Report](archive/PR-Demand-Opportunity-Report.md)
 - [PR-Dependabot-Body-Contract-Exemption](archive/PR-Dependabot-Body-Contract-Exemption.md) - lane: dependency-maintenance/pr-body-contract | phase: Workflow/process
 - [PR-Dependabot-Package-Maintenance-Wave](archive/PR-Dependabot-Package-Maintenance-Wave.md) - lane: dependency-maintenance | phase: Workflow/process
+- [PR-Dependabot-Python-Compatibility](archive/PR-Dependabot-Python-Compatibility.md) - lane: dependency/dependabot | phase: Production hardening
 - [PR-Describe-Control-Surfaces-Cache](archive/PR-Describe-Control-Surfaces-Cache.md)
 - [PR-Dev-Workflow-Helpers-Docs](archive/PR-Dev-Workflow-Helpers-Docs.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
 - [PR-Dev-Workflow-Open-PR-Stdin-Wrapper](archive/PR-Dev-Workflow-Open-PR-Stdin-Wrapper.md) - lane: dev-workflow/pr-friction | phase: Workflow/process
