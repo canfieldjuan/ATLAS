@@ -174,3 +174,37 @@ def test_resolve_approval_is_server_owned():
 def test_resolve_approval_never_approves_non_drafted():
     r = validate_followup_draft(_failure("partial", failed_stage="compose"))
     assert resolve_approval(r, server_approved=True) is False
+
+
+# --- strict fail-closed input boundary (Codex round 2) ---
+
+
+def test_resolve_approval_requires_real_true():
+    r = validate_followup_draft(DRAFTED)
+    assert resolve_approval(r, server_approved=True) is True
+    # a truthy serialized value at the approval boundary must not approve
+    assert resolve_approval(r, server_approved="false") is False
+    assert resolve_approval(r, server_approved=1) is False
+
+
+def test_extra_worker_fields_rejected():
+    with pytest.raises(ValidationError):
+        validate_followup_draft({**DRAFTED, "send_payload": "x@example.com"})
+
+
+def test_non_v1_schema_version_rejected():
+    with pytest.raises(ValidationError):
+        validate_followup_draft({**DRAFTED, "schema_version": 2})
+
+
+def test_attribute_name_only_schema_key_rejected():
+    payload = {k: v for k, v in DRAFTED.items() if k != "schema"}
+    payload["artifact_schema"] = "followup_draft.v1"
+    with pytest.raises(ValidationError):
+        validate_followup_draft(payload)
+
+
+@pytest.mark.parametrize("bad", ["yes", "true", 1])
+def test_success_must_be_a_real_boolean(bad):
+    with pytest.raises(ValidationError):
+        validate_followup_draft({**DRAFTED, "success": bad})

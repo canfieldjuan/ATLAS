@@ -111,10 +111,10 @@ action in next_permitted_actions is rejected; an unknown status is rejected.
 
 | File | Lines |
 |---|---|
-| atlas_brain/schemas/followup_workflow.py | 144 |
-| tests/test_followup_workflow.py | 176 |
-| plans/PR-Followup-Draft-Contract.md | 117 |
-| **Total** | **437** |
+| atlas_brain/schemas/followup_workflow.py | 151 |
+| tests/test_followup_workflow.py | 210 |
+| plans/PR-Followup-Draft-Contract.md | 122 |
+| **Total** | **483** |
 
 Over the 400 soft cap after the review-driven guard closures (canonical codes,
 closed stage enum, action allowlist, normalized approval, required ids) and their

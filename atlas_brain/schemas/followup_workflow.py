@@ -26,7 +26,12 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-_BASE_CONFIG = ConfigDict(extra="allow", populate_by_name=True, serialize_by_alias=True)
+# This contract is a fail-closed security boundary for UNTRUSTED worker output
+# (not a trusted-artifact iteration contract), so it is strict: no unmodeled
+# fields (extra='forbid'), no type coercion (strict -- "yes"/1 is not True), and
+# only the canonical "schema" key on input (no populate_by_name). serialize_by_
+# alias still emits the canonical "schema" key on dump.
+_BASE_CONFIG = ConfigDict(extra="forbid", strict=True, serialize_by_alias=True)
 
 # Canonical outcome status. The worker copies this; it does not infer it.
 Status = Literal[
@@ -76,7 +81,7 @@ class FollowUpDraftResult(BaseModel):
     model_config = _BASE_CONFIG
 
     artifact_schema: Literal["followup_draft.v1"] = Field(alias="schema")
-    schema_version: int = 1
+    schema_version: Literal[1] = 1
     success: bool
     status: Status
     error_code: Optional[str] = None
@@ -134,7 +139,9 @@ def resolve_approval(result: FollowUpDraftResult, *, server_approved: bool) -> b
     is not a successful ``drafted`` outcome can never be approved."""
     if result.status != "drafted":
         return False
-    return bool(server_approved)
+    # Fail closed: approve only on an actual True boolean, never on a truthy
+    # serialized value such as "false" or 0 reaching this approval boundary.
+    return server_approved is True
 
 
 def validate_followup_draft(data: dict[str, Any]) -> FollowUpDraftResult:
