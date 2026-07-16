@@ -27,6 +27,7 @@ ALLOWED_PULL_REQUEST_TARGET_JOBS = frozenset(
         ("pr_body_contract.yml", "pr-body-contract"),
         ("pre_push_audit.yml", "pre-push-audit"),
         ("session_lane.yml", "session-lane"),
+        ("plan_admission.yml", "plan-admission"),
     }
 )
 ALLOWED_ID_TOKEN_JOB = ("claude.yml", "claude")
