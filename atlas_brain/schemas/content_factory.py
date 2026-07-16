@@ -15,10 +15,11 @@ Five artifact surfaces, one per stage:
   - ArtifactManifest -> manifest.json  (the job index)
 
 House style (matches atlas_brain/schemas/campaigns.py): every model opens with
-``extra='allow'`` and ``schema_version=1``. ``extra='allow'`` lets artifacts
-written before a field was added round-trip without validation errors while the
-pipeline is still iterating; flip to ``extra='forbid'`` in a later slice once the
-shapes are stable.
+``schema_version=1``. The iteration-phase ``extra='allow'`` has now been flipped
+to ``extra='forbid'`` (the content_factory_store/runner consumers round-trip
+artifacts, so the flip is validated against known-good shapes): any unmodeled key
+is rejected rather than silently carried, terminally closing the schema-key leak
+class (a reserved ``artifact_schema`` key can no longer ride through as an extra).
 
 The artifact's type tag is stored under the JSON key ``"schema"`` via an alias
 (the attribute is ``artifact_schema`` to avoid shadowing ``BaseModel.schema``).
@@ -58,7 +59,9 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 #     "schema" too (not "artifact_schema").
 # One key both ways means a raw artifact always round-trips through model_for(),
 # and the Phase 2.2 writer and Phase 4.2 filter cannot disagree on the key.
-_BASE_CONFIG = ConfigDict(extra="allow", serialize_by_alias=True)
+# extra='forbid' rejects any non-canonical key (including a reserved
+# "artifact_schema" duplicate of the tag), so unmodeled worker output fails closed.
+_BASE_CONFIG = ConfigDict(extra="forbid", serialize_by_alias=True)
 
 # A string that must carry real content: whitespace is stripped, then a
 # non-empty result is required. Used for citation fields whose blankness would
@@ -92,12 +95,14 @@ class ContentBrief(BaseModel):
 
 
 class EvidenceRow(BaseModel):
-    """One cited evidence row. A row without a usable quote + source_id is not
-    admissible -- blank strings are rejected, not just missing keys."""
+    """One cited evidence row. A row without a usable id, quote, and source_id is
+    not admissible -- blank strings are rejected, not just missing keys."""
 
     model_config = _BASE_CONFIG
 
-    id: str
+    # Non-blank: a blank id cannot be referenced by Claim.source_id, so it would
+    # silently defeat the no-orphan-claim invariant.
+    id: NonEmptyStr
     claim_candidate: str = ""
     quote: NonEmptyStr
     source_id: NonEmptyStr
@@ -114,9 +119,27 @@ class EvidencePacket(BaseModel):
     schema_version: int = 1
     project_id: str
     evidence: list[EvidenceRow] = Field(default_factory=list)
-    gaps: list[str] = Field(default_factory=list)
+    # Each gap must carry real content: a blank/whitespace gap is not a logged gap
+    # and would otherwise let a packet slip past the honest-empty-packet guard below
+    # with gaps=[''] -- the same blankness this contract rejects on citation fields.
+    gaps: list[NonEmptyStr] = Field(default_factory=list)
     retrieved_from: list[str] = Field(default_factory=list)
     prompt_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _evidence_or_gaps_required(self) -> "EvidencePacket":
+        # A packet with neither evidence nor gaps is not the honest "no evidence,
+        # logged gaps" result -- it is indistinguishable from a truncated/empty
+        # worker output. At least one must be present, and a gap must be a real
+        # non-blank gap (enforced by the list[NonEmptyStr] type above), so gaps=['']
+        # cannot defeat this guard.
+        if not self.evidence and not self.gaps:
+            raise ValueError(
+                "an evidence packet must carry at least one evidence row or one "
+                "non-blank gap; an empty packet cannot masquerade as an honest "
+                "'no evidence' result"
+            )
+        return self
 
 
 class Claim(BaseModel):
