@@ -15,6 +15,11 @@ represents included routers lazily, which made one host-wiring test assume an
 obsolete flat router shape even though the mounted route remains reachable.
 This is production hardening: the update cannot ship until the direct inputs,
 generated closure, and compatibility test all agree.
+The resulting diff exceeds the soft cap because one indivisible
+compatibility proof must carry the generated dual-Python lock, the six existing
+aggregate-router regressions, and the UI-root regression exposed by the same
+FastAPI change; splitting those fixes would leave the selected dependency
+release red or semantically unverified.
 
 ### Problem-derived contract
 
@@ -26,19 +31,24 @@ generated closure, and compatibility test all agree.
   boto3 version invisible to the dual-interpreter compiler. Separately,
   FastAPI 0.139 preserves included routers as lazy router objects, while six
   existing aggregate-router structural assertions assume every entry exposes
-  `.path`.
+  `.path`. The existing UI-build root override also removes only top-level
+  routes, leaving the Ollama root inside FastAPI 0.139's lazy include ahead of
+  the intended browser UI handler.
 - Correct fix must touch/change: Update only the selected root/ASR direct
   dependency inputs other than Torch and the resolver cutoff, regenerate
   `constraints.root-asr.txt` through `scripts/compile_root_asr_constraints.py`,
   retain the compiler's lock inclusion in both entrypoints and its digest
-  binding in the root entrypoint, and make the affected aggregate-router tests
-  inspect direct and lazily included routers. The result must solve for Python
-  3.10 and 3.11 without changing ASR's existing Torch input or product route
-  behavior.
-- Must not change: Do not modify product code, runtime configuration, CI
-  workflow behavior, or customer-facing surfaces. Do not edit generated lock
-  cells by hand, force a Starlette pin to preserve a test implementation
-  detail, upgrade the separate `atlas_edge` NeMo dependency, or include the
+  binding in the root entrypoint, make the affected aggregate-router tests
+  inspect direct and lazily included routers, and preserve the existing UI
+  build root behavior without mutating FastAPI's route list. The result must
+  solve for Python 3.10 and 3.11 without changing ASR's existing Torch input,
+  browser UI response, or non-browser Ollama health response.
+- Must not change: Do not modify product code beyond the exact existing UI-root
+  behavior required by this FastAPI compatibility repair, runtime
+  configuration, CI workflow behavior, or customer-facing surfaces. Do not
+  edit generated lock cells by hand, force a Starlette pin to preserve a test implementation
+  detail, change the established browser UI or non-browser Ollama root
+  semantics, upgrade the separate `atlas_edge` NeMo dependency, or include the
   Thinc 9 migration tracked by issue #2100 / Dependabot PR #2093.
 
 ## Scope (this PR)
@@ -60,7 +70,12 @@ Slice phase: Production hardening
    LLM gateway registration, and Content Ops generated-assets host wiring.
    Preserve each test's existing route, auth, pool, provider, and negative
    route assertions.
-4. Prove the complete root/ASR lock graph through the real compiler, `--check`,
+4. Move the existing UI-build content negotiation from the top-level route-list
+   mutation to the actual Ollama root handler, while leaving `main.py` to mount
+   UI static assets. Add a real FastAPI entrypoint test that proves browsers
+   receive the UI, non-browser clients receive the Ollama health response, and
+   static assets remain reachable under FastAPI 0.139.
+5. Prove the complete root/ASR lock graph through the real compiler, `--check`,
    its CI-enrolled contract tests, the Content Ops workflow suite under the
    selected FastAPI release, and target-Python dependency-resolution dry runs.
    Leave every other #2108 update for a separate owner-compatible slice.
@@ -78,27 +93,36 @@ Slice phase: Production hardening
     direct and FastAPI 0.139 lazy included-router representations without
     weakening its existing route, auth, pool, provider, or negative-route
     assertions.
+  - [ ] With a UI build present, the actual FastAPI app returns the UI index at
+    `/` for browser accepts, preserves the Ollama health body for non-browser
+    accepts, and serves static assets without direct `app.routes` mutation.
   - [ ] The root and ASR entrypoints resolve under their generated lock for the
     supported target interpreter.
-  - [ ] No Thinc, spaCy, `atlas_edge`, or product/runtime change is included.
+  - [ ] No Thinc, spaCy, `atlas_edge`, or unrelated product/runtime change is
+    included.
 - Reachability proof: `scripts/compile_root_asr_constraints.py` is the real
   lock-generation entrypoint; its observable output is the canonical lock plus
   a root digest binding, then a freshness check and the CI-enrolled constraints
-  contract test verify that generated artifact.
+  contract test verify that generated artifact. `tests/test_ollama_compat.py`
+  mounts the real Ollama router and UI static surface; its observable browser,
+  health, and asset responses prove the updated root wiring.
 - Affected surfaces: root requirements, ASR requirements, the dual-Python
-  lock compiler, generated root/ASR constraints, the Content Ops host-wiring
-  test, and their existing CI workflows.
+  lock compiler, generated root/ASR constraints, aggregate-router tests, the
+  Ollama compatibility root, UI static mount, and their existing CI workflows.
 - Risk areas: a stale or manually edited lock can make Docker/CI installs
   unsatisfiable; advancing the cutoff can choose an unintended transitive
   release; a resolver can accept ABI-incompatible binary packages; a FastAPI
-  test can confuse private router representation with route reachability;
-  broadening into #2108's other package surfaces would make the compatibility
+  test can confuse private router representation with route reachability; an
+  obsolete top-level route mutation can leave the UI root behind an included
+  router; broadening into #2108's other package surfaces would make the compatibility
   proof meaningless.
-- Reviewer rules triggered: R1, R2, R10, R11, R12, R14.
+- Reviewer rules triggered: R1, R2, R5, R10, R11, R12, R14.
 
 ### Files touched
 
 - `HARDENING.md`
+- `atlas_brain/api/ollama_compat.py`
+- `atlas_brain/main.py`
 - `constraints.root-asr.txt`
 - `plans/PR-Dependabot-Python-Compatibility.md`
 - `requirements.asr.txt`
@@ -109,6 +133,7 @@ Slice phase: Production hardening
 - `tests/test_b2b_tenant_data_freshness.py`
 - `tests/test_byok_keys.py`
 - `tests/test_llm_gateway_router.py`
+- `tests/test_ollama_compat.py`
 
 ## Mechanism
 
@@ -122,7 +147,11 @@ with its SHA-256 binding while keeping both entrypoints bound to the lock. No
 CUDA or NVIDIA cell is edited directly. Each affected test recursively inspects
 a FastAPI lazy include's original router only to locate the same terminal route
 objects it already asserts; it does not alter host routing or extract a shared
-test utility outside this CI failure set.
+test utility outside this CI failure set. The existing root content negotiation
+lives on the Ollama router's terminal route, which FastAPI dispatches before
+the UI static mount; the main module no longer mutates the framework-owned
+route list. The entrypoint test mounts that real router and static assets under
+the updated FastAPI version to prove the existing browser and health responses.
 
 ## Intentional
 
@@ -135,6 +164,9 @@ test utility outside this CI failure set.
 - Do not pin Starlette solely to retain FastAPI's former flat router list; the
   actual mounted Content Ops route remains reachable and the structural test
   must represent both router forms instead.
+- Do not change the root product contract: browser requests still receive the
+  built UI while non-browser clients still receive `Ollama is running`; this
+  repair moves the existing decision to the route FastAPI actually dispatches.
 - Keep the existing Python 3.10 + 3.11 lock contract and pinned `uv` version;
   this is a closure repair, not a tooling migration.
 - Do not treat a local Python 3.13 pip dry-run's missing Kokoro distribution as
@@ -177,7 +209,8 @@ Parked hardening: `HARDENING.md` "ASR Torch/Torchaudio compatibility baseline".
       tests/test_atlas_content_ops_input_provider.py::test_api_plan_route_applies_support_ticket_input_provider \
       tests/test_b2b_tenant_data_freshness.py::test_api_router_exposes_only_tenant_b2b_paths \
       tests/test_byok_keys.py::test_byok_router_registered_in_aggregator \
-      tests/test_llm_gateway_router.py::test_router_registered_in_api_aggregator -q  # 86 passed
+      tests/test_llm_gateway_router.py::test_router_registered_in_api_aggregator \
+      tests/test_ollama_compat.py -q  # 87 passed after root repair
     python -m pip install --dry-run --python-version 3.11 --only-binary=:all: -r requirements.txt      # pass
     python -m pip install --dry-run --python-version 3.11 --only-binary=:all: -r requirements.asr.txt  # pass
 
@@ -188,8 +221,10 @@ Parked hardening: `HARDENING.md` "ASR Torch/Torchaudio compatibility baseline".
 | File | LOC |
 |---|---:|
 | `HARDENING.md` | 17 |
+| `atlas_brain/api/ollama_compat.py` | 13 |
+| `atlas_brain/main.py` | 22 |
 | `constraints.root-asr.txt` | 28 |
-| `plans/PR-Dependabot-Python-Compatibility.md` | 201 |
+| `plans/PR-Dependabot-Python-Compatibility.md` | 237 |
 | `requirements.asr.txt` | 2 |
 | `requirements.txt` | 14 |
 | `scripts/compile_root_asr_constraints.py` | 2 |
@@ -198,4 +233,5 @@ Parked hardening: `HARDENING.md` "ASR Torch/Torchaudio compatibility baseline".
 | `tests/test_b2b_tenant_data_freshness.py` | 12 |
 | `tests/test_byok_keys.py` | 14 |
 | `tests/test_llm_gateway_router.py` | 14 |
-| **Total** | **340** |
+| `tests/test_ollama_compat.py` | 31 |
+| **Total** | **442** |

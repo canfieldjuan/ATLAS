@@ -12,10 +12,11 @@ HA's ollama Python client calls:
 
 import logging
 import time
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from ..agents.interface import get_agent
@@ -24,6 +25,7 @@ from ..config import settings
 logger = logging.getLogger("atlas.api.ollama_compat")
 
 router = APIRouter(tags=["ollama-compat"])
+_UI_DIST = Path(__file__).resolve().parents[2] / "atlas-ui" / "dist"
 
 
 # --- Models for /api/tags ---
@@ -80,8 +82,11 @@ class OllamaChatResponse(BaseModel):
 
 
 @router.get("/", response_class=PlainTextResponse)
-async def root():
-    """Root health check -- ollama client checks this on connect."""
+async def root(request: Request):
+    """Serve the built UI to browsers and the Ollama health check otherwise."""
+    ui_index = _UI_DIST / "index.html"
+    if "text/html" in request.headers.get("accept", "") and ui_index.is_file():
+        return FileResponse(str(ui_index), media_type="text/html")
     return "Ollama is running"
 
 
