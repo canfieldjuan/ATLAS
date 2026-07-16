@@ -27,6 +27,16 @@ def _read_migration(filename: str) -> str:
     return (_MIG_DIR / filename).read_text(encoding="utf-8")
 
 
+def _router_routes(router):
+    """Yield terminal routes across FastAPI's eager and lazy include forms."""
+    for route in router.routes:
+        included_router = getattr(route, "original_router", None)
+        if included_router is not None:
+            yield from _router_routes(included_router)
+            continue
+        yield route
+
+
 # ---- Migration ----------------------------------------------------------
 
 
@@ -300,7 +310,9 @@ def test_byok_router_registered_in_aggregator():
     import sys
     sys.modules.pop("atlas_brain.api", None)
     api_pkg = importlib.import_module("atlas_brain.api")
-    paths = {getattr(route, "path", "") for route in api_pkg.router.routes}
+    paths = {
+        getattr(route, "path", "") for route in _router_routes(api_pkg.router)
+    }
     assert any(p.startswith("/byok-keys") for p in paths)
 
 

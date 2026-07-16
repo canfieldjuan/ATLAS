@@ -971,28 +971,10 @@ async def security_txt():
     return PlainTextResponse(_security_txt_body(), media_type="text/plain")
 
 
-# Serve the web UI production build (atlas-ui/dist) as static files.
-# Root "/" uses content negotiation: browsers get the UI, API clients get
-# the Ollama health-check response. Static assets mounted at /.
+# Serve the web UI production build (atlas-ui/dist) as static files. The
+# Ollama root route owns browser/UI content negotiation before this mount.
 _ui_dist = Path(__file__).parent.parent / "atlas-ui" / "dist"
 if _ui_dist.is_dir():
     from starlette.staticfiles import StaticFiles
-
-    # Override the Ollama compat GET / with a content-negotiating handler.
-    # Browsers (Accept: text/html) get the UI; everything else gets "Ollama is running".
-    _ui_index = _ui_dist / "index.html"
-
-    # Remove the Ollama root route and replace with content-negotiating version
-    app.routes[:] = [r for r in app.routes if not (hasattr(r, 'path') and r.path == '/' and hasattr(r, 'methods') and 'GET' in (r.methods or set()))]
-
-    from starlette.responses import FileResponse
-    from fastapi import Request
-
-    @app.get("/", include_in_schema=False)
-    async def root_with_ui(request: Request):
-        accept = request.headers.get("accept", "")
-        if "text/html" in accept:
-            return FileResponse(str(_ui_index), media_type="text/html")
-        return PlainTextResponse("Ollama is running")
 
     app.mount("/", StaticFiles(directory=str(_ui_dist)), name="ui")
