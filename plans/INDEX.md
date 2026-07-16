@@ -1,6 +1,6 @@
 # Plan archive index
 
-1401 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1405 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -968,6 +968,7 @@
 - [PR-Demand-Opportunity-Report](archive/PR-Demand-Opportunity-Report.md)
 - [PR-Dependabot-Body-Contract-Exemption](archive/PR-Dependabot-Body-Contract-Exemption.md) - lane: dependency-maintenance/pr-body-contract | phase: Workflow/process
 - [PR-Dependabot-Package-Maintenance-Wave](archive/PR-Dependabot-Package-Maintenance-Wave.md) - lane: dependency-maintenance | phase: Workflow/process
+- [PR-Dependabot-Python-Compatibility](archive/PR-Dependabot-Python-Compatibility.md) - lane: dependency/dependabot | phase: Production hardening
 - [PR-Describe-Control-Surfaces-Cache](archive/PR-Describe-Control-Surfaces-Cache.md)
 - [PR-Dev-Workflow-Helpers-Docs](archive/PR-Dev-Workflow-Helpers-Docs.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
 - [PR-Dev-Workflow-Open-PR-Stdin-Wrapper](archive/PR-Dev-Workflow-Open-PR-Stdin-Wrapper.md) - lane: dev-workflow/pr-friction | phase: Workflow/process
@@ -1237,6 +1238,7 @@
 - [PR-Orphan-Detector-Question-Stacked](archive/PR-Orphan-Detector-Question-Stacked.md) - lane: `content-ops/blog-orphan-detector`
 - [PR-PR-Body-Contract-Gate](archive/PR-PR-Body-Contract-Gate.md) - lane: pr-workflow-tooling | phase: Production hardening
 - [PR-Plan-Admission-Contract](archive/PR-Plan-Admission-Contract.md) - lane: dev-workflow/plan-admission | phase: Workflow/process
+- [PR-Plan-Admission-PreAdmission](archive/PR-Plan-Admission-PreAdmission.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
 - [PR-Plans-Archive-Tooling](archive/PR-Plans-Archive-Tooling.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Plans-Check-Wiring](archive/PR-Plans-Check-Wiring.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Post-575-Extraction-State-Closeout](archive/PR-Post-575-Extraction-State-Closeout.md)
@@ -1332,7 +1334,9 @@
 - [PR-Semantic-Diff-Advisor-CI](archive/PR-Semantic-Diff-Advisor-CI.md) - lane: review-workflow | phase: workflow/process
 - [PR-Session-Bootstrap-Temporal-Discipline](archive/PR-Session-Bootstrap-Temporal-Discipline.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-Session-Lane-Admission](archive/PR-Session-Lane-Admission.md) - lane: dev-workflow/session-lane-admission | phase: Workflow/process
+- [PR-Session-Lane-Fence-Leak](archive/PR-Session-Lane-Fence-Leak.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
 - [PR-Session-Lane-PreAdmission](archive/PR-Session-Lane-PreAdmission.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
+- [PR-Session-Lane-Producer](archive/PR-Session-Lane-Producer.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
 - [PR-Spark-Routing-Light-Enforcement](archive/PR-Spark-Routing-Light-Enforcement.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Spark-Subagent-Routing-Docs](archive/PR-Spark-Subagent-Routing-Docs.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Stale-Base-Push-Guard](archive/PR-Stale-Base-Push-Guard.md) - lane: workflow/process | phase: Workflow/process
