@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # This contract is a fail-closed security boundary for UNTRUSTED worker output
 # (not a trusted-artifact iteration contract), so it is strict: no unmodeled
@@ -94,19 +94,43 @@ class FollowUpDraftResult(BaseModel):
     # comes from resolve_approval() with server-side state.
     approval_state: Optional[str] = None
 
+    # Normalize-and-store canonical values, so the validator GUARANTEES canonical
+    # output downstream (not merely accepts a padded/mixed-case value and keeps the
+    # raw one). strings are stripped; approval is also case-folded.
+    @field_validator("error_code", "customer_id", "draft_id", mode="before")
+    @classmethod
+    def _strip_str(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("approval_state", mode="before")
+    @classmethod
+    def _normalize_approval(cls, value: Any) -> Any:
+        return _norm(value) if isinstance(value, str) else value
+
+    # Reject a non-integer schema_version before the Literal check, since
+    # Literal[1] would otherwise admit True or 1.0 by equality.
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def _require_int_version(cls, value: Any) -> Any:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
     @model_validator(mode="after")
     def _fail_closed(self) -> "FollowUpDraftResult":
         if self.success != (self.status == "drafted"):
             raise ValueError("success must be true iff status == 'drafted'")
 
         if self.status == "drafted":
-            if not (self.customer_id or "").strip() or not (self.draft_id or "").strip():
+            if not self.customer_id or not self.draft_id:
                 raise ValueError("a drafted result requires non-blank customer_id and draft_id")
             if self.error_code is not None:
                 raise ValueError("a drafted result carries no error_code")
+            if self.failed_stage is not None:
+                raise ValueError("a drafted result may not carry a failed_stage")
         else:
             expected = STATUS_ERROR_CODE[self.status]
-            if (self.error_code or "").strip() != expected:
+            if self.error_code != expected:  # exact canonical (already stripped)
                 raise ValueError(
                     f"status {self.status!r} requires canonical error_code {expected!r}"
                 )
@@ -114,15 +138,15 @@ class FollowUpDraftResult(BaseModel):
                 raise ValueError(f"status {self.status!r} requires a failed_stage")
 
         # The worker may not emit "approved" (any case/whitespace); approval is
-        # server-owned. Any other value must be a known benign state.
+        # server-owned. Any other value must be a known benign state. approval_state
+        # is already normalized (stripped + case-folded) by the field validator.
         if self.approval_state is not None:
-            norm = _norm(self.approval_state)
-            if norm == "approved":
+            if self.approval_state == "approved":
                 raise ValueError(
                     "INVALID_APPROVAL_STATE: the worker may not emit approval_state "
                     "'approved'; approval is server-owned"
                 )
-            if norm not in _ALLOWED_APPROVAL:
+            if self.approval_state not in _ALLOWED_APPROVAL:
                 raise ValueError(f"unknown approval_state: {self.approval_state!r}")
 
         # Closed allowlist: any action outside PERMITTED_ACTIONS (any send variant)

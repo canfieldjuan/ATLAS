@@ -208,3 +208,27 @@ def test_attribute_name_only_schema_key_rejected():
 def test_success_must_be_a_real_boolean(bad):
     with pytest.raises(ValidationError):
         validate_followup_draft({**DRAFTED, "success": bad})
+
+
+# --- canonical-stored values + remaining strictness (Codex round 3) ---
+
+
+def test_padded_error_code_is_stored_canonical():
+    r = validate_followup_draft(_failure("no_results", error_code="  NO_RESULTS  "))
+    assert r.error_code == "NO_RESULTS"  # normalized, not the padded raw value
+
+
+def test_padded_approval_is_stored_canonical():
+    r = validate_followup_draft({**DRAFTED, "approval_state": "  Pending  "})
+    assert r.approval_state == "pending"
+
+
+@pytest.mark.parametrize("bad", [True, 1.0, "1"])
+def test_schema_version_must_be_a_real_integer(bad):
+    with pytest.raises(ValidationError):
+        validate_followup_draft({**DRAFTED, "schema_version": bad})
+
+
+def test_drafted_may_not_carry_failed_stage():
+    with pytest.raises(ValidationError):
+        validate_followup_draft({**DRAFTED, "failed_stage": "lookup"})
