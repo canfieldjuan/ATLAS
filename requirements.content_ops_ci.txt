@@ -23,6 +23,7 @@ tzlocal==5.4.4
 
 # MCP, auth, billing, and document/report rendering surfaces.
 mcp==1.28.1
+jsonschema==4.26.0
 bcrypt==5.0.0
 PyJWT==2.13.0
 cryptography==49.0.0

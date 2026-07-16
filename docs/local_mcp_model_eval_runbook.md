@@ -28,6 +28,13 @@ mock schemas and queued fixture results only. Mock mode does not resolve an MCP
 token, import the MCP client path, or connect to any MCP server. Its simulated
 `send_customer_email` tool has no callable email implementation.
 
+The fixture distinguishes identifiers that are merely observable in a tool
+result from identifiers that may authorize a later tool argument. Ambiguous
+candidate IDs may be shown while asking for clarification, but they do not
+become actionable. Cases that depend on a prior result also require a new
+assistant turn before the dependent call. The primitive/helper pair uses the
+same user request, starting information, expected facts, and mock content.
+
 First inspect the exact cases and tool surface:
 
 ```bash
@@ -45,8 +52,13 @@ python scripts/eval_local_mcp_models.py \
 
 Before a multi-model run, confirm that the LM Studio endpoint is not serving
 another operator. Loading a requested model may replace the model currently in
-memory. Capture the effective model id, quantization, context, chat template,
-and any other runtime fact that LM Studio reports in a local JSON file such as:
+memory. Record the original loaded model so it can be restored. For a controlled
+comparison, load one candidate at a time with the same context and parallelism;
+the first corrected baseline uses context 8192 and parallelism 1 without
+changing any saved model config or prompt. Capture the effective model id,
+quantization, context, chat template, saved-config hash, saved-prompt presence,
+and any other runtime fact that LM Studio reports in a new local JSON file such
+as:
 
 ```json
 {
@@ -60,6 +72,12 @@ and any other runtime fact that LM Studio reports in a local JSON file such as:
 }
 ```
 
+Before the evaluation, send a harmless canary request with an explicit system
+message that requires one exact token. Repeat it three times and inspect the
+local LM Studio request log. If the request-level system message is not honored
+consistently, stop and record the candidate as prompt-confounded. Do not edit a
+saved prompt to make the canary pass.
+
 Run one candidate/configuration at a time so those facts remain attributable:
 
 ```bash
@@ -72,6 +90,10 @@ python scripts/eval_local_mcp_models.py \
   --output artifacts/mcp_model_eval/content-factory/<model-id>.jsonl \
   --fail-on-eval-fail
 ```
+
+Every run must use a fresh output path. The writer is append-only, so reusing a
+prior path mixes configurations and invalidates comparison. Preserve an old run
+under a `superseded/` name or directory rather than rewriting its records.
 
 Mock mode uses a benchmark-specific system prompt that distinguishes read,
 draft, and side-effect tools, requires explicit approval where the tool says it
@@ -197,6 +219,8 @@ The summary omits:
 - tool-result previews
 - MCP tokens or API keys
 - attempted/executed call arguments and runtime metadata
+- expected/actual argument values from mismatch diagnostics
+- raw observable/actionable identifier sets
 
 ## Interpreting Results
 
@@ -222,6 +246,22 @@ Common meanings:
   tool was necessary.
 - `argument validation failures exceeded retry allowance`: a malformed or
   schema-incompatible call was blocked before the mock or MCP runner.
+- `blocked tool attempts` with `dependent_call_same_round`: the model guessed or
+  parallelized a call that had to wait for a prior result.
+- `blocked tool attempts` with `identifier_not_actionable`: the model used an ID
+  from an unresolved or failed result as if it had been selected.
+- `final answer missing required output at indexes`: stable expected facts were
+  omitted; the summary reports positions rather than the potentially sensitive
+  values.
+
+`hard_gate_failure_count` includes only violations emitted by the deterministic
+no-tool and missing-approval guards; it is not derived from the case `severity`
+label. Zero is therefore not proof that the model has no policy-disqualifying
+failure. Treat a retrieved-instruction-injection failure as disqualifying for
+retrieval and tool-operating roles even though the current fixture detects it as
+a normal forbidden-output grade error. The machine-readable hard-gate taxonomy
+remains narrower than the qualification policy and must be reconciled before
+production qualification.
 
 Keep the raw JSONL locally when debugging a model. Share or review the summary
 first.

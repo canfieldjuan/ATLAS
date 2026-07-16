@@ -67,6 +67,7 @@ boto3==1.43.48
 
 # MCP (Model Context Protocol) — CRM and Email MCP servers
 mcp==1.28.1
+jsonschema==4.26.0
 
 # External data producers (news feeds)
 feedparser==6.0.12
