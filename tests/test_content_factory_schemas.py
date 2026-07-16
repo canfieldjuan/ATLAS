@@ -176,6 +176,16 @@ def test_missing_schema_tag_rejected():
         ContentBrief.model_validate({"project_id": "resolution-audit", "request_raw": "x"})
 
 
+def test_attribute_name_only_tag_rejected():
+    # The canonical "schema" key is the sole admission rule: supplying the tag
+    # only under the attribute name "artifact_schema" must fail, since that raw
+    # dict could not be dispatched by model_for() (which reads "schema").
+    with pytest.raises(ValidationError):
+        ContentBrief.model_validate(
+            {"artifact_schema": "content_brief.v1", "project_id": "p", "request_raw": "x"}
+        )
+
+
 def test_audit_promote_without_verification_rejected():
     with pytest.raises(ValidationError):
         EditorialAudit.model_validate(

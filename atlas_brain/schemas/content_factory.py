@@ -21,11 +21,14 @@ pipeline is still iterating; flip to ``extra='forbid'`` in a later slice once th
 shapes are stable.
 
 The artifact's type tag is stored under the JSON key ``"schema"`` via an alias
-(the attribute is ``artifact_schema`` to avoid shadowing ``BaseModel.schema``);
-``populate_by_name=True`` accepts either name on input. The tag is **required**
-on the five top-level artifacts -- this contract is the version boundary, so an
-artifact that omits its version/type tag must fail rather than be silently tagged
-on dump.
+(the attribute is ``artifact_schema`` to avoid shadowing ``BaseModel.schema``).
+The canonical ``"schema"`` key is the sole admission rule: raw input is accepted
+only under ``"schema"`` (not the attribute name), and ``serialize_by_alias``
+emits ``"schema"`` on dump, so a raw artifact always round-trips through
+``model_for()``. The tag is **required** on the five top-level artifacts -- this
+contract is the version boundary, so an artifact that omits its version/type tag,
+or supplies it only under the attribute name, must fail rather than be silently
+accepted or tagged on dump.
 
 Three load-bearing invariants are enforced here, not merely documented:
   - an evidence row is inadmissible without a non-blank ``quote`` and
@@ -47,14 +50,15 @@ from typing import Annotated, Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
-# serialize_by_alias so the default model_dump()/model_dump_json() emit the
-# canonical "schema" key (not the "artifact_schema" attribute name). This keeps
-# the version boundary intact by default: an artifact dumped without by_alias=True
-# still round-trips through model_for(), so the Phase 2.2 writer and Phase 4.2
-# filter cannot disagree on the key.
-_BASE_CONFIG = ConfigDict(
-    extra="allow", populate_by_name=True, serialize_by_alias=True
-)
+# The canonical "schema" key is the SOLE admission rule for the version tag,
+# in both directions:
+#   - no populate_by_name, so a raw artifact is accepted only under "schema"
+#     (the "artifact_schema" attribute name is not a valid raw input key); and
+#   - serialize_by_alias, so the default model_dump()/model_dump_json() emit
+#     "schema" too (not "artifact_schema").
+# One key both ways means a raw artifact always round-trips through model_for(),
+# and the Phase 2.2 writer and Phase 4.2 filter cannot disagree on the key.
+_BASE_CONFIG = ConfigDict(extra="allow", serialize_by_alias=True)
 
 # A string that must carry real content: whitespace is stripped, then a
 # non-empty result is required. Used for citation fields whose blankness would
