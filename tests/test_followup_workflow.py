@@ -232,3 +232,29 @@ def test_schema_version_must_be_a_real_integer(bad):
 def test_drafted_may_not_carry_failed_stage():
     with pytest.raises(ValidationError):
         validate_followup_draft({**DRAFTED, "failed_stage": "lookup"})
+
+
+# --- canonical actions + stage ordering (Codex round 4) ---
+
+
+def test_permitted_actions_stored_canonical():
+    r = validate_followup_draft({**DRAFTED, "next_permitted_actions": ["  REQUEST_APPROVAL  ", "Revise"]})
+    assert r.next_permitted_actions == ["request_approval", "revise"]
+
+
+def test_stages_completed_after_failed_stage_rejected():
+    with pytest.raises(ValidationError):
+        validate_followup_draft(
+            _failure("permission_denied", failed_stage="lookup", stages_completed=["lookup", "select"])
+        )
+    with pytest.raises(ValidationError):  # a later stage after the failed one
+        validate_followup_draft(
+            _failure("partial", failed_stage="select", stages_completed=["lookup", "compose"])
+        )
+
+
+def test_stages_completed_before_failed_stage_allowed():
+    r = validate_followup_draft(
+        _failure("partial", failed_stage="compose", stages_completed=["lookup", "select"])
+    )
+    assert r.stages_completed == ["lookup", "select"]

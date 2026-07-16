@@ -45,7 +45,10 @@ Status = Literal[
     "invalid",
 ]
 
-# Closed set of workflow stages (stages_completed / failed_stage).
+# Closed, ORDERED set of workflow stages (stages_completed / failed_stage). The
+# order matters: a failure at stage N means stages before N completed and N and
+# later did not.
+STAGE_ORDER: tuple[str, ...] = ("lookup", "select", "compose", "approval")
 Stage = Literal["lookup", "select", "compose", "approval"]
 
 # Canonical machine error code for each failure status. The tool/server emits
@@ -107,6 +110,13 @@ class FollowUpDraftResult(BaseModel):
     def _normalize_approval(cls, value: Any) -> Any:
         return _norm(value) if isinstance(value, str) else value
 
+    @field_validator("next_permitted_actions", mode="before")
+    @classmethod
+    def _normalize_actions(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [_norm(item) if isinstance(item, str) else item for item in value]
+        return value
+
     # Reject a non-integer schema_version before the Literal check, since
     # Literal[1] would otherwise admit True or 1.0 by equality.
     @field_validator("schema_version", mode="before")
@@ -136,6 +146,14 @@ class FollowUpDraftResult(BaseModel):
                 )
             if self.failed_stage is None:
                 raise ValueError(f"status {self.status!r} requires a failed_stage")
+            # Stages at or after the failed stage cannot have completed.
+            fail_index = STAGE_ORDER.index(self.failed_stage)
+            for stage in self.stages_completed:
+                if STAGE_ORDER.index(stage) >= fail_index:
+                    raise ValueError(
+                        f"stages_completed may not include {stage!r} at or after "
+                        f"failed_stage {self.failed_stage!r}"
+                    )
 
         # The worker may not emit "approved" (any case/whitespace); approval is
         # server-owned. Any other value must be a known benign state. approval_state
@@ -151,8 +169,8 @@ class FollowUpDraftResult(BaseModel):
 
         # Closed allowlist: any action outside PERMITTED_ACTIONS (any send variant)
         # fails closed.
-        for action in self.next_permitted_actions:
-            if _norm(action) not in PERMITTED_ACTIONS:
+        for action in self.next_permitted_actions:  # already normalized above
+            if action not in PERMITTED_ACTIONS:
                 raise ValueError(f"action {action!r} is not a permitted draft-only action")
         return self
 
