@@ -111,10 +111,10 @@ defaults to `pending`.
 
 | File | Lines |
 |---|---|
-| atlas_brain/schemas/content_factory.py | 230 |
-| tests/test_content_factory_schemas.py | 211 |
-| plans/PR-Content-Factory-Contracts.md | 120 |
-| **Total** | **561** |
+| atlas_brain/schemas/content_factory.py | 237 |
+| tests/test_content_factory_schemas.py | 230 |
+| plans/PR-Content-Factory-Contracts.md | 123 |
+| **Total** | **590** |
 
 Over the 400-LOC soft cap (the overage is carried by the `Diff-budget override:`
 line in the PR body). The diff is entirely declarative schema + tests + plan --

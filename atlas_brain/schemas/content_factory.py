@@ -47,7 +47,14 @@ from typing import Annotated, Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
-_BASE_CONFIG = ConfigDict(extra="allow", populate_by_name=True)
+# serialize_by_alias so the default model_dump()/model_dump_json() emit the
+# canonical "schema" key (not the "artifact_schema" attribute name). This keeps
+# the version boundary intact by default: an artifact dumped without by_alias=True
+# still round-trips through model_for(), so the Phase 2.2 writer and Phase 4.2
+# filter cannot disagree on the key.
+_BASE_CONFIG = ConfigDict(
+    extra="allow", populate_by_name=True, serialize_by_alias=True
+)
 
 # A string that must carry real content: whitespace is stripped, then a
 # non-empty result is required. Used for citation fields whose blankness would

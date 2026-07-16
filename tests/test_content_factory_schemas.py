@@ -209,3 +209,22 @@ def test_audit_promote_with_passing_verdict_accepted():
         }
     )
     assert audit.recommendation == "promote"
+
+
+def test_default_dump_uses_canonical_schema_key():
+    # Default model_dump() (no by_alias) emits the "schema" key, so model_for
+    # round-trips without callers remembering by_alias=True (version boundary).
+    brief = ContentBrief.model_validate(BRIEF)
+    dumped = brief.model_dump()
+    assert dumped["schema"] == "content_brief.v1"
+    assert "artifact_schema" not in dumped
+    assert model_for(dumped) is ContentBrief
+
+
+def test_model_dump_json_uses_canonical_schema_key():
+    import json
+
+    draft = DraftArtifact.model_validate(DRAFT)
+    reparsed = json.loads(draft.model_dump_json())
+    assert reparsed["schema"] == "draft.v1"
+    assert model_for(reparsed) is DraftArtifact
