@@ -410,6 +410,36 @@ def test_converted_meta_gates_pull_request_target_is_allowed(tmp_path: Path) -> 
         assert any("allowed pull_request_target" in f.detail for f in findings)
 
 
+def test_review_contract_preadmission_requires_canonical_workflow(tmp_path: Path) -> None:
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "review_contract.yml",
+        auditor.REVIEW_CONTRACT_CANONICAL_WORKFLOW,
+    )
+
+    findings = auditor.audit_workflow(workflow)
+
+    assert not [f for f in findings if f.level == "ERROR"], findings
+    assert any("allowed pull_request_target" in f.detail for f in findings)
+
+
+def test_review_contract_preadmission_rejects_noncanonical_workflow(tmp_path: Path) -> None:
+    auditor = load_auditor()
+    workflow_text = auditor.REVIEW_CONTRACT_CANONICAL_WORKFLOW.replace(
+        "  contents: read\n  pull-requests: read",
+        "  contents: write\n  pull-requests: write",
+    ).replace(
+        '          cd "$RUNNER_TEMP/pr-tree"',
+        '          cd "$RUNNER_TEMP/pr-tree"\n          gh pr merge "$PR_NUMBER" --squash',
+    )
+    workflow = _write_workflow(tmp_path, "review_contract.yml", workflow_text)
+
+    findings = auditor.audit_workflow(workflow)
+
+    assert any(f.level == "ERROR" and "pull_request_target" in f.detail for f in findings)
+
+
 def test_allowlisted_gate_without_guard_shape_is_still_error(tmp_path: Path) -> None:
     """Allowlisting is necessary but not sufficient: an allowlisted gate
     that drops the if-guard or the pinned base-SHA checkout fails."""
