@@ -138,6 +138,15 @@ class FollowUpDraftResult(BaseModel):
                 raise ValueError("a drafted result carries no error_code")
             if self.failed_stage is not None:
                 raise ValueError("a drafted result may not carry a failed_stage")
+            # The approval stage is server-owned and runs AFTER the worker's draft.
+            # A drafted result may not claim the approval stage completed -- that is a
+            # worker-controlled machine claim about the server-owned boundary, even
+            # though it grants nothing (resolve_approval ignores it). Fail closed.
+            if "approval" in self.stages_completed:
+                raise ValueError(
+                    "a drafted result may not claim the approval stage completed; "
+                    "approval is server-owned"
+                )
         else:
             expected = STATUS_ERROR_CODE[self.status]
             if self.error_code != expected:  # exact canonical (already stripped)
@@ -146,14 +155,18 @@ class FollowUpDraftResult(BaseModel):
                 )
             if self.failed_stage is None:
                 raise ValueError(f"status {self.status!r} requires a failed_stage")
-            # Stages at or after the failed stage cannot have completed.
-            fail_index = STAGE_ORDER.index(self.failed_stage)
-            for stage in self.stages_completed:
-                if STAGE_ORDER.index(stage) >= fail_index:
-                    raise ValueError(
-                        f"stages_completed may not include {stage!r} at or after "
-                        f"failed_stage {self.failed_stage!r}"
-                    )
+            # A failure at stage N means exactly stages 0..N-1 completed, in order
+            # (linear workflow). stages_completed must be that exact ordered prefix,
+            # so a missing, reordered, duplicated, or at/after entry all fail closed
+            # -- same fail-closed treatment as the canonical error_code above, rather
+            # than merely rejecting stages at/after the failure.
+            expected_prefix = list(STAGE_ORDER[: STAGE_ORDER.index(self.failed_stage)])
+            if self.stages_completed != expected_prefix:
+                raise ValueError(
+                    f"stages_completed must be the ordered pre-failure prefix "
+                    f"{expected_prefix!r} for failed_stage {self.failed_stage!r}, "
+                    f"got {self.stages_completed!r}"
+                )
 
         # The worker may not emit "approved" (any case/whitespace); approval is
         # server-owned. Any other value must be a known benign state. approval_state

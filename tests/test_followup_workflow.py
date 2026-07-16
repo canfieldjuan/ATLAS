@@ -172,7 +172,9 @@ def test_resolve_approval_is_server_owned():
 
 
 def test_resolve_approval_never_approves_non_drafted():
-    r = validate_followup_draft(_failure("partial", failed_stage="compose"))
+    r = validate_followup_draft(
+        _failure("partial", failed_stage="compose", stages_completed=["lookup", "select"])
+    )
     assert resolve_approval(r, server_approved=True) is False
 
 
@@ -258,3 +260,46 @@ def test_stages_completed_before_failed_stage_allowed():
         _failure("partial", failed_stage="compose", stages_completed=["lookup", "select"])
     )
     assert r.stages_completed == ["lookup", "select"]
+
+
+# --- exact pre-failure prefix + drafted approval-stage claim (#2129) ---
+
+
+def test_failure_stages_must_be_exact_ordered_prefix():
+    # missing an earlier stage (compose failure with only "select")
+    with pytest.raises(ValidationError):
+        validate_followup_draft(
+            _failure("partial", failed_stage="compose", stages_completed=["select"])
+        )
+    # reordered
+    with pytest.raises(ValidationError):
+        validate_followup_draft(
+            _failure("partial", failed_stage="compose", stages_completed=["select", "lookup"])
+        )
+    # duplicated
+    with pytest.raises(ValidationError):
+        validate_followup_draft(
+            _failure("partial", failed_stage="compose", stages_completed=["lookup", "lookup"])
+        )
+
+
+def test_failure_at_first_stage_requires_empty_prefix():
+    validate_followup_draft(_failure("no_results", failed_stage="lookup", stages_completed=[]))
+    with pytest.raises(ValidationError):  # nothing can precede the first stage
+        validate_followup_draft(
+            _failure("no_results", failed_stage="lookup", stages_completed=["lookup"])
+        )
+
+
+def test_drafted_may_not_claim_approval_stage():
+    with pytest.raises(ValidationError):
+        validate_followup_draft(
+            {**DRAFTED, "stages_completed": ["lookup", "select", "compose", "approval"]}
+        )
+
+
+def test_drafted_may_report_preapproval_stages():
+    r = validate_followup_draft(
+        {**DRAFTED, "stages_completed": ["lookup", "select", "compose"]}
+    )
+    assert r.stages_completed == ["lookup", "select", "compose"]
