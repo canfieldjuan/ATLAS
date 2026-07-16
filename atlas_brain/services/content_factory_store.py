@@ -115,8 +115,8 @@ def write_artifact(
     job = job_dir(job_id, root=root)
 
     # Canonical form carries the version tag only under "schema"; a reserved
-    # "artifact_schema" key (which extra='allow' would otherwise persist) is
-    # non-canonical and rejected.
+    # "artifact_schema" key is non-canonical and rejected here with a specific
+    # error before validation (the contracts' extra='forbid' would also reject it).
     if "artifact_schema" in artifact:
         raise ArtifactStoreError(
             "non-canonical artifact: reserved 'artifact_schema' key present; "
