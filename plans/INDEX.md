@@ -1335,6 +1335,7 @@
 - [PR-Session-Lane-Admission](archive/PR-Session-Lane-Admission.md) - lane: dev-workflow/session-lane-admission | phase: Workflow/process
 - [PR-Session-Lane-Fence-Leak](archive/PR-Session-Lane-Fence-Leak.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
 - [PR-Session-Lane-PreAdmission](archive/PR-Session-Lane-PreAdmission.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
+- [PR-Session-Lane-Producer](archive/PR-Session-Lane-Producer.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
 - [PR-Spark-Routing-Light-Enforcement](archive/PR-Spark-Routing-Light-Enforcement.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Spark-Subagent-Routing-Docs](archive/PR-Spark-Subagent-Routing-Docs.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Stale-Base-Push-Guard](archive/PR-Stale-Base-Push-Guard.md) - lane: workflow/process | phase: Workflow/process
