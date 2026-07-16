@@ -66,46 +66,43 @@ workflow suppresses the follow-up chain entirely (no event model exists
 that delivers trusted code on review events); the fallback is a scheduled
 trusted sweep, parked in plans/PR-Trusted-Base-Gate-Execution.md.
 
-Branch protection for `main` requires `live-reconciliation`, `diff-budget`
-(the AGENTS.md diff-budget gate), `Gitleaks PR secret scan`, and
-`Gitleaks baseline growth guard`. The
-`Branch Protection Required Checks` workflow audits that live repository
-setting on a weekly/manual cadence and on trusted `main` updates touching the
-branch-protection checker, the security workflows, or security guardrail docs
-when `ATLAS_BRANCH_PROTECTION_READ_TOKEN` is configured with GitHub
-Administration read permission. The audit requires those contexts to be pinned
-to the GitHub Actions app source in branch protection, not only present as
-legacy bare context names.
+The target branch-protection set for #2104 non-Claude process-gate enrollment
+is `live-reconciliation`, `diff-budget` (the AGENTS.md diff-budget gate),
+`Gitleaks PR secret scan`, `Gitleaks baseline growth guard`, `plan-admission`,
+`session-lane`, and `review-contract`. The `Branch Protection Required Checks` workflow
+audits the live repository setting on a weekly/manual cadence and on
+trusted `main` updates touching the branch-protection checker, any audited
+producer workflow, or security guardrail docs when
+`ATLAS_BRANCH_PROTECTION_READ_TOKEN` is configured with GitHub Administration
+read permission. The audit requires those contexts to be pinned to the GitHub
+Actions app source in branch protection, not only present as legacy bare
+context names.
 
 The workflow security posture auditor admits
 `.github/workflows/session_lane.yml` / `session-lane` only when it has the same
 event guard and base-SHA checkout shape as the existing PR meta-gates. The
-workflow is an advisory producer for #2104 burn-in: it checks out trusted base
-code, materializes the PR head as git data, writes the trusted event PR body to
-a temporary file, and runs the base-owned session-drift auditor against that
-data worktree. Branch-protection enrollment remains a separate REST PATCH slice
-after the producer proves stable and the existing required contexts can be
-preserved.
+workflow checks out trusted base code, materializes the PR head as git data,
+writes the trusted event PR body to a temporary file, and runs the base-owned
+session-drift auditor against that data worktree. Live branch-protection
+enrollment remains a separate REST PATCH step that must preserve the existing
+required contexts.
 
 The same auditor admits
 `.github/workflows/plan_admission.yml` / `plan-admission` only under that exact
-guard shape. The workflow is an advisory producer for #2104 burn-in: it checks
-out trusted base code, materializes the PR head as git data, and runs the
-base-owned plan-admission auditor against that data worktree. Branch-protection
-enrollment remains a separate REST PATCH slice after the producer proves stable
-and the existing required contexts can be preserved.
+guard shape. The workflow checks out trusted base code, materializes the PR head
+as git data, and runs the base-owned plan-admission auditor against that data
+worktree. Live branch-protection enrollment remains a separate REST PATCH step
+that must preserve the existing required contexts.
 
-The same auditor pre-admits a future
+The same auditor admits the
 `.github/workflows/review_contract.yml` / `review-contract` trusted-base
 producer only when the whole workflow file matches the canonical normalized YAML
 stored in the base-owned posture auditor. This keeps the pre-admission
 fail-closed without maintaining a per-field predicate ladder: permissions,
 checkout depth, step order, run blocks, and no-plan behavior are admitted or
-rejected as one workflow-shaped unit. The workflow itself lands in a later #2104
-slice after this canonical allowlist is on `main`, for the same trusted-base
-bootstrap reason: base-owned `pre-push-audit` must already know the exact
-workflow shape before it can safely evaluate that new `pull_request_target`
-workflow as PR data.
+rejected as one workflow-shaped unit. The workflow itself is now on `main`; live
+branch-protection enrollment remains a separate REST PATCH step that must
+preserve the existing required contexts.
 
 - Full-history secret scan: Gitleaks checks out the complete branch history
   (`fetch-depth: 0`) so leaked keys in old commits are in scope. The workflow

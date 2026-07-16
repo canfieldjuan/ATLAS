@@ -15,6 +15,9 @@ DEFAULT_REQUIRED_CONTEXTS = (
     "diff-budget",
     "Gitleaks PR secret scan",
     "Gitleaks baseline growth guard",
+    "plan-admission",
+    "session-lane",
+    "review-contract",
 )
 
 

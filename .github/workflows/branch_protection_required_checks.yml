@@ -9,8 +9,13 @@ on:
       - main
     paths:
       - ".github/workflows/branch_protection_required_checks.yml"
+      - ".github/workflows/ai_reconciliation_live.yml"
+      - ".github/workflows/diff_budget.yml"
       - ".github/workflows/gitleaks_baseline_growth_guard.yml"
+      - ".github/workflows/plan_admission.yml"
+      - ".github/workflows/review_contract.yml"
       - ".github/workflows/security_guardrails.yml"
+      - ".github/workflows/session_lane.yml"
       - "docs/SECURITY_GUARDRAILS.md"
       - "scripts/check_required_status_checks.py"
       - "tests/test_security_guardrails_workflow.py"
@@ -46,7 +51,7 @@ jobs:
             "repos/${REPOSITORY}/branches/main/protection/required_status_checks" \
             > /tmp/required-status-checks.json
 
-      - name: Verify required security checks
+      - name: Verify required branch-protection checks
         if: env.BRANCH_PROTECTION_READ_TOKEN != ''
         run: |
           python scripts/check_required_status_checks.py \

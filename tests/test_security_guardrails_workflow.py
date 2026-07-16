@@ -15,6 +15,15 @@ BRANCH_PROTECTION_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "
 PRE_COMMIT_CONFIG = Path(__file__).resolve().parents[1] / ".pre-commit-config.yaml"
 SECURITY_GUARDRAILS_DOC = Path(__file__).resolve().parents[1] / "docs" / "SECURITY_GUARDRAILS.md"
 REQUIRED_STATUS_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_required_status_checks.py"
+EXPECTED_REQUIRED_CONTEXTS = [
+    "live-reconciliation",
+    "diff-budget",
+    "Gitleaks PR secret scan",
+    "Gitleaks baseline growth guard",
+    "plan-admission",
+    "session-lane",
+    "review-contract",
+]
 
 
 def _workflow_text() -> str:
@@ -95,9 +104,8 @@ def test_security_guardrails_docs_explain_gitleaks_pre_commit_install() -> None:
 def test_security_guardrails_docs_name_required_gitleaks_checks() -> None:
     text = SECURITY_GUARDRAILS_DOC.read_text(encoding="utf-8")
 
-    assert "`Gitleaks PR secret scan`" in text
-    assert "`Gitleaks baseline growth guard`" in text
-    assert "`diff-budget`" in text
+    for context in EXPECTED_REQUIRED_CONTEXTS:
+        assert f"`{context}`" in text
     assert "`Branch Protection Required Checks` workflow" in text
 
 
@@ -107,8 +115,13 @@ def test_branch_protection_workflow_audits_live_required_checks() -> None:
     assert "branches/main/protection/required_status_checks" in text
     assert "ATLAS_BRANCH_PROTECTION_READ_TOKEN" in text
     assert "BRANCH_PROTECTION_READ_TOKEN != ''" in text
+    assert ".github/workflows/ai_reconciliation_live.yml" in text
+    assert ".github/workflows/diff_budget.yml" in text
     assert ".github/workflows/gitleaks_baseline_growth_guard.yml" in text
+    assert ".github/workflows/plan_admission.yml" in text
+    assert ".github/workflows/review_contract.yml" in text
     assert ".github/workflows/security_guardrails.yml" in text
+    assert ".github/workflows/session_lane.yml" in text
     assert (
         "if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'"
         in text
@@ -134,10 +147,12 @@ def test_branch_protection_workflow_ref_guard_precedes_admin_read_token() -> Non
 def test_required_status_check_audit_accepts_contexts_and_checks_shapes() -> None:
     checker = _load_required_status_script()
     payload = {
-        "contexts": ["live-reconciliation", "diff-budget"],
+        "contexts": ["live-reconciliation", "diff-budget", "plan-admission"],
         "checks": [
             {"context": "Gitleaks PR secret scan"},
             {"context": "Gitleaks baseline growth guard"},
+            {"context": "session-lane"},
+            {"context": "review-contract"},
         ],
     }
 
@@ -147,42 +162,25 @@ def test_required_status_check_audit_accepts_contexts_and_checks_shapes() -> Non
 def test_required_status_check_audit_accepts_github_actions_source() -> None:
     checker = _load_required_status_script()
     payload = {
-        "contexts": [
-            "live-reconciliation",
-            "diff-budget",
-            "Gitleaks PR secret scan",
-            "Gitleaks baseline growth guard",
-        ],
         "checks": [
-            {"context": "live-reconciliation", "app_id": checker.GITHUB_ACTIONS_APP_ID},
-            {"context": "diff-budget", "app_id": checker.GITHUB_ACTIONS_APP_ID},
-            {"context": "Gitleaks PR secret scan", "app_id": checker.GITHUB_ACTIONS_APP_ID},
-            {"context": "Gitleaks baseline growth guard", "app_id": checker.GITHUB_ACTIONS_APP_ID},
+            {"context": context, "app_id": checker.GITHUB_ACTIONS_APP_ID}
+            for context in EXPECTED_REQUIRED_CONTEXTS
         ],
     }
 
+    assert checker.DEFAULT_REQUIRED_CONTEXTS == tuple(EXPECTED_REQUIRED_CONTEXTS)
     assert checker.required_status_check_failures(payload) == []
 
 
 def test_required_status_check_audit_rejects_legacy_only_contexts() -> None:
     checker = _load_required_status_script()
     payload = {
-        "contexts": [
-            "live-reconciliation",
-            "diff-budget",
-            "Gitleaks PR secret scan",
-            "Gitleaks baseline growth guard",
-        ],
+        "contexts": EXPECTED_REQUIRED_CONTEXTS,
     }
 
     failures = checker.required_status_check_failures(payload)
 
-    assert [failure.context for failure in failures] == [
-        "live-reconciliation",
-        "diff-budget",
-        "Gitleaks PR secret scan",
-        "Gitleaks baseline growth guard",
-    ]
+    assert [failure.context for failure in failures] == EXPECTED_REQUIRED_CONTEXTS
     assert all("expected app_id" in failure.reason for failure in failures)
 
 
@@ -192,22 +190,28 @@ def test_required_status_check_audit_rejects_wrong_check_source() -> None:
         "checks": [
             {"context": "live-reconciliation", "app_id": checker.GITHUB_ACTIONS_APP_ID},
             {"context": "diff-budget", "app_id": checker.GITHUB_ACTIONS_APP_ID},
-            {"context": "Gitleaks PR secret scan", "app_id": -1},
-            {"context": "Gitleaks baseline growth guard", "app_id": None},
+            {"context": "Gitleaks PR secret scan", "app_id": checker.GITHUB_ACTIONS_APP_ID},
+            {
+                "context": "Gitleaks baseline growth guard",
+                "app_id": checker.GITHUB_ACTIONS_APP_ID,
+            },
+            {"context": "plan-admission", "app_id": -1},
+            {"context": "session-lane", "app_id": None},
+            {"context": "review-contract", "app_id": checker.GITHUB_ACTIONS_APP_ID},
         ],
     }
 
     failures = checker.required_status_check_failures(payload)
 
     assert [failure.context for failure in failures] == [
-        "Gitleaks PR secret scan",
-        "Gitleaks baseline growth guard",
+        "plan-admission",
+        "session-lane",
     ]
     assert "found app_id -1" in failures[0].reason
     assert "found legacy/unpinned" in failures[1].reason
 
 
-def test_required_status_check_audit_fails_when_gitleaks_context_missing() -> None:
+def test_required_status_check_audit_fails_when_required_contexts_missing() -> None:
     checker = _load_required_status_script()
     payload = {
         "required_status_checks": {
@@ -219,4 +223,7 @@ def test_required_status_check_audit_fails_when_gitleaks_context_missing() -> No
         "diff-budget",
         "Gitleaks PR secret scan",
         "Gitleaks baseline growth guard",
+        "plan-admission",
+        "session-lane",
+        "review-contract",
     ]
