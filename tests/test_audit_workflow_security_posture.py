@@ -402,6 +402,7 @@ def test_converted_meta_gates_pull_request_target_is_allowed(tmp_path: Path) -> 
         ("pr_body_contract.yml", "pr-body-contract"),
         ("pre_push_audit.yml", "pre-push-audit"),
         ("session_lane.yml", "session-lane"),
+        ("plan_admission.yml", "plan-admission"),
     ):
         workflow = _write_workflow(tmp_path, name, _trusted_gate_workflow(job))
         findings = auditor.audit_workflow(workflow)
