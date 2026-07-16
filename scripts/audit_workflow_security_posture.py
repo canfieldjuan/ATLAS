@@ -28,10 +28,72 @@ ALLOWED_PULL_REQUEST_TARGET_JOBS = frozenset(
         ("pre_push_audit.yml", "pre-push-audit"),
         ("session_lane.yml", "session-lane"),
         ("plan_admission.yml", "plan-admission"),
+        ("review_contract.yml", "review-contract"),
     }
 )
+REVIEW_CONTRACT_PREADMISSION_JOB = ("review_contract.yml", "review-contract")
 ALLOWED_ID_TOKEN_JOB = ("claude.yml", "claude")
 CLAUDE_OWNER_GATE = "github.actor == github.repository_owner"
+REVIEW_CONTRACT_CANONICAL_WORKFLOW = """
+name: Review Contract
+on:
+  pull_request_target:
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  review-contract:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+      - name: Materialize PR head as data
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \\
+            "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" \\
+            "pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}"
+          git worktree add "$RUNNER_TEMP/pr-tree" "refs/remotes/origin/pr-${PR_NUMBER}"
+          git -C "$RUNNER_TEMP/pr-tree" symbolic-ref "refs/remotes/origin/HEAD" "refs/remotes/origin/${BASE_REF}" || true
+      - name: Audit Review Contract
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          cd "$RUNNER_TEMP/pr-tree"
+          PLAN_DOC=$(
+            git diff --name-only --diff-filter=A "origin/${BASE_REF}...HEAD" -- "plans/PR-*.md" | sed -n "1,2p"
+          )
+          PLAN_DOC_COUNT=$(printf "%s\\n" "$PLAN_DOC" | sed "/^$/d" | wc -l | tr -d " ")
+          if [ "$PLAN_DOC_COUNT" = "0" ]; then
+            ATLAS_AUDIT_REPO_ROOT="$RUNNER_TEMP/pr-tree" \\
+              python "$GITHUB_WORKSPACE/scripts/audit_review_rules_triggered.py" \\
+              "origin/${BASE_REF}" \\
+              --reviewer-rules "$GITHUB_WORKSPACE/docs/REVIEWER_RULES.md"
+            exit 0
+          fi
+          if [ "$PLAN_DOC_COUNT" != "1" ]; then
+            echo "expected exactly one branch-added plan doc, found ${PLAN_DOC_COUNT}" >&2
+            printf "%s\\n" "$PLAN_DOC" >&2
+            exit 1
+          fi
+          python "$GITHUB_WORKSPACE/scripts/audit_plan_doc.py" "$PLAN_DOC"
+          ATLAS_AUDIT_REPO_ROOT="$RUNNER_TEMP/pr-tree" \\
+            python "$GITHUB_WORKSPACE/scripts/audit_review_rules_triggered.py" \\
+            "origin/${BASE_REF}" \\
+            --plan "$PLAN_DOC" \\
+            --reviewer-rules "$GITHUB_WORKSPACE/docs/REVIEWER_RULES.md"
+"""
 
 
 @dataclass(frozen=True)
@@ -82,6 +144,16 @@ def _permissions_write_oidc(permissions: Any) -> bool:
     return isinstance(permissions, dict) and permissions.get("id-token") == "write"
 
 
+def _normalized_workflow_text(text: str) -> str:
+    return "\n".join(line.rstrip() for line in text.strip().splitlines())
+
+
+def _review_contract_workflow_text_is_allowed(workflow_text: str) -> bool:
+    return _normalized_workflow_text(workflow_text) == _normalized_workflow_text(
+        REVIEW_CONTRACT_CANONICAL_WORKFLOW
+    )
+
+
 def _job_runs_on_pull_request_target(job: dict[str, Any]) -> bool:
     condition = job.get("if")
     if not isinstance(condition, str):
@@ -95,9 +167,16 @@ def _job_runs_on_pull_request_target(job: dict[str, Any]) -> bool:
     return "pull_request_target" not in condition
 
 
-def _is_allowed_pull_request_target_job(path: Path, job_name: str, job: dict[str, Any]) -> bool:
+def _is_allowed_pull_request_target_job(
+    path: Path,
+    job_name: str,
+    job: dict[str, Any],
+    workflow_text: str,
+) -> bool:
     if (path.name, job_name) not in ALLOWED_PULL_REQUEST_TARGET_JOBS:
         return False
+    if (path.name, job_name) == REVIEW_CONTRACT_PREADMISSION_JOB:
+        return _review_contract_workflow_text_is_allowed(workflow_text)
     if job.get("if") != "github.event_name == 'pull_request_target'":
         return False
     steps = _iter_steps(job)
@@ -108,7 +187,9 @@ def _is_allowed_pull_request_target_job(path: Path, job_name: str, job: dict[str
     if checkout_ref is None or checkout_ref[0] != "actions/checkout" or not PINNED_REF_RE.fullmatch(checkout_ref[1]):
         return False
     with_block = checkout.get("with")
-    return isinstance(with_block, dict) and with_block.get("ref") == "${{ github.event.pull_request.base.sha }}"
+    if not (isinstance(with_block, dict) and with_block.get("ref") == "${{ github.event.pull_request.base.sha }}"):
+        return False
+    return True
 
 
 def _is_allowed_oidc_job(path: Path, job_name: str, job: dict[str, Any]) -> bool:
@@ -137,7 +218,8 @@ def _iter_container_images(job: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def audit_workflow(path: Path) -> list[Finding]:
-    workflow = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    workflow_text = path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text) or {}
     if not isinstance(workflow, dict):
         return [Finding("ERROR", str(path), "workflow root is not a mapping")]
 
@@ -150,7 +232,7 @@ def audit_workflow(path: Path) -> list[Finding]:
 
     for job_name, job in _iter_jobs(workflow):
         if "pull_request_target" in events and _job_runs_on_pull_request_target(job):
-            if _is_allowed_pull_request_target_job(path, job_name, job):
+            if _is_allowed_pull_request_target_job(path, job_name, job, workflow_text):
                 findings.append(Finding("WARN", str(path), f"job {job_name} allowed pull_request_target: trusted-base checkout guard"))
             else:
                 findings.append(Finding("ERROR", str(path), f"job {job_name} can run on pull_request_target without the approved trusted-base guard shape"))

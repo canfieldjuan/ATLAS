@@ -1,6 +1,6 @@
 # Plan archive index
 
-1405 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1406 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1239,6 +1239,7 @@
 - [PR-PR-Body-Contract-Gate](archive/PR-PR-Body-Contract-Gate.md) - lane: pr-workflow-tooling | phase: Production hardening
 - [PR-Plan-Admission-Contract](archive/PR-Plan-Admission-Contract.md) - lane: dev-workflow/plan-admission | phase: Workflow/process
 - [PR-Plan-Admission-PreAdmission](archive/PR-Plan-Admission-PreAdmission.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
+- [PR-Plan-Admission-Producer](archive/PR-Plan-Admission-Producer.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
 - [PR-Plans-Archive-Tooling](archive/PR-Plans-Archive-Tooling.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Plans-Check-Wiring](archive/PR-Plans-Check-Wiring.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Post-575-Extraction-State-Closeout](archive/PR-Post-575-Extraction-State-Closeout.md)
