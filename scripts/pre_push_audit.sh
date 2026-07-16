@@ -5,6 +5,7 @@ set -euo pipefail
 
 repo_root=""
 script_root=""
+current_pr_author="${ATLAS_CURRENT_PR_AUTHOR:-}"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -24,13 +25,24 @@ while [ "$#" -gt 0 ]; do
             script_root="$2"
             shift 2
             ;;
+        --pr-author)
+            if [ "$#" -lt 2 ]; then
+                echo "pre_push_audit.sh: --pr-author requires a GitHub login" >&2
+                exit 2
+            fi
+            current_pr_author="$2"
+            shift 2
+            ;;
         --help|-h)
             cat <<'EOF'
-Usage: bash scripts/pre_push_audit.sh [--repo-root PATH] [--script-root PATH]
+Usage: bash scripts/pre_push_audit.sh [--repo-root PATH] [--script-root PATH] [--pr-author LOGIN]
 
 Run mechanical audit checks before opening or updating a PR. By default, both
 roots are the current checkout. Trusted CI can execute scripts from
 --script-root while inspecting --repo-root as data.
+
+Pass --pr-author (or ATLAS_CURRENT_PR_AUTHOR) in trusted CI so the plan
+admission policy preserves the explicit Dependabot exemption.
 EOF
             exit 0
             ;;
@@ -101,6 +113,11 @@ run_check "MCP tool-name inventories" python "$script_root/scripts/audit_mcp_too
 run_check "Extracted manifest sync" python "$script_root/scripts/audit_extracted_manifests.py"
 run_check "UI test:* CI enrollment" python "$script_root/scripts/audit_ui_test_enrollment.py"
 run_check "PR watcher safety" python "$script_root/scripts/audit_pr_watcher_safety.py" --repo-root "$repo_root"
+plan_admission_args=("$script_root/scripts/audit_pr_plan_presence.py" "$base_ref")
+if [ -n "$current_pr_author" ]; then
+    plan_admission_args+=(--pr-author "$current_pr_author")
+fi
+run_check "Plan admission" python "${plan_admission_args[@]}"
 
 committed=$(
     git diff --name-only --diff-filter=AM "$base"...HEAD -- 'plans/PR-*.md' 2>/dev/null || true

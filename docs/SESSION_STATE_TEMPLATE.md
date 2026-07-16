@@ -19,7 +19,7 @@ conflicts with this file, stop and ask the operator instead of guessing.
 
 Last updated: YYYY-MM-DD HH:MM TZ
 Session role: builder
-Operator-assigned lane: <one sentence>
+Current lane: <one sentence>
 Current task: <one sentence>
 Spark/subagent routing: used <what/why> | considered <why main/direct was better> | not applicable
 Builder surface: Claude Code native | Codex/local CLI | other <name>

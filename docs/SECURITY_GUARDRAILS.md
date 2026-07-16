@@ -50,12 +50,12 @@ The same trusted-base execution pattern covers the PR meta-gates
 (#1944 waiver 18): `diff-budget`, `live-reconciliation`, and
 `pr-body-contract` run on `pull_request_target` with a checkout pinned to
 the base SHA, so a PR that edits a gate script or gate workflow is still
-judged by `main`'s version. These jobs run base-ref code only and must
-never gain a step that executes PR-ref content -- `pr-body-contract`
-inspects the fetched PR head purely as git data (`git cat-file`) to see
-the plan doc the PR brings with it. Residual PR-ref surface, by design:
-`pre-push-audit` and the maturity sweeps operate on the PR tree and need a
-scripts-from-base split in a follow-up slice. Review-event runs resolve the
+judged by `main`'s version. These jobs run base-ref code only and must never
+gain a step that executes PR-ref content -- `pr-body-contract` inspects the
+fetched PR head purely as git data (`git cat-file`) to see the plan doc the PR
+brings with it. Residual PR-ref surface, by design: `pre-push-audit` and the
+maturity sweeps operate on the PR tree and need a scripts-from-base split in a
+follow-up slice. Review-event runs resolve the
 workflow file PR-side, so the required `live-reconciliation` context is fed
 only by `pull_request_target` runs; the default-branch
 `ai_reconciliation_review_retrigger.yml` follow-up re-runs the latest
@@ -76,6 +76,13 @@ when `ATLAS_BRANCH_PROTECTION_READ_TOKEN` is configured with GitHub
 Administration read permission. The audit requires those contexts to be pinned
 to the GitHub Actions app source in branch protection, not only present as
 legacy bare context names.
+
+The workflow security posture auditor pre-admits a future
+`.github/workflows/session_lane.yml` / `session-lane` trusted-base producer only
+when it has the same event guard and base-SHA checkout shape as the existing
+PR meta-gates. The workflow itself is intentionally added in a later #2104
+slice so the current trusted-base `pre-push-audit` can learn the allowlist
+before it evaluates that new `pull_request_target` workflow as PR data.
 
 - Full-history secret scan: Gitleaks checks out the complete branch history
   (`fetch-depth: 0`) so leaked keys in old commits are in scope. The workflow

@@ -43,6 +43,7 @@ def test_messy_grounding_fixture_exercises_noisy_lopsided_ticket_shape() -> None
     ]
     assert package.warnings[-1] == {
         "code": "support_ticket_date_window_disabled",
+        "date_convention": "unknown",  # S7: convention in diagnostics
         "message": (
             "Disabled the dated support-ticket source window because 12 of 42 "
             "included ticket rows did not include a parseable source date."

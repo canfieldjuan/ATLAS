@@ -20,6 +20,10 @@ from extracted_content_pipeline.blog_generation import BlogPostGenerationService
 from extracted_content_pipeline.campaign_ports import LLMMessage, LLMResponse
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.content_ops_execution import ContentOpsExecutionServices
+from extracted_content_pipeline.deflection_report_access import (
+    InMemoryDeflectionReportArtifactStore,
+)
+from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
 from extracted_content_pipeline.content_ops_input_provider import (
     merge_content_ops_input_package,
 )
@@ -372,10 +376,37 @@ def test_atlas_content_ops_input_provider_expands_support_ticket_source_material
     preview = preview_control_surface(request)
 
     assert request.outputs == ("faq_markdown", "landing_page", "blog_post")
+    assert package.authoritative_input_keys == ("source_material",)
     assert request.ingestion_profile == "existing_evidence"
     assert request.inputs["faq_questions"] == ["How do I change my login email?"]
     assert request.inputs["source_material"][0]["source_id"] == "ticket-1"
     assert preview.can_run is True
+
+
+def test_atlas_content_ops_input_provider_keeps_empty_filtered_source_authoritative() -> None:
+    private_sentinel = "PRIVATE RAW SOURCE MUST NOT RETURN"
+    request_payload = {
+        "inputs": {
+            "source_material": [{
+                "ticket_id": "private-ticket",
+                "subject": "Internal workaround",
+                "description": private_sentinel,
+                "private": True,
+            }],
+        },
+    }
+    provider = build_content_ops_input_provider()
+
+    package = provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-private-filter"),
+        request=request_payload,
+    )
+    payload = merge_content_ops_input_package(request_payload, package)
+
+    assert package.authoritative_input_keys == ("source_material",)
+    assert package.inputs["source_material"] == []
+    assert payload["inputs"]["source_material"] == []
+    assert private_sentinel not in json.dumps(payload)
 
 
 def test_atlas_content_ops_input_provider_expands_selected_faq_output() -> None:
@@ -519,6 +550,36 @@ async def test_atlas_content_ops_input_provider_fetches_selected_faq_ids_by_scop
     assert package.inputs["source_material"][0]["faq_draft_id"] == FAQ_DRAFT_ID
     assert package.inputs["support_ticket_resolution_evidence_present"] is True
     assert package.inputs["support_ticket_resolution_evidence_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_selected_source_warning_rebuild_keeps_source_authority() -> None:
+    pool = {
+        "drafts": {FAQ_DRAFT_ID: _saved_faq_draft()},
+        "calls": [],
+    }
+    provider = build_content_ops_input_provider(
+        pool_provider=lambda: pool,
+        faq_repository_factory=_FAQRepo,
+    )
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_faq_ids": [FAQ_DRAFT_ID, MISSING_FAQ_DRAFT_ID],
+            },
+        },
+    )
+
+    assert pool["calls"] == [
+        (FAQ_DRAFT_ID, "acct-1"),
+        (MISSING_FAQ_DRAFT_ID, "acct-1"),
+    ]
+    assert package.authoritative_input_keys == ("source_material",)
+    assert package.metadata["selected_faq_loaded_count"] == 1
+    assert package.metadata["selected_faq_missing_id_count"] == 1
+    assert package.warnings[0]["code"] == "source_faq_drafts_not_found"
 
 
 @pytest.mark.asyncio
@@ -844,6 +905,76 @@ async def test_execute_route_generates_support_ticket_faq_at_inline_cap() -> Non
     assert result["saved_ids"] == []
     assert result["items"][0]["ticket_count"] == 1000
     assert len(result["items"][0]["source_ids"]) == 1000
+
+
+@pytest.mark.skipif(
+    api_module.APIRouter is None,
+    reason="fastapi is not installed in this test environment",
+)
+@pytest.mark.asyncio
+async def test_execute_route_cannot_restore_provider_rejected_source_material() -> None:
+    private_sentinel = "PRIVATE RAW WORKAROUND MUST NOT REACH THE REPORT"
+    public_question = "How do I export an attribution report?"
+    public_resolution = "Open Analytics, choose Attribution, then download the CSV."
+    source_material = [
+        {
+            "ticket_id": f"public-{index}",
+            "source_type": "support_ticket",
+            "subject": public_question,
+            "message": public_question,
+            "resolution_text": public_resolution,
+        }
+        for index in (1, 2)
+    ]
+    source_material.append({
+        "ticket_id": "private-1",
+        "source_type": "support_ticket",
+        "subject": "Internal attribution workaround",
+        "description": private_sentinel,
+        "public_comment": {
+            "body": {
+                "text": private_sentinel,
+                "status": "kept private",
+            },
+        },
+    })
+    store = InMemoryDeflectionReportArtifactStore()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/content-ops"),
+        input_provider=build_content_ops_input_provider(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService()
+        ),
+        scope_provider=lambda: {"account_id": "acct-authoritative-source"},
+        deflection_report_store_provider=lambda: store,
+    )
+
+    route = _router_route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "outputs": ["faq_deflection_report"],
+        "limit": 3,
+        "require_quality_gates": False,
+        "inputs": {"source_material": source_material},
+    })
+    request_id = payload["request_id"]
+    snapshot = await store.get_snapshot(
+        account_id="acct-authoritative-source",
+        request_id=request_id,
+    )
+    record = await store.get_artifact_record(
+        account_id="acct-authoritative-source",
+        request_id=request_id,
+    )
+
+    assert payload["status"] == "completed"
+    assert payload["input_provider"]["metadata"]["source_row_count"] == 3
+    assert payload["input_provider"]["metadata"]["included_row_count"] == 2
+    assert snapshot is not None
+    assert record is not None
+    assert public_resolution in json.dumps(record.artifact)
+    assert private_sentinel not in json.dumps(payload)
+    assert private_sentinel not in json.dumps(snapshot)
+    assert private_sentinel not in json.dumps(record.artifact)
 
 
 @pytest.mark.skipif(

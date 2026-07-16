@@ -325,6 +325,12 @@
       "target": "extracted_content_pipeline/support_ticket_dates.py"
     },
     {
+      "target": "extracted_content_pipeline/support_ticket_junk.py"
+    },
+    {
+      "target": "extracted_content_pipeline/support_ticket_privacy.py"
+    },
+    {
       "target": "extracted_content_pipeline/support_ticket_zendesk_thread.py"
     },
     {

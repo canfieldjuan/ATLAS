@@ -33,6 +33,15 @@ def load_auditor():
     return module
 
 
+def _review_contract(rule_line: str) -> str:
+    return "\n".join([
+        "## Scope (this PR)",
+        "### Review Contract",
+        rule_line,
+        "### Files touched",
+    ])
+
+
 # --- table parsing ----------------------------------------------------------
 
 def test_parse_trigger_table_splits_glob_and_prose_rows():
@@ -104,23 +113,21 @@ def test_required_rules_tracks_triggering_paths():
 
 def test_declared_rules_parses_line():
     aud = load_auditor()
-    plan = "## Scope\n- Reviewer rules triggered: R2 (test evidence), R10 (maintainability)\n"
+    plan = _review_contract("- Reviewer rules triggered: R2 (test evidence), R10 (maintainability)")
     assert aud.declared_rules(plan) == {"R2", "R10"}
 
 
 def test_declared_rules_empty_when_line_absent():
     aud = load_auditor()
-    assert aud.declared_rules("## Scope\nno such line here\n") == set()
+    assert aud.declared_rules(_review_contract("no such line here")) == set()
 
 
 def test_declared_rules_spans_wrapped_lines():
     # The bullet wraps across 80-col lines; the continuation carries R10.
     aud = load_auditor()
-    plan = (
+    plan = _review_contract(
         "- Reviewer rules triggered: R2 (the audit is a detector -- failure branch\n"
         "  proven), R10 (maintainable).\n"
-        "\n"
-        "### Files touched\n"
     )
     assert aud.declared_rules(plan) == {"R2", "R10"}
 
@@ -129,7 +136,7 @@ def test_declared_rules_ignores_unindented_later_text():
     # A non-indented paragraph after the bullet is not part of it; its stray
     # rule id must not be absorbed (which would mask an omission).
     aud = load_auditor()
-    plan = (
+    plan = _review_contract(
         "- Reviewer rules triggered: R2\n"
         "Later prose mentioning R5 that is not part of the bullet.\n"
     )
@@ -140,7 +147,7 @@ def test_declared_rules_ignores_unindented_later_text():
 
 def test_audit_passes_when_plan_declares_triggered_rules():
     aud = load_auditor()
-    plan = "- Reviewer rules triggered: R2, R10\n"
+    plan = _review_contract("- Reviewer rules triggered: R2, R10")
     _, missing, _, _ = aud.audit(plan, ["scripts/audit_x.py"], RULES_DOC)
     assert missing == {}
 
@@ -148,7 +155,7 @@ def test_audit_passes_when_plan_declares_triggered_rules():
 def test_audit_flags_missing_triggered_rule():
     aud = load_auditor()
     # Diff triggers R2+R10 (audit script) but the plan only declares R2.
-    plan = "- Reviewer rules triggered: R2\n"
+    plan = _review_contract("- Reviewer rules triggered: R2")
     _, missing, _, _ = aud.audit(plan, ["scripts/audit_x.py"], RULES_DOC)
     assert "R10" in missing
     assert "scripts/audit_x.py" in missing["R10"]
@@ -156,7 +163,7 @@ def test_audit_flags_missing_triggered_rule():
 
 def test_audit_surfaces_prose_rows():
     aud = load_auditor()
-    _, _, prose_rows, _ = aud.audit("- Reviewer rules triggered: R2, R10\n", ["scripts/audit_x.py"], RULES_DOC)
+    _, _, prose_rows, _ = aud.audit(_review_contract("- Reviewer rules triggered: R2, R10"), ["scripts/audit_x.py"], RULES_DOC)
     assert any("invoicing" in d for d, _ in prose_rows)
 
 

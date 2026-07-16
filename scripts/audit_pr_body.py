@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Audit a PR body against the AGENTS.md section 1b contract.
 
-The PR body must lead with ``Plan: plans/PR-<Slice-Name>.md`` and a
-``Slice phase: <phase>`` line, then carry these ``##`` sections in order:
+Most human PR bodies must lead with ``Plan: plans/PR-<Slice-Name>.md``, a
+``Slice phase: <phase>`` line, and an ``Ownership lane: <lane>`` line, then
+carry these ``##`` sections in order:
 Intentional, Deferred, Parked hardening, Cold diff reconstruction,
 Verification, Diff size. The referenced plan doc must exist in the checkout.
+A non-empty Markdown-only human diff may instead lead with ``Docs-only: true``
+when the caller supplies a base ref for changed-path validation. Dependabot
+keeps its explicit generated-body exemption.
 
 Intended for CI on ``pull_request`` events (the workflow writes
 ``github.event.pull_request.body`` to a file - no GitHub API call), and for
@@ -16,17 +20,30 @@ local use before opening a PR:
 from __future__ import annotations
 
 import argparse
+from itertools import islice
 from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Callable, Sequence
+from typing import Callable, NamedTuple, Sequence
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _pr_change_policy import (
+    ChangeKind,
+    ChangePolicyError,
+    branch_added_plan_docs,
+    classify_changes,
+    is_dependabot_author,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN_LINE_RE = re.compile(r"^Plan:\s+(?P<plan>plans/PR-[A-Za-z0-9._-]+\.md)\s*$")
 SLICE_PHASE_RE = re.compile(r"^Slice phase:\s*\S.*$")
+LANE_LINE_RE = re.compile(r"^Ownership lane:\s*[a-z0-9][a-z0-9._/-]*[a-z0-9]\s*$")
+LANE_PREFIX_RE = re.compile(r"^Ownership lane:\s*")
 HEADING_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$")
+FENCE_RE = re.compile(r"^\s*(?P<delimiter>`{3,}|~{3,})")
 REQUIRED_SECTIONS = (
     "Intentional",
     "Deferred",
@@ -35,21 +52,28 @@ REQUIRED_SECTIONS = (
     "Verification",
     "Diff size",
 )
-DEPENDABOT_AUTHORS = frozenset(
-    {
-        "app/dependabot",
-        "dependabot",
-        "dependabot[bot]",
-    }
-)
+DOCS_ONLY_RE = re.compile(r"^Docs-only:\s*true\s*$", re.IGNORECASE)
 
 
-def is_dependabot_author(author: str | None) -> bool:
-    """Return true for Dependabot identities seen in GitHub PR events."""
+class FenceMarker(NamedTuple):
+    is_backtick: bool
+    length: int
 
-    if author is None:
-        return False
-    return author.strip() in DEPENDABOT_AUTHORS
+
+def is_docs_only_body(body: str) -> bool:
+    """Return true only for the explicit planless Markdown-only body marker."""
+
+    first_nonempty = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    return DOCS_ONLY_RE.fullmatch(first_nonempty) is not None
+
+
+def first_nonempty_raw_line_index(lines: list[str]) -> tuple[int, str] | None:
+    """Return the first non-empty raw line position before fence elision."""
+
+    for index, line in enumerate(lines):
+        if line.strip():
+            return index, line.strip()
+    return None
 
 
 def _git_read(args: list[str], *, repo_root: Path) -> tuple[int, bytes]:
@@ -115,6 +139,51 @@ def plan_exists_in_worktree(plan: str, *, repo_root: Path = ROOT) -> bool:
     return current.is_file()
 
 
+def unfenced_lines(body: str) -> list[str]:
+    """Return body lines with fenced examples made non-structural.
+
+    Blank placeholders preserve the fact that a fenced block appeared between
+    two real lines, so a header declaration cannot become adjacent by removing
+    an intervening example.
+    """
+
+    lines: list[str] = []
+    fence_marker: FenceMarker | None = None
+    for line in body.splitlines():
+        match = FENCE_RE.match(line)
+        if fence_marker is not None:
+            lines.append("")
+            if match is not None and closes_fence(match, fence_marker):
+                fence_marker = None
+        elif match is not None:
+            lines.append("")
+            fence_marker = open_fence_marker(match)
+        else:
+            lines.append(line)
+    return lines
+
+
+def line_after(lines: list[str], index: int) -> str:
+    """Return one line after ``index`` without assuming it exists."""
+
+    return next(islice(lines, index + 1, index + 2), "")
+
+
+def open_fence_marker(match: re.Match[str]) -> FenceMarker:
+    """Return the opening fence character and minimum closing length."""
+
+    delimiter = match.group("delimiter")
+    return FenceMarker(is_backtick=delimiter.startswith("`"), length=len(delimiter))
+
+
+def closes_fence(match: re.Match[str], marker: FenceMarker) -> bool:
+    """Return true when ``match`` closes the active Markdown fence."""
+
+    delimiter = match.group("delimiter")
+    same_kind = delimiter.startswith("`") if marker.is_backtick else delimiter.startswith("~")
+    return same_kind and len(delimiter) >= marker.length
+
+
 def audit_pr_body(
     body: str,
     *,
@@ -128,12 +197,17 @@ def audit_pr_body(
             return plan_exists_in_worktree(plan, repo_root=root)
 
     failures: list[str] = []
-    lines = body.splitlines()
+    raw_lines = body.splitlines()
+    raw_header_start = first_nonempty_raw_line_index(raw_lines)
+    lines = unfenced_lines(body)
     nonempty = [line.strip() for line in lines if line.strip()]
     if not nonempty:
         return ["PR body is empty"]
 
-    plan_match = PLAN_LINE_RE.match(nonempty[0])
+    if raw_header_start is None:
+        return ["PR body is empty"]
+    first_nonempty_index, first_nonempty_line = raw_header_start
+    plan_match = PLAN_LINE_RE.match(first_nonempty_line)
     if plan_match is None:
         failures.append(
             "first non-empty line must be 'Plan: plans/PR-<Slice-Name>.md'"
@@ -144,14 +218,31 @@ def audit_pr_body(
                 f"plan doc named in the PR body does not exist: {plan_match.group('plan')}"
             )
 
+    phase_line = line_after(raw_lines, first_nonempty_index)
+    if not SLICE_PHASE_RE.match(phase_line.strip()):
+        failures.append(
+            "missing canonical 'Slice phase: <phase>' line immediately after "
+            "'Plan: plans/PR-<Slice-Name>.md'"
+        )
+    else:
+        lane_line = line_after(raw_lines, first_nonempty_index + 1)
+        if not LANE_LINE_RE.match(lane_line.strip()):
+            failures.append(
+                "missing canonical 'Ownership lane: <lowercase-lane>' line immediately "
+                "after 'Slice phase: <phase>'"
+            )
+
     first_heading_index = next(
         (index for index, line in enumerate(lines) if HEADING_RE.match(line)),
         len(lines),
     )
     lead_lines = lines[:first_heading_index]
-    if not any(SLICE_PHASE_RE.match(line.strip()) for line in lead_lines):
+    lane_lines = [line.strip() for line in lead_lines if LANE_PREFIX_RE.match(line.strip())]
+    if len(lane_lines) != 1:
+        failures.append("full PR body must contain exactly one 'Ownership lane:' line")
+    elif not LANE_LINE_RE.match(next(iter(lane_lines))):
         failures.append(
-            "missing 'Slice phase: <phase>' line before the first '##' section"
+            "Ownership lane must use lowercase letters, numbers, dots, dashes, slashes, or underscores"
         )
     why_lines = [
         line.strip()
@@ -159,6 +250,7 @@ def audit_pr_body(
         if line.strip()
         and PLAN_LINE_RE.match(line.strip()) is None
         and SLICE_PHASE_RE.match(line.strip()) is None
+        and LANE_PREFIX_RE.match(line.strip()) is None
     ]
     if not why_lines:
         failures.append(
@@ -207,6 +299,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             "inspected; defaults to this script's checkout"
         ),
     )
+    parser.add_argument(
+        "--base-ref",
+        default="",
+        help=(
+            "base ref used to validate a Docs-only: true body against the "
+            "actual changed paths"
+        ),
+    )
+    parser.add_argument(
+        "--head-ref",
+        default="HEAD",
+        help=(
+            "head ref used with --base-ref for Docs-only: true validation; "
+            "trusted-base gates pass their fetched PR head"
+        ),
+    )
     parser.add_argument("body_file", help="path to a file holding the PR body")
     args = parser.parse_args(argv)
 
@@ -238,7 +346,88 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2  # infrastructure failure -- never a silent pass
         plan_exists = plan_exists_at_ref(args.plan_git_ref, repo_root=repo_root)
 
+    if is_docs_only_body(body):
+        if not args.base_ref:
+            print(
+                "pr body audit: Docs-only body requires --base-ref for changed-path validation",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            classification = classify_changes(
+                author=args.pr_author,
+                base_ref=args.base_ref,
+                head_ref=args.head_ref,
+                repo_root=repo_root,
+            )
+        except ChangePolicyError as exc:
+            print(f"pr body audit: {exc}", file=sys.stderr)
+            return 2
+        if classification.kind is not ChangeKind.DOCS_ONLY:
+            print("pr body audit: FAIL (AGENTS.md section 1b contract)")
+            print("- Docs-only: true is valid only for a non-empty Markdown-only human diff")
+            return 1
+        try:
+            plans = branch_added_plan_docs(
+                args.base_ref,
+                head_ref=args.head_ref,
+                repo_root=repo_root,
+            )
+        except ChangePolicyError as exc:
+            print(f"pr body audit: {exc}", file=sys.stderr)
+            return 2
+        if plans:
+            print("pr body audit: FAIL (AGENTS.md section 1b contract)")
+            print("- Docs-only: true is only for a Markdown-only diff with no branch-added plan")
+            return 1
+        print("pr body audit: PASS (explicit Markdown-only body exemption)")
+        return 0
+
     failures = audit_pr_body(body, root=repo_root, plan_exists=plan_exists)
+    if failures:
+        print("pr body audit: FAIL (AGENTS.md section 1b contract)")
+        for failure in failures:
+            print(f"- {failure}")
+        return 1
+
+    if args.base_ref:
+        try:
+            classification = classify_changes(
+                author=args.pr_author,
+                base_ref=args.base_ref,
+                head_ref=args.head_ref,
+                repo_root=repo_root,
+            )
+            plans = branch_added_plan_docs(
+                args.base_ref,
+                head_ref=args.head_ref,
+                repo_root=repo_root,
+            )
+        except ChangePolicyError as exc:
+            print(f"pr body audit: {exc}", file=sys.stderr)
+            return 2
+        if classification.kind in (ChangeKind.DOCS_ONLY, ChangeKind.PLAN_REQUIRED):
+            body_plan = PLAN_LINE_RE.match(
+                next(line.strip() for line in body.splitlines() if line.strip())
+            ).group("plan")
+            if len(plans) != 1:
+                if classification.kind is ChangeKind.DOCS_ONLY:
+                    failures.append(
+                        "a Markdown-only human diff with a full PR body must add "
+                        "exactly one plan; otherwise use Docs-only: true"
+                    )
+                else:
+                    failures.append(
+                        "human non-Markdown diff must add exactly one plan before its "
+                        "full PR body can be accepted"
+                    )
+            else:
+                sole_plan, = plans
+                if body_plan != sole_plan:
+                    failures.append(
+                        "Plan: line must name the sole branch-added plan for a human "
+                        f"full PR body: {sole_plan}"
+                    )
     if failures:
         print("pr body audit: FAIL (AGENTS.md section 1b contract)")
         for failure in failures:

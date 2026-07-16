@@ -28,10 +28,12 @@ Long-running sessions now have two durable responsibilities:
 2. Record the actual wake mode after each PR open or push: Claude Code native
    subscription/polling, a Codex wake bridge, or local watcher state-only.
 
-The local watcher is intentionally local and per session. One Codex/local
-session equals one watcher config. A second Codex/local session should create a
-second config and timer rather than reuse another session's watcher. Claude Code
-native sessions do not need this local watcher path.
+The watcher executable is an installed copy of repo-owned
+`scripts/pr_watcher.py`; its configs and output remain intentionally local and
+per session. One Codex/local session equals one watcher config. A second
+Codex/local session should create a second config and timer rather than reuse
+another session's watcher. Claude Code native sessions do not need this local
+watcher path.
 
 ## Wake Modes
 
@@ -63,7 +65,7 @@ These files are local machine infrastructure, not committed repo files:
 
 | Path | Purpose |
 |---|---|
-| `~/.local/bin/atlas-pr-watch` | One-shot watcher executable |
+| `~/.local/bin/atlas-pr-watch` | Installed repo-owned one-shot producer (`scripts/pr_watcher.py`) |
 | `~/.config/systemd/user/atlas-pr-watch@.service` | User systemd service template |
 | `~/.config/systemd/user/atlas-pr-watch@.timer` | User systemd timer template, every 30 minutes |
 | `~/.config/atlas-pr-watchers/<session-id>.env` | One config per builder session |
@@ -73,9 +75,9 @@ These files are local machine infrastructure, not committed repo files:
 | `~/.local/state/atlas-pr-watchers/<session-id>.log` | Append-only watcher log |
 
 If a Codex/local session is using local watcher state and
-`~/.local/bin/atlas-pr-watch` is missing, stop and ask the operator. Do not
-recreate a merge-capable watcher from scratch. The watcher must stay read-only
-with respect to GitHub merges.
+`~/.local/bin/atlas-pr-watch` is missing or drifted, run the repo-owned
+installer and its `--check` mode. Do not recreate a watcher from ad hoc local
+source. The watcher must stay read-only with respect to GitHub merges.
 
 ## Push/Review-Event Hook
 
@@ -138,11 +140,36 @@ Wake-source rules:
   as inspection/fix handoffs only; scheduled green-confirmation is still the
   only wake source that may proceed to merge consideration after live guards.
 - `--source scheduled` may classify `ready_for_human_merge` as
-  `scheduled-ready`, which is only permission to run the AGENTS merge guards.
-  The resumed builder still needs explicit standing merge authorization in
-  this session's state file before merging.
+  `scheduled-ready` only when the snapshot carries a version-1 readiness proof
+  for the same open, non-draft head: at least one required check, all required
+  checks complete/green, complete review-thread pagination, zero unresolved
+  threads (including outdated threads), no changes-requested decision, and a
+  clean merge state. Missing or contradictory proof becomes `attention` and
+  lists its blockers. `scheduled-ready` is still only permission to run the
+  AGENTS merge guards; the resumed builder also needs explicit standing merge
+  authorization in this session's state file before merging.
 - Pending states write a handoff but do not run the optional command by default.
   Do not replace the watcher timer with an in-chat polling loop.
+
+The version-1 snapshot proof is:
+
+```json
+{
+  "readiness": {
+    "version": 1,
+    "evaluated_head_sha": "<same as pr.headRefOid>",
+    "required_check_count": 3,
+    "required_checks_complete": true,
+    "required_check_failures": [],
+    "required_check_pending": [],
+    "review_threads_complete": true,
+    "review_thread_pages_fetched": 1,
+    "unresolved_review_threads": [],
+    "review_decision": "<same as pr.reviewDecision>",
+    "merge_state_status": "CLEAN"
+  }
+}
+```
 
 This gives the two-hook shape without making the watcher merge-capable: event
 hooks can call the bridge with `--source event`; the 30-minute green-confirmation
@@ -152,7 +179,10 @@ timer can call it with `--source scheduled`.
 
 - No auto-merge. Truthy watcher auto-merge config is unsafe and must surface as
   attention, not an action path.
-- A green PR becomes `ready_for_human_merge`; it does not merge itself.
+- A local producer may label a PR `ready_for_human_merge`, but the bridge and
+  reporter fail closed unless the versioned readiness proof above is complete.
+  Legacy snapshots therefore remain attention-only until their producer is
+  upgraded. No watcher snapshot merges by itself.
 - Local review runs `scripts/audit_pr_watcher_safety.py`; unsafe watcher configs
   or watcher source merge commands are blocking.
 - Codex/local active builders must run `scripts/report_pr_watcher_state.py` on
@@ -243,12 +273,12 @@ NOTIFY="1"
 EOF
 ```
 
-Install the bridge wrapper, trusted bridge copy, and systemd drop-in through the
-repo-owned installer. The wrapper reads `REPO_DIR` from the session config each
-time it runs, but it invokes the installed bridge copy rather than executing
-`scripts/codex_wake_bridge.py` from the watched PR worktree. One systemd
-template can safely serve multiple sessions without baking one worktree path
-into every timer.
+Install the repo-owned watcher producer, bridge wrapper, trusted bridge copy,
+AI-reconciliation checker and parser dependency, and systemd drop-in through
+the installer. The watcher and wrapper invoke those installed copies rather
+than executing scripts from the watched PR worktree. One systemd template can
+safely serve multiple sessions without baking one worktree path into every
+timer.
 
 ```bash
 python scripts/install_codex_wake_bridge.py --reload-systemd
@@ -286,10 +316,21 @@ systemctl --user disable --now "atlas-pr-watch@${SESSION_ID}.timer"
 
 | State | Meaning | Builder action |
 |---|---|---|
-| `pending` | At least one check is still pending | Record the next poll; do not ask the operator to babysit CI |
+| `pending` | At least one check is still pending and no new review/comment activity was observed | Record the next poll; do not ask the operator to babysit CI |
 | `attention` | Red/canceled check, failed AI reconciliation, or status details such as `head_mismatch: true` | Inspect the owned PR, fix the root cause in-scope, push, update watcher config head SHA. If `head_mismatch` is true, follow the stop/fetch/inspect branch before any force-push or merge |
-| `review_changed` | New review/comment activity since last poll | Inspect comments before any merge decision |
-| `ready_for_human_merge` | Checks are green and AI reconciliation passes on the scheduled timer wake | Run `scripts/report_pr_watcher_state.py`, then report readiness or perform the active-builder guarded merge only when explicitly authorized |
+| `review_changed` | New review/comment activity since last poll, including while checks are pending | Inspect comments before any merge decision |
+| `ready_for_human_merge` | The snapshot label and version-1 proof agree: same open/non-draft head, required checks complete/green, all thread pages fetched, zero unresolved threads, no changes requested, clean merge state | Run `scripts/report_pr_watcher_state.py`; missing/contradictory proof is reported as attention. Otherwise report readiness or perform the active-builder guarded merge only when explicitly authorized and after fresh live guards |
+
+The installed producer reads branch protection's required-context inventory,
+compares it with `gh pr checks --required`, fetches every GraphQL
+`reviewThreads` page, and reads PR metadata again after those calls. This
+prevents a required context that has not reported yet from disappearing from
+the observed set. A changed head, empty/malformed required policy, unreported
+required context, incomplete pagination, unresolved thread (including
+outdated), or GitHub read error cannot produce a ready proof. The JSON snapshot
+is replaced atomically so the bridge/reporter cannot consume a partial file.
+Live AI reconciliation runs from the exact checker and parser sources installed
+beside the watcher; it never executes the watched PR worktree's checker.
 
 ## Prompt For Other Builder Sessions
 

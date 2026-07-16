@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Install or verify the local Codex watcher wake wrapper.
+"""Install or verify the repo-owned PR watcher and Codex wake wrapper.
 
-This writes local user files only. The wrapper keeps the watcher read-only:
-it runs the one-shot watcher, then asks the repo bridge to build/run the Codex
-handoff for scheduled wakes.
+This writes local user files only. The installed producer and wrapper keep the
+watcher read-only: they record one snapshot, then ask the bridge to build/run
+the Codex handoff for scheduled wakes.
 """
 from __future__ import annotations
 
@@ -17,8 +17,15 @@ from typing import Sequence
 
 WRAPPER_NAME = "atlas-pr-watch-and-wake"
 BRIDGE_NAME = "atlas-codex-wake-bridge"
+WATCHER_NAME = "atlas-pr-watch"
+RECONCILIATION_LIB_DIR = "atlas-pr-watch-lib"
+RECONCILIATION_CHECKER_NAME = "check_ai_reconciliation_live.py"
+RECONCILIATION_AUDIT_NAME = "audit_ai_reconciliation.py"
 DROPIN_REL = Path("atlas-pr-watch@.service.d") / "wake-bridge.conf"
 BRIDGE_SOURCE = Path(__file__).with_name("codex_wake_bridge.py")
+WATCHER_SOURCE = Path(__file__).with_name("pr_watcher.py")
+RECONCILIATION_CHECKER_SOURCE = Path(__file__).with_name(RECONCILIATION_CHECKER_NAME)
+RECONCILIATION_AUDIT_SOURCE = Path(__file__).with_name(RECONCILIATION_AUDIT_NAME)
 
 
 def _shell_token(path: Path) -> str:
@@ -26,10 +33,11 @@ def _shell_token(path: Path) -> str:
     return f"'{escaped}'"
 
 
-def _wrapper_text(bridge: Path) -> str:
+def _wrapper_text(watcher: Path, bridge: Path) -> str:
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 session_id="${{1:?watcher session id required}}"
+watcher={_shell_token(watcher)}
 bridge={_shell_token(bridge)}
 
 if [[ ! "$session_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || [[ "$session_id" == *..* ]]; then
@@ -52,13 +60,26 @@ if [ -z "${{REPO_DIR:-}}" ] || [ ! -d "$REPO_DIR" ]; then
   exit 2
 fi
 
-~/.local/bin/atlas-pr-watch "${{session_id}}"
+"$watcher" "${{session_id}}"
 python "$bridge" "${{session_id}}" --source scheduled
 """
 
 
 def _bridge_text() -> str:
     return BRIDGE_SOURCE.read_text(encoding="utf-8")
+
+
+def _watcher_text() -> str:
+    return WATCHER_SOURCE.read_text(encoding="utf-8")
+
+
+def _reconciliation_checker_text() -> str:
+    return RECONCILIATION_CHECKER_SOURCE.read_text(encoding="utf-8")
+
+
+def _reconciliation_audit_text() -> str:
+    return RECONCILIATION_AUDIT_SOURCE.read_text(encoding="utf-8")
+
 
 def _systemd_exec_token(path: Path) -> str:
     resolved = path.expanduser().resolve(strict=False)
@@ -80,10 +101,15 @@ ExecStart={_systemd_exec_token(wrapper)} %i
 
 def _write(path: Path, text: str, *, executable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    if executable:
-        mode = path.stat().st_mode
-        path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    staged_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        staged_path.write_text(text, encoding="utf-8")
+        if executable:
+            mode = staged_path.stat().st_mode
+            staged_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        os.replace(staged_path, path)
+    finally:
+        staged_path.unlink(missing_ok=True)
 
 
 def _matches(path: Path, expected: str, *, executable: bool = False) -> tuple[bool, str]:
@@ -103,23 +129,44 @@ def _matches(path: Path, expected: str, *, executable: bool = False) -> tuple[bo
 def check_install(bin_dir: Path, systemd_dir: Path) -> tuple[bool, list[str]]:
     wrapper = bin_dir / WRAPPER_NAME
     bridge = bin_dir / BRIDGE_NAME
+    watcher = bin_dir / WATCHER_NAME
+    reconciliation_dir = bin_dir / RECONCILIATION_LIB_DIR
+    reconciliation_checker = reconciliation_dir / RECONCILIATION_CHECKER_NAME
+    reconciliation_audit = reconciliation_dir / RECONCILIATION_AUDIT_NAME
     checks = [
-        _matches(wrapper, _wrapper_text(bridge), executable=True),
+        _matches(wrapper, _wrapper_text(watcher, bridge), executable=True),
         _matches(bridge, _bridge_text(), executable=True),
+        _matches(watcher, _watcher_text(), executable=True),
+        _matches(reconciliation_checker, _reconciliation_checker_text()),
+        _matches(reconciliation_audit, _reconciliation_audit_text()),
         _matches(systemd_dir / DROPIN_REL, _dropin_text(wrapper)),
     ]
-    ok = all(item[0] for item in checks)
-    return ok, [item[1] for item in checks]
+    ok = all(passed for passed, _message in checks)
+    return ok, [message for _passed, message in checks]
 
 
 def install(bin_dir: Path, systemd_dir: Path, *, reload_systemd: bool) -> tuple[int, list[str]]:
     wrapper = bin_dir / WRAPPER_NAME
     bridge = bin_dir / BRIDGE_NAME
+    watcher = bin_dir / WATCHER_NAME
+    reconciliation_dir = bin_dir / RECONCILIATION_LIB_DIR
+    reconciliation_checker = reconciliation_dir / RECONCILIATION_CHECKER_NAME
+    reconciliation_audit = reconciliation_dir / RECONCILIATION_AUDIT_NAME
     dropin = systemd_dir / DROPIN_REL
-    _write(wrapper, _wrapper_text(bridge), executable=True)
+    _write(reconciliation_audit, _reconciliation_audit_text())
+    _write(reconciliation_checker, _reconciliation_checker_text())
     _write(bridge, _bridge_text(), executable=True)
+    _write(watcher, _watcher_text(), executable=True)
+    _write(wrapper, _wrapper_text(watcher, bridge), executable=True)
     _write(dropin, _dropin_text(wrapper))
-    messages = [f"wrote: {wrapper}", f"wrote: {bridge}", f"wrote: {dropin}"]
+    messages = [
+        f"wrote: {reconciliation_audit}",
+        f"wrote: {reconciliation_checker}",
+        f"wrote: {bridge}",
+        f"wrote: {watcher}",
+        f"wrote: {wrapper}",
+        f"wrote: {dropin}",
+    ]
     exit_code = 0
     if reload_systemd:
         proc = subprocess.run(

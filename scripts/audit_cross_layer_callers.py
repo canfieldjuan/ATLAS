@@ -101,8 +101,9 @@ def build_hints(base_ref: str) -> tuple[CallerHint, ...]:
         for path in tracked_files()
         if path not in changed and is_code_path(path)
     )
+    references = find_references_by_symbol(symbols, searchable)
     return tuple(
-        CallerHint(symbol=symbol, references=find_references(symbol, searchable))
+        CallerHint(symbol=symbol, references=references[symbol])
         for symbol in symbols
     )
 
@@ -215,21 +216,50 @@ def _symbol_kind(node: ast.AST) -> str:
     return "function"
 
 
-def find_references(symbol: ChangedSymbol, paths: Sequence[str]) -> tuple[Reference, ...]:
-    references: list[Reference] = []
-    patterns = reference_patterns(symbol)
+def find_references_by_symbol(
+    symbols: Sequence[ChangedSymbol],
+    paths: Sequence[str],
+) -> dict[ChangedSymbol, tuple[Reference, ...]]:
+    if not symbols:
+        return {}
+    symbols_by_name: dict[str, list[ChangedSymbol]] = {}
+    for symbol in symbols:
+        symbols_by_name.setdefault(symbol.name, []).append(symbol)
+    references: dict[ChangedSymbol, list[Reference]] = {
+        symbol: [] for symbol in symbols
+    }
+    patterns = {
+        symbol: reference_patterns(symbol)
+        for symbol in symbols
+    }
+    requested_names = frozenset(symbols_by_name)
+    name_pattern = re.compile(
+        rf"\b(?:{'|'.join(re.escape(name) for name in sorted(requested_names))})\b"
+    )
+
     for path in paths:
         try:
             text = Path(path).read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        candidate_lines = code_reference_lines(path, text, symbol)
-        for index, line in enumerate(text.splitlines(), start=1):
-            if index in candidate_lines and any(pattern.search(line) for pattern in patterns):
-                references.append(
-                    Reference(path=path, line=index, text=line.strip()[:160])
-                )
-    return tuple(references)
+        lines = text.splitlines()
+        candidates = candidate_names_by_line(
+            path,
+            text,
+            requested_names,
+            name_pattern,
+        )
+        for index in sorted(candidates):
+            line = lines[index - 1]
+            reference = Reference(path=path, line=index, text=line.strip()[:160])
+            for name in candidates[index]:
+                for symbol in symbols_by_name[name]:
+                    if any(pattern.search(line) for pattern in patterns[symbol]):
+                        references[symbol].append(reference)
+    return {
+        symbol: tuple(symbol_references)
+        for symbol, symbol_references in references.items()
+    }
 
 
 def reference_patterns(symbol: ChangedSymbol) -> tuple[re.Pattern[str], ...]:
@@ -245,31 +275,57 @@ def reference_patterns(symbol: ChangedSymbol) -> tuple[re.Pattern[str], ...]:
     return (re.compile(rf"\b{escaped}\s*\("),)
 
 
-def code_reference_lines(path: str, text: str, symbol: ChangedSymbol) -> set[int]:
+def candidate_names_by_line(
+    path: str,
+    text: str,
+    requested_names: frozenset[str],
+    name_pattern: re.Pattern[str],
+) -> dict[int, set[str]]:
     if PurePosixPath(path).suffix in {".py", ".pyi"}:
-        return python_name_lines(text, symbol.name)
-    return non_python_candidate_lines(text)
+        return python_names_by_line(text, requested_names, name_pattern)
+    return non_python_names_by_line(text, name_pattern)
 
 
-def python_name_lines(text: str, name: str) -> set[int]:
-    lines: set[int] = set()
+def python_names_by_line(
+    text: str,
+    requested_names: frozenset[str],
+    name_pattern: re.Pattern[str],
+) -> dict[int, set[str]]:
+    lines: dict[int, set[str]] = {}
     try:
         tokens = tokenize.generate_tokens(StringIO(text).readline)
         for token in tokens:
-            if token.type == tokenize.NAME and token.string == name:
-                lines.add(token.start[0])
+            if token.type == tokenize.NAME and token.string in requested_names:
+                lines.setdefault(token.start[0], set()).add(token.string)
     except tokenize.TokenError:
-        return set(range(1, len(text.splitlines()) + 1))
+        return names_by_line(text, name_pattern, skip_comment_lines=False)
     return lines
 
 
-def non_python_candidate_lines(text: str) -> set[int]:
-    lines: set[int] = set()
+def non_python_names_by_line(
+    text: str,
+    name_pattern: re.Pattern[str],
+) -> dict[int, set[str]]:
+    return names_by_line(text, name_pattern, skip_comment_lines=True)
+
+
+def names_by_line(
+    text: str,
+    name_pattern: re.Pattern[str],
+    *,
+    skip_comment_lines: bool,
+) -> dict[int, set[str]]:
+    matches: dict[int, set[str]] = {}
     for index, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
-        if stripped and not stripped.startswith(("//", "#", "/*", "*")):
-            lines.add(index)
-    return lines
+        if not stripped:
+            continue
+        if skip_comment_lines and stripped.startswith(("//", "#", "/*", "*")):
+            continue
+        names = {match.group(0) for match in name_pattern.finditer(line)}
+        if names:
+            matches[index] = names
+    return matches
 
 
 def is_code_path(path: str) -> bool:

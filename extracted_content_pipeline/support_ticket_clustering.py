@@ -15,18 +15,48 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _LEADING_BRACKETED_METADATA_RE = re.compile(r"^(?:\[[^\]\n]{1,80}\]\s*)+")
 _HTML_TAG_NAMES_RE = (
-    r"(?:a|abbr|article|aside|b|blockquote|body|br|button|cite|code|dd|"
+    r"(?:a|abbr|article|aside|b|body|br|button|cite|code|dd|"
     r"del|div|dl|dt|em|figcaption|figure|footer|h[1-6]|header|hr|html|i|"
     r"img|ins|li|main|mark|nav|ol|p|pre|s|section|small|span|strike|strong|"
     r"sub|sup|table|tbody|td|tfoot|th|thead|time|tr|u|ul)"
 )
+_HTML_BOOLEAN_ATTRS_RE = (
+    r"(?:hidden|disabled|checked|selected|readonly|required|multiple|"
+    r"autofocus|autoplay|controls|loop|muted|open|reversed|async|defer|"
+    r"novalidate|itemscope|contenteditable|spellcheck|translate|inert)"
+)
 _HTML_ATTR_RE = (
-    r"(?:\s+[a-z_:][a-z0-9_:.-]*\s*=\s*"
-    r"(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]+))"
+    r"(?:\s+(?:[a-z_:][a-z0-9_:.-]*\s*=\s*"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]+)"
+    rf"|{_HTML_BOOLEAN_ATTRS_RE}\b))"
 )
 _HTML_SIGNAL_RE = re.compile(
     rf"</?{_HTML_TAG_NAMES_RE}(?:{_HTML_ATTR_RE})*\s*/?>",
     re.IGNORECASE,
+)
+# Excluded tags mentioned MID-PROSE ("How do I add <script> to the page?",
+# "How do I write <blockquote>hello</blockquote> in the editor?") are
+# customer wording, not markup. A body that STARTS with an excluded tag
+# ("<script>alert(1)", "<blockquote>quoted prior reply") is markup intent:
+# script-only bodies exclude, quote-to-EOF bodies are all-quote. Inside a
+# document detected via other tags, exclusion applies as usual.
+_HTML_EXCLUDED_TAG_AT_START_RE = re.compile(
+    r"\A\s*(?:(?:\[[^\]\n]{1,80}\]|<!doctype[^>]*>|<!--.*?-->"
+    r"|<title[^>]*>[^<]*</title\s*>"
+    r"|</?(?:html|head|body|meta|title|link|base)[^>]*>)\s*)*"
+    r"<(script|style|blockquote)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_HTML_EXCLUDED_TAG_RE = re.compile(
+    r"</?(script|style|blockquote)\b[^>]*>",
+    re.IGNORECASE,
+)
+# A paired excluded element that CLOSES the body ("Real<script>x</script>",
+# "question<blockquote>quoted</blockquote>") is markup; a mention keeps
+# trailing prose ("... <blockquote>hello</blockquote> in the editor?").
+_HTML_EXCLUDED_TAG_AT_END_RE = re.compile(
+    r"<(script|style|blockquote)\b[^>]*>.*?</\1\s*>\s*\Z",
+    re.IGNORECASE | re.DOTALL,
 )
 _HTML_CUSTOM_TAG_RE = re.compile(
     r"</?[a-z][a-z0-9:-]*-[a-z0-9:-]*(?:\s+[^<>]*)?/?>",
@@ -289,28 +319,424 @@ class _ClusterBucket:
     token_counts: Counter[str] = field(default_factory=Counter)
 
 
+# Block-level members of the SAME tag families _HTML_SIGNAL_RE recognizes,
+# so HTML detection and line extraction cannot drift apart. These tags carry
+# the message structure (paragraph/break/list/table/heading/quote boundaries)
+# that line-based hygiene downstream keys on.
+_BLOCK_TAG_NAMES = frozenset({
+    "article", "aside", "blockquote", "body", "br", "dd", "div", "dl", "dt",
+    "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
+    "header", "hr", "html", "li", "main", "nav", "ol", "p", "pre", "section",
+    "table", "tbody", "tfoot", "thead", "tr", "ul",
+})
+# Bodies excluded from customer text: script/style are markup machinery;
+# blockquote is the HTML-native quoted-prior-message marker.
+_EXCLUDED_CONTENT_TAGS = frozenset({"script", "style", "blockquote"})
+
+
 class _HTMLTextExtractor(HTMLParser):
-    def __init__(self) -> None:
+    """Extract text with line boundaries at block tags.
+
+    Block-level tags emit newlines so downstream line-based hygiene sees the
+    structure rich HTML encodes in tags; inline tags emit spaces as before.
+    script/style bodies (and blockquote bodies when ``exclude_blockquote``)
+    are excluded. Excluded content is buffered, not discarded: if a
+    script/style scope never closes (malformed HTML puts the parser in CDATA
+    mode and would otherwise swallow the rest of the ticket), the buffered
+    text is recovered tag-stripped at EOF so customer text is never lost. An
+    unclosed blockquote stays excluded -- a quote running to end-of-message
+    is a quote, not data loss.
+    """
+
+    def __init__(self, *, exclude_blockquote: bool = True) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
-        self._skip_depth = 0
+        self._skip_stack: list[str] = []
+        self._pending: list[str] = []
+        self._excluded = {"script", "style"}
+        if exclude_blockquote:
+            self._excluded = _EXCLUDED_CONTENT_TAGS
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         del attrs
         lowered = tag.lower()
-        if lowered in {"script", "style"}:
-            self._skip_depth += 1
-        self.parts.append(" ")
+        if lowered in self._excluded and not self._skip_stack:
+            # The excluded tag's own boundary follows the block rule too.
+            self.parts.append("\n" if lowered in _BLOCK_TAG_NAMES else " ")
+            self._skip_stack.append(lowered)
+            return
+        if self._skip_stack:
+            if lowered in self._excluded:
+                self._skip_stack.append(lowered)
+            return
+        self.parts.append("\n" if lowered in _BLOCK_TAG_NAMES else " ")
 
     def handle_endtag(self, tag: str) -> None:
         lowered = tag.lower()
-        if lowered in {"script", "style"} and self._skip_depth:
-            self._skip_depth -= 1
-        self.parts.append(" ")
+        if self._skip_stack:
+            if lowered == self._skip_stack[-1]:
+                self._skip_stack.pop()
+                if lowered in {"script", "style"}:
+                    # CDATA may have swallowed outer scopes' close tags
+                    # (<blockquote><script>x</blockquote></script>): unwind
+                    # scopes whose close tags sit in the buffer outside code
+                    # literals. If the unwind empties the stack, the tail
+                    # AFTER the last swallowed close is real markup the
+                    # parser never saw -- re-emit it. Then drop the buffer:
+                    # a closed scope's content never leaks into a later
+                    # malformed scope's recovery.
+                    buffered = "".join(self._pending)
+                    tail_from = self._unwind_swallowed_scopes(buffered)
+                    if tail_from is not None and not self._skip_stack:
+                        tail = buffered[tail_from:]
+                        if tail.strip():
+                            recovered = _extract_html_text(
+                                tail,
+                                exclude_blockquote=(
+                                    "blockquote" in self._excluded
+                                ),
+                            )
+                            if recovered.strip():
+                                self.parts.append("\n")
+                                self.parts.append(recovered)
+                    self._pending.clear()
+                if not self._skip_stack:
+                    self.parts.append(
+                        "\n" if lowered in _BLOCK_TAG_NAMES else " "
+                    )
+            return
+        self.parts.append("\n" if lowered in _BLOCK_TAG_NAMES else " ")
+
+    def _unwind_swallowed_scopes(self, buffered: str) -> int | None:
+        """Pop scopes whose close tags the buffer swallowed.
+
+        Returns the end offset just past the last consumed close tag, or
+        None when nothing was unwound. Comparison-shaped tags (preceded by
+        identifiers, not statement boundaries) count for neither opens nor
+        closes.
+        """
+
+        if not self._skip_stack or not buffered:
+            return None
+        masked = _code_literal_regions(buffered)
+        available: dict[str, int] = {}
+        ends: dict[str, list[int]] = {}
+        last_end: int | None = None
+        while self._skip_stack:
+            scope = self._skip_stack[-1]
+            if scope not in available:
+                # Close tags are never comparisons (a</b is not valid JS),
+                # so only the mask filters them; OPENS also need the
+                # statement-boundary rule to skip comparison shapes.
+                close_matches = [
+                    match
+                    for match in re.finditer(
+                        rf"</{scope}\s*>", buffered, re.IGNORECASE
+                    )
+                    if not any(
+                        lo <= match.start() <= hi for lo, hi in masked
+                    )
+                ]
+                opens = sum(
+                    1
+                    for match in re.finditer(
+                        rf"<{scope}\b[^>]*(?<!/)>", buffered, re.IGNORECASE
+                    )
+                    if not any(
+                        lo <= match.start() <= hi for lo, hi in masked
+                    )
+                    and _statement_boundary_precedes(buffered, match.start())
+                )
+                # A close belonging to a balanced pair INSIDE the buffer
+                # cannot close a pre-existing outer scope.
+                available[scope] = max(0, len(close_matches) - opens)
+                ends[scope] = [match.end() for match in close_matches]
+            if available[scope] <= 0:
+                break
+            available[scope] -= 1
+            if ends[scope]:
+                last_end = ends[scope][len(ends[scope]) - available[scope] - 1]
+            self._skip_stack.pop()
+        return last_end
 
     def handle_data(self, data: str) -> None:
-        if not self._skip_depth:
-            self.parts.append(data)
+        if self._skip_stack:
+            # Buffer whenever the parser may be in CDATA mode (an open
+            # script/style is always innermost -- CDATA parses no tags), so a
+            # malformed script nested in a blockquote can still recover the
+            # swallowed tail. Blockquote-only scopes are never buffered.
+            if self._skip_stack[-1] in {"script", "style"}:
+                self._pending.append(data)
+            return
+        self.parts.append(data)
+
+    def finalize(self) -> str:
+        self.close()
+        if self._skip_stack and self._pending:
+            # Unclosed script/style swallowed trailing content via CDATA
+            # mode. Everything before the first recognized HTML signal in
+            # the buffer is script/CSS machinery and stays excluded; the
+            # remainder is real markup the parser never saw -- re-extract it
+            # so customer text is recovered without admitting machinery.
+            # An unclosed blockquote is a quote to EOF and stays excluded.
+            if self._skip_stack[-1] in {"script", "style"}:
+                buffered = "".join(self._pending)
+                # The buffer may hold swallowed close tags of outer scopes;
+                # unwind them first. If a non-CDATA scope (an unclosed
+                # blockquote) still remains, the tail is quoted content and
+                # stays excluded.
+                self._skip_stack.pop()
+                self._unwind_swallowed_scopes(buffered)
+                if any(
+                    scope not in {"script", "style"}
+                    for scope in self._skip_stack
+                ):
+                    return "".join(self.parts)
+                start = _first_markup_outside_code_literals(buffered)
+                if start is not None:
+                    recovered = _extract_html_text(
+                        buffered[start:],
+                        exclude_blockquote="blockquote" in self._excluded,
+                    )
+                    if recovered.strip():
+                        # The scope-open boundary was already emitted per the
+                        # block rule; the recovered extraction carries its own
+                        # boundaries. Do not invent one here.
+                        self.parts.append(recovered)
+        return "".join(self.parts)
+
+
+def _first_markup_outside_code_literals(buffered: str) -> int | None:
+    """First HTML-signal offset outside string literals and comments.
+
+    Script/CSS code embeds markup in quoted templates ('<p>x</p>'),
+    template literals, regex literals, and comments; those are code, not
+    lost ticket text. Only markup in plain code context marks where real
+    trailing HTML began.
+    """
+
+    masked = _code_literal_regions(buffered)
+    candidates = [
+        match.start()
+        for pattern in (
+            _HTML_RECOVERY_TAG_RE,
+            _HTML_CUSTOM_TAG_RE,
+            _HTML_EXCLUDED_TAG_RE,
+        )
+        for match in pattern.finditer(buffered)
+    ]
+    for position in sorted(candidates):
+        if any(lo <= position <= hi for lo, hi in masked):
+            continue
+        # Tag-shaped code such as comparisons (if (x<p>y), if (x <p> y))
+        # is not markup: a real tag follows a STATEMENT boundary -- a
+        # newline, or ;{}>/ before at most intra-line whitespace -- never
+        # an identifier or expression operator.
+        if not _statement_boundary_precedes(buffered, position):
+            continue
+        return position
+    return None
+
+
+def _statement_boundary_precedes(buffered: str, position: int) -> bool:
+    i = position - 1
+    while i >= 0 and buffered[i] in " \t":
+        i -= 1
+    if i < 0:
+        return True
+    if buffered[i] == "\n":
+        return True
+    return buffered[i] in ";{}>/"
+
+
+# Recovery-only tag shape: like _HTML_SIGNAL_RE but attributes may be bare
+# booleans (<p hidden>), which real fragments use and code rarely does.
+_HTML_RECOVERY_ATTR_RE = (
+    r"(?:\s+[a-z_:][a-z0-9_:.-]*"
+    r"(?:\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]+))?)"
+)
+_HTML_RECOVERY_TAG_RE = re.compile(
+    rf"</?{_HTML_TAG_NAMES_RE}(?:{_HTML_RECOVERY_ATTR_RE})*\s*/?>",
+    re.IGNORECASE,
+)
+
+_JS_EXPRESSION_KEYWORDS = frozenset({
+    "return", "typeof", "case", "in", "of", "delete", "void", "throw",
+    "do", "else", "yield", "await", "instanceof", "new",
+})
+_JS_CONTROL_KEYWORDS = frozenset({"if", "for", "while", "switch", "catch"})
+
+
+def _code_literal_regions(buffered: str) -> list[tuple[int, int]]:
+    """Mask string/template/regex literals and comments in script text.
+
+    Regex-literal handling is deliberately bounded: a slash opens a regex
+    only in expression position (not after a value: alphanumerics, closing
+    brackets/braces, closed literals, or postfix ++/--), a slash inside a
+    character class does not close it, and a candidate that reaches a
+    newline was division all along (JS regex literals cannot span lines),
+    so a misread slash can never mask to EOF.
+    """
+
+    masked: list[tuple[int, int]] = []
+    state: str | None = None
+    start = 0
+    in_char_class = False
+    i = 0
+    length = len(buffered)
+    prev = ""
+    prev2 = ""
+    word = ""
+    prev_word = ""
+    paren_stack: list[bool] = []
+    brace_stack: list[bool] = []
+    control_paren_just_closed = False
+    block_just_closed = False
+    while i < length:
+        ch = buffered[i]
+        nxt = buffered[i + 1] if i + 1 < length else ""
+        if state is None:
+            if ch in "'\"`":
+                state, start = ch, i
+            elif ch == "/" and nxt == "/":
+                state, start = "//", i
+                i += 1
+            elif ch == "/" and nxt == "*":
+                state, start = "/*", i
+                i += 1
+            elif ch == "<" and buffered[i:i + 4] == "<!--":
+                state, start = "<!--", i
+                i += 3
+            elif ch == "/" and (
+                (word or prev_word) in _JS_EXPRESSION_KEYWORDS
+                or control_paren_just_closed
+                or block_just_closed
+                or (
+                    # "</tag>" (slash ADJACENT to <) is markup; a spaced
+                    # "< /" is a less-than operator before a regex.
+                    not (prev == "<" and i > 0 and buffered[i - 1] == "<")
+                    and prev not in ")]}\"'`"
+                    and not prev.isalnum()
+                    and not (prev in "+-" and prev2 == prev)
+                )
+            ):
+                # Expression-position slash: candidate regex literal.
+                state, start = "re", i
+                in_char_class = False
+                control_paren_just_closed = False
+            if state is None:
+                if ch.isspace():
+                    # Whitespace completes a word (x in /re/): remember it
+                    # for the keyword check without polluting the buffer.
+                    if word:
+                        prev_word, word = word, ""
+                elif ch.isalnum() or ch in "$_":
+                    # A word opened by "." is a property access, never an
+                    # expression keyword (obj.return / 2 is division).
+                    word = word + ch if word else ("." + ch if prev == "." else ch)
+                    prev2, prev = prev, ch
+                else:
+                    if ch == "(":
+                        # Remember whether this paren is a control-flow
+                        # header: its close puts a slash in expression
+                        # position (if (ok) /re/) unlike a value paren.
+                        paren_stack.append(
+                            (word or prev_word) in _JS_CONTROL_KEYWORDS
+                        )
+                        control_paren_just_closed = False
+                        block_just_closed = False
+                    elif ch == ")":
+                        control_paren_just_closed = (
+                            paren_stack.pop() if paren_stack else False
+                        )
+                        block_just_closed = False
+                    elif ch == "{":
+                        # A block brace (after a control header, statement
+                        # boundary, or start) closes into statement
+                        # position; an object-literal brace is a value.
+                        brace_stack.append(
+                            control_paren_just_closed
+                            or prev in ";{}"
+                            or prev == ""
+                        )
+                        control_paren_just_closed = False
+                        block_just_closed = False
+                    elif ch == "}":
+                        block_just_closed = (
+                            brace_stack.pop() if brace_stack else False
+                        )
+                        control_paren_just_closed = False
+                    elif not ch.isspace():
+                        control_paren_just_closed = False
+                        block_just_closed = False
+                    word = ""
+                    prev_word = ""
+                    prev2, prev = prev, ch
+        elif state == "re":
+            if ch == "\\":
+                i += 1
+            elif ch == "\n":
+                # JS regex literals cannot span lines: this was division.
+                state = None
+                prev2, prev = "", "/"
+            elif ch == "[":
+                in_char_class = True
+            elif ch == "]":
+                in_char_class = False
+            elif ch == "/" and not in_char_class:
+                masked.append((start, i))
+                state = None
+                # A closed regex is a value and consumes any keyword
+                # context: a following slash is division.
+                prev2, prev = "", ")"
+                word = ""
+                prev_word = ""
+        elif state in "'\"`":
+            if ch == "\\":
+                i += 1
+            elif ch == state:
+                masked.append((start, i))
+                state = None
+                # A closed literal is a value and consumes any keyword
+                # context: a following slash is division.
+                prev2, prev = "", ch
+                word = ""
+                prev_word = ""
+        elif state == "//":
+            if ch == "\n":
+                masked.append((start, i))
+                state = None
+        elif state == "/*":
+            if ch == "*" and nxt == "/":
+                masked.append((start, i + 1))
+                state = None
+                i += 1
+        elif state == "<!--":
+            # In script text "<!--" behaves as a line comment.
+            if ch == "\n":
+                masked.append((start, i))
+                state = None
+            elif buffered[i:i + 3] == "-->":
+                masked.append((start, i + 2))
+                state = None
+                i += 2
+        i += 1
+    if state == "re":
+        # Unterminated regex candidate at EOF: mask it. The newline reset
+        # already bounds candidates to one line, so this can swallow at
+        # most the final line, never the buffer.
+        masked.append((start, length - 1))
+    elif state is not None:
+        # Unterminated string/comment runs to EOF: everything after it is
+        # still code context, never recoverable ticket text.
+        masked.append((start, length - 1))
+    return masked
+
+
+def _extract_html_text(text: str, *, exclude_blockquote: bool) -> str:
+    parser = _HTMLTextExtractor(exclude_blockquote=exclude_blockquote)
+    parser.feed(text)
+    return parser.finalize()
 
 
 def support_ticket_plain_text(value: Any) -> str:
@@ -325,19 +751,57 @@ def support_ticket_plain_text(value: Any) -> str:
         if not _looks_like_html(decoded):
             return _compact(decoded)
         text = decoded
-    parser = _HTMLTextExtractor()
     try:
-        parser.feed(text)
-        parser.close()
-        parsed = "".join(parser.parts)
+        parsed = _extract_html_text(text, exclude_blockquote=True)
+        compacted = _compact(parsed)
+        if compacted:
+            return compacted
+        # An all-quote body would otherwise turn a previously admitted row
+        # empty; keep the unexcluded extraction rather than losing the row.
+        parsed = _extract_html_text(text, exclude_blockquote=False)
     except Exception:
         parsed = _TAG_FALLBACK_RE.sub(" ", text)
     return _compact(parsed)
 
 
+def support_ticket_plain_text_lines(value: Any) -> str:
+    """Return readable text with line boundaries preserved.
+
+    The line-preserving seam for downstream line-based hygiene (scalar
+    history signature/quote handling and the junk/auto-reply gate): block
+    tags become newlines, each line is whitespace-compacted, and empty lines
+    are dropped. Plain-text input keeps its own newlines. Quoted
+    ``blockquote`` bodies and script/style bodies are excluded with no
+    all-quote fallback -- an all-quote body is genuinely empty of new
+    customer text for hygiene purposes.
+    """
+
+    raw = str(value or "")
+    if not raw.strip():
+        return ""
+    text = raw
+    if not _looks_like_html(text):
+        decoded = unescape(text)
+        if not _looks_like_html(decoded):
+            return _compact_lines(decoded)
+        text = decoded
+    try:
+        parsed = _extract_html_text(text, exclude_blockquote=True)
+    except Exception:
+        parsed = _TAG_FALLBACK_RE.sub(" ", text)
+    return _compact_lines(parsed)
+
+
+def _compact_lines(text: str) -> str:
+    lines = [_compact(line) for line in text.split("\n")]
+    return "\n".join(line for line in lines if line)
+
+
 def _looks_like_html(text: str) -> bool:
     return bool(
         _HTML_SIGNAL_RE.search(text)
+        or _HTML_EXCLUDED_TAG_AT_START_RE.search(text)
+        or _HTML_EXCLUDED_TAG_AT_END_RE.search(text)
         or _HTML_CUSTOM_TAG_RE.search(text)
     )
 
@@ -707,5 +1171,6 @@ __all__ = [
     "support_ticket_cluster_quality",
     "support_ticket_cluster_summary",
     "support_ticket_plain_text",
+    "support_ticket_plain_text_lines",
     "support_ticket_tokens",
 ]

@@ -11,10 +11,14 @@ on:
       - "scripts/codex_wake_bridge.py"
       - "scripts/codex_issue_queue.py"
       - "scripts/install_codex_wake_bridge.py"
+      - "scripts/pr_watcher.py"
+      - "scripts/report_pr_watcher_state.py"
       - "tests/test_audit_pr_watcher_safety.py"
       - "tests/test_codex_wake_bridge.py"
       - "tests/test_codex_issue_queue.py"
       - "tests/test_install_codex_wake_bridge.py"
+      - "tests/test_pr_watcher.py"
+      - "tests/test_report_pr_watcher_state.py"
 
 jobs:
   codex-wake-bridge:
@@ -36,5 +40,7 @@ jobs:
             tests/test_codex_wake_bridge.py \
             tests/test_codex_issue_queue.py \
             tests/test_install_codex_wake_bridge.py \
+            tests/test_pr_watcher.py \
+            tests/test_report_pr_watcher_state.py \
             tests/test_audit_pr_watcher_safety.py \
             -q

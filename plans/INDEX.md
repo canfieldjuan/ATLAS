@@ -1,6 +1,6 @@
 # Plan archive index
 
-1390 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1400 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1225,6 +1225,7 @@
 - [PR-Maturity-Sweep-Report-Validation-Tighten](archive/PR-Maturity-Sweep-Report-Validation-Tighten.md) - lane: ci/maturity-sweep | phase: Production hardening
 - [PR-Maturity-Sweep-Robust-Gate](archive/PR-Maturity-Sweep-Robust-Gate.md) - lane: ci/maturity-sweep | phase: Production hardening (CI enforcement)
 - [PR-Mobile-NPM-Security-Patches](archive/PR-Mobile-NPM-Security-Patches.md) - lane: security/dependencies | phase: Production hardening
+- [PR-NeMo-Requirements-Dedup](archive/PR-NeMo-Requirements-Dedup.md) - lane: dependency-hardening/python-requirements | phase: Production hardening
 - [PR-Negatives-Presence-Gate](archive/PR-Negatives-Presence-Gate.md) - lane: workflow/negatives-presence-gate | phase: Workflow/process
 - [PR-Npm-Package-CI-Enrollment](archive/PR-Npm-Package-CI-Enrollment.md) - lane: security/dependencies | phase: Workflow/process
 - [PR-Npm-Security-Patch-Batch](archive/PR-Npm-Security-Patch-Batch.md) - lane: security/dependencies | phase: Production hardening
@@ -1235,10 +1236,12 @@
 - [PR-OptionA-5](archive/PR-OptionA-5.md)
 - [PR-Orphan-Detector-Question-Stacked](archive/PR-Orphan-Detector-Question-Stacked.md) - lane: `content-ops/blog-orphan-detector`
 - [PR-PR-Body-Contract-Gate](archive/PR-PR-Body-Contract-Gate.md) - lane: pr-workflow-tooling | phase: Production hardening
+- [PR-Plan-Admission-Contract](archive/PR-Plan-Admission-Contract.md) - lane: dev-workflow/plan-admission | phase: Workflow/process
 - [PR-Plans-Archive-Tooling](archive/PR-Plans-Archive-Tooling.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Plans-Check-Wiring](archive/PR-Plans-Check-Wiring.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Post-575-Extraction-State-Closeout](archive/PR-Post-575-Extraction-State-Closeout.md)
 - [PR-Post-586-Content-Ops-Closeout](archive/PR-Post-586-Content-Ops-Closeout.md)
+- [PR-Pre-Push-Caller-Hints-Timeout](archive/PR-Pre-Push-Caller-Hints-Timeout.md) - lane: workflow/pre-push-audit-performance | phase: Workflow/process
 - [PR-Producer-Fidelity-Fixture-Factory](archive/PR-Producer-Fidelity-Fixture-Factory.md) - lane: Workflow/process | phase: Robust testing
 - [PR-Product-Gap-Company-Organization-Alias](archive/PR-Product-Gap-Company-Organization-Alias.md) - lane: deflection/product-gap-hardening | phase: Production hardening
 - [PR-Product-Gap-Owner-Lane-Precedence](archive/PR-Product-Gap-Owner-Lane-Precedence.md) - lane: deflection/product-gap-hardening | phase: Production hardening
@@ -1247,6 +1250,8 @@
 - [PR-Product-Gaps-CSV-QA-Proof](archive/PR-Product-Gaps-CSV-QA-Proof.md) - lane: deflection/product-gaps-report-shape | phase: Functional validation
 - [PR-Product-Gaps-Jira-Copy-Action](archive/PR-Product-Gaps-Jira-Copy-Action.md) - lane: deflection/product-gaps-report-shape | phase: Product polish
 - [PR-Public-Landing-Page-Renderer-V1](archive/PR-Public-Landing-Page-Renderer-V1.md) - lane: content-ops/public-landing-page-renderer-v1
+- [PR-Public-Lane-Contract](archive/PR-Public-Lane-Contract.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
+- [PR-Python-Transitive-Constraints-Lock](archive/PR-Python-Transitive-Constraints-Lock.md) - lane: dependency-hardening/python-requirements | phase: Production hardening
 - [PR-Reachability-Proof-Review-Rule](archive/PR-Reachability-Proof-Review-Rule.md) - lane: workflow/process | phase: Workflow/process
 - [PR-React-Hooks-Patch-Web-Batch](archive/PR-React-Hooks-Patch-Web-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-Ready-Review-PR-Docs](archive/PR-Ready-Review-PR-Docs.md)
@@ -1291,6 +1296,10 @@
 - [PR-Resolution-Audit-S4-Synthesis](archive/PR-Resolution-Audit-S4-Synthesis.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-S5-Clustering-Implementation](archive/PR-Resolution-Audit-S5-Clustering-Implementation.md) - lane: resolution-audit-csv | phase: Vertical slice
 - [PR-Resolution-Audit-S5-Clustering-Spike](archive/PR-Resolution-Audit-S5-Clustering-Spike.md) - lane: resolution-audit-csv | phase: Functional validation
+- [PR-Resolution-Audit-S6A-Structured-Privacy-Semantics](archive/PR-Resolution-Audit-S6A-Structured-Privacy-Semantics.md) - lane: resolution-audit/privacy-admission | phase: Vertical slice
+- [PR-Resolution-Audit-S6A2-Authoritative-Source-Admission](archive/PR-Resolution-Audit-S6A2-Authoritative-Source-Admission.md) - lane: resolution-audit/privacy-admission | phase: Production hardening
+- [PR-Resolution-Audit-S6C-Scalar-History](archive/PR-Resolution-Audit-S6C-Scalar-History.md) - lane: resolution-audit-csv | phase: Production hardening
+- [PR-Resolution-Audit-S6D-M9-Status-Outcome-Synonyms](archive/PR-Resolution-Audit-S6D-M9-Status-Outcome-Synonyms.md) - lane: resolution-audit-csv | phase: Production hardening
 - [PR-Resolution-Audit-Self-Correction](archive/PR-Resolution-Audit-Self-Correction.md) - lane: workflow/process | phase: workflow/process
 - [PR-Resolution-Audit-Zendesk-Writeback](archive/PR-Resolution-Audit-Zendesk-Writeback.md) - lane: content-ops/resolution-audit-zendesk-writeback | phase: Vertical slice
 - [PR-Retired-Failure-Detector-Workflow](archive/PR-Retired-Failure-Detector-Workflow.md) - lane: workflow/retired-failure-detectors | phase: Workflow/process
@@ -1322,6 +1331,7 @@
 - [PR-Security-Structured-JSON-Logging](archive/PR-Security-Structured-JSON-Logging.md) - lane: security/structured-json-logging | phase: Production hardening
 - [PR-Semantic-Diff-Advisor-CI](archive/PR-Semantic-Diff-Advisor-CI.md) - lane: review-workflow | phase: workflow/process
 - [PR-Session-Bootstrap-Temporal-Discipline](archive/PR-Session-Bootstrap-Temporal-Discipline.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
+- [PR-Session-Lane-Admission](archive/PR-Session-Lane-Admission.md) - lane: dev-workflow/session-lane-admission | phase: Workflow/process
 - [PR-Spark-Routing-Light-Enforcement](archive/PR-Spark-Routing-Light-Enforcement.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Spark-Subagent-Routing-Docs](archive/PR-Spark-Subagent-Routing-Docs.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Stale-Base-Push-Guard](archive/PR-Stale-Base-Push-Guard.md) - lane: workflow/process | phase: Workflow/process

@@ -20,13 +20,23 @@ from .support_ticket_clustering import (
     support_ticket_cluster_quality,
     support_ticket_cluster_summary,
     support_ticket_plain_text,
+    support_ticket_plain_text_lines,
 )
 from .support_ticket_context_contract import (
     SUPPORT_TICKET_DEFAULT_TOPIC,
     UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD,
     support_ticket_topic_filter,
 )
-from .support_ticket_dates import parse_support_ticket_source_date
+from .support_ticket_dates import (
+    DATE_CONVENTION_AMBIGUOUS,
+    infer_support_ticket_date_convention,
+    parse_support_ticket_source_date,
+)
+from .support_ticket_junk import support_ticket_row_is_junk
+from .support_ticket_privacy import (
+    support_ticket_comment_is_private,
+    support_ticket_row_is_private,
+)
 
 
 DEFAULT_SUPPORT_TICKET_OUTPUTS: tuple[str, ...] = (
@@ -87,6 +97,57 @@ _QUESTION_STARTS = (
     "where ",
     "why ",
 )
+_HISTORY_BLANK_LINE_RE = re.compile(r"\n[^\S\r\n]*\n+")
+_HISTORY_HTML_BLANK_RE = re.compile(
+    r"(?:<br\s*/?>\s*){2,}|"
+    r"<(?P<history_blank_tag>p|div)\b[^>]*>\s*"
+    r"(?:(?:&nbsp;|&#(?:160|x0*a0);|<br\s*/?>)\s*)*"
+    r"</(?P=history_blank_tag)>",
+    re.IGNORECASE,
+)
+_HISTORY_SIGNATURE_BOUNDARY_RE = re.compile(r"^\s*(?:--+|__+)\s*$")
+_HISTORY_MOBILE_SIGNATURE_RE = re.compile(
+    r"^\s*sent from my (?:iphone|ipad|android(?: phone| device)?|mobile device)"
+    r"(?:\s*[,;-]\s*(?:please\s+)?(?:excuse|pardon)"
+    r"(?:\s+(?:any|the))?\s+(?:typos?|errors?))?"
+    r"\.?\s*$",
+    re.IGNORECASE,
+)
+_HISTORY_ORIGINAL_MESSAGE_RE = re.compile(r"^\s*-{2,}\s*original message\s*-{2,}\s*$", re.I)
+_HISTORY_QUOTED_REPLY_HEADER_RE = re.compile(
+    r"^\s*on\s+(?P<history_reply_prefix>[^\n]{1,280})\s+wrote:\s*$", re.I)
+_HISTORY_QUOTE_PREFIX_RE = re.compile(r"^\s*(?:>\s*)+(?P<history_quoted_line>.*)$")
+_HISTORY_ANGLE_EMAIL_RE = re.compile(r"<[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}>")
+_HISTORY_REPLY_DATE_RE = re.compile(
+    r"(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|"
+    r"\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,4})?\b|\d{1,2}\s+"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b",
+    re.IGNORECASE,
+)
+_HISTORY_REPLY_EMAIL_RE = re.compile(r"<[^>]+@[^>]+>|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.I)
+_HISTORY_MAIL_HEADER_RE = re.compile(r"^(?P<history_header_name>[A-Za-z][A-Za-z-]{0,40}):")
+_HISTORY_MAIL_HEADER_LOOKAHEAD = 12
+_HISTORY_PERSON_TOKEN = r"[^\W\d_][^\W\d_.'\u2019-]*"
+_HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE = re.compile(r"^(?:customer|requester|user)\s*:", re.I)
+_HISTORY_SIGNATURE_PERSON_RE = re.compile(
+    rf"^{_HISTORY_PERSON_TOKEN}(?:\s+{_HISTORY_PERSON_TOKEN}){{0,3}}$"
+)
+_HISTORY_VALEDICTION_RE = re.compile(
+    r"^(?:thanks|thank you|best|regards|sincerely|cheers)[,!]?$", re.I
+)
+_HISTORY_SIGNATURE_LOOKAHEAD = 10
+_HISTORY_SIGNATURE_CONTACT_RE = re.compile(
+    r"[\w.+-]+@"
+    r"[\w.-]+\.[a-z]{2,}|https?://|www\.|(?:^|\s)\+?\d[\d .()/-]{6,}\d(?:\s|$)",
+    re.IGNORECASE,
+)
+_HISTORY_EVENT_POLICY = {
+    "blank": ("", False),
+    "quote": ("quote", False),
+    "signature": ("signature", False),
+    "customer": ("", True),
+}
 
 _SOURCE_ID_KEYS = ("source_id", "ticket_id", "id", "case_id", "conversation_id")
 _SOURCE_TITLE_KEYS = (
@@ -121,6 +182,9 @@ _TEXT_KEYS = (
     "notes",
     "summary",
 )
+_CUSTOMER_BODY_KEYS = tuple(
+    key for key in _TEXT_KEYS if key not in _SOURCE_TITLE_KEYS
+)
 _PUBLIC_COMMENT_KEYS = (
     "comments",
     "messages",
@@ -135,6 +199,9 @@ _PUBLIC_COMMENT_KEYS = (
     "history",
     "conversation_history",
 )
+_SCALAR_HISTORY_KEYS = frozenset((
+    "ticket_history", "history", "conversation_history",
+))
 _RESOLUTION_TEXT_KEYS = (
     "resolution",
     "resolution_text",
@@ -296,6 +363,39 @@ _OPEN_STATUS_VALUES = frozenset({
     "investigating",
     "active",
 })
+_STATUS_BUCKET_VALUES = (
+    ("reopened", _REOPENED_STATUS_VALUES),
+    ("resolved", _RESOLVED_STATUS_VALUES),
+    ("cancelled", _CANCELLED_STATUS_VALUES),
+    ("open", _OPEN_STATUS_VALUES),
+)
+# Exact word sequences for existing multi-word lifecycle aliases. A phrase may
+# use the full normalized key only when its words and internal delimiters match
+# this grammar; unknown or wrapped word boundaries stay fail-closed.
+_STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES = frozenset({
+    ("awaiting", "customer"),
+    ("customer", "response"),
+    ("in", "progress"),
+    ("in", "review"),
+    ("on", "hold"),
+    ("pending", "customer"),
+    ("pending", "customer", "approval"),
+    ("pending", "customer", "response"),
+    ("pending", "deployment"),
+    ("resolved", "under", "monitoring"),
+    ("testing", "monitoring"),
+    ("to", "do"),
+    ("under", "review"),
+    ("waiting", "on", "customer"),
+})
+# Exact spellings retained from the prior punctuation-erasing normalizer. They
+# are deliberately finite: arbitrary punctuation must not turn unknown words
+# into a lifecycle alias.
+_STATUS_EXACT_LEGACY_SPELLING_KEYS = {"re-opened": "reopened"}
+_STATUS_EXACT_COMPOUND_PHRASE_RE = re.compile(
+    r"[a-z0-9]+(?:[ \t_:|/>-]+[a-z0-9]+)+", re.IGNORECASE,
+)
+_STATUS_MACRO_SUFFIX_SEPARATOR_RE = re.compile(r":\s*|\s+(?:[-|/>])\s+")
 
 
 def build_support_ticket_input_package(
@@ -331,6 +431,8 @@ def build_support_ticket_input_package(
             "message": "No support-ticket source rows were provided.",
         })
     source_date_signal_count = 0
+    junk_excluded_counts: dict[str, int] = {}
+    raw_date_values: list[Any] = []
     for index, row in enumerate(raw_rows[:max_rows], start=1):
         if not isinstance(row, Mapping):
             warnings.append({
@@ -340,7 +442,18 @@ def build_support_ticket_input_package(
             })
             continue
         row_lookup = _SupportTicketRowLookup(row)
+        # The date convention is a property of the EXPORT, not of admission:
+        # a row excluded later (junk auto-reply, missing text) still proves
+        # how the export tool wrote dates. Only the count of evidence is
+        # used; excluded rows' values never egress.
+        raw_date_values.append(row_lookup.first_value(_DATE_KEYS))
         normalized = _normalize_ticket_row(row_lookup, row_index=index)
+        junk_reason = normalized.pop("_junk_reason", None) if normalized else None
+        if junk_reason:
+            junk_excluded_counts[junk_reason] = (
+                junk_excluded_counts.get(junk_reason, 0) + 1
+            )
+            continue
         if normalized:
             normalized_rows.append(normalized)
             # Carry the date-column-present signal out-of-band rather than
@@ -400,12 +513,34 @@ def build_support_ticket_input_package(
             "row_count": cluster_diagnostics["token_set_row_count"],
             "max_token_set_rows": cluster_diagnostics["max_token_set_rows"],
         })
+    if junk_excluded_counts:
+        warnings.append({
+            "code": "support_ticket_junk_excluded",
+            "count": sum(junk_excluded_counts.values()),
+            "reasons": dict(sorted(junk_excluded_counts.items())),
+            "message": (
+                "Excluded auto-generated/no-content rows from billed "
+                "clusters."
+            ),
+        })
+    date_convention = infer_support_ticket_date_convention(raw_date_values)
+    if date_convention == DATE_CONVENTION_AMBIGUOUS:
+        warnings.append({
+            "code": "support_ticket_date_convention_ambiguous",
+            "message": (
+                "Numeric ticket dates contradict each other (both day-first "
+                "and month-first evidence); ambiguous dates were left "
+                "unparsed rather than guessed."
+            ),
+        })
+    _normalize_row_created_dates(normalized_rows, convention=date_convention)
     date_diagnostics = _source_date_diagnostics(
-        normalized_rows, source_date_signal_count=source_date_signal_count
+        normalized_rows,
+        source_date_signal_count=source_date_signal_count,
+        convention=date_convention,
     )
-    has_valid_date_window = (
-        bool(normalized_rows) and date_diagnostics["missing_count"] == 0
-    )
+    date_diagnostics["date_convention"] = date_convention
+    has_valid_date_window = _date_window_is_valid(date_diagnostics)
     if (
         normalized_rows
         and not has_valid_date_window
@@ -494,6 +629,12 @@ def build_support_ticket_input_package(
     }
     if has_valid_date_window:
         inputs["faq_window_days"] = window_days
+        latest_source_date = date_diagnostics.get("latest_source_date")
+        if latest_source_date is not None:
+            # Anchor the window to the DATA's own recency. The downstream
+            # builder falls back to date.today() without an anchor, which
+            # empties a stale-but-valid upload's report (#2056).
+            inputs["faq_as_of_date"] = latest_source_date.isoformat()
 
     metadata: dict[str, Any] = {
         "source": "support_ticket_input_package",
@@ -514,6 +655,11 @@ def build_support_ticket_input_package(
         "ticket_status_present_count": ticket_status_present_count,
         "ticket_status_summary": ticket_status_summary,
         "source_id_fallback_count": len(source_id_fallback_rows),
+        "support_ticket_date_convention": date_diagnostics.get(
+            "date_convention", "unknown"
+        ),
+        "junk_excluded_count": sum(junk_excluded_counts.values()),
+        "junk_excluded_reasons": dict(sorted(junk_excluded_counts.items())),
         "csat_present": csat_present_count > 0,
         "csat_present_count": csat_present_count,
         "csat_score_count": len(csat_scores),
@@ -528,6 +674,7 @@ def build_support_ticket_input_package(
         )
     return ContentOpsInputPackage(
         provider=_clean(provider) or "support_ticket_upload",
+        authoritative_input_keys=("source_material",),
         outputs=_normalize_outputs(outputs),
         target_mode="vendor_retention",
         ingestion_profile="existing_evidence",
@@ -588,8 +735,37 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         return {}
     if not isinstance(row, _SupportTicketRowLookup):
         row = _SupportTicketRowLookup(row)
+    if support_ticket_row_is_private(row):
+        return {}
     source_title = support_ticket_plain_text(_first_text(row, _SOURCE_TITLE_KEYS))
     text = _ticket_text(row, source_title=source_title)
+    raw_body = _first_text(row, _TEXT_KEYS)
+    raw_comments = _raw_comment_texts(row)
+    raw_scalar_history = any(isinstance(value := _first_value(row, (key,)), str) and value.strip() for key in _SCALAR_HISTORY_KEYS)
+    body_part = support_ticket_plain_text_lines(raw_body)
+    if body_part:
+        # A row with real customer body text is judged on that body; a
+        # generated auto-ack COMMENT must not junk a real ticket.
+        gate_parts = [body_part]
+    else:
+        gate_parts = [
+            support_ticket_plain_text_lines(comment)
+            for comment in raw_comments
+        ]
+    gate_body = "\n".join(part for part in gate_parts if part)
+    junk_reason = support_ticket_row_is_junk(
+        source_title,
+        gate_body,
+        had_source_text=bool(raw_body.strip() or any(raw_comments) or raw_scalar_history),
+    )
+    explicit_evidence = _first_text(row, _RESOLUTION_TEXT_KEYS) or _evidence_text(
+        _first_value(row, _MEASURED_OUTCOME_KEYS))
+    if junk_reason is None and raw_scalar_history and not gate_body and not explicit_evidence:
+        junk_reason = support_ticket_row_is_junk("", "", had_source_text=True)
+    if junk_reason:
+        # Junk rows (auto-replies, bounces, no-new-content) must not count
+        # toward billed clusters (F2); the caller counts the bounded reason.
+        return {"_junk_reason": junk_reason}
     if not text:
         return {}
     source_id = _first_text(row, _SOURCE_ID_KEYS)
@@ -613,8 +789,12 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     measured_outcome = _evidence_text(_first_value(row, _MEASURED_OUTCOME_KEYS))
     if measured_outcome:
         normalized["measured_outcome"] = _clip_text(measured_outcome, max_chars=500)
-    if _has_customer_text(row):
-        normalized["_customer_text_present"] = True
+    admitted_customer_wording = _admitted_customer_wording(
+        row,
+        source_title=source_title,
+    )
+    if admitted_customer_wording:
+        normalized["_admitted_customer_wording"] = admitted_customer_wording
     for key in _PASSTHROUGH_KEYS:
         value = row.get(key)
         if value not in (None, "", [], {}):
@@ -658,7 +838,7 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
 def _support_ticket_row_evidence_tier(row: Mapping[str, Any]) -> str:
     if _clean(row.get("resolution_text")):
         return "csv_full_thread_resolution_evidence"
-    if row.get("_customer_text_present"):
+    if row.get("_admitted_customer_wording"):
         return "csv_customer_text"
     return "csv_index_metadata_only"
 
@@ -670,13 +850,36 @@ def _support_ticket_evidence_tier(
 ) -> str:
     if resolution_evidence_count > 0:
         return "csv_full_thread_resolution_evidence"
-    if any(row.get("_customer_text_present") for row in rows):
+    if any(row.get("_admitted_customer_wording") for row in rows):
         return "csv_customer_text"
     return "csv_index_metadata_only"
 
 
-def _has_customer_text(row: Mapping[str, Any]) -> bool:
-    return bool(_first_text(row, _TEXT_KEYS) or _comments_text(row))
+def _admitted_customer_wording(
+    row: Mapping[str, Any],
+    *,
+    source_title: str,
+) -> str:
+    parts = [
+        _first_hygiene_preserved_text(row, _CUSTOMER_BODY_KEYS),
+        *(
+            support_ticket_plain_text_lines(comment)
+            for comment in _raw_comment_texts(row)
+        ),
+    ]
+    wording = support_ticket_plain_text("\n".join(part for part in parts if part))
+    return wording or _question_like(source_title)
+
+
+def _first_hygiene_preserved_text(
+    row: Mapping[str, Any],
+    keys: Sequence[str],
+) -> str:
+    for key in keys:
+        text = support_ticket_plain_text_lines(_first_text(row, (key,)))
+        if text:
+            return text
+    return ""
 
 
 def _routing_context_value(value: Any) -> Any:
@@ -720,6 +923,35 @@ def _ticket_text(row: Mapping[str, Any], *, source_title: str) -> str:
     return support_ticket_plain_text("\n".join(parts))
 
 
+def _raw_comment_texts(row: Mapping[str, Any]) -> list[str]:
+    """Public comment texts with their line structure intact for the junk
+    gate; `_comments_text` compacts per comment, which erases the line
+    boundaries the assertion patterns key on."""
+
+    texts: list[str] = []
+    for key in _PUBLIC_COMMENT_KEYS:
+        comments = _first_value(row, (key,))
+        if isinstance(comments, Mapping):
+            comments = (comments,)
+        elif isinstance(comments, str):
+            if key in _SCALAR_HISTORY_KEYS:
+                text = _scalar_history_text(comments)
+                if text:
+                    texts.append(text)
+                continue
+            comments = (comments,)
+        elif not isinstance(comments, Sequence) or isinstance(
+            comments,
+            (bytes, bytearray),
+        ):
+            continue
+        for item in comments:
+            text = _comment_text(item)
+            if text:
+                texts.append(text)
+    return texts
+
+
 def _comments_text(row: Mapping[str, Any]) -> str:
     parts: list[str] = []
     for key in _PUBLIC_COMMENT_KEYS:
@@ -727,6 +959,11 @@ def _comments_text(row: Mapping[str, Any]) -> str:
         if isinstance(comments, Mapping):
             comments = (comments,)
         elif isinstance(comments, str):
+            if key in _SCALAR_HISTORY_KEYS:
+                text = _scalar_history_text(comments)
+                if text:
+                    parts.append(text)
+                continue
             comments = (comments,)
         elif not isinstance(comments, Sequence) or isinstance(
             comments,
@@ -740,9 +977,138 @@ def _comments_text(row: Mapping[str, Any]) -> str:
     return support_ticket_plain_text("\n".join(parts))
 
 
+def _scalar_history_text(value: Any) -> str:
+    """Admit new messages while excluding scalar transcript quote/footer runs."""
+
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not raw.strip():
+        return ""
+    blank_marker = "ATLAS_HISTORY_BLANK_BOUNDARY"
+    while blank_marker in raw:
+        blank_marker += "_"
+    marked = _HISTORY_HTML_BLANK_RE.sub(f"\n{blank_marker}\n", raw)
+    marked = _HISTORY_BLANK_LINE_RE.sub(f"\n{blank_marker}\n", marked)
+    marked = _HISTORY_ANGLE_EMAIL_RE.sub(
+        lambda match: match.group(0).replace("<", "&lt;").replace(">", "&gt;"), marked
+    )
+    lines = support_ticket_plain_text_lines(marked).splitlines()
+
+    admitted: list[str] = []
+    skip_mode = ""
+    for line_index, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        event = _history_line_event(
+            lines, line_index=line_index, line=line, blank_marker=blank_marker
+        )
+        policy = _HISTORY_EVENT_POLICY.get(event)
+        if policy:
+            skip_mode, emit = policy
+        else:
+            emit = not skip_mode
+        if emit:
+            admitted.append(line)
+    return "\n".join(admitted)
+
+
+def _history_line_event(
+    lines: Sequence[str], *, line_index: int, line: str, blank_marker: str
+) -> str:
+    if not line or line == blank_marker:
+        return "blank"
+    probe, _ = _history_line_probe(line)
+    if _history_line_is_reply_header(
+        lines, line_index=line_index, line=line, blank_marker=blank_marker
+    ):
+        return "quote"
+    if _history_line_starts_signature(
+        lines, line_index=line_index, line=line, blank_marker=blank_marker
+    ):
+        return "signature"
+    if _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(probe):
+        return "customer"
+    return "text"
+
+
+def _history_line_probe(line: str) -> tuple[str, bool]:
+    """Return detection text without mutating customer-visible quote markers."""
+
+    match = _HISTORY_QUOTE_PREFIX_RE.fullmatch(line)
+    if not match:
+        return line.strip(), False
+    return match.group("history_quoted_line").strip(), True
+
+
+def _history_line_is_reply_header(
+    lines: Sequence[str], *, line_index: int, line: str, blank_marker: str
+) -> bool:
+    probe, header_is_quoted = _history_line_probe(line)
+    if _HISTORY_ORIGINAL_MESSAGE_RE.fullmatch(probe):
+        from_seen = timestamp_seen = False
+        for item in lines[
+            line_index + 1 : line_index + 1 + _HISTORY_MAIL_HEADER_LOOKAHEAD
+        ]:
+            if item.strip() == blank_marker:
+                break
+            tail_probe, _ = _history_line_probe(item.strip())
+            header_match = _HISTORY_MAIL_HEADER_RE.match(tail_probe)
+            if not header_match:
+                break
+            header_name = header_match.group("history_header_name").lower()
+            from_seen = from_seen or header_name == "from"
+            timestamp_seen = timestamp_seen or header_name in {"sent", "date"}
+        return from_seen and timestamp_seen
+    match = _HISTORY_QUOTED_REPLY_HEADER_RE.fullmatch(probe)
+    if not match:
+        return False
+    prefix = match.group("history_reply_prefix")
+    if not _HISTORY_REPLY_DATE_RE.search(prefix):
+        return False
+    if header_is_quoted or _HISTORY_REPLY_EMAIL_RE.search(prefix):
+        return True
+    for item in lines[line_index + 1 : line_index + 4]:
+        candidate = item.strip()
+        if not candidate or candidate == blank_marker:
+            continue
+        _, candidate_is_quoted = _history_line_probe(candidate)
+        return candidate_is_quoted
+    return False
+
+
+def _history_line_starts_signature(
+    lines: Sequence[str], *, line_index: int, line: str, blank_marker: str
+) -> bool:
+    probe, _ = _history_line_probe(line)
+    if _HISTORY_MOBILE_SIGNATURE_RE.fullmatch(probe):
+        return True
+    if not _HISTORY_SIGNATURE_BOUNDARY_RE.fullmatch(probe):
+        return False
+    tail = lines[line_index + 1 : line_index + 1 + _HISTORY_SIGNATURE_LOOKAHEAD]
+    signature_head_seen = False
+    for item in tail:
+        candidate = item.strip()
+        if candidate == blank_marker:
+            return False
+        candidate_probe, _ = _history_line_probe(candidate)
+        if _HISTORY_EXPLICIT_CUSTOMER_BOUNDARY_RE.match(candidate_probe):
+            return False
+        if not signature_head_seen and _HISTORY_VALEDICTION_RE.fullmatch(candidate_probe):
+            continue
+        if not signature_head_seen:
+            signature_head_seen = bool(
+                _HISTORY_SIGNATURE_PERSON_RE.fullmatch(candidate_probe)
+                and all(token[:1].isupper() for token in candidate_probe.split())
+            )
+            if not signature_head_seen:
+                return False
+            continue
+        if _HISTORY_SIGNATURE_CONTACT_RE.search(candidate_probe):
+            return True
+    return False
+
+
 def _comment_text(item: Any) -> str:
     if isinstance(item, Mapping):
-        if item.get("public") is False:
+        if support_ticket_comment_is_private(item):
             return ""
         return _first_text(item, ("body", "message", "text", "content", "description"))
     return _clean(item)
@@ -799,7 +1165,7 @@ def _customer_wording_examples(
 ) -> list[dict[str, Any]]:
     examples: list[dict[str, Any]] = []
     for row in rows:
-        text = _compact(row.get("text"))
+        text = _compact(row.get("_admitted_customer_wording"))
         if not text:
             continue
         example = {
@@ -877,18 +1243,49 @@ def _measured_outcome_examples(
     return examples
 
 
+def _status_state_for_key(key: str) -> str:
+    for state, accepted_values in _STATUS_BUCKET_VALUES:
+        if key in accepted_values:
+            return state
+    return "other"
+
+
+def _status_state_for_exact_phrase(raw: str) -> str:
+    phrase = _clean(raw)
+    legacy_key = _STATUS_EXACT_LEGACY_SPELLING_KEYS.get(phrase.lower())
+    if legacy_key:
+        return _status_state_for_key(legacy_key)
+
+    tokens = tuple(re.findall(r"[a-z0-9]+", phrase.lower()))
+    if len(tokens) == 1:
+        token, = tokens
+        if phrase.lower() == token:
+            return _status_state_for_key(token)
+    if (
+        _STATUS_EXACT_COMPOUND_PHRASE_RE.fullmatch(phrase)
+        and tokens in _STATUS_EXACT_COMPOUND_TOKEN_SEQUENCES
+    ):
+        return _status_state_for_key("".join(tokens))
+    return "other"
+
+
 def _normalize_status_state(value: Any) -> str:
-    key = _key(value)
-    if not key:
+    raw = _clean(value)
+    if not raw:
         return ""
-    if key in _REOPENED_STATUS_VALUES:
-        return "reopened"
-    if key in _RESOLVED_STATUS_VALUES:
-        return "resolved"
-    if key in _CANCELLED_STATUS_VALUES:
-        return "cancelled"
-    if key in _OPEN_STATUS_VALUES:
-        return "open"
+    if raw.startswith((":", "-", "|", "/", ">")):
+        return "other"
+
+    exact_state = _status_state_for_exact_phrase(raw)
+    if exact_state != "other":
+        return exact_state
+
+    for separator in _STATUS_MACRO_SUFFIX_SEPARATOR_RE.finditer(raw):
+        if not any(character.isalnum() for character in raw[separator.end():]):
+            continue
+        leading_state = _status_state_for_exact_phrase(raw[:separator.start()])
+        if leading_state != "other":
+            return leading_state
     return "other"
 
 
@@ -950,14 +1347,56 @@ def _clip_text(value: str, *, max_chars: int) -> str:
     return f"{trimmed}..."
 
 
+# A window stays valid while at least this share of included rows carry a
+# parseable date: one blank export cell must not flip the report onto the
+# dateless x12 run-rate basis, while sparse dates must not fake a window.
+DATE_WINDOW_MIN_COVERAGE = 0.9
+
+
+def _date_window_is_valid(diagnostics: Mapping[str, Any]) -> bool:
+    included = int(diagnostics.get("included_count") or 0)
+    dated = int(diagnostics.get("dated_count") or 0)
+    if included <= 0:
+        return False
+    return dated / included >= DATE_WINDOW_MIN_COVERAGE
+
+
 def _all_rows_have_dates(rows: Sequence[Mapping[str, Any]]) -> bool:
     return bool(rows) and _source_date_diagnostics(rows)["missing_count"] == 0
+
+
+def _normalize_row_created_dates(
+    rows: Sequence[dict[str, Any]],
+    *,
+    convention: str,
+) -> None:
+    """Rewrite parseable created_at values to ISO once, at admission.
+
+    Downstream consumers (markdown recency, sorting) re-parse row dates;
+    canonicalizing here means the upload-level convention decision is made
+    exactly once and can never transpose later.
+    """
+
+    for row in rows:
+        raw = row.get("created_at")
+        if raw in (None, ""):
+            continue
+        parsed = parse_support_ticket_source_date(raw, convention=convention)
+        if parsed is not None:
+            row["created_at"] = parsed.isoformat()
+        else:
+            # Downstream consumers re-parse row dates with their own
+            # defaults; a raw value this boundary refused to interpret
+            # (ambiguous or malformed) must not leak out to be guessed at.
+            # The invariant: created_at is canonical ISO or absent.
+            row.pop("created_at", None)
 
 
 def _source_date_diagnostics(
     rows: Sequence[Mapping[str, Any]],
     *,
     source_date_signal_count: int | None = None,
+    convention: str = "unknown",
 ) -> dict[str, Any]:
     # The date-column-present signal is supplied out-of-band (computed during
     # row normalization) so it never has to ride on the row dicts. When it is
@@ -966,12 +1405,18 @@ def _source_date_diagnostics(
     # (the warning trigger), not for the missing_count window gate.
     dated_count = 0
     fallback_signal_count = 0
+    latest_source_date = None
     missing_source_ids: list[str] = []
     for index, row in enumerate(rows, start=1):
         if source_date_signal_count is None and _clean(row.get("created_at")) != "":
             fallback_signal_count += 1
-        if parse_support_ticket_source_date(row.get("created_at")) is not None:
+        parsed = parse_support_ticket_source_date(
+            row.get("created_at"), convention=convention
+        )
+        if parsed is not None:
             dated_count += 1
+            if latest_source_date is None or parsed > latest_source_date:
+                latest_source_date = parsed
             continue
         source_id = _clean(row.get("source_id")) or f"row-{index}"
         missing_source_ids.append(source_id)
@@ -979,6 +1424,7 @@ def _source_date_diagnostics(
         "included_count": len(rows),
         "dated_count": dated_count,
         "missing_count": len(rows) - dated_count,
+        "latest_source_date": latest_source_date,
         "source_date_signal_count": (
             source_date_signal_count
             if source_date_signal_count is not None
@@ -997,6 +1443,7 @@ def _date_window_disabled_warning(diagnostics: Mapping[str, Any]) -> dict[str, A
     missing_count = int(diagnostics.get("missing_count") or 0)
     return {
         "code": "support_ticket_date_window_disabled",
+        "date_convention": diagnostics.get("date_convention", "unknown"),
         "message": (
             "Disabled the dated support-ticket source window because "
             f"{missing_count} of {included_count} included ticket rows did not "

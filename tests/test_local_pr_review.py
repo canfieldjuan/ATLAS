@@ -117,6 +117,7 @@ def test_local_pr_review_runs_pr_body_contract_when_body_supplied(tmp_path: Path
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PR body contract" in result.stdout
     assert f"--repo-root {repo}" in result.stdout
+    assert "--base-ref origin/main" in result.stdout
     assert f" {body}" in result.stdout
     assert "local PR review passed" in result.stdout
 
@@ -149,6 +150,7 @@ def test_local_pr_review_forwards_pr_author_to_body_contract(tmp_path: Path) -> 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "--pr-author dependabot[bot]" in result.stdout
+    assert "--base-ref origin/main" in result.stdout
 
 
 def test_local_pr_review_env_pr_author_reaches_body_contract(tmp_path: Path) -> None:
@@ -176,6 +178,27 @@ def test_local_pr_review_env_pr_author_reaches_body_contract(tmp_path: Path) -> 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "--pr-author app/dependabot" in result.stdout
+    assert "--base-ref origin/main" in result.stdout
+
+
+def test_local_pr_review_forwards_pr_author_to_pre_push_audit(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_executable(
+        repo / "scripts" / "pre_push_audit.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'pre-push args=%s\\n' \"$*\"\n",
+    )
+    _git(repo, "add", "scripts/pre_push_audit.sh")
+    _git(repo, "commit", "-m", "capture pre-push args")
+
+    result = _run(
+        repo,
+        ["bash", "scripts/local_pr_review.sh", "--pr-author", "dependabot[bot]"],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pre-push args=--repo-root" in result.stdout
+    assert "--pr-author dependabot[bot]" in result.stdout
 
 
 def test_local_pr_review_env_pr_body_contract_fails_closed(tmp_path: Path) -> None:
@@ -212,7 +235,11 @@ def test_local_pr_review_real_body_audit_honors_dependabot_exemption(
         repo / "scripts" / "audit_pr_body.py",
         (REPO_ROOT / "scripts" / "audit_pr_body.py").read_text(encoding="utf-8"),
     )
-    _git(repo, "add", "scripts/audit_pr_body.py")
+    _write_executable(
+        repo / "scripts" / "_pr_change_policy.py",
+        (REPO_ROOT / "scripts" / "_pr_change_policy.py").read_text(encoding="utf-8"),
+    )
+    _git(repo, "add", "scripts/audit_pr_body.py", "scripts/_pr_change_policy.py")
     _git(repo, "commit", "-m", "add real body audit")
 
     result = _run(
@@ -315,6 +342,10 @@ def test_local_pr_review_body_audit_inspects_repo_root_plan_with_trusted_scripts
         (REPO_ROOT / "scripts" / "audit_pr_body.py").read_text(encoding="utf-8"),
     )
     _write_executable(
+        trusted / "scripts" / "_pr_change_policy.py",
+        (REPO_ROOT / "scripts" / "_pr_change_policy.py").read_text(encoding="utf-8"),
+    )
+    _write_executable(
         trusted / "scripts" / "pre_push_audit.sh",
         "#!/usr/bin/env bash\nset -euo pipefail\necho trusted pre-push ok\n",
     )
@@ -352,6 +383,7 @@ def _valid_pr_body(plan: str) -> str:
     return "\n".join([
         f"Plan: {plan}",
         "Slice phase: Production hardening",
+        "Ownership lane: dev-workflow/process-gate-enrollment",
         "",
         "One-paragraph why.",
         "",

@@ -28,7 +28,9 @@ from extracted_content_pipeline.faq_deflection_report import (
     DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
     DEFLECTION_REPORT_SCHEMA_VERSION,
     FAQDeflectionReportService,
+    build_deflection_report_artifact,
 )
+from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1280,86 +1282,57 @@ async def test_deflection_report_search_only_returns_portfolio_renderable_items(
 @pytest.mark.asyncio
 async def test_deflection_report_storage_gate_scrubs_supported_pii() -> None:
     store = InMemoryDeflectionReportArtifactStore()
-    unsafe_artifact = {
-        "markdown": (
-            "# Report\n\n"
-            "How do I reset access for jane.doe@acme.com?\n"
-            "Call _555-123-4567_ and confirm account 4829103.\n"
-            "Customer: Jane Doe moved to 123 Maple Street Apt 4B.\n"
+    pii_item = {
+        "question": "How do I reset access for jane.doe@acme.com?",
+        "question_source": "customer_wording",
+        "customer_wording": "Call 555-123-4567 for account 4829103.",
+        "topic": "access",
+        "weighted_frequency": 2,
+        "ticket_count": 2,
+        "opportunity_score": 9,
+        "answer": (
+            "Reset _jane.doe@acme.com_ after confirming account 4829103 "
+            "for customer: Jane Doe at 123 Maple Street Apt 4B. "
+            "The customer is Jane Smith ticket was closed. "
+            "The customer id is 123e4567-e89b-12d3-a456-426614174000."
         ),
-        "summary": {
-            "generated": 1,
-            "drafted_answer_count": 1,
-            "no_proven_answer_count": 0,
-        },
-        "faq_result": {
-            "items": [
-                {
-                    "question": "How do I reset access for jane.doe@acme.com?",
-                    "question_source": "customer_wording",
-                    "customer_wording": "Call 555-123-4567 for account 4829103.",
-                    "weighted_frequency": 2,
-                    "ticket_count": 2,
-                    "answer": (
-                        "Reset _jane.doe@acme.com_ after confirming account 4829103 "
-                        "for customer: Jane Doe at 123 Maple Street Apt 4B. "
-                        "The customer is Jane Smith ticket was closed. "
-                        "The customer id is 123e4567-e89b-12d3-a456-426614174000."
-                    ),
-                    "steps": [
-                        "Remove XXXXX before publishing.",
-                        "Escalate case 999999 if the reset still fails.",
-                        "Check opaque migration token CUST-9XQ7-ABCD.",
-                        "Requester name is Jane Doe.",
-                        "Mail a label to 123 Maple Street Apt 4B.",
-                        "customer id is 12345678.",
-                        "case CVE-2021-44228 should remain diagnostic context.",
-                    ],
-                    "source_ids": ["4829103", "777777"],
-                    "evidence_quotes": [
-                        "`4829103`: jane.doe@acme.com called _555-123-4567_."
-                    ],
-                    "answer_evidence_status": "resolution_evidence",
-                    "resolution_evidence_scope": "scoped",
-                }
-            ]
-        },
-        "report_model": {
-            "schema_version": DEFLECTION_REPORT_SCHEMA_VERSION,
-            "title": "Support Ticket Deflection Report",
-            "summary": {"generated": 1},
-            "sections": [
-                {
-                    "id": "question_details",
-                    "title": "Question Details and Evidence",
-                    "priority": 40,
-                    "surfaces": ["web"],
-                    "default_limit": None,
-                    "required_data": ["rows"],
-                    "data": {
-                        "rows": [
-                            {
-                                "question": "How do I reset jane.doe@acme.com?",
-                                "answer": (
-                                    "Confirm account 4829103 for jane.doe@acme.com."
-                                    " Requester name is Jane Doe at 123 Maple Street."
-                                ),
-                            }
-                        ]
-                    },
-                }
-            ],
-        },
-        "evidence_export": {
-            "schema_version": DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
-            "evidence_rows": [
-                {
-                    "source_id": "4829103",
-                    "evidence_quote": "jane.doe@acme.com called 555-123-4567.",
-                }
-            ],
-        },
+        "steps": [
+            "Remove XXXXX before publishing.",
+            "Escalate case 999999 if the reset still fails.",
+            "Check opaque migration token CUST-9XQ7-ABCD.",
+            "Requester name is Jane Doe.",
+            "Mail a label to 123 Maple Street Apt 4B.",
+            "customer id is 12345678.",
+            "case CVE-2021-44228 should remain diagnostic context.",
+        ],
+        "source_ids": ["4829103", "777777"],
+        "evidence_quotes": [
+            "`4829103`: jane.doe@acme.com called _555-123-4567_."
+        ],
+        "answer_evidence_status": "resolution_evidence",
+        "resolution_evidence_scope": "scoped",
     }
+    # Built through the REAL artifact builder (not a hand-rolled shape):
+    # the storage boundary now refuses structurally-invalid artifacts via
+    # the QA gate, so the PII-scrub proof must ride a valid artifact.
+    unsafe_artifact = build_deflection_report_artifact(
+        TicketFAQMarkdownResult(
+            markdown=(
+                "# Report\n\n"
+                "How do I reset access for jane.doe@acme.com?\n"
+                "Call _555-123-4567_ and confirm account 4829103.\n"
+                "Customer: Jane Doe moved to 123 Maple Street Apt 4B.\n"
+            ),
+            source_count=2,
+            ticket_source_count=2,
+            output_checks={"condensed": True},
+            items=(pii_item,),
+        )
+    ).as_dict()
+    # The real builder embeds the derived evidence_export, and its rows
+    # carry the same PII (source ids, quotes) as the item above; the QA
+    # gate scores that STORED export, so the test must not replace it.
+    assert "jane.doe" in json.dumps(unsafe_artifact["evidence_export"])
 
     gated = await api_module._gate_deflection_report_artifacts(
         {
@@ -2257,6 +2230,67 @@ async def test_deflection_submit_accepts_full_thread_multipart_json_upload() -> 
     assert payload["input_provider"]["warnings"] == []
     assert "Internal note" not in json.dumps(payload)
     assert "A member of the support team will get back to you" not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_excludes_nested_private_comments_from_stored_artifact() -> None:
+    private_sentinel = "PRIVATE NESTED WORKAROUND MUST NOT REACH THE REPORT"
+    public_question = "How do I export an attribution report?"
+    public_comment_sentinel = "Where can I download the attribution CSV export?"
+    tickets = []
+    for ticket_id in (101, 102):
+        requester_id = ticket_id * 10
+        tickets.append({
+            "ticket": {
+                "id": ticket_id,
+                "requester_id": requester_id,
+                "subject": "Attribution export help",
+                "description": public_question,
+                "status": "open",
+            },
+            "comments": [
+                {
+                    "author_id": requester_id,
+                    "visibility": "requester",
+                    "plain_body": public_comment_sentinel,
+                },
+                {
+                    "author_id": 999,
+                    "visibility": {"private": {"value": True}},
+                    "plain_body": private_sentinel,
+                },
+            ],
+        })
+    artifact_data = json.dumps({"tickets": tickets}).encode("utf-8")
+    store = InMemoryDeflectionReportArtifactStore()
+    submit = _route(_router(store), "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "json_file": _Upload(artifact_data, filename="zendesk-thread.json"),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+        "importer_mode": "full_thread",
+    })
+
+    payload = await submit.endpoint(request)
+    request_id = payload["request_id"]
+    snapshot = await store.get_snapshot(
+        account_id="acct-portfolio-submit",
+        request_id=request_id,
+    )
+    record = await store.get_artifact_record(
+        account_id="acct-portfolio-submit",
+        request_id=request_id,
+    )
+
+    assert payload["status"] == "completed"
+    assert payload["input_provider"]["metadata"]["included_row_count"] == 2
+    assert snapshot is not None
+    assert record is not None
+    assert public_comment_sentinel in json.dumps(record.artifact)
+    assert private_sentinel not in json.dumps(payload)
+    assert private_sentinel not in json.dumps(snapshot)
+    assert private_sentinel not in json.dumps(record.artifact)
 
 
 @pytest.mark.asyncio
@@ -3338,3 +3372,94 @@ async def test_publish_macros_partial_generated_draft_publishes_nothing() -> Non
     assert boundary.calls == []
     assert repo.update_calls == []
     assert repo.stored_status == "draft"
+
+
+# S8a: fail-closed QA gate at the persist boundary -- a drifted artifact is
+# refused with the failing assertion ids and never enters the store.
+
+
+def _valid_report_artifact_dict() -> dict:
+    return build_deflection_report_artifact(
+        TicketFAQMarkdownResult(
+            markdown="# Report\n\nHow do I export data?\n",
+            source_count=2,
+            ticket_source_count=2,
+            output_checks={"condensed": True},
+            items=(
+                {
+                    "question": "How do I export data?",
+                    "question_source": "customer_wording",
+                    "customer_wording": "export data",
+                    "topic": "exports",
+                    "weighted_frequency": 2,
+                    "ticket_count": 2,
+                    "opportunity_score": 9,
+                    "answer": "Open Settings and choose Export.",
+                    "steps": ["Open Settings and choose Export."],
+                    "source_ids": ["ticket-1", "ticket-2"],
+                    "evidence_quotes": ["`ticket-1` - export data"],
+                    "answer_evidence_status": "resolution_evidence",
+                    "resolution_evidence_scope": "scoped",
+                },
+            ),
+        )
+    ).as_dict()
+
+
+def _execution_result_with_artifact(artifact: dict) -> dict:
+    return {
+        "status": "completed",
+        "steps": [
+            {
+                "output": "faq_deflection_report",
+                "status": "completed",
+                "result": artifact,
+            }
+        ],
+    }
+
+
+async def test_storage_gate_refuses_drifted_artifact_and_persists_nothing() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    drifted = _valid_report_artifact_dict()
+    drifted["report_model"] = dict(drifted["report_model"])
+    drifted["report_model"]["schema_version"] = "deflection.v999"
+
+    with pytest.raises(api_module.HTTPException) as exc_info:
+        await api_module._gate_deflection_report_artifacts(
+            _execution_result_with_artifact(drifted),
+            store_provider=lambda: store,
+            scope=TenantScope(account_id="acct-qa"),
+            request_id="request-qa-drifted",
+            top_n=1,
+            teaser_preview_count=1,
+        )
+
+    assert exc_info.value.status_code == 502
+    assert "deflection_report_qa_gate_failed" in str(exc_info.value.detail)
+    assert "model.schema_version" in str(exc_info.value.detail)
+    record = await store.get_artifact_record(
+        account_id="acct-qa",
+        request_id="request-qa-drifted",
+    )
+    assert record is None
+
+
+async def test_storage_gate_persists_a_healthy_artifact_through_the_qa_gate() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+
+    gated = await api_module._gate_deflection_report_artifacts(
+        _execution_result_with_artifact(_valid_report_artifact_dict()),
+        store_provider=lambda: store,
+        scope=TenantScope(account_id="acct-qa"),
+        request_id="request-qa-healthy",
+        top_n=1,
+        teaser_preview_count=1,
+    )
+
+    record = await store.get_artifact_record(
+        account_id="acct-qa",
+        request_id="request-qa-healthy",
+    )
+    assert record is not None
+    assert gated["steps"][0]["status"] == "completed"

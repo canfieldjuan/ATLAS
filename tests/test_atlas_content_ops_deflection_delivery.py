@@ -1963,3 +1963,26 @@ def test_deflection_report_result_url_defaults_to_live_portfolio_result_route() 
 def test_deflection_report_result_url_requires_configured_destination() -> None:
     with pytest.raises(ValueError, match="result_base_url or result_url_template"):
         deflection_report_result_url(request_id="req-123", config=_config(result_base_url=""))
+
+
+# S8b: signed delta money rounds HALF-UP (the canonical deflection_money
+# rule) at display -- f-string float formatting rounded half-even.
+
+
+def test_signed_email_money_rounds_half_up_on_both_signs() -> None:
+    from atlas_brain.content_ops_deflection_delivery import _signed_email_money
+
+    assert _signed_email_money(2.5) == "+$3"
+    assert _signed_email_money(-2.5) == "-$3"
+    assert _signed_email_money(1.5) == "+$2"
+    assert _signed_email_money(0) == "$0"
+
+
+def test_signed_delta_compute_quantizes_half_up() -> None:
+    from extracted_content_pipeline.deflection_money import (
+        signed_support_cost_delta_usd,
+    )
+
+    assert signed_support_cost_delta_usd(2.005) == 2.01
+    assert signed_support_cost_delta_usd(-2.005) == -2.01
+    assert signed_support_cost_delta_usd(0) == 0.0

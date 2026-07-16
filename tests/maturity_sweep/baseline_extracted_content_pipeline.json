@@ -894,13 +894,6 @@
     },
     "score": 4
   },
-  "extracted_content_pipeline/storage/models.py": {
-    "counts": {
-      "HAPPY_PATH_TESTS": 1,
-      "NO_RAISES_TESTS": 1
-    },
-    "score": 7
-  },
   "extracted_content_pipeline/storage/repositories/scheduled_task.py": {
     "counts": {
       "INTERNAL_MOCK": 1
@@ -926,9 +919,10 @@
   },
   "extracted_content_pipeline/support_ticket_dates.py": {
     "counts": {
-      "SWALLOWED_EXCEPT": 3
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 4
     },
-    "score": 15
+    "score": 23
   },
   "extracted_content_pipeline/support_ticket_generated_content_eval.py": {
     "counts": {
@@ -939,13 +933,26 @@
   },
   "extracted_content_pipeline/support_ticket_input_package.py": {
     "counts": {
-      "HAPPY_PATH_TESTS": 1,
       "HEURISTIC_COMMENT": 2,
-      "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 1
     },
-    "score": 16
+    "score": 9
+  },
+  "extracted_content_pipeline/support_ticket_junk.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1,
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 11
+  },
+  "extracted_content_pipeline/support_ticket_privacy.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "UNGUARDED_INDEX": 2
+    },
+    "score": 7
   },
   "extracted_content_pipeline/text_truncate.py": {
     "counts": {
@@ -963,7 +970,7 @@
   "extracted_content_pipeline/ticket_faq_markdown.py": {
     "counts": {
       "SWALLOWED_EXCEPT": 2,
-      "UNGUARDED_INDEX": 32
+      "UNGUARDED_INDEX": 33
     },
     "score": 16
   },

@@ -185,6 +185,144 @@ def test_validate_repo_path_rejects_absolute_path(auditor) -> None:
         auditor.validate_repo_path("/tmp/outside.py")
 
 
+def test_batched_reference_scan_reads_each_file_once(
+    auditor,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    symbol_count = 60
+    file_count = 20
+    symbols = tuple(
+        auditor.ChangedSymbol(
+            path="pkg/lib.py",
+            name=f"helper_{index}",
+            qualname=f"helper_{index}",
+            kind="function",
+            line=index + 1,
+        )
+        for index in range(symbol_count)
+    )
+    paths = tuple(f"callers/caller_{index}.py" for index in range(file_count))
+    calls = "\n".join(f"helper_{index}(value)" for index in range(symbol_count))
+    for path in paths:
+        _write(tmp_path, path, calls + "\n")
+
+    reads: dict[str, int] = {}
+    original_read_text = auditor.Path.read_text
+
+    def counted_read_text(path: Path, *args, **kwargs) -> str:
+        key = path.as_posix()
+        reads[key] = reads.get(key, 0) + 1
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(auditor.Path, "read_text", counted_read_text)
+
+    references = auditor.find_references_by_symbol(symbols, paths)
+
+    assert reads == {path: 1 for path in paths}
+    assert all(len(references[symbol]) == file_count for symbol in symbols)
+
+
+def test_batched_reference_scan_preserves_same_name_symbol_patterns(
+    auditor,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    function = auditor.ChangedSymbol(
+        path="pkg/lib.py",
+        name="normalize",
+        qualname="normalize",
+        kind="function",
+        line=1,
+    )
+    method = auditor.ChangedSymbol(
+        path="pkg/service.py",
+        name="normalize",
+        qualname="Normalizer.normalize",
+        kind="function",
+        line=2,
+    )
+    _write(
+        tmp_path,
+        "caller.py",
+        "normalize(value)\nservice.normalize(value)\nnormalized = value\n",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    references = auditor.find_references_by_symbol(
+        (function, method),
+        ("caller.py",),
+    )
+
+    assert [reference.line for reference in references[function]] == [1, 2]
+    assert [reference.line for reference in references[method]] == [2]
+
+
+def test_batched_reference_scan_keeps_malformed_python_fallback(
+    auditor,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    symbol = auditor.ChangedSymbol(
+        path="pkg/lib.py",
+        name="normalize",
+        qualname="normalize",
+        kind="function",
+        line=1,
+    )
+    _write(tmp_path, "broken.py", 'text = """\nnormalize(value)\n')
+    monkeypatch.chdir(tmp_path)
+
+    references = auditor.find_references_by_symbol((symbol,), ("broken.py",))
+
+    assert [reference.line for reference in references[symbol]] == [2]
+
+
+def test_batched_reference_scan_keeps_non_python_comment_filter(
+    auditor,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    symbol = auditor.ChangedSymbol(
+        path="pkg/lib.py",
+        name="normalize",
+        qualname="normalize",
+        kind="function",
+        line=1,
+    )
+    _write(
+        tmp_path,
+        "caller.ts",
+        "// normalize(value)\nconst value = normalize(input)\n# normalize(value)\n",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    references = auditor.find_references_by_symbol((symbol,), ("caller.ts",))
+
+    assert [reference.line for reference in references[symbol]] == [2]
+
+
+def test_batched_reference_scan_skips_non_utf8_files(
+    auditor,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    symbol = auditor.ChangedSymbol(
+        path="pkg/lib.py",
+        name="normalize",
+        qualname="normalize",
+        kind="function",
+        line=1,
+    )
+    (tmp_path / "caller.py").write_bytes(b"normalize(value)\n\xff")
+    monkeypatch.chdir(tmp_path)
+
+    references = auditor.find_references_by_symbol((symbol,), ("caller.py",))
+
+    assert references[symbol] == ()
+
+
 def _write_fixture_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
+from .deflection_money import signed_support_cost_delta_usd
+
 
 DEFLECTION_DELTA_SCHEMA_VERSION = "deflection_delta.v1"
 SUPPORTED_DEFLECTION_MODEL_SCHEMA_VERSION = "deflection.v1"
@@ -134,7 +136,7 @@ def _delta_row(
         "ticket_count_delta": current_count - baseline_count,
         "current_estimated_support_cost": current_cost,
         "baseline_estimated_support_cost": baseline_cost,
-        "support_cost_delta": round(current_cost - baseline_cost, 2),
+        "support_cost_delta": signed_support_cost_delta_usd(current_cost - baseline_cost),
         "current_csat_signal": _csat(current_row),
         "baseline_csat_signal": _csat(baseline_row),
         "change_types": _change_types(current_row, baseline_row, effective_confidence),
@@ -206,7 +208,7 @@ def _summary(
         "matched_item_count": sum(
             1 for item in items if item["current_status"] and item["baseline_status"]
         ),
-        "support_cost_delta": round(sum(float(item["support_cost_delta"]) for item in items), 2),
+        "support_cost_delta": signed_support_cost_delta_usd(sum(float(item["support_cost_delta"]) for item in items)),
     }
     for change in (
         "NEW",

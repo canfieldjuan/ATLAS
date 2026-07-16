@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 from typing import Any, Sequence
 
+from codex_wake_bridge import attention_blockers, readiness_blockers
+
 
 def _json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     try:
@@ -21,50 +23,49 @@ def _json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return value, None
 
 
-def _gh_pr_state(pr: object, fallback: str) -> str:
+def _gh_pr_metadata(
+    pr: object,
+    fallback: dict[str, Any],
+) -> tuple[dict[str, Any], str | None]:
     if not pr:
-        return fallback
+        return fallback, "PR number is missing; live GitHub refresh was not run"
     try:
         proc = subprocess.run(
-            ["gh", "pr", "view", str(pr), "--json", "state", "--jq", ".state"],
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr),
+                "--json",
+                "state,headRefOid,mergeStateStatus,reviewDecision,isDraft",
+            ],
             check=False,
             capture_output=True,
             text=True,
         )
-    except OSError:
-        return fallback
+    except OSError as exc:
+        return fallback, f"live GitHub refresh failed: {exc}"
     if proc.returncode != 0:
-        return fallback
-    return proc.stdout.strip() or fallback
-
-
-def _truthy(value: Any) -> bool:
-    if value is None or value is False or value == "" or value == 0:
-        return False
-    return bool(value)
-
-
-def _has_failure_detail(data: dict[str, Any]) -> bool:
-    return any(
-        [
-            _truthy(data.get("head_mismatch")),
-            _truthy(data.get("worktree_dirty")),
-            _truthy(data.get("merge_error")),
-            _truthy(data.get("check_failures")),
-            data.get("reconciliation_exit_code") not in {None, 0},
-        ]
-    )
+        detail = (proc.stderr or proc.stdout or "gh pr view failed").strip()
+        return fallback, f"live GitHub refresh failed: {detail}"
+    try:
+        value = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        return fallback, f"live GitHub refresh returned invalid JSON: {exc}"
+    if not isinstance(value, dict):
+        return fallback, "live GitHub refresh did not return an object"
+    return {**fallback, **value}, None
 
 
 def _bucket(data: dict[str, Any], *, watcher_state: str, gh_state: str) -> str:
-    if _has_failure_detail(data):
+    if attention_blockers(data):
         return "attention"
     if gh_state in {"MERGED", "CLOSED"} or watcher_state == "closed":
         return "stale"
-    if watcher_state == "pending" or _truthy(data.get("check_pending")):
+    if watcher_state == "pending" or bool(data.get("check_pending")):
         return "pending"
     if watcher_state == "ready_for_human_merge":
-        return "ready"
+        return "attention" if readiness_blockers(data) else "ready"
     if watcher_state in {"attention", "review_changed"}:
         return "attention"
     return "other"
@@ -89,14 +90,21 @@ def _entries(state_dir: Path, *, skip_github: bool) -> list[dict[str, Any]]:
                 }
             )
             continue
-        pr = data.get("pr") if isinstance(data.get("pr"), dict) else {}
-        stored_gh_state = str(pr.get("state") or "unknown")
-        gh_state = stored_gh_state if skip_github else _gh_pr_state(pr.get("number"), stored_gh_state)
+        stored_pr = data.get("pr") if isinstance(data.get("pr"), dict) else {}
+        if skip_github:
+            pr = stored_pr
+            github_refresh_error = None
+        else:
+            pr, github_refresh_error = _gh_pr_metadata(stored_pr.get("number"), stored_pr)
+        effective_data = {**data, "pr": pr}
+        if github_refresh_error:
+            effective_data["view_error"] = github_refresh_error
+        gh_state = str(pr.get("state") or "unknown")
         watcher_state = str(data.get("state") or "unknown")
         entries.append(
             {
                 "path": path,
-                "bucket": _bucket(data, watcher_state=watcher_state, gh_state=gh_state),
+                "bucket": _bucket(effective_data, watcher_state=watcher_state, gh_state=gh_state),
                 "watcher_state": watcher_state,
                 "gh_state": gh_state,
                 "pr_number": pr.get("number"),
@@ -109,6 +117,10 @@ def _entries(state_dir: Path, *, skip_github: bool) -> list[dict[str, Any]]:
                 "head_mismatch": data.get("head_mismatch"),
                 "worktree_dirty": data.get("worktree_dirty"),
                 "merge_error": data.get("merge_error"),
+                "readiness_blockers": readiness_blockers(effective_data)
+                if watcher_state == "ready_for_human_merge"
+                else [],
+                "github_refresh_error": github_refresh_error,
             }
         )
     return entries
@@ -136,9 +148,14 @@ def _line(entry: dict[str, Any]) -> str:
         bits.append("worktree_dirty=true")
     if entry.get("merge_error"):
         bits.append(f"merge_error={entry.get('merge_error')}")
+    if entry.get("github_refresh_error"):
+        bits.append(f"github_refresh_error={entry.get('github_refresh_error')}")
     reconciliation = entry.get("reconciliation")
     if reconciliation not in {None, 0}:
         bits.append(f"reconciliation_exit_code={reconciliation}")
+    blockers = entry.get("readiness_blockers") or []
+    if blockers:
+        bits.append("readiness_blockers=" + "; ".join(str(item) for item in blockers))
     return " | ".join(bits)
 
 

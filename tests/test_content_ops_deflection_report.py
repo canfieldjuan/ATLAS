@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 from extracted_content_pipeline.faq_deflection_report import (
+    DeflectionReportQAGateError,
+    check_deflection_report_artifact_qa,
     DEFAULT_DEFLECTION_REPORT_TITLE,
     DEFAULT_DEFLECTION_SNAPSHOT_TITLE,
     DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
@@ -3611,6 +3613,24 @@ def test_deflection_full_report_qa_scorecard_checks_surface_caps_behaviorally() 
 
     support_tax["generated_question_count"] = 30
     ranked_rows[:] = [dict(ranked_rows[0], rank=index) for index in range(1, 31)]
+    # Keep the inflated fixture money-consistent with the S8b guard: the
+    # headline must equal the billed-repeat predicate over the new rows.
+    from extracted_content_pipeline.deflection_money import (
+        annualized_support_cost_usd,
+        support_cost_usd,
+    )
+
+    inflated_repeat = sum(
+        int(row["ticket_count"])
+        for row in ranked_rows
+        if int(row["ticket_count"]) >= 2
+    )
+    support_tax["repeat_ticket_count"] = inflated_repeat
+    support_tax["estimated_support_cost"] = support_cost_usd(inflated_repeat)
+    support_tax["annualized_support_cost"] = annualized_support_cost_usd(
+        inflated_repeat,
+        support_tax["source_date_window"]["source_window_days"],
+    )
     detail_rows[:] = [dict(detail_rows[0], rank=index) for index in range(1, 13)]
     diagnostic_rows[:] = [dict(diagnostic_rows[0]) for _ in range(30)]
     seo_targets["phrases"] = [f"phrase {index}" for index in range(1, 31)]
@@ -5455,6 +5475,21 @@ def test_outcome_diagnostics_count_duplicate_evidence_by_source_ticket() -> None
     assert "Reopened tickets: 1" in artifact.markdown
 
 
+def test_direct_subject_only_question_uses_customer_evidence_tier() -> None:
+    package = build_support_ticket_input_package([
+        {"ticket_id": "metadata", "subject": "Update billing"},
+        {"ticket_id": "subject-question", "subject": "How do I update billing?"},
+    ])
+
+    result = build_ticket_faq_markdown(package.inputs["source_material"], max_items=1)
+
+    assert [row["support_ticket_evidence_tier"] for row in package.inputs["source_material"]] == [
+        "csv_index_metadata_only",
+        "csv_customer_text",
+    ]
+    assert result.items[0]["evidence_tier"] == "csv_customer_text"
+
+
 def test_outcome_diagnostics_normalize_direct_raw_status_and_csat() -> None:
     result = build_ticket_faq_markdown(
         [
@@ -5497,6 +5532,52 @@ def test_outcome_diagnostics_normalize_direct_raw_status_and_csat() -> None:
     assert artifact.summary["outcome_risk_ticket_count"] == 1
     assert "Tickets with reopened or negative-CSAT risk: 1" in artifact.markdown
     assert "reopened: 1, resolved: 1" in artifact.markdown
+
+
+def test_outcome_diagnostics_normalize_direct_raw_compound_statuses() -> None:
+    def row(source_id: str, status_key: str, status: str) -> dict[str, str]:
+        return {
+            "source_id": source_id,
+            "source_type": "support_ticket",
+            "source_title": "Refund status diagnostic",
+            "text": "How do I get a duplicate charge refunded?",
+            "support_ticket_cluster": "duplicate charge refund",
+            status_key: status,
+        }
+
+    result = build_ticket_faq_markdown(
+        [
+            row("direct-compound-1", "ticket_status", "Reopened: Escalation macro"),
+            row("direct-compound-2", "status", "Solved - Réponse 7"),
+            row("direct-compound-3", "ticket_status", "Re: solved"),
+            row("direct-compound-4", "ticket_status", "Re: opened"),
+            row("direct-compound-5", "ticket_status", "Can: celled"),
+            row("direct-compound-6", "ticket_status", "Re -solved"),
+            row("direct-compound-7", "ticket_status", "Re solved"),
+            row("direct-compound-8", "ticket_status", "Re/Solved"),
+            row("direct-compound-9", "ticket_status", "#Pending Customer"),
+            row("direct-compound-10", "ticket_status", "Under - Review - Escalation macro"),
+            row("direct-compound-11", "ticket_status", "Solved:"),
+            row("direct-compound-12", "ticket_status", "Solved::"),
+            row("direct-compound-13", "ticket_status", "Open - -"),
+            row("direct-compound-14", "ticket_status", "Reopened: |"),
+        ],
+        max_items=1,
+    )
+
+    diagnostics = result.items[0]["outcome_diagnostics"]
+
+    assert diagnostics == {
+        "diagnostic_ticket_count": 14,
+        "outcome_risk_ticket_count": 1,
+        "reopened_ticket_count": 1,
+        "ticket_status_summary": {
+            "open": 1,
+            "other": 11,
+            "reopened": 1,
+            "resolved": 1,
+        },
+    }
 
 
 def test_deflection_snapshot_omits_contradictory_summary_date_window() -> None:
@@ -7324,3 +7405,253 @@ def test_deflection_report_cli_rejects_malformed_intent_rule(
         "--intent-rule must use topic=keyword,keyword with at least one keyword"
     )
     assert not output.exists()
+
+
+# S8a: the QA scorecard wired as a fail-closed runtime gate.
+
+
+def test_qa_gate_passes_a_healthy_artifact_and_does_not_modify_it() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    scrubbed = scrub_deflection_report_payload(artifact.as_dict())
+    before = json.dumps(scrubbed, sort_keys=True, default=str)
+
+    scorecard = check_deflection_report_artifact_qa(scrubbed)
+
+    assert scorecard["ok"] is True
+    assert scorecard["assertions"]
+    # The gate gates; it never edits the artifact.
+    assert json.dumps(scrubbed, sort_keys=True, default=str) == before
+    # The raw (pre-scrub) artifact object passes too.
+    assert check_deflection_report_artifact_qa(artifact)["ok"] is True
+
+
+def test_qa_gate_refuses_a_drifted_schema_version() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    drifted["report_model"] = dict(drifted["report_model"])
+    drifted["report_model"]["schema_version"] = "deflection.v999"
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "model.schema_version" in exc_info.value.failing_assertion_ids
+    assert "deflection_report_qa_gate_failed" in str(exc_info.value)
+    assert exc_info.value.scorecard.get("ok") is False
+
+
+def test_qa_gate_refuses_a_missing_required_section() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    model = dict(drifted["report_model"])
+    model["sections"] = [
+        section for section in model["sections"]
+        if section.get("id") != "ranked_questions"
+    ]
+    drifted["report_model"] = model
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "model.section.ranked_questions.present" in (
+        exc_info.value.failing_assertion_ids
+    )
+
+
+def test_qa_gate_fails_closed_on_an_unreadable_artifact() -> None:
+    with pytest.raises(DeflectionReportQAGateError):
+        check_deflection_report_artifact_qa({})
+
+
+# Round-1 review refinement: the gate scores the export that will be
+# STORED, not a fresh derivation -- a drifted or missing embedded
+# evidence_export must not ride through.
+
+
+def test_qa_gate_refuses_a_drifted_embedded_evidence_export() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    drifted["evidence_export"] = {
+        "schema_version": "bad",
+        "summary": {},
+        "questions": [],
+        "evidence_rows": [],
+    }
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "evidence_export.schema_version" in exc_info.value.failing_assertion_ids
+
+
+def test_qa_gate_refuses_a_missing_embedded_evidence_export() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    scrubbed = scrub_deflection_report_payload(artifact.as_dict())
+    scrubbed.pop("evidence_export", None)
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(scrubbed)
+
+    assert "evidence_export.present" in exc_info.value.failing_assertion_ids
+
+
+# Round-2 review refinements: same-count element drift and paid-reader
+# projection readability.
+
+
+def test_qa_gate_refuses_a_same_count_drifted_export() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    good = drifted["evidence_export"]
+    # Same schema version, same summary counts, same array lengths -- but
+    # the elements themselves are junk.
+    drifted["evidence_export"] = {
+        "schema_version": good["schema_version"],
+        "summary": good["summary"],
+        "questions": [{} for _ in good["questions"]],
+        "evidence_rows": [{} for _ in good["evidence_rows"]],
+    }
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "evidence_export.matches_stored_artifact" in (
+        exc_info.value.failing_assertion_ids
+    )
+
+
+def test_qa_gate_refuses_a_model_paid_readers_cannot_project() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    model = json.loads(json.dumps(drifted["report_model"], default=str))
+    for section in model["sections"]:
+        section["priority"] = "high"  # stored projection requires an int
+    drifted["report_model"] = model
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    # Round 3 upgraded the None-check to a full scorecard on the projected
+    # model; an unprojectable model now fails its section assertions.
+    assert any(
+        failing_id.startswith("stored_projection:")
+        for failing_id in exc_info.value.failing_assertion_ids
+    )
+
+
+# Round-3 review refinements (cap round): the projection paid readers see
+# is itself scorecard-checked, and linkage keys must be present even
+# though their hash content is scrub-volatile.
+
+
+def test_qa_gate_refuses_a_projection_that_drops_a_required_section() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    model = json.loads(json.dumps(drifted["report_model"], default=str))
+    for section in model["sections"]:
+        if section["id"] == "ranked_questions":
+            # The stored projection silently drops this section; the paid
+            # report-model route would then be missing it.
+            section["priority"] = "high"
+    drifted["report_model"] = model
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "stored_projection:model.section.ranked_questions.present" in (
+        exc_info.value.failing_assertion_ids
+    )
+
+
+def test_qa_gate_refuses_an_export_missing_linkage_keys() -> None:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    drifted = scrub_deflection_report_payload(artifact.as_dict())
+    export = json.loads(json.dumps(drifted["evidence_export"], default=str))
+    for element in list(export["questions"]) + list(export["evidence_rows"]):
+        element.pop("cluster_id", None)
+        element.pop("repeat_key", None)
+    drifted["evidence_export"] = export
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(drifted)
+
+    assert "evidence_export.matches_stored_artifact" in (
+        exc_info.value.failing_assertion_ids
+    )
+
+
+# S8b: money reconciliation guard (P5-7) -- the scorecard verifies every
+# money figure against the ONE billed-repeat predicate, and the S8a gate
+# makes it fail-closed at persist.
+
+
+def _drifted(mutate) -> dict:
+    artifact = build_deflection_report_artifact(_structured_report_fixture_result())
+    payload = json.loads(
+        json.dumps(
+            scrub_deflection_report_payload(artifact.as_dict()), default=str
+        )
+    )
+    mutate(payload)
+    return payload
+
+
+def _section_data(payload: dict, section_id: str) -> dict:
+    for section in payload["report_model"]["sections"]:
+        if section["id"] == section_id:
+            return section["data"]
+    raise AssertionError(f"missing section {section_id}")
+
+
+def test_money_guard_passes_the_healthy_artifact() -> None:
+    payload = _drifted(lambda p: None)
+    assert check_deflection_report_artifact_qa(payload)["ok"] is True
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_id"),
+    [
+        (
+            lambda p: _section_data(p, "support_tax").__setitem__(
+                "repeat_ticket_count", 999
+            ),
+            "money.support_tax.repeat_ticket_count.matches_predicate",
+        ),
+        (
+            lambda p: _section_data(p, "support_tax").__setitem__(
+                "estimated_support_cost", 999.0
+            ),
+            "money.support_tax.estimated_support_cost.matches_rule",
+        ),
+        (
+            lambda p: _section_data(p, "ranked_questions")["rows"][0].__setitem__(
+                "estimated_support_cost", 1.0
+            ),
+            "money.rows.each_priced_by_rule",
+        ),
+        (
+            lambda p: _section_data(p, "support_tax").__setitem__(
+                "annualized_support_cost", 5.0
+            ),
+            "money.support_tax.annualized_support_cost.matches_rule",
+        ),
+    ],
+)
+def test_money_guard_refuses_drifted_money(mutate, expected_id: str) -> None:
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(_drifted(mutate))
+    assert expected_id in exc_info.value.failing_assertion_ids
+
+
+def test_money_guard_refuses_dateless_run_rate_drift() -> None:
+    def mutate(payload: dict) -> None:
+        data = _section_data(payload, "support_tax")
+        # Flip to the dateless x12 basis with a wrong run-rate figure.
+        data["source_date_window"] = None
+        data.pop("annualized_support_cost", None)
+        data["annualized_run_rate_support_cost"] = 1.0
+
+    with pytest.raises(DeflectionReportQAGateError) as exc_info:
+        check_deflection_report_artifact_qa(_drifted(mutate))
+    assert "money.support_tax.annualized_run_rate.matches_rule" in (
+        exc_info.value.failing_assertion_ids
+    )

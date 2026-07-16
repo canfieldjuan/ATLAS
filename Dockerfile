@@ -16,8 +16,8 @@ RUN apt-get update && \
 # Set the working directory in the container
 WORKDIR /app
 
-# Copy the requirements file into the container at /app
-COPY requirements.txt .
+# Copy the requirements inputs into the container at /app
+COPY requirements.txt constraints.root-asr.txt ./
 
 # Install any needed packages specified in requirements.txt
 # Using --no-cache-dir makes the image smaller

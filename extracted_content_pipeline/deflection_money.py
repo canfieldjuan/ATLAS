@@ -31,6 +31,18 @@ def annualized_support_cost_usd(ticket_count: Any, window_days: Any) -> float:
     return float(_quantize_usd(amount))
 
 
+def signed_support_cost_delta_usd(value: Any) -> float:
+    """Quantize a SIGNED money delta with the same ROUND_HALF_UP rule.
+
+    `support_cost_usd` clamps to zero for report displays; deltas must
+    keep their sign, rounding half-up by magnitude on both sides.
+    """
+
+    amount = _coerce_decimal(value)
+    quantized = abs(amount).quantize(_CENT, rounding=ROUND_HALF_UP)
+    return float(-quantized if amount < 0 else quantized)
+
+
 def format_support_cost_usd(value: Any) -> str:
     quantized = _quantize_usd(_coerce_decimal(value))
     return f"${quantized:,.2f}"

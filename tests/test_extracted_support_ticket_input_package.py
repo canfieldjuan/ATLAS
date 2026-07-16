@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from itertools import product
 import json
 from pathlib import Path
 
@@ -462,10 +463,7 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
         "source_id": "ticket-1",
         "source_title": "How do I change my login email?",
         "pain_category": "profile updates",
-        "text": (
-            "How do I change my login email? I cannot find where to update the "
-            "email on my account."
-        ),
+        "text": "I cannot find where to update the email on my account.",
     }
     assert "support_ticket_source_summary" not in request.inputs
     assert request.inputs["faq_questions"] == [
@@ -566,6 +564,24 @@ def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None
     assert package.inputs["faq_questions"] == ["Can I automate demo follow-up?"]
     assert package.inputs["support_ticket_resolution_evidence_present"] is False
     assert package.inputs["has_dated_window"] is False
+
+
+def test_support_ticket_public_comment_markers_preserve_mixed_content_list() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "public-comment-list",
+            "subject": "How do I export invoices?",
+            "public_comments": [
+                {"visibility": "requester", "body": "Open Billing."},
+                {"body": "Choose Export CSV."},
+            ],
+        }
+    ])
+
+    assert package.metadata["included_row_count"] == 1
+    assert package.inputs["source_material"][0]["text"] == (
+        "How do I export invoices? Open Billing. Choose Export CSV."
+    )
 
 
 def test_support_ticket_input_package_surfaces_explicit_resolution_evidence() -> None:
@@ -821,7 +837,7 @@ def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> No
         "text": (
             "How do I reset MFA? I cannot get the login code on my new phone."
         ),
-        "created_at": "05/01/2026",
+        "created_at": "2026-05-01",  # canonicalized to ISO at admission (S7)
         "contact_email": "maya@example.test",
         "support_ticket_cluster": "code login mfa new",
         "support_ticket_cluster_key": "tokens:code-login-mfa-new",
@@ -833,14 +849,14 @@ def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> No
     assert rows[1]["text"] == (
         "Where do I update billing? Why was I charged twice this month?"
     )
-    assert rows[1]["created_at"] == "5/2/2026"
+    assert rows[1]["created_at"] == "2026-05-02"  # ISO at admission (S7)
     assert rows[1]["contact_email"] == "ops@example.test"
     assert rows[2]["source_id"] == "ic-300"
     assert rows[2]["source_title"] == "Cancellation before renewal"
     assert rows[2]["text"] == (
         "Cancellation before renewal How do I cancel my account before it renews?"
     )
-    assert rows[2]["created_at"] == "05-03-26"
+    assert rows[2]["created_at"] == "2026-05-03"  # ISO at admission (S7)
     assert rows[2]["contact_email"] == "founder@example.test"
 
 
@@ -995,7 +1011,10 @@ def test_support_ticket_input_package_strips_generic_provider_html_before_cluste
     assert "ignore me" not in rows[0]["text"]
     assert "answer-card" not in rows[0]["resolution_text"]
     assert "<" not in rows[0]["resolution_text"]
-    assert package.inputs["customer_wording_examples"][0]["text"] == rows[0]["text"]
+    assert package.inputs["customer_wording_examples"][0]["text"] == (
+        "How do I reset my password? Use the login screen & email link. "
+        "Customer still sees the reset error."
+    )
     assert package.inputs["faq_questions"][0] == "How do I reset my password?"
 
 
@@ -1323,6 +1342,7 @@ def test_support_ticket_input_package_warns_when_date_column_is_blank() -> None:
     assert package.warnings == (
         {
             "code": "support_ticket_date_window_disabled",
+            "date_convention": "unknown",  # S7: convention in diagnostics
             "message": (
                 "Disabled the dated support-ticket source window because "
                 "1 of 1 included ticket rows did not include a parseable "
@@ -1378,6 +1398,7 @@ def test_support_ticket_input_package_omits_window_filter_without_parseable_row_
     assert package.warnings == (
         {
             "code": "support_ticket_date_window_disabled",
+            "date_convention": "unknown",  # S7: convention in diagnostics
             "message": (
                 "Disabled the dated support-ticket source window because "
                 "1 of 1 included ticket rows did not include a parseable "
@@ -1411,6 +1432,7 @@ def test_support_ticket_input_package_omits_window_filter_for_mixed_date_rows() 
     assert package.warnings == (
         {
             "code": "support_ticket_date_window_disabled",
+            "date_convention": "unknown",  # S7: convention in diagnostics
             "message": (
                 "Disabled the dated support-ticket source window because "
                 "1 of 2 included ticket rows did not include a parseable "
@@ -1770,23 +1792,169 @@ def test_support_ticket_input_package_preserves_support_platform_provenance() ->
     assert rows[2]["support_platform"] == "intercom"
 
 
+def test_support_ticket_customer_wording_uses_admitted_text() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "stripped",
+            "subject": "Account index row",
+            "description": '<img src="tracking.gif">',
+        },
+        {
+            "ticket_id": "quoted",
+            "subject": "Account index row",
+            "description": "<blockquote>Old quoted reply?</blockquote>",
+        },
+        {"ticket_id": "ordinary", "subject": "Account index row"},
+        {"ticket_id": "summary", "summary": "Account index row"},
+        {"ticket_id": "subject-question", "subject": "How do I update billing?"},
+        {
+            "ticket_id": "body",
+            "subject": "Account index row",
+            "description": "Where do I update billing?",
+        },
+        {
+            "ticket_id": "later-body",
+            "subject": "Account index row",
+            "body": "<blockquote>Old quoted reply?</blockquote>",
+            "description": "Where do I update billing after a failed export?",
+        },
+        {
+            "ticket_id": "comment",
+            "subject": "Account index row",
+            "comments": {"body": "Can I update billing details?"},
+        },
+    ])
+
+    rows = {row["source_id"]: row for row in package.inputs["source_material"]}
+
+    assert rows["stripped"]["support_ticket_evidence_tier"] == "csv_index_metadata_only"
+    assert rows["quoted"]["support_ticket_evidence_tier"] == "csv_index_metadata_only"
+    assert rows["ordinary"]["support_ticket_evidence_tier"] == "csv_index_metadata_only"
+    assert rows["summary"]["support_ticket_evidence_tier"] == "csv_index_metadata_only"
+    assert rows["subject-question"]["support_ticket_evidence_tier"] == "csv_customer_text"
+    assert rows["body"]["support_ticket_evidence_tier"] == "csv_customer_text"
+    assert rows["later-body"]["support_ticket_evidence_tier"] == "csv_customer_text"
+    assert rows["comment"]["support_ticket_evidence_tier"] == "csv_customer_text"
+    assert [example["source_id"] for example in package.inputs["customer_wording_examples"]] == [
+        "subject-question",
+        "body",
+        "later-body",
+        "comment",
+    ]
+    assert [example["text"] for example in package.inputs["customer_wording_examples"]] == [
+        "How do I update billing?",
+        "Where do I update billing?",
+        "Where do I update billing after a failed export?",
+        "Can I update billing details?",
+    ]
+    assert package.metadata["support_ticket_evidence_tier"] == "csv_customer_text"
+
+
 def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
-    statuses = {
-        "done": "resolved",
-        "Solved": "resolved",
+    semantic_one_word_states = {
+        alias: state
+        for state, aliases in (
+            ("reopened", "reopened reopen"),
+            ("resolved", "resolved closed done solved complete completed fixed resolvedundermonitoring"),
+            ("cancelled", "cancelled canceled rejected withdrawn void"),
+            ("open", "open new todo inprogress pending pendingcustomer pendingcustomerapproval pendingcustomerresponse awaitingcustomer customerresponse waitingoncustomer pendingdeployment waiting onhold hold underreview inreview validation monitoring testingmonitoring deployment investigating active"),
+        )
+        for alias in aliases.split()
+    }
+    semantic_phrase_states = {
+        "Awaiting Customer": "open",
+        "Customer Response": "open",
         "In Progress": "open",
+        "In Review": "open",
+        "On Hold": "open",
         "Pending Customer": "open",
         "Pending Customer Approval": "open",
         "Pending Customer Response": "open",
-        "Awaiting Customer": "open",
-        "Customer Response": "open",
+        "Pending Deployment": "open",
+        "Resolved Under Monitoring": "resolved",
+        "Testing Monitoring": "open",
+        "To Do": "open",
+        "Under Review": "open",
         "Waiting on Customer": "open",
-        "reopened": "reopened",
+    }
+    semantic_phrase_token_pairs = {
+        tuple(phrase.lower().split())
+        for phrase in semantic_phrase_states
+        if len(phrase.split()) == 2
+    }
+    exact_phrase_separators = (" ", "_", "-", "|", "/", ">", ":", " - ", " | ", " / ", " > ")
+    macro_separators = (":", ": ", " - ", " | ", " / ", " > ")
+    separator_prefixes = (
+        ":", ": ", "-", "- ", "|", "| ", "/", "/ ", ">", "> ",
+    )
+    malformed_boundaries = (
+        " ", "  ", "_", "-", "- ", " -", "|", "| ", " |", "/", "/ ", " /", ">", "> ", " >",
+    )
+    exact_phrase_statuses = {
+        separator.join(phrase.lower().split()): state
+        for phrase, state in semantic_phrase_states.items()
+        for separator in exact_phrase_separators
+    }
+    compound_leader_statuses = {
+        f"{separator.join(phrase.lower().split())} - Macro {index}": state
+        for index, ((phrase, state), separator) in enumerate(
+            product(semantic_phrase_states.items(), exact_phrase_separators), start=1
+        )
+    }
+    wrapped_phrase_statuses = {
+        f"{prefix}{phrase}{suffix}": "other"
+        for phrase in semantic_phrase_states
+        for prefix, suffix in (("#", ""), ("(", ")"), ("[", "]"))
+    }
+    punctuation_only_suffixes = {
+        "".join(suffix)
+        for suffix_length in range(3)
+        for suffix in product((":", "-", "|", "/", ">", "_"), repeat=suffix_length)
+    }
+    suffix_without_content_statuses = {
+        f"{leading}{separator}{suffix}".rstrip(): "other"
+        for leading in (*semantic_one_word_states, *semantic_phrase_states)
+        for separator, suffix in product(macro_separators, punctuation_only_suffixes)
+    }
+    malformed_partition_statuses = {}
+    for alias in semantic_one_word_states:
+        for split_at in range(1, len(alias)):
+            for boundary in malformed_boundaries:
+                candidate = f"{alias[:split_at]}{boundary}{alias[split_at:]}"
+                if (
+                    (alias[:split_at], alias[split_at:]) not in semantic_phrase_token_pairs
+                    and candidate != "re-opened"
+                ):
+                    malformed_partition_statuses[candidate] = "other"
+    statuses = {
+        f"{leading}{separator}Macro {index}": state
+        for index, ((leading, state), separator) in enumerate(
+            product(semantic_one_word_states.items(), macro_separators), start=1
+        )
+    }
+    statuses.update(semantic_one_word_states)
+    statuses.update(exact_phrase_statuses)
+    statuses.update(compound_leader_statuses)
+    statuses.update(wrapped_phrase_statuses)
+    statuses.update(suffix_without_content_statuses)
+    statuses.update({
+        f"{prefix}{leading}": "other"
+        for prefix, leading in product(separator_prefixes, semantic_one_word_states)
+    })
+    statuses.update(malformed_partition_statuses)
+    statuses.update({
+        "Re-opened": "reopened",
         "Cancelled": "cancelled",
         "Escalated": "other",
         "Customer Escalation": "other",
         "Pending Vendor Approval": "other",
-    }
+        "closedeal": "other",
+        "unresolved": "other",
+        "Macro - Solved": "other",
+        "Customer Escalation: resolved": "other",
+        "Reopened - Solved macro": "reopened",
+        "Resolved: Réponse 7": "resolved",
+    })
     package = build_support_ticket_input_package([
         {
             "ticket_id": f"t-{index}",
@@ -1794,17 +1962,17 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
             "issue_status": raw,
         }
         for index, raw in enumerate(statuses, start=1)
-    ])
+    ], max_rows=len(statuses))
 
     got = {
         row["ticket_status"]: row["ticket_status_state"]
         for row in package.inputs["source_material"]
     }
     assert got == statuses
-    # the reopened bucket is the churn signal #1419/#1466 consume; keep it distinct
-    assert package.metadata["ticket_status_summary"]["reopened"] == 1
-    assert package.metadata["ticket_status_summary"]["open"] == 7
-    assert package.metadata["ticket_status_summary"]["other"] == 3
+    expected_summary: dict[str, int] = {}
+    for state in statuses.values():
+        expected_summary[state] = expected_summary.get(state, 0) + 1
+    assert package.metadata["ticket_status_summary"] == expected_summary
 
 
 def test_support_ticket_csat_parses_numeric_only_and_averages_numeric() -> None:
@@ -1892,6 +2060,135 @@ def test_support_ticket_input_package_without_status_or_csat_is_unchanged() -> N
     assert package.metadata["csat_score_average"] is None
 
 
+def _s6c_history_text(history_key: str, transcript: str) -> str:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "s6c-grammar", "subject": "Export report",
+        history_key: transcript,
+    }])
+    return package.inputs["source_material"][0]["text"]
+
+
+def test_s6c_scalar_history_generated_grammar_matches_semantic_oracle() -> None:
+    history_keys = ("ticket_history", "history", "conversation_history")
+    quote_markers = ("", "> ", ">> ")
+    for history_key, separator, header_marker, body_marker, has_email in product(
+        history_keys, ("\n", "<br>", "<br/>"), quote_markers, quote_markers,
+        (False, True),
+    ):
+        sender = "Jos\u00e9 Garc\u00eda"
+        if has_email:
+            sender += " <jose@example.com>"
+        reply_evidence = bool(header_marker or body_marker or has_email)
+        text = _s6c_history_text(
+            history_key,
+            f"Current question.{separator}{header_marker}On Monday, {sender} wrote:{separator}"
+            f"{body_marker}Old reply body.",
+        )
+        assert "Current question." in text
+        assert ("Old reply body." not in text) is reply_evidence
+
+    boundary_oracle = (
+        ("\nLater customer message.", False),
+        ("\n\nLater customer message.", True),
+        ("\n\u00a0\nLater customer message.", True),
+        ("\n<div>&nbsp;</div>\nLater customer message.", True),
+        ("\nCustomer: Later customer message.", True),
+    )
+    for history_key, mode, (boundary, resumes) in product(
+        history_keys, ("quote", "signature"), boundary_oracle
+    ):
+        excluded = (
+            "On Monday, Agent <agent@example.com> wrote:\nOld reply body."
+            if mode == "quote"
+            else "--\nThanks,\nJos\u00e9 Garc\u00eda\nSupport Lead\nRegional Team\n"
+                 "Customer Operations\nExport Escalations\nNorth America\n"
+                 "jose@example.com\nFooter"
+        )
+        text = _s6c_history_text(
+            history_key, f"Current question.\n{excluded}{boundary}"
+        )
+        assert "Current question." in text
+        assert "Old reply body." not in text
+        assert "jose@example.com" not in text
+        assert ("Later customer message." in text) is resumes
+
+    header_runs = ((), ("To", "Cc", "Bcc", "Reply-To", "X-Trace"))
+    for history_key, quote_marker, date_header, extra_headers in product(
+        history_keys, quote_markers, ("Sent", "Date"), header_runs
+    ):
+        extra = "".join(f"{quote_marker}{name}: value\n" for name in extra_headers)
+        transcript = (
+            f"Current question.\n{quote_marker}-----Original Message-----\n"
+            f"{quote_marker}From: Agent <agent@example.com>\n"
+            f"{extra}"
+            f"{quote_marker}{date_header}: Thursday\n"
+            f"{quote_marker}Subject: Old reply\n{quote_marker}Old body."
+        )
+        text = _s6c_history_text(history_key, transcript)
+        assert "Current question." in text
+        assert "agent@example.com" not in text
+        assert "Old body." not in text
+
+    ordinary = (
+        "On Monday wrote:\nError 501. How do I fix it?",
+        "On Monday, Jos\u00e9 Garc\u00eda wrote:\nOld-looking customer prose.",
+        "On Monday, System Agent wrote:\nSystem Agent is the feature name.",
+        "> Customer supplied this comparison line.",
+        "--\nhttps://api.example.com/webhook returns 500.", "--\n+1 555 121 2121 disconnects during export.",
+        "--\nSteps To Reproduce\nOpen reports.\nTeam members see error 500.",
+        "--\nJane Agent\nSupport Manager\nOpen reports.",
+    )
+    for history_key, transcript in product(history_keys, ordinary):
+        text = _s6c_history_text(history_key, transcript)
+        assert transcript.splitlines()[-1] in text
+
+    mobile_signature = (
+        "Current question.\nSent from my Android phone, please excuse typos\n"
+        "Jos\u00e9 Garc\u00eda\n\nLater customer message."
+    )
+    text = _s6c_history_text("ticket_history", mobile_signature)
+    assert "Current question." in text
+    assert "Jos\u00e9 Garc\u00eda" not in text
+    assert "Later customer message." in text
+
+
+def test_s6c_scalar_history_preserves_lines_for_junk_admission() -> None:
+    rows = [{"ticket_id": "s6c-junk-lines", "subject": "Automatic reply: Status update",
+             "ticket_history": "On Mon, Agent <agent@example.com> wrote:\nPlease retry."}]
+    rows.extend(
+        {"ticket_id": f"s6c-all-quote-{history_key}-{bool(subject)}", "subject": subject,
+         history_key: "On Mon, Agent <agent@example.com> wrote:\nPlease retry."}
+        for history_key, subject in product(
+            ("ticket_history", "history", "conversation_history"), ("", "Export issue"))
+    )
+    evidence = (("resolution_text", "Refund issued."), ("measured_outcome", "Saved 2 hours."))
+    rows.extend(
+        {"ticket_id": f"s6c-evidence-{history_key}-{key}", "subject": "Export issue",
+         history_key: "On Mon, Agent <agent@example.com> wrote:\nPlease retry.", key: value}
+        for history_key, (key, value) in product(
+            ("ticket_history", "history", "conversation_history"), evidence)
+    )
+    package = build_support_ticket_input_package(rows)
+
+    assert len(package.inputs["source_material"]) == 6
+    assert {(row.get("resolution_text"), row.get("measured_outcome")) for row in package.inputs[
+            "source_material"]} == {
+        ("Refund issued.", None), (None, "Saved 2 hours."),
+    }
+    assert package.metadata["junk_excluded_reasons"] == {"auto_reply": 1, "no_new_content": 6}
+
+
+def test_s6c_non_history_scalar_comment_keeps_existing_one_message_behavior() -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "s6c-ordinary-comment", "subject": "Export report",
+        "comments": "On the checkout page it wrote:\nCard failed. How do I retry checkout?",
+    }])
+
+    text = package.inputs["source_material"][0]["text"]
+    assert "On the checkout page it wrote:" in text
+    assert "Card failed. How do I retry checkout?" in text
+
+
 def test_zendesk_full_thread_rows_preserve_public_roles_and_drop_private_notes() -> None:
     result = load_zendesk_full_thread_rows_from_json_bytes(
         ZENDESK_THREAD_SAMPLE.read_bytes()
@@ -1935,6 +2232,26 @@ def test_zendesk_full_thread_rows_load_from_json_file() -> None:
     assert by_id["2"]["satisfaction_rating"] == "good"
     assert "Internal note" not in json.dumps(result.rows)
     assert result.warnings == ()
+
+
+def test_zendesk_json_exponent_overflow_access_marker_fails_closed() -> None:
+    private_sentinel = "PRIVATE EXPONENT OVERFLOW MUST NOT BE ADMITTED"
+    result = load_zendesk_full_thread_rows_from_json_bytes(
+        (
+            '{"tickets":['
+            '{"ticket":{"id":"overflow-private","subject":"Internal",'
+            '"description":"'
+            + private_sentinel
+            + '","access":1e309}},'
+            '{"ticket":{"id":"public-control","subject":"Export invoices",'
+            '"description":"Where do invoice exports live?"}}]}'
+        ).encode("utf-8")
+    )
+
+    assert result.warnings == ()
+    assert result.source_row_count == 2
+    assert [row["ticket_id"] for row in result.rows] == ["public-control"]
+    assert private_sentinel not in json.dumps(result.rows)
 
 
 def test_zendesk_full_thread_rows_cap_admitted_rows_and_preserve_source_count() -> None:
@@ -2028,6 +2345,438 @@ def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:
     assert package.inputs["faq_questions"] == [
         "What permission do I need for account exports?"
     ]
+
+
+@pytest.mark.parametrize("private_marker", [
+    {"public": "false"},
+    {"public": "0.0"},
+    {"is_private": "true"},
+    {"is_private_note": "true"},
+    {"private_note": "yes"},
+    {"type": "private_note"},
+    {"type": "private_reply"},
+    {"message_type": "internal_reply"},
+    {"visibility": "internal"},
+    {"visibility": {"name": "internal"}},
+    {"Public": False, "public": True},
+    {"public": "maybe"},
+])
+def test_zendesk_full_thread_rows_skip_private_comment_marker_variants(
+    private_marker: dict[str, object],
+) -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-private-marker",
+                "subject": "How do I export invoices?",
+                "description": "Where do invoice exports live?",
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "plain_body": "Internal billing flag; do not publish.",
+                    **private_marker,
+                },
+                {
+                    "author_id": "agent-1",
+                    "public": "public",
+                    "plain_body": "Open Billing, then choose Export CSV.",
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    row = result.rows[0]
+    assert row["resolution_text"] == "Open Billing, then choose Export CSV."
+    assert "Internal billing flag" not in json.dumps(result.rows)
+
+
+@pytest.mark.parametrize("private_marker", [
+    {"private_note": {"value": True}},
+    {"private_note": {}},
+    {"private_note": {"body": ""}},
+    {"private_note": {"text": ["", None]}},
+    {"internal_notes": {"message": {"text": ""}}},
+    {"private_note": {"foo": "bar"}},
+    {"private_note": {"value": "billing role"}},
+    {"internal_notes": [{"metadata": "billing role"}]},
+    {"private_note": ["private"]},
+    {"private_note": ("true",)},
+    {"public_comment": ["false"]},
+    {"internal_notes": ["2e3"]},
+    {"public": {"name": "public", "value": "2e3"}},
+    {"visible": {"label": "public", "status": "Infinity"}},
+    {"external": {"public": True, "value": 5}},
+    {"published": "not published"},
+    {"published": "never published"},
+    {"published": "unpublished"},
+    {"unpublished": True},
+    {"unpublic": True},
+    {"published_status": "not published"},
+    {"customer_facing_label": False},
+    {"customer_facing": "not customer facing"},
+    {"privacy": {"value": True}},
+    {"published": "private"},
+    {"customer_facing": "confidential"},
+    {"published": {"value": "private"}},
+    {"published": {"label": "public", "value": "Infinity"}},
+    {"customer_facing": ["public", "NaN"]},
+    {"published": {"label": "public", "value": "not published"}},
+    {"published": {"label": "public", "value": "kept private"}},
+    {"published": {"label": "public", "value": "2026-02-30"}},
+    {"published": {"label": "public", "value": "unpublished"}},
+    {"published": {"label": "public", "value": "notpublished"}},
+    {"published": {"label": "public", "value": "nonpublished"}},
+    {"unpublished_status": True},
+    {"unpublishedStatus": True},
+    {"unpublished_label": True},
+    {"published": {"label": "public", "value": "2026-13-01Z"}},
+    {"public": {"label": "public", "value": "not publicly visible"}},
+    {"access": 5},
+    {"access": "2e3"},
+    {"access": "1e0"},
+    {"audience": {"value": "-1e2"}},
+    {"access": "Infinity"},
+    {"access": "qNaN"},
+    {"published": {"label": "public", "value": "qNaN"}},
+    {"visibility": {"label": "public", "value": "1e0"}},
+    {"access": "internalAndPrivate"},
+    {"private_note": [{"value": True}]},
+    {"private_note": ["0e0"]},
+    {"visibility": {"label": "public", "privacy": True}},
+    {"visibility": {"name": "public", "value": "2e3"}},
+    {"public_comment": {"value": False, "body": "private content"}},
+    {
+        "public_comment": {
+            "public": True,
+            "value": False,
+            "body": "private content",
+        },
+    },
+    {"public_comment": {"value": [], "body": "private content"}},
+    {
+        "public_comments": [{
+            "body": {"private": True, "text": "private nested content"},
+        }],
+    },
+    {
+        "public_comment": {
+            "body": {
+                "text": "private nested content",
+                "status": "kept private",
+            },
+        },
+    },
+    {"visibility": {"published": "2026-07-09"}},
+    {"private": "end user"},
+    {"hidden": "visible to end user"},
+    {"visibility": {"private": "end user"}},
+    {"visibility": {"hidden": "visible to end user"}},
+    {"published": "kept private"},
+    {"published": "no longer public"},
+    {"published": "withheld from public"},
+    {"customer_facing": "not made public"},
+    {"published": "not exposed"},
+    {"visibility": "not private"},
+    {"visibility": "made public"},
+    {"visibility": "open to public"},
+    {"visibility": "shared with customer"},
+])
+def test_support_ticket_input_package_rejects_structured_private_content_columns(
+    private_marker: dict[str, object],
+) -> None:
+    private_sentinel = "PRIVATE STRUCTURED CONTENT MUST NOT BE ADMITTED"
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "private-structured",
+            "subject": "Internal workaround",
+            "description": private_sentinel,
+            **private_marker,
+        },
+        {
+            "ticket_id": "public-control",
+            "subject": "How do I export invoices?",
+            "description": "Where do invoice exports live?",
+        },
+    ])
+
+    assert package.metadata["included_row_count"] == 1
+    assert package.inputs["source_material"][0]["source_id"] == "public-control"
+    assert private_sentinel not in json.dumps(package.as_dict())
+
+
+@pytest.mark.parametrize(
+    "public_marker",
+    [
+        {"public_comments": ["customer question", ""]},
+        {"public_comments": [{"body": "customer question"}, {"body": ""}]},
+        {
+            "public_comments": [
+                {"body": "customer question"},
+                {"body": "&copy;"},
+            ],
+        },
+        {
+            "public_comments": [
+                {"body": "customer question"},
+                {"public": True},
+            ],
+        },
+        {"visibility": ["requester", ""]},
+        {"visibility": [None, "requester"]},
+        {"published": ["2026-07-09", ""]},
+        {"published": [None, "2026-07-09"]},
+        {"published": ["2026-07-09", []]},
+        {"access": ["billing role", ""]},
+        {"access": ["billing role", ()]},
+        {"audience": [None, "partner workspace"]},
+        {"visibility": ["requester", [[], ()]]},
+        {"type": ["billing role", frozenset()]},
+    ],
+)
+def test_support_ticket_input_package_ignores_blank_marker_placeholders(
+    public_marker: dict[str, object],
+) -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "public-with-placeholder",
+        "subject": "How do I export invoices?",
+        "description": "Where do invoice exports live?",
+        **public_marker,
+    }])
+
+    assert package.metadata["included_row_count"] == 1
+    assert package.inputs["source_material"][0]["source_id"] == (
+        "public-with-placeholder"
+    )
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("has_access", 2),
+        ("has_access", "2e3"),
+        ("hasAccess", -7),
+        ("has-access", {"value": 3}),
+        ("has access", ["internal", 2]),
+        ("HAS_ACCESS", {"nested": {"value": False}}),
+    ],
+)
+def test_support_ticket_input_package_keeps_has_access_data_columns(
+    column: str,
+    value: object,
+) -> None:
+    public_body = "HAS ACCESS DATA COLUMN MUST NOT DROP THIS ROW"
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "has-access-data",
+            "subject": "How do I export invoices?",
+            "description": public_body,
+            column: value,
+        }
+    ])
+
+    assert package.metadata["included_row_count"] == 1
+    assert package.inputs["source_material"][0]["source_id"] == "has-access-data"
+    assert public_body in json.dumps(package.as_dict())
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("access", "kept private"),
+        ("audience", "no longer public"),
+        ("type", "withheld from public"),
+        ("kind", "shared with customer"),
+    ],
+)
+def test_support_ticket_input_package_keeps_neutral_data_family_text(
+    key: str,
+    value: str,
+) -> None:
+    package = build_support_ticket_input_package([{
+        "ticket_id": "neutral-data-family",
+        "subject": "How do I export invoices?",
+        "description": "Where do invoice exports live?",
+        key: {"value": [value]},
+    }])
+
+    assert package.metadata["included_row_count"] == 1
+    assert package.inputs["source_material"][0]["source_id"] == (
+        "neutral-data-family"
+    )
+
+
+@pytest.mark.parametrize("public_marker", [
+    {},
+    {"public": True},
+    {"public": "public"},
+    {"public": "1.0"},
+    {"is_public": "yes"},
+    {"visibility": "public"},
+    {"visibility": {"name": "public"}},
+    {"visibility": {"name": "public", "value": "billing role"}},
+    {"visibility": "visible to end user"},
+    {"published": "2026-07-09"},
+    {"published": "2026-07-09Z"},
+    {"published": "2026-07-09T12:34+0000"},
+    {"published": 5},
+    {"published": "2e3"},
+    {"published": ["public", "2026-07-09"]},
+    {"published": ["2026-07-09+00:00", "public"]},
+    {"unpublished": False},
+    {"published_status": "2026-07-09"},
+    {"customer_facing_label": 5},
+    {"published": {"label": "public", "value": "billing role"}},
+    {"public_comments": [{
+        "body": {"public": True, "text": "customer text"},
+    }]},
+    {"access": "partner workspace"},
+    {"access": {"value": True}},
+    {"access": [True]},
+    {"type": {"value": [False]}},
+    {"visibility": ["requester"]},
+    {"privacy": {"label": "customer"}},
+    {"private": "public"},
+    {"visibility": {"public": "end user"}},
+])
+def test_zendesk_full_thread_rows_keep_public_comment_marker_variants(
+    public_marker: dict[str, object],
+) -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-public-marker",
+                "subject": "How do I export invoices?",
+                "description": "Where do invoice exports live?",
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "plain_body": "Open Billing, then choose Export CSV.",
+                    **public_marker,
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    assert result.rows[0]["resolution_text"] == (
+        "Open Billing, then choose Export CSV."
+    )
+
+
+def test_zendesk_full_thread_rows_suppress_private_first_description_alias() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-private-alias",
+                "subject": "Internal migration workaround",
+                "description": (
+                    "Internal note: explain the real workaround only to the owner."
+                ),
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "type": "private_note",
+                    "plain_body": (
+                        "Internal note: explain the real workaround only to the owner."
+                    ),
+                },
+                {
+                    "author_id": "requester-1",
+                    "public": "public",
+                    "plain_body": "What permission do I need for account exports?",
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    assert result.rows == [{
+        "ticket_id": "zd-private-alias",
+        "source_id": "zd-private-alias",
+        "source_type": "support_ticket",
+        "subject": "Internal migration workaround",
+        "description": "What permission do I need for account exports?",
+    }]
+
+
+@pytest.mark.parametrize("private_marker", [
+    {"public": False},
+    {"public": 2},
+    {"is_private": "true"},
+    {"internal": "yes"},
+    {"visibility": "private"},
+    {"visibility": {"name": "private"}},
+    {"access": "internal"},
+    {"access": "restricted access"},
+    {"type": "internal_note"},
+    {"Public": False, "public": True},
+])
+def test_zendesk_full_thread_rows_skip_ticket_private_markers_before_flattening(
+    private_marker: dict[str, object],
+) -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [
+            {
+                "ticket": {
+                    "id": "zd-private-ticket",
+                    "subject": "Internal migration workaround",
+                    "description": "Private account flag should not be admitted.",
+                    "requester_id": "requester-1",
+                    **private_marker,
+                },
+                "comments": [{
+                    "author_id": "requester-1",
+                    "plain_body": "Private mirrored question should not be admitted.",
+                }],
+            },
+            {
+                "ticket": {
+                    "id": "zd-public-ticket",
+                    "subject": "How do I export invoices?",
+                    "description": "Where do invoice exports live?",
+                    "requester_id": "requester-2",
+                },
+                "comments": [{
+                    "author_id": "agent-1",
+                    "plain_body": "Open Billing, then choose Export CSV.",
+                }],
+            },
+        ],
+    })
+
+    assert result.warnings == ()
+    assert [row["source_id"] for row in result.rows] == ["zd-public-ticket"]
+    payload = json.dumps(result.rows)
+    assert "Private account flag" not in payload
+    assert "Private mirrored question" not in payload
+
+
+def test_zendesk_full_thread_rows_skip_entry_private_markers_before_flattening() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "is_private": True,
+            "ticket": {
+                "id": "zd-private-entry",
+                "subject": "Internal migration workaround",
+                "description": "Private account flag should not be admitted.",
+                "requester_id": "requester-1",
+            },
+            "comments": [{
+                "author_id": "requester-1",
+                "plain_body": "Private mirrored question should not be admitted.",
+            }],
+        }],
+    })
+
+    assert result.rows == []
+    assert result.warnings == ()
 
 
 def test_zendesk_full_thread_rows_keep_substantive_agent_reply_after_boilerplate() -> None:

@@ -25,6 +25,29 @@ redirect prompt in that file.
 
 ---
 
+## Review guidelines
+
+Automated reviewers — including the GitHub Codex connector, which reads this
+section — follow Atlas's Reviewer Rules Pack in `docs/REVIEWER_RULES.md` (rules
+R1–R14) and the PR's Review Contract. Review the same way the Reviewer session does.
+
+- Verify against the codebase, not the PR story (R14): treat the PR description,
+  title, and commit messages as unverified claims; reconstruct what the diff
+  actually does from the code.
+- Every finding cites a rule ID (R1–R14) and `file:line`. Blockers must cite
+  `file:line`. Classify each finding as **BLOCKER / MAJOR / NIT / LGTM** per the pack.
+- Check the PR's `### Review Contract`: does the diff meet its acceptance criteria,
+  and which rules do the changed paths trigger (the path-to-rule table in the pack)?
+- Hunt the rule categories: requirements match (R1), test evidence (R2),
+  security/authorization (R3), data & migration safety (R4), backward compatibility
+  (R5), error handling & observability (R6), performance (R7), concurrency &
+  idempotency (R8), frontend (R9), maintainability (R10), dependencies & config
+  (R11), deployment safety & CI (R12). Fix the class, not the example (R13).
+- Lead with blockers. `LGTM` (all triggered rules pass, no open BLOCKER/MAJOR) is a
+  valid, complete result; do not manufacture NITs.
+
+---
+
 ## 0. Product Discipline And Consent Gates
 
 Read `docs/CURRENT_PRODUCT_DISCIPLINE.md` before choosing or widening a product
@@ -55,6 +78,14 @@ and continue only on the technical path that does not decide that shape.
 Every non-trivial change ships as a single PR with the following
 artifacts:
 
+For a human-authored PR, any diff containing a non-Markdown path must add
+exactly one `plans/PR-*.md` file. A non-empty Markdown-only diff may omit a
+plan only when every changed path is a regular Git blob with `.md` as its sole
+suffix and its PR body begins `Docs-only: true`; it may always use the full
+plan/body contract instead. Dependabot keeps its explicit generated-PR
+exemption. These admission outcomes must be surfaced by local review and CI,
+never silently skipped.
+
 ### 1a. Plan doc (`plans/PR-<Slice-Name>.md`)
 
 Required sections, in this order:
@@ -81,11 +112,25 @@ result that proves the surface is wired.
 
 ### 1b. PR body
 
-Mirror the plan-doc framing in the PR description:
+For a non-empty human PR that intentionally carries no plan and changes only
+regular Git blobs with `.md` as their sole suffix, use this narrower body
+instead:
+
+```
+Docs-only: true
+
+<optional prose>
+```
+
+The marker is invalid for any non-Markdown or empty diff. A docs-only PR that
+does carry a plan must use the full body shape below.
+
+Otherwise, mirror the plan-doc framing in the PR description:
 
 ```
 Plan: plans/PR-<Slice-Name>.md
 Slice phase: <phase>
+Ownership lane: <canonical-lowercase-lane>
 
 <one-paragraph why>
 
@@ -346,13 +391,14 @@ work is on-topic.
 
 ### 3a.2. PR-prep helpers
 
-Three scripts remove the PR-shape and failed-push friction — use them
+Four scripts remove the PR-shape and failed-push friction — use them
 rather than hand-formatting:
 
 - `bash scripts/new_pr_plan.sh <Slice> --lane <lane> --phase "<phase>"` —
-  scaffolds `plans/PR-<Slice>.md` with the required 7 sections, a
-  `### Files touched` placeholder, and a zero diff-size table. Refuses to
-  overwrite an existing plan without `--force`.
+  scaffolds `plans/PR-<Slice>.md` with the required 7 top-level sections,
+  nested Problem-derived and Review Contracts, a `### Files touched`
+  placeholder, and a zero diff-size table. Refuses to overwrite an existing
+  plan without `--force`.
 - `python scripts/sync_pr_plan.py plans/PR-<Slice>.md [base-ref]` —
   rewrites `### Files touched` and `## Estimated diff size` from the actual
   `git diff` (tracked vs merge-base plus untracked). Run after
@@ -553,6 +599,24 @@ Watcher safety is enforced by `scripts/audit_pr_watcher_safety.py` in local
 review. Local watcher executables and configs are status-only: truthy
 auto-merge config, PR merge commands, delete-branch merge cleanup, or equivalent
 merge behavior in watcher infrastructure is a blocking workflow defect.
+
+### 3c.2. Overnight arc protocol
+
+When the operator assigns an **unattended overnight arc** (a long-running
+coding task expected to run to merged-or-blocked with zero operator contact),
+the governing runbook is `docs/OVERNIGHT_ARC_WORKFLOW.md`. It wraps this
+section's watcher rules with: a mandatory interactive **pre-flight** (task
+readiness contract plus all clarifying questions asked while the operator is
+still present), the **night-loop deltas** (never wait on the operator; defer
+operator-only choices as issues; watcher-driven waiting via
+`scripts/watch_owned_pr.sh`, which is status-only per the watcher-safety rule
+above; bot-review round cap with the fail-closed-guard exception), the
+**true-blocker escalation channel**, and a mandatory **morning report**. The
+overnight baton (active arc task/contract, current slice, owned PR + head
+SHA, watcher armed-state, morning-report accumulator) is compaction handoff
+data per the `CLAUDE.md` compact instructions; a compacted overnight session
+re-reads the runbook and verifies the baton against `git`/`gh` state before
+proceeding.
 
 ### 3d. Thin-slice and hardening triage
 
@@ -888,6 +952,108 @@ treats a symptom without this justification is rejected before implementation,
 not after a full review round. Chasing the symptom one layer at a time -- fix
 the named case, ship, get bounced one layer deeper, repeat -- is the
 tail-chasing this gate exists to stop.
+
+### 3k.1. Guard class-closure (open-input guards)
+
+For a guard / validator / sanitizer / classifier / gate / denylist /
+parser-admission rule / safety or privacy checker whose input space is **open**
+(free text, nested/recursive structures, producer-supplied keys/values), the
+root cause of a reported leak or over-scrub is almost never the reported input
+-- it is an **open default**: a per-input branch whose fall-through lands on the
+unsafe verdict. Fixing the reported string closes nothing; the next string in
+the same class is reported next round (the S6A privacy guard ran this loop 9+
+rounds). The root-cause fix -- a fail-closed / evidence-gated choke point,
+class-closure (not string-closure), a grammar- or evidence-derived property
+test, plus the open-category exception and the asymmetric-safe default -- is
+defined canonically in `docs/GUARD_CLASS_CLOSURE.md`. It is mandatory before
+merge, it is the acceptance gate reviewers require before LGTM, and it
+strengthens section 3j from "5-10 unseen cases" to "the generated class" for
+open-input guards. The requirements are **not re-listed here**: that doc is the
+single source, so this section cannot drift from it (three review rounds on #2077
+were spent reconciling parallel restatements).
+
+The reviewer enforcement of this gate lives in the guard boundary-probe section
+of `docs/REVIEWER_RULES.md`; the scope caveat (documented neutral/data-column
+families keep their admit policy -- the choke point governs the safety verdict,
+not every field's text) and the open-category evidence-gated form both live in
+`docs/GUARD_CLASS_CLOSURE.md`. A non-converging loop on one decision is governed
+by 3k.2 below.
+
+### 3k.2. Convergence circuit-breaker (stop instance-patching a seam)
+
+Section 3k.1 is the fix for open-input guards; this is the process guardrail for
+when a fix loop is NOT converging. On a PR where each push closes the reported
+review threads but the next push opens a comparable count of **same-class**
+findings on the **same file / decision** -- the thread count is flat or rising
+over 3 consecutive pushes, not trending to zero -- the builder is
+instance-patching a shared decision, not fixing it. This is distinct from the
+bot-round *noise* cap (see 4a and `docs/OVERNIGHT_ARC_WORKFLOW.md`): there the
+findings are formally-identical re-litigation of a green contract; here the
+findings are real, and each patch shifts the boundary and exposes the adjacent
+case.
+
+When this trips, the next push may NOT add another example-scoped patch (another
+token, regex, vocabulary row, or oracle fixture). It must carry a **Decision-Seam
+Analysis** in the plan / PR body:
+
+1. **Name the one decision** all the open threads share (the seam) -- e.g. "the
+   single admit/skip verdict for a transcript line."
+2. **State why that decision is wrong** -- over-broad, under-broad, or an open
+   category it cannot enumerate. If the recognizer itself is open, evidence-gate
+   it per `docs/GUARD_CLASS_CLOSURE.md` (do not enumerate the category).
+3. **Do exactly one of:** (a) fix the seam structurally with a stated default
+   direction, and for asymmetric error costs the cheap-error default; (b) waive
+   the bounded residual explicitly (<= status-quo, recorded in *Deferred*) and
+   reconcile the threads as accepted-not-fixing; or (c) re-scope or park the
+   slice. Adding the next instance patch is none of these and is rejected at
+   review.
+
+**Why:** Resolution Audit S6C (#2076) ran ~9 rounds and ~35 findings this way --
+each round fixed the cited senders and the next round reported new same-class
+senders, and every miss dropped a customer question. The round count alone was
+not the signal (the bot-noise cap did not apply -- the findings were real); the
+signal was that the findings were *the same decision re-litigated*. Naming the
+seam and evidence-gating it converged in one push after nine that did not. The
+builder pattern this catches -- close each cited example with the narrowest local
+patch, never abstract to the generating decision -- is a recurring failure mode,
+not a one-off.
+
+### 3k.3. Open-input work: evidence-gate at plan time, one class per slice
+
+3k.1 defines the closure bar and 3k.2 the non-convergence breaker; this is the
+BEFORE-code gate that stops an open-input guard from generating the bar's
+findings in the first place. It applies to a PR whose core change is a guard /
+sanitizer / classifier / parser-admission / privacy-marker / boundary-detector
+over free text or producer-supplied structure (the Resolution Audit S6 class).
+
+1. **Plan-stage method gate (primary).** Before any code, the plan names three
+   things: the single choke-point decision the guard makes; how ambiguous,
+   unrecognized, or malformed input reaches the safe verdict *by default*; and
+   the bounded evidence the recognizer keys on. A plan that instead lists shapes
+   to handle -- a denylist, a case table, "handle these examples" -- is rejected
+   at the plan stage, before the enumeration is written. Reject the enumerative
+   method when it is cheapest to reject: on the plan, not after 50 review
+   comments. The evidence-gate mechanics (fail-closed / evidence-gated choke
+   point, evidence-keyed oracle, asymmetric-safe default, open-category form)
+   live in `docs/GUARD_CLASS_CLOSURE.md`; the plan points to them, it does not
+   restate them.
+2. **One class per slice (surface bound).** An open-input PR handles ONE class or
+   decision. A change that touches several open-input classes at once (HTML
+   sanitizing AND quote/signature boundaries AND privacy-marker detection AND
+   auto-reply detection) is split, one class per slice, so a single PR's blast
+   radius is bounded to that class's findings.
+
+**Why:** the S6 sanitizer arc. #2037 did the whole sanitizer in one +1262 change
+and drew ~24 findings across four open-input classes at once, then paused. It was
+sliced into S6A/A.1/B/C/E -- yet each slice still ran ~50 review threads (#2053,
+#2061, #2046, #2076, #2054), because slicing bounds surface but each slice was
+still built by enumeration. #2076 fell to a handful of rounds only when it
+switched to evidence-gating; #2061 the same. So slicing alone distributes the
+comments (~24 became ~244 across five PRs); evidence-gating is the lever that
+collapses a class to one choke point. Gate the method at plan time (primary);
+slice for surface (secondary). The general form -- pick the structural solution
+over the enumerative one, which is also the smaller diff -- is why the
+evidence-gated rewrite shrank both the code and the thread count together.
 
 ### 3l. PR fix mode (constrain the fix loop)
 
