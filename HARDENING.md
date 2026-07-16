@@ -30,6 +30,23 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-07-15
+
+### ASR Torch/Torchaudio compatibility baseline
+- File/location: `requirements.txt:13-14`, `requirements.asr.txt:7-8`, and `asr_server.py:29-30,88`.
+- Description: The ASR entrypoint imports and uses Torch plus Torchaudio, but
+  the available Torchaudio release ceiling is 2.11 while the existing root
+  Torch input is 2.12.1. This focused dependency slice prevents a further
+  unsupported Torch advance; it does not establish a fully validated matching
+  ASR binary pair.
+- Why it matters: TorchAudio binary extensions are compiled for a specific
+  PyTorch release, so an incompatible pair can fail when ASR imports or
+  resamples audio even if a generic package resolver accepts both.
+- Effort: M
+- Category: correctness
+- Owner/session: dependency/dependabot
+- Found during: PR-Dependabot-Python-Compatibility CI reconciliation
+
 ## 2026-06-17
 
 ### Churn and Atlas UI lint debt blocks ESLint 10

@@ -9,6 +9,16 @@ from atlas_brain.services.b2b import watchlist_alerts as watchlist_alert_service
 from atlas_brain.services.b2b.report_trust import report_section_evidence_payload, report_trust_payload
 
 
+def _router_routes(router):
+    """Yield terminal routes across FastAPI's eager and lazy include forms."""
+    for route in router.routes:
+        included_router = getattr(route, "original_router", None)
+        if included_router is not None:
+            yield from _router_routes(included_router)
+            continue
+        yield route
+
+
 def test_report_trust_payload_includes_artifact_state_when_status_present():
     created_at = datetime.now(timezone.utc) - timedelta(hours=8)
 
@@ -122,7 +132,7 @@ def test_report_section_evidence_payload_marks_witness_backed_partial_and_thin_s
 def test_api_router_exposes_only_tenant_b2b_paths():
     from atlas_brain.api import router
 
-    paths = {route.path for route in router.routes}
+    paths = {route.path for route in _router_routes(router)}
     assert not any(path.startswith("/b2b/dashboard") for path in paths)
     assert "/b2b/tenant/reports/compare" in paths
     assert "/b2b/tenant/reports/compare-companies" in paths
