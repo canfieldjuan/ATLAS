@@ -240,6 +240,60 @@ def test_shorter_nested_fence_cannot_end_outer_body_example(
     assert "missing required section: ## Intentional" in failures
 
 
+@pytest.mark.parametrize(
+    ("opener", "lookalike_close"),
+    (
+        ("```", "```json"),
+        ("~~~", "~~~ note"),
+        ("````", "````x"),
+    ),
+)
+def test_closing_fence_with_trailing_text_keeps_body_sections_fenced(
+    tmp_path: Path, opener: str, lookalike_close: str
+) -> None:
+    root = _write_plan(tmp_path)
+    body = "\n".join([
+        "Plan: plans/PR-Example.md",
+        "Slice phase: Production hardening",
+        "Ownership lane: dev-workflow/process-gate-enrollment",
+        "",
+        "One-paragraph why.",
+        "",
+        opener,
+        "example",
+        lookalike_close,
+        "## Intentional",
+        "- still fenced",
+        "## Deferred",
+        "- still fenced",
+        "## Parked hardening",
+        "None.",
+        "## Cold diff reconstruction",
+        "- Gaps: none.",
+        "## Verification",
+        "- pytest passed",
+        "## Diff size",
+        "2 files, +10 / -2",
+        opener,
+    ])
+
+    failures = audit_pr_body(body, root=root)
+
+    assert "missing required section: ## Intentional" in failures
+
+
+def test_backtick_fence_info_with_backtick_does_not_hide_body_sections(
+    tmp_path: Path,
+) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "One-paragraph why.",
+        "One-paragraph why.\n\n``` `not-a-fence",
+    )
+
+    assert audit_pr_body(body, root=root) == []
+
+
 def test_fenced_content_after_incomplete_header_cannot_supply_lane(tmp_path: Path) -> None:
     root = _write_plan(tmp_path)
     body = "\n".join([
