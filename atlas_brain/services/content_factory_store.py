@@ -14,6 +14,7 @@ Each job folder is its own git repo, so every stage write is an auditable commit
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -77,14 +78,20 @@ def _git(job: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _ensure_repo(job: Path) -> None:
+    # Init if needed, then isolate the private job repo from inherited global git
+    # config on EVERY call (not only at creation, so an externally-initialized job
+    # folder is isolated too): a local author, signing pinned off, and hooks
+    # neutralized. Otherwise an inherited global commit.gpgsign=true, a global
+    # core.hooksPath, or a template hook (all common on dev machines) can make the
+    # store's commit fail before the valid artifact is committed. This is local
+    # repo config on an isolated store repo, not a --no-verify/--no-gpg-sign
+    # bypass of any Atlas gate.
     if not (job / ".git").exists():
         _git(job, "init", "-q")
-        _git(job, "config", "user.email", _GIT_EMAIL)
-        _git(job, "config", "user.name", _GIT_NAME)
-        # The job repo is a private artifact store; pin commit signing off locally
-        # so an inherited global commit.gpgsign=true (common on dev machines) does
-        # not make the store's commits fail on a missing signing key.
-        _git(job, "config", "commit.gpgsign", "false")
+    _git(job, "config", "user.email", _GIT_EMAIL)
+    _git(job, "config", "user.name", _GIT_NAME)
+    _git(job, "config", "commit.gpgsign", "false")
+    _git(job, "config", "core.hooksPath", os.devnull)
 
 
 def write_artifact(

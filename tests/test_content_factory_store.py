@@ -176,3 +176,32 @@ def test_commit_succeeds_under_global_gpgsign(tmp_path, monkeypatch):
     monkeypatch.setenv("GNUPGHOME", str(tmp_path / "no-gnupg"))  # ensure no usable key
     rec = write_artifact("job1", "brief", BRIEF, root=tmp_path)
     assert Path(rec["path"]).exists() and rec["sha"]
+
+
+def test_isolation_applies_to_preexisting_repo(tmp_path, monkeypatch):
+    # An externally-initialized job repo (prior scratchpad/manual repair) must be
+    # isolated too, so global gpgsign=true does not defeat a later store commit.
+    global_cfg = tmp_path / "gitconfig"
+    global_cfg.write_text("[commit]\n\tgpgsign = true\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_cfg))
+    monkeypatch.setenv("GNUPGHOME", str(tmp_path / "no-gnupg"))
+    job = job_dir("job1", root=tmp_path)
+    job.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(job), "init", "-q"], check=True)  # pre-exists
+    rec = write_artifact("job1", "brief", BRIEF, root=tmp_path)
+    assert Path(rec["path"]).exists() and rec["sha"]
+
+
+def test_commit_succeeds_despite_inherited_failing_hook(tmp_path, monkeypatch):
+    # A global core.hooksPath with a failing pre-commit must not break the store;
+    # the job repo pins core.hooksPath to a no-op location.
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    pre = hooks / "pre-commit"
+    pre.write_text("#!/bin/sh\nexit 1\n")
+    pre.chmod(0o755)
+    global_cfg = tmp_path / "gitconfig"
+    global_cfg.write_text(f"[core]\n\thooksPath = {hooks}\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_cfg))
+    rec = write_artifact("job1", "brief", BRIEF, root=tmp_path)
+    assert Path(rec["path"]).exists() and rec["sha"]
