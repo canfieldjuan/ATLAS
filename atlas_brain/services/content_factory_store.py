@@ -127,6 +127,14 @@ def write_artifact(
             f"stage/schema mismatch: stage {stage!r} expects {expected!r}, got {tag!r}"
         )
 
+    # The manifest is the job index; its own job_id must match the folder it lands
+    # in, or it would claim to index a different job.
+    if tag == "manifest.v1" and canonical.get("job_id") != job_id:
+        raise ArtifactStoreError(
+            f"manifest job_id {canonical.get('job_id')!r} does not match "
+            f"path job_id {job_id!r}"
+        )
+
     job.mkdir(parents=True, exist_ok=True)
     _ensure_repo(job)
     path = job / f"{stage}.json"

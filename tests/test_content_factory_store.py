@@ -155,3 +155,13 @@ def test_commit_scoped_to_own_file(tmp_path):
         text=True,
     ).stdout.split()
     assert committed == ["brief.json"]
+
+
+def test_manifest_job_id_must_match_path(tmp_path):
+    good = {"schema": "manifest.v1", "job_id": "job1", "project_id": "p"}
+    rec = write_artifact("job1", "manifest", good, root=tmp_path)
+    assert Path(rec["path"]).exists()
+    # a manifest indexing a different job must not land in this job's folder
+    bad = {"schema": "manifest.v1", "job_id": "job2", "project_id": "p"}
+    with pytest.raises(ArtifactStoreError):
+        write_artifact("job1", "manifest", bad, root=tmp_path)
