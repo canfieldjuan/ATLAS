@@ -165,3 +165,14 @@ def test_manifest_job_id_must_match_path(tmp_path):
     bad = {"schema": "manifest.v1", "job_id": "job2", "project_id": "p"}
     with pytest.raises(ArtifactStoreError):
         write_artifact("job1", "manifest", bad, root=tmp_path)
+
+
+def test_commit_succeeds_under_global_gpgsign(tmp_path, monkeypatch):
+    # Simulate a dev machine with global commit.gpgsign=true and no signing key:
+    # the store pins commit.gpgsign=false locally, so the commit still succeeds.
+    global_cfg = tmp_path / "gitconfig"
+    global_cfg.write_text("[commit]\n\tgpgsign = true\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_cfg))
+    monkeypatch.setenv("GNUPGHOME", str(tmp_path / "no-gnupg"))  # ensure no usable key
+    rec = write_artifact("job1", "brief", BRIEF, root=tmp_path)
+    assert Path(rec["path"]).exists() and rec["sha"]

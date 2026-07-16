@@ -81,6 +81,10 @@ def _ensure_repo(job: Path) -> None:
         _git(job, "init", "-q")
         _git(job, "config", "user.email", _GIT_EMAIL)
         _git(job, "config", "user.name", _GIT_NAME)
+        # The job repo is a private artifact store; pin commit signing off locally
+        # so an inherited global commit.gpgsign=true (common on dev machines) does
+        # not make the store's commits fail on a missing signing key.
+        _git(job, "config", "commit.gpgsign", "false")
 
 
 def write_artifact(

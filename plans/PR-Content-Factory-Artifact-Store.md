@@ -105,10 +105,10 @@ re-write commits.
 
 | File | Lines |
 |---|---|
-| atlas_brain/services/content_factory_store.py | 163 |
-| tests/test_content_factory_store.py | 167 |
+| atlas_brain/services/content_factory_store.py | 167 |
+| tests/test_content_factory_store.py | 178 |
 | plans/PR-Content-Factory-Artifact-Store.md | 116 |
-| **Total** | **446** |
+| **Total** | **461** |
 
 Slightly over the 400 soft cap after the Codex-review hardening (stage/schema
 map, reserved-key rejection, fullmatch guard, scoped commit) and their tests; the
