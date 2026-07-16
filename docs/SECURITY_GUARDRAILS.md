@@ -77,12 +77,15 @@ Administration read permission. The audit requires those contexts to be pinned
 to the GitHub Actions app source in branch protection, not only present as
 legacy bare context names.
 
-The workflow security posture auditor pre-admits a future
-`.github/workflows/session_lane.yml` / `session-lane` trusted-base producer only
-when it has the same event guard and base-SHA checkout shape as the existing
-PR meta-gates. The workflow itself is intentionally added in a later #2104
-slice so the current trusted-base `pre-push-audit` can learn the allowlist
-before it evaluates that new `pull_request_target` workflow as PR data.
+The workflow security posture auditor admits
+`.github/workflows/session_lane.yml` / `session-lane` only when it has the same
+event guard and base-SHA checkout shape as the existing PR meta-gates. The
+workflow is an advisory producer for #2104 burn-in: it checks out trusted base
+code, materializes the PR head as git data, writes the trusted event PR body to
+a temporary file, and runs the base-owned session-drift auditor against that
+data worktree. Branch-protection enrollment remains a separate REST PATCH slice
+after the producer proves stable and the existing required contexts can be
+preserved.
 
 - Full-history secret scan: Gitleaks checks out the complete branch history
   (`fetch-depth: 0`) so leaked keys in old commits are in scope. The workflow
