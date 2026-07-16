@@ -105,7 +105,12 @@ re-write commits.
 
 | File | Lines |
 |---|---|
-| atlas_brain/services/content_factory_store.py | 123 |
-| tests/test_content_factory_store.py | 110 |
-| plans/PR-Content-Factory-Artifact-Store.md | 90 |
-| **Total** | **323** |
+| atlas_brain/services/content_factory_store.py | 155 |
+| tests/test_content_factory_store.py | 157 |
+| plans/PR-Content-Factory-Artifact-Store.md | 111 |
+| **Total** | **423** |
+
+Slightly over the 400 soft cap after the Codex-review hardening (stage/schema
+map, reserved-key rejection, fullmatch guard, scoped commit) and their tests; the
+overage is a cohesive service + its tests, indivisible without shipping the guard
+without its proof. Carried by the `Diff-budget override:` line in the PR body.

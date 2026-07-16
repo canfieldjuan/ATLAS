@@ -108,3 +108,50 @@ def test_rewrite_changed_content_makes_new_commit(tmp_path):
     changed = {**BRIEF, "channel": "linkedin"}
     write_artifact("job1", "brief", changed, root=tmp_path)
     assert _commits(job_dir("job1", root=tmp_path)) == 2
+
+
+# --- fixes from Codex round 1 on #2121 ---
+
+
+@pytest.mark.parametrize("bad", ["brief\n", "a\nb", "job1\t", "x\r"])
+def test_newline_bearing_segment_rejected(tmp_path, bad):
+    # $ matches before a trailing newline; the guard uses fullmatch so it does not.
+    with pytest.raises(ArtifactStoreError):
+        write_artifact(bad, "brief", BRIEF, root=tmp_path)
+    with pytest.raises(ArtifactStoreError):
+        write_artifact("job1", bad, BRIEF, root=tmp_path)
+
+
+def test_stage_schema_mismatch_rejected(tmp_path):
+    # A draft.v1 payload written under the "brief" stage must be rejected.
+    with pytest.raises(ArtifactStoreError):
+        write_artifact("job1", "brief", DRAFT, root=tmp_path)
+    assert not job_dir("job1", root=tmp_path).exists()
+
+
+def test_custom_stage_allows_any_schema(tmp_path):
+    # A stage not in STAGE_SCHEMAS may carry any valid artifact.
+    rec = write_artifact("job1", "draft-v2", DRAFT, root=tmp_path)
+    assert Path(rec["path"]).exists() and rec["schema"] == "draft.v1"
+
+
+def test_reserved_artifact_schema_key_rejected(tmp_path):
+    with pytest.raises(ArtifactStoreError):
+        write_artifact("job1", "brief", {**BRIEF, "artifact_schema": "draft.v1"}, root=tmp_path)
+    assert not job_dir("job1", root=tmp_path).exists()
+
+
+def test_commit_scoped_to_own_file(tmp_path):
+    write_artifact("job1", "brief", BRIEF, root=tmp_path)
+    job = job_dir("job1", root=tmp_path)
+    # Pre-stage an unrelated file, as an interrupted write / manual repair would.
+    (job / "junk.txt").write_text("unrelated\n")
+    subprocess.run(["git", "-C", str(job), "add", "junk.txt"], check=True)
+    # A changed brief write must commit ONLY brief.json, not the staged junk.
+    write_artifact("job1", "brief", {**BRIEF, "channel": "x"}, root=tmp_path)
+    committed = subprocess.run(
+        ["git", "-C", str(job), "show", "--name-only", "--format=", "HEAD"],
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    assert committed == ["brief.json"]

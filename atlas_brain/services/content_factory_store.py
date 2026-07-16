@@ -26,7 +26,20 @@ DEFAULT_ROOT = Path.home() / "content-factory"
 # A job_id / stage must be a single safe path segment: alphanumeric start, then
 # only [A-Za-z0-9._-], and never a ".." sequence. This is the path-traversal
 # choke point -- both job_id and stage flow through it before any filesystem use.
-_SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# Matched with fullmatch (not $, which in Python matches before a trailing
+# newline, so "brief\n" would otherwise slip through into a filename).
+_SAFE_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+# Canonical stage -> version tag. A known stage must carry its matching artifact,
+# so a mislabeled write (e.g. a draft under the "brief" stage) is rejected. An
+# unknown/custom stage is allowed to carry any artifact.
+STAGE_SCHEMAS = {
+    "brief": "content_brief.v1",
+    "evidence": "evidence_packet.v1",
+    "draft": "draft.v1",
+    "audit": "editorial_audit.v1",
+    "manifest": "manifest.v1",
+}
 
 _GIT_NAME = "Content Factory"
 _GIT_EMAIL = "content-factory@local"
@@ -37,7 +50,7 @@ class ArtifactStoreError(ValueError):
 
 
 def _safe_segment(value: str, kind: str) -> str:
-    if not isinstance(value, str) or ".." in value or not _SAFE_SEGMENT.match(value):
+    if not isinstance(value, str) or ".." in value or not _SAFE_SEGMENT.fullmatch(value):
         raise ArtifactStoreError(f"unsafe {kind}: {value!r}")
     return value
 
@@ -90,28 +103,47 @@ def write_artifact(
     stage = _safe_segment(stage, "stage")
     job = job_dir(job_id, root=root)
 
+    # Canonical form carries the version tag only under "schema"; a reserved
+    # "artifact_schema" key (which extra='allow' would otherwise persist) is
+    # non-canonical and rejected.
+    if "artifact_schema" in artifact:
+        raise ArtifactStoreError(
+            "non-canonical artifact: reserved 'artifact_schema' key present; "
+            "supply the version tag only under 'schema'"
+        )
+
     # Fail closed: validate before writing. model_for dispatches by the artifact's
     # "schema" tag (ValueError if absent/unknown); model_validate enforces the
     # contract invariants (non-empty citations, required tag, no self-promote, ...).
     model = model_for(artifact).model_validate(artifact)
     canonical = model.model_dump(mode="json")  # serialize_by_alias -> "schema" key
+    tag = canonical.get("schema")
+
+    # A known stage must carry its matching schema, so a mislabeled write cannot
+    # land as a valid stage artifact.
+    expected = STAGE_SCHEMAS.get(stage)
+    if expected is not None and tag != expected:
+        raise ArtifactStoreError(
+            f"stage/schema mismatch: stage {stage!r} expects {expected!r}, got {tag!r}"
+        )
 
     job.mkdir(parents=True, exist_ok=True)
     _ensure_repo(job)
     path = job / f"{stage}.json"
     path.write_text(json.dumps(canonical, indent=2, ensure_ascii=False) + "\n")
 
+    # Scope the staged-change check and the commit to THIS file, so an unrelated
+    # pre-staged file in the job repo cannot ride into this stage's commit and an
+    # identical rewrite still makes no empty commit.
     _git(job, "add", "--", path.name)
-    # Skip an empty commit when re-writing byte-identical content.
     unchanged = (
         subprocess.run(
-            ["git", "-C", str(job), "diff", "--cached", "--quiet"]
+            ["git", "-C", str(job), "diff", "--cached", "--quiet", "--", path.name]
         ).returncode
         == 0
     )
     if not unchanged:
-        tag = canonical.get("schema", stage)
-        _git(job, "commit", "-q", "-m", f"{stage}: {tag}")
+        _git(job, "commit", "-q", "-m", f"{stage}: {tag}", "--", path.name)
     sha = _git(job, "rev-parse", "HEAD").stdout.strip()
 
     return {
