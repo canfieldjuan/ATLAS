@@ -60,8 +60,9 @@ surface and to a worker is a later slice.
 ## Mechanism
 
 `FOLLOWUP_READONLY_TOOLS` is a frozenset allowlist of verified read tools (CRM / Email /
-Calendar reads). `qualify_followup_tool_surface(offered)` normalizes each offered name
-and disqualifies the surface if any is not an exact allowlist member, returning a frozen
+Calendar reads). `qualify_followup_tool_surface(offered)` compares each offered name
+EXACTLY (raw, not stripped/normalized -- a tool name is a capability identity) and
+disqualifies the surface if any is not an exact allowlist member, returning a frozen
 `ToolSurfaceQualification` (qualified, offered, disallowed, mutating, reason). The
 allowlist is the closure -- `KNOWN_MUTATING_TOOLS` is not the guard; it drives the
 import-time disjointness self-audit (a `raise`, not `assert`, so `-O` cannot strip it)

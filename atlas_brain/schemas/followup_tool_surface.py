@@ -114,32 +114,31 @@ class ToolSurfaceQualification:
     reason: str
 
 
-def _normalize(name: Any) -> str:
-    """A tool name is a non-blank string; anything else normalizes to '' so it fails
-    the allowlist check (fail closed on a malformed/blank/non-string entry)."""
-    return name.strip() if isinstance(name, str) else ""
-
-
 def qualify_followup_tool_surface(offered: Iterable[Any]) -> ToolSurfaceQualification:
     """Qualify a proposed tool surface as read-only / dry-run, failing closed.
 
-    Every offered tool must be an exact member of ``FOLLOWUP_READONLY_TOOLS``. Any tool
-    outside it -- a mutating tool, an unknown tool, a case/whitespace variant, or a
-    blank/non-string entry -- disqualifies the surface. An empty surface is trivially
-    qualified (it can send nothing). This is the deterministic core a later slice can
-    point at a live MCP ``list_tools`` result to prove the worker's real surface sends
-    nothing."""
+    Every offered tool must be an EXACT member of ``FOLLOWUP_READONLY_TOOLS`` -- the raw
+    name is compared, never a stripped/normalized form. A tool name is a capability
+    identity, not free text: ``"get_contact "`` (trailing space) is a DIFFERENT tool than
+    ``get_contact`` and must not inherit its allowlisting (unlike the data fields in the
+    #2126 contract, which normalize to canonical). Any tool outside the allowlist -- a
+    mutating tool, an unknown tool, a case/whitespace variant, or a blank/non-string entry
+    -- disqualifies the surface. An empty surface is trivially qualified (it can send
+    nothing). This is the deterministic core a later slice can point at a live MCP
+    ``list_tools`` result to prove the worker's real surface sends nothing."""
     offered_names: list[str] = []
     disallowed: list[str] = []
     mutating: list[str] = []
     for item in offered:
-        name = _normalize(item)
-        display = name if name else f"<invalid:{item!r}>"
+        # Exact identity only: a str compared raw against the allowlist. A non-string, a
+        # blank, or a whitespace/case variant is not that exact tool -> fails closed.
+        is_str = isinstance(item, str)
+        display = item if is_str else f"<invalid:{item!r}>"
         offered_names.append(display)
-        if not name or name not in FOLLOWUP_READONLY_TOOLS:
+        if not (is_str and item in FOLLOWUP_READONLY_TOOLS):
             disallowed.append(display)
-            if name in KNOWN_MUTATING_TOOLS:
-                mutating.append(name)
+            if is_str and item in KNOWN_MUTATING_TOOLS:
+                mutating.append(item)
 
     disallowed_sorted = tuple(sorted(set(disallowed)))
     mutating_sorted = tuple(sorted(set(mutating)))
@@ -171,5 +170,5 @@ def qualify_followup_tool_surface(offered: Iterable[Any]) -> ToolSurfaceQualific
 
 
 def is_read_only_tool(name: Any) -> bool:
-    """True only for an exact member of the read-only allowlist."""
-    return _normalize(name) in FOLLOWUP_READONLY_TOOLS
+    """True only for an EXACT member of the read-only allowlist (raw, not normalized)."""
+    return isinstance(name, str) and name in FOLLOWUP_READONLY_TOOLS

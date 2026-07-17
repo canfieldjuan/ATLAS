@@ -61,15 +61,16 @@ def test_empty_surface_is_trivially_qualified():
     assert "no tools offered" in q.reason
 
 
-@pytest.mark.parametrize("variant", ["Get_Contact", "GET_CONTACT", "get_contact "])
-def test_case_and_whitespace_variants(variant):
-    # Whitespace is normalized (a padded real tool qualifies); a case variant is a
-    # different, non-allowlisted name and fails closed.
+@pytest.mark.parametrize("variant", ["Get_Contact", "GET_CONTACT", "get_contact ", " get_contact"])
+def test_case_and_whitespace_variants_fail_closed(variant):
+    # A tool name is an exact capability identity: a case or whitespace variant is a
+    # DIFFERENT name than the allowlisted tool and must fail closed (not be normalized
+    # into a match). Guards against a lookalike tool inheriting read-only allowlisting.
+    assert variant not in FOLLOWUP_READONLY_TOOLS  # sanity: not an exact member
     q = qualify_followup_tool_surface([variant])
-    if variant.strip() in FOLLOWUP_READONLY_TOOLS:
-        assert q.qualified is True
-    else:
-        assert q.qualified is False
+    assert q.qualified is False
+    assert q.disallowed == (variant,)
+    assert is_read_only_tool(variant) is False
 
 
 def test_blank_and_non_string_entries_fail_closed():
