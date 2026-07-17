@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate Gitleaks baseline changes to an explicit rotation path."""
+"""Gate Gitleaks baseline and ignore growth from a trusted base checkout."""
 
 from __future__ import annotations
 
@@ -10,11 +10,12 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-
 BASELINE_PATH = "docs/security/gitleaks-baseline.json"
+IGNORE_PATH = ".gitleaksignore"
 DEFAULT_ROTATION_LABEL = "security-rotation"
 ALLOWED_ROTATION_PATHS = {
     BASELINE_PATH,
+    IGNORE_PATH,
     "HARDENING.md",
     "docs/SECURITY_GUARDRAILS.md",
 }
@@ -27,6 +28,7 @@ class Decision:
     reason: str
     disallowed_paths: tuple[str, ...] = ()
     missing_fingerprints: tuple[str, ...] = ()
+    added_ignore_fingerprints: tuple[str, ...] = ()
 
 
 def parse_labels(raw: str | None) -> set[str]:
@@ -57,40 +59,66 @@ def evaluate_baseline_rotation(
     base_has_baseline: bool,
     base_fingerprints: set[str] | None = None,
     candidate_fingerprints: set[str] | None = None,
+    base_ignore_fingerprints: set[str] | None = None,
+    candidate_ignore_fingerprints: set[str] | None = None,
     rotation_label: str = DEFAULT_ROTATION_LABEL,
 ) -> Decision:
-    if not base_has_baseline:
-        return Decision(True, "No trusted-base Gitleaks baseline exists; initial adoption is allowed.")
+    baseline_changed = BASELINE_PATH in changed_paths
+    base_ignores = base_ignore_fingerprints or set()
+    candidate_ignores = candidate_ignore_fingerprints or set()
+    added_ignores = (
+        candidate_ignores - base_ignores if IGNORE_PATH in changed_paths else set()
+    )
+    baseline_requires_rotation = baseline_changed and base_has_baseline
+    ignore_requires_rotation = bool(added_ignores)
 
-    if BASELINE_PATH not in changed_paths:
-        return Decision(True, "Gitleaks baseline unchanged.")
+    if not baseline_requires_rotation and not ignore_requires_rotation:
+        if baseline_changed and not base_has_baseline:
+            return Decision(
+                True,
+                "No trusted-base Gitleaks baseline exists; initial adoption is allowed.",
+            )
+        return Decision(True, "Gitleaks baseline and ignore fingerprints unchanged.")
 
     if rotation_label not in labels:
         return Decision(
             False,
             (
-                "Gitleaks baseline changes require the "
+                "Gitleaks baseline changes or ignore growth require the "
                 f"`{rotation_label}` PR label after provider rotation/revocation."
             ),
+            added_ignore_fingerprints=tuple(sorted(added_ignores)),
         )
 
-    disallowed = tuple(sorted(path for path in changed_paths if not is_rotation_path_allowed(path)))
+    disallowed = tuple(
+        sorted(path for path in changed_paths if not is_rotation_path_allowed(path))
+    )
     if disallowed:
         return Decision(
             False,
-            "Baseline rotation PRs may only touch the baseline, hardening/security docs, and their plan.",
+            "Gitleaks rotation PRs may only touch the baseline, ignore file, hardening/security docs, and their plan.",
             disallowed,
+            added_ignore_fingerprints=tuple(sorted(added_ignores)),
         )
 
-    missing = tuple(sorted((base_fingerprints or set()) - (candidate_fingerprints or set())))
+    missing = tuple(
+        sorted((base_fingerprints or set()) - (candidate_fingerprints or set()))
+        if baseline_changed
+        else ()
+    )
     if missing:
         return Decision(
             False,
             "Proposed Gitleaks baseline drops trusted-base fingerprints.",
             missing_fingerprints=missing,
+            added_ignore_fingerprints=tuple(sorted(added_ignores)),
         )
 
-    return Decision(True, f"Gitleaks baseline rotation accepted with `{rotation_label}` label.")
+    return Decision(
+        True,
+        f"Gitleaks baseline/ignore rotation accepted with `{rotation_label}` label.",
+        added_ignore_fingerprints=tuple(sorted(added_ignores)),
+    )
 
 
 def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -98,7 +126,11 @@ def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def ref_has_baseline(ref: str) -> bool:
-    proc = run_git(["cat-file", "-e", f"{ref}:{BASELINE_PATH}"])
+    return ref_has_path(ref, BASELINE_PATH)
+
+
+def ref_has_path(ref: str, path: str) -> bool:
+    proc = run_git(["cat-file", "-e", f"{ref}:{path}"])
     return proc.returncode == 0
 
 
@@ -120,6 +152,21 @@ def baseline_fingerprints(ref: str) -> set[str]:
         if isinstance(fingerprint, str) and fingerprint:
             fingerprints.add(fingerprint)
     return fingerprints
+
+
+def parse_ignore_fingerprints(raw: str) -> set[str]:
+    return {
+        line.strip()
+        for line in raw.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+
+
+def ignore_fingerprints(ref: str) -> set[str]:
+    proc = run_git(["show", f"{ref}:{IGNORE_PATH}"])
+    if proc.returncode != 0:
+        return set()
+    return parse_ignore_fingerprints(proc.stdout)
 
 
 def changed_paths(base_ref: str, head_ref: str = "HEAD") -> set[str]:
@@ -156,10 +203,26 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         paths = changed_paths(args.base_ref, args.head_ref)
-        labels = parse_labels_json(args.labels_json) if args.labels_json else parse_labels(args.labels)
-        base_fps = baseline_fingerprints(args.base_ref) if ref_has_baseline(args.base_ref) else set()
+        labels = (
+            parse_labels_json(args.labels_json)
+            if args.labels_json
+            else parse_labels(args.labels)
+        )
+        base_fps = (
+            baseline_fingerprints(args.base_ref)
+            if ref_has_baseline(args.base_ref)
+            else set()
+        )
         candidate_fps = (
-            baseline_fingerprints(args.head_ref) if BASELINE_PATH in paths and ref_has_baseline(args.head_ref) else set()
+            baseline_fingerprints(args.head_ref)
+            if BASELINE_PATH in paths and ref_has_baseline(args.head_ref)
+            else set()
+        )
+        base_ignore_fps = ignore_fingerprints(args.base_ref)
+        candidate_ignore_fps = (
+            ignore_fingerprints(args.head_ref)
+            if IGNORE_PATH in paths and ref_has_path(args.head_ref, IGNORE_PATH)
+            else set()
         )
     except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -171,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         base_has_baseline=ref_has_baseline(args.base_ref),
         base_fingerprints=base_fps,
         candidate_fingerprints=candidate_fps,
+        base_ignore_fingerprints=base_ignore_fps,
+        candidate_ignore_fingerprints=candidate_ignore_fps,
         rotation_label=args.rotation_label,
     )
     print(decision.reason)
@@ -181,6 +246,10 @@ def main(argv: list[str] | None = None) -> int:
     if decision.missing_fingerprints:
         print("Missing trusted-base fingerprints:")
         for fingerprint in decision.missing_fingerprints:
+            print(f"- {fingerprint}")
+    if decision.added_ignore_fingerprints:
+        print("Added Gitleaks ignore fingerprints:")
+        for fingerprint in decision.added_ignore_fingerprints:
             print(f"- {fingerprint}")
     return 0 if decision.allowed else 1
 

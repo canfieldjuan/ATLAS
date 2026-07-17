@@ -12,6 +12,7 @@ Tools:
     send_invoice        -- mark sent; optionally send via email
     approve_and_send    -- batch approve drafts: generate PDF, email, mark sent
     export_invoice_pdf  -- generate PDF for an invoice and save to disk
+    record_customer_payment -- record one receipt across several invoices
     record_payment      -- record manual payment, auto-update status
     mark_void           -- void/cancel an invoice with reason
     customer_balance    -- outstanding balance by contact_id/phone/email
@@ -31,9 +32,11 @@ import sys
 import uuid as _uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from decimal import Decimal
+from typing import Annotated, Any, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("atlas.mcp.invoicing")
 
@@ -44,16 +47,71 @@ _BLOCKER_NEEDS_HOURS = "needs_hours"
 _BLOCKER_NO_EMAIL = "no_email"
 _WARNING_SUBTOTAL_ZERO = "subtotal_zero"
 _WARNING_NO_CONTACT = "no_contact_id"
+_MIN_HTTP_AUTH_TOKEN_LENGTH = 24
+_PLACEHOLDER_HTTP_AUTH_TOKENS = {
+    "<token>",
+    "change-me",
+    "changeme",
+    "password",
+    "secret",
+    "test-token",
+    "token",
+}
+
+
+PositiveCents = Annotated[int, Field(strict=True, gt=0)]
+
+
+class CustomerPaymentAllocation(BaseModel):
+    """Integer-cent allocation accepted by the multi-invoice payment tool."""
+
+    invoice_id: str = Field(min_length=1)
+    amount_cents: PositiveCents
+
+
+@asynccontextmanager
+async def _database_lifespan(
+    *,
+    init_database_fn,
+    get_db_pool_fn,
+    run_migrations_fn,
+    receivables_ready_fn,
+    close_database_fn,
+):
+    """Prepare the standalone finance writer before exposing any tools."""
+    try:
+        await init_database_fn()
+        pool = get_db_pool_fn()
+        if not pool.is_initialized:
+            raise RuntimeError("Invoicing MCP requires an initialized database pool")
+        await run_migrations_fn(pool)
+        if not await receivables_ready_fn(pool):
+            raise RuntimeError(
+                "Invoicing MCP requires a complete receivables schema"
+            )
+        logger.info(
+            "Invoicing MCP: DB pool initialized, migrated, and schema-ready"
+        )
+        yield
+    finally:
+        await close_database_fn()
 
 
 @asynccontextmanager
 async def _lifespan(server):
-    """Initialize DB pool on startup, close on shutdown."""
-    from ..storage.database import init_database, close_database
-    await init_database()
-    logger.info("Invoicing MCP: DB pool initialized")
-    yield
-    await close_database()
+    """Initialize and migrate the DB before serving, then close on shutdown."""
+    from ..services.receivables import ReceivablesService
+    from ..storage.database import close_database, get_db_pool, init_database
+    from ..storage.migrations import run_migrations
+
+    async with _database_lifespan(
+        init_database_fn=init_database,
+        get_db_pool_fn=get_db_pool,
+        run_migrations_fn=run_migrations,
+        receivables_ready_fn=lambda pool: ReceivablesService(pool).is_ready(),
+        close_database_fn=close_database,
+    ):
+        yield
 
 
 mcp = FastMCP(
@@ -84,6 +142,32 @@ def _is_uuid(value: str) -> bool:
         return True
     except (ValueError, AttributeError):
         return False
+
+
+def _authenticated_streamable_http_app(token: str, app_factory: Any):
+    """Validate HTTP auth before constructing the write-capable MCP app."""
+    from .auth import BearerAuthMiddleware
+
+    token = token.strip()
+    if not token:
+        raise RuntimeError("ATLAS_MCP_AUTH_TOKEN is required for invoicing HTTP")
+    if token.lower() in _PLACEHOLDER_HTTP_AUTH_TOKENS:
+        raise RuntimeError("ATLAS_MCP_AUTH_TOKEN must not be a placeholder")
+    if len(token) < _MIN_HTTP_AUTH_TOKEN_LENGTH:
+        raise RuntimeError(
+            f"ATLAS_MCP_AUTH_TOKEN must be at least {_MIN_HTTP_AUTH_TOKEN_LENGTH} characters"
+        )
+    return BearerAuthMiddleware(app_factory(), token=token)
+
+
+def _streamable_http_app():
+    """Build the full write-capable HTTP surface with mandatory bearer auth."""
+    from ..config import settings
+
+    return _authenticated_streamable_http_app(
+        settings.mcp.auth_token,
+        mcp.streamable_http_app,
+    )
 
 
 async def _resolve_contact_id(
@@ -408,24 +492,130 @@ async def send_invoice(
 # Tool: record_payment
 # ---------------------------------------------------------------------------
 
+
+async def _record_customer_payment_with_service(
+    *,
+    service: Any,
+    contact_id: str,
+    payer_name: str,
+    total_amount_cents: int,
+    payment_method: str,
+    allocations: list[CustomerPaymentAllocation],
+    idempotency_key: str,
+    reference: Optional[str] = None,
+    notes: Optional[str] = None,
+    payment_date: Optional[str] = None,
+) -> str:
+    try:
+        if (
+            isinstance(total_amount_cents, bool)
+            or not isinstance(total_amount_cents, int)
+            or total_amount_cents <= 0
+        ):
+            raise ValueError("total_amount_cents must be a positive integer")
+        normalized_payer = payer_name.strip()
+        if not normalized_payer or len(normalized_payer) > 256:
+            raise ValueError("payer_name must contain 1 to 256 characters")
+        normalized_key = idempotency_key.strip()
+        if not normalized_key or len(normalized_key) > 128:
+            raise ValueError("idempotency_key must contain 1 to 128 characters")
+        if reference is not None and len(reference) > 256:
+            raise ValueError("reference must contain at most 256 characters")
+        if not 1 <= len(allocations) <= 100:
+            raise ValueError("allocations must contain 1 to 100 items")
+
+        normalized_allocations = []
+        for item in allocations:
+            allocation = (
+                item
+                if isinstance(item, CustomerPaymentAllocation)
+                else CustomerPaymentAllocation.model_validate(item)
+            )
+            normalized_allocations.append(
+                {
+                    "invoice_id": _uuid.UUID(allocation.invoice_id),
+                    "amount": Decimal(allocation.amount_cents) / Decimal(100),
+                }
+            )
+
+        payment = await service.create_payment(
+            contact_id=_uuid.UUID(contact_id),
+            payer_name=normalized_payer,
+            total_amount=Decimal(total_amount_cents) / Decimal(100),
+            payment_method=payment_method,
+            received_date=(
+                date.fromisoformat(payment_date) if payment_date else date.today()
+            ),
+            allocations=normalized_allocations,
+            idempotency_key=normalized_key,
+            reference=reference,
+            notes=notes,
+            recorded_by="atlas-invoicing-mcp",
+            source="invoicing_mcp",
+        )
+        return json.dumps({"success": True, "payment": payment}, default=str)
+    except Exception as exc:
+        logger.warning("record_customer_payment rejected: %s", exc)
+        return json.dumps({"success": False, "error": str(exc)})
+
+
 @mcp.tool()
-async def record_payment(
+async def record_customer_payment(
+    contact_id: str,
+    payer_name: Annotated[str, Field(min_length=1, max_length=256)],
+    total_amount_cents: PositiveCents,
+    payment_method: Literal["check", "ach", "square"],
+    allocations: Annotated[
+        list[CustomerPaymentAllocation], Field(min_length=1, max_length=100)
+    ],
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=128)],
+    reference: Annotated[Optional[str], Field(max_length=256)] = None,
+    notes: Optional[str] = None,
+    payment_date: Optional[str] = None,
+) -> str:
+    """Record one check, ACH, or Square receipt across multiple invoices.
+
+    allocations is a list of {"invoice_id": UUID, "amount_cents": integer}.
+    Atlas validates that every invoice belongs to contact_id and leaves any
+    remainder unapplied. ACH and Square entries are recorded as already cleared.
+    """
+    from ..services.receivables import get_receivables_service
+
+    return await _record_customer_payment_with_service(
+        service=get_receivables_service(),
+        contact_id=contact_id,
+        payer_name=payer_name,
+        total_amount_cents=total_amount_cents,
+        payment_method=payment_method,
+        allocations=allocations,
+        idempotency_key=idempotency_key,
+        reference=reference,
+        notes=notes,
+        payment_date=payment_date,
+    )
+
+
+async def _record_payment_with_dependencies(
+    *,
+    repo: Any,
+    crm_logger: Any,
     invoice_id: str,
     amount: float,
     payment_method: str = "other",
     reference: Optional[str] = None,
     notes: Optional[str] = None,
     payment_date: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
 ) -> str:
-    """
-    Record a manual payment on an invoice. Auto-updates status to partial/paid.
+    normalized_idempotency_key = None
+    if idempotency_key is not None:
+        normalized_idempotency_key = idempotency_key.strip()
+        if not normalized_idempotency_key or len(normalized_idempotency_key) > 128:
+            message = "idempotency_key must contain 1 to 128 characters"
+            logger.warning("record_payment rejected: %s", message)
+            return json.dumps({"success": False, "error": message})
 
-    payment_method: cash | check | card | zelle | venmo | other
-    reference: check number, transaction ID, etc.
-    payment_date: ISO date (YYYY-MM-DD), defaults to today
-    """
     try:
-        repo = _repo()
         # Resolve invoice by UUID or number
         if _is_uuid(invoice_id):
             iid = _uuid.UUID(invoice_id)
@@ -439,25 +629,30 @@ async def record_payment(
 
         pd = date.fromisoformat(payment_date) if payment_date else None
 
-        payment = await repo.record_payment(
+        payment_outcome = await repo.record_payment_with_outcome(
             invoice_id=iid,
             amount=amount,
             payment_method=payment_method,
             payment_date=pd,
             reference=reference,
             notes=notes,
+            idempotency_key=normalized_idempotency_key,
         )
+        payment = payment_outcome.payment
 
         # Refresh invoice to get updated status
         updated_inv = await repo.get_by_id(iid)
 
-        # CRM log
-        contact_id = inv.get("contact_id")
-        ref_text = f" ({reference})" if reference else ""
-        await _log_crm(
-            str(contact_id) if contact_id else None, "invoice",
-            f"Payment ${amount:.2f} on {inv['invoice_number']} via {payment_method}{ref_text}",
-        )
+        # The receipt transaction owns replay classification, so a retry does
+        # not duplicate this secondary customer-history side effect.
+        if not payment_outcome.replayed:
+            contact_id = inv.get("contact_id")
+            ref_text = f" ({reference})" if reference else ""
+            await crm_logger(
+                str(contact_id) if contact_id else None,
+                "invoice",
+                f"Payment ${amount:.2f} on {inv['invoice_number']} via {payment_method}{ref_text}",
+            )
 
         return json.dumps({
             "success": True,
@@ -468,6 +663,41 @@ async def record_payment(
     except Exception as exc:
         logger.exception("record_payment error")
         return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def record_payment(
+    invoice_id: str,
+    amount: float,
+    payment_method: str = "other",
+    reference: Optional[str] = None,
+    notes: Optional[str] = None,
+    payment_date: Optional[str] = None,
+    idempotency_key: Annotated[
+        Optional[str], Field(min_length=1, max_length=128)
+    ] = None,
+) -> str:
+    """
+    Record a manual payment on an invoice. Auto-updates status to partial/paid.
+
+    payment_method: cash | check | card | zelle | venmo | other
+    reference: check number, transaction ID, etc.
+    payment_date: ISO date (YYYY-MM-DD), defaults to today
+    idempotency_key: supply a unique operation key on the first call and reuse it
+        when retrying the same payment. Calls without a key remain compatible but
+        are treated as distinct receipts.
+    """
+    return await _record_payment_with_dependencies(
+        repo=_repo(),
+        crm_logger=_log_crm,
+        invoice_id=invoice_id,
+        amount=amount,
+        payment_method=payment_method,
+        reference=reference,
+        notes=notes,
+        payment_date=payment_date,
+        idempotency_key=idempotency_key,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1197,14 +1427,13 @@ async def export_invoice_pdf(
 if __name__ == "__main__":
     if "--sse" in sys.argv:
         # Streamable HTTP transport (preferred by claude.ai connectors;
-        # mcp.sse_app() is being deprecated). Bearer auth via
-        # apply_auth_middleware when ATLAS_MCP_AUTH_TOKEN is set.
+        # mcp.sse_app() is being deprecated). This write-capable surface
+        # refuses to start without a non-placeholder bearer token.
         import anyio
         import uvicorn
         from mcp.server.transport_security import TransportSecuritySettings
 
         from ..config import settings
-        from .auth import apply_auth_middleware
 
         mcp.settings.host = settings.mcp.host
         mcp.settings.port = settings.mcp.invoicing_port
@@ -1213,7 +1442,7 @@ if __name__ == "__main__":
         mcp.settings.transport_security = TransportSecuritySettings(
             enable_dns_rebinding_protection=False,
         )
-        secured_app = apply_auth_middleware(mcp.streamable_http_app())
+        secured_app = _streamable_http_app()
 
         async def _serve():
             config = uvicorn.Config(

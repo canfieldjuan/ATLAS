@@ -2238,6 +2238,14 @@ class InvoicingConfig(BaseSettings):
         env_prefix="ATLAS_INVOICING_", env_file=ENV_FILES, extra="ignore"
     )
     enabled: bool = Field(default=False, description="Enable invoicing system")
+    receivables_api_enabled: bool = Field(
+        default=False,
+        description="Enable the authenticated EOM receivables service API",
+    )
+    receivables_service_token: str = Field(
+        default="",
+        description="Bearer token accepted by the EOM receivables service API",
+    )
     default_payment_terms_days: int = Field(default=30, ge=1, le=365, description="Default days until due")
     default_tax_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Default tax rate (0.0-1.0)")
     reminders_enabled: bool = Field(default=True, description="Master toggle for the payment-reminder cron task")
