@@ -49,8 +49,10 @@ _RULES: dict[str, list[tuple[str, str]]] = {
         # "guaranteed savings", "guaranteed cost/monthly savings", "guaranteed 30%
         # savings", "guarantees savings". Up to 3 tokens (incl. numeric/percent ones)
         # may sit between the guarantee verb and "savings".
-        ("guaranteed-savings", r"\bguarante(?:e|es|ed)\b(?:\s+[\w%$.,-]+){0,3}\s+savings\b"),
-        ("guaranteed-rankings", r"\bguarante(?:e|es|ed)\b(?:\s+[\w%$.,-]+){0,3}\s+rankings\b"),
+        # Gap tokens allow digits/percent (e.g. "30%") but NOT sentence punctuation, so a
+        # modifier gap cannot bridge a sentence boundary ("guarantee X. Savings ...").
+        ("guaranteed-savings", r"\bguarante(?:e|es|ed)\b(?:\s+[\w%$-]+){0,3}\s+savings\b"),
+        ("guaranteed-rankings", r"\bguarante(?:e|es|ed)\b(?:\s+[\w%$-]+){0,3}\s+rankings\b"),
         # Fixed deflection percentage, "%" or spelled-out "percent".
         ("fixed-deflection-percent", r"\b\d{1,3}\s*(?:%|percent)\s+deflection\b"),
         # Fixed ticket reductions: "reduce (support) tickets/ticket volume by N%/percent".
@@ -100,8 +102,10 @@ _RULES: dict[str, list[tuple[str, str]]] = {
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 _PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})\b")
 
-# A negation directly before the claim (no/not/never/without, or an -n't contraction).
-_NEGATION_RE = re.compile(r"\b(?:no|not|never|without)\b|n't\b", re.I)
+# A negation directly before the claim (no/not/never/without/cannot, or an -n't
+# contraction). "not only"/"not just" are emphatic, NOT negations, and are excluded.
+_NEGATION_RE = re.compile(r"\b(?:no|not|never|without|cannot)\b|n't\b", re.I)
+_EMPHATIC_RE = re.compile(r"\bnot\s+(?:only|just)\b", re.I)
 
 
 def _is_negated(text: str, start: int) -> bool:
@@ -109,25 +113,36 @@ def _is_negated(text: str, start: int) -> bool:
 
     Only the last two words of the current segment are considered (a segment ends at
     ``.!?;,`` or newline), so a real negation ("no guaranteed savings", "does not promise
-    guaranteed savings") suppresses the hit, but an UNRELATED earlier negation in the same
-    sentence ("No setup fee, and guaranteed savings ...", "does not delay launch and
-    guarantees savings") does not -- the source tool scanned the whole prefix and leaked
-    those false negatives."""
+    guaranteed savings", "we cannot guarantee savings") suppresses the hit, but an
+    UNRELATED earlier negation in the same sentence ("No setup fee, and guaranteed savings
+    ...") does not, and emphatic "not only"/"not just" is not read as a negation ("not only
+    guarantees savings" is still a hit)."""
     segment_start = max(text.rfind(mark, 0, start) for mark in ".!?;,\n")
     prefix = text[segment_start + 1 : start]
     window = " ".join(prefix.split()[-2:])
+    if _EMPHATIC_RE.search(window):
+        return False
     return bool(_NEGATION_RE.search(window))
+
+
+def _redact_pii(evidence: str) -> str:
+    """Strip any email/phone out of matched claim evidence before it is recorded, so a
+    claim that happens to span a contact string ("Guaranteed 618-555-9876 savings") does
+    not persist raw PII into the git-backed audit metadata via the claim hit."""
+    evidence = _EMAIL_RE.sub("<redacted-email>", evidence)
+    evidence = _PHONE_RE.sub("<redacted-phone>", evidence)
+    return evidence
 
 
 def _claim_hits(text: str) -> list[str]:
     """"code: evidence" for each non-negated forbidden-claim match. Claim evidence is the
-    marketing phrase itself (safe and useful for a human reviewer), not PII."""
+    marketing phrase itself (useful for a human reviewer), with any PII redacted out."""
     hits: list[str] = []
     for category in ("outcomes", "automation", "replacing_agents"):
         for code, pattern in _RULES[category]:
             for match in re.finditer(pattern, text, re.I):
                 if not _is_negated(text, match.start()):
-                    hits.append(f"{code}: {match.group(0)}")
+                    hits.append(f"{code}: {_redact_pii(match.group(0))}")
     return hits
 
 

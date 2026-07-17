@@ -114,7 +114,7 @@ the verdict is "pass", a draft that overclaims or leaks PII cannot be promoted.
 ```
 python -m pytest tests/test_content_factory_copy_verification.py -q
 ```
-47 tests pass: legitimate copy (incl. non-claim uses of the trigger words and possessive/
+51 tests pass: legitimate copy (incl. non-claim uses of the trigger words and possessive/
 benign agent copy) passes; each promote-blocking category fails on its common variants
 (incl. numeric guaranteed savings); a directly-governing negation passes while an unrelated
 earlier negation and an ambiguous-scope negation fail; PII fails but is redacted out of the

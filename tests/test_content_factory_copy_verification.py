@@ -27,6 +27,7 @@ from atlas_brain.services.content_factory_copy_verification import verify_copy
         "and drafts owner-routed next steps so the right team can review the fix.",
         "We help teams understand where their support workload concentrates.",
         "Our guarantee is honest, evidence-backed reporting.",  # 'guarantee' but not savings
+        "We guarantee honest reporting. Savings summaries are reviewed by your team.",  # cross-sentence
         "Auto-save keeps your draft safe as you write.",  # 'auto-' but not auto-publish
         "Replace your old spreadsheet with a single source of truth.",  # replace, not agents
         "Replace your agents' spreadsheet with a dashboard.",  # possessive: object is spreadsheet
@@ -53,6 +54,7 @@ def test_legitimate_copy_passes(text):
         ("Our tool guarantees savings for your team.", "guaranteed-savings"),
         ("Guaranteed 30% savings from day one.", "guaranteed-savings"),
         ("We guarantee 30% savings.", "guaranteed-savings"),
+        ("Atlas not only guarantees savings for teams.", "guaranteed-savings"),  # emphatic, not negation
         # deflection %, both forms
         ("Expect 40% deflection from day one.", "fixed-deflection-percent"),
         ("Expect 40 percent deflection from day one.", "fixed-deflection-percent"),
@@ -91,6 +93,7 @@ def test_forbidden_claims_fail(text, code_fragment):
         "This does not promise guaranteed savings.",
         "We will not guarantee savings.",
         "We don't guarantee savings.",
+        "We cannot guarantee savings.",
     ],
 )
 def test_direct_negation_passes(text):
@@ -142,6 +145,13 @@ def test_multiple_hits_all_recorded():
     assert r.verdict == "fail"
     assert len(r.hits) >= 2
     assert all("x@y.com" not in h for h in r.hits)
+
+
+def test_pii_inside_claim_evidence_is_redacted():
+    # PII that falls INSIDE a matched claim phrase must not persist via the claim hit.
+    r = verify_copy("Guaranteed 618-555-9876 savings.")
+    assert r.verdict == "fail"
+    assert all("618-555-9876" not in h for h in r.hits), r.hits
 
 
 def test_non_string_rejected():
