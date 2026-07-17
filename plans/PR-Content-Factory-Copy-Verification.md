@@ -95,11 +95,11 @@ draft that overclaims or leaks PII cannot be promoted.
 ```
 python -m pytest tests/test_content_factory_copy_verification.py -q
 ```
-22 tests pass: clean copy passes; each forbidden claim category and each PII shape fails
-with the hit recorded; negated claims pass; multiple hits are all recorded; a non-string
-is rejected; and the produced verdict gates promotion through the #2116 EditorialAudit
-contract (forbidden copy cannot be promoted, clean copy can, forbidden copy may still be
-recommended for revise).
+23 tests pass: clean copy passes; each forbidden claim category (incl. ticket-volume in
+both "30%" and "30 percent" forms) and each PII shape fails with the hit recorded; negated
+claims pass; multiple hits are all recorded; a non-string is rejected; and the produced
+verdict gates promotion through the #2116 EditorialAudit contract (forbidden copy cannot be
+promoted, clean copy can, forbidden copy may still be recommended for revise).
 
 ## Estimated diff size
 
