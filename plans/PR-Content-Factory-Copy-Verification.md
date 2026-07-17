@@ -64,11 +64,10 @@ will call.
   verdict). This gate is an incomplete-by-nature NL backstop, not a complete classifier.
 
 ### Files touched
-- `atlas_brain/services/content_factory_copy_verification.py`
-- `tests/test_content_factory_copy_verification.py`
-- `plans/PR-Content-Factory-Copy-Verification.md`
 
-Max files: 3
+- `atlas_brain/services/content_factory_copy_verification.py`
+- `plans/PR-Content-Factory-Copy-Verification.md`
+- `tests/test_content_factory_copy_verification.py`
 
 ## Mechanism
 
@@ -120,13 +119,9 @@ and the verdict gates promotion through the #2116 EditorialAudit contract.
 
 ## Estimated diff size
 
-| File | Lines |
-|---|---|
-| atlas_brain/services/content_factory_copy_verification.py | 150 |
-| tests/test_content_factory_copy_verification.py | 175 |
-| plans/PR-Content-Factory-Copy-Verification.md | 120 |
-| **Total** | **445** |
-
-Over the 400 soft cap: a content-safety gate whose value is real coverage across each
-category plus a false-positive guard, so the module and its two-sided tests ship together;
-splitting the catalogue from its tests would ship safety code without its evidence.
+| File | LOC |
+|---|---:|
+| `atlas_brain/services/content_factory_copy_verification.py` | 151 |
+| `plans/PR-Content-Factory-Copy-Verification.md` | 132 |
+| `tests/test_content_factory_copy_verification.py` | 180 |
+| **Total** | **463** |
