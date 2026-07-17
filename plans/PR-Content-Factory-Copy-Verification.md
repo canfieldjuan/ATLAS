@@ -69,10 +69,12 @@ draft that overclaims or leaks PII cannot be promoted.
 
 ## Intentional
 
-- Patterns are ported VERBATIM, including a quirk: the `fixed-ticket-volume-reduction`
-  rule ends `(?:%|percent)\b`, and `%\b` cannot match a `%` before a space, so it catches
-  "30 percent" but not "30%". Preserving source behavior is correct for a port; tightening
-  the regex is the operator's content-policy call, deferred below.
+- Patterns are ported VERBATIM except ONE operator-authorized fix: the source
+  `fixed-ticket-volume-reduction` rule ended `(?:%|percent)\b`, and `%\b` can never match a
+  `%` before a space, so "30%" slipped through while "30 percent" was caught. Moving the
+  boundary inside the alternation (`(?:%|percent\b)`) closes the gap -- a strict tightening
+  of the gate, never a loosening. This repo module is now the canonical gate; the Open
+  WebUI copy is superseded and should be re-synced from here.
 - Only the source tool's BLOCKER categories are ported. Its softer "needs human review"
   layer (answer/ownership qualifiers, owner-routing coverage, CTA reminder) produces
   warnings, not promote-blocks, and is a later slice.
@@ -85,8 +87,8 @@ draft that overclaims or leaks PII cannot be promoted.
   qualifiers, honest-CTA reminder) from the source tool -- a later slice.
 - Wiring `verify_copy` into the stage runner and the Phase 4.2 Editor Filter (fail-closed
   when the gate is unavailable).
-- Tightening the ported patterns (e.g. the `%`-before-space quirk) -- an operator
-  content-policy decision, tracked as a follow-up, not changed inside a verbatim port.
+- Re-syncing the Open WebUI copy_verification tool from this now-canonical repo module
+  (ops step) so the `%`-boundary fix is reflected there too.
 
 ## Verification
 

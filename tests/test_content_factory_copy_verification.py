@@ -31,9 +31,9 @@ def test_clean_copy_passes_with_no_hits():
         ("We deliver guaranteed savings on every plan.", "guaranteed-savings"),
         ("Our tool guarantees savings for your team.", "guarantees-savings"),
         ("Expect 40% deflection from day one.", "fixed-deflection-percent"),
-        # Source pattern ends `(?:%|percent)\b`; `%\b` cannot match a `%` before a
-        # space, so the rule catches "30 percent" (not "30%") -- ported verbatim.
+        # Both forms hit after the operator-authorized %-boundary fix.
         ("We cut ticket volume by 30 percent in a month.", "fixed-ticket-volume-reduction"),
+        ("We cut ticket volume by 30% in a month.", "fixed-ticket-volume-reduction"),
         ("Customers see 25% fewer tickets.", "fixed-fewer-tickets"),
         ("Enjoy automatic ticket answering out of the box.", "automatic-ticket-answering"),
         ("Your help center is auto-published nightly.", "auto-published"),

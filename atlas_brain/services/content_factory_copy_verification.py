@@ -8,8 +8,11 @@ contains a forbidden marketing claim or raw contact PII.
 
 The banned-claim catalogue and PII patterns are ported VERBATIM from the operator's
 "Resolution Audit Draft Verifier" copy_verification tool (authored by Juan Canfield /
-Codex), which lived only in the Open WebUI database and was therefore un-versioned. This
-is the blocker core of that tool -- the categories it marks "Do not post yet":
+Codex), which lived only in the Open WebUI database and was therefore un-versioned --
+with ONE operator-authorized fix, annotated at the ``fixed-ticket-volume-reduction`` rule,
+that closes a ``%``-boundary gap so "30%" is caught like "30 percent" (a strict tightening).
+This repo module is now the canonical gate; the Open WebUI copy is superseded. This is the
+blocker core of that tool -- the categories it marks "Do not post yet":
 
   - forbidden OUTCOME claims (guaranteed savings, fixed deflection %, ticket reductions),
   - forbidden AUTOMATION claims (auto-publishing / auto-answering the help center),
@@ -38,8 +41,15 @@ _RULES: dict[str, list[tuple[str, str]]] = {
         ("guaranteed-rankings", r"\bguaranteed\s+rankings\b"),
         ("fixed-deflection-percent", r"\b\d{1,3}\s*%\s+deflection\b"),
         (
+            # Operator-authorized fix to the one source quirk: the source ended this
+            # rule `(?:%|percent)\b`, but `\b` after `%` can never match (`%` before a
+            # space is two non-word chars), so "30%" slipped through while "30 percent"
+            # did not. Moving `\b` inside the alternation guards only the word "percent"
+            # and lets a bare "%" match -- a strict tightening of the gate, not a
+            # loosening. (The other percent rules anchor `%` with following text, so
+            # they never had this gap.)
             "fixed-ticket-volume-reduction",
-            r"\b(?:cut|cuts|reduce|reduces|lower|lowers|drop|drops|shrink|shrinks)\s+ticket\s+volume\s+by\s+\d{1,3}\s*(?:%|percent)\b",
+            r"\b(?:cut|cuts|reduce|reduces|lower|lowers|drop|drops|shrink|shrinks)\s+ticket\s+volume\s+by\s+\d{1,3}\s*(?:%|percent\b)",
         ),
         (
             "fixed-fewer-tickets",
