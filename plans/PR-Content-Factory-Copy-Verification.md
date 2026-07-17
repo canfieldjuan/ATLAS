@@ -60,8 +60,11 @@ will call.
 - Affected surfaces: one new service module and its test file; nothing calls it yet.
 - Risk areas: pattern coverage vs false positives (both sides tested); negation scope;
   PII never persisted; the verdict -> promote-guard wiring.
-- Reviewer rules triggered: R14 (a content safety gate producing a promote-blocking
-  verdict). This gate is an incomplete-by-nature NL backstop, not a complete classifier.
+- Reviewer rules triggered: R2, R13, R14. R14 (guard/gate) and R2 (a guard/validator
+  change requires failure-branch test evidence) pair for this promote-blocking validator;
+  R13 (class-closure) because the diff responds to same-class review findings. PII handling
+  is covered by the redaction acceptance criterion above. This gate is an incomplete-by-
+  nature NL backstop, not a complete classifier.
 
 ### Files touched
 
@@ -111,11 +114,12 @@ the verdict is "pass", a draft that overclaims or leaks PII cannot be promoted.
 ```
 python -m pytest tests/test_content_factory_copy_verification.py -q
 ```
-43 tests pass: legitimate copy (incl. non-claim uses of the trigger words) passes; each
-promote-blocking category fails on its common variants; a directly-governing negation
-passes while an unrelated earlier negation and an ambiguous-scope negation fail; PII fails
-but is redacted out of the hits (the raw value never appears); a non-string is rejected;
-and the verdict gates promotion through the #2116 EditorialAudit contract.
+47 tests pass: legitimate copy (incl. non-claim uses of the trigger words and possessive/
+benign agent copy) passes; each promote-blocking category fails on its common variants
+(incl. numeric guaranteed savings); a directly-governing negation passes while an unrelated
+earlier negation and an ambiguous-scope negation fail; PII fails but is redacted out of the
+hits (the raw value never appears); a non-string is rejected; and the verdict gates
+promotion through the #2116 EditorialAudit contract.
 
 ## Estimated diff size
 

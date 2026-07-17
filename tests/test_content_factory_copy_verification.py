@@ -29,6 +29,8 @@ from atlas_brain.services.content_factory_copy_verification import verify_copy
         "Our guarantee is honest, evidence-backed reporting.",  # 'guarantee' but not savings
         "Auto-save keeps your draft safe as you write.",  # 'auto-' but not auto-publish
         "Replace your old spreadsheet with a single source of truth.",  # replace, not agents
+        "Replace your agents' spreadsheet with a dashboard.",  # possessive: object is spreadsheet
+        "Avoid distracting your agents with repetitive triage.",  # avoid, not a hire
         "Deflection improved noticeably this quarter.",  # deflection, no fixed %
         "Reduce back-and-forth by triaging tickets faster.",  # reduce tickets, no %
         "Avoid a stockout with better forecasting.",  # avoid, not a hire/agent
@@ -49,6 +51,8 @@ def test_legitimate_copy_passes(text):
         ("Enjoy guaranteed cost savings from month one.", "guaranteed-savings"),
         ("You get guaranteed monthly savings.", "guaranteed-savings"),
         ("Our tool guarantees savings for your team.", "guaranteed-savings"),
+        ("Guaranteed 30% savings from day one.", "guaranteed-savings"),
+        ("We guarantee 30% savings.", "guaranteed-savings"),
         # deflection %, both forms
         ("Expect 40% deflection from day one.", "fixed-deflection-percent"),
         ("Expect 40 percent deflection from day one.", "fixed-deflection-percent"),

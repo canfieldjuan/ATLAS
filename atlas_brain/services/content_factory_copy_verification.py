@@ -46,10 +46,11 @@ from atlas_brain.schemas.content_factory import CopyVerification
 # best-effort backstop (see module docstring): a novel paraphrase can pass.
 _RULES: dict[str, list[tuple[str, str]]] = {
     "outcomes": [
-        # "guaranteed savings", "guaranteed cost/monthly savings", "guarantees savings".
-        # Up to 3 words may sit between the guarantee verb and "savings".
-        ("guaranteed-savings", r"\bguarante(?:e|es|ed)\b(?:\s+\w+){0,3}\s+savings\b"),
-        ("guaranteed-rankings", r"\bguarante(?:e|es|ed)\b(?:\s+\w+){0,3}\s+rankings\b"),
+        # "guaranteed savings", "guaranteed cost/monthly savings", "guaranteed 30%
+        # savings", "guarantees savings". Up to 3 tokens (incl. numeric/percent ones)
+        # may sit between the guarantee verb and "savings".
+        ("guaranteed-savings", r"\bguarante(?:e|es|ed)\b(?:\s+[\w%$.,-]+){0,3}\s+savings\b"),
+        ("guaranteed-rankings", r"\bguarante(?:e|es|ed)\b(?:\s+[\w%$.,-]+){0,3}\s+rankings\b"),
         # Fixed deflection percentage, "%" or spelled-out "percent".
         ("fixed-deflection-percent", r"\b\d{1,3}\s*(?:%|percent)\s+deflection\b"),
         # Fixed ticket reductions: "reduce (support) tickets/ticket volume by N%/percent".
@@ -76,15 +77,19 @@ _RULES: dict[str, list[tuple[str, str]]] = {
         ("answers-tickets-automatically", r"\banswers?\s+tickets?\s+automatically\b"),
     ],
     "replacing_agents": [
-        # "replace (your/our/the) (support) agents".
+        # "replace (your/our/the) (support) agents" as the direct object. The negative
+        # lookahead excludes a possessive ("replace your agents' spreadsheet"), where the
+        # thing replaced is not the agents.
         (
             "replace-agents",
-            r"\breplac(?:e|es|ing)\s+(?:your\s+|our\s+|the\s+)?(?:support\s+)?agents?\b",
+            r"\breplac(?:e|es|ing)\s+(?:your\s+|our\s+|the\s+)?(?:support\s+)?agents?\b(?![\u0027\u2019])",
         ),
-        # "avoid a support hire", "avoid hiring (another) (support) agent".
+        # "avoid a support hire", "avoid hiring (another) (support) agent". Anchored on
+        # hire/hiring semantics -- NOT any nearby "agents" (which would match benign copy
+        # like "avoid distracting your agents").
         (
             "avoid-support-hire",
-            r"\bavoid(?:s|ing)?\s+(?:\w+\s+){0,3}(?:hire|hiring|agents?)\b",
+            r"\bavoid(?:s|ing)?\s+(?:\w+\s+){0,3}(?:hire|hiring)\b",
         ),
     ],
 }
