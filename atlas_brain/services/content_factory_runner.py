@@ -17,9 +17,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from atlas_brain.services.content_factory_copy_verification import verify_copy
 from atlas_brain.services.content_factory_store import DEFAULT_ROOT, write_artifact
 
 DEFAULT_OWUI_URL = "http://127.0.0.1:8080"
+
+# The editor stage's artifact schema. Its promote decision is gated (via #2116's
+# EditorialAudit contract) on copy_verification.verdict == "pass".
+_EDITOR_SCHEMA = "editorial_audit.v1"
 
 # A leading ```/```json fence and a trailing fence, so a fenced reply still
 # yields its JSON body.
@@ -91,6 +96,38 @@ def call_worker(
     return content or ""
 
 
+def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
+    """For ANY editorial audit (gated by schema, not stage name -- see below), OVERWRITE
+    copy_verification with the deterministic verdict computed from the edited copy,
+    discarding any value the worker reported.
+
+    This is what makes the model unable to self-promote: #2116's EditorialAudit contract
+    rejects ``recommendation == "promote"`` unless ``copy_verification.verdict == "pass"``,
+    and after this the verdict is the deterministic gate's, not the worker's claim. So if
+    the edited copy overclaims or leaks PII, the injected "fail" verdict makes a
+    worker-asserted "promote" invalid and the store rejects the artifact (fail closed);
+    a "revise" recommendation still persists with the recorded hits.
+
+    Gating is by SCHEMA (``editorial_audit.v1``), not by the canonical "audit" stage name:
+    the store lets a custom stage carry any artifact, and any editorial_audit.v1 can
+    promote, so gating by stage name would let a custom-stage audit bypass the gate.
+
+    Empty/blank edited copy fails closed: with nothing to verify, the audit cannot carry a
+    passing verdict (otherwise a worker could self-promote by omitting the edited body).
+    Verifying the parent draft body in that case is a later refinement (#2136).
+    """
+    if artifact.get("schema") != _EDITOR_SCHEMA:
+        return
+    edited = str(artifact.get("edited_body_markdown") or "")
+    if not edited.strip():
+        artifact["copy_verification"] = {
+            "verdict": "fail",
+            "hits": ["unverified-copy: edited_body_markdown is empty; nothing was verified"],
+        }
+        return
+    artifact["copy_verification"] = verify_copy(edited).model_dump()
+
+
 def run_stage(
     job_id: str,
     stage: str,
@@ -101,12 +138,13 @@ def run_stage(
     base_url: str = DEFAULT_OWUI_URL,
     root: Path | str = DEFAULT_ROOT,
 ) -> dict[str, Any]:
-    """Run one stage end to end: call the worker, extract its JSON artifact, then
-    validate + persist it via the store. Returns the store's record.
+    """Run one stage end to end: call the worker, extract its JSON artifact, enforce the
+    deterministic copy-verification verdict on an editor audit, then validate + persist it
+    via the store. Returns the store's record.
 
     Raises WorkerError if the worker call fails or returns no JSON object, and
     ValueError / pydantic ValidationError (from the store) if the artifact fails
-    its contract -- so a malformed stage output is never persisted.
+    its contract -- so a malformed or self-promoting stage output is never persisted.
     """
     reply = call_worker(model, user_content, api_key=api_key, base_url=base_url)
     artifact = extract_json(reply)
@@ -114,4 +152,5 @@ def run_stage(
         raise WorkerError(
             f"stage {stage!r}: worker {model!r} returned no JSON artifact"
         )
+    _enforce_copy_verification(artifact)
     return write_artifact(job_id, stage, artifact, root=root)
