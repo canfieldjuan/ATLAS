@@ -100,7 +100,7 @@ empty surface is trivially qualified; the allowlist is disjoint from known mutat
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/followup_tool_surface.py` | 175 |
-| `plans/PR-Followup-Tool-Surface-Qualification.md` | 108 |
-| `tests/test_followup_tool_surface.py` | 97 |
-| **Total** | **380** |
+| `atlas_brain/schemas/followup_tool_surface.py` | 174 |
+| `plans/PR-Followup-Tool-Surface-Qualification.md` | 106 |
+| `tests/test_followup_tool_surface.py` | 98 |
+| **Total** | **378** |
