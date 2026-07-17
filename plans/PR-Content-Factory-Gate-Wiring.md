@@ -48,7 +48,9 @@ separate step (needs LM Studio serving the qualified model).
   test file.
 - Risk areas: the deterministic override actually replacing the worker's claim; fail-closed
   on self-promote; only the editor stage touched.
-- Reviewer rules triggered: R14 (wires a safety gate into the enforcement path).
+- Reviewer rules triggered: R2, R14. R14 (safety gate wired into the enforcement path) and
+  R2 (a guard/gate change requires failure-branch + boundary test evidence -- the
+  self-promote-rejected, empty-copy-fail-closed, and custom-stage-gated tests provide it).
 
 ### Files touched
 
