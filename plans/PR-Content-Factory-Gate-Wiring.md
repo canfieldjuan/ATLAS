@@ -39,7 +39,9 @@ separate step (needs LM Studio serving the qualified model).
         rejected and nothing is persisted; a `revise` recommendation persists with the
         fail verdict + hits.
   - [ ] Clean edited copy may promote.
-  - [ ] Non-editor stages get no `copy_verification` injected.
+  - [ ] Empty/blank edited copy fails closed (a fail verdict; cannot promote unverified copy).
+  - [ ] Gating is by SCHEMA (any `editorial_audit.v1`), so a custom-stage audit is also
+        gated and cannot bypass; a non-audit-schema stage gets no injection.
 - Reachability proof: `run_stage` is the pipeline's stage entry point; the store persists
   what it returns. Proof is the test suite (worker mocked, real store + contracts + gate).
 - Affected surfaces: `content_factory_runner.run_stage` (one added helper call) and its
@@ -69,9 +71,13 @@ now fails validation in the store and is never persisted.
   advisory at best and never trusted, matching the "model cannot self-promote" invariant.
 - Enforcement reuses the existing #2116 guard rather than adding new gating: injecting the
   real verdict is enough; the contract already rejects promote-without-pass.
-- The gate verifies `edited_body_markdown` (the copy the editor would promote); if the
-  editor leaves it empty, there is nothing to verify (a degenerate case a later slice can
-  tighten by also checking the parent draft).
+- The gate verifies `edited_body_markdown` (the copy the editor would promote). Empty/blank
+  edited copy FAILS CLOSED (a fail verdict) so a worker cannot self-promote by omitting the
+  edited body; verifying the parent draft body in that case is a later refinement (#2136).
+- Gating is by SCHEMA, not the "audit" stage name: any `editorial_audit.v1` can promote, and
+  the store allows a custom stage to carry any artifact, so gating by stage name would let a
+  custom-stage audit bypass the deterministic gate. The Review Contract's "non-editor stage"
+  means non-audit-SCHEMA, not non-"audit"-stage.
 
 ## Deferred
 
@@ -85,11 +91,12 @@ now fails validation in the store and is never persisted.
 ```
 python -m pytest tests/test_content_factory_runner.py -q
 ```
-21 tests pass (16 existing + 5 new): an editor audit's copy_verification is the
+24 tests pass (16 existing + 8 new): an editor audit's copy_verification is the
 deterministic verdict of its edited copy; a worker cannot self-promote overclaiming copy
 (rejected, nothing persisted) while a revise recommendation persists with the fail verdict
-and hits; clean copy may promote; a worker-claimed verdict is overridden; non-editor stages
-get no copy_verification.
+and hits; clean copy may promote; empty edited copy fails closed (cannot promote); a
+custom-stage audit is also gated by schema; a worker-claimed verdict is overridden;
+non-audit-schema stages get no copy_verification.
 
 ## Estimated diff size
 

@@ -184,3 +184,30 @@ def test_non_editor_stage_gets_no_copy_verification(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: BRIEF_JSON)
     rec = runner.run_stage("job1", "brief", "m", "req", api_key="k", root=tmp_path)
     assert "copy_verification" not in _stored(rec)
+
+
+def test_empty_edited_copy_cannot_promote(tmp_path, monkeypatch):
+    # Fail closed: an empty edited body means nothing was verified, so a worker cannot
+    # self-promote by omitting the edited copy.
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: _editor_json("", "promote"))
+    with pytest.raises(ValidationError):
+        runner.run_stage("job1", "audit", "m", "req", api_key="k", root=tmp_path)
+    assert not job_dir("job1", root=tmp_path).exists()
+
+
+def test_empty_edited_copy_revise_persists_with_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: _editor_json("   ", "revise"))
+    rec = runner.run_stage("job1", "audit", "m", "req", api_key="k", root=tmp_path)
+    stored = _stored(rec)
+    assert stored["copy_verification"]["verdict"] == "fail"
+    assert any("unverified-copy" in h for h in stored["copy_verification"]["hits"])
+
+
+def test_custom_stage_audit_is_also_gated(tmp_path, monkeypatch):
+    # A custom (non-"audit") stage emitting editorial_audit.v1 must not bypass the gate:
+    # gating is by schema, so its self-promotion of overclaiming copy is still rejected.
+    reply = _editor_json(_BAD_BODY, "promote", copy_verification={"verdict": "pass", "hits": []})
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ValidationError):
+        runner.run_stage("job1", "audit-v2", "m", "req", api_key="k", root=tmp_path)
+    assert not job_dir("job1", root=tmp_path).exists()

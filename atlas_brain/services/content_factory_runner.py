@@ -97,8 +97,9 @@ def call_worker(
 
 
 def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
-    """For an editorial audit, OVERWRITE copy_verification with the deterministic verdict
-    computed from the edited copy, discarding any value the worker reported.
+    """For ANY editorial audit (gated by schema, not stage name -- see below), OVERWRITE
+    copy_verification with the deterministic verdict computed from the edited copy,
+    discarding any value the worker reported.
 
     This is what makes the model unable to self-promote: #2116's EditorialAudit contract
     rejects ``recommendation == "promote"`` unless ``copy_verification.verdict == "pass"``,
@@ -106,10 +107,25 @@ def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
     the edited copy overclaims or leaks PII, the injected "fail" verdict makes a
     worker-asserted "promote" invalid and the store rejects the artifact (fail closed);
     a "revise" recommendation still persists with the recorded hits.
+
+    Gating is by SCHEMA (``editorial_audit.v1``), not by the canonical "audit" stage name:
+    the store lets a custom stage carry any artifact, and any editorial_audit.v1 can
+    promote, so gating by stage name would let a custom-stage audit bypass the gate.
+
+    Empty/blank edited copy fails closed: with nothing to verify, the audit cannot carry a
+    passing verdict (otherwise a worker could self-promote by omitting the edited body).
+    Verifying the parent draft body in that case is a later refinement (#2136).
     """
-    if artifact.get("schema") == _EDITOR_SCHEMA:
-        edited = artifact.get("edited_body_markdown") or ""
-        artifact["copy_verification"] = verify_copy(str(edited)).model_dump()
+    if artifact.get("schema") != _EDITOR_SCHEMA:
+        return
+    edited = str(artifact.get("edited_body_markdown") or "")
+    if not edited.strip():
+        artifact["copy_verification"] = {
+            "verdict": "fail",
+            "hits": ["unverified-copy: edited_body_markdown is empty; nothing was verified"],
+        }
+        return
+    artifact["copy_verification"] = verify_copy(edited).model_dump()
 
 
 def run_stage(
