@@ -105,7 +105,7 @@ recommended for revise).
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/content_factory_copy_verification.py` | 118 |
-| `plans/PR-Content-Factory-Copy-Verification.md` | 112 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 128 |
+| `plans/PR-Content-Factory-Copy-Verification.md` | 111 |
 | `tests/test_content_factory_copy_verification.py` | 116 |
-| **Total** | **346** |
+| **Total** | **355** |
