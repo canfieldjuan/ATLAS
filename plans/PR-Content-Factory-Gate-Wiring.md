@@ -102,7 +102,7 @@ non-audit-schema stages get no copy_verification.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/content_factory_runner.py` | 29 |
-| `plans/PR-Content-Factory-Gate-Wiring.md` | 104 |
-| `tests/test_content_factory_runner.py` | 61 |
-| **Total** | **194** |
+| `atlas_brain/services/content_factory_runner.py` | 45 |
+| `plans/PR-Content-Factory-Gate-Wiring.md` | 108 |
+| `tests/test_content_factory_runner.py` | 88 |
+| **Total** | **241** |
