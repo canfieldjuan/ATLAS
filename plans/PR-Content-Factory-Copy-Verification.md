@@ -125,7 +125,7 @@ promotion through the #2116 EditorialAudit contract.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/content_factory_copy_verification.py` | 156 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 171 |
 | `plans/PR-Content-Factory-Copy-Verification.md` | 131 |
-| `tests/test_content_factory_copy_verification.py` | 184 |
-| **Total** | **471** |
+| `tests/test_content_factory_copy_verification.py` | 194 |
+| **Total** | **496** |
