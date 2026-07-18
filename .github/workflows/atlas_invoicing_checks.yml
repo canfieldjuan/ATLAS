@@ -15,11 +15,18 @@ on:
       - "atlas_brain/mcp/invoicing_readonly_oauth.py"
       - "atlas_brain/mcp/invoicing_draft_writer_oauth.py"
       - "atlas_brain/mcp/auth.py"
+      - "atlas_brain/api/invoicing/**"
+      - "atlas_brain/config.py"
       - "atlas_brain/config_defaults.py"
       - "atlas_brain/services/__init__.py"
+      - "atlas_brain/services/receivables.py"
+      - "atlas_brain/storage/migrations/344_receivables_payments.sql"
+      - "atlas_brain/storage/migrations/345_receivables_event_key_lookup.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "tests/test_monthly_invoice_generation.py"
+      - "tests/test_invoice_repository.py"
+      - "tests/test_receivables.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -37,11 +44,18 @@ on:
       - "atlas_brain/mcp/invoicing_readonly_oauth.py"
       - "atlas_brain/mcp/invoicing_draft_writer_oauth.py"
       - "atlas_brain/mcp/auth.py"
+      - "atlas_brain/api/invoicing/**"
+      - "atlas_brain/config.py"
       - "atlas_brain/config_defaults.py"
       - "atlas_brain/services/__init__.py"
+      - "atlas_brain/services/receivables.py"
+      - "atlas_brain/storage/migrations/344_receivables_payments.sql"
+      - "atlas_brain/storage/migrations/345_receivables_event_key_lookup.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "tests/test_monthly_invoice_generation.py"
+      - "tests/test_invoice_repository.py"
+      - "tests/test_receivables.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -50,6 +64,22 @@ on:
 jobs:
   atlas-invoicing-checks:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: atlas_receivables_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d atlas_receivables_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ATLAS_RECEIVABLES_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/atlas_receivables_test
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -71,6 +101,13 @@ jobs:
           python -m pytest \
             tests/test_monthly_invoice_generation.py \
             -k "update_invoice_clears_needs_hours_when_line_items_are_billable or line_items_are_billable_requires_all_positive_quantities" \
+            -q
+
+      - name: Run receivables ledger and repository tests
+        run: |
+          python -m pytest \
+            tests/test_receivables.py \
+            tests/test_invoice_repository.py \
             -q
 
       - name: Run invoicing MCP + OAuth surface tests

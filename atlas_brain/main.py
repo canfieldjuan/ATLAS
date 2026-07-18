@@ -287,6 +287,9 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     logger.info("Atlas Brain starting up...")
     _enforce_paid_funnel_alert_channel(settings)
+    from .api.invoicing.auth import validate_receivables_api_config
+
+    validate_receivables_api_config(settings.invoicing)
 
     # Initialize database connection pool
     if db_settings.enabled:

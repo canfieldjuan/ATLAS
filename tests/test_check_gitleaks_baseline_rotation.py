@@ -116,6 +116,97 @@ def test_allows_initial_adoption_when_base_has_no_baseline() -> None:
     assert "initial adoption" in decision.reason
 
 
+def test_rejects_initial_ignore_growth_without_trusted_rotation() -> None:
+    checker = load_checker()
+    decision = checker.evaluate_baseline_rotation(
+        _changed(checker.IGNORE_PATH, "app/api/foo.py"),
+        labels=set(),
+        base_has_baseline=True,
+        candidate_ignore_fingerprints={"first-ignore-fingerprint"},
+    )
+
+    assert decision.allowed is False
+    assert "security-rotation" in decision.reason
+    assert decision.added_ignore_fingerprints == ("first-ignore-fingerprint",)
+
+
+def test_rejects_unapproved_initial_ignore_fingerprint_without_label() -> None:
+    checker = load_checker()
+    decision = checker.evaluate_baseline_rotation(
+        _changed(checker.IGNORE_PATH),
+        labels=set(),
+        base_has_baseline=True,
+        candidate_ignore_fingerprints={"unexpected-fingerprint"},
+    )
+
+    assert decision.allowed is False
+    assert decision.added_ignore_fingerprints == ("unexpected-fingerprint",)
+
+
+def test_rejects_ignore_growth_without_rotation_label() -> None:
+    checker = load_checker()
+    decision = checker.evaluate_baseline_rotation(
+        _changed(checker.IGNORE_PATH),
+        labels=set(),
+        base_has_baseline=True,
+        base_ignore_fingerprints={"kept"},
+        candidate_ignore_fingerprints={"kept", "added"},
+    )
+
+    assert decision.allowed is False
+    assert "security-rotation" in decision.reason
+    assert decision.added_ignore_fingerprints == ("added",)
+
+
+def test_allows_labeled_ignore_growth_in_security_only_rotation() -> None:
+    checker = load_checker()
+    decision = checker.evaluate_baseline_rotation(
+        _changed(checker.IGNORE_PATH, "plans/PR-Gitleaks-Baseline-Rotation.md"),
+        labels={"security-rotation"},
+        base_has_baseline=True,
+        base_ignore_fingerprints={"kept"},
+        candidate_ignore_fingerprints={"kept", "added"},
+    )
+
+    assert decision.allowed is True
+    assert "accepted" in decision.reason
+
+
+def test_rejects_labeled_ignore_growth_that_changes_product_code() -> None:
+    checker = load_checker()
+    decision = checker.evaluate_baseline_rotation(
+        _changed(checker.IGNORE_PATH, "atlas_brain/main.py"),
+        labels={"security-rotation"},
+        base_has_baseline=True,
+        base_ignore_fingerprints={"kept"},
+        candidate_ignore_fingerprints={"kept", "added"},
+    )
+
+    assert decision.allowed is False
+    assert decision.disallowed_paths == ("atlas_brain/main.py",)
+
+
+def test_allows_ignore_removal_without_rotation_label() -> None:
+    checker = load_checker()
+    decision = checker.evaluate_baseline_rotation(
+        _changed(checker.IGNORE_PATH),
+        labels=set(),
+        base_has_baseline=True,
+        base_ignore_fingerprints={"remove-me"},
+        candidate_ignore_fingerprints=set(),
+    )
+
+    assert decision.allowed is True
+    assert "unchanged" in decision.reason
+
+
+def test_ignore_parser_excludes_comments_and_blank_lines() -> None:
+    checker = load_checker()
+    assert checker.parse_ignore_fingerprints(
+        "# explanation\n\n fingerprint-a \n  # another comment\nfingerprint-b\n"
+    ) == {"fingerprint-a", "fingerprint-b"}
+
+
 def test_parse_labels_strips_empty_entries() -> None:
     checker = load_checker()
     assert checker.parse_labels(" security-rotation, ,docs-only ") == {
