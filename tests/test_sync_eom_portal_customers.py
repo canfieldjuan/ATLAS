@@ -102,11 +102,14 @@ def test_contact_data_carries_stamp_status_and_source():
 # Auth seam
 # ---------------------------------------------------------------------------
 
-def test_env_token_short_circuits_prompt():
+def test_typed_env_token_short_circuits_prompt():
     class NoClient:
         def post(self, *a, **k):
             raise AssertionError("no HTTP call expected")
-    assert portal_login(NoClient(), "https://x", {"EOM_PORTAL_TOKEN": "t"}) == "t"
+    assert portal_login(NoClient(), "https://x",
+                        {"ATLAS_TOOLS_EOM_PORTAL_TOKEN": "t"}) == "t"
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    assert '"EOM_PORTAL_TOKEN"' not in src      # single typed surface (r4)
 
 
 def test_no_credential_persistence_in_source():
@@ -139,7 +142,7 @@ def test_atlas_contact_id_link_wins_over_channels():
     linked = {"id": "linked-id", "tags": ["website"], "source": "web",
               "status": "inactive", "full_name": "Firefly Grill",
               "business_context_id": "effingham_maids"}
-    pool = SyncPool(rows=[linked])
+    pool = SyncPool(rows=[None, linked])   # portal-id page misses first
     outcome, cid = asyncio.run(
         sync_one(_customer(atlasContactId="linked-id"), crm, pool, apply=True)
     )
@@ -156,8 +159,8 @@ def test_null_context_linked_row_is_claimed_via_cas():
     crm = StubCRM()
     linked = {"id": "legacy-link", "tags": [], "source": "web",
               "status": "active", "business_context_id": None}
-    pool = SyncPool(rows=[linked, {"id": "legacy-link", "source": "web",
-                                   "status": "active", "tags": []}])
+    pool = SyncPool(rows=[None, linked, {"id": "legacy-link", "source": "web",
+                                         "status": "active", "tags": []}])
     outcome, cid = asyncio.run(
         sync_one(_customer(atlasContactId="legacy-link"), crm, pool, apply=True)
     )
@@ -170,7 +173,7 @@ def test_foreign_tenant_link_is_ignored_falls_to_ladder():
     crm = StubCRM()          # ladder misses -> create
     linked = {"id": "foreign", "tags": [], "source": "b2b",
               "status": "active", "business_context_id": "churnsignals"}
-    pool = SyncPool(rows=[linked, None, None])
+    pool = SyncPool(rows=[None, linked, None, None])
     outcome, cid = asyncio.run(
         sync_one(_customer(atlasContactId="foreign"), crm, pool, apply=True)
     )
@@ -188,7 +191,9 @@ def test_matched_contact_keeps_provenance_and_gets_activated():
     cid2, payload = pool.updates[0]
     assert payload["status"] == "active"
     assert "source" not in payload          # provenance preserved (slice-A rule)
-    assert "portal" in payload["tags"] and "past_customer" in payload["tags"]
+    # Portal-authoritative managed tags: past_customer sheds on an active
+    # match; foreign tags survive (Codex A2 round 4).
+    assert "portal" in payload["tags"] and "past_customer" not in payload["tags"]
 
 
 def test_dry_run_reports_matched_id_and_writes_nothing():
@@ -198,6 +203,35 @@ def test_dry_run_reports_matched_id_and_writes_nothing():
     assert outcome == "update-planned"
     assert cid == "k"                        # feeds the demotion preview
     assert pool.updates == [] and pool.stamps == [] and crm.created == []
+
+
+def test_dry_run_previews_unchanged_for_clean_rows():
+    # Codex A2 round 4: a fully-synced row previews as unchanged.
+    rec_data = customer_to_contact_data(_customer())
+    existing = {"id": "k", **{k: v for k, v in rec_data.items()
+                              if k not in ("source", "business_context_id")},
+                "source": "portal_sync", "business_context_id": "effingham_maids",
+                "metadata": {"portal_customer_id": 7}}
+    crm = StubCRM(scoped_hit=existing)
+    pool = SyncPool()
+    outcome, cid = asyncio.run(sync_one(_customer(), crm, pool, apply=False))
+    assert outcome == "unchanged"
+
+
+def test_resolver_finds_stamped_portal_id_first():
+    # Codex A2 round 4 (R8): the stamped id is the stable key -- channel
+    # drift must not cause a duplicate create.
+    crm = StubCRM()          # channels would miss entirely
+    stamped_row = {"id": "stamped", "tags": ["portal", "commercial"],
+                   "source": "portal_sync", "status": "active",
+                   "business_context_id": "effingham_maids",
+                   "metadata": {"portal_customer_id": 7}}
+    pool = SyncPool(rows=[stamped_row])
+    outcome, cid = asyncio.run(sync_one(_customer(primaryPhone=None), crm, pool,
+                                        apply=True))
+    assert cid == "stamped"
+    assert crm.created == []
+    assert "portal_customer_id' = $1" in pool.queries[0][0]
 
 
 def test_failed_portal_id_stamp_is_an_error():

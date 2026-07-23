@@ -16,7 +16,7 @@ calendar history (slice A) is enrichment, not the active set. This script:
 
 Dry-run by default; pass --apply to write (demotion-bearing script, #2155
 convention). Non-interactive runs may supply a pre-obtained token via the
-EOM_PORTAL_TOKEN environment variable. Credentials are never written to
+ATLAS_TOOLS_EOM_PORTAL_TOKEN setting/env. Credentials are never written to
 disk, argv, or logs.
 
 Usage:
@@ -40,6 +40,9 @@ import import_eom_customers_live as live  # noqa: E402  (slice-A machinery)
 EOM_CONTEXT_ID = live.EOM_CONTEXT_ID
 DEFAULT_BASE_URL = "https://eom-timetracker.onrender.com"
 DEMOTABLE_SOURCES = ("calendar_import", "portal_sync")
+# Tags this pipeline manages: the portal replaces them on a match; every
+# other (foreign) tag is preserved (Codex A2 round 4).
+MANAGED_TAGS = {"portal", "residential", "commercial", "one_time", "past_customer"}
 
 
 def settings_default(attr: str):
@@ -56,7 +59,7 @@ def portal_login(client, base_url: str, env: dict):
     """Runtime auth: env or typed-settings token when provided
     (non-interactive), else a getpass prompt. The password variable never
     leaves this function and is never printed or persisted."""
-    token = env.get("EOM_PORTAL_TOKEN") or settings_default("eom_portal_token")
+    token = env.get("ATLAS_TOOLS_EOM_PORTAL_TOKEN") or settings_default("eom_portal_token")
     if token:
         return token
     name = input("Portal admin name: ")
@@ -132,6 +135,25 @@ async def resolve_contact(customer: dict, data: dict, crm, pool):
     """atlasContactId first (the designed cross-system link), then the
     slice-A identity ladder. Returns (existing_row_or_None, needs_claim,
     identity_tuple_or_None)."""
+    pid = customer.get("id")
+    if isinstance(pid, int):
+        row = await pool.fetchrow(
+            """
+            SELECT id, full_name, address, contact_type, business_context_id,
+                   tags, status, phone, email, notes, source, metadata
+            FROM contacts
+            WHERE metadata->>'portal_customer_id' = $1
+              AND business_context_id = $2
+              AND status != 'archived'
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            str(pid),
+            EOM_CONTEXT_ID,
+        )
+        if row:
+            return row, False, None
+
     atlas_id = customer.get("atlasContactId")
     if atlas_id:
         row = await pool.fetchrow(
@@ -174,6 +196,31 @@ async def resolve_contact(customer: dict, data: dict, crm, pool):
         if existing is not None:
             return existing, needs_claim, ("address", addr)
     return None, False, None
+
+
+def portal_final_tags(existing: dict, data: dict) -> list:
+    prior = set(existing.get("tags") or [])
+    return sorted((prior - MANAGED_TAGS) | set(data["tags"]))
+
+
+async def _update_matched_portal(pool, existing: dict, data: dict):
+    """Portal-authoritative matched write: managed tags are REPLACED (an
+    active portal match sheds past_customer), foreign tags preserved;
+    provenance and tenant stamps never resent; diffed; archive/tenant
+    guards inside the UPDATE (Codex A2 round 4)."""
+    contact_id = str(existing["id"])
+    payload = dict(data)
+    payload["tags"] = portal_final_tags(existing, data)
+    payload.pop("source", None)
+    payload.pop("business_context_id", None)
+    updates = live._diff_updates(existing, payload)
+    if not updates:
+        return contact_id, "unchanged"
+    row = await live._guarded_update(pool, contact_id, updates)
+    if row is None:
+        print(f"    note: contact {contact_id} archived mid-run; write skipped")
+        return contact_id, "skipped"
+    return contact_id, "updated"
 
 
 async def stamp_portal_id(pool, contact_id: str, portal_id: int):
@@ -232,11 +279,22 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
 
     existing, needs_claim, identity = await resolve_contact(customer, data, crm, pool)
     if not apply:
-        # Dry-run still reports the matched id so the demotion preview is
-        # accurate (a matched contact is NOT a demotion candidate).
-        if existing is not None:
+        # Dry-run reports the matched id (demotion preview accuracy) AND
+        # computes the real diff/stamp need, so a clean re-run previews
+        # zero updates (Codex A2 round 4).
+        if existing is None:
+            return "create-planned", None
+        payload = dict(data)
+        payload["tags"] = portal_final_tags(existing, data)
+        payload.pop("source", None)
+        payload.pop("business_context_id", None)
+        updates = live._diff_updates(existing, payload)
+        stamped = ("metadata" in existing and
+                   str((existing.get("metadata") or {}).get("portal_customer_id",
+                       "")) == str(customer.get("id")))
+        if updates or not stamped:
             return "update-planned", str(existing["id"])
-        return "create-planned", None
+        return "unchanged", str(existing["id"])
 
     if existing is not None and needs_claim:
         existing = await live.claim_legacy_row(
@@ -246,7 +304,7 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
         )
 
     if existing is not None:
-        contact_id, outcome = await live._update_matched(pool, existing, data)
+        contact_id, outcome = await _update_matched_portal(pool, existing, data)
         if outcome == "skipped":
             return "skipped", contact_id
     else:
@@ -267,7 +325,7 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
                           "provenance stamp; left unstamped")
                     return "errors", contact_id
         else:
-            contact_id, outcome = await live._update_matched(pool, result, data)
+            contact_id, outcome = await _update_matched_portal(pool, result, data)
             if outcome == "skipped":
                 return "skipped", contact_id
 
@@ -351,7 +409,7 @@ async def run(args) -> int:
 
     matched_ids: set = set()
     for customer in sorted(customers, key=lambda c: str(c.get("name") or "").lower()):
-        print(f"  {customer.get('name'):<45} sites={len(active_sites(customer))} "
+        print(f"  {str(customer.get('name') or '(unnamed)'):<45} sites={len(active_sites(customer))} "
               f"[{','.join(segment_tags(customer))}]")
         try:
             outcome, contact_id = await sync_one(customer, crm, pool, args.apply)
@@ -394,7 +452,7 @@ def main():
                         help="Write changes (default is dry-run)")
     parser.add_argument(
         "--base-url",
-        default=os.environ.get("EOM_PORTAL_BASE_URL")
+        default=os.environ.get("ATLAS_TOOLS_EOM_PORTAL_BASE_URL")
         or settings_default("eom_portal_base_url")
         or DEFAULT_BASE_URL,
     )

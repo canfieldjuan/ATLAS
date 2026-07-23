@@ -80,6 +80,14 @@ Slice phase: vertical slice
       the CAS (the id link is the identity); a link to a FOREIGN tenant is
       ignored (reported) and resolution falls to the ladder (both
       asserted; Codex A2 round 1, BLOCKER).
+  14. Resolution checks the STAMPED portal id first (the stable key after
+      a create -- channel drift can never duplicate a synced customer);
+      managed tags (portal/segments/past_customer) are REPLACED on portal
+      matches while foreign tags survive (an active match sheds
+      past_customer); dry-run computes the real diff + stamp need so clean
+      re-runs preview zero updates; the config surface is the single typed
+      ATLAS_TOOLS_* name; nameless records cannot crash the run loop (all
+      asserted; Codex A2 round 4).
   13. Portal-id and name validation precede ANY write; nameless active
       records are run errors (gating demotion), and the already-stamped
       fallback carries the same archive/tenant guards as the stamp itself
@@ -159,7 +167,7 @@ run's matched ids.
 
 ## Verification
 
-- `tests/test_sync_eom_portal_customers.py` — 23 passed.
+- `tests/test_sync_eom_portal_customers.py` — 26 passed.
 - Maturity note: the scripts-lane ratchet baseline gains ONLY this PR's
   new script (deliberate per-record operator patterns recorded); the
   pre-existing unbaselined `import_eom_customers_live.py` (main's code,
