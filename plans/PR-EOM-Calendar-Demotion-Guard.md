@@ -45,6 +45,10 @@ Slice phase: vertical slice
      (source-asserted) -- the veto is never silently absent.
   4. Guard keys derive from the same slice-A parser/identity semantics as
      the import itself (mechanism-asserted by reuse).
+  6. The fail-closed guard also catches SystemExit (missing calendar
+     config surfaces as DEMOTION SKIPPED, never a mid-apply crash), and
+     name keys apply latest-record-wins recency independently since the
+     merger unions by channel only (both asserted; Codex round 3).
   5. CANCELLED-latest calendar records never veto, decided on the
      CROSS-CALENDAR merged view (`dedup_records` recency runs before key
      emission, so a newer cancellation on another calendar supersedes an
@@ -91,7 +95,7 @@ reported, the rest demote unchanged.
 
 ## Verification
 
-- `tests/test_sync_eom_portal_customers.py` — 43 passed.
+- `tests/test_sync_eom_portal_customers.py` — 44 passed.
 - `tests/test_eom_live_calendar_import.py` — 55 passed (adjacent).
 - `python -m py_compile` — clean.
 - NOT run: the live sync (operator-run; the owner re-runs dry-run after

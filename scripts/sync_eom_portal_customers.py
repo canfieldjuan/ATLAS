@@ -441,7 +441,18 @@ async def fetch_calendar_guard_keys(months_back: int = 1, months_forward: int = 
         # Cross-calendar recency first (Codex 2163 r2): an older active event
         # on one calendar must not veto when a NEWER cancellation on another
         # calendar supersedes it -- the merged record's state decides.
-        for rec in live.dedup_records(all_records):
+        merged = live.dedup_records(all_records)
+        # The merger unions by phone/address only, so same-NAME records
+        # without a shared channel stay separate: name keys get their own
+        # latest-record-wins pass (Codex 2163 r3).
+        name_state = {}
+        for rec in merged:
+            nm = rec.name.strip().lower()
+            dt = getattr(rec, "latest_event_dt", None)
+            cur = name_state.get(nm)
+            if cur is None or (dt and (cur[0] is None or dt > cur[0])):
+                name_state[nm] = (dt, rec.cancelled)
+        for rec in merged:
             if rec.cancelled:
                 # A latest-event cancellation is evidence of ENDING, not
                 # currency -- it must not veto demotion (Codex 2163 r1-r2).
@@ -452,7 +463,9 @@ async def fetch_calendar_guard_keys(months_back: int = 1, months_forward: int = 
                     keys["phones"].add(digits[-10:])
             for addr in getattr(rec, "all_addresses", None) or [rec.address]:
                 keys["addrs"].add(addr.lower())
-            keys["names"].add(rec.name.strip().lower())
+        for nm, (_, cancelled) in name_state.items():
+            if not cancelled:
+                keys["names"].add(nm)
     finally:
         await provider.aclose()
     return keys
@@ -605,7 +618,9 @@ async def run(args) -> int:
     else:
         try:
             guard_keys = await fetch_calendar_guard_keys()
-        except Exception as e:  # noqa: BLE001 -- fail closed, never guess
+        except (Exception, SystemExit) as e:  # noqa: BLE001 -- fail closed;
+            # SystemExit included: missing calendar config must surface as
+            # the skip, not kill an --apply run mid-flight (Codex r3).
             print(f"  DEMOTION SKIPPED: calendar guard unavailable ({e}) -- "
                   "refusing to demote without the calendar veto check.")
             counts["errors"] += 1

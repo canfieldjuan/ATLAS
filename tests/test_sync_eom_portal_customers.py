@@ -510,6 +510,17 @@ def test_demotion_refuses_without_the_calendar_guard():
     guard_block = src.split("fetch_calendar_guard_keys()")[1].split("demote_unmatched(")[0]
     assert "DEMOTION SKIPPED" in guard_block
     assert 'counts["errors"] += 1' in guard_block
+    # Codex r3: SystemExit (missing calendar config) takes the same skip.
+    assert "(Exception, SystemExit)" in guard_block
+
+
+def test_name_keys_respect_name_level_cancellation_recency():
+    # Codex r3: same name, no shared channel -- the newer CANCELLED record
+    # suppresses the name key emitted by the older active one.
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    body = src.split("def fetch_calendar_guard_keys")[1].split("def on_calendar")[0]
+    assert "name_state" in body
+    assert body.index("name_state") < body.index('keys["names"].add')
 
 
 def test_unmatched_previously_imported_actives_are_demoted():
