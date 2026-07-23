@@ -381,13 +381,26 @@ def _diff_updates(existing: dict, data: dict) -> dict:
     return changed
 
 
-async def claim_legacy_row(pool, contact_id: str, require_import_source: bool):
+async def claim_legacy_row(pool, contact_id: str, require_import_source: bool,
+                           identity: tuple = None):
     """CAS claim of a NULL-context legacy row with the FULL guard inside the
     UPDATE itself: unarchived always, calendar_import provenance additionally
-    for weak (address-only) identity. A raced archive/source-correction makes
-    the predicate fail -> None -> caller creates fresh, and the row is never
-    tenant-stamped (Codex round 8, P1)."""
+    for weak (address-only) identity, and the MATCHED IDENTITY itself
+    (address / phone last-10 / email) so a row corrected between SELECT and
+    claim no longer matches the predicate and is never tenant-stamped
+    (Codex rounds 8 + 12)."""
     src_clause = "AND source = 'calendar_import'" if require_import_source else ""
+    id_clause, id_val = "", None
+    if identity:
+        kind, id_val = identity
+        if kind == "address":
+            id_clause = "AND LOWER(address) = LOWER($3)"
+        elif kind == "phone":
+            id_clause = ("AND regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g')"
+                         " LIKE '%' || $3")
+        elif kind == "email":
+            id_clause = "AND LOWER(email) = LOWER($3)"
+    args = [contact_id, EOM_CONTEXT_ID] + ([id_val] if id_clause else [])
     return await pool.fetchrow(
         f"""
         UPDATE contacts
@@ -396,11 +409,11 @@ async def claim_legacy_row(pool, contact_id: str, require_import_source: bool):
            AND (business_context_id IS NULL OR business_context_id = $2)
            AND status != 'archived'
            {src_clause}
+           {id_clause}
         RETURNING id, full_name, address, contact_type, business_context_id,
                   tags, status, phone, email, notes, source
         """,
-        contact_id,
-        EOM_CONTEXT_ID,
+        *args,
     )
 
 
@@ -484,16 +497,26 @@ async def import_one(rec, crm, pool) -> str:
 
     existing, needs_claim = None, False
     claim_by_address = False
+    matched_identity = None
     if rec.phone:
         digits = _phone_digits(rec.phone)
         if len(digits) >= 10:
             existing, needs_claim = await _search_channel(crm, phone=digits)
+            if existing is not None:
+                matched_identity = ("phone", digits[-10:])
     if existing is None and rec.email:
         existing, needs_claim = await _search_channel(crm, email=rec.email)
+        if existing is not None:
+            matched_identity = ("email", rec.email)
     if existing is None:
-        for addr in getattr(rec, "all_addresses", None) or [rec.address]:
+        candidates = [rec.address] + [
+            a for a in (getattr(rec, "all_addresses", None) or [])
+            if a.lower() != rec.address.lower()
+        ]
+        for addr in candidates:
             existing, needs_claim = await resolve_by_address(pool, addr)
             if existing is not None:
+                matched_identity = ("address", addr)
                 break
         claim_by_address = needs_claim
 
@@ -506,7 +529,9 @@ async def import_one(rec, crm, pool) -> str:
         # unarchived; the weaker address-only match additionally requires
         # calendar_import provenance (rounds 3+7 semantics, race-proof).
         existing = await claim_legacy_row(
-            pool, str(existing["id"]), require_import_source=claim_by_address
+            pool, str(existing["id"]),
+            require_import_source=claim_by_address,
+            identity=matched_identity,
         )
 
     if existing is not None:
@@ -538,9 +563,14 @@ async def import_one(rec, crm, pool) -> str:
         # re-check so an archived contact's timeline is never touched
         # (Codex round 11, R4/R8).
         row = await pool.fetchrow(
-            "SELECT status FROM contacts WHERE id = $1", contact_id
+            "SELECT status, business_context_id FROM contacts WHERE id = $1",
+            contact_id,
         )
-        if row is None or row.get("status") == "archived":
+        if (
+            row is None
+            or row.get("status") == "archived"
+            or row.get("business_context_id") != EOM_CONTEXT_ID
+        ):
             return outcome
         # source_ref inside metadata is a dedupe anchor (migration 256): the
         # same address never accumulates duplicate import interactions across

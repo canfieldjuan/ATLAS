@@ -152,6 +152,11 @@ Slice phase: vertical slice
       matched payloads never re-send the stamp, so a concurrently
       reassigned row is never stolen back across tenants (asserted;
       Codex round 11).
+  29a. The pre-log re-check also confirms the row still belongs to
+      `effingham_maids`; the current (latest) address leads the fallback
+      candidate order; and the matched identity (address / phone last-10 /
+      email) rides inside the claim CAS so a row corrected mid-race no
+      longer matches the predicate (all asserted; Codex round 12).
   29. Interaction anchors are date-scoped: re-runs with the same latest
       booking dedupe, while each new latest booking advances the CRM
       timeline instead of colliding with the old anchor forever
@@ -232,6 +237,18 @@ stable `source_ref`.
   pydantic-settings reads but `os.environ` never sees; the script resolves
   settings first, process env wins.
 
+## Waived (with reason)
+
+- Codex round 12, "Serialize address-only creates" (R8, concurrent-run
+  duplicate window): two SIMULTANEOUS runs of this operator script could
+  each miss the address lookup and both insert. Waived: the script is a
+  runbook-serialized, single-operator tool -- concurrent self-runs are not
+  a supported execution mode; sequential re-run idempotency IS asserted
+  (criterion 16); the failure mode is a non-destructive duplicate contact,
+  repairable by the next run's fallback matching; and the fix (per-address
+  advisory locks through the provider's non-transactional create path)
+  carries more risk than the window it closes.
+
 ## Deferred
 
 - Read-path tenant-scoping defaults (next #2151 slice; the watcher passes
@@ -242,7 +259,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 41 passed.
+- `tests/test_eom_live_calendar_import.py` — 44 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.

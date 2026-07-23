@@ -235,8 +235,9 @@ class StubPool:
 
     async def fetchrow(self, sql, *args):
         self.queries.append((sql, args))
-        if "SELECT status FROM contacts" in sql:
-            return {"status": "archived" if args[0] in self.archived_ids else "active"}
+        if sql.strip().startswith("SELECT status"):
+            return {"status": "archived" if args[0] in self.archived_ids else "active",
+                    "business_context_id": "effingham_maids"}
         is_claim = "SET business_context_id" in sql
         if sql.strip().startswith("UPDATE contacts") and not is_claim:
             import re as _re
@@ -420,6 +421,44 @@ def test_archive_race_before_logging_skips_timeline():
                     archived_ids={"arch"})
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert crm.interactions == []
+
+
+def test_prelog_recheck_confirms_tenant():
+    # Codex round 12 (P1): a contact reassigned to another tenant after the
+    # write never gets an EOM interaction appended.
+    class ForeignPool(StubPool):
+        async def fetchrow(self, sql, *args):
+            if sql.strip().startswith("SELECT status"):
+                return {"status": "active", "business_context_id": "churnsignals"}
+            return await super().fetchrow(sql, *args)
+    rec = _record(phone="(217) 555-9999")
+    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "inactive"})
+    asyncio.run(import_one(rec, crm, ForeignPool()))
+    assert crm.interactions == []
+
+
+def test_address_fallback_tries_current_address_first():
+    # Codex round 12: rec.address (latest) leads the candidate order even
+    # when all_addresses lists the stale address first.
+    rec = _record()
+    rec.all_addresses = ["1 Old St, Effingham, IL", rec.address]
+    crm = StubCRM()
+    pool = StubPool(rows=[{"id": "current-row", "tags": []}])
+    asyncio.run(import_one(rec, crm, pool))
+    first_select_args = pool.queries[0][1]
+    assert first_select_args[-1] == rec.address
+
+
+def test_claim_cas_carries_matched_identity():
+    # Codex round 12: the identity that matched rides inside the CAS UPDATE.
+    rec = _record()
+    crm = StubCRM()
+    pool = StubPool(rows=[None, {"id": "legacy-id", "tags": []},
+                          {"id": "legacy-id", "source": "calendar_import",
+                           "status": "inactive", "tags": []}])
+    asyncio.run(import_one(rec, crm, pool))
+    cas_sql = [q for q, _ in pool.queries if "SET business_context_id" in q][0]
+    assert "LOWER(address) = LOWER($3)" in cas_sql
 
 
 def test_merged_group_prefers_latest_address_and_carries_all():
@@ -646,7 +685,7 @@ def test_address_resolver_excludes_archived_rows():
     crm, pool = StubCRM(), StubPool(rows=[None, None])
     asyncio.run(import_one(rec, crm, pool))
     selects = [q for q in pool.queries
-               if q[0].strip().startswith("SELECT") and "SELECT status FROM" not in q[0]]
+               if q[0].strip().startswith("SELECT") and not q[0].strip().startswith("SELECT status")]
     assert len(selects) == 2
     for sql, _ in selects:
         assert "status != 'archived'" in sql
