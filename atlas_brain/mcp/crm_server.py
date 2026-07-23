@@ -110,25 +110,35 @@ def _visible_under_default(contact: "dict | None") -> bool:
     return contact.get("business_context_id") in (None, default)
 
 
-async def _guard_contact_id(
+async def _guarded_contact(
     contact_id: str, business_context_id: "str | None" = None
-) -> bool:
+) -> "tuple[bool, dict | None]":
     """Resolve + tenant-check an id-addressed operation.
 
-    An explicit ``business_context_id`` addresses exactly that tenant's page
-    (mirroring explicit search: no NULL-context fallback). Otherwise the
-    deployment default applies: the default tenant plus NULL-context legacy
-    rows are visible. Foreign-tenant rows read as nonexistent (fail-closed).
+    Returns ``(allowed, contact)`` so callers that need the resolved row
+    (e.g. claim-on-update) avoid a second lookup. An explicit
+    ``business_context_id`` addresses exactly that tenant's page (mirroring
+    explicit search: no NULL-context fallback). Otherwise the deployment
+    default applies: the default tenant plus NULL-context legacy rows are
+    visible. Foreign-tenant rows read as nonexistent (fail-closed).
     """
     if business_context_id:
         contact = await _provider().get_contact(contact_id)
         if contact is None:
-            return False
-        return contact.get("business_context_id") == business_context_id
+            return False, None
+        return contact.get("business_context_id") == business_context_id, contact
     if not _default_context():
-        return True
+        return True, None
     contact = await _provider().get_contact(contact_id)
-    return _visible_under_default(contact)
+    return _visible_under_default(contact), contact
+
+
+async def _guard_contact_id(
+    contact_id: str, business_context_id: "str | None" = None
+) -> bool:
+    """Boolean form of :func:`_guarded_contact` for tools that only gate."""
+    allowed, _ = await _guarded_contact(contact_id, business_context_id)
+    return allowed
 
 
 async def _scoped_search(provider, **kwargs):
@@ -404,8 +414,20 @@ async def update_contact(
         if not data:
             return json.dumps({"success": False, "error": "No fields provided to update"})
 
-        if not await _guard_contact_id(contact_id, business_context_id):
+        allowed, existing = await _guarded_contact(contact_id, business_context_id)
+        if not allowed:
             return json.dumps({"success": False, "error": "Contact not found"})
+        default = _default_context()
+        if (
+            default
+            and not business_context_id
+            and existing is not None
+            and existing.get("business_context_id") is None
+        ):
+            # Claim-on-write: an update from a scoped session takes ownership
+            # of the NULL-context legacy row, so corrected data stops being
+            # visible to every tenant as unclaimed legacy.
+            data["business_context_id"] = default
         updated = await _provider().update_contact(contact_id, data)
         if updated is None:
             return json.dumps({"success": False, "error": "Contact not found"})
@@ -594,6 +616,7 @@ async def get_contact_appointments(
         if not await _guard_contact_id(contact_id, business_context_id):
             return json.dumps({"error": "Contact not found", "appointments": [], "count": 0})
         appointments = await _provider().get_contact_appointments(contact_id)
+        appointments = _appointments_in_scope(appointments, business_context_id)
         return json.dumps(
             {"appointments": appointments, "count": len(appointments)}, default=str
         )

@@ -60,7 +60,12 @@ Slice phase: vertical slice
    mirroring #2153's search filter); every id-addressed tool accepts an
    explicit `business_context_id` override (exact-page semantics, so
    cross-tenant admin access stays possible per call).
-4. Proof: `tests/test_crm_read_scoping.py` — 25 tests covering default+
+4. Review round 2 (Codex): `get_contact_appointments` filters linked
+   appointment rows to the effective scope (a NULL-context legacy contact
+   cannot expose foreign-tenant appointment history), and `update_contact`
+   claims NULL-context rows under the default (claim-on-write: corrected
+   legacy data stops being cross-tenant-visible as unclaimed).
+5. Proof: `tests/test_crm_read_scoping.py` — 29 tests covering default+
    fallback search order, explicit-arg precedence, no-default legacy
    behavior, foreign-tenant invisibility on reads and refusal on
    mutations, NULL-legacy visibility, create default-stamp, list default +
@@ -168,7 +173,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Suite `tests/test_crm_read_scoping.py` — 25 passed.
+- Suite `tests/test_crm_read_scoping.py` — 29 passed.
 - Suites `tests/test_tenant_stamping.py` + `tests/test_leads_intake.py` +
   `tests/test_mcp_servers.py` — 145 passed combined, 6 failed
   pre-existing on origin/main (email/Twilio/calendar env-dependent

@@ -245,6 +245,47 @@ async def test_update_contact_explicit_override_reaches_foreign_tenant(default_c
     provider.update_contact.assert_awaited()
 
 
+@pytest.mark.asyncio
+async def test_update_claims_null_contact_under_default(default_ctx, monkeypatch):
+    """Claim-on-write: updating a NULL-context legacy row from a scoped
+    session stamps the default tenant."""
+    provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
+    out = json.loads(await crm_srv.update_contact(UUID, phone="217-555-0000"))
+    assert out["success"] is True
+    data = provider.update_contact.await_args.args[1]
+    assert data["business_context_id"] == EOM
+
+
+@pytest.mark.asyncio
+async def test_update_same_tenant_row_not_restamped(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch, get=SAME)
+    await crm_srv.update_contact(UUID, phone="217-555-0000")
+    data = provider.update_contact.await_args.args[1]
+    assert "business_context_id" not in data
+
+
+@pytest.mark.asyncio
+async def test_update_without_default_never_stamps(no_default, monkeypatch):
+    provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
+    await crm_srv.update_contact(UUID, phone="217-555-0000")
+    data = provider.update_contact.await_args.args[1]
+    assert "business_context_id" not in data
+
+
+@pytest.mark.asyncio
+async def test_contact_appointments_filtered_to_scope(default_ctx, monkeypatch):
+    """A NULL-context legacy contact must not expose foreign-tenant
+    appointment history through the linked-appointments tool."""
+    provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
+    provider.get_contact_appointments = AsyncMock(return_value=[
+        {"id": "a1", "business_context_id": EOM},
+        {"id": "a2", "business_context_id": "churnsignals"},
+    ])
+    out = json.loads(await crm_srv.get_contact_appointments(UUID))
+    assert [a["id"] for a in out["appointments"]] == ["a1"]
+    assert out["count"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Appointment-fallback scope filter (pure)
 # ---------------------------------------------------------------------------
