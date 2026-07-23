@@ -124,13 +124,21 @@ class DatabaseCRMProvider:
         email = raw_email.lower() if raw_email else None
         phone = data.get("phone")
 
+        # Tenant-scoped dedup: when the caller stamps a business_context_id,
+        # only match contacts within that tenant -- an EOM web lead must never
+        # resolve to (and mutate) a contact belonging to another context
+        # (PR #2152 review finding, R3/R4).
+        _scope: dict[str, Any] = {}
+        if data.get("business_context_id"):
+            _scope["business_context_id"] = data["business_context_id"]
+
         existing: Optional[dict[str, Any]] = None
         if phone:
-            matches = await self.search_contacts(phone=phone)
+            matches = await self.search_contacts(phone=phone, **_scope)
             if matches:
                 existing = matches[0]
         if existing is None and email:
-            matches = await self.search_contacts(email=email)
+            matches = await self.search_contacts(email=email, **_scope)
             if matches:
                 existing = matches[0]
 
@@ -426,6 +434,9 @@ class DatabaseCRMProvider:
         )
         result = dict(row) if row else {}
         inserted = bool(result.pop("_inserted", False))
+        # Public flag for callers that gate side effects (e.g. acknowledgement
+        # emails) on first-time-vs-duplicate; the raw column is stripped above.
+        result["inserted"] = inserted
 
         if inserted:
             # Emit event for reasoning agent only for new interactions.

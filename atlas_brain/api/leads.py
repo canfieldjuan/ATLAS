@@ -22,6 +22,10 @@ router = APIRouter(prefix="/leads", tags=["leads"])
 EOM_BUSINESS_CONTEXT_ID = "effingham_maids"
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_MIN_PHONE_DIGITS = 7
+# Server-side throttle (PR #2152 review, R3/R8): max submissions per
+# email-or-phone identity per rolling day, enforced BEFORE any side effect.
+MAX_DAILY_SUBMISSIONS = 5
 
 
 class LeadIntakeRequest(BaseModel):
@@ -41,6 +45,31 @@ class LeadIntakeRequest(BaseModel):
 
 class LeadValidationError(ValueError):
     """Raised when a payload is structurally unusable as a lead."""
+
+
+class LeadRateLimitedError(RuntimeError):
+    """Raised when an identity exceeds the daily submission cap."""
+
+
+async def _daily_submission_count(email: str, phone: str) -> int:
+    """Count today's web_form submissions for this identity (EOM-scoped)."""
+    from ..storage.database import get_db_pool
+
+    pool = get_db_pool()
+    return await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM contact_interactions ci
+        JOIN contacts c ON c.id = ci.contact_id
+        WHERE ci.interaction_type = 'web_form'
+          AND ci.occurred_at > NOW() - INTERVAL '1 day'
+          AND c.business_context_id = $1
+          AND (($2 <> '' AND LOWER(c.email) = $2) OR ($3 <> '' AND c.phone = $3))
+        """,
+        EOM_BUSINESS_CONTEXT_ID,
+        email,
+        phone,
+    ) or 0
 
 
 def _build_summary(payload: LeadIntakeRequest) -> str:
@@ -65,6 +94,7 @@ async def _process_lead_intake(
     payload: LeadIntakeRequest,
     crm: Any,
     email_provider: Any,
+    daily_count: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Core intake flow with injectable providers (unit-testable sans HTTP)."""
     if payload.website.strip():
@@ -74,10 +104,23 @@ async def _process_lead_intake(
 
     email = payload.email.strip().lower()
     phone = payload.phone.strip()
+    # A phone with no dialable digits ("n/a", "-") is not a contact channel
+    # (PR #2152 review, R1/R2).
+    if phone and len(re.sub(r"\D", "", phone)) < _MIN_PHONE_DIGITS:
+        phone = ""
     if not email and not phone:
-        raise LeadValidationError("Provide an email address or phone number")
+        raise LeadValidationError(
+            "Provide an email address or a phone number with at least "
+            f"{_MIN_PHONE_DIGITS} digits"
+        )
     if email and not _EMAIL_RE.match(email):
         raise LeadValidationError("Invalid email address")
+
+    # Throttle BEFORE any side effect (CRM write or email).
+    if daily_count is not None:
+        recent = await daily_count(email, phone)
+        if recent >= MAX_DAILY_SUBMISSIONS:
+            raise LeadRateLimitedError("Daily submission limit reached")
 
     contact = await crm.find_or_create_contact(
         full_name=payload.name.strip(),
@@ -105,9 +148,9 @@ async def _process_lead_intake(
             "source_page": payload.source_page,
         },
     )
-    # log_interaction dedupes identical same-day rows (_inserted=False on
-    # conflict) — a double-submit shouldn't double-email the lead.
-    freshly_logged = bool((interaction or {}).get("_inserted", True))
+    # log_interaction dedupes identical same-day rows and reports it via the
+    # public "inserted" flag — a double-submit shouldn't double-email the lead.
+    freshly_logged = bool((interaction or {}).get("inserted", True))
 
     email_sent = False
     if email and freshly_logged:
@@ -145,9 +188,12 @@ async def lead_intake(payload: LeadIntakeRequest) -> dict[str, Any]:
             payload,
             crm=get_crm_provider(),
             email_provider=get_email_provider(),
+            daily_count=_daily_submission_count,
         )
     except LeadValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LeadRateLimitedError as exc:
+        raise HTTPException(status_code=429, detail="Too many requests — try again tomorrow") from exc
     except Exception:
         logger.exception("lead_intake: intake failed")
         raise HTTPException(status_code=503, detail="Lead intake temporarily unavailable")

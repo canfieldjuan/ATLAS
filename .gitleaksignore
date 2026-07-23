@@ -1,0 +1,5 @@
+# False positive: gitleaks generic-api-key matched review-contract prose
+# ("security: ... honeypot/validation/CORS scoping") in the PR plan doc.
+# The line is documentation text, not a credential; it is also reworded in
+# the follow-up commit, but the original commit remains in PR history.
+4f5204e85cd3049f20083d16c15b0261e8444d1b:plans/PR-EOM-Lead-Intake.md:generic-api-key:102

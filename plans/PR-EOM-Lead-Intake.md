@@ -18,6 +18,27 @@ against code 2026-07-22):
   price + service date (`send_estimate`, `mcp/email_server.py:125-133`); no
   price-free request-acknowledgement template exists.
 
+### Contract revision (2026-07-23, post-Codex review)
+
+Review evidence proved two provider behaviors the original contract wrongly
+declared out of scope, plus three endpoint gaps:
+
+- `DatabaseCRMProvider.log_interaction` pops `_inserted` before returning, so
+  the endpoint's duplicate-email gate read a field production never returns.
+  Revised surface: expose a public `inserted` key (additive; callers
+  unaffected).
+- `create_contact` dedupes by phone/email globally and merges incoming fields
+  (including `business_context_id`, `contact_type`, `tags`) into whatever
+  contact matches — an EOM web lead sharing an email with a non-EOM contact
+  would mutate that foreign-tenant record. Revised surface: when the caller
+  stamps `business_context_id`, scope both dedupe searches to that tenant
+  (unstamped callers keep legacy global dedupe).
+- Endpoint additions: pre-side-effect daily submission throttle (429),
+  dialable-digit phone validation, and a mounted-route smoke test.
+
+`crm_provider` is therefore no longer blanket non-scope; only these two
+surgical additions are in scope, nothing else in the provider moved.
+
 ### Problem-derived contract
 
 - Root cause: Atlas has **no ingress for website lead submissions** — the
@@ -32,7 +53,7 @@ against code 2026-07-22):
   effinghamofficemaids.com; the stale contact data in adjacent email content
   (3 skills docs' phone, 1 template address).
 - Must not change: `gmail_digest`/`email_classifier` (remain as redundant
-  backfill), `crm_provider` internals, `email_provider` transport, any B2B
+  backfill), `email_provider` transport, any B2B
   endpoint, invoicing/receivables (#2133), schema/migrations, other writers'
   tenant stamping (Phase 2), customer backfill (Phase 3), the website repo
   (named follow-up PR).
@@ -65,7 +86,14 @@ Slice phase: vertical slice
    `1901 S. 4th St. Ste #1, Effingham IL 62401` in
    `atlas_brain/templates/email/estimate_confirmation.py` (matches
    `atlas_brain/templates/email/invoice.py` + the live website).
-5. Proof: `tests/test_leads_intake.py` (repo unit style, mocked CRM/email).
+5. Post-review hardening (Codex reconciliation): tenant-scoped dedupe in
+   `create_contact` when `business_context_id` is stamped; public `inserted`
+   flag on `log_interaction` returns; pre-side-effect daily submission
+   throttle (HTTP 429, cap 5/identity/day); phone must carry >=7 digits to
+   count as a contact channel; route-level smoke test for the mounted path.
+6. Proof: `tests/test_leads_intake.py` (repo unit style, mocked CRM/email) —
+   18 tests including provider-level dedupe-scoping regressions and the
+   mounted-route smoke (200/422/429).
 
 ### Review Contract
 
@@ -85,6 +113,11 @@ Slice phase: vertical slice
      send call wires `reply_to=info@effinghamofficemaids.com`.
   8. Only additive `include_router` in `atlas_brain/api/__init__.py`; no
      existing router moved.
+  9. Daily cap blocks BEFORE any side effect (test-asserted: no CRM call, no
+     email on 429 path).
+  10. `create_contact` dedupe searches carry `business_context_id` when the
+      caller stamps one, and stay unscoped when not (both test-asserted).
+  11. Mounted `POST /api/v1/leads/intake` returns 200/422/429 via TestClient.
 - Reachability proof: entrypoint `POST /api/v1/leads/intake` on the
   atlas_brain app (port 8012), already publicly proxied by Tailscale Funnel
   (`https://atlas-brain.tailc7bd29.ts.net/api` → `127.0.0.1:8012/api`;
@@ -99,8 +132,8 @@ Slice phase: vertical slice
   `b2b/briefings/gate`; CORS additions are origin-scoped; email misconfig
   degrades to CRM-only capture (capture > acknowledgement).
 - Reviewer rules triggered: R1 (requirements match #2151 Phase 1), R2 (test
-  evidence: 11 unit tests), R3 (security: new public unauthenticated endpoint,
-  honeypot/validation/CORS scoping), R5 (backward compatibility: additive
+  evidence: 11 unit tests), R3 (security review of the new public endpoint: honeypot,
+  input validation, origin-scoped CORS, daily throttle), R5 (backward compatibility: additive
   router only; no existing API surface changed), R6 (error handling: email best-effort,
   503 path), R8 (idempotency: same-day dedupe via interaction dedupe key),
   R11 (config: CORS origin list), R12 (deployment: endpoint live on next
@@ -108,9 +141,11 @@ Slice phase: vertical slice
 
 ### Files touched
 
+- `.gitleaksignore`
 - `atlas_brain/api/__init__.py`
 - `atlas_brain/api/leads.py`
 - `atlas_brain/main.py`
+- `atlas_brain/services/crm_provider.py`
 - `atlas_brain/skills/email/cleaning_confirmation.md`
 - `atlas_brain/skills/email/estimate_confirmation.md`
 - `atlas_brain/skills/email/proposal.md`
@@ -177,15 +212,17 @@ Parked hardening: per-IP/email rate-limit table (above).
 
 | File | LOC |
 |---|---:|
+| `.gitleaksignore` | 5 |
 | `atlas_brain/api/__init__.py` | 2 |
-| `atlas_brain/api/leads.py` | 153 |
+| `atlas_brain/api/leads.py` | 199 |
 | `atlas_brain/main.py` | 8 |
+| `atlas_brain/services/crm_provider.py` | 15 |
 | `atlas_brain/skills/email/cleaning_confirmation.md` | 2 |
 | `atlas_brain/skills/email/estimate_confirmation.md` | 2 |
 | `atlas_brain/skills/email/proposal.md` | 2 |
 | `atlas_brain/templates/email/__init__.py` | 5 |
 | `atlas_brain/templates/email/estimate_confirmation.py` | 2 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 66 |
-| `plans/PR-EOM-Lead-Intake.md` | 169 |
-| `tests/test_leads_intake.py` | 241 |
-| **Total** | **652** |
+| `plans/PR-EOM-Lead-Intake.md` | 224 |
+| `tests/test_leads_intake.py` | 368 |
+| **Total** | **900** |

@@ -26,9 +26,12 @@ sys.modules.setdefault("asyncpg.exceptions", _asyncpg_exceptions)
 
 from atlas_brain.api.leads import (  # noqa: E402
     EOM_BUSINESS_CONTEXT_ID,
+    MAX_DAILY_SUBMISSIONS,
     LeadIntakeRequest,
+    LeadRateLimitedError,
     LeadValidationError,
     _process_lead_intake,
+    router,
 )
 from atlas_brain.templates.email.request_acknowledgement import (  # noqa: E402
     format_request_acknowledgement,
@@ -63,7 +66,7 @@ def _payload(**overrides):
 def _crm(inserted: bool = True):
     crm = MagicMock()
     crm.find_or_create_contact = AsyncMock(return_value={"id": "c-123"})
-    crm.log_interaction = AsyncMock(return_value={"id": "i-1", "_inserted": inserted})
+    crm.log_interaction = AsyncMock(return_value={"id": "i-1", "inserted": inserted})
     return crm
 
 
@@ -239,3 +242,127 @@ def test_template_omits_request_line_when_fields_empty():
     _, body = format_request_acknowledgement(client_name="")
     assert "Your request:" not in body
     assert "Hi there," in body  # empty name falls back gracefully
+
+
+# ---------------------------------------------------------------------------
+# PR #2152 review reconciliation — throttle, phone digits, scoped dedupe,
+# route smoke
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_blocks_before_any_side_effect():
+    crm, provider = _crm(), _email_provider()
+    counter = AsyncMock(return_value=MAX_DAILY_SUBMISSIONS)
+    with pytest.raises(LeadRateLimitedError):
+        await _process_lead_intake(
+            _payload(), crm=crm, email_provider=provider, daily_count=counter
+        )
+    crm.find_or_create_contact.assert_not_awaited()
+    crm.log_interaction.assert_not_awaited()
+    provider.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_under_limit_proceeds():
+    crm, provider = _crm(), _email_provider()
+    counter = AsyncMock(return_value=MAX_DAILY_SUBMISSIONS - 1)
+    result = await _process_lead_intake(
+        _payload(), crm=crm, email_provider=provider, daily_count=counter
+    )
+    assert result["success"] is True
+    counter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_phone_without_dialable_digits_rejected_as_only_channel():
+    crm, provider = _crm(), _email_provider()
+    with pytest.raises(LeadValidationError):
+        await _process_lead_intake(
+            _payload(email="", phone="n/a"), crm=crm, email_provider=provider
+        )
+    crm.find_or_create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_garbage_phone_dropped_when_email_present():
+    crm, provider = _crm(), _email_provider()
+    result = await _process_lead_intake(
+        _payload(phone="—"), crm=crm, email_provider=provider
+    )
+    assert result["success"] is True
+    assert crm.find_or_create_contact.call_args.kwargs["phone"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_contact_dedupe_is_tenant_scoped():
+    """Provider-level regression for the cross-tenant mutation finding:
+    when data carries business_context_id, both dedupe searches must be
+    scoped to that tenant."""
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    provider = DatabaseCRMProvider.__new__(DatabaseCRMProvider)
+    provider.search_contacts = AsyncMock(return_value=[{"id": "existing-eom"}])
+    provider.update_contact = AsyncMock(return_value={"id": "existing-eom"})
+
+    result = await provider.create_contact(
+        {
+            "full_name": "Jane Doe",
+            "email": "jane@example.com",
+            "phone": "2175550100",
+            "business_context_id": "effingham_maids",
+        }
+    )
+    assert result["id"] == "existing-eom"
+    for call in provider.search_contacts.await_args_list:
+        assert call.kwargs.get("business_context_id") == "effingham_maids"
+
+
+@pytest.mark.asyncio
+async def test_create_contact_dedupe_unscoped_without_context():
+    """Without a stamped tenant the legacy global dedupe is preserved."""
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    provider = DatabaseCRMProvider.__new__(DatabaseCRMProvider)
+    provider.search_contacts = AsyncMock(return_value=[{"id": "existing-any"}])
+    provider.update_contact = AsyncMock(return_value={"id": "existing-any"})
+
+    await provider.create_contact({"full_name": "X", "email": "x@example.com"})
+    for call in provider.search_contacts.await_args_list:
+        assert "business_context_id" not in call.kwargs
+
+
+def test_route_smoke_mounted_path_statuses(monkeypatch):
+    """Route-level smoke: the mounted POST /api/v1/leads/intake path maps
+    outcomes to 200 / 422 / 429 (the injectable-core tests can't see this)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import atlas_brain.api.leads as leads_mod
+    from atlas_brain.services import crm_provider as crm_mod
+    from atlas_brain.services import email_provider as email_mod
+
+    monkeypatch.setattr(crm_mod, "get_crm_provider", lambda: _crm())
+    monkeypatch.setattr(email_mod, "get_email_provider", lambda: _email_provider())
+    counter = {"n": 0}
+
+    async def fake_count(email, phone):
+        return counter["n"]
+
+    monkeypatch.setattr(leads_mod, "_daily_submission_count", fake_count)
+
+    app = FastAPI()
+    app.include_router(leads_mod.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    ok = client.post("/api/v1/leads/intake", json={"name": "Jane", "email": "jane@example.com"})
+    assert ok.status_code == 200 and ok.json()["success"] is True
+
+    bad = client.post("/api/v1/leads/intake", json={"name": "Jane"})
+    assert bad.status_code == 422
+
+    counter["n"] = MAX_DAILY_SUBMISSIONS
+    throttled = client.post(
+        "/api/v1/leads/intake", json={"name": "Jane", "email": "jane@example.com"}
+    )
+    assert throttled.status_code == 429
