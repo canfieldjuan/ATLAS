@@ -58,9 +58,9 @@ class LeadRateLimitedError(RuntimeError):
 async def _daily_submission_count(email: str, phone_digits: str) -> int:
     """Count today's web_form submissions for this identity (EOM-scoped).
 
-    Phones share a cap bucket on their last 10 dialable digits — the same
-    semantics search_contacts uses for lookup — so formatting and
-    country-code variants of one number cannot dodge the cap.
+    Phone bucketing mirrors search_contacts' lookup exactly (substring LIKE
+    on the last 10 submitted digits) so any submission that would RESOLVE to
+    a stored contact also COUNTS against that contact's cap.
     """
     from ..storage.database import get_db_pool
 
@@ -74,8 +74,8 @@ async def _daily_submission_count(email: str, phone_digits: str) -> int:
           AND ci.occurred_at > NOW() - INTERVAL '1 day'
           AND c.business_context_id = $1
           AND (($2 <> '' AND LOWER(c.email) = $2)
-               OR ($3 <> '' AND RIGHT(regexp_replace(COALESCE(c.phone, ''), '[^0-9]', '', 'g'), 10)
-                   = RIGHT($3, 10)))
+               OR ($3 <> '' AND regexp_replace(COALESCE(c.phone, ''), '[^0-9]', '', 'g')
+                   LIKE '%' || RIGHT($3, 10) || '%'))
         """,
         EOM_BUSINESS_CONTEXT_ID,
         email,
@@ -157,17 +157,23 @@ async def _process_lead_intake(
     # lead (PR #2153 review, R3/R4). Only a brand-new contact gets created.
     # Phone first: the CRM treats phone as the more unique identity channel,
     # and a mistyped/shared email must not steal a returning caller's record.
+    # Searches run unscoped and are filtered here so legacy NULL-context
+    # customers are ALSO resolved read-only (a scoped search would miss them
+    # and drop them into the mutating create path — PR #2153 round 4, R3/R4).
+    def _pick_readonly(matches: list) -> Optional[dict[str, Any]]:
+        for m in matches or []:
+            if m.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID:
+                return m
+        for m in matches or []:
+            if m.get("business_context_id") is None:
+                return m
+        return None
+
     contact: Optional[dict[str, Any]] = None
     if phone_digits:
-        matches = await crm.search_contacts(
-            phone=phone_digits, business_context_id=EOM_BUSINESS_CONTEXT_ID
-        )
-        contact = matches[0] if matches else None
+        contact = _pick_readonly(await crm.search_contacts(phone=phone_digits))
     if contact is None and email:
-        matches = await crm.search_contacts(
-            email=email, business_context_id=EOM_BUSINESS_CONTEXT_ID
-        )
-        contact = matches[0] if matches else None
+        contact = _pick_readonly(await crm.search_contacts(email=email))
 
     if contact is None:
         contact = await crm.find_or_create_contact(
@@ -194,6 +200,11 @@ async def _process_lead_intake(
             "frequency": payload.frequency,
             "square_feet": payload.square_feet,
             "source_page": payload.source_page,
+            # Submitted channels are recorded even when an existing contact
+            # is resolved read-only, so a new callback number/email is never
+            # lost (PR #2153 round 4, R1/R6).
+            "submitted_email": email,
+            "submitted_phone": phone_digits,
         },
     )
     # log_interaction dedupes identical same-day rows and reports it via the

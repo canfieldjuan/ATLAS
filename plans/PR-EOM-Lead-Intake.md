@@ -136,6 +136,13 @@ Slice phase: vertical slice
       resolving existing customers pre-backfill).
   18. A failing ack-volume guard skips the email (fail-closed for sends)
       and never fails the captured lead.
+  19. Legacy NULL-context contacts are resolved read-only by the endpoint
+      (same-tenant preferred over NULL; foreign tenants invisible), and the
+      provider prefers a same-tenant match over a claimable NULL row.
+  20. Throttle bucketing mirrors search_contacts' substring lookup exactly
+      (any submission that resolves to a contact also counts against it);
+      submitted email/phone are recorded in interaction metadata so new
+      callback channels are never lost.
 - Reachability proof: entrypoint `POST /api/v1/leads/intake` on the
   atlas_brain app (port 8012), already publicly proxied by Tailscale Funnel
   (`https://atlas-brain.tailc7bd29.ts.net/api` → `127.0.0.1:8012/api`;
@@ -235,15 +242,15 @@ Parked hardening: per-IP/email rate-limit table; DB-side atomic cap guard (both 
 | File | LOC |
 |---|---:|
 | `atlas_brain/api/__init__.py` | 2 |
-| `atlas_brain/api/leads.py` | 291 |
+| `atlas_brain/api/leads.py` | 302 |
 | `atlas_brain/main.py` | 8 |
-| `atlas_brain/services/crm_provider.py` | 28 |
+| `atlas_brain/services/crm_provider.py` | 37 |
 | `atlas_brain/skills/email/cleaning_confirmation.md` | 2 |
 | `atlas_brain/skills/email/estimate_confirmation.md` | 2 |
 | `atlas_brain/skills/email/proposal.md` | 2 |
 | `atlas_brain/templates/email/__init__.py` | 5 |
 | `atlas_brain/templates/email/estimate_confirmation.py` | 2 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 66 |
-| `plans/PR-EOM-Lead-Intake.md` | 249 |
-| `tests/test_leads_intake.py` | 481 |
-| **Total** | **1138** |
+| `plans/PR-EOM-Lead-Intake.md` | 256 |
+| `tests/test_leads_intake.py` | 531 |
+| **Total** | **1215** |

@@ -137,19 +137,24 @@ class DatabaseCRMProvider:
             existing_ctx = candidate.get("business_context_id")
             return existing_ctx is None or existing_ctx == ctx
 
+        def _pick(matches: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+            # Prefer a real same-tenant contact over a NULL-context historical
+            # row so a claimable legacy row cannot shadow the tenant's own
+            # record (PR #2153 round 4, R4/R5).
+            if ctx:
+                for m in matches:
+                    if m.get("business_context_id") == ctx:
+                        return m
+            for m in matches:
+                if _ctx_compatible(m):
+                    return m
+            return None
+
         existing: Optional[dict[str, Any]] = None
         if phone:
-            matches = await self.search_contacts(phone=phone)
-            for m in matches:
-                if _ctx_compatible(m):
-                    existing = m
-                    break
+            existing = _pick(await self.search_contacts(phone=phone))
         if existing is None and email:
-            matches = await self.search_contacts(email=email)
-            for m in matches:
-                if _ctx_compatible(m):
-                    existing = m
-                    break
+            existing = _pick(await self.search_contacts(email=email))
 
         if existing is not None:
             # Merge any new non-null fields into the existing record

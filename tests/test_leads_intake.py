@@ -407,7 +407,9 @@ def test_route_smoke_mounted_path_statuses():
 async def test_existing_eom_contact_not_mutated_or_downgraded():
     """A returning CUSTOMER requesting another estimate must not be rewritten
     into a lead or have identity fields replaced by untrusted form input."""
-    existing = [{"id": "cust-9", "contact_type": "customer", "full_name": "Real Name"}]
+    existing = [{"id": "cust-9", "contact_type": "customer",
+                 "business_context_id": EOM_BUSINESS_CONTEXT_ID,
+                 "full_name": "Real Name"}]
     crm, provider = _crm(existing=existing), _email_provider()
 
     result = await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
@@ -416,12 +418,10 @@ async def test_existing_eom_contact_not_mutated_or_downgraded():
     crm.find_or_create_contact.assert_not_awaited()  # no create, no merge
     crm.log_interaction.assert_awaited()  # the request is still recorded
     assert crm.log_interaction.call_args.kwargs["contact_id"] == "cust-9"
-    # resolution searches are tenant-scoped and PHONE-FIRST (phone is the
-    # more unique channel; a shared/mistyped email must not steal the match)
+    # resolution is PHONE-FIRST (phone is the more unique channel; a
+    # shared/mistyped email must not steal the match)
     first = crm.search_contacts.await_args_list[0]
     assert "phone" in first.kwargs
-    for call in crm.search_contacts.await_args_list:
-        assert call.kwargs["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
 
 
 @pytest.mark.asyncio
@@ -479,3 +479,53 @@ async def test_ack_volume_failure_skips_email_never_fails_request():
     assert result == {"success": True, "email_sent": False}
     provider.send.assert_not_awaited()
     crm.log_interaction.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_legacy_null_context_contact_resolved_readonly():
+    """PR #2153 round 4: a legacy customer whose business_context_id is
+    still NULL must be resolved read-only, not dropped into the mutating
+    create path."""
+    legacy = [{"id": "legacy-7", "contact_type": "customer",
+               "business_context_id": None}]
+    crm, provider = _crm(existing=legacy), _email_provider()
+    result = await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+    assert result["success"] is True
+    crm.find_or_create_contact.assert_not_awaited()
+    assert crm.log_interaction.call_args.kwargs["contact_id"] == "legacy-7"
+
+
+@pytest.mark.asyncio
+async def test_foreign_tenant_match_ignored_new_contact_created():
+    """A same-channel contact belonging to another tenant is invisible to
+    the read-only resolution; a fresh EOM contact is created instead."""
+    foreign = [{"id": "b2b-3", "business_context_id": "churnsignals"}]
+    crm, provider = _crm(existing=foreign), _email_provider()
+    await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+    crm.find_or_create_contact.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submitted_channels_recorded_in_interaction_metadata():
+    """New callback email/phone from a returning contact must not be lost."""
+    existing = [{"id": "cust-9", "business_context_id": EOM_BUSINESS_CONTEXT_ID}]
+    crm, provider = _crm(existing=existing), _email_provider()
+    await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+    md = crm.log_interaction.call_args.kwargs["metadata"]
+    assert md["submitted_email"] == "jane@example.com"
+    assert md["submitted_phone"] == "2175550100"
+
+
+@pytest.mark.asyncio
+async def test_provider_prefers_same_tenant_over_null_context():
+    """When both a same-tenant and a (newer) NULL-context row match, the
+    tenant's own record wins; the claimable legacy row must not shadow it."""
+    provider = _provider_with([
+        {"id": "legacy-null", "business_context_id": None},
+        {"id": "eom-real", "business_context_id": "effingham_maids"},
+    ])
+    result = await provider.create_contact(
+        {"full_name": "Jane", "email": "jane@example.com",
+         "business_context_id": "effingham_maids"}
+    )
+    assert result["id"] == "eom-real"
