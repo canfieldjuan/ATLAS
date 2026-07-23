@@ -156,6 +156,7 @@ async def _hourly_ack_volume() -> int:
         WHERE ci.interaction_type = 'web_form'
           AND ci.occurred_at > NOW() - INTERVAL '1 hour'
           AND (c.business_context_id = $1 OR c.business_context_id IS NULL)
+          AND COALESCE(ci.metadata->>'submitted_email', '') <> ''
         """,
         EOM_BUSINESS_CONTEXT_ID,
     ) or 0
@@ -231,33 +232,35 @@ async def _process_lead_intake(
     # lead (PR #2153 review, R3/R4). Only a brand-new contact gets created.
     # Phone first: the CRM treats phone as the more unique identity channel,
     # and a mistyped/shared email must not steal a returning caller's record.
-    # Searches run unscoped and are filtered here so legacy NULL-context
-    # customers are ALSO resolved read-only (a scoped search would miss them
-    # and drop them into the mutating create path — PR #2153 round 4, R3/R4).
-    def _pick_readonly(matches: list) -> Optional[dict[str, Any]]:
-        for m in matches or []:
-            if m.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID:
-                return m
-        for m in matches or []:
-            if m.get("business_context_id") is None:
-                return m
-        return None
+    # Each channel queries the same-tenant page, then the NULL-context
+    # (legacy, claimable) page directly — exact populations, so foreign
+    # contacts can neither be touched nor page-starve the lookup
+    # (PR #2153 rounds 4-8, R3/R4/R5). Partial numbers (7-9 digits) are a
+    # valid callback channel but are never used for matching: substring
+    # lookups could hit an unrelated contact ahead of an exact email.
+    async def _resolve_readonly(**channel: Any) -> Optional[dict[str, Any]]:
+        scoped = await crm.search_contacts(
+            business_context_id=EOM_BUSINESS_CONTEXT_ID, **channel
+        )
+        if scoped:
+            return scoped[0]
+        legacy = await crm.search_contacts(business_context_id_is_null=True, **channel)
+        return legacy[0] if legacy else None
 
-    # Partial numbers (7-9 digits) are a valid contact channel but are NOT
-    # used for matching: search_contacts matches by substring, so a short
-    # digit run could resolve to an unrelated contact ahead of an exact
-    # email (PR #2153 round 6, R4/R6).
     contact: Optional[dict[str, Any]] = None
     if len(phone_digits) >= 10:
-        contact = _pick_readonly(await crm.search_contacts(phone=phone_digits))
+        contact = await _resolve_readonly(phone=phone_digits)
     if contact is None and email:
-        contact = _pick_readonly(await crm.search_contacts(email=email))
+        contact = await _resolve_readonly(email=email)
 
     if contact is None:
         contact = await crm.find_or_create_contact(
             full_name=payload.name.strip(),
             email=email or None,
-            phone=phone_digits or None,
+            # A sub-10-digit number must not feed the provider's substring
+            # dedupe (it could merge into an unrelated contact); it stays
+            # available in the interaction summary/metadata (round 8, R3/R4).
+            phone=phone_digits if len(phone_digits) >= 10 else None,
             contact_type="lead",
             source="web",
             source_ref="website_estimate_form",

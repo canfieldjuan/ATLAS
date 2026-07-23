@@ -591,6 +591,29 @@ async def test_partial_phone_not_used_for_contact_matching():
 
 
 @pytest.mark.asyncio
+async def test_short_phone_not_passed_to_mutating_create():
+    """Round 8 R3/R4: a 7-9 digit number must not enter find_or_create's own
+    substring dedupe (it could merge into an unrelated contact)."""
+    crm, provider = _crm(), _email_provider()
+    await _process_lead_intake(
+        _payload(email="jane@example.com", phone="5550100"),
+        crm=crm, email_provider=provider,
+    )
+    assert crm.find_or_create_contact.call_args.kwargs["phone"] is None
+
+
+@pytest.mark.asyncio
+async def test_readonly_resolution_queries_exact_populations():
+    """Round 8 R3/R4: every resolution search names its population — tenant
+    page or IS-NULL page — never an unscoped global page."""
+    crm, provider = _crm(), _email_provider()
+    await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+    for call in crm.search_contacts.await_args_list:
+        assert (call.kwargs.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID
+                or call.kwargs.get("business_context_id_is_null") is True)
+
+
+@pytest.mark.asyncio
 async def test_corrected_callback_defeats_same_day_dedupe_key():
     """Round 6 R1/R6: submitted channels ride the summary, so a corrected
     callback changes the dedupe basis instead of being swallowed."""
