@@ -347,6 +347,80 @@ def test_context_result_omits_emails_under_scope():
     src = (REPO / "atlas_brain/mcp/crm_server.py").read_text(encoding="utf-8")
     assert '"sent_emails": [] if effective else ctx.sent_emails' in src
     assert "emails_omitted_under_scope" in src
+    assert '"b2b_churn_signals": [] if effective else ctx.b2b_churn_signals' in src
+    assert "b2b_enrichment_omitted_under_scope" in src
+
+
+@pytest.mark.asyncio
+async def test_create_contact_claims_legacy_match_with_cas():
+    """The stamped-create legacy merge claims by compare-and-set, never by
+    blind update (round-5 MAJOR)."""
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    class _Provider(DatabaseCRMProvider):
+        def __init__(self, claim_result):
+            self.claim_calls = []
+            self.updates = []
+            self._claim_result = claim_result
+
+        async def search_contacts(self, **kwargs):
+            if kwargs.get("business_context_id_is_null"):
+                return [{"id": UUID, "business_context_id": None,
+                         "phone": "2175550000"}]
+            return []
+
+        async def claim_contact(self, contact_id, business_context_id):
+            self.claim_calls.append((contact_id, business_context_id))
+            return self._claim_result
+
+        async def update_contact(self, contact_id, data):
+            self.updates.append((contact_id, data))
+            return {"id": contact_id, **data}
+
+    p = _Provider({"id": UUID, "business_context_id": EOM})
+    result = await p.create_contact({
+        "phone": "2175550000", "full_name": "Jane",
+        "business_context_id": EOM,
+    })
+    assert p.claim_calls == [(UUID, EOM)]
+    assert result["_was_created"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_contact_lost_claim_never_blind_merges():
+    """When another tenant wins the claim race, the NULL match is not ours:
+    no merge lands on the stolen row (create falls through to insert)."""
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    class _Provider(DatabaseCRMProvider):
+        def __init__(self):
+            self.claim_calls = []
+            self.updates = []
+
+        async def search_contacts(self, **kwargs):
+            if kwargs.get("business_context_id_is_null"):
+                return [{"id": UUID, "business_context_id": None,
+                         "phone": "2175550000"}]
+            return []
+
+        async def claim_contact(self, contact_id, business_context_id):
+            self.claim_calls.append((contact_id, business_context_id))
+            return None
+
+        async def update_contact(self, contact_id, data):
+            self.updates.append((contact_id, data))
+            return {"id": contact_id, **data}
+
+    p = _Provider()
+    try:
+        await p.create_contact({
+            "phone": "2175550000", "full_name": "Jane",
+            "business_context_id": EOM,
+        })
+    except Exception:
+        pass  # the fresh-insert path needs a live pool; irrelevant here
+    assert p.claim_calls == [(UUID, EOM)]
+    assert p.updates == []
 
 
 # ---------------------------------------------------------------------------

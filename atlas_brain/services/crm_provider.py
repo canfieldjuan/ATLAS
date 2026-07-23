@@ -171,6 +171,17 @@ class DatabaseCRMProvider:
         if existing is None and email:
             existing = await _resolve(email=email)
 
+        if existing is not None and ctx and existing.get("business_context_id") is None:
+            # Claim the NULL-context legacy match by compare-and-set before
+            # merging: a concurrent claim by another tenant leaves the row
+            # theirs and this create falls through to a fresh insert instead
+            # of overwriting their claim.
+            claimed = await self.claim_contact(str(existing["id"]), ctx)
+            if claimed is None:
+                existing = None
+            else:
+                existing = claimed
+
         if existing is not None:
             # Merge any new non-null fields into the existing record
             _MERGEABLE = {

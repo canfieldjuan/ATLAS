@@ -789,10 +789,14 @@ async def get_customer_context(
             # email store is tenant-addressable.
             "sent_emails": [] if effective else ctx.sent_emails,
             "inbox_emails": [] if effective else ctx.inbox_emails,
-            "b2b_churn_signals": ctx.b2b_churn_signals,
+            # B2B churn enrichment is keyed by email domain against a global
+            # table with no tenant column -- omitted under a scope like the
+            # email history (the B2B MCP server is the scoped surface for it).
+            "b2b_churn_signals": [] if effective else ctx.b2b_churn_signals,
         }
         if effective:
             result["emails_omitted_under_scope"] = True
+            result["b2b_enrichment_omitted_under_scope"] = True
 
         return json.dumps(result, default=str)
     except Exception as exc:

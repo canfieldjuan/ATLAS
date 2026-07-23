@@ -84,7 +84,13 @@ Slice phase: vertical slice
    (`customer_context._gather` threads the scope to both child queries);
    email history is omitted under a scope (no tenant column on the email
    store yet — fail closed, flagged `emails_omitted_under_scope`).
-7. Proof: `tests/test_crm_read_scoping.py` — 46 tests covering default+
+7. Review round 5 (Codex): B2B churn enrichment (global, email-domain
+   keyed, no tenant column) is omitted from scoped context responses like
+   the email history; the stamped-create legacy merge in
+   `crm_provider.create_contact` claims its NULL match via the CAS
+   `claim_contact` (a lost race falls through to a fresh insert instead of
+   overwriting the winner's row and fields).
+8. Proof: `tests/test_crm_read_scoping.py` — 48 tests covering default+
    fallback search order, explicit-arg precedence, no-default legacy
    behavior, foreign-tenant invisibility on reads and refusal on
    mutations, NULL-legacy visibility, create default-stamp, list default +
@@ -146,6 +152,8 @@ Slice phase: vertical slice
 - `atlas_brain/services/customer_context.py`
 - `plans/PR-EOM-Read-Scoping.md`
 - `tests/test_crm_read_scoping.py`
+- `tests/test_leads_intake.py` (round 5: the #2153 dedupe-claim test
+  updated to the compare-and-set contract)
 
 ## Mechanism
 
@@ -195,7 +203,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Suite `tests/test_crm_read_scoping.py` — 46 passed (plus the existing
+- Suite `tests/test_crm_read_scoping.py` — 48 passed (plus the existing
   `tests/test_customer_context.py` suite against the threaded service).
 - Suites `tests/test_tenant_stamping.py` + `tests/test_leads_intake.py` +
   `tests/test_mcp_servers.py` — 145 passed combined, 6 failed
