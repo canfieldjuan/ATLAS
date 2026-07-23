@@ -235,10 +235,12 @@ class StubPool:
 
     async def fetchrow(self, sql, *args):
         self.queries.append((sql, args))
-        is_claim = "business_context_id IS NULL OR" in sql
+        if "SELECT status FROM contacts" in sql:
+            return {"status": "archived" if args[0] in self.archived_ids else "active"}
+        is_claim = "SET business_context_id" in sql
         if sql.strip().startswith("UPDATE contacts") and not is_claim:
             import re as _re
-            cols = _re.findall(r"(\w+) = \$\d+", sql)
+            cols = _re.findall(r"(\w+) = \$\d+", sql.split("WHERE")[0])
             cols = [c for c in cols if c != "updated_at"]
             payload = dict(zip(cols, args[1:]))
             self.updates.append((args[0], payload))
@@ -392,6 +394,32 @@ def test_matched_update_is_archive_guarded():
     assert crm.interactions == []        # archived timeline untouched (r10)
     sql = pool.queries[-1][0]
     assert "status != 'archived'" in sql
+
+
+def test_guarded_update_carries_tenant_predicate_and_no_stamp():
+    # Codex round 11 (R4/R8): the guarded UPDATE cannot steal a concurrently
+    # reassigned row -- context predicate inside, no tenant stamp resent.
+    rec = _record(phone="(217) 555-9999")
+    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "inactive"})
+    pool = StubPool()
+    asyncio.run(import_one(rec, crm, pool))
+    sql, payload = None, None
+    for q_sql, _ in pool.queries:
+        if q_sql.strip().startswith("UPDATE contacts") and "SET business_context_id" not in q_sql:
+            sql = q_sql
+    assert sql and "business_context_id IS NULL OR business_context_id =" in sql
+    assert "business_context_id" not in pool.updates[0][1]
+
+
+def test_archive_race_before_logging_skips_timeline():
+    # Codex round 11 (R4/R8): archive landing after the write but before the
+    # interaction log leaves the archived timeline untouched.
+    rec = _record()
+    crm = StubCRM()
+    pool = StubPool(rows=[{"id": "arch", "tags": [], "source": "web", "status": "active"}],
+                    archived_ids={"arch"})
+    outcome = asyncio.run(import_one(rec, crm, pool))
+    assert crm.interactions == []
 
 
 def test_merged_group_prefers_latest_address_and_carries_all():
@@ -617,7 +645,8 @@ def test_address_resolver_excludes_archived_rows():
     rec = _record()
     crm, pool = StubCRM(), StubPool(rows=[None, None])
     asyncio.run(import_one(rec, crm, pool))
-    selects = [q for q in pool.queries if q[0].strip().startswith("SELECT")]
+    selects = [q for q in pool.queries
+               if q[0].strip().startswith("SELECT") and "SELECT status FROM" not in q[0]]
     assert len(selects) == 2
     for sql, _ in selects:
         assert "status != 'archived'" in sql
@@ -640,4 +669,5 @@ def test_interaction_carries_stable_dedupe_anchor():
     assert crm.interactions, "interaction should be logged for dated records"
     meta = crm.interactions[0]["metadata"]
     assert meta["source_ref"].startswith("eom_live_calendar:")
+    assert meta["source_ref"].endswith(rec.last_event_date.isoformat())
     assert crm.interactions[0]["interaction_type"] == "appointment"

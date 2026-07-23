@@ -418,16 +418,19 @@ async def _guarded_update(pool, contact_id: str, updates: dict):
     cols = [k for k in updates if k in _GUARDED_COLUMNS]
     sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(cols))
     vals = [updates[k].lower() if k == "email" and updates[k] else updates[k] for k in cols]
+    ctx_param = len(cols) + 2
     return await pool.fetchrow(
         f"""
         UPDATE contacts
            SET {sets}, updated_at = NOW()
          WHERE id = $1
            AND status != 'archived'
+           AND (business_context_id IS NULL OR business_context_id = ${ctx_param})
         RETURNING id
         """,
         contact_id,
         *vals,
+        EOM_CONTEXT_ID,
     )
 
 
@@ -444,6 +447,9 @@ async def _update_matched(pool, existing: dict, data: dict):
     prior = existing.get("tags") or []
     payload["tags"] = sorted(set(prior) | set(payload["tags"]))
     payload.pop("source", None)
+    # Resolution already established tenancy; re-sending the stamp could
+    # steal a concurrently reassigned row back across tenants (round 11).
+    payload.pop("business_context_id", None)
     updates = _diff_updates(existing, payload)
     if updates:
         row = await _guarded_update(pool, contact_id, updates)
@@ -528,6 +534,14 @@ async def import_one(rec, crm, pool) -> str:
             contact_id, outcome = await _update_matched(pool, result, data)
 
     if contact_id and rec.last_event_date and outcome != "skipped":
+        # The archive can land after the contact write but before this log:
+        # re-check so an archived contact's timeline is never touched
+        # (Codex round 11, R4/R8).
+        row = await pool.fetchrow(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        )
+        if row is None or row.get("status") == "archived":
+            return outcome
         # source_ref inside metadata is a dedupe anchor (migration 256): the
         # same address never accumulates duplicate import interactions across
         # re-runs.
@@ -542,7 +556,16 @@ async def import_one(rec, crm, pool) -> str:
             occurred_at=datetime.combine(
                 rec.last_event_date, datetime.min.time()
             ).replace(tzinfo=timezone.utc).isoformat(),
-            metadata={"source_ref": f"eom_live_calendar:{rec.address.lower()}"},
+            # Date-scoped anchor: re-runs with the same latest booking dedupe,
+            # while each NEW latest booking advances the timeline instead of
+            # colliding with the old anchored row forever (Codex round 11,
+            # R1/R6).
+            metadata={
+                "source_ref": (
+                    f"eom_live_calendar:{rec.address.lower()}"
+                    f":{rec.last_event_date.isoformat()}"
+                )
+            },
         )
     return outcome
 

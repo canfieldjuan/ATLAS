@@ -145,7 +145,17 @@ Slice phase: vertical slice
       and every matched/stamp write goes through an UPDATE whose archived
       guard lives inside the statement -- a contact archived mid-run is
       skipped, never resurrected -- including its interaction timeline,
-      via a distinct 'skipped' outcome (asserted; Codex rounds 9-10).
+      via a distinct 'skipped' outcome AND a pre-log status re-check that
+      covers archives landing after the contact write (asserted; Codex
+      rounds 9-11).
+  28. The guarded UPDATE carries a tenant predicate (NULL-or-EOM) and
+      matched payloads never re-send the stamp, so a concurrently
+      reassigned row is never stolen back across tenants (asserted;
+      Codex round 11).
+  29. Interaction anchors are date-scoped: re-runs with the same latest
+      booking dedupe, while each new latest booking advances the CRM
+      timeline instead of colliding with the old anchor forever
+      (asserted; Codex round 11, R1/R6).
   27. A merged group's surviving address is the latest-dated one and ALL
       group addresses ride into the fallback lookup, so an existing
       address-only contact at any of them is enriched, never duplicated
@@ -232,7 +242,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 39 passed.
+- `tests/test_eom_live_calendar_import.py` — 41 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.
