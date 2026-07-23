@@ -250,6 +250,8 @@ async def stamp_portal_id(pool, contact_id: str, portal_id: int):
          WHERE id = $1
            AND status != 'archived'
            AND business_context_id = $3
+           AND (metadata->>'portal_customer_id' IS NULL
+                OR metadata->>'portal_customer_id' = $2::text)
            AND COALESCE(metadata->>'portal_customer_id', '')
                IS DISTINCT FROM $2::text
         RETURNING id
@@ -260,7 +262,8 @@ async def stamp_portal_id(pool, contact_id: str, portal_id: int):
     )
 
 
-async def portal_id_already_stamped(pool, contact_id: str, portal_id: int) -> bool:
+async def portal_id_current(pool, contact_id: str):
+    """(row_found, pid) under the same guards as the stamp itself."""
     row = await pool.fetchrow(
         """
         SELECT metadata->>'portal_customer_id' AS pid FROM contacts
@@ -271,7 +274,7 @@ async def portal_id_already_stamped(pool, contact_id: str, portal_id: int) -> bo
         contact_id,
         EOM_CONTEXT_ID,
     )
-    return bool(row) and row.get("pid") == str(portal_id)
+    return (row is not None), (row.get("pid") if row else None)
 
 
 async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
@@ -299,6 +302,12 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
         # zero updates (Codex A2 round 4).
         if existing is None:
             return "create-planned", None
+        if "metadata" in existing:
+            prior_pid = parse_meta(existing).get("portal_customer_id")
+            if prior_pid is not None and str(prior_pid) != str(portal_id):
+                print(f"    ERROR (previewed): contact {existing['id']} "
+                      f"already linked to portal customer {prior_pid}")
+                return "errors", None
         payload = dict(data)
         payload["tags"] = portal_final_tags(existing, data)
         payload.pop("source", None)
@@ -364,10 +373,20 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
 
     if contact_id:
         stamped = await stamp_portal_id(pool, contact_id, portal_id)
-        if stamped is None and not await portal_id_already_stamped(
-                pool, contact_id, portal_id):
-            print(f"    ERROR: portal-id stamp rejected for contact {contact_id}")
-            return "errors", contact_id
+        if stamped is None:
+            found, pid = await portal_id_current(pool, contact_id)
+            if found and pid == str(portal_id):
+                pass  # clean re-run: already stamped
+            elif found and pid not in (None, ""):
+                # The in-SQL guard refused a relink (address-fallback rows
+                # carry no metadata for the app-side check -- Codex A2 r7).
+                print(f"    ERROR: contact {contact_id} already linked to "
+                      f"portal customer {pid}; refusing to relink")
+                return "errors", None
+            else:
+                print(f"    ERROR: portal-id stamp rejected for contact "
+                      f"{contact_id}")
+                return "errors", contact_id
     return outcome, contact_id
 
 
@@ -440,11 +459,19 @@ async def run(args) -> int:
     await pool.initialize()
     crm = get_crm_provider()
 
-    invalid = [
-        c for c in customers
-        if not str(c.get("name") or "").strip()
-        or not isinstance(c.get("id"), int) or isinstance(c.get("id"), bool)
-    ]
+    def _malformed(c):
+        if not str(c.get("name") or "").strip():
+            return True
+        if not isinstance(c.get("id"), int) or isinstance(c.get("id"), bool):
+            return True
+        sites = c.get("sites")
+        if sites is None:
+            return False
+        return not isinstance(sites, list) or any(
+            not isinstance(x, dict) for x in sites
+        )
+
+    invalid = [c for c in customers if _malformed(c)]
     if invalid:
         # Validate the WHOLE roster before any write: a malformed record
         # later in sort order must not leave earlier writes applied with

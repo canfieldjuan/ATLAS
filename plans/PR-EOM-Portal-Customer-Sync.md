@@ -80,6 +80,11 @@ Slice phase: vertical slice
       the CAS (the id link is the identity); a link to a FOREIGN tenant is
       ignored (reported) and resolution falls to the ladder (both
       asserted; Codex A2 round 1, BLOCKER).
+  17. The relink guard also lives INSIDE the stamp SQL (metadata-blind
+      address-fallback rows are protected), the refusal error names the
+      existing link, dry-runs preview link conflicts when metadata is
+      visible, and roster preflight rejects malformed site shapes (all
+      asserted; Codex A2 round 7).
   16. The WHOLE roster validates before any write (a malformed record
       aborts the run with nothing written); a contact already linked to a
       DIFFERENT portal id is never relinked (run error); whitespace-only
@@ -178,7 +183,7 @@ run's matched ids.
 
 ## Verification
 
-- `tests/test_sync_eom_portal_customers.py` — 32 passed.
+- `tests/test_sync_eom_portal_customers.py` — 35 passed.
 - Maturity note: the scripts-lane ratchet baseline gains ONLY this PR's
   new script (deliberate per-record operator patterns recorded); the
   pre-existing unbaselined `import_eom_customers_live.py` (main's code,

@@ -62,13 +62,16 @@ class SyncPool(StubPool):
             self.stamps.append((args[0], args[1]))
             return None if self.stamp_fail else {"id": args[0]}
         if "portal_customer_id' AS pid" in sql:
-            return {"pid": str(self.already_stamped)} if self.already_stamped else None
+            if not self.row_exists:
+                return None
+            return {"pid": str(self.already_stamped) if self.already_stamped else None}
         if "SET status = 'inactive'" in sql:
             self.updates.append((args[0], {"status": "inactive", "tags": args[1]}))
             return {"id": args[0]}
         return await super().fetchrow(sql, *args)
 
     already_stamped = None
+    row_exists = True
 
     async def fetch(self, sql, *args):
         self.queries.append((sql, args))
@@ -265,6 +268,37 @@ def test_conflicting_portal_link_is_never_overwritten():
     outcome, cid = asyncio.run(sync_one(_customer(), crm, pool, apply=True))
     assert outcome == "errors"
     assert pool.updates == [] and pool.stamps == []
+
+
+def test_sql_guard_catches_conflicts_on_metadata_blind_rows():
+    # Codex A2 round 7: address-fallback rows carry no metadata; the stamp
+    # SQL itself refuses a relink and the error names the existing link.
+    crm = StubCRM()
+    pool = SyncPool(rows=[None, None, None,
+                          {"id": "addr-row", "tags": []}], stamp_fail=True)
+    pool.already_stamped = 9
+    outcome, cid = asyncio.run(sync_one(_customer(primaryPhone=None), crm, pool,
+                                        apply=True))
+    assert outcome == "errors"
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    stamp_sql = src.split("jsonb_build_object('portal_customer_id'")[1].split('"""')[0]
+    assert "portal_customer_id' IS NULL" in stamp_sql
+
+
+def test_dry_run_previews_link_conflicts():
+    # Codex A2 round 7: dry-run reports the conflict the apply would hit.
+    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "active",
+                              "metadata": {"portal_customer_id": 9}})
+    outcome, cid = asyncio.run(sync_one(_customer(), crm, SyncPool(), apply=False))
+    assert outcome == "errors"
+    assert cid is None                       # not in the demotion-safe set
+
+
+def test_roster_preflight_rejects_malformed_sites():
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    body = src.split("def _malformed")[1].split("invalid =")[0]
+    assert "isinstance(sites, list)" in body
+    assert "isinstance(x, dict)" in body
 
 
 def test_roster_validation_aborts_before_any_write():
