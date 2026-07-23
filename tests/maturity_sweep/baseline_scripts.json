@@ -1942,5 +1942,12 @@
       "UNGUARDED_INDEX": 3
     },
     "score": 14
+  },
+  "scripts/import_eom_customers_live.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 7,
+      "WEAK_CONTRACT": 4
+    },
+    "score": 9
   }
 }
