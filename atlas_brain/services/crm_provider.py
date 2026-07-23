@@ -150,11 +150,22 @@ class DatabaseCRMProvider:
                     return m
             return None
 
+        async def _resolve(**channel: Any) -> Optional[dict[str, Any]]:
+            # Scoped page first: a same-tenant match must win even when many
+            # recently-updated foreign contacts share the channel and would
+            # crowd the unscoped page (PR #2153 round 6, R4/R5). The unscoped
+            # pass then covers claimable NULL-context historical rows.
+            if ctx:
+                scoped = await self.search_contacts(business_context_id=ctx, **channel)
+                if scoped:
+                    return scoped[0]
+            return _pick(await self.search_contacts(**channel))
+
         existing: Optional[dict[str, Any]] = None
         if phone:
-            existing = _pick(await self.search_contacts(phone=phone))
+            existing = await _resolve(phone=phone)
         if existing is None and email:
-            existing = _pick(await self.search_contacts(email=email))
+            existing = await _resolve(email=email)
 
         if existing is not None:
             # Merge any new non-null fields into the existing record

@@ -12,7 +12,8 @@ import logging
 import re
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/leads", tags=["leads"])
 
 EOM_BUSINESS_CONTEXT_ID = "effingham_maids"
+
+# Route-scoped CORS: only THIS endpoint is exposed to the marketing site, and
+# without credentials — an app-wide allowlist entry would grant the site's
+# origin credentialed access to every route (PR #2153 round 6, R3).
+ALLOWED_FORM_ORIGINS = frozenset({
+    "https://effinghamofficemaids.com",
+    "https://www.effinghamofficemaids.com",
+})
+
+
+def _form_cors_headers(request: Request) -> dict[str, str]:
+    origin = request.headers.get("origin", "")
+    if origin not in ALLOWED_FORM_ORIGINS:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Vary": "Origin",
+    }
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _MIN_PHONE_DIGITS = 7
@@ -119,6 +140,16 @@ def _build_summary(payload: LeadIntakeRequest) -> str:
     return summary
 
 
+def _summary_with_channels(payload: LeadIntakeRequest, email: str, phone_digits: str) -> str:
+    """Summary including the submitted callback channels: they participate in
+    the same-day dedupe key, so a resubmission with a CORRECTED email/phone
+    is a new interaction (and a fresh acknowledgement target) instead of
+    being swallowed by the duplicate guard (PR #2153 round 6, R1/R6)."""
+    summary = _build_summary(payload)
+    channels = ", ".join(v for v in (email, phone_digits) if v)
+    return f"{summary}\nCallback: {channels}" if channels else summary
+
+
 async def _process_lead_intake(
     payload: LeadIntakeRequest,
     crm: Any,
@@ -169,8 +200,12 @@ async def _process_lead_intake(
                 return m
         return None
 
+    # Partial numbers (7-9 digits) are a valid contact channel but are NOT
+    # used for matching: search_contacts matches by substring, so a short
+    # digit run could resolve to an unrelated contact ahead of an exact
+    # email (PR #2153 round 6, R4/R6).
     contact: Optional[dict[str, Any]] = None
-    if phone_digits:
+    if len(phone_digits) >= 10:
         contact = _pick_readonly(await crm.search_contacts(phone=phone_digits))
     if contact is None and email:
         contact = _pick_readonly(await crm.search_contacts(email=email))
@@ -193,7 +228,7 @@ async def _process_lead_intake(
     interaction = await crm.log_interaction(
         contact_id=str(contact_id),
         interaction_type="web_form",
-        summary=_build_summary(payload),
+        summary=_summary_with_channels(payload, email, phone_digits),
         intent="estimate_request",
         metadata={
             "service": payload.service,
@@ -212,7 +247,10 @@ async def _process_lead_intake(
     freshly_logged = bool((interaction or {}).get("inserted", True))
 
     email_sent = False
-    if email and freshly_logged:
+    from ..config import settings as _settings
+
+    email_enabled = bool(getattr(getattr(_settings, "email", None), "enabled", False))
+    if email and freshly_logged and email_enabled:
         # Global send ceiling: past the hourly cap the lead is still captured
         # but no acknowledgement goes out (PR #2153 review, R3/R8).
         over_volume = False
@@ -276,27 +314,39 @@ def _ack_volume_dependency() -> Any:
     return _hourly_ack_volume
 
 
+@router.options("/intake", include_in_schema=False)
+async def lead_intake_preflight(request: Request) -> Response:
+    return Response(status_code=204, headers=_form_cors_headers(request))
+
+
 @router.post("/intake")
 async def lead_intake(
     payload: LeadIntakeRequest,
+    request: Request,
     crm: Any = Depends(_crm_dependency),
     email_provider: Any = Depends(_email_dependency),
     daily_count: Any = Depends(_daily_count_dependency),
     ack_volume: Any = Depends(_ack_volume_dependency),
-) -> dict[str, Any]:
+) -> Response:
     """Receive an estimate-form submission from the public website."""
+    cors = _form_cors_headers(request)
     try:
-        return await _process_lead_intake(
+        result = await _process_lead_intake(
             payload,
             crm=crm,
             email_provider=email_provider,
             daily_count=daily_count,
             ack_volume=ack_volume,
         )
+        return JSONResponse(content=result, headers=cors)
     except LeadValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc), headers=cors) from exc
     except LeadRateLimitedError as exc:
-        raise HTTPException(status_code=429, detail="Too many requests — try again tomorrow") from exc
+        raise HTTPException(
+            status_code=429, detail="Too many requests — try again tomorrow", headers=cors
+        ) from exc
     except Exception:
         logger.exception("lead_intake: intake failed")
-        raise HTTPException(status_code=503, detail="Lead intake temporarily unavailable")
+        raise HTTPException(
+            status_code=503, detail="Lead intake temporarily unavailable", headers=cors
+        )

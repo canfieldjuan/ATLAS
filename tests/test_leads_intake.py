@@ -38,6 +38,14 @@ from atlas_brain.templates.email.request_acknowledgement import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _email_enabled(monkeypatch):
+    """The endpoint honors settings.email.enabled (round 6, R11); tests that
+    exercise the send path assume it is on."""
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.email, "enabled", True)
+
+
 LONG_MESSAGE = (
     "We have a three-story home with a finished basement and two dogs. "
     "Mostly interested in the main floor and the upstairs bathrooms, the "
@@ -297,10 +305,18 @@ async def test_garbage_phone_dropped_when_email_present():
 
 
 def _provider_with(matches):
+    """Kwargs-aware search mock mirroring production: a scoped call returns
+    only rows in that tenant; an unscoped call returns everything."""
     from atlas_brain.services.crm_provider import DatabaseCRMProvider
 
+    async def _search(**kwargs):
+        ctx = kwargs.get("business_context_id")
+        if ctx:
+            return [m for m in matches if m.get("business_context_id") == ctx]
+        return matches
+
     provider = DatabaseCRMProvider.__new__(DatabaseCRMProvider)
-    provider.search_contacts = AsyncMock(return_value=matches)
+    provider.search_contacts = AsyncMock(side_effect=_search)
     provider.update_contact = AsyncMock(side_effect=lambda cid, u: {"id": cid, **u})
     return provider
 
@@ -529,3 +545,72 @@ async def test_provider_prefers_same_tenant_over_null_context():
          "business_context_id": "effingham_maids"}
     )
     assert result["id"] == "eom-real"
+
+
+@pytest.mark.asyncio
+async def test_email_disabled_setting_skips_send(monkeypatch):
+    """R11: with settings.email.enabled=False no acknowledgement goes out even
+    though Gmail OAuth may be present; the lead is still captured."""
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.email, "enabled", False)
+    crm, provider = _crm(), _email_provider()
+    result = await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+    assert result == {"success": True, "email_sent": False}
+    provider.send.assert_not_awaited()
+    crm.log_interaction.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_partial_phone_not_used_for_contact_matching():
+    """Round 6 R4/R6: 7-9 digit numbers are a valid channel but must not
+    resolve to a contact via substring match; email resolution still runs."""
+    existing = [{"id": "cust-9", "business_context_id": EOM_BUSINESS_CONTEXT_ID}]
+    crm, provider = _crm(existing=existing), _email_provider()
+    await _process_lead_intake(
+        _payload(phone="5550100"), crm=crm, email_provider=provider
+    )
+    # only ONE search (email); no phone-based lookup for the short number
+    assert len(crm.search_contacts.await_args_list) == 1
+    assert "email" in crm.search_contacts.await_args_list[0].kwargs
+
+
+@pytest.mark.asyncio
+async def test_corrected_callback_defeats_same_day_dedupe_key():
+    """Round 6 R1/R6: submitted channels ride the summary, so a corrected
+    callback changes the dedupe basis instead of being swallowed."""
+    crm, provider = _crm(), _email_provider()
+    await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+    s1 = crm.log_interaction.call_args.kwargs["summary"]
+    crm2, _ = _crm(), None
+    await _process_lead_intake(
+        _payload(phone="217-555-9999"), crm=crm2, email_provider=provider
+    )
+    s2 = crm2.log_interaction.call_args.kwargs["summary"]
+    assert s1 != s2
+    assert "2175559999" in s2  # corrected callback visible in the summary
+
+
+def test_route_cors_scoped_to_form_origins():
+    """Round 6 R3: CORS is granted per-route to the form origins only, with
+    no credentials; other origins get no CORS headers."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import atlas_brain.api.leads as leads_mod
+
+    app = FastAPI()
+    app.include_router(leads_mod.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    pre = client.options(
+        "/api/v1/leads/intake",
+        headers={"Origin": "https://effinghamofficemaids.com"},
+    )
+    assert pre.status_code == 204
+    assert pre.headers["access-control-allow-origin"] == "https://effinghamofficemaids.com"
+    assert "access-control-allow-credentials" not in pre.headers
+
+    other = client.options(
+        "/api/v1/leads/intake", headers={"Origin": "https://evil.example"}
+    )
+    assert "access-control-allow-origin" not in other.headers

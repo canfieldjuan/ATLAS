@@ -957,13 +957,7 @@ async def _inject_rate_limit_identity(request, call_next):
 
 # CORS middleware for dashboard dev servers + production (Vercel, etc.)
 from fastapi.middleware.cors import CORSMiddleware
-_cors_origins = [
-    "http://localhost:5174",
-    "http://localhost:5173",
-    "http://localhost:5175",
-    "https://effinghamofficemaids.com",
-    "https://www.effinghamofficemaids.com",
-]
+_cors_origins = ["http://localhost:5174", "http://localhost:5173", "http://localhost:5175"]
 if settings.saas_auth.cors_origins:
     _cors_origins.extend(o.strip() for o in settings.saas_auth.cors_origins.split(",") if o.strip())
 app.add_middleware(

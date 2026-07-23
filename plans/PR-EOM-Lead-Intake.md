@@ -77,8 +77,9 @@ Slice phase: vertical slice
 2. New template `atlas_brain/templates/email/request_acknowledgement.py` —
    price-free, date-free, guardrail-compliant — exported via
    `atlas_brain/templates/email/__init__.py`.
-3. `main.py`: add `https://effinghamofficemaids.com` +
-   `https://www.effinghamofficemaids.com` to `_cors_origins`.
+3. Route-scoped CORS on `/leads/intake` (OPTIONS preflight + response
+   headers for the two form origins, credential-free); `main.py`'s
+   app-wide credentialed allowlist is deliberately NOT extended.
 4. Data hygiene shipped with the email content: phone `(217) 821-2370` →
    `(217) 207-3097` in `atlas_brain/skills/email/cleaning_confirmation.md`,
    `atlas_brain/skills/email/estimate_confirmation.md`, and
@@ -142,7 +143,14 @@ Slice phase: vertical slice
   20. Guard counts (daily cap + hourly volume) include NULL-context legacy
       contacts — the same population the read-only resolution accepts —
       so repeat submissions against a legacy customer still hit the caps.
-  21. Throttle bucketing mirrors search_contacts' substring lookup exactly
+  21. CORS is route-scoped to the two form origins, credential-free (the
+      app-wide credentialed allowlist is NOT extended); other origins get no
+      CORS headers.
+  22. settings.email.enabled gates the acknowledgement send; partial phones
+      (7-9 digits) are a valid channel but never used for contact matching;
+      submitted callback channels ride the summary so corrections defeat
+      the same-day dedupe; provider dedupe queries the scoped page first.
+  23. Throttle bucketing mirrors search_contacts' substring lookup exactly
       (any submission that resolves to a contact also counts against it);
       submitted email/phone are recorded in interaction metadata so new
       callback channels are never lost.
@@ -171,7 +179,6 @@ Slice phase: vertical slice
 
 - `atlas_brain/api/__init__.py`
 - `atlas_brain/api/leads.py`
-- `atlas_brain/main.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/skills/email/cleaning_confirmation.md`
 - `atlas_brain/skills/email/estimate_confirmation.md`
@@ -245,15 +252,14 @@ Parked hardening: per-IP/email rate-limit table; DB-side atomic cap guard (both 
 | File | LOC |
 |---|---:|
 | `atlas_brain/api/__init__.py` | 2 |
-| `atlas_brain/api/leads.py` | 302 |
-| `atlas_brain/main.py` | 8 |
-| `atlas_brain/services/crm_provider.py` | 37 |
+| `atlas_brain/api/leads.py` | 352 |
+| `atlas_brain/services/crm_provider.py` | 48 |
 | `atlas_brain/skills/email/cleaning_confirmation.md` | 2 |
 | `atlas_brain/skills/email/estimate_confirmation.md` | 2 |
 | `atlas_brain/skills/email/proposal.md` | 2 |
 | `atlas_brain/templates/email/__init__.py` | 5 |
 | `atlas_brain/templates/email/estimate_confirmation.py` | 2 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 66 |
-| `plans/PR-EOM-Lead-Intake.md` | 259 |
-| `tests/test_leads_intake.py` | 531 |
-| **Total** | **1218** |
+| `plans/PR-EOM-Lead-Intake.md` | 267 |
+| `tests/test_leads_intake.py` | 616 |
+| **Total** | **1364** |
