@@ -144,7 +144,8 @@ Slice phase: vertical slice
   26. Matched updates NEVER carry `source` (asserted incl. a 'manual' row),
       and every matched/stamp write goes through an UPDATE whose archived
       guard lives inside the statement -- a contact archived mid-run is
-      skipped, never resurrected (asserted; Codex round 9).
+      skipped, never resurrected -- including its interaction timeline,
+      via a distinct 'skipped' outcome (asserted; Codex rounds 9-10).
   27. A merged group's surviving address is the latest-dated one and ALL
       group addresses ride into the fallback lookup, so an existing
       address-only contact at any of them is enriched, never duplicated

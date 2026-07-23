@@ -449,7 +449,9 @@ async def _update_matched(pool, existing: dict, data: dict):
         row = await _guarded_update(pool, contact_id, updates)
         if row is None:
             print(f"    note: contact {contact_id} archived mid-run; write skipped")
-            return contact_id, "unchanged"
+            # Distinct outcome: the caller must not touch the archived
+            # contact's timeline either (Codex round 10, R4/R8).
+            return contact_id, "skipped"
         return contact_id, "updated"
     return contact_id, "unchanged"
 
@@ -525,7 +527,7 @@ async def import_one(rec, crm, pool) -> str:
             # (Codex round 7, R1/R8).
             contact_id, outcome = await _update_matched(pool, result, data)
 
-    if contact_id and rec.last_event_date:
+    if contact_id and rec.last_event_date and outcome != "skipped":
         # source_ref inside metadata is a dedupe anchor (migration 256): the
         # same address never accumulates duplicate import interactions across
         # re-runs.
@@ -552,7 +554,7 @@ def exit_code_for(counts: dict) -> int:
 
 
 async def run_import(records, dry_run: bool) -> dict:
-    counts = {"created": 0, "updated": 0, "unchanged": 0, "errors": 0}
+    counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0, "errors": 0}
     crm = None
     pool = None
     if not dry_run:
@@ -649,7 +651,8 @@ async def main():
     else:
         print(
             f"  Created: {counts['created']}   Updated: {counts['updated']}   "
-            f"Unchanged: {counts['unchanged']}   Errors: {counts['errors']}"
+            f"Unchanged: {counts['unchanged']}   Skipped: {counts['skipped']}   "
+            f"Errors: {counts['errors']}"
         )
     print(f"{'=' * 70}\n")
     return exit_code_for(counts)

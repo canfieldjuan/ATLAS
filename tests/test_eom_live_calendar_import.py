@@ -388,7 +388,8 @@ def test_matched_update_is_archive_guarded():
     crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "inactive"})
     pool = StubPool(archived_ids={"k"})
     outcome = asyncio.run(import_one(rec, crm, pool))
-    assert outcome == "unchanged"
+    assert outcome == "skipped"
+    assert crm.interactions == []        # archived timeline untouched (r10)
     sql = pool.queries[-1][0]
     assert "status != 'archived'" in sql
 
