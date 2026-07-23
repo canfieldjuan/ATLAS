@@ -125,9 +125,16 @@ Slice phase: vertical slice
   20. The dedupe phone key uses extension-stripped digits, so ext-bearing
       and plain forms of one number are one customer (asserted; Codex
       round 6).
-  21. `source` never rides a find-or-create that may race-merge: creates
-      are source-free and provenance is stamped post-create only on
-      truly-new rows (asserted; Codex round 6).
+  21. Neither `source` nor `tags` ride a find-or-create that may
+      race-merge: creates are stripped of both and stamped post-create on
+      truly-new rows only; a race-merged result gets the full matched-path
+      reconciliation (asserted; Codex rounds 6-7).
+  22. Retries are self-repairing: a matched row carrying provider-default
+      'manual' source (the signature of a failed post-create stamp) gets
+      calendar provenance restored (asserted; Codex round 7, R6/R8).
+  23. A claimed legacy row is re-checked after the CAS; archived or
+      source-corrected races fail closed to a fresh create (asserted;
+      Codex round 7, R4/R8).
 - Reachability proof: operator script, invoked directly. The full CLI
   entrypoint (arg parsing, id resolution, `GoogleCalendarProvider.
   list_events` pagination, cross-calendar dedupe, exit code) was exercised
@@ -210,7 +217,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 30 passed.
+- `tests/test_eom_live_calendar_import.py` — 33 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.

@@ -200,7 +200,10 @@ class StubCRM:
     async def claim_contact(self, contact_id, business_context_id):
         self.claims.append((contact_id, business_context_id))
         if self.claim_result == "row":
-            return {"id": contact_id, "business_context_id": business_context_id}
+            return {"id": contact_id, "business_context_id": business_context_id,
+                    "source": "calendar_import", "status": "inactive", "tags": []}
+        if isinstance(self.claim_result, dict):
+            return {"id": contact_id, **self.claim_result}
         return None
 
     async def create_contact(self, data):
@@ -322,24 +325,67 @@ def test_dedupe_phone_key_ignores_extensions():
     assert len(dedup_records(with_ext + without_ext)) == 1
 
 
-def test_created_contact_gets_source_only_after_true_create():
-    # Codex round 6 (R1/R8): create_contact may race-merge (its allowlist
-    # includes source), so provenance is stamped post-create only.
+def test_created_contact_gets_source_and_tags_only_after_true_create():
+    # Codex rounds 6-7 (R1/R8): create_contact may race-merge (its allowlist
+    # includes source AND tags), so both ride the post-create stamp only.
     rec = _record()
     crm, pool = StubCRM(), StubPool(rows=[None, None])
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert outcome == "created"
     assert "source" not in crm.created[0]
-    assert ("new-id", {"source": "calendar_import"}) in crm.updated
+    assert "tags" not in crm.created[0]
+    assert ("new-id", {"source": "calendar_import", "tags": ["residential"]}) in crm.updated
+
+
+def test_race_merged_create_reconciles_like_a_match():
+    # Codex round 7 (R1/R8): _was_created=False means another writer won the
+    # race; the result row gets full matched-path reconciliation.
+    rec = _record()
+    crm = StubCRM(was_created=False)
+    # create_contact stub returns status from data; emulate a race-merged
+    # intake lead by giving the stub result provenance-rich fields
+    async def race_create(data, _self=crm):
+        _self.created.append(data)
+        return {"id": "lead-id", "_was_created": False, "source": "web",
+                "status": "active", "tags": ["website", "estimate_request"]}
+    crm.create_contact = race_create
+    outcome = asyncio.run(import_one(rec, crm, StubPool(rows=[None, None])))
+    assert outcome == "updated"
+    cid, updates = crm.updated[0]
+    assert cid == "lead-id"
+    assert "source" not in updates                       # 'web' preserved
+    assert updates["tags"] == ["estimate_request", "residential", "website"]
+
+
+def test_retry_repairs_manual_source_after_failed_stamp():
+    # Codex round 7 (R6/R8): a row whose post-create stamp failed sits at
+    # provider-default 'manual'; the next run repairs its provenance.
+    rec = _record(phone="(217) 555-9999")
+    crm = StubCRM(scoped_hit={"id": "k", "tags": ["residential"], "source": "manual",
+                              "status": "active"})
+    asyncio.run(import_one(rec, crm, StubPool()))
+    assert crm.updated[0][1]["source"] == "calendar_import"
+
+
+def test_claimed_row_recheck_fails_closed_on_races():
+    # Codex round 7 (R4/R8): archived or source-corrected between SELECT and
+    # CAS -> never updated; a fresh EOM row is created instead.
+    for raced in ({"status": "archived", "source": "calendar_import", "tags": []},
+                  {"status": "active", "source": "manual", "tags": []}):
+        rec = _record()
+        crm = StubCRM(claim_result=raced)
+        pool = StubPool(rows=[None, {"id": "legacy-id", "tags": []}])
+        outcome = asyncio.run(import_one(rec, crm, pool))
+        assert outcome == "created"
+        assert all(cid != "legacy-id" for cid, _ in crm.updated)
 
 
 def test_unchanged_contact_is_not_rewritten():
     # Codex round 5 (P1): a repeat import of an unchanged calendar performs
     # zero writes on matched contacts.
     rec = _record(phone="(217) 555-9999")
-    stored = record_to_contact_data(rec)
-    stored.pop("source")
-    existing = {"id": "x", **stored}
+    stored = record_to_contact_data(rec)   # incl. source='calendar_import',
+    existing = {"id": "x", **stored}       # i.e. a previously-imported row
     crm = StubCRM(scoped_hit=existing)
     outcome = asyncio.run(import_one(rec, crm, StubPool()))
     assert outcome == "unchanged"
@@ -404,9 +450,9 @@ def test_concurrently_claimed_legacy_row_falls_through_to_create():
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert outcome == "created"
     assert crm.claims == [("legacy-id", "effingham_maids")]
-    # The only update is the post-create source stamp -- the foreign-claimed
+    # The only update is the post-create stamp -- the foreign-claimed
     # legacy row itself is never written.
-    assert crm.updated == [("new-id", {"source": "calendar_import"})]
+    assert crm.updated == [("new-id", {"source": "calendar_import", "tags": ["residential"]})]
     assert len(crm.created) == 1
 
 

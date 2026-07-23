@@ -362,6 +362,26 @@ def _diff_updates(existing: dict, data: dict) -> dict:
     return changed
 
 
+async def _update_matched(crm, existing: dict, data: dict):
+    """Reconcile an imported record onto an existing contact: tags UNION
+    (Codex round 4), provenance preserved unless the row carries the
+    provider-default 'manual' -- which is what a create whose follow-up
+    source stamp failed looks like, so retries repair it (Codex round 7,
+    R6/R8) -- and a field diff so unchanged rows get zero writes
+    (Codex round 5, P1)."""
+    contact_id = str(existing["id"])
+    payload = dict(data)
+    prior = existing.get("tags") or []
+    payload["tags"] = sorted(set(prior) | set(payload["tags"]))
+    if (existing.get("source") or "manual") != "manual":
+        payload.pop("source", None)
+    updates = _diff_updates(existing, payload)
+    if updates:
+        await crm.update_contact(contact_id, updates)
+        return contact_id, "updated"
+    return contact_id, "unchanged"
+
+
 async def _search_channel(crm, **channel):
     """Provider-order channel resolution: same-tenant page first, then the
     NULL-context claimable page (mirrors create_contact's own _resolve)."""
@@ -397,42 +417,38 @@ async def import_one(rec, crm, pool) -> str:
         # None means a concurrent claim moved it to another tenant, in which
         # case we fail closed and create a fresh EOM row.
         existing = await crm.claim_contact(str(existing["id"]), EOM_CONTEXT_ID)
+        if existing is not None and (
+            existing.get("status") == "archived"
+            or existing.get("source") != "calendar_import"
+        ):
+            # The row changed between the SELECT and the claim (archived, or
+            # source corrected away): fail closed, never update it
+            # (Codex round 7, R4/R8).
+            existing = None
 
     if existing is not None:
-        contact_id = str(existing["id"])
-        # Union tags: the imported segment must never erase provenance the
-        # CRM already recorded, e.g. the intake's ['website',
-        # 'estimate_request'] on a returning lead (Codex round 4, R1).
-        prior = existing.get("tags") or []
-        data["tags"] = sorted(set(prior) | set(data["tags"]))
-        # Never overwrite recorded origin on a matched contact: a returning
-        # website lead keeps source='web' (Codex round 5, R1). New contacts
-        # still stamp calendar_import on the create path below.
-        data.pop("source", None)
-        # Only write when something actually changed, so a repeat import of
-        # an unchanged calendar provably touches zero rows (Codex round 5,
-        # P1 idempotency).
-        updates = _diff_updates(existing, data)
-        if updates:
-            await crm.update_contact(contact_id, updates)
-            outcome = "updated"
-        else:
-            outcome = "unchanged"
+        contact_id, outcome = await _update_matched(crm, existing, data)
     else:
         create_data = dict(data)
-        # create_contact can still merge into a contact created concurrently
-        # (e.g. the real-time intake) and its merge allowlist includes
-        # `source` -- so provenance is stamped only on rows this import
-        # truly created (Codex round 6, R1/R8).
+        # create_contact can still race-merge into a contact created
+        # concurrently (e.g. the real-time intake); its merge would apply
+        # `source` and `tags` wholesale, clobbering recorded provenance --
+        # so both ride the controlled paths only (Codex rounds 6-7, R1/R8).
         create_data.pop("source", None)
+        create_data.pop("tags", None)
         result = await crm.create_contact(create_data)
-        contact_id = str(result.get("id", ""))
         if result.get("_was_created"):
+            contact_id = str(result.get("id", ""))
             outcome = "created"
             if contact_id:
-                await crm.update_contact(contact_id, {"source": "calendar_import"})
+                await crm.update_contact(
+                    contact_id,
+                    {"source": "calendar_import", "tags": data["tags"]},
+                )
         else:
-            outcome = "updated"
+            # Race-merged: reconcile exactly like any matched contact
+            # (Codex round 7, R1/R8).
+            contact_id, outcome = await _update_matched(crm, result, data)
 
     if contact_id and rec.last_event_date:
         # source_ref inside metadata is a dedupe anchor (migration 256): the
