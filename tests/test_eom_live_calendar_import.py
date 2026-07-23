@@ -558,6 +558,42 @@ def test_cross_calendar_merge_prefers_latest_channels():
         assert "1111" in merged[0].phone
 
 
+def test_email_links_records_across_calendars():
+    # Codex round 16: same email, different phones/addresses = one customer.
+    a = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL",
+                description="jane@example.com\n217-555-0000",
+                start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc))],
+        ["commercial"], "customer", True, "Commercial")
+    b = parse_events(
+        [_event("Jane Smith", "77 Elm St, Effingham, IL",
+                description="jane@example.com\n217-555-1111",
+                start=datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc))],
+        ["residential"], "customer", False, "Residential")
+    merged = dedup_records(a + b)
+    assert len(merged) == 1
+
+
+def test_merged_group_carries_latest_event_dt_and_timed_occurred_at():
+    # Codex round 16: the merge propagates latest_event_dt, and the logged
+    # interaction uses the real event time, not midnight.
+    older = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL", description="217-555-8888",
+                start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc))],
+        ["commercial"], "customer", True, "Commercial")
+    newer = parse_events(
+        [_event("Jane Smith", "77 Elm St, Effingham, IL", description="217-555-8888",
+                start=datetime(2026, 6, 1, 14, 30, tzinfo=timezone.utc))],
+        ["residential"], "customer", False, "Residential")
+    merged = dedup_records(older + newer)
+    assert merged[0].latest_event_dt == datetime(2026, 6, 1, 14, 30, tzinfo=timezone.utc)
+    crm, pool = StubCRM(), StubPool(rows=[None, None])
+    rec = merged[0]
+    rec.phone = None
+    asyncio.run(import_one(rec, crm, pool))
+    assert crm.interactions[0]["occurred_at"].endswith("14:30:00+00:00")
+
+
 def test_merged_group_prefers_latest_address_and_carries_all():
     # Codex round 9 (P1): the surviving record uses the latest-dated
     # address, and every group address rides along for fallback lookup.

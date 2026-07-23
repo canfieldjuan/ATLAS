@@ -265,6 +265,8 @@ def dedup_records(records):
         pk = digits[-10:] if len(digits) >= 10 else None
         if pk:
             keys.append(("phone", pk))
+        if rec.email:
+            keys.append(("email", rec.email.lower()))
         keys.append(("addr", rec.address.lower()))
         for k in keys:
             if k in key_owner:
@@ -328,6 +330,7 @@ def dedup_records(records):
                  for r in group if _dt(r) is not None]
         if dated:
             latest = max(d for d, _, _, _ in dated)
+            base.latest_event_dt = latest
             base.last_event_date = max(ld for _, _, _, ld in dated)
             # full-timestamp recency decides cross-calendar too (round 13)
             base.cancelled = next(c for d, c, _, _ in dated if d == latest)
@@ -631,9 +634,11 @@ async def import_one(rec, crm, pool) -> str:
                 f"Most recent: {rec.last_event_date.isoformat()}. "
                 f"Source: {rec.source_calendar}"
             ),
-            occurred_at=datetime.combine(
-                rec.last_event_date, datetime.min.time()
-            ).replace(tzinfo=timezone.utc).isoformat(),
+            occurred_at=(
+                getattr(rec, "latest_event_dt", None)
+                or datetime.combine(rec.last_event_date, datetime.min.time())
+                .replace(tzinfo=timezone.utc)
+            ).isoformat(),
             # Date-scoped anchor: re-runs with the same latest booking dedupe,
             # while each NEW latest booking advances the timeline instead of
             # colliding with the old anchored row forever (Codex round 11,
