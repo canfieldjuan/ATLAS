@@ -93,7 +93,18 @@ Slice phase: vertical slice
   11. Calendar ids resolve through typed `ATLAS_TOOLS_EOM_CALENDAR_*`
       settings (which read .env/.env.local) with process-env override
       (asserted; Codex round 2, R11).
-  12. A NULL-context legacy address-only row is claimed via the provider's
+  12. Cancellation recency holds ACROSS calendars: the inherited
+      cross-calendar merger's any-active-clears is corrected by a
+      recency map keyed on phone/address, asserted in both input orders
+      plus reactivation (Codex round 4, R1).
+  13. Channel resolution never miss-creates: tenant phone -> email ->
+      address net, in that order, BEFORE any create — a previously
+      address-only row that gains a phone is enriched, not duplicated
+      (asserted; Codex round 4, R8).
+  14. Imported segment tags UNION with existing tags; recorded provenance
+      like the intake's website/estimate_request is never erased
+      (asserted; Codex round 4, R1).
+  15. A NULL-context legacy address-only row is claimed via the provider's
       CAS (`claim_contact`) and updated, never duplicated; a concurrent
       foreign claim fails closed to a fresh EOM row; the legacy page carries
       the same archived guard AND is restricted to
@@ -133,7 +144,6 @@ Slice phase: vertical slice
 - `atlas_brain/config.py`
 - `plans/PR-EOM-Live-Calendar-Import.md`
 - `scripts/import_eom_customers_live.py`
-- `tests/maturity_sweep/baseline_atlas_brain_tools.json`
 - `tests/test_eom_live_calendar_import.py`
 
 ## Mechanism
@@ -184,11 +194,13 @@ stable `source_ref`.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.
-- Maturity baseline note: touching `atlas_brain/config.py` woke the b2d
-  tools-lane ratchet, which flagged pre-existing drift in
-  `atlas_brain/tools/calendar.py` (12 -> 15) — a file this PR does not
-  touch (reproduced locally on the branch base). Baseline updated via the
-  sanctioned `--update-baseline` path to record that inherited state.
+- Maturity ratchet note: touching `atlas_brain/config.py` wakes the b2d
+  tools-lane ratchet (advisory, not merge-required), which flags
+  pre-existing drift in `atlas_brain/tools/calendar.py` (12 -> 15) — a file
+  this PR does not touch (reproduced locally on the branch base). Per
+  review, no baseline change ships in this PR; the drift is tracked in
+  #2159 for its own tools-lane slice, and the advisory check stays red
+  here by design.
 - `tests/test_tenant_stamping.py` — passed (adjacent, 8).
 - `tests/test_leads_intake.py` — passed (adjacent, 38).
 - `python -m py_compile` on both new Python files — clean.

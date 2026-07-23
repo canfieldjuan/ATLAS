@@ -174,14 +174,26 @@ def test_contact_data_marks_cancelled_records_inactive():
 # ---------------------------------------------------------------------------
 
 class StubCRM:
-    def __init__(self, was_created=True, existing_status="active", claim_result="row"):
+    def __init__(self, was_created=True, claim_result="row",
+                 scoped_hit=None, legacy_hit=None):
         self.was_created = was_created
-        self.existing_status = existing_status
         self.claim_result = claim_result   # "row" -> claim succeeds; None -> foreign claim
+        self.scoped_hit = scoped_hit       # returned for tenant-scoped channel search
+        self.legacy_hit = legacy_hit       # returned for NULL-context channel search
         self.created = []
         self.updated = []
         self.claims = []
+        self.searches = []
         self.interactions = []
+
+    async def search_contacts(self, business_context_id=None,
+                              business_context_id_is_null=False, **channel):
+        self.searches.append((business_context_id, business_context_id_is_null, channel))
+        if business_context_id and self.scoped_hit:
+            return [self.scoped_hit]
+        if business_context_id_is_null and self.legacy_hit:
+            return [self.legacy_hit]
+        return []
 
     async def claim_contact(self, contact_id, business_context_id):
         self.claims.append((contact_id, business_context_id))
@@ -227,7 +239,7 @@ def _record(phone=None, email=None):
 def test_address_only_record_updates_existing_row():
     rec = _record()
     assert not rec.phone and not rec.email
-    crm, pool = StubCRM(), StubPool(rows=[{"id": "existing-id"}])
+    crm, pool = StubCRM(), StubPool(rows=[{"id": "existing-id", "tags": None}])
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert outcome == "updated"
     assert crm.created == []
@@ -244,12 +256,40 @@ def test_address_only_record_creates_when_unmatched():
     assert crm.created[0]["business_context_id"] == "effingham_maids"
 
 
+def test_cross_calendar_dedupe_preserves_cancellation_recency():
+    # Codex round 4 (R1): the latest-dated record decides `cancelled` across
+    # calendars too -- the inherited merger's any-active-clears is corrected.
+    from import_eom_customers_live import dedup_records
+    older_active = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL",
+                description="217-555-8888",
+                start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc))],
+        ["one_time"], "customer", False, "One-Time")
+    newer_cancelled = parse_events(
+        [_event("Jane Smith - CANCELLED", "12 Oak St, Effingham, IL",
+                description="217-555-8888",
+                start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))],
+        ["residential"], "customer", False, "Residential")
+    for records in (older_active + newer_cancelled, newer_cancelled + older_active):
+        merged = dedup_records(list(records))
+        assert len(merged) == 1
+        assert merged[0].cancelled is True
+    # And the reverse: a newer active booking reactivates across calendars.
+    newer_active = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL",
+                description="217-555-8888",
+                start=datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc))],
+        ["residential"], "customer", False, "Residential")
+    merged = dedup_records(list(newer_cancelled + newer_active))
+    assert merged[0].cancelled is False
+
+
 def test_legacy_null_context_row_is_claimed_not_duplicated():
     # Codex round 2 (R4/R8): a pre-#2155 NULL-context address-only contact is
     # claimed through the provider CAS and updated, never duplicated.
     rec = _record()
     crm = StubCRM(claim_result="row")
-    pool = StubPool(rows=[None, {"id": "legacy-id"}])
+    pool = StubPool(rows=[None, {"id": "legacy-id", "tags": []}])
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert outcome == "updated"
     assert crm.claims == [("legacy-id", "effingham_maids")]
@@ -262,7 +302,7 @@ def test_concurrently_claimed_legacy_row_falls_through_to_create():
     # create a fresh EOM row instead of overwriting the foreign claim.
     rec = _record()
     crm = StubCRM(claim_result=None)
-    pool = StubPool(rows=[None, {"id": "legacy-id"}])
+    pool = StubPool(rows=[None, {"id": "legacy-id", "tags": []}])
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert outcome == "created"
     assert crm.claims == [("legacy-id", "effingham_maids")]
@@ -287,31 +327,44 @@ def test_settings_provide_ids_and_process_env_wins():
     }
 
 
-def test_phone_record_uses_provider_dedupe_not_address_lookup():
+def test_phone_match_updates_without_address_lookup_and_unions_tags():
+    # Codex round 4 (R1): the imported segment tag joins, never replaces,
+    # tags the CRM already recorded (e.g. website intake provenance).
     rec = _record(phone="(217) 555-9999")
     assert rec.phone
-    crm, pool = StubCRM(was_created=False), StubPool(row={"id": "should-not-be-used"})
+    crm = StubCRM(scoped_hit={"id": "known-id", "tags": ["website", "estimate_request"]})
+    pool = StubPool(row={"id": "should-not-be-used"})
     outcome = asyncio.run(import_one(rec, crm, pool))
-    assert outcome == "updated"          # _was_created False -> merged into existing
-    assert pool.queries == []            # address net not consulted
-    assert len(crm.created) == 1         # create_contact called (dedupes internally)
+    assert outcome == "updated"
+    assert pool.queries == []            # address net not consulted on a channel hit
+    assert crm.created == []
+    cid, data = crm.updated[0]
+    assert cid == "known-id"
+    assert data["tags"] == ["estimate_request", "residential", "website"]
+    assert data["status"] == "active"    # calendar-computed status persisted
 
 
-def test_merged_contact_gets_calendar_computed_status():
-    # Codex R1/R8: the provider merge allowlist excludes `status`, so the
-    # import must persist it explicitly when the statuses differ.
+def test_channel_miss_falls_back_to_address_before_creating():
+    # Codex round 4 (R8): a calendar edit that adds a phone to a previously
+    # address-only customer must enrich the existing row, not duplicate it.
     rec = _record(phone="(217) 555-9999")
-    crm = StubCRM(was_created=False, existing_status="inactive")
+    crm = StubCRM()                                    # both channel pages miss
+    pool = StubPool(rows=[{"id": "addr-row", "tags": []}])
+    outcome = asyncio.run(import_one(rec, crm, pool))
+    assert outcome == "updated"
+    assert crm.created == []
+    assert crm.updated[0][0] == "addr-row"
+    assert len(pool.queries) == 1        # tenant address page hit
+
+
+def test_matched_contact_gets_calendar_computed_status():
+    # Codex R1/R8: the provider merge allowlist excludes `status`; the update
+    # path always carries the calendar-computed one.
+    rec = _record(phone="(217) 555-9999")
+    crm = StubCRM(scoped_hit={"id": "known-id", "tags": [], "status": "inactive"})
     outcome = asyncio.run(import_one(rec, crm, StubPool()))
     assert outcome == "updated"
-    assert ("new-id", {"status": "active"}) in crm.updated
-
-
-def test_merged_contact_with_matching_status_gets_no_extra_write():
-    rec = _record(phone="(217) 555-9999")
-    crm = StubCRM(was_created=False, existing_status="active")
-    asyncio.run(import_one(rec, crm, StubPool()))
-    assert crm.updated == []
+    assert crm.updated[0][1]["status"] == "active"
 
 
 def test_address_resolver_excludes_archived_rows():

@@ -190,6 +190,32 @@ def parse_events(events, tags, contact_type, is_commercial, label):
     return list(by_address.values())
 
 
+def dedup_records(records):
+    """Cross-calendar dedupe via the inherited merger, then restore
+    cancellation recency: the ICS merge clears `cancelled` whenever any
+    merged record is active, ignoring dates (Codex round 4, R1). The
+    latest-dated contributing record decides, matching the per-calendar
+    semantics."""
+    latest = {}
+    for rec in records:
+        if not rec.last_event_date:
+            continue
+        for key in filter(None, (ics._phone_key(rec.phone), rec.address.lower())):
+            cur = latest.get(key)
+            if cur is None or rec.last_event_date > cur[0]:
+                latest[key] = (rec.last_event_date, rec.cancelled)
+    merged = ics.dedup_across_calendars(records)
+    for rec in merged:
+        best = None
+        for key in filter(None, (ics._phone_key(rec.phone), rec.address.lower())):
+            cur = latest.get(key)
+            if cur and (best is None or cur[0] > best[0]):
+                best = cur
+        if best is not None:
+            rec.cancelled = best[1]
+    return merged
+
+
 def record_to_contact_data(rec) -> dict:
     """Contact payload for one record. Tenant stamp and source are
     non-negotiable here; tests assert both."""
@@ -230,7 +256,7 @@ async def resolve_by_address(pool, address: str):
     (Codex round 2, R4/R8)."""
     row = await pool.fetchrow(
         """
-        SELECT id FROM contacts
+        SELECT id, tags FROM contacts
         WHERE business_context_id = $1
           AND status != 'archived'
           AND address IS NOT NULL AND LOWER(address) = LOWER($2)
@@ -244,7 +270,7 @@ async def resolve_by_address(pool, address: str):
         return row, False
     legacy = await pool.fetchrow(
         """
-        SELECT id FROM contacts
+        SELECT id, tags FROM contacts
         WHERE business_context_id IS NULL
           AND status != 'archived'
           AND source = 'calendar_import'
@@ -257,37 +283,55 @@ async def resolve_by_address(pool, address: str):
     return legacy, legacy is not None
 
 
+async def _search_channel(crm, **channel):
+    """Provider-order channel resolution: same-tenant page first, then the
+    NULL-context claimable page (mirrors create_contact's own _resolve)."""
+    scoped = await crm.search_contacts(business_context_id=EOM_CONTEXT_ID, **channel)
+    if scoped:
+        return scoped[0], False
+    legacy = await crm.search_contacts(business_context_id_is_null=True, **channel)
+    return (legacy[0], True) if legacy else (None, False)
+
+
 async def import_one(rec, crm, pool) -> str:
-    """Import a single record; returns 'created' or 'updated'."""
+    """Import a single record; returns 'created' or 'updated'.
+
+    Resolution order: tenant-scoped phone, then email (provider priority),
+    then the address net -- BEFORE any create. Without the address step a
+    previously address-only row would be duplicated the moment a calendar
+    edit adds a phone/email, because create_contact only dedupes on those
+    two channels (Codex round 4, R8)."""
     data = record_to_contact_data(rec)
 
-    if rec.phone or rec.email:
+    existing, needs_claim = None, False
+    if rec.phone:
+        digits = "".join(c for c in rec.phone if c.isdigit())
+        if len(digits) >= 10:
+            existing, needs_claim = await _search_channel(crm, phone=digits)
+    if existing is None and rec.email:
+        existing, needs_claim = await _search_channel(crm, email=rec.email)
+    if existing is None:
+        existing, needs_claim = await resolve_by_address(pool, rec.address)
+
+    if existing is not None and needs_claim:
+        # Provider CAS: stamps the tenant only while the row is still NULL;
+        # None means a concurrent claim moved it to another tenant, in which
+        # case we fail closed and create a fresh EOM row.
+        existing = await crm.claim_contact(str(existing["id"]), EOM_CONTEXT_ID)
+
+    if existing is not None:
+        contact_id = str(existing["id"])
+        # Union tags: the imported segment must never erase provenance the
+        # CRM already recorded, e.g. the intake's ['website',
+        # 'estimate_request'] on a returning lead (Codex round 4, R1).
+        prior = existing.get("tags") or []
+        data["tags"] = sorted(set(prior) | set(data["tags"]))
+        await crm.update_contact(contact_id, data)
+        outcome = "updated"
+    else:
         result = await crm.create_contact(data)
         contact_id = str(result.get("id", ""))
-        if result.get("_was_created"):
-            outcome = "created"
-        else:
-            outcome = "updated"
-            # The provider's merge allowlist excludes `status`, so a matched
-            # contact would silently keep its old status (Codex R1/R8):
-            # persist the calendar-computed one explicitly.
-            if contact_id and result.get("status") != data["status"]:
-                await crm.update_contact(contact_id, {"status": data["status"]})
-    else:
-        row, needs_claim = await resolve_by_address(pool, rec.address)
-        if row and needs_claim:
-            # Provider CAS: stamps the tenant only while the row is still
-            # NULL; None means a concurrent claim moved it to another tenant,
-            # in which case we fail closed and create a fresh EOM row.
-            row = await crm.claim_contact(str(row["id"]), EOM_CONTEXT_ID)
-        if row:
-            contact_id = str(row["id"])
-            await crm.update_contact(contact_id, data)
-            outcome = "updated"
-        else:
-            result = await crm.create_contact(data)
-            contact_id = str(result.get("id", ""))
-            outcome = "created"
+        outcome = "created"
 
     if contact_id and rec.last_event_date:
         # source_ref inside metadata is a dedupe anchor (migration 256): the
@@ -394,7 +438,7 @@ async def main():
         await provider.aclose()
 
     print(f"Total before cross-calendar dedup: {len(all_records)}")
-    records = ics.dedup_across_calendars(all_records)
+    records = dedup_records(all_records)
     print(f"Total after dedup:                 {len(records)}")
 
     if not args.dry_run:
