@@ -80,6 +80,10 @@ Slice phase: vertical slice
       the CAS (the id link is the identity); a link to a FOREIGN tenant is
       ignored (reported) and resolution falls to the ladder (both
       asserted; Codex A2 round 1, BLOCKER).
+  13. Portal-id and name validation precede ANY write; nameless active
+      records are run errors (gating demotion), and the already-stamped
+      fallback carries the same archive/tenant guards as the stamp itself
+      (all asserted; Codex A2 round 3).
   12. An empty (or all-inactive) portal roster fails closed -- it would
       demote the entire base (asserted); inactive customers are belt-
       filtered client-side; portal emails normalize to provider casing
@@ -155,7 +159,7 @@ run's matched ids.
 
 ## Verification
 
-- `tests/test_sync_eom_portal_customers.py` — 22 passed.
+- `tests/test_sync_eom_portal_customers.py` — 23 passed.
 - Maturity note: the scripts-lane ratchet baseline gains ONLY this PR's
   new script (deliberate per-record operator patterns recorded); the
   pre-existing unbaselined `import_eom_customers_live.py` (main's code,

@@ -200,8 +200,14 @@ async def stamp_portal_id(pool, contact_id: str, portal_id: int):
 
 async def portal_id_already_stamped(pool, contact_id: str, portal_id: int) -> bool:
     row = await pool.fetchrow(
-        "SELECT metadata->>'portal_customer_id' AS pid FROM contacts WHERE id = $1",
+        """
+        SELECT metadata->>'portal_customer_id' AS pid FROM contacts
+        WHERE id = $1
+          AND status != 'archived'
+          AND business_context_id = $2
+        """,
         contact_id,
+        EOM_CONTEXT_ID,
     )
     return bool(row) and row.get("pid") == str(portal_id)
 
@@ -210,7 +216,19 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
     """Sync a single portal customer; returns (outcome, contact_id)."""
     data = customer_to_contact_data(customer)
     if not data["full_name"]:
-        return "skipped", None
+        # A nameless ACTIVE portal record is unprocessable: it may shadow a
+        # real matched customer, and a match set missing it must not drive
+        # demotions -- error (which also gates demotion) rather than skip
+        # (Codex A2 round 3).
+        print("    ERROR: active portal customer with blank name; run failed closed")
+        return "errors", None
+    portal_id = customer.get("id")
+    if not isinstance(portal_id, int):
+        # Validate BEFORE any write: --apply must not activate a contact and
+        # only then discover it cannot stamp the predicate (Codex A2 r3).
+        print(f"    ERROR: portal customer {customer.get('name')!r} has no "
+              "usable id; nothing written")
+        return "errors", None
 
     existing, needs_claim, identity = await resolve_contact(customer, data, crm, pool)
     if not apply:
@@ -253,13 +271,6 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
             if outcome == "skipped":
                 return "skipped", contact_id
 
-    portal_id = customer.get("id")
-    if not isinstance(portal_id, int):
-        # A contact synced without the watcher predicate is a failure, not
-        # a silent skip (Codex A2 round 2).
-        print(f"    ERROR: portal customer {customer.get('name')!r} has no "
-              "usable id; predicate not stamped")
-        return "errors", contact_id
     if contact_id:
         stamped = await stamp_portal_id(pool, contact_id, portal_id)
         if stamped is None and not await portal_id_already_stamped(

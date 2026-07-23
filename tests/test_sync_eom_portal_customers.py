@@ -207,11 +207,29 @@ def test_failed_portal_id_stamp_is_an_error():
     assert outcome == "errors"
 
 
-def test_nameless_portal_customer_is_skipped():
+def test_nameless_portal_customer_is_an_error_not_a_skip():
+    # Codex A2 round 3: unprocessable records gate demotion via the error
+    # counter instead of silently shrinking the match set.
     crm, pool = StubCRM(), SyncPool()
     outcome, cid = asyncio.run(sync_one(_customer(name=""), crm, pool, apply=True))
-    assert outcome == "skipped"
+    assert outcome == "errors"
     assert crm.created == [] and pool.updates == []
+
+
+def test_missing_portal_id_errors_before_any_write():
+    # Codex A2 round 3: validation precedes writes entirely.
+    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "active"})
+    pool = SyncPool()
+    outcome, cid = asyncio.run(sync_one(_customer(id=None), crm, pool, apply=True))
+    assert outcome == "errors"
+    assert pool.updates == [] and crm.created == []
+
+
+def test_already_stamped_fallback_is_guarded():
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    body = src.split("AS pid FROM contacts")[1].split('"""')[0]
+    assert "status != 'archived'" in body
+    assert "business_context_id = $2" in body
 
 
 def test_empty_roster_fails_closed():
@@ -250,13 +268,6 @@ def test_inactive_portal_customers_are_filtered():
 def test_portal_email_is_normalized():
     data = customer_to_contact_data(_customer(primaryEmail=" Niall@Firefly.COM "))
     assert data["email"] == "niall@firefly.com"
-
-
-def test_missing_portal_id_is_an_error():
-    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "active"})
-    outcome, cid = asyncio.run(
-        sync_one(_customer(id=None), crm, SyncPool(), apply=True))
-    assert outcome == "errors"
 
 
 def test_already_stamped_id_is_not_an_error_or_rewrite():
