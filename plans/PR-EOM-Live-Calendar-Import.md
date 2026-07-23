@@ -130,9 +130,10 @@ Slice phase: vertical slice
       race-merge: creates are stripped of both and stamped post-create on
       truly-new rows only; a race-merged result gets the full matched-path
       reconciliation (asserted; Codex rounds 6-7).
-  22. Retries are self-repairing: a matched row carrying provider-default
-      'manual' source (the signature of a failed post-create stamp) gets
-      calendar provenance restored (asserted; Codex round 7, R6/R8).
+  22. (superseded by 26, round 9: matched rows never carry `source` --
+      schema-default 'manual' rows are legitimate provenance; the
+      failed-post-create-stamp window is an accepted provenance-label
+      trade-off reported as the run error.)
   23. (superseded by 15's in-CAS guards, round 8)
   24. The address-net SELECTs return `source`, so an address-only matched
       web contact keeps its provenance instead of being treated as
@@ -140,6 +141,14 @@ Slice phase: vertical slice
   25. Uppercase phone extensions (X42 / EXT 42) are normalized before
       extraction so the base number is never corrupted (asserted against
       the real extractor behavior; Codex round 8).
+  26. Matched updates NEVER carry `source` (asserted incl. a 'manual' row),
+      and every matched/stamp write goes through an UPDATE whose archived
+      guard lives inside the statement -- a contact archived mid-run is
+      skipped, never resurrected (asserted; Codex round 9).
+  27. A merged group's surviving address is the latest-dated one and ALL
+      group addresses ride into the fallback lookup, so an existing
+      address-only contact at any of them is enriched, never duplicated
+      (asserted; Codex round 9, P1).
 - Reachability proof: operator script, invoked directly. The full CLI
   entrypoint (arg parsing, id resolution, `GoogleCalendarProvider.
   list_events` pagination, cross-calendar dedupe, exit code) was exercised
@@ -222,7 +231,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 36 passed.
+- `tests/test_eom_live_calendar_import.py` — 39 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.

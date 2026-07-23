@@ -280,11 +280,20 @@ def dedup_records(records):
             if _TYPE.get(rec.contact_type, 99) < _TYPE.get(base.contact_type, 99):
                 base.contact_type = rec.contact_type
             base.event_count += rec.event_count
-        dated = [(r.last_event_date, r.cancelled) for r in group if r.last_event_date]
+        base.all_addresses = []
+        for r in group:
+            if r.address.lower() not in [a.lower() for a in base.all_addresses]:
+                base.all_addresses.append(r.address)
+        dated = [(r.last_event_date, r.cancelled, r.address) for r in group if r.last_event_date]
         if dated:
-            latest = max(d for d, _ in dated)
+            latest = max(d for d, _, _ in dated)
             base.last_event_date = latest
-            base.cancelled = any(c for d, c in dated if d == latest)
+            base.cancelled = any(c for d, c, _ in dated if d == latest)
+            # The customer's CURRENT address is the latest-dated one; keep
+            # every group address for fallback lookup so an existing
+            # address-only contact at any of them is enriched, never
+            # duplicated (Codex round 9, P1).
+            base.address = next(a for d, c, a in dated if d == latest)
         merged.append(base)
     return merged
 
@@ -395,22 +404,52 @@ async def claim_legacy_row(pool, contact_id: str, require_import_source: bool):
     )
 
 
-async def _update_matched(crm, existing: dict, data: dict):
+_GUARDED_COLUMNS = (
+    "full_name", "address", "contact_type", "business_context_id",
+    "tags", "status", "phone", "email", "notes", "source",
+)
+
+
+async def _guarded_update(pool, contact_id: str, updates: dict):
+    """UPDATE with the archived guard INSIDE the statement: an operator
+    archiving the contact between resolution and this write must not be
+    resurrected by the import (Codex round 9, R4/R8). Returns the row or
+    None when the guard rejected the write."""
+    cols = [k for k in updates if k in _GUARDED_COLUMNS]
+    sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(cols))
+    vals = [updates[k].lower() if k == "email" and updates[k] else updates[k] for k in cols]
+    return await pool.fetchrow(
+        f"""
+        UPDATE contacts
+           SET {sets}, updated_at = NOW()
+         WHERE id = $1
+           AND status != 'archived'
+        RETURNING id
+        """,
+        contact_id,
+        *vals,
+    )
+
+
+async def _update_matched(pool, existing: dict, data: dict):
     """Reconcile an imported record onto an existing contact: tags UNION
-    (Codex round 4), provenance preserved unless the row carries the
-    provider-default 'manual' -- which is what a create whose follow-up
-    source stamp failed looks like, so retries repair it (Codex round 7,
-    R6/R8) -- and a field diff so unchanged rows get zero writes
-    (Codex round 5, P1)."""
+    (Codex round 4), a field diff so unchanged rows get zero writes
+    (Codex round 5, P1), NEVER `source` -- schema-default 'manual' rows are
+    legitimate recorded provenance, so only the create path stamps
+    calendar_import; the failed-post-create-stamp window is an accepted
+    provenance-label trade-off, reported as the run error (Codex rounds 7
+    and 9) -- all through the archive-guarded UPDATE."""
     contact_id = str(existing["id"])
     payload = dict(data)
     prior = existing.get("tags") or []
     payload["tags"] = sorted(set(prior) | set(payload["tags"]))
-    if (existing.get("source") or "manual") != "manual":
-        payload.pop("source", None)
+    payload.pop("source", None)
     updates = _diff_updates(existing, payload)
     if updates:
-        await crm.update_contact(contact_id, updates)
+        row = await _guarded_update(pool, contact_id, updates)
+        if row is None:
+            print(f"    note: contact {contact_id} archived mid-run; write skipped")
+            return contact_id, "unchanged"
         return contact_id, "updated"
     return contact_id, "unchanged"
 
@@ -444,7 +483,10 @@ async def import_one(rec, crm, pool) -> str:
     if existing is None and rec.email:
         existing, needs_claim = await _search_channel(crm, email=rec.email)
     if existing is None:
-        existing, needs_claim = await resolve_by_address(pool, rec.address)
+        for addr in getattr(rec, "all_addresses", None) or [rec.address]:
+            existing, needs_claim = await resolve_by_address(pool, addr)
+            if existing is not None:
+                break
         claim_by_address = needs_claim
 
     if existing is not None and needs_claim:
@@ -460,7 +502,7 @@ async def import_one(rec, crm, pool) -> str:
         )
 
     if existing is not None:
-        contact_id, outcome = await _update_matched(crm, existing, data)
+        contact_id, outcome = await _update_matched(pool, existing, data)
     else:
         create_data = dict(data)
         # create_contact can still race-merge into a contact created
@@ -474,14 +516,14 @@ async def import_one(rec, crm, pool) -> str:
             contact_id = str(result.get("id", ""))
             outcome = "created"
             if contact_id:
-                await crm.update_contact(
-                    contact_id,
+                await _guarded_update(
+                    pool, contact_id,
                     {"source": "calendar_import", "tags": data["tags"]},
                 )
         else:
             # Race-merged: reconcile exactly like any matched contact
             # (Codex round 7, R1/R8).
-            contact_id, outcome = await _update_matched(crm, result, data)
+            contact_id, outcome = await _update_matched(pool, result, data)
 
     if contact_id and rec.last_event_date:
         # source_ref inside metadata is a dedupe anchor (migration 256): the
