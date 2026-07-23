@@ -68,6 +68,8 @@ def _provider_mock(monkeypatch, **overrides):
     provider.log_interaction = AsyncMock(return_value={"id": "i-1"})
     provider.get_interactions = AsyncMock(return_value=[])
     provider.get_contact_appointments = AsyncMock(return_value=[])
+    provider.claim_contact = AsyncMock(
+        return_value={"id": UUID, "business_context_id": EOM})
     crm_srv.set_provider_override(lambda: provider)
     return provider
 
@@ -252,34 +254,64 @@ async def test_update_contact_explicit_override_reaches_foreign_tenant(default_c
 @pytest.mark.asyncio
 async def test_update_claims_null_contact_under_default(default_ctx, monkeypatch):
     """Claim-on-write: updating a NULL-context legacy row from a scoped
-    session stamps the default tenant."""
+    session claims it for the default tenant via compare-and-set."""
     provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
     out = json.loads(await crm_srv.update_contact(UUID, phone="217-555-0000"))
     assert out["success"] is True
+    provider.claim_contact.assert_awaited_once_with(UUID, EOM)
     data = provider.update_contact.await_args.args[1]
-    assert data["business_context_id"] == EOM
+    assert "business_context_id" not in data
 
 
 @pytest.mark.asyncio
-async def test_update_same_tenant_row_not_restamped(default_ctx, monkeypatch):
+async def test_update_fails_closed_when_claim_lost(default_ctx, monkeypatch):
+    """A concurrent claim by another tenant between guard and write must
+    abort the mutation, not overwrite the other tenant's claim."""
+    provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
+    provider.claim_contact = AsyncMock(return_value=None)
+    out = json.loads(await crm_srv.update_contact(UUID, phone="217-555-0000"))
+    assert out["success"] is False
+    provider.update_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_same_tenant_row_not_reclaimed(default_ctx, monkeypatch):
     provider = _provider_mock(monkeypatch, get=SAME)
     await crm_srv.update_contact(UUID, phone="217-555-0000")
-    data = provider.update_contact.await_args.args[1]
-    assert "business_context_id" not in data
+    provider.claim_contact.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_update_without_default_never_stamps(no_default, monkeypatch):
+async def test_update_without_default_never_claims(no_default, monkeypatch):
     provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
     await crm_srv.update_contact(UUID, phone="217-555-0000")
-    data = provider.update_contact.await_args.args[1]
-    assert "business_context_id" not in data
+    provider.claim_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_claims_null_contact_under_default(default_ctx, monkeypatch):
+    """Archiving is a legacy mutation: the row is claimed first so one
+    tenant cannot hide shared legacy data from the other's default view."""
+    provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
+    out = json.loads(await crm_srv.delete_contact(UUID))
+    assert out["success"] is True
+    provider.claim_contact.assert_awaited_once_with(UUID, EOM)
+
+
+@pytest.mark.asyncio
+async def test_delete_fails_closed_when_claim_lost(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
+    provider.claim_contact = AsyncMock(return_value=None)
+    out = json.loads(await crm_srv.delete_contact(UUID))
+    assert out["success"] is False
+    provider.delete_contact.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_contact_appointments_filtered_to_scope(default_ctx, monkeypatch):
     """A NULL-context legacy contact must not expose foreign-tenant
-    appointment history through the linked-appointments tool."""
+    appointment history through the linked-appointments tool; the scope is
+    also pushed into the provider query (before its LIMIT)."""
     provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
     provider.get_contact_appointments = AsyncMock(return_value=[
         {"id": "a1", "business_context_id": EOM},
@@ -288,6 +320,33 @@ async def test_contact_appointments_filtered_to_scope(default_ctx, monkeypatch):
     out = json.loads(await crm_srv.get_contact_appointments(UUID))
     assert [a["id"] for a in out["appointments"]] == ["a1"]
     assert out["count"] == 1
+    call = provider.get_contact_appointments.await_args
+    assert call.kwargs["business_context_id"] == EOM
+
+
+def test_provider_claim_contact_is_compare_and_set():
+    """The claim must be conditional in SQL, not a blind stamp."""
+    src = (REPO / "atlas_brain/services/crm_provider.py").read_text(encoding="utf-8")
+    block = src.split("async def claim_contact", 1)[1][:900]
+    assert "business_context_id IS NULL OR business_context_id = $2" in block
+
+
+def test_call_repo_scopes_before_limit():
+    src = (REPO / "atlas_brain/storage/repositories/call_transcript.py").read_text(encoding="utf-8")
+    block = src.split("async def get_by_contact_id", 1)[1][:1200]
+    assert "business_context_id = $2 OR business_context_id IS NULL" in block
+
+
+def test_context_service_threads_scope_to_child_queries():
+    src = (REPO / "atlas_brain/services/customer_context.py").read_text(encoding="utf-8")
+    gather = src.split("async def _gather", 1)[1]
+    assert gather.count("business_context_id=business_context_id") >= 2
+
+
+def test_context_result_omits_emails_under_scope():
+    src = (REPO / "atlas_brain/mcp/crm_server.py").read_text(encoding="utf-8")
+    assert '"sent_emails": [] if effective else ctx.sent_emails' in src
+    assert "emails_omitted_under_scope" in src
 
 
 # ---------------------------------------------------------------------------
@@ -358,23 +417,31 @@ async def test_log_interaction_claims_null_contact_under_default(default_ctx, mo
     provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
     out = json.loads(await crm_srv.log_interaction(UUID, interaction_type="note", summary="x"))
     assert out["success"] is True
-    claim = provider.update_contact.await_args.args
-    assert claim[1] == {"business_context_id": EOM}
+    provider.claim_contact.assert_awaited_once_with(UUID, EOM)
     provider.log_interaction.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_log_interaction_fails_closed_when_claim_lost(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
+    provider.claim_contact = AsyncMock(return_value=None)
+    out = json.loads(await crm_srv.log_interaction(UUID, interaction_type="note", summary="x"))
+    assert out["success"] is False
+    provider.log_interaction.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_log_interaction_same_tenant_no_claim(default_ctx, monkeypatch):
     provider = _provider_mock(monkeypatch, get=SAME)
     await crm_srv.log_interaction(UUID, interaction_type="note", summary="x")
-    provider.update_contact.assert_not_awaited()
+    provider.claim_contact.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_log_interaction_without_default_no_claim(no_default, monkeypatch):
     provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
     await crm_srv.log_interaction(UUID, interaction_type="note", summary="x")
-    provider.update_contact.assert_not_awaited()
+    provider.claim_contact.assert_not_awaited()
 
 
 @pytest.mark.asyncio

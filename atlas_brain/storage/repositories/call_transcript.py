@@ -267,23 +267,42 @@ class CallTranscriptRepository:
 
     async def get_by_contact_id(
         self, contact_id: str, limit: int = 20,
+        business_context_id: Optional[str] = None,
     ) -> list[dict]:
-        """Get call transcripts linked to a CRM contact."""
+        """Get call transcripts linked to a CRM contact.
+
+        With ``business_context_id``, rows are limited to that tenant plus
+        NULL-context legacy rows (scoped before LIMIT).
+        """
         pool = get_db_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get by contact id")
 
         try:
-            rows = await pool.fetch(
-                """
-                SELECT * FROM call_transcripts
-                WHERE contact_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-                """,
-                contact_id,
-                limit,
-            )
+            if business_context_id:
+                rows = await pool.fetch(
+                    """
+                    SELECT * FROM call_transcripts
+                    WHERE contact_id = $1
+                      AND (business_context_id = $2 OR business_context_id IS NULL)
+                    ORDER BY created_at DESC
+                    LIMIT $3
+                    """,
+                    contact_id,
+                    business_context_id,
+                    limit,
+                )
+            else:
+                rows = await pool.fetch(
+                    """
+                    SELECT * FROM call_transcripts
+                    WHERE contact_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                    """,
+                    contact_id,
+                    limit,
+                )
             return [self._row_to_dict(row) for row in rows]
         except DatabaseUnavailableError:
             raise

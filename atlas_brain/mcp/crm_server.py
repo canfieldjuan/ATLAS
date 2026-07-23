@@ -172,6 +172,25 @@ def _appointments_in_scope(
     return [a for a in appointments if a.get("business_context_id") == effective]
 
 
+async def _claim_if_legacy(
+    contact_id: str, existing: "dict | None", business_context_id: "str | None"
+) -> bool:
+    """Claim-on-write of a NULL-context legacy row under the default.
+
+    Compare-and-set in SQL (``claim_contact``): returns False when a
+    concurrent claim moved the row to another tenant between the guard read
+    and this write, so callers fail closed instead of overwriting the other
+    tenant's claim.
+    """
+    default = _default_context()
+    if not default or business_context_id or existing is None:
+        return True
+    if existing.get("business_context_id") is not None:
+        return True
+    claimed = await _provider().claim_contact(contact_id, default)
+    return claimed is not None
+
+
 def _calls_in_scope(
     rows: "list[dict]", business_context_id: "str | None"
 ) -> "list[dict]":
@@ -432,17 +451,11 @@ async def update_contact(
         allowed, existing = await _guarded_contact(contact_id, business_context_id)
         if not allowed:
             return json.dumps({"success": False, "error": "Contact not found"})
-        default = _default_context()
-        if (
-            default
-            and not business_context_id
-            and existing is not None
-            and existing.get("business_context_id") is None
-        ):
-            # Claim-on-write: an update from a scoped session takes ownership
-            # of the NULL-context legacy row, so corrected data stops being
-            # visible to every tenant as unclaimed legacy.
-            data["business_context_id"] = default
+        # Claim-on-write: an update from a scoped session takes ownership of
+        # the NULL-context legacy row, so corrected data stops being visible
+        # to every tenant as unclaimed legacy.
+        if not await _claim_if_legacy(contact_id, existing, business_context_id):
+            return json.dumps({"success": False, "error": "Contact not found"})
         updated = await _provider().update_contact(contact_id, data)
         if updated is None:
             return json.dumps({"success": False, "error": "Contact not found"})
@@ -470,7 +483,13 @@ async def delete_contact(contact_id: str, business_context_id: Optional[str] = N
         return json.dumps({"success": False, "error": "Invalid contact_id (must be UUID)"})
 
     try:
-        if not await _guard_contact_id(contact_id, business_context_id):
+        allowed, existing = await _guarded_contact(contact_id, business_context_id)
+        if not allowed:
+            return json.dumps({"success": False, "error": "Contact not found"})
+        # Archiving is a legacy mutation too: claim the NULL-context row so
+        # one tenant cannot soft-delete shared legacy data out of the other
+        # tenant's default view.
+        if not await _claim_if_legacy(contact_id, existing, business_context_id):
             return json.dumps({"success": False, "error": "Contact not found"})
         success = await _provider().delete_contact(contact_id)
         return json.dumps({"success": success})
@@ -569,19 +588,11 @@ async def log_interaction(
         allowed, existing = await _guarded_contact(contact_id, business_context_id)
         if not allowed:
             return json.dumps({"success": False, "error": "Contact not found"})
-        default = _default_context()
-        if (
-            default
-            and not business_context_id
-            and existing is not None
-            and existing.get("business_context_id") is None
-        ):
-            # Claim-on-write: logging an interaction from a scoped session
-            # takes ownership of the NULL-context legacy row first, so the
-            # new note is not readable through another tenant's default.
-            await _provider().update_contact(
-                contact_id, {"business_context_id": default}
-            )
+        # Claim-on-write: logging an interaction from a scoped session takes
+        # ownership of the NULL-context legacy row first, so the new note is
+        # not readable through another tenant's default.
+        if not await _claim_if_legacy(contact_id, existing, business_context_id):
+            return json.dumps({"success": False, "error": "Contact not found"})
         interaction = await _provider().log_interaction(
             contact_id=contact_id,
             interaction_type=interaction_type,
@@ -644,7 +655,10 @@ async def get_contact_appointments(
     try:
         if not await _guard_contact_id(contact_id, business_context_id):
             return json.dumps({"error": "Contact not found", "appointments": [], "count": 0})
-        appointments = await _provider().get_contact_appointments(contact_id)
+        appointments = await _provider().get_contact_appointments(
+            contact_id,
+            business_context_id=business_context_id or _default_context(),
+        )
         appointments = _appointments_in_scope(appointments, business_context_id)
         return json.dumps(
             {"appointments": appointments, "count": len(appointments)}, default=str
@@ -748,7 +762,11 @@ async def get_customer_context(
 
         svc = get_customer_context_service()
         if contact_id:
-            ctx = await svc.get_context(contact_id, **kwargs)
+            ctx = await svc.get_context(
+                contact_id,
+                business_context_id=business_context_id or _default_context(),
+                **kwargs,
+            )
         elif phone:
             ctx = await svc.get_context_by_phone(phone, **kwargs)
         else:
@@ -757,6 +775,7 @@ async def get_customer_context(
         if ctx.is_empty:
             return json.dumps({"found": False, "context": None})
 
+        effective = business_context_id or _default_context()
         result: dict = {
             "found": True,
             "contact": ctx.contact,
@@ -765,10 +784,15 @@ async def get_customer_context(
                 ctx.appointments, business_context_id),
             "call_transcripts": _calls_in_scope(
                 ctx.call_transcripts, business_context_id),
-            "sent_emails": ctx.sent_emails,
-            "inbox_emails": ctx.inbox_emails,
+            # Email history is gathered by address and carries no tenant
+            # column, so under a scope it is omitted (fail closed) until the
+            # email store is tenant-addressable.
+            "sent_emails": [] if effective else ctx.sent_emails,
+            "inbox_emails": [] if effective else ctx.inbox_emails,
             "b2b_churn_signals": ctx.b2b_churn_signals,
         }
+        if effective:
+            result["emails_omitted_under_scope"] = True
 
         return json.dumps(result, default=str)
     except Exception as exc:

@@ -66,6 +66,7 @@ class CustomerContextService:
         max_emails: int = 10,
         max_sms: int = 10,
         max_invoices: int = 10,
+        business_context_id: Optional[str] = None,
     ) -> CustomerContext:
         """Build full customer context by contact_id.
 
@@ -84,6 +85,7 @@ class CustomerContextService:
             contact, contact_id,
             max_interactions, max_calls, max_appointments, max_emails, max_sms,
             max_invoices,
+            business_context_id=business_context_id,
         )
 
     async def get_context_by_phone(
@@ -124,8 +126,14 @@ class CustomerContextService:
         max_emails: int = 10,
         max_sms: int = 10,
         max_invoices: int = 10,
+        business_context_id: Optional[str] = None,
     ) -> CustomerContext:
-        """Fetch all supplementary data in parallel."""
+        """Fetch all supplementary data in parallel.
+
+        ``business_context_id`` scopes the tenant-stamped child sources
+        (appointments strictly; call transcripts tenant-plus-NULL) inside
+        their SQL, before per-source limits apply.
+        """
         from .crm_provider import get_crm_provider
         from ..storage.repositories.call_transcript import get_call_transcript_repo
         from ..storage.repositories.sms_message import get_sms_message_repo
@@ -148,11 +156,14 @@ class CustomerContextService:
             "interactions",
         )
         appointments_coro = _safe(
-            crm.get_contact_appointments(contact_id),
+            crm.get_contact_appointments(
+                contact_id, business_context_id=business_context_id),
             "appointments",
         )
         calls_coro = _safe(
-            call_repo.get_by_contact_id(contact_id, limit=max_calls),
+            call_repo.get_by_contact_id(
+                contact_id, limit=max_calls,
+                business_context_id=business_context_id),
             "call_transcripts",
         )
         emails_coro = _safe(

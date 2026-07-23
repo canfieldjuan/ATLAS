@@ -76,7 +76,15 @@ Slice phase: vertical slice
    effective scope (calls NULL-inclusive — same claimable population as
    contacts) and keeps legacy phone-first resolution when scoped;
    `log_interaction` claims NULL-context rows like `update_contact`.
-6. Proof: `tests/test_crm_read_scoping.py` — 38 tests covering default+
+6. Review round 4 (Codex): the claim became a compare-and-set
+   (`crm_provider.claim_contact`: stamps only while the row is still NULL
+   or same-tenant; a lost race fails the mutation closed); archive claims
+   like the other legacy mutations; linked appointments and call
+   transcripts scope inside their SQL before LIMIT
+   (`customer_context._gather` threads the scope to both child queries);
+   email history is omitted under a scope (no tenant column on the email
+   store yet — fail closed, flagged `emails_omitted_under_scope`).
+7. Proof: `tests/test_crm_read_scoping.py` — 46 tests covering default+
    fallback search order, explicit-arg precedence, no-default legacy
    behavior, foreign-tenant invisibility on reads and refusal on
    mutations, NULL-legacy visibility, create default-stamp, list default +
@@ -134,6 +142,8 @@ Slice phase: vertical slice
 - `atlas_brain/mcp/crm_server.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/storage/repositories/appointment.py`
+- `atlas_brain/storage/repositories/call_transcript.py`
+- `atlas_brain/services/customer_context.py`
 - `plans/PR-EOM-Read-Scoping.md`
 - `tests/test_crm_read_scoping.py`
 
@@ -185,7 +195,8 @@ Parked hardening: none new.
 
 ## Verification
 
-- Suite `tests/test_crm_read_scoping.py` — 38 passed.
+- Suite `tests/test_crm_read_scoping.py` — 46 passed (plus the existing
+  `tests/test_customer_context.py` suite against the threaded service).
 - Suites `tests/test_tenant_stamping.py` + `tests/test_leads_intake.py` +
   `tests/test_mcp_servers.py` — 145 passed combined, 6 failed
   pre-existing on origin/main (email/Twilio/calendar env-dependent
@@ -199,9 +210,15 @@ Parked hardening: none new.
 | File | LOC |
 |---|---:|
 | `atlas_brain/config.py` | 8 |
-| `atlas_brain/mcp/crm_server.py` | 200 |
-| `atlas_brain/services/crm_provider.py` | 4 |
-| `atlas_brain/storage/repositories/appointment.py` | 14 |
-| `plans/PR-EOM-Read-Scoping.md` | 210 |
-| `tests/test_crm_read_scoping.py` | 320 |
-| **Total** | **~740** |
+| `atlas_brain/mcp/crm_server.py` | 300 |
+| `atlas_brain/services/crm_provider.py` | 75 |
+| `atlas_brain/storage/repositories/appointment.py` | 25 |
+| `atlas_brain/storage/repositories/call_transcript.py` | 30 |
+| `atlas_brain/services/customer_context.py` | 20 |
+| `plans/PR-EOM-Read-Scoping.md` | 270 |
+| `tests/test_crm_read_scoping.py` | 450 |
+| **Total** | **~1180** |
+
+Four Codex reconciliation rounds grew the slice ~2.8x over the original
+estimate; the growth is itemized in the PR body's AI-reconciliation
+section (rounds 1-4) rather than re-estimated here per round.
