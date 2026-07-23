@@ -306,6 +306,33 @@ def test_transitive_phone_address_dedupe():
     assert merged[0].event_count == 3
 
 
+def test_dedupe_phone_key_ignores_extensions():
+    # Codex round 6 (R1/R8): '217-555-8888 ext 9' and '217-555-8888' are one
+    # customer across calendars.
+    with_ext = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL",
+                description="217-555-8888 ext 9",
+                start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc))],
+        ["commercial"], "customer", True, "Commercial")
+    without_ext = parse_events(
+        [_event("Jane Smith", "77 Elm St, Effingham, IL",
+                description="217-555-8888",
+                start=datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc))],
+        ["residential"], "customer", False, "Residential")
+    assert len(dedup_records(with_ext + without_ext)) == 1
+
+
+def test_created_contact_gets_source_only_after_true_create():
+    # Codex round 6 (R1/R8): create_contact may race-merge (its allowlist
+    # includes source), so provenance is stamped post-create only.
+    rec = _record()
+    crm, pool = StubCRM(), StubPool(rows=[None, None])
+    outcome = asyncio.run(import_one(rec, crm, pool))
+    assert outcome == "created"
+    assert "source" not in crm.created[0]
+    assert ("new-id", {"source": "calendar_import"}) in crm.updated
+
+
 def test_unchanged_contact_is_not_rewritten():
     # Codex round 5 (P1): a repeat import of an unchanged calendar performs
     # zero writes on matched contacts.
@@ -377,7 +404,9 @@ def test_concurrently_claimed_legacy_row_falls_through_to_create():
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert outcome == "created"
     assert crm.claims == [("legacy-id", "effingham_maids")]
-    assert crm.updated == []
+    # The only update is the post-create source stamp -- the foreign-claimed
+    # legacy row itself is never written.
+    assert crm.updated == [("new-id", {"source": "calendar_import"})]
     assert len(crm.created) == 1
 
 

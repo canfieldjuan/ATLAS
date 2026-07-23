@@ -122,6 +122,12 @@ Slice phase: vertical slice
       (union-find), and same-day cancellation ordering is resolved at
       full event-timestamp granularity within a calendar (asserted;
       Codex round 5).
+  20. The dedupe phone key uses extension-stripped digits, so ext-bearing
+      and plain forms of one number are one customer (asserted; Codex
+      round 6).
+  21. `source` never rides a find-or-create that may race-merge: creates
+      are source-free and provenance is stamped post-create only on
+      truly-new rows (asserted; Codex round 6).
 - Reachability proof: operator script, invoked directly. The full CLI
   entrypoint (arg parsing, id resolution, `GoogleCalendarProvider.
   list_events` pagination, cross-calendar dedupe, exit code) was exercised
@@ -204,7 +210,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 28 passed.
+- `tests/test_eom_live_calendar_import.py` — 30 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.

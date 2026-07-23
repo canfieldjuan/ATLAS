@@ -230,7 +230,10 @@ def dedup_records(records):
     key_owner = {}
     for i, rec in enumerate(records):
         keys = []
-        pk = ics._phone_key(rec.phone)
+        # Extension-stripped key: ics._phone_key folds 'ext 123' digits into
+        # the last-10 window and would split one customer in two (round 6).
+        digits = _phone_digits(rec.phone) if rec.phone else ""
+        pk = digits[-10:] if len(digits) >= 10 else None
         if pk:
             keys.append(("phone", pk))
         keys.append(("addr", rec.address.lower()))
@@ -416,9 +419,20 @@ async def import_one(rec, crm, pool) -> str:
         else:
             outcome = "unchanged"
     else:
-        result = await crm.create_contact(data)
+        create_data = dict(data)
+        # create_contact can still merge into a contact created concurrently
+        # (e.g. the real-time intake) and its merge allowlist includes
+        # `source` -- so provenance is stamped only on rows this import
+        # truly created (Codex round 6, R1/R8).
+        create_data.pop("source", None)
+        result = await crm.create_contact(create_data)
         contact_id = str(result.get("id", ""))
-        outcome = "created"
+        if result.get("_was_created"):
+            outcome = "created"
+            if contact_id:
+                await crm.update_contact(contact_id, {"source": "calendar_import"})
+        else:
+            outcome = "updated"
 
     if contact_id and rec.last_event_date:
         # source_ref inside metadata is a dedupe anchor (migration 256): the
