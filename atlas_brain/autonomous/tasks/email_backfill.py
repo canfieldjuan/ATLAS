@@ -200,6 +200,7 @@ async def run(task: ScheduledTask) -> dict:
                 email=recipient_email,
                 source="email_backfill",
                 contact_type="customer",
+                business_context_id="effingham_maids",
             )
             if not contact.get("id"):
                 continue

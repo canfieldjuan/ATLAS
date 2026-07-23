@@ -616,6 +616,7 @@ async def _detect_campaign_replies(pool, emails: list[dict[str, Any]]) -> int:
                         "contact_type": "lead",
                         "source": "campaign_reply",
                         "source_ref": str(sequence_id),
+                        "business_context_id": "churnsignals",
                     })
                     contact_id = contact.get("id")
                     if contact_id:
