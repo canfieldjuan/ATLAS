@@ -130,7 +130,8 @@ def test_create_path_stamps_source_tags_and_portal_id():
 def test_atlas_contact_id_link_wins_over_channels():
     crm = StubCRM(scoped_hit={"id": "should-not-be-used", "tags": []})
     linked = {"id": "linked-id", "tags": ["website"], "source": "web",
-              "status": "inactive", "full_name": "Firefly Grill"}
+              "status": "inactive", "full_name": "Firefly Grill",
+              "business_context_id": "effingham_maids"}
     pool = SyncPool(rows=[linked])
     outcome, cid = asyncio.run(
         sync_one(_customer(atlasContactId="linked-id"), crm, pool, apply=True)
@@ -140,6 +141,35 @@ def test_atlas_contact_id_link_wins_over_channels():
     sql = pool.queries[0][0]
     assert "status != 'archived'" in sql
     assert pool.stamps == [("linked-id", 7)]
+
+
+def test_null_context_linked_row_is_claimed_via_cas():
+    # Codex A2 round 1: a legacy NULL-context row behind atlasContactId is
+    # claimed through the CAS (the id link IS the identity).
+    crm = StubCRM()
+    linked = {"id": "legacy-link", "tags": [], "source": "web",
+              "status": "active", "business_context_id": None}
+    pool = SyncPool(rows=[linked, {"id": "legacy-link", "source": "web",
+                                   "status": "active", "tags": []}])
+    outcome, cid = asyncio.run(
+        sync_one(_customer(atlasContactId="legacy-link"), crm, pool, apply=True)
+    )
+    assert cid == "legacy-link"
+    cas_sql = [q for q, _ in pool.queries if "SET business_context_id" in q]
+    assert cas_sql and "source = 'calendar_import'" not in cas_sql[0]
+
+
+def test_foreign_tenant_link_is_ignored_falls_to_ladder():
+    crm = StubCRM()          # ladder misses -> create
+    linked = {"id": "foreign", "tags": [], "source": "b2b",
+              "status": "active", "business_context_id": "churnsignals"}
+    pool = SyncPool(rows=[linked, None, None])
+    outcome, cid = asyncio.run(
+        sync_one(_customer(atlasContactId="foreign"), crm, pool, apply=True)
+    )
+    assert outcome == "created"
+    assert all(u[0] != "foreign" for u in pool.updates)
+    assert all(st[0] != "foreign" for st in pool.stamps)
 
 
 def test_matched_contact_keeps_provenance_and_gets_activated():
@@ -202,6 +232,15 @@ def test_demotion_candidates_are_provenance_scoped():
     assert "status = 'active'" in sql
     assert "source = ANY($2::text[])" in sql
     assert list(args[1]) == list(DEMOTABLE_SOURCES)
+
+
+def test_run_skips_demotion_when_sync_errored():
+    # Codex A2 round 1 (BLOCKER): a partial match set must not drive
+    # demotions -- source-asserted wiring in run().
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    guard = src.split('if counts["errors"]:')[1].split("else:")[0]
+    assert "DEMOTION SKIPPED" in guard
+    assert "demote_unmatched" not in guard
 
 
 def test_demotion_dry_run_counts_without_writing():

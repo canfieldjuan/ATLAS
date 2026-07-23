@@ -42,11 +42,21 @@ DEFAULT_BASE_URL = "https://eom-timetracker.onrender.com"
 DEMOTABLE_SOURCES = ("calendar_import", "portal_sync")
 
 
+def settings_default(attr: str):
+    """Typed Atlas settings (pydantic reads .env/.env.local that never reach
+    os.environ -- slice-A R11 rule). Never raises in minimal envs."""
+    try:
+        from atlas_brain.config import settings as _settings
+        return getattr(_settings.tools, attr, None)
+    except Exception:  # noqa: BLE001 -- settings absent: env/prompt only
+        return None
+
+
 def portal_login(client, base_url: str, env: dict):
-    """Runtime auth: env token when provided (non-interactive), else a
-    getpass prompt. The password variable never leaves this function and is
-    never printed or persisted."""
-    token = env.get("EOM_PORTAL_TOKEN")
+    """Runtime auth: env or typed-settings token when provided
+    (non-interactive), else a getpass prompt. The password variable never
+    leaves this function and is never printed or persisted."""
+    token = env.get("EOM_PORTAL_TOKEN") or settings_default("eom_portal_token")
     if token:
         return token
     name = input("Portal admin name: ")
@@ -105,8 +115,8 @@ def customer_to_contact_data(customer: dict) -> dict:
     if customer.get("primaryEmail"):
         data["email"] = customer["primaryEmail"]
     sites = active_sites(customer)
-    if sites:
-        data["address"] = sites[0].get("address")
+    if sites and sites[0].get("address"):
+        data["address"] = str(sites[0]["address"])
     if customer.get("primaryContactName"):
         data["notes"] = f"Contact: {customer['primaryContactName']}"
     return data
@@ -128,7 +138,17 @@ async def resolve_contact(customer: dict, data: dict, crm, pool):
             str(atlas_id),
         )
         if row:
-            return row, False, None
+            ctx = row.get("business_context_id")
+            if ctx == EOM_CONTEXT_ID:
+                return row, False, None
+            if ctx is None:
+                # Designed link to a legacy NULL-context row: claim it via
+                # the CAS (the id link IS the identity) -- Codex A2 round 1.
+                return row, True, None
+            # Linked to a FOREIGN tenant: fail closed, fall to the ladder
+            # and report rather than writing across tenants.
+            print(f"    note: atlasContactId {atlas_id} belongs to tenant "
+                  f"{ctx!r}; ignoring the link")
 
     if data.get("phone"):
         digits = live._phone_digits(data["phone"])
@@ -217,8 +237,9 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
             if outcome == "skipped":
                 return "skipped", contact_id
 
-    if contact_id:
-        stamped = await stamp_portal_id(pool, contact_id, int(customer["id"]))
+    portal_id = customer.get("id")
+    if contact_id and isinstance(portal_id, int):
+        stamped = await stamp_portal_id(pool, contact_id, portal_id)
         if stamped is None:
             print(f"    ERROR: portal-id stamp rejected for contact {contact_id}")
             return "errors", contact_id
@@ -295,7 +316,15 @@ async def run(args) -> int:
             counts["errors"] += 1
 
     print(f"\n{'-' * 70}")
-    demoted, eligible = await demote_unmatched(pool, matched_ids, args.apply)
+    if counts["errors"]:
+        # An errored customer never reached matched_ids; demoting on a
+        # partial sync could retire real customers (Codex A2 round 1,
+        # BLOCKER). Fail the run and leave demotion for a clean pass.
+        print(f"  DEMOTION SKIPPED: {counts['errors']} sync error(s) -- "
+              "a partial match set must not drive demotions.")
+        demoted, eligible = 0, 0
+    else:
+        demoted, eligible = await demote_unmatched(pool, matched_ids, args.apply)
 
     print(f"\n{'=' * 70}")
     if args.apply:
@@ -316,7 +345,12 @@ def main():
     )
     parser.add_argument("--apply", action="store_true",
                         help="Write changes (default is dry-run)")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument(
+        "--base-url",
+        default=os.environ.get("EOM_PORTAL_BASE_URL")
+        or settings_default("eom_portal_base_url")
+        or DEFAULT_BASE_URL,
+    )
     args = parser.parse_args()
     return asyncio.run(run(args))
 

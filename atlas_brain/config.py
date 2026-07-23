@@ -728,6 +728,15 @@ class ToolsConfig(BaseSettings):
         default=None, description="EOM One-Time Cleanings calendar id"
     )
 
+    # EOM portal sync (scripts/sync_eom_portal_customers.py). Optional
+    # non-interactive auth + base URL; the script prompts when absent.
+    eom_portal_token: str | None = Field(
+        default=None, description="Pre-obtained EOM portal admin token"
+    )
+    eom_portal_base_url: str | None = Field(
+        default=None, description="EOM portal backend base URL override"
+    )
+
     # CalDAV calendar (provider-agnostic alternative to Google Calendar)
     # Works with Nextcloud, Apple Calendar, Fastmail, Proton Calendar, SOGo, Baikal, etc.
     caldav_url: str | None = Field(

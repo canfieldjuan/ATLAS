@@ -43,7 +43,7 @@ Slice phase: vertical slice
 
 1. New `scripts/sync_eom_portal_customers.py`: portal -> CRM customer sync
    with demotion, dry-run default, `--apply`, `--base-url`.
-2. New `tests/test_eom_portal_customer_sync.py`: 13 behavioural tests on
+2. New `tests/test_sync_eom_portal_customers.py`: 16 behavioural tests on
    the slice-A stub harness.
 3. This plan doc.
 
@@ -73,11 +73,21 @@ Slice phase: vertical slice
      printed (source-asserted).
   8. Non-zero exit when any record errored (reuses slice-A
      `exit_code_for` semantics via the errors counter).
+  9. Demotion is SKIPPED entirely when any sync error occurred -- a
+     partial match set never drives demotions (source-asserted; Codex A2
+     round 1, BLOCKER).
+  10. An `atlasContactId` link to a NULL-context legacy row is claimed via
+      the CAS (the id link is the identity); a link to a FOREIGN tenant is
+      ignored (reported) and resolution falls to the ladder (both
+      asserted; Codex A2 round 1, BLOCKER).
+  11. The portal token/base-url resolve through typed
+      `ATLAS_TOOLS_EOM_PORTAL_*` settings with process-env override
+      (live-parse verified; Codex A2 round 1, R11).
 - Reachability proof: operator script, invoked directly; the fetch/auth
   seam is exercised at the client boundary (stub client), and the
   write paths run the same slice-A machinery already live-proven by the
   #2158 production run.
-- Reviewer rules triggered: R1, R2, R4, R6, R8, R12, R14.
+- Reviewer rules triggered: R1, R2, R4, R6, R8, R11, R12, R14.
   - R1: behavior implements the #2156 A2 owner correction (portal defines
     active; calendar is enrichment).
   - R2: every criterion has a named test; the slice-A machinery reused
@@ -88,15 +98,20 @@ Slice phase: vertical slice
     non-zero via SystemExit.
   - R8: idempotency — diffed no-op-free updates, stable portal-id stamp,
     re-runs converge (matched set stable).
+  - R11: dependencies & config -- two optional typed
+    `ATLAS_TOOLS_EOM_PORTAL_*` fields on `ToolsConfig`, default None;
+    absent config changes no behavior.
   - R12: env/config — only `EOM_PORTAL_TOKEN` (optional, never written)
     and `--base-url`; no secrets in the repo.
   - R14: this contract is the reviewer checklist.
 
 ### Files touched
 
+- `atlas_brain/config.py`
 - `plans/PR-EOM-Portal-Customer-Sync.md`
 - `scripts/sync_eom_portal_customers.py`
-- `tests/test_eom_portal_customer_sync.py`
+- `tests/maturity_sweep/baseline_scripts.json`
+- `tests/test_sync_eom_portal_customers.py`
 
 ## Mechanism
 
@@ -132,7 +147,11 @@ run's matched ids.
 
 ## Verification
 
-- `tests/test_eom_portal_customer_sync.py` — 13 passed.
+- `tests/test_sync_eom_portal_customers.py` — 16 passed.
+- Maturity note: the scripts-lane ratchet baseline gains ONLY this PR's
+  new script (deliberate per-record operator patterns recorded); the
+  pre-existing unbaselined `import_eom_customers_live.py` (main's code,
+  untouched here) stays advisory-red and is tracked with #2159.
 - `tests/test_eom_live_calendar_import.py` — 55 passed (adjacent; the
   imported slice-A machinery is unmodified).
 - `python -m py_compile` on the script — clean.
@@ -143,7 +162,9 @@ run's matched ids.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-EOM-Portal-Customer-Sync.md` | 150 |
-| `scripts/sync_eom_portal_customers.py` | 310 |
-| `tests/test_eom_portal_customer_sync.py` | 215 |
-| **Total** | **675** |
+| `atlas_brain/config.py` | 10 |
+| `plans/PR-EOM-Portal-Customer-Sync.md` | 200 |
+| `scripts/sync_eom_portal_customers.py` | 359 |
+| `tests/maturity_sweep/baseline_scripts.json` | 8 |
+| `tests/test_sync_eom_portal_customers.py` | 252 |
+| **Total** | **829** |
