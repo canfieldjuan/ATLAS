@@ -31,6 +31,7 @@ import json
 import getpass
 import os
 import sys
+import uuid as _uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))          # sibling script import
@@ -158,6 +159,13 @@ async def resolve_contact(customer: dict, data: dict, crm, pool):
             return row, False, None
 
     atlas_id = customer.get("atlasContactId")
+    if atlas_id is not None:
+        try:
+            _uuid.UUID(str(atlas_id))
+        except (ValueError, AttributeError, TypeError):
+            print(f"    note: malformed atlasContactId {atlas_id!r}; "
+                  "ignoring the link")
+            atlas_id = None
     if atlas_id:
         row = await pool.fetchrow(
             """
@@ -307,6 +315,12 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
             if prior_pid is not None and str(prior_pid) != str(portal_id):
                 print(f"    ERROR (previewed): contact {existing['id']} "
                       f"already linked to portal customer {prior_pid}")
+                return "errors", None
+        else:
+            found, pid = await portal_id_current(pool, str(existing["id"]))
+            if found and pid not in (None, "") and pid != str(portal_id):
+                print(f"    ERROR (previewed): contact {existing['id']} "
+                      f"already linked to portal customer {pid}")
                 return "errors", None
         payload = dict(data)
         payload["tags"] = portal_final_tags(existing, data)

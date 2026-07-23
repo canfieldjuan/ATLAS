@@ -80,6 +80,12 @@ Slice phase: vertical slice
       the CAS (the id link is the identity); a link to a FOREIGN tenant is
       ignored (reported) and resolution falls to the ladder (both
       asserted; Codex A2 round 1, BLOCKER).
+  19. Dry-runs probe metadata-blind fallback links too, and malformed
+      (non-UUID) atlasContactId values are ignored with a note instead of
+      crashing the UUID lookup (both asserted; Codex A2 round 9); the
+      remaining in-statement-guard and collision-preflight hardening is
+      tracked in #2162 — all three residuals are already fail-closed by
+      the stamp UPDATE's in-SQL relink guard.
   18. Metadata-blind (address-fallback) matches probe the existing link
       BEFORE any matched write; non-string locationType is both preflighted
       and safe in the helper (all asserted; Codex A2 round 8).
@@ -186,7 +192,7 @@ run's matched ids.
 
 ## Verification
 
-- `tests/test_sync_eom_portal_customers.py` — 37 passed.
+- `tests/test_sync_eom_portal_customers.py` — 39 passed.
 - Maturity note: the scripts-lane ratchet baseline gains ONLY this PR's
   new script (deliberate per-record operator patterns recorded); the
   pre-existing unbaselined `import_eom_customers_live.py` (main's code,
@@ -202,8 +208,8 @@ run's matched ids.
 | File | LOC |
 |---|---:|
 | `atlas_brain/config.py` | 10 |
-| `plans/PR-EOM-Portal-Customer-Sync.md` | 211 |
-| `scripts/sync_eom_portal_customers.py` | 556 |
+| `plans/PR-EOM-Portal-Customer-Sync.md` | 217 |
+| `scripts/sync_eom_portal_customers.py` | 570 |
 | `tests/maturity_sweep/baseline_scripts.json` | 8 |
-| `tests/test_sync_eom_portal_customers.py` | 488 |
-| **Total** | **1273** |
+| `tests/test_sync_eom_portal_customers.py` | 514 |
+| **Total** | **1319** |

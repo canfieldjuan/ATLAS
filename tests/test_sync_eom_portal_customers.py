@@ -27,6 +27,11 @@ from sync_eom_portal_customers import (  # noqa: E402
 )
 
 
+LINK_A = "11111111-1111-1111-1111-111111111111"
+LINK_B = "22222222-2222-2222-2222-222222222222"
+LINK_C = "33333333-3333-3333-3333-333333333333"
+
+
 def _customer(**over):
     base = {
         "id": 7,
@@ -143,47 +148,47 @@ def test_create_path_stamps_source_tags_and_portal_id():
 
 def test_atlas_contact_id_link_wins_over_channels():
     crm = StubCRM(scoped_hit={"id": "should-not-be-used", "tags": []})
-    linked = {"id": "linked-id", "tags": ["website"], "source": "web",
+    linked = {"id": LINK_A, "tags": ["website"], "source": "web",
               "status": "inactive", "full_name": "Firefly Grill",
               "business_context_id": "effingham_maids"}
     pool = SyncPool(rows=[None, linked])   # portal-id page misses first
     outcome, cid = asyncio.run(
-        sync_one(_customer(atlasContactId="linked-id"), crm, pool, apply=True)
+        sync_one(_customer(atlasContactId=LINK_A), crm, pool, apply=True)
     )
-    assert cid == "linked-id"
+    assert cid == LINK_A
     assert crm.searches == []               # designed link short-circuits the ladder
     sql = pool.queries[0][0]
     assert "status != 'archived'" in sql
-    assert pool.stamps == [("linked-id", 7)]
+    assert pool.stamps == [(LINK_A, 7)]
 
 
 def test_null_context_linked_row_is_claimed_via_cas():
     # Codex A2 round 1: a legacy NULL-context row behind atlasContactId is
     # claimed through the CAS (the id link IS the identity).
     crm = StubCRM()
-    linked = {"id": "legacy-link", "tags": [], "source": "web",
+    linked = {"id": LINK_B, "tags": [], "source": "web",
               "status": "active", "business_context_id": None}
-    pool = SyncPool(rows=[None, linked, {"id": "legacy-link", "source": "web",
+    pool = SyncPool(rows=[None, linked, {"id": LINK_B, "source": "web",
                                          "status": "active", "tags": []}])
     outcome, cid = asyncio.run(
-        sync_one(_customer(atlasContactId="legacy-link"), crm, pool, apply=True)
+        sync_one(_customer(atlasContactId=LINK_B), crm, pool, apply=True)
     )
-    assert cid == "legacy-link"
+    assert cid == LINK_B
     cas_sql = [q for q, _ in pool.queries if "SET business_context_id" in q]
     assert cas_sql and "source = 'calendar_import'" not in cas_sql[0]
 
 
 def test_foreign_tenant_link_is_ignored_falls_to_ladder():
     crm = StubCRM()          # ladder misses -> create
-    linked = {"id": "foreign", "tags": [], "source": "b2b",
+    linked = {"id": LINK_C, "tags": [], "source": "b2b",
               "status": "active", "business_context_id": "churnsignals"}
     pool = SyncPool(rows=[None, linked, None, None])
     outcome, cid = asyncio.run(
-        sync_one(_customer(atlasContactId="foreign"), crm, pool, apply=True)
+        sync_one(_customer(atlasContactId=LINK_C), crm, pool, apply=True)
     )
     assert outcome == "created"
-    assert all(u[0] != "foreign" for u in pool.updates)
-    assert all(st[0] != "foreign" for st in pool.stamps)
+    assert all(u[0] != LINK_C for u in pool.updates)
+    assert all(st[0] != LINK_C for st in pool.stamps)
 
 
 def test_matched_contact_keeps_provenance_and_gets_activated():
@@ -313,6 +318,27 @@ def test_non_string_location_type_is_safe_and_preflighted():
     src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
     body = src.split("def _malformed")[1].split("invalid =")[0]
     assert 'isinstance(x.get("locationType"), str)' in body
+
+
+def test_malformed_atlas_contact_id_is_ignored():
+    # Codex A2 round 9: non-UUID links never reach the UUID id lookup.
+    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "active"})
+    pool = SyncPool()
+    outcome, cid = asyncio.run(
+        sync_one(_customer(atlasContactId="not-a-uuid"), crm, pool, apply=True))
+    assert outcome == "updated"        # fell through to the ladder cleanly
+    assert cid == "k"
+
+
+def test_dry_run_previews_metadata_blind_fallback_conflicts():
+    # Codex A2 round 9: the dry-run probes address-fallback links too.
+    crm = StubCRM()
+    pool = SyncPool(rows=[None, {"id": "addr-row", "tags": []}])
+    pool.already_stamped = 9
+    outcome, cid = asyncio.run(sync_one(_customer(primaryPhone=None), crm, pool,
+                                        apply=False))
+    assert outcome == "errors"
+    assert cid is None
 
 
 def test_roster_preflight_rejects_malformed_sites():
