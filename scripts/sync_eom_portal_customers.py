@@ -27,6 +27,7 @@ Usage:
 
 import argparse
 import asyncio
+import json
 import getpass
 import os
 import sys
@@ -136,7 +137,7 @@ async def resolve_contact(customer: dict, data: dict, crm, pool):
     slice-A identity ladder. Returns (existing_row_or_None, needs_claim,
     identity_tuple_or_None)."""
     pid = customer.get("id")
-    if isinstance(pid, int):
+    if isinstance(pid, int) and not isinstance(pid, bool):
         row = await pool.fetchrow(
             """
             SELECT id, full_name, address, contact_type, business_context_id,
@@ -234,7 +235,7 @@ async def stamp_portal_id(pool, contact_id: str, portal_id: int):
                updated_at = NOW()
          WHERE id = $1
            AND status != 'archived'
-           AND (business_context_id IS NULL OR business_context_id = $3)
+           AND business_context_id = $3
            AND COALESCE(metadata->>'portal_customer_id', '')
                IS DISTINCT FROM $2::text
         RETURNING id
@@ -270,7 +271,7 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
         print("    ERROR: active portal customer with blank name; run failed closed")
         return "errors", None
     portal_id = customer.get("id")
-    if not isinstance(portal_id, int):
+    if not isinstance(portal_id, int) or isinstance(portal_id, bool):
         # Validate BEFORE any write: --apply must not activate a contact and
         # only then discover it cannot stamp the predicate (Codex A2 r3).
         print(f"    ERROR: portal customer {customer.get('name')!r} has no "
@@ -289,9 +290,15 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
         payload.pop("source", None)
         payload.pop("business_context_id", None)
         updates = live._diff_updates(existing, payload)
+        meta = existing.get("metadata") if "metadata" in existing else None
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta or "{}")
+            except ValueError:
+                meta = {}
         stamped = ("metadata" in existing and
-                   str((existing.get("metadata") or {}).get("portal_customer_id",
-                       "")) == str(customer.get("id")))
+                   str((meta or {}).get("portal_customer_id", ""))
+                   == str(customer.get("id")))
         if updates or not stamped:
             return "update-planned", str(existing["id"])
         return "unchanged", str(existing["id"])
@@ -311,14 +318,21 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
         create_data = dict(data)
         create_data.pop("source", None)
         create_data.pop("tags", None)
+        # The resolver already proved no match with its extension-stripped
+        # semantics; create_contact's internal %last-10% dedupe is WEAKER
+        # and could wrong-match a raw/ext-bearing phone -- so the phone
+        # rides the controlled post-create stamp instead (Codex A2 r5).
+        create_data.pop("phone", None)
         result = await crm.create_contact(create_data)
         contact_id = str(result.get("id", ""))
         if result.get("_was_created"):
             outcome = "created"
             if contact_id:
+                stamp_payload = {"source": "portal_sync", "tags": data["tags"]}
+                if data.get("phone"):
+                    stamp_payload["phone"] = data["phone"]
                 stamp = await live._guarded_update(
-                    pool, contact_id,
-                    {"source": "portal_sync", "tags": data["tags"]},
+                    pool, contact_id, stamp_payload,
                 )
                 if stamp is None:
                     print(f"    ERROR: contact {contact_id} changed before the "
@@ -409,9 +423,10 @@ async def run(args) -> int:
 
     matched_ids: set = set()
     for customer in sorted(customers, key=lambda c: str(c.get("name") or "").lower()):
-        print(f"  {str(customer.get('name') or '(unnamed)'):<45} sites={len(active_sites(customer))} "
-              f"[{','.join(segment_tags(customer))}]")
         try:
+            print(f"  {str(customer.get('name') or '(unnamed)'):<45} "
+                  f"sites={len(active_sites(customer))} "
+                  f"[{','.join(segment_tags(customer))}]")
             outcome, contact_id = await sync_one(customer, crm, pool, args.apply)
             counts[outcome] += 1
             if contact_id:

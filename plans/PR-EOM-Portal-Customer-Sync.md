@@ -80,6 +80,12 @@ Slice phase: vertical slice
       the CAS (the id link is the identity); a link to a FOREIGN tenant is
       ignored (reported) and resolution falls to the ladder (both
       asserted; Codex A2 round 1, BLOCKER).
+  15. Boolean portal ids are rejected (bool subclasses int); string JSONB
+      metadata parses instead of crashing dry-runs; the create path never
+      exposes a raw phone to create_contact's weaker dedupe (it rides the
+      controlled stamp); the portal-id stamp REQUIRES the EOM tenant; and
+      the display path lives inside the per-record error guard (all
+      asserted; Codex A2 round 5).
   14. Resolution checks the STAMPED portal id first (the stable key after
       a create -- channel drift can never duplicate a synced customer);
       managed tags (portal/segments/past_customer) are REPLACED on portal
@@ -167,7 +173,7 @@ run's matched ids.
 
 ## Verification
 
-- `tests/test_sync_eom_portal_customers.py` — 26 passed.
+- `tests/test_sync_eom_portal_customers.py` — 29 passed.
 - Maturity note: the scripts-lane ratchet baseline gains ONLY this PR's
   new script (deliberate per-record operator patterns recorded); the
   pre-existing unbaselined `import_eom_customers_live.py` (main's code,

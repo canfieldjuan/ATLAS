@@ -133,7 +133,8 @@ def test_create_path_stamps_source_tags_and_portal_id():
     assert outcome == "created"
     assert "source" not in crm.created[0]
     assert "tags" not in crm.created[0]
-    assert ("new-id", {"source": "portal_sync", "tags": ["commercial", "portal"]}) in pool.updates
+    assert ("new-id", {"source": "portal_sync", "tags": ["commercial", "portal"],
+                       "phone": "217-317-3953"}) in pool.updates
     assert pool.stamps == [("new-id", 7)]
 
 
@@ -248,6 +249,45 @@ def test_nameless_portal_customer_is_an_error_not_a_skip():
     outcome, cid = asyncio.run(sync_one(_customer(name=""), crm, pool, apply=True))
     assert outcome == "errors"
     assert crm.created == [] and pool.updates == []
+
+
+def test_boolean_portal_id_is_rejected_before_writes():
+    # Codex A2 round 5: bool subclasses int; id=true must not pass.
+    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "active"})
+    pool = SyncPool()
+    outcome, cid = asyncio.run(sync_one(_customer(id=True), crm, pool, apply=True))
+    assert outcome == "errors"
+    assert pool.updates == [] and crm.created == []
+
+
+def test_string_metadata_does_not_crash_dry_run():
+    # Codex A2 round 5: asyncpg can deliver JSONB as a string.
+    rec_data = customer_to_contact_data(_customer())
+    existing = {"id": "k", **{k: v for k, v in rec_data.items()
+                              if k not in ("source", "business_context_id")},
+                "source": "portal_sync", "business_context_id": "effingham_maids",
+                "metadata": '{"portal_customer_id": 7}'}
+    crm = StubCRM(scoped_hit=existing)
+    outcome, cid = asyncio.run(sync_one(_customer(), crm, SyncPool(), apply=False))
+    assert outcome == "unchanged"
+
+
+def test_create_path_phone_rides_the_stamp_not_create():
+    # Codex A2 round 5: create_contact's weaker %last-10% dedupe never sees
+    # the raw phone; it lands via the controlled stamp.
+    crm = StubCRM()
+    pool = SyncPool(rows=[None, None, None, None])
+    outcome, cid = asyncio.run(sync_one(_customer(), crm, pool, apply=True))
+    assert outcome == "created"
+    assert "phone" not in crm.created[0]
+    assert any("phone" in payload for _, payload in pool.updates)
+
+
+def test_portal_id_stamp_requires_eom_tenant():
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    stamp_sql = src.split("jsonb_build_object('portal_customer_id'")[1].split('"""')[0]
+    assert "business_context_id = $3" in stamp_sql
+    assert "IS NULL OR" not in stamp_sql
 
 
 def test_missing_portal_id_errors_before_any_write():
