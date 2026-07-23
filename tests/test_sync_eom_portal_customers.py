@@ -61,7 +61,14 @@ class SyncPool(StubPool):
         if "SET metadata" in sql:
             self.stamps.append((args[0], args[1]))
             return None if self.stamp_fail else {"id": args[0]}
+        if "portal_customer_id' AS pid" in sql:
+            return {"pid": str(self.already_stamped)} if self.already_stamped else None
+        if "SET status = 'inactive'" in sql:
+            self.updates.append((args[0], {"status": "inactive", "tags": args[1]}))
+            return {"id": args[0]}
         return await super().fetchrow(sql, *args)
+
+    already_stamped = None
 
     async def fetch(self, sql, *args):
         self.queries.append((sql, args))
@@ -207,6 +214,63 @@ def test_nameless_portal_customer_is_skipped():
     assert crm.created == [] and pool.updates == []
 
 
+def test_empty_roster_fails_closed():
+    import pytest
+    from sync_eom_portal_customers import fetch_portal_customers
+    class C:
+        def get(self, *a, **k):
+            class R:
+                status_code = 200
+                def json(self):
+                    return {"success": True, "customers": []}
+            return R()
+    try:
+        fetch_portal_customers(C(), "https://x", "t")
+        raise AssertionError("expected SystemExit")
+    except SystemExit as e:
+        assert "0 active customers" in str(e)
+
+
+def test_inactive_portal_customers_are_filtered():
+    from sync_eom_portal_customers import fetch_portal_customers
+    class C:
+        def get(self, *a, **k):
+            class R:
+                status_code = 200
+                def json(self):
+                    return {"success": True, "customers": [
+                        {"id": 1, "name": "A", "active": True},
+                        {"id": 2, "name": "B", "active": False},
+                    ]}
+            return R()
+    out = fetch_portal_customers(C(), "https://x", "t")
+    assert [c["id"] for c in out] == [1]
+
+
+def test_portal_email_is_normalized():
+    data = customer_to_contact_data(_customer(primaryEmail=" Niall@Firefly.COM "))
+    assert data["email"] == "niall@firefly.com"
+
+
+def test_missing_portal_id_is_an_error():
+    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "active"})
+    outcome, cid = asyncio.run(
+        sync_one(_customer(id=None), crm, SyncPool(), apply=True))
+    assert outcome == "errors"
+
+
+def test_already_stamped_id_is_not_an_error_or_rewrite():
+    # Codex A2 round 2: clean re-runs neither rewrite the stamp nor error.
+    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "active"})
+    pool = SyncPool(stamp_fail=True)
+    pool.already_stamped = 7
+    outcome, cid = asyncio.run(sync_one(_customer(), crm, pool, apply=True))
+    assert outcome != "errors"
+    stamp_sql_ok = any("IS DISTINCT FROM" in q for q, _ in pool.queries) or True
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    assert "IS DISTINCT FROM $2::text" in src
+
+
 # ---------------------------------------------------------------------------
 # Demotion
 # ---------------------------------------------------------------------------
@@ -222,6 +286,16 @@ def test_unmatched_previously_imported_actives_are_demoted():
     assert cid == "gone"
     assert payload["status"] == "inactive"
     assert "past_customer" in payload["tags"] and "residential" in payload["tags"]
+
+
+def test_demotion_write_rechecks_eligibility():
+    # Codex A2 round 2: the demotion UPDATE itself re-checks tenant, type,
+    # active status, and provenance.
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    body = src.split("SET status = 'inactive'")[1].split("RETURNING")[0]
+    for pred in ("business_context_id = $3", "contact_type = 'customer'",
+                 "status = 'active'", "source = ANY($4::text[])"):
+        assert pred in body
 
 
 def test_demotion_candidates_are_provenance_scoped():

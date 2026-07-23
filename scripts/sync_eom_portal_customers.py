@@ -82,7 +82,13 @@ def fetch_portal_customers(client, base_url: str, token: str) -> list:
     payload = resp.json() or {}
     if not payload.get("success"):
         raise SystemExit("Customer fetch returned success=false")
-    return payload.get("customers") or []
+    customers = [c for c in (payload.get("customers") or [])
+                 if c.get("active", True)]
+    if not customers:
+        # An empty roster would demote the entire base -- refuse to
+        # proceed rather than trust it (Codex A2 round 2).
+        raise SystemExit("Portal returned 0 active customers; refusing to sync")
+    return customers
 
 
 def active_sites(customer: dict) -> list:
@@ -113,7 +119,7 @@ def customer_to_contact_data(customer: dict) -> dict:
     if customer.get("primaryPhone"):
         data["phone"] = customer["primaryPhone"]
     if customer.get("primaryEmail"):
-        data["email"] = customer["primaryEmail"]
+        data["email"] = str(customer["primaryEmail"]).strip().lower()
     sites = active_sites(customer)
     if sites and sites[0].get("address"):
         data["address"] = str(sites[0]["address"])
@@ -182,12 +188,22 @@ async def stamp_portal_id(pool, contact_id: str, portal_id: int):
          WHERE id = $1
            AND status != 'archived'
            AND (business_context_id IS NULL OR business_context_id = $3)
+           AND COALESCE(metadata->>'portal_customer_id', '')
+               IS DISTINCT FROM $2::text
         RETURNING id
         """,
         contact_id,
         portal_id,
         EOM_CONTEXT_ID,
     )
+
+
+async def portal_id_already_stamped(pool, contact_id: str, portal_id: int) -> bool:
+    row = await pool.fetchrow(
+        "SELECT metadata->>'portal_customer_id' AS pid FROM contacts WHERE id = $1",
+        contact_id,
+    )
+    return bool(row) and row.get("pid") == str(portal_id)
 
 
 async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
@@ -238,9 +254,16 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
                 return "skipped", contact_id
 
     portal_id = customer.get("id")
-    if contact_id and isinstance(portal_id, int):
+    if not isinstance(portal_id, int):
+        # A contact synced without the watcher predicate is a failure, not
+        # a silent skip (Codex A2 round 2).
+        print(f"    ERROR: portal customer {customer.get('name')!r} has no "
+              "usable id; predicate not stamped")
+        return "errors", contact_id
+    if contact_id:
         stamped = await stamp_portal_id(pool, contact_id, portal_id)
-        if stamped is None:
+        if stamped is None and not await portal_id_already_stamped(
+                pool, contact_id, portal_id):
             print(f"    ERROR: portal-id stamp rejected for contact {contact_id}")
             return "errors", contact_id
     return outcome, contact_id
@@ -272,8 +295,21 @@ async def demote_unmatched(pool, matched_ids: set, apply: bool) -> tuple:
             demoted += 1
             continue
         tags = sorted(set(row["tags"] or []) | {"past_customer"})
-        result = await live._guarded_update(
-            pool, str(row["id"]), {"status": "inactive", "tags": tags}
+        result = await pool.fetchrow(
+            """
+            UPDATE contacts
+               SET status = 'inactive', tags = $2, updated_at = NOW()
+             WHERE id = $1
+               AND business_context_id = $3
+               AND contact_type = 'customer'
+               AND status = 'active'
+               AND source = ANY($4::text[])
+            RETURNING id
+            """,
+            str(row["id"]),
+            tags,
+            EOM_CONTEXT_ID,
+            list(DEMOTABLE_SOURCES),
         )
         if result is not None:
             demoted += 1

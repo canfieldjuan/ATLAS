@@ -80,6 +80,14 @@ Slice phase: vertical slice
       the CAS (the id link is the identity); a link to a FOREIGN tenant is
       ignored (reported) and resolution falls to the ladder (both
       asserted; Codex A2 round 1, BLOCKER).
+  12. An empty (or all-inactive) portal roster fails closed -- it would
+      demote the entire base (asserted); inactive customers are belt-
+      filtered client-side; portal emails normalize to provider casing
+      before diffing; a missing portal id is a run error, not a silent
+      predicate gap; clean re-runs neither rewrite the stamp nor error
+      (IS DISTINCT FROM guard + already-stamped check); and the demotion
+      UPDATE itself re-checks tenant/type/active/provenance (all
+      asserted; Codex A2 round 2).
   11. The portal token/base-url resolve through typed
       `ATLAS_TOOLS_EOM_PORTAL_*` settings with process-env override
       (live-parse verified; Codex A2 round 1, R11).
@@ -147,7 +155,7 @@ run's matched ids.
 
 ## Verification
 
-- `tests/test_sync_eom_portal_customers.py` — 16 passed.
+- `tests/test_sync_eom_portal_customers.py` — 22 passed.
 - Maturity note: the scripts-lane ratchet baseline gains ONLY this PR's
   new script (deliberate per-record operator patterns recorded); the
   pre-existing unbaselined `import_eom_customers_live.py` (main's code,
