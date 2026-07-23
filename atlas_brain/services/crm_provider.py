@@ -124,15 +124,52 @@ class DatabaseCRMProvider:
         email = raw_email.lower() if raw_email else None
         phone = data.get("phone")
 
+        # Tenant-scoped dedup: when the caller stamps a business_context_id,
+        # match contacts within that tenant OR historical contacts with no
+        # context yet (which the merge below then claims for the tenant) --
+        # but never a contact belonging to a DIFFERENT context
+        # (PR #2152/#2153 review findings, R3/R4/R5).
+        ctx = data.get("business_context_id")
+
+        def _ctx_compatible(candidate: dict[str, Any]) -> bool:
+            if not ctx:
+                return True
+            existing_ctx = candidate.get("business_context_id")
+            return existing_ctx is None or existing_ctx == ctx
+
+        def _pick(matches: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+            # Prefer a real same-tenant contact over a NULL-context historical
+            # row so a claimable legacy row cannot shadow the tenant's own
+            # record (PR #2153 round 4, R4/R5).
+            if ctx:
+                for m in matches:
+                    if m.get("business_context_id") == ctx:
+                        return m
+            for m in matches:
+                if _ctx_compatible(m):
+                    return m
+            return None
+
+        async def _resolve(**channel: Any) -> Optional[dict[str, Any]]:
+            # Same-tenant page first, then the NULL-context (claimable) page
+            # directly -- both queries name their exact population, so a crowd
+            # of recently-updated foreign contacts can never page-starve the
+            # match (PR #2153 rounds 6-7, R4/R5).
+            if ctx:
+                scoped = await self.search_contacts(business_context_id=ctx, **channel)
+                if scoped:
+                    return scoped[0]
+                claimable = await self.search_contacts(
+                    business_context_id_is_null=True, **channel
+                )
+                return claimable[0] if claimable else None
+            return _pick(await self.search_contacts(**channel))
+
         existing: Optional[dict[str, Any]] = None
         if phone:
-            matches = await self.search_contacts(phone=phone)
-            if matches:
-                existing = matches[0]
+            existing = await _resolve(phone=phone)
         if existing is None and email:
-            matches = await self.search_contacts(email=email)
-            if matches:
-                existing = matches[0]
+            existing = await _resolve(email=email)
 
         if existing is not None:
             # Merge any new non-null fields into the existing record
@@ -247,6 +284,7 @@ class DatabaseCRMProvider:
         phone: Optional[str] = None,
         email: Optional[str] = None,
         business_context_id: Optional[str] = None,
+        business_context_id_is_null: bool = False,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         from ..storage.database import get_db_pool
@@ -271,6 +309,8 @@ class DatabaseCRMProvider:
             conditions.append(f"business_context_id = ${idx}")
             params.append(business_context_id)
             idx += 1
+        if business_context_id_is_null:
+            conditions.append("business_context_id IS NULL")
         if query:
             conditions.append(f"full_name ILIKE ${idx}")
             params.append(f"%{query[:200]}%")
@@ -426,6 +466,9 @@ class DatabaseCRMProvider:
         )
         result = dict(row) if row else {}
         inserted = bool(result.pop("_inserted", False))
+        # Public flag for callers that gate side effects (e.g. acknowledgement
+        # emails) on first-time-vs-duplicate; the raw column is stripped above.
+        result["inserted"] = inserted
 
         if inserted:
             # Emit event for reasoning agent only for new interactions.

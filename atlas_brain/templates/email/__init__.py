@@ -12,6 +12,10 @@ from .estimate_confirmation import (
     format_residential_email,
 )
 
+from .request_acknowledgement import (
+    format_request_acknowledgement,
+)
+
 from .proposal import (
     format_business_proposal,
     format_residential_proposal,
@@ -29,6 +33,7 @@ __all__ = [
     "BUSINESS_WEBSITE",
     "format_business_email",
     "format_residential_email",
+    "format_request_acknowledgement",
     "format_business_proposal",
     "format_residential_proposal",
     "render_invoice_html",

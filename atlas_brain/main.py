@@ -968,6 +968,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Path-scoped, credential-free CORS for the public EOM lead-intake form.
+# Added AFTER CORSMiddleware so it runs first and browser preflights for the
+# intake path are answered here instead of being rejected by the app-wide
+# credentialed policy (which deliberately excludes the marketing site).
+from .api.leads import LeadIntakeCORSMiddleware  # noqa: E402
+app.add_middleware(LeadIntakeCORSMiddleware)
+
 
 @app.get("/.well-known/security.txt", include_in_schema=False)
 async def security_txt():
