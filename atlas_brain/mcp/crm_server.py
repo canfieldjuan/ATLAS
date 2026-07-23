@@ -172,6 +172,18 @@ def _appointments_in_scope(
     return [a for a in appointments if a.get("business_context_id") == effective]
 
 
+def _calls_in_scope(
+    rows: "list[dict]", business_context_id: "str | None"
+) -> "list[dict]":
+    """Call-transcript rows may carry a NULL business_context_id (legacy),
+    so under an effective scope the visible set is the tenant's rows plus
+    NULL-context ones -- the same claimable population as contacts."""
+    effective = business_context_id or _default_context()
+    if not effective:
+        return rows
+    return [r for r in rows if r.get("business_context_id") in (None, effective)]
+
+
 def _is_uuid(value: str) -> bool:
     """Check if a string is a valid UUID."""
     try:
@@ -236,13 +248,16 @@ async def search_contacts(
         repo = get_appointment_repo()
         appointments = []
 
+        effective_scope = business_context_id or _default_context()
         if phone:
             appointments = await repo.get_by_phone(
                 phone, status=None, upcoming_only=False, limit=limit,
+                business_context_id=effective_scope,
             )
         if not appointments and query:
             appointments = await repo.search_by_name(
                 query, include_history=True, limit=limit,
+                business_context_id=effective_scope,
             )
         appointments = _appointments_in_scope(appointments, business_context_id)
 
@@ -551,8 +566,22 @@ async def log_interaction(
         return json.dumps({"success": False, "error": "interaction_type is required"})
 
     try:
-        if not await _guard_contact_id(contact_id, business_context_id):
+        allowed, existing = await _guarded_contact(contact_id, business_context_id)
+        if not allowed:
             return json.dumps({"success": False, "error": "Contact not found"})
+        default = _default_context()
+        if (
+            default
+            and not business_context_id
+            and existing is not None
+            and existing.get("business_context_id") is None
+        ):
+            # Claim-on-write: logging an interaction from a scoped session
+            # takes ownership of the NULL-context legacy row first, so the
+            # new note is not readable through another tenant's default.
+            await _provider().update_contact(
+                contact_id, {"business_context_id": default}
+            )
         interaction = await _provider().log_interaction(
             contact_id=contact_id,
             interaction_type=interaction_type,
@@ -698,10 +727,16 @@ async def get_customer_context(
             and (phone or email)
             and (business_context_id or _default_context())
         ):
-            results = await _scoped_search(
-                _provider(), phone=phone, email=email, limit=1,
-                business_context_id=business_context_id,
-            )
+            if phone:
+                results = await _scoped_search(
+                    _provider(), phone=phone, limit=1,
+                    business_context_id=business_context_id,
+                )
+            else:
+                results = await _scoped_search(
+                    _provider(), email=email, limit=1,
+                    business_context_id=business_context_id,
+                )
             if not results:
                 return json.dumps({"found": False, "context": None})
             contact_id = results[0].get("id")
@@ -726,8 +761,10 @@ async def get_customer_context(
             "found": True,
             "contact": ctx.contact,
             "interactions": ctx.interactions,
-            "appointments": ctx.appointments,
-            "call_transcripts": ctx.call_transcripts,
+            "appointments": _appointments_in_scope(
+                ctx.appointments, business_context_id),
+            "call_transcripts": _calls_in_scope(
+                ctx.call_transcripts, business_context_id),
             "sent_emails": ctx.sent_emails,
             "inbox_emails": ctx.inbox_emails,
             "b2b_churn_signals": ctx.b2b_churn_signals,

@@ -31,7 +31,10 @@ CRM MCP surface is still all-tenant by default. Verified at HEAD:
   claimable population from #2153), fail-closed tenant guards on all five
   id-addressed tools, and default-stamping on the MCP create tool.
 - Must not change: `crm_provider` beyond a NULL-page filter on
-  `list_contacts` (search already had one; review round 1), any B2B module, `atlas_brain/api/contacts.py` (shared intel-UI surface
+  `list_contacts` and the tenant column in the linked-appointments SELECT
+  (review rounds 1/3); `appointment` repository beyond an optional tenant
+  condition on `get_by_phone`/`search_by_name` (round 3, so the fallback
+  scopes in SQL before LIMIT); any B2B module, `atlas_brain/api/contacts.py` (shared intel-UI surface
   serving both tenants — see Intentional), behavior when no default is
   configured (legacy unscoped, backward compatible), the lead-intake
   endpoint, schema.
@@ -65,7 +68,15 @@ Slice phase: vertical slice
    cannot expose foreign-tenant appointment history), and `update_contact`
    claims NULL-context rows under the default (claim-on-write: corrected
    legacy data stops being cross-tenant-visible as unclaimed).
-5. Proof: `tests/test_crm_read_scoping.py` — 29 tests covering default+
+5. Review round 3 (Codex): the appointment fallback scopes in SQL before
+   LIMIT (repo `get_by_phone`/`search_by_name` gained an optional tenant
+   condition); the linked-appointments SELECT returns
+   `business_context_id` so the strict filter operates on real data;
+   `get_customer_context` filters child appointment/call rows to the
+   effective scope (calls NULL-inclusive — same claimable population as
+   contacts) and keeps legacy phone-first resolution when scoped;
+   `log_interaction` claims NULL-context rows like `update_contact`.
+6. Proof: `tests/test_crm_read_scoping.py` — 38 tests covering default+
    fallback search order, explicit-arg precedence, no-default legacy
    behavior, foreign-tenant invisibility on reads and refusal on
    mutations, NULL-legacy visibility, create default-stamp, list default +
@@ -122,6 +133,7 @@ Slice phase: vertical slice
 - `atlas_brain/config.py`
 - `atlas_brain/mcp/crm_server.py`
 - `atlas_brain/services/crm_provider.py`
+- `atlas_brain/storage/repositories/appointment.py`
 - `plans/PR-EOM-Read-Scoping.md`
 - `tests/test_crm_read_scoping.py`
 
@@ -173,7 +185,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Suite `tests/test_crm_read_scoping.py` — 29 passed.
+- Suite `tests/test_crm_read_scoping.py` — 38 passed.
 - Suites `tests/test_tenant_stamping.py` + `tests/test_leads_intake.py` +
   `tests/test_mcp_servers.py` — 145 passed combined, 6 failed
   pre-existing on origin/main (email/Twilio/calendar env-dependent
@@ -188,7 +200,8 @@ Parked hardening: none new.
 |---|---:|
 | `atlas_brain/config.py` | 8 |
 | `atlas_brain/mcp/crm_server.py` | 200 |
-| `atlas_brain/services/crm_provider.py` | 3 |
+| `atlas_brain/services/crm_provider.py` | 4 |
+| `atlas_brain/storage/repositories/appointment.py` | 14 |
 | `plans/PR-EOM-Read-Scoping.md` | 210 |
 | `tests/test_crm_read_scoping.py` | 320 |
 | **Total** | **~740** |

@@ -525,7 +525,7 @@ class DatabaseCRMProvider:
             """
             SELECT id, start_time, end_time, service_type, status,
                    customer_name, customer_phone, customer_email,
-                   customer_address, notes, created_at
+                   customer_address, notes, created_at, business_context_id
             FROM appointments
             WHERE contact_id = $1
             ORDER BY start_time DESC

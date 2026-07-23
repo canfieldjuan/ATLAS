@@ -15,9 +15,13 @@ Semantics under test (plans/PR-EOM-Read-Scoping.md):
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+
+REPO = Path(__file__).resolve().parent.parent
 
 import pytest
 
@@ -303,6 +307,85 @@ def test_appointments_in_scope_filters_foreign(default_ctx):
 def test_appointments_in_scope_unfiltered_without_default(no_default):
     rows = [{"id": 1, "business_context_id": "churnsignals"}]
     assert crm_srv._appointments_in_scope(rows, None) == rows
+
+
+def test_calls_in_scope_keeps_null_and_same_tenant(default_ctx):
+    rows = [
+        {"id": 1, "business_context_id": EOM},
+        {"id": 2, "business_context_id": None},
+        {"id": 3, "business_context_id": "churnsignals"},
+    ]
+    assert [r["id"] for r in crm_srv._calls_in_scope(rows, None)] == [1, 2]
+
+
+def test_calls_in_scope_unfiltered_without_default(no_default):
+    rows = [{"id": 1, "business_context_id": "churnsignals"}]
+    assert crm_srv._calls_in_scope(rows, None) == rows
+
+
+def test_linked_appointment_query_selects_tenant_column():
+    """The scoped filter reads business_context_id off provider rows; the
+    SELECT must return it or every scoped result empties (round-3 P2)."""
+    src = (REPO / "atlas_brain/services/crm_provider.py").read_text(encoding="utf-8")
+    block = src.split("async def get_contact_appointments", 1)[1][:700]
+    assert "business_context_id" in block
+
+
+def test_appointment_repo_accepts_scope_param():
+    """Fallback scoping happens in SQL, before LIMIT (round-3 P2)."""
+    src = (REPO / "atlas_brain/storage/repositories/appointment.py").read_text(encoding="utf-8")
+    for fn in ("async def get_by_phone", "async def search_by_name"):
+        sig = src.split(fn, 1)[1][:300]
+        assert "business_context_id" in sig, fn
+
+
+def test_fallback_repo_calls_pass_scope():
+    tree = ast.parse((REPO / "atlas_brain/mcp/crm_server.py").read_text(encoding="utf-8"))
+    wanted = {"get_by_phone": False, "search_by_name": False}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in wanted
+        ):
+            if any(k.arg == "business_context_id" for k in node.keywords):
+                wanted[node.func.attr] = True
+    assert all(wanted.values()), wanted
+
+
+@pytest.mark.asyncio
+async def test_log_interaction_claims_null_contact_under_default(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
+    out = json.loads(await crm_srv.log_interaction(UUID, interaction_type="note", summary="x"))
+    assert out["success"] is True
+    claim = provider.update_contact.await_args.args
+    assert claim[1] == {"business_context_id": EOM}
+    provider.log_interaction.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_log_interaction_same_tenant_no_claim(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch, get=SAME)
+    await crm_srv.log_interaction(UUID, interaction_type="note", summary="x")
+    provider.update_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_log_interaction_without_default_no_claim(no_default, monkeypatch):
+    provider = _provider_mock(monkeypatch, get=LEGACY_NULL)
+    await crm_srv.log_interaction(UUID, interaction_type="note", summary="x")
+    provider.update_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_customer_context_scoped_lookup_is_phone_first(default_ctx, monkeypatch):
+    """Scoped resolution keeps legacy phone-first semantics: a stale email
+    must not veto a valid phone match (round-3 MAJOR)."""
+    provider = _provider_mock(monkeypatch)
+    await crm_srv.get_customer_context(phone="217-555-0000", email="stale@example.com")
+    first = provider.search_contacts.await_args_list[0]
+    assert first.kwargs.get("phone") == "217-555-0000"
+    assert "email" not in first.kwargs
 
 
 # ---------------------------------------------------------------------------
