@@ -251,6 +251,28 @@ def test_nameless_portal_customer_is_an_error_not_a_skip():
     assert crm.created == [] and pool.updates == []
 
 
+def test_whitespace_channels_are_absent():
+    data = customer_to_contact_data(_customer(primaryPhone="   ", primaryEmail=" "))
+    assert "phone" not in data and "email" not in data
+
+
+def test_conflicting_portal_link_is_never_overwritten():
+    # Codex A2 round 6 (R8): a contact linked to portal id 9 must not be
+    # silently relinked to 7.
+    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "active",
+                              "metadata": {"portal_customer_id": 9}})
+    pool = SyncPool()
+    outcome, cid = asyncio.run(sync_one(_customer(), crm, pool, apply=True))
+    assert outcome == "errors"
+    assert pool.updates == [] and pool.stamps == []
+
+
+def test_roster_validation_aborts_before_any_write():
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    guard = src.split("invalid = [")[1].split("matched_ids")[0]
+    assert "ABORTED" in guard and "return 1" in guard
+
+
 def test_boolean_portal_id_is_rejected_before_writes():
     # Codex A2 round 5: bool subclasses int; id=true must not pass.
     crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "active"})

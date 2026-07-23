@@ -120,10 +120,12 @@ def customer_to_contact_data(customer: dict) -> dict:
         "tags": segment_tags(customer),
         "source": "portal_sync",
     }
-    if customer.get("primaryPhone"):
-        data["phone"] = customer["primaryPhone"]
-    if customer.get("primaryEmail"):
-        data["email"] = str(customer["primaryEmail"]).strip().lower()
+    phone = str(customer.get("primaryPhone") or "").strip()
+    if phone:
+        data["phone"] = phone
+    email = str(customer.get("primaryEmail") or "").strip().lower()
+    if email:
+        data["email"] = email
     sites = active_sites(customer)
     if sites and sites[0].get("address"):
         data["address"] = str(sites[0]["address"])
@@ -197,6 +199,18 @@ async def resolve_contact(customer: dict, data: dict, crm, pool):
         if existing is not None:
             return existing, needs_claim, ("address", addr)
     return None, False, None
+
+
+def parse_meta(existing: dict):
+    """asyncpg can deliver JSONB as str; absent metadata (narrow SELECTs)
+    reads as unknown ({})."""
+    meta = existing.get("metadata") if "metadata" in existing else None
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta or "{}")
+        except ValueError:
+            meta = {}
+    return meta or {}
 
 
 def portal_final_tags(existing: dict, data: dict) -> list:
@@ -290,18 +304,23 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
         payload.pop("source", None)
         payload.pop("business_context_id", None)
         updates = live._diff_updates(existing, payload)
-        meta = existing.get("metadata") if "metadata" in existing else None
-        if isinstance(meta, str):
-            try:
-                meta = json.loads(meta or "{}")
-            except ValueError:
-                meta = {}
         stamped = ("metadata" in existing and
-                   str((meta or {}).get("portal_customer_id", ""))
+                   str(parse_meta(existing).get("portal_customer_id", ""))
                    == str(customer.get("id")))
         if updates or not stamped:
             return "update-planned", str(existing["id"])
         return "unchanged", str(existing["id"])
+
+    if existing is not None:
+        prior_pid = parse_meta(existing).get("portal_customer_id")
+        if prior_pid is not None and str(prior_pid) != str(portal_id):
+            # Never bounce a stable portal link between ids: two portal
+            # customers sharing a channel/address must be fixed in the
+            # portal, not by overwriting the CRM link (Codex A2 round 6).
+            print(f"    ERROR: contact {existing['id']} already linked to "
+                  f"portal customer {prior_pid}; refusing to relink to "
+                  f"{portal_id}")
+            return "errors", None
 
     if existing is not None and needs_claim:
         existing = await live.claim_legacy_row(
@@ -420,6 +439,22 @@ async def run(args) -> int:
     pool = get_db_pool()
     await pool.initialize()
     crm = get_crm_provider()
+
+    invalid = [
+        c for c in customers
+        if not str(c.get("name") or "").strip()
+        or not isinstance(c.get("id"), int) or isinstance(c.get("id"), bool)
+    ]
+    if invalid:
+        # Validate the WHOLE roster before any write: a malformed record
+        # later in sort order must not leave earlier writes applied with
+        # demotion skipped (Codex A2 round 6).
+        for c in invalid:
+            print(f"  INVALID portal record: id={c.get('id')!r} "
+                  f"name={c.get('name')!r}")
+        print(f"\n  ABORTED: {len(invalid)} malformed portal record(s); "
+              "nothing written.")
+        return 1
 
     matched_ids: set = set()
     for customer in sorted(customers, key=lambda c: str(c.get("name") or "").lower()):
