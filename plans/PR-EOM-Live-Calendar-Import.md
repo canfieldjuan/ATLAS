@@ -157,6 +157,9 @@ Slice phase: vertical slice
       candidate order; and the matched identity (address / phone last-10 /
       email) rides inside the claim CAS so a row corrected mid-race no
       longer matches the predicate (all asserted; Codex round 12).
+  31. Cross-calendar channel merges follow the same event recency as
+      in-calendar (the newest booking's phone/email wins regardless of
+      calendar processing order; both orders asserted; Codex round 14, P1).
   30. The claim-CAS phone predicate is contains-match (provider parity, so
       ext-bearing stored contacts satisfy the CAS they matched by); same-day
       cross-calendar ties resolve by full timestamp; and the latest event's
@@ -264,7 +267,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 47 passed.
+- `tests/test_eom_live_calendar_import.py` — 48 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.

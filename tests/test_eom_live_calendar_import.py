@@ -510,6 +510,25 @@ def test_latest_event_channels_replace_stale_ones():
         assert "1111" in rec.phone
 
 
+def test_cross_calendar_merge_prefers_latest_channels():
+    # Codex round 14 (P1): the newest booking's phone wins across calendars,
+    # regardless of which calendar is processed first.
+    older_comm = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL",
+                description="217-555-0000",
+                start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc))],
+        ["commercial"], "customer", True, "Commercial")
+    newer_resi = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL",
+                description="217-555-1111",
+                start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))],
+        ["residential"], "customer", False, "Residential")
+    for records in (older_comm + newer_resi, newer_resi + older_comm):
+        merged = dedup_records(list(records))
+        assert len(merged) == 1
+        assert "1111" in merged[0].phone
+
+
 def test_merged_group_prefers_latest_address_and_carries_all():
     # Codex round 9 (P1): the surviving record uses the latest-dated
     # address, and every group address rides along for fallback lookup.

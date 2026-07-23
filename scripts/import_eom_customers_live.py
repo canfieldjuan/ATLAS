@@ -277,13 +277,32 @@ def dedup_records(records):
     merged = []
     for group in groups.values():
         base = group[0]
+
+        def _dt(r):
+            dt = getattr(r, "latest_event_dt", None)
+            if dt is None and r.last_event_date:
+                from datetime import datetime as _dtm, time as _t, timezone as _tz
+                dt = _dtm.combine(r.last_event_date, _t.min).replace(tzinfo=_tz.utc)
+            return dt
+
+        def _ch_key(r):
+            from datetime import datetime as _dtm, timezone as _tz
+            return (getattr(r, "_ch_dt", None) or _dt(r)
+                    or _dtm(1970, 1, 1, tzinfo=_tz.utc))
+
+        # Channels merge by event recency too, matching the in-calendar rule
+        # (Codex round 14, P1): the latest record with a value wins, not the
+        # first-processed calendar.
+        phones = [r for r in group if r.phone]
+        if phones:
+            base.phone = max(phones, key=_ch_key).phone
+        emails = [r for r in group if r.email]
+        if emails:
+            base.email = max(emails, key=_ch_key).email
+
         for rec in group[1:]:
             if len(rec.name) < len(base.name):
                 base.name = rec.name
-            if not base.phone and rec.phone:
-                base.phone = rec.phone
-            if not base.email and rec.email:
-                base.email = rec.email
             if not base.contact_name and rec.contact_name:
                 base.contact_name = rec.contact_name
             if not base.notes and rec.notes:
@@ -298,12 +317,6 @@ def dedup_records(records):
         for r in group:
             if r.address.lower() not in [a.lower() for a in base.all_addresses]:
                 base.all_addresses.append(r.address)
-        def _dt(r):
-            dt = getattr(r, "latest_event_dt", None)
-            if dt is None and r.last_event_date:
-                from datetime import datetime as _dtm, time as _t, timezone as _tz
-                dt = _dtm.combine(r.last_event_date, _t.min).replace(tzinfo=_tz.utc)
-            return dt
         dated = [(_dt(r), r.cancelled, r.address, r.last_event_date)
                  for r in group if _dt(r) is not None]
         if dated:
