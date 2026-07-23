@@ -429,6 +429,7 @@ class BookAppointmentTool:
                         phone=customer_phone,
                         email=customer_email,
                         source="booking",
+                        business_context_id=context.id,
                     )
                     contact_id_str = str(contact.get("id", "")) if contact else None
                     if contact_id_str:

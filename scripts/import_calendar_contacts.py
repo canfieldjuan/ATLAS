@@ -494,6 +494,7 @@ async def import_records(records: list[CustomerRecord], dry_run: bool) -> dict:
                 "address": rec.address,
                 "contact_type": rec.contact_type,
                 "source": "calendar_import",
+                "business_context_id": "effingham_maids",
                 "tags": rec.tags,
                 "status": "inactive" if rec.cancelled else "active",
             }
