@@ -28,8 +28,10 @@ from backfill_business_context import (  # noqa: E402
     B2B_SOURCES,
     EOM_CONTEXT,
     EOM_SOURCES,
-    SQL_BACKFILL_EOM_BY_APPOINTMENT,
-    SQL_BACKFILL_EOM_BY_SOURCE,
+    SQL_COUNT_BY_APPOINTMENT,
+    SQL_COUNT_BY_SOURCE,
+    SQL_UPDATE_BY_APPOINTMENT,
+    SQL_UPDATE_BY_SOURCE,
     classify_source,
 )
 
@@ -59,12 +61,31 @@ def test_source_maps_are_disjoint():
 
 
 def test_backfill_sql_only_touches_null_rows():
-    for sql in (SQL_BACKFILL_EOM_BY_SOURCE, SQL_BACKFILL_EOM_BY_APPOINTMENT):
+    for sql in (SQL_UPDATE_BY_SOURCE, SQL_UPDATE_BY_APPOINTMENT,
+                SQL_COUNT_BY_SOURCE, SQL_COUNT_BY_APPOINTMENT):
         assert "business_context_id IS NULL" in sql
 
 
+def test_count_and_update_share_where_clause():
+    """The dry-run count must report exactly what --apply would touch."""
+    def where(sql):
+        return sql.split("WHERE", 1)[1].strip()
+    assert where(SQL_COUNT_BY_SOURCE) == where(SQL_UPDATE_BY_SOURCE)
+    assert where(SQL_COUNT_BY_APPOINTMENT) == where(SQL_UPDATE_BY_APPOINTMENT)
+
+
 def test_appointment_backfill_requires_tenant_stamped_appointment():
-    assert "a.business_context_id = $1" in SQL_BACKFILL_EOM_BY_APPOINTMENT
+    assert "a.business_context_id = $1" in SQL_UPDATE_BY_APPOINTMENT
+    assert "a.business_context_id = $1" in SQL_COUNT_BY_APPOINTMENT
+
+
+def test_source_tier_is_opt_in():
+    """Tier-2 source classification must be gated behind an explicit flag —
+    contacts.source is free text (settable via the MCP tool without a
+    context), so it is operator-attested, never automatic."""
+    src = (REPO / "scripts/backfill_business_context.py").read_text(encoding="utf-8")
+    assert "--classify-by-source" in src
+    assert 'classify_by_source' in src
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +100,8 @@ WRITER_SITES = [
     ("atlas_brain/autonomous/tasks/gmail_digest.py", "find_or_create_contact", "effingham_maids"),
     ("atlas_brain/autonomous/tasks/email_backfill.py", "find_or_create_contact", "effingham_maids"),
     ("atlas_brain/api/b2b_vendor_briefing.py", "find_or_create_contact", "churnsignals"),
+    ("extracted_competitive_intelligence/api/b2b_vendor_briefing.py",
+     "find_or_create_contact", "churnsignals"),
 ]
 
 

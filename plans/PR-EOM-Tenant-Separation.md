@@ -41,16 +41,22 @@ sit at NULL. Verified at HEAD 44ddd9964 (2026-07-23):
 Ownership lane: eom-crm/lead-funnel
 Slice phase: vertical slice
 
-1. Stamp `business_context_id` on all six previously NULL-context contact
+1. Stamp `business_context_id` on all seven previously NULL-context contact
    writers: booking (`context.id`), gmail_digest web-lead, email_backfill,
-   calendar import (`effingham_maids`); briefing gate + campaign reply
-   (`churnsignals` — stops the B2B leak at the source).
+   calendar import (`effingham_maids`); briefing gate + campaign reply +
+   the extracted-package mirror gate
+   (`extracted_competitive_intelligence/api/b2b_vendor_briefing.py`) as
+   `churnsignals` — stops the B2B leak at every source.
 2. New `scripts/backfill_business_context.py`: dry-run-by-default,
-   `--apply` to write, idempotent (only touches rows still NULL).
-   Classification: EOM by source (`booking, web, email_backfill,
-   calendar_import`) and by tenant-stamped appointment linkage; B2B by
-   source (`briefing_gate, campaign_reply`); everything else stays NULL and
-   is reported, never guessed.
+   `--apply` to write, idempotent (only touches rows still NULL). Two
+   evidence tiers: tier 1 (default) = tenant-stamped appointment linkage
+   (schema-trustworthy, `012:24` NOT NULL); tier 2 (opt-in
+   `--classify-by-source`, operator-attested) = writer-unique source maps
+   (`contacts.source` is free text also settable via the MCP crm tool, so
+   it is never trusted automatically). Everything else stays NULL and is
+   reported, never guessed. Count and UPDATE statements share their WHERE
+   clause verbatim with positionally-complete parameters (no skipped
+   placeholders).
 3. Proof: `tests/test_tenant_stamping.py` — pure classification tests,
    SQL-predicate guards (NULL-only, appointment-stamp requirement,
    disjoint source maps), and AST-verified kwargs on every stamped
@@ -89,8 +95,9 @@ Slice phase: vertical slice
   above), R3 (tenant isolation — leak stopped at source), R4 (data safety:
   NULL-only updates, dry-run default, no guessing), R5 (backward compat: additive kwargs; unstamped callers
   unchanged), R6 (jobs: digest/backfill/intake keep their fail-open error
-  handling; the stamp adds no new failure path), R8 (idempotent backfill),
-  R14.
+  handling; the stamp adds no new failure path), R8 (idempotent backfill), R10
+  (maintainability: the extracted-package mirror gate is stamped
+  identically to its atlas_brain twin, keeping the two in lockstep), R14.
 
 ### Files touched
 
@@ -99,6 +106,7 @@ Slice phase: vertical slice
 - `atlas_brain/autonomous/tasks/email_intake.py`
 - `atlas_brain/autonomous/tasks/gmail_digest.py`
 - `atlas_brain/tools/scheduling.py`
+- `extracted_competitive_intelligence/api/b2b_vendor_briefing.py`
 - `plans/PR-EOM-Tenant-Separation.md`
 - `scripts/backfill_business_context.py`
 - `scripts/import_calendar_contacts.py`
@@ -133,7 +141,11 @@ what `--apply` would touch.
 - Read-path tenant filtering defaults for EOM surfaces (next slice of
   #2151 Phase 2).
 - Phase 3: customer-master import (calendar ICS / appointments-driven).
-- Operator run of the backfill (`--apply`) after merge + deploy; the
+- Operator backfill runbook (ordering matters — a live stamped writer can
+  claim a NULL row for either tenant before backfill classifies it): merge
+  -> pull runtime worktree -> run backfill `--apply` (tier 1, plus tier 2
+  with attestation) BEFORE restarting the service -> restart -> re-run the
+  backfill (idempotent) to sweep rows written during the window. The
   remaining-NULL report feeds Phase 3.
 
 Parked hardening: none new (Phase 1's parked items unchanged).
@@ -155,8 +167,9 @@ Parked hardening: none new (Phase 1's parked items unchanged).
 | `atlas_brain/autonomous/tasks/email_intake.py` | 1 |
 | `atlas_brain/autonomous/tasks/gmail_digest.py` | 1 |
 | `atlas_brain/tools/scheduling.py` | 1 |
-| `plans/PR-EOM-Tenant-Separation.md` | 148 |
-| `scripts/backfill_business_context.py` | 118 |
+| `extracted_competitive_intelligence/api/b2b_vendor_briefing.py` | 1 |
+| `plans/PR-EOM-Tenant-Separation.md` | 172 |
+| `scripts/backfill_business_context.py` | 136 |
 | `scripts/import_calendar_contacts.py` | 1 |
-| `tests/test_tenant_stamping.py` | 111 |
-| **Total** | **383** |
+| `tests/test_tenant_stamping.py` | 134 |
+| **Total** | **449** |
