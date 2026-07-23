@@ -375,6 +375,7 @@ class DatabaseCRMProvider:
     async def list_contacts(
         self,
         business_context_id: Optional[str] = None,
+        business_context_id_is_null: bool = False,
         status: Optional[str] = "active",
         contact_type: Optional[str] = None,
         limit: int = 50,
@@ -395,6 +396,8 @@ class DatabaseCRMProvider:
             conditions.append(f"business_context_id = ${idx}")
             params.append(business_context_id)
             idx += 1
+        if business_context_id_is_null:
+            conditions.append("business_context_id IS NULL")
         if contact_type:
             conditions.append(f"contact_type = ${idx}")
             params.append(contact_type)

@@ -30,8 +30,8 @@ CRM MCP surface is still all-tenant by default. Verified at HEAD:
   scoped search/list (default page + NULL-context legacy page, the
   claimable population from #2153), fail-closed tenant guards on all five
   id-addressed tools, and default-stamping on the MCP create tool.
-- Must not change: `crm_provider` (already has the scoped + IS-NULL
-  filters), any B2B module, `atlas_brain/api/contacts.py` (shared intel-UI surface
+- Must not change: `crm_provider` beyond a NULL-page filter on
+  `list_contacts` (search already had one; review round 1), any B2B module, `atlas_brain/api/contacts.py` (shared intel-UI surface
   serving both tenants — see Intentional), behavior when no default is
   configured (legacy unscoped, backward compatible), the lead-intake
   endpoint, schema.
@@ -51,10 +51,21 @@ Slice phase: vertical slice
    id-addressed tools (`get/update/delete/log_interaction/
    get_interactions/get_contact_appointments`) treat foreign-tenant rows as
    "not found" (fail-closed, no cross-tenant existence leak).
-3. Proof: `tests/test_crm_read_scoping.py` — 14 tests covering default+
+3. Review round 1 (Codex) widened the same contract to the rest of the
+   read surface: `get_customer_context` resolves through the scoped search
+   and tenant guard; the appointment fallback in `search_contacts` filters
+   rows to the effective tenant (`_appointments_in_scope`); `list_contacts`
+   under the default merges the tenant page with the NULL-context legacy
+   page (`crm_provider.list_contacts` gained `business_context_id_is_null`,
+   mirroring #2153's search filter); every id-addressed tool accepts an
+   explicit `business_context_id` override (exact-page semantics, so
+   cross-tenant admin access stays possible per call).
+4. Proof: `tests/test_crm_read_scoping.py` — 25 tests covering default+
    fallback search order, explicit-arg precedence, no-default legacy
    behavior, foreign-tenant invisibility on reads and refusal on
-   mutations, NULL-legacy visibility, create default-stamp, list default.
+   mutations, NULL-legacy visibility, create default-stamp, list default +
+   NULL-page merge, explicit override on id tools (exact match), the
+   appointment-fallback filter, and customer-context scoping.
 
 ### Review Contract
 
@@ -76,6 +87,13 @@ Slice phase: vertical slice
      context wins.
   7. A bare `search_contacts()` call is valid when a default exists
      (list-my-tenant), preserving the requires-one-of error otherwise.
+  8. `get_customer_context` follows the same scoping as
+     `search_contacts`/`get_contact` on every resolution path (uuid, name,
+     phone, email); the appointment fallback never returns foreign-tenant
+     rows under an effective scope; `list_contacts` under the default
+     includes the NULL-context legacy page; an explicit
+     `business_context_id` on id-addressed tools addresses exactly that
+     tenant's page.
 - Reachability proof: the CRM MCP server tools themselves (stdio/SSE per
   `settings.mcp`); deployment opt-in is
   `ATLAS_MCP_CRM_DEFAULT_BUSINESS_CONTEXT=effingham_maids` in the Atlas
@@ -98,6 +116,7 @@ Slice phase: vertical slice
 
 - `atlas_brain/config.py`
 - `atlas_brain/mcp/crm_server.py`
+- `atlas_brain/services/crm_provider.py`
 - `plans/PR-EOM-Read-Scoping.md`
 - `tests/test_crm_read_scoping.py`
 
@@ -125,6 +144,17 @@ set, which keeps every other Atlas deployment/test unaffected.
 - **No sentinel for "all tenants"** — cross-tenant admin reads can pass the
   other tenant explicitly per call; a wildcard would reopen the hole by
   convention.
+- **Explicit override is exact-page** — passing `business_context_id`
+  addresses only that tenant's rows, with no NULL-context fallback
+  (mirrors explicit search). NULL legacy rows stay reachable by omitting
+  the argument under the default.
+- **`list_contacts` NULL-page merge paginates per page** — offset applies
+  to each underlying page and the merged result truncates to `limit`;
+  documented in the tool docstring, acceptable for an operator-facing
+  listing tool.
+- **`set_provider_override` test seam** — mirrors the HTTP surface's
+  `dependency_overrides` so tests need not monkeypatch module internals
+  (mcp-lane maturity ratchet).
 
 ## Deferred
 
@@ -138,9 +168,11 @@ Parked hardening: none new.
 
 ## Verification
 
-- Suite `tests/test_crm_read_scoping.py` — 14 passed.
-- Suites `tests/test_tenant_stamping.py` + `tests/test_leads_intake.py` —
-  44 passed combined (adjacent lane suites).
+- Suite `tests/test_crm_read_scoping.py` — 25 passed.
+- Suites `tests/test_tenant_stamping.py` + `tests/test_leads_intake.py` +
+  `tests/test_mcp_servers.py` — 145 passed combined, 6 failed
+  pre-existing on origin/main (email/Twilio/calendar env-dependent
+  cases, verified on a pristine `origin/main` worktree).
 - `python -m py_compile` on both touched Python files — clean.
 - NOT run: live MCP session against the running server (env not yet set;
   post-merge operator step, then a scoped search spot-check).
@@ -150,7 +182,8 @@ Parked hardening: none new.
 | File | LOC |
 |---|---:|
 | `atlas_brain/config.py` | 8 |
-| `atlas_brain/mcp/crm_server.py` | 73 |
-| `plans/PR-EOM-Read-Scoping.md` | 152 |
-| `tests/test_crm_read_scoping.py` | 193 |
-| **Total** | **426** |
+| `atlas_brain/mcp/crm_server.py` | 200 |
+| `atlas_brain/services/crm_provider.py` | 3 |
+| `plans/PR-EOM-Read-Scoping.md` | 210 |
+| `tests/test_crm_read_scoping.py` | 320 |
+| **Total** | **~740** |

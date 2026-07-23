@@ -193,7 +193,111 @@ async def test_create_contact_explicit_context_wins(default_ctx, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_contacts_merges_null_page_under_default(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch)
+    tenant_page = [{"id": "t1", "business_context_id": EOM}]
+    legacy_page = [{"id": "n1", "business_context_id": None}]
+    provider.list_contacts = AsyncMock(side_effect=[tenant_page, legacy_page])
+    out = json.loads(await crm_srv.list_contacts())
+    calls = provider.list_contacts.await_args_list
+    assert calls[0].kwargs["business_context_id"] == EOM
+    assert calls[1].kwargs["business_context_id_is_null"] is True
+    assert [c["id"] for c in out["contacts"]] == ["t1", "n1"]
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_explicit_context_single_page(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch)
+    await crm_srv.list_contacts(business_context_id="churnsignals")
+    calls = provider.list_contacts.await_args_list
+    assert len(calls) == 1
+    assert calls[0].kwargs["business_context_id"] == "churnsignals"
+
+
+# ---------------------------------------------------------------------------
+# Explicit tenant override on id-addressed tools
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_contact_explicit_context_reaches_foreign_tenant(default_ctx, monkeypatch):
+    _provider_mock(monkeypatch, get=FOREIGN)
+    out = json.loads(await crm_srv.get_contact(UUID, business_context_id="churnsignals"))
+    assert out["found"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row", [LEGACY_NULL, FOREIGN])
+async def test_explicit_context_is_exact_match(default_ctx, monkeypatch, row):
+    """Explicit tenant addressing mirrors explicit search: exact page only,
+    no NULL-context fallback (NULL rows stay reachable via the default)."""
+    _provider_mock(monkeypatch, get=row)
+    out = json.loads(await crm_srv.get_contact(UUID, business_context_id=EOM))
+    assert out["found"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_contact_explicit_override_reaches_foreign_tenant(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch, get=FOREIGN)
+    out = json.loads(await crm_srv.update_contact(
+        UUID, full_name="X", business_context_id="churnsignals"))
+    assert out["success"] is True
+    provider.update_contact.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Appointment-fallback scope filter (pure)
+# ---------------------------------------------------------------------------
+
+
+def test_appointments_in_scope_filters_foreign(default_ctx):
+    rows = [
+        {"id": 1, "business_context_id": EOM},
+        {"id": 2, "business_context_id": "churnsignals"},
+    ]
+    assert [a["id"] for a in crm_srv._appointments_in_scope(rows, None)] == [1]
+    assert [a["id"] for a in crm_srv._appointments_in_scope(rows, "churnsignals")] == [2]
+
+
+def test_appointments_in_scope_unfiltered_without_default(no_default):
+    rows = [{"id": 1, "business_context_id": "churnsignals"}]
+    assert crm_srv._appointments_in_scope(rows, None) == rows
+
+
+# ---------------------------------------------------------------------------
+# get_customer_context scoping
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_customer_context_hides_foreign_uuid(default_ctx, monkeypatch):
+    _provider_mock(monkeypatch, get=FOREIGN)
+    out = json.loads(await crm_srv.get_customer_context(contact_id=UUID))
+    assert out == {"found": False, "context": None}
+
+
+@pytest.mark.asyncio
+async def test_customer_context_name_lookup_is_scoped(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch)
+    out = json.loads(await crm_srv.get_customer_context(name="jane"))
+    assert out["found"] is False
+    calls = provider.search_contacts.await_args_list
+    assert calls[0].kwargs["business_context_id"] == EOM
+    assert calls[1].kwargs["business_context_id_is_null"] is True
+
+
+@pytest.mark.asyncio
+async def test_customer_context_phone_lookup_is_scoped(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch)
+    out = json.loads(await crm_srv.get_customer_context(phone="217-555-0000"))
+    assert out == {"found": False, "context": None}
+    calls = provider.search_contacts.await_args_list
+    assert calls[0].kwargs["business_context_id"] == EOM
+
+
+@pytest.mark.asyncio
 async def test_list_contacts_uses_default(default_ctx, monkeypatch):
     provider = _provider_mock(monkeypatch)
     await crm_srv.list_contacts()
-    assert provider.list_contacts.await_args.kwargs["business_context_id"] == EOM
+    first = provider.list_contacts.await_args_list[0]
+    assert first.kwargs["business_context_id"] == EOM
