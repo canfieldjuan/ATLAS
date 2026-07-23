@@ -333,6 +333,8 @@ def _provider_with(matches):
     provider = DatabaseCRMProvider.__new__(DatabaseCRMProvider)
     provider.search_contacts = AsyncMock(side_effect=_search)
     provider.update_contact = AsyncMock(side_effect=lambda cid, u: {"id": cid, **u})
+    provider.claim_contact = AsyncMock(
+        side_effect=lambda cid, ctx: {"id": cid, "business_context_id": ctx})
     return provider
 
 
@@ -374,8 +376,8 @@ async def test_create_contact_dedupe_claims_null_context_contact():
          "business_context_id": "effingham_maids"}
     )
     assert result["id"] == "legacy-1"
-    merged = provider.update_contact.await_args.args[1]
-    assert merged["business_context_id"] == "effingham_maids"  # claimed
+    # Claimed via compare-and-set (round-5 of #2157), not a blind merge
+    provider.claim_contact.assert_awaited_once_with("legacy-1", "effingham_maids")
 
 
 @pytest.mark.asyncio

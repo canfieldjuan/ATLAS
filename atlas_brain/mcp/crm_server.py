@@ -31,7 +31,7 @@ import logging
 import sys
 import uuid as _uuid
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -61,10 +61,146 @@ mcp = FastMCP(
 )
 
 
+_provider_override: "Callable[[], Any] | None" = None
+
+
+def set_provider_override(factory: "Callable[[], Any] | None") -> None:
+    """Install (or clear with ``None``) a CRM provider factory override.
+
+    Injection seam for unit tests, mirroring the FastAPI
+    ``dependency_overrides`` pattern used by the HTTP surface: tests supply a
+    fake provider through this public setter rather than patching module
+    internals.
+    """
+    global _provider_override
+    _provider_override = factory
+
+
 def _provider():
+    if _provider_override is not None:
+        return _provider_override()
     from ..services.crm_provider import get_crm_provider
 
     return get_crm_provider()
+
+
+def _default_context() -> "str | None":
+    """Deployment-default tenant for read scoping (issue #2151).
+
+    When configured (ATLAS_MCP_CRM_DEFAULT_BUSINESS_CONTEXT), read tools that
+    receive no explicit business_context_id operate on that tenant's rows
+    plus NULL-context legacy rows (the claimable population established in
+    PR #2153). An explicit argument always wins; unset preserves the legacy
+    unscoped behavior.
+    """
+    from ..config import settings
+
+    return settings.mcp.crm_default_business_context or None
+
+
+def _visible_under_default(contact: "dict | None") -> bool:
+    """Tenant guard for id-addressed tools: with a default configured, a
+    contact belonging to a DIFFERENT tenant is reported as not found
+    (fail-closed, no cross-tenant existence leak)."""
+    if contact is None:
+        return False
+    default = _default_context()
+    if not default:
+        return True
+    return contact.get("business_context_id") in (None, default)
+
+
+async def _guarded_contact(
+    contact_id: str, business_context_id: "str | None" = None
+) -> "tuple[bool, dict | None]":
+    """Resolve + tenant-check an id-addressed operation.
+
+    Returns ``(allowed, contact)`` so callers that need the resolved row
+    (e.g. claim-on-update) avoid a second lookup. An explicit
+    ``business_context_id`` addresses exactly that tenant's page (mirroring
+    explicit search: no NULL-context fallback). Otherwise the deployment
+    default applies: the default tenant plus NULL-context legacy rows are
+    visible. Foreign-tenant rows read as nonexistent (fail-closed).
+    """
+    if business_context_id:
+        contact = await _provider().get_contact(contact_id)
+        if contact is None:
+            return False, None
+        return contact.get("business_context_id") == business_context_id, contact
+    if not _default_context():
+        return True, None
+    contact = await _provider().get_contact(contact_id)
+    return _visible_under_default(contact), contact
+
+
+async def _guard_contact_id(
+    contact_id: str, business_context_id: "str | None" = None
+) -> bool:
+    """Boolean form of :func:`_guarded_contact` for tools that only gate."""
+    allowed, _ = await _guarded_contact(contact_id, business_context_id)
+    return allowed
+
+
+async def _scoped_search(provider, **kwargs):
+    """search_contacts honoring the default scope: tenant page first, then
+    the NULL-context legacy page (mirrors crm_provider's stamped dedupe)."""
+    explicit = kwargs.pop("business_context_id", None)
+    if explicit:
+        return await provider.search_contacts(business_context_id=explicit, **kwargs)
+    default = _default_context()
+    if not default:
+        return await provider.search_contacts(**kwargs)
+    results = await provider.search_contacts(business_context_id=default, **kwargs)
+    if results:
+        return results
+    return await provider.search_contacts(business_context_id_is_null=True, **kwargs)
+
+
+def _appointments_in_scope(
+    appointments: "list[dict]", business_context_id: "str | None"
+) -> "list[dict]":
+    """Filter appointment rows to the effective tenant scope.
+
+    ``appointments.business_context_id`` is NOT NULL by schema, so under an
+    effective scope (explicit argument or deployment default) only rows
+    stamped with that tenant qualify; with no scope every row passes (legacy
+    unscoped behavior).
+    """
+    effective = business_context_id or _default_context()
+    if not effective:
+        return appointments
+    return [a for a in appointments if a.get("business_context_id") == effective]
+
+
+async def _claim_if_legacy(
+    contact_id: str, existing: "dict | None", business_context_id: "str | None"
+) -> bool:
+    """Claim-on-write of a NULL-context legacy row under the default.
+
+    Compare-and-set in SQL (``claim_contact``): returns False when a
+    concurrent claim moved the row to another tenant between the guard read
+    and this write, so callers fail closed instead of overwriting the other
+    tenant's claim.
+    """
+    default = _default_context()
+    if not default or business_context_id or existing is None:
+        return True
+    if existing.get("business_context_id") is not None:
+        return True
+    claimed = await _provider().claim_contact(contact_id, default)
+    return claimed is not None
+
+
+def _calls_in_scope(
+    rows: "list[dict]", business_context_id: "str | None"
+) -> "list[dict]":
+    """Call-transcript rows may carry a NULL business_context_id (legacy),
+    so under an effective scope the visible set is the tenant's rows plus
+    NULL-context ones -- the same claimable population as contacts."""
+    effective = business_context_id or _default_context()
+    if not effective:
+        return rows
+    return [r for r in rows if r.get("business_context_id") in (None, effective)]
 
 
 def _is_uuid(value: str) -> bool:
@@ -100,11 +236,12 @@ async def search_contacts(
     phone: any format accepted (digits extracted automatically)
     limit: max results (default 20)
     """
-    if not any([query, phone, email, business_context_id]):
+    if not any([query, phone, email, business_context_id, _default_context()]):
         return json.dumps({"error": "At least one of query, phone, email, or business_context_id is required",
                            "found": False, "contacts": [], "count": 0})
     try:
-        results = await _provider().search_contacts(
+        results = await _scoped_search(
+            _provider(),
             query=query,
             phone=phone,
             email=email,
@@ -130,14 +267,18 @@ async def search_contacts(
         repo = get_appointment_repo()
         appointments = []
 
+        effective_scope = business_context_id or _default_context()
         if phone:
             appointments = await repo.get_by_phone(
                 phone, status=None, upcoming_only=False, limit=limit,
+                business_context_id=effective_scope,
             )
         if not appointments and query:
             appointments = await repo.search_by_name(
                 query, include_history=True, limit=limit,
+                business_context_id=effective_scope,
             )
+        appointments = _appointments_in_scope(appointments, business_context_id)
 
         if not appointments:
             return json.dumps({"found": False, "contacts": [], "count": 0})
@@ -176,21 +317,28 @@ async def search_contacts(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def get_contact(contact_id: str) -> str:
+async def get_contact(contact_id: str, business_context_id: Optional[str] = None) -> str:
     """
     Fetch a contact by UUID or name.
 
     If contact_id is not a valid UUID, treats it as a name search
     and returns the first matching contact.
+    business_context_id: address a specific tenant's page explicitly;
+    omitted, the deployment default (plus NULL-context legacy rows) applies.
     """
     try:
         # If it doesn't look like a UUID, search by name instead
         if not _is_uuid(contact_id):
-            results = await _provider().search_contacts(query=contact_id, limit=1)
+            results = await _scoped_search(
+                _provider(), query=contact_id, limit=1,
+                business_context_id=business_context_id,
+            )
             if results:
                 return json.dumps({"found": True, "contact": results[0]}, default=str)
             return json.dumps({"found": False, "contact": None})
 
+        if not await _guard_contact_id(contact_id, business_context_id):
+            return json.dumps({"found": False, "contact": None})
         contact = await _provider().get_contact(contact_id)
         if contact is None:
             return json.dumps({"found": False, "contact": None})
@@ -238,7 +386,7 @@ async def create_contact(
             "city": city,
             "state": state,
             "zip": zip_code,
-            "business_context_id": business_context_id,
+            "business_context_id": business_context_id or _default_context(),
             "contact_type": contact_type,
             "notes": notes,
             "source": source,
@@ -268,12 +416,16 @@ async def update_contact(
     notes: Optional[str] = None,
     status: Optional[str] = None,
     tags: Optional[list[str]] = None,
+    business_context_id: Optional[str] = None,
 ) -> str:
     """
     Update a contact's information.
 
     Only supply fields you want to change.
     status: active | inactive | archived
+    business_context_id: addresses which tenant page the contact is looked
+    up on (explicit override of the deployment default); it is NOT an
+    updatable field.
     """
     if not _is_uuid(contact_id):
         return json.dumps({"success": False, "error": "Invalid contact_id (must be UUID)"})
@@ -296,6 +448,14 @@ async def update_contact(
         if not data:
             return json.dumps({"success": False, "error": "No fields provided to update"})
 
+        allowed, existing = await _guarded_contact(contact_id, business_context_id)
+        if not allowed:
+            return json.dumps({"success": False, "error": "Contact not found"})
+        # Claim-on-write: an update from a scoped session takes ownership of
+        # the NULL-context legacy row, so corrected data stops being visible
+        # to every tenant as unclaimed legacy.
+        if not await _claim_if_legacy(contact_id, existing, business_context_id):
+            return json.dumps({"success": False, "error": "Contact not found"})
         updated = await _provider().update_contact(contact_id, data)
         if updated is None:
             return json.dumps({"success": False, "error": "Contact not found"})
@@ -310,17 +470,27 @@ async def update_contact(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def delete_contact(contact_id: str) -> str:
+async def delete_contact(contact_id: str, business_context_id: Optional[str] = None) -> str:
     """
     Archive (soft-delete) a contact.
 
     The record is marked status=archived rather than permanently removed so
     interaction history and appointment links are preserved.
+    business_context_id: explicit tenant-page override of the deployment
+    default for the lookup.
     """
     if not _is_uuid(contact_id):
         return json.dumps({"success": False, "error": "Invalid contact_id (must be UUID)"})
 
     try:
+        allowed, existing = await _guarded_contact(contact_id, business_context_id)
+        if not allowed:
+            return json.dumps({"success": False, "error": "Contact not found"})
+        # Archiving is a legacy mutation too: claim the NULL-context row so
+        # one tenant cannot soft-delete shared legacy data out of the other
+        # tenant's default view.
+        if not await _claim_if_legacy(contact_id, existing, business_context_id):
+            return json.dumps({"success": False, "error": "Contact not found"})
         success = await _provider().delete_contact(contact_id)
         return json.dumps({"success": success})
     except Exception as exc:
@@ -346,15 +516,40 @@ async def list_contacts(
     status:       active (default) | inactive | archived
     contact_type: customer | lead | prospect | vendor
     limit / offset: for pagination
+
+    With a deployment default tenant configured and no explicit
+    business_context_id, results merge the default tenant's page with the
+    NULL-context legacy page (offset applies to each page; the merged
+    result is truncated to limit).
     """
     try:
-        contacts = await _provider().list_contacts(
-            business_context_id=business_context_id,
-            status=status,
-            contact_type=contact_type,
-            limit=min(limit, 200),
-            offset=offset,
-        )
+        provider = _provider()
+        default = _default_context()
+        capped = min(limit, 200)
+        if business_context_id or not default:
+            contacts = await provider.list_contacts(
+                business_context_id=business_context_id,
+                status=status,
+                contact_type=contact_type,
+                limit=capped,
+                offset=offset,
+            )
+        else:
+            tenant_rows = await provider.list_contacts(
+                business_context_id=default,
+                status=status,
+                contact_type=contact_type,
+                limit=capped,
+                offset=offset,
+            )
+            legacy_rows = await provider.list_contacts(
+                business_context_id_is_null=True,
+                status=status,
+                contact_type=contact_type,
+                limit=capped,
+                offset=offset,
+            )
+            contacts = (tenant_rows + legacy_rows)[:capped]
         return json.dumps({"contacts": contacts, "count": len(contacts)}, default=str)
     except Exception as exc:
         logger.exception("list_contacts error")
@@ -371,6 +566,7 @@ async def log_interaction(
     interaction_type: str,
     summary: str,
     occurred_at: Optional[str] = None,
+    business_context_id: Optional[str] = None,
 ) -> str:
     """
     Log a customer interaction.
@@ -389,6 +585,14 @@ async def log_interaction(
         return json.dumps({"success": False, "error": "interaction_type is required"})
 
     try:
+        allowed, existing = await _guarded_contact(contact_id, business_context_id)
+        if not allowed:
+            return json.dumps({"success": False, "error": "Contact not found"})
+        # Claim-on-write: logging an interaction from a scoped session takes
+        # ownership of the NULL-context legacy row first, so the new note is
+        # not readable through another tenant's default.
+        if not await _claim_if_legacy(contact_id, existing, business_context_id):
+            return json.dumps({"success": False, "error": "Contact not found"})
         interaction = await _provider().log_interaction(
             contact_id=contact_id,
             interaction_type=interaction_type,
@@ -406,7 +610,9 @@ async def log_interaction(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def get_interactions(contact_id: str, limit: int = 20) -> str:
+async def get_interactions(
+    contact_id: str, limit: int = 20, business_context_id: Optional[str] = None
+) -> str:
     """
     Retrieve interaction history for a contact.
 
@@ -417,6 +623,8 @@ async def get_interactions(contact_id: str, limit: int = 20) -> str:
         return json.dumps({"error": "Invalid contact_id (must be UUID)", "interactions": [], "count": 0})
 
     try:
+        if not await _guard_contact_id(contact_id, business_context_id):
+            return json.dumps({"error": "Contact not found", "interactions": [], "count": 0})
         interactions = await _provider().get_interactions(contact_id, limit=min(limit, 100))
         return json.dumps(
             {"interactions": interactions, "count": len(interactions)}, default=str
@@ -431,7 +639,9 @@ async def get_interactions(contact_id: str, limit: int = 20) -> str:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def get_contact_appointments(contact_id: str) -> str:
+async def get_contact_appointments(
+    contact_id: str, business_context_id: Optional[str] = None
+) -> str:
     """
     Fetch all appointments linked to a contact.
 
@@ -443,7 +653,13 @@ async def get_contact_appointments(contact_id: str) -> str:
         return json.dumps({"error": "Invalid contact_id (must be UUID)", "appointments": [], "count": 0})
 
     try:
-        appointments = await _provider().get_contact_appointments(contact_id)
+        if not await _guard_contact_id(contact_id, business_context_id):
+            return json.dumps({"error": "Contact not found", "appointments": [], "count": 0})
+        appointments = await _provider().get_contact_appointments(
+            contact_id,
+            business_context_id=business_context_id or _default_context(),
+        )
+        appointments = _appointments_in_scope(appointments, business_context_id)
         return json.dumps(
             {"appointments": appointments, "count": len(appointments)}, default=str
         )
@@ -466,6 +682,7 @@ async def get_customer_context(
     max_calls: int = 10,
     max_appointments: int = 10,
     max_emails: int = 10,
+    business_context_id: Optional[str] = None,
 ) -> str:
     """
     Get the full unified customer context --everything Atlas knows about a customer.
@@ -477,6 +694,9 @@ async def get_customer_context(
     name: customer name --will search contacts and use the first match
     phone: phone number in any format
     email: email address
+    business_context_id: explicit tenant-page override of the deployment
+    default; resolution and the tenant guard follow the same scoping rules
+    as search_contacts / get_contact.
     """
     if not any([contact_id, phone, email, name]):
         return json.dumps(
@@ -486,7 +706,6 @@ async def get_customer_context(
     try:
         from ..services.customer_context import get_customer_context_service
 
-        svc = get_customer_context_service()
         kwargs = {
             "max_interactions": min(max_interactions, 50),
             "max_calls": min(max_calls, 50),
@@ -499,17 +718,55 @@ async def get_customer_context(
             name = contact_id
             contact_id = None
 
+        resolved_in_scope = False
+
         # Name-based lookup: search contacts first, then get context by ID
         if name and not contact_id:
-            results = await _provider().search_contacts(query=name, limit=1)
+            results = await _scoped_search(
+                _provider(), query=name, limit=1,
+                business_context_id=business_context_id,
+            )
             if results:
                 contact_id = results[0].get("id")
+                resolved_in_scope = True
             else:
                 return json.dumps({"found": False, "context": None,
                                    "message": f"No contact found matching '{name}'"})
 
+        # Under a tenant scope, phone/email must resolve through the scoped
+        # contact search as well; the context service's own lookups are
+        # unscoped and would return foreign-tenant rows.
+        if (
+            not contact_id
+            and (phone or email)
+            and (business_context_id or _default_context())
+        ):
+            if phone:
+                results = await _scoped_search(
+                    _provider(), phone=phone, limit=1,
+                    business_context_id=business_context_id,
+                )
+            else:
+                results = await _scoped_search(
+                    _provider(), email=email, limit=1,
+                    business_context_id=business_context_id,
+                )
+            if not results:
+                return json.dumps({"found": False, "context": None})
+            contact_id = results[0].get("id")
+            resolved_in_scope = True
+
+        if contact_id and not resolved_in_scope:
+            if not await _guard_contact_id(contact_id, business_context_id):
+                return json.dumps({"found": False, "context": None})
+
+        svc = get_customer_context_service()
         if contact_id:
-            ctx = await svc.get_context(contact_id, **kwargs)
+            ctx = await svc.get_context(
+                contact_id,
+                business_context_id=business_context_id or _default_context(),
+                **kwargs,
+            )
         elif phone:
             ctx = await svc.get_context_by_phone(phone, **kwargs)
         else:
@@ -518,16 +775,28 @@ async def get_customer_context(
         if ctx.is_empty:
             return json.dumps({"found": False, "context": None})
 
+        effective = business_context_id or _default_context()
         result: dict = {
             "found": True,
             "contact": ctx.contact,
             "interactions": ctx.interactions,
-            "appointments": ctx.appointments,
-            "call_transcripts": ctx.call_transcripts,
-            "sent_emails": ctx.sent_emails,
-            "inbox_emails": ctx.inbox_emails,
-            "b2b_churn_signals": ctx.b2b_churn_signals,
+            "appointments": _appointments_in_scope(
+                ctx.appointments, business_context_id),
+            "call_transcripts": _calls_in_scope(
+                ctx.call_transcripts, business_context_id),
+            # Email history is gathered by address and carries no tenant
+            # column, so under a scope it is omitted (fail closed) until the
+            # email store is tenant-addressable.
+            "sent_emails": [] if effective else ctx.sent_emails,
+            "inbox_emails": [] if effective else ctx.inbox_emails,
+            # B2B churn enrichment is keyed by email domain against a global
+            # table with no tenant column -- omitted under a scope like the
+            # email history (the B2B MCP server is the scoped surface for it).
+            "b2b_churn_signals": [] if effective else ctx.b2b_churn_signals,
         }
+        if effective:
+            result["emails_omitted_under_scope"] = True
+            result["b2b_enrichment_omitted_under_scope"] = True
 
         return json.dumps(result, default=str)
     except Exception as exc:

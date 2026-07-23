@@ -171,6 +171,17 @@ class DatabaseCRMProvider:
         if existing is None and email:
             existing = await _resolve(email=email)
 
+        if existing is not None and ctx and existing.get("business_context_id") is None:
+            # Claim the NULL-context legacy match by compare-and-set before
+            # merging: a concurrent claim by another tenant leaves the row
+            # theirs and this create falls through to a fresh insert instead
+            # of overwriting their claim.
+            claimed = await self.claim_contact(str(existing["id"]), ctx)
+            if claimed is None:
+                existing = None
+            else:
+                existing = claimed
+
         if existing is not None:
             # Merge any new non-null fields into the existing record
             _MERGEABLE = {
@@ -362,6 +373,32 @@ class DatabaseCRMProvider:
         )
         return dict(row) if row else None
 
+    async def claim_contact(
+        self, contact_id: str, business_context_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Compare-and-set claim of a legacy row for a tenant.
+
+        Stamps ``business_context_id`` only while the row is still NULL (or
+        already carries the same tenant, making the claim idempotent).
+        Returns None when a concurrent claim moved the row to a different
+        tenant, so callers can fail closed instead of overwriting it.
+        """
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            UPDATE contacts
+               SET business_context_id = $2, updated_at = NOW()
+             WHERE id = $1
+               AND (business_context_id IS NULL OR business_context_id = $2)
+             RETURNING *
+            """,
+            contact_id,
+            business_context_id,
+        )
+        return dict(row) if row else None
+
     async def delete_contact(self, contact_id: str) -> bool:
         from ..storage.database import get_db_pool
 
@@ -375,6 +412,7 @@ class DatabaseCRMProvider:
     async def list_contacts(
         self,
         business_context_id: Optional[str] = None,
+        business_context_id_is_null: bool = False,
         status: Optional[str] = "active",
         contact_type: Optional[str] = None,
         limit: int = 50,
@@ -395,6 +433,8 @@ class DatabaseCRMProvider:
             conditions.append(f"business_context_id = ${idx}")
             params.append(business_context_id)
             idx += 1
+        if business_context_id_is_null:
+            conditions.append("business_context_id IS NULL")
         if contact_type:
             conditions.append(f"contact_type = ${idx}")
             params.append(contact_type)
@@ -513,23 +553,39 @@ class DatabaseCRMProvider:
         return [dict(r) for r in rows]
 
     async def get_contact_appointments(
-        self, contact_id: str
+        self, contact_id: str, business_context_id: Optional[str] = None
     ) -> list[dict[str, Any]]:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
-        rows = await pool.fetch(
-            """
-            SELECT id, start_time, end_time, service_type, status,
-                   customer_name, customer_phone, customer_email,
-                   customer_address, notes, created_at
-            FROM appointments
-            WHERE contact_id = $1
-            ORDER BY start_time DESC
-            LIMIT 50
-            """,
-            contact_id,
-        )
+        if business_context_id:
+            rows = await pool.fetch(
+                """
+                SELECT id, start_time, end_time, service_type, status,
+                       customer_name, customer_phone, customer_email,
+                       customer_address, notes, created_at, business_context_id
+                FROM appointments
+                WHERE contact_id = $1
+                  AND business_context_id = $2
+                ORDER BY start_time DESC
+                LIMIT 50
+                """,
+                contact_id,
+                business_context_id,
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT id, start_time, end_time, service_type, status,
+                       customer_name, customer_phone, customer_email,
+                       customer_address, notes, created_at, business_context_id
+                FROM appointments
+                WHERE contact_id = $1
+                ORDER BY start_time DESC
+                LIMIT 50
+                """,
+                contact_id,
+            )
         return [dict(r) for r in rows]
 
 
