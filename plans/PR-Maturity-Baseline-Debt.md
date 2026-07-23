@@ -100,7 +100,7 @@ entry except the two named files to origin/main's values.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Maturity-Baseline-Debt.md` | 108 |
+| `plans/PR-Maturity-Baseline-Debt.md` | 106 |
 | `tests/maturity_sweep/baseline_atlas_brain_tools.json` | 3 |
 | `tests/maturity_sweep/baseline_scripts.json` | 7 |
-| **Total** | **118** |
+| **Total** | **116** |
