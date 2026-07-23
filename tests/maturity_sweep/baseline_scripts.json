@@ -1934,5 +1934,13 @@
       "UNGUARDED_INDEX": 1
     },
     "score": 2
+  },
+  "scripts/sync_eom_portal_customers.py": {
+    "counts": {
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 14
   }
 }
