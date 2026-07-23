@@ -1,4 +1,4 @@
-# constraints-root-asr-sha256: 65df406c3663333868141ca5d9d96b642b3f8d9c9546998be643cb5f0cab086a
+# constraints-root-asr-sha256: 986ecbd0168a5cb1a3a934330fd08e7c13a20f263a37b0ff8c5d2b46c97da087
 -c constraints.root-asr.txt
 
 fastapi==0.139.0
