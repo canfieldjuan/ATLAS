@@ -12,8 +12,7 @@ import logging
 import re
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -31,8 +30,7 @@ ALLOWED_FORM_ORIGINS = frozenset({
 })
 
 
-def _form_cors_headers(request: Request) -> dict[str, str]:
-    origin = request.headers.get("origin", "")
+def _form_cors_headers(origin: str) -> dict[str, str]:
     if origin not in ALLOWED_FORM_ORIGINS:
         return {}
     return {
@@ -41,6 +39,47 @@ def _form_cors_headers(request: Request) -> dict[str, str]:
         "Access-Control-Allow-Headers": "Content-Type",
         "Vary": "Origin",
     }
+
+
+class LeadIntakeCORSMiddleware:
+    """Path-scoped, credential-free CORS for the public intake route.
+
+    Mounted OUTSIDE the app-wide CORSMiddleware (added after it), because
+    Starlette's CORSMiddleware consumes browser preflights before routing —
+    a route-level OPTIONS handler would never see them (PR #2153 round 7,
+    R1/R12). Only the exact intake path is affected; every other route keeps
+    the app-wide policy.
+    """
+
+    def __init__(self, app: Any, path: str = "/api/v1/leads/intake") -> None:
+        self.app = app
+        self.path = path
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or scope.get("path") != self.path:
+            await self.app(scope, receive, send)
+            return
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+                   for k, v in scope.get("headers", [])}
+        cors = _form_cors_headers(headers.get("origin", ""))
+        if scope.get("method") == "OPTIONS" and "access-control-request-method" in headers:
+            await send({
+                "type": "http.response.start",
+                "status": 204 if cors else 400,
+                "headers": [(k.encode(), v.encode()) for k, v in cors.items()],
+            })
+            await send({"type": "http.response.body", "body": b""})
+            return
+
+        async def send_with_cors(message: Any) -> None:
+            if message.get("type") == "http.response.start" and cors:
+                message = dict(message)
+                message["headers"] = list(message.get("headers", [])) + [
+                    (k.encode(), v.encode()) for k, v in cors.items()
+                ]
+            await send(message)
+
+        await self.app(scope, receive, send_with_cors)
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _MIN_PHONE_DIGITS = 7
@@ -145,9 +184,13 @@ def _summary_with_channels(payload: LeadIntakeRequest, email: str, phone_digits:
     the same-day dedupe key, so a resubmission with a CORRECTED email/phone
     is a new interaction (and a fresh acknowledgement target) instead of
     being swallowed by the duplicate guard (PR #2153 round 6, R1/R6)."""
-    summary = _build_summary(payload)
     channels = ", ".join(v for v in (email, phone_digits) if v)
-    return f"{summary}\nCallback: {channels}" if channels else summary
+    summary = _build_summary(payload)
+    # Prepended, not appended: log_interaction hashes only the leading slice
+    # of the normalized summary, so the channels must sit inside the hashed
+    # prefix or a long message pushes them out of the dedupe basis
+    # (PR #2153 round 7, R1/R6).
+    return f"Callback: {channels}\n{summary}" if channels else summary
 
 
 async def _process_lead_intake(
@@ -314,39 +357,31 @@ def _ack_volume_dependency() -> Any:
     return _hourly_ack_volume
 
 
-@router.options("/intake", include_in_schema=False)
-async def lead_intake_preflight(request: Request) -> Response:
-    return Response(status_code=204, headers=_form_cors_headers(request))
-
-
 @router.post("/intake")
 async def lead_intake(
     payload: LeadIntakeRequest,
-    request: Request,
     crm: Any = Depends(_crm_dependency),
     email_provider: Any = Depends(_email_dependency),
     daily_count: Any = Depends(_daily_count_dependency),
     ack_volume: Any = Depends(_ack_volume_dependency),
-) -> Response:
-    """Receive an estimate-form submission from the public website."""
-    cors = _form_cors_headers(request)
+) -> dict[str, Any]:
+    """Receive an estimate-form submission from the public website.
+
+    CORS for the form origins is applied by LeadIntakeCORSMiddleware in
+    main.py (path-scoped, credential-free), including on error responses.
+    """
     try:
-        result = await _process_lead_intake(
+        return await _process_lead_intake(
             payload,
             crm=crm,
             email_provider=email_provider,
             daily_count=daily_count,
             ack_volume=ack_volume,
         )
-        return JSONResponse(content=result, headers=cors)
     except LeadValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc), headers=cors) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LeadRateLimitedError as exc:
-        raise HTTPException(
-            status_code=429, detail="Too many requests — try again tomorrow", headers=cors
-        ) from exc
+        raise HTTPException(status_code=429, detail="Too many requests — try again tomorrow") from exc
     except Exception:
         logger.exception("lead_intake: intake failed")
-        raise HTTPException(
-            status_code=503, detail="Lead intake temporarily unavailable", headers=cors
-        )
+        raise HTTPException(status_code=503, detail="Lead intake temporarily unavailable")

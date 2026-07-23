@@ -151,14 +151,18 @@ class DatabaseCRMProvider:
             return None
 
         async def _resolve(**channel: Any) -> Optional[dict[str, Any]]:
-            # Scoped page first: a same-tenant match must win even when many
-            # recently-updated foreign contacts share the channel and would
-            # crowd the unscoped page (PR #2153 round 6, R4/R5). The unscoped
-            # pass then covers claimable NULL-context historical rows.
+            # Same-tenant page first, then the NULL-context (claimable) page
+            # directly -- both queries name their exact population, so a crowd
+            # of recently-updated foreign contacts can never page-starve the
+            # match (PR #2153 rounds 6-7, R4/R5).
             if ctx:
                 scoped = await self.search_contacts(business_context_id=ctx, **channel)
                 if scoped:
                     return scoped[0]
+                claimable = await self.search_contacts(
+                    business_context_id_is_null=True, **channel
+                )
+                return claimable[0] if claimable else None
             return _pick(await self.search_contacts(**channel))
 
         existing: Optional[dict[str, Any]] = None
@@ -280,6 +284,7 @@ class DatabaseCRMProvider:
         phone: Optional[str] = None,
         email: Optional[str] = None,
         business_context_id: Optional[str] = None,
+        business_context_id_is_null: bool = False,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         from ..storage.database import get_db_pool
@@ -304,6 +309,8 @@ class DatabaseCRMProvider:
             conditions.append(f"business_context_id = ${idx}")
             params.append(business_context_id)
             idx += 1
+        if business_context_id_is_null:
+            conditions.append("business_context_id IS NULL")
         if query:
             conditions.append(f"full_name ILIKE ${idx}")
             params.append(f"%{query[:200]}%")

@@ -146,7 +146,15 @@ Slice phase: vertical slice
   21. CORS is route-scoped to the two form origins, credential-free (the
       app-wide credentialed allowlist is NOT extended); other origins get no
       CORS headers.
-  22. settings.email.enabled gates the acknowledgement send; partial phones
+  22. Intake CORS is a path-scoped ASGI middleware mounted OUTSIDE the
+      app-wide CORSMiddleware (which consumes preflights before routing);
+      real browser preflights succeed for the form origins and every other
+      route keeps the app-wide policy.
+  22b. Resolution and dedupe query exact populations (tenant page, then an
+      IS NULL page via a new search_contacts filter) — no page-limit
+      crowd-out; callback channels are PREPENDED to the summary so they sit
+      inside the hashed dedupe prefix at any message length.
+  23. settings.email.enabled gates the acknowledgement send; partial phones
       (7-9 digits) are a valid channel but never used for contact matching;
       submitted callback channels ride the summary so corrections defeat
       the same-day dedupe; provider dedupe queries the scoped page first.
@@ -179,6 +187,7 @@ Slice phase: vertical slice
 
 - `atlas_brain/api/__init__.py`
 - `atlas_brain/api/leads.py`
+- `atlas_brain/main.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/skills/email/cleaning_confirmation.md`
 - `atlas_brain/skills/email/estimate_confirmation.md`
@@ -252,14 +261,15 @@ Parked hardening: per-IP/email rate-limit table; DB-side atomic cap guard (both 
 | File | LOC |
 |---|---:|
 | `atlas_brain/api/__init__.py` | 2 |
-| `atlas_brain/api/leads.py` | 352 |
-| `atlas_brain/services/crm_provider.py` | 48 |
+| `atlas_brain/api/leads.py` | 387 |
+| `atlas_brain/main.py` | 7 |
+| `atlas_brain/services/crm_provider.py` | 55 |
 | `atlas_brain/skills/email/cleaning_confirmation.md` | 2 |
 | `atlas_brain/skills/email/estimate_confirmation.md` | 2 |
 | `atlas_brain/skills/email/proposal.md` | 2 |
 | `atlas_brain/templates/email/__init__.py` | 5 |
 | `atlas_brain/templates/email/estimate_confirmation.py` | 2 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 66 |
-| `plans/PR-EOM-Lead-Intake.md` | 267 |
-| `tests/test_leads_intake.py` | 616 |
-| **Total** | **1364** |
+| `plans/PR-EOM-Lead-Intake.md` | 273 |
+| `tests/test_leads_intake.py` | 665 |
+| **Total** | **1468** |

@@ -72,8 +72,21 @@ def _payload(**overrides):
 
 
 def _crm(inserted: bool = True, existing: list | None = None):
+    """Search mock mirrors production filters: a tenant-scoped call returns
+    only that tenant's rows; a null-scoped call returns only NULL-context
+    rows; an unscoped call returns everything."""
+    rows = existing or []
+
+    async def _search(**kwargs):
+        if kwargs.get("business_context_id"):
+            return [m for m in rows
+                    if m.get("business_context_id") == kwargs["business_context_id"]]
+        if kwargs.get("business_context_id_is_null"):
+            return [m for m in rows if m.get("business_context_id") is None]
+        return rows
+
     crm = MagicMock()
-    crm.search_contacts = AsyncMock(return_value=existing or [])
+    crm.search_contacts = AsyncMock(side_effect=_search)
     crm.find_or_create_contact = AsyncMock(return_value={"id": "c-123"})
     crm.log_interaction = AsyncMock(return_value={"id": "i-1", "inserted": inserted})
     return crm
@@ -313,6 +326,8 @@ def _provider_with(matches):
         ctx = kwargs.get("business_context_id")
         if ctx:
             return [m for m in matches if m.get("business_context_id") == ctx]
+        if kwargs.get("business_context_id_is_null"):
+            return [m for m in matches if m.get("business_context_id") is None]
         return matches
 
     provider = DatabaseCRMProvider.__new__(DatabaseCRMProvider)
@@ -569,9 +584,10 @@ async def test_partial_phone_not_used_for_contact_matching():
     await _process_lead_intake(
         _payload(phone="5550100"), crm=crm, email_provider=provider
     )
-    # only ONE search (email); no phone-based lookup for the short number
-    assert len(crm.search_contacts.await_args_list) == 1
-    assert "email" in crm.search_contacts.await_args_list[0].kwargs
+    # no phone-based lookup for the short number; email lookups only
+    for call in crm.search_contacts.await_args_list:
+        assert "phone" not in call.kwargs
+        assert "email" in call.kwargs
 
 
 @pytest.mark.asyncio
@@ -590,27 +606,60 @@ async def test_corrected_callback_defeats_same_day_dedupe_key():
     assert "2175559999" in s2  # corrected callback visible in the summary
 
 
-def test_route_cors_scoped_to_form_origins():
-    """Round 6 R3: CORS is granted per-route to the form origins only, with
-    no credentials; other origins get no CORS headers."""
+def test_cors_middleware_scoped_to_form_origins():
+    """Rounds 6-7 R3/R12: intake CORS is a path-scoped middleware mounted
+    OUTSIDE the app-wide credentialed CORSMiddleware, so real browser
+    preflights (with Access-Control-Request-Method) are answered for the
+    form origins, credential-free, without widening any other route."""
     from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
     from fastapi.testclient import TestClient
 
     import atlas_brain.api.leads as leads_mod
 
     app = FastAPI()
     app.include_router(leads_mod.router, prefix="/api/v1")
+    # same order as main.py: app-wide credentialed CORS first, then ours
+    app.add_middleware(
+        CORSMiddleware, allow_origins=["http://localhost:5174"],
+        allow_credentials=True, allow_methods=["POST"], allow_headers=["*"],
+    )
+    app.add_middleware(leads_mod.LeadIntakeCORSMiddleware)
     client = TestClient(app)
 
-    pre = client.options(
-        "/api/v1/leads/intake",
-        headers={"Origin": "https://effinghamofficemaids.com"},
-    )
+    preflight_headers = {
+        "Origin": "https://effinghamofficemaids.com",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Content-Type",
+    }
+    pre = client.options("/api/v1/leads/intake", headers=preflight_headers)
     assert pre.status_code == 204
     assert pre.headers["access-control-allow-origin"] == "https://effinghamofficemaids.com"
     assert "access-control-allow-credentials" not in pre.headers
 
-    other = client.options(
-        "/api/v1/leads/intake", headers={"Origin": "https://evil.example"}
+    evil = client.options(
+        "/api/v1/leads/intake",
+        headers={**preflight_headers, "Origin": "https://evil.example"},
     )
-    assert "access-control-allow-origin" not in other.headers
+    assert "access-control-allow-origin" not in evil.headers
+    assert evil.status_code == 400
+
+    # other routes keep the app-wide policy (dashboard preflight untouched)
+    dash = client.options(
+        "/api/v1/anything",
+        headers={"Origin": "http://localhost:5174",
+                 "Access-Control-Request-Method": "POST"},
+    )
+    assert dash.headers.get("access-control-allow-origin") == "http://localhost:5174"
+
+
+@pytest.mark.asyncio
+async def test_callback_channels_prepended_within_dedupe_prefix():
+    """Round 7 R1/R6: channels must lead the summary so they sit inside the
+    hashed dedupe prefix even for maximum-length messages."""
+    crm, provider = _crm(), _email_provider()
+    await _process_lead_intake(
+        _payload(message="x" * 7900), crm=crm, email_provider=provider
+    )
+    summary = crm.log_interaction.call_args.kwargs["summary"]
+    assert summary.startswith("Callback: jane@example.com, 2175550100")
