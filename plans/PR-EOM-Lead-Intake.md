@@ -139,7 +139,10 @@ Slice phase: vertical slice
   19. Legacy NULL-context contacts are resolved read-only by the endpoint
       (same-tenant preferred over NULL; foreign tenants invisible), and the
       provider prefers a same-tenant match over a claimable NULL row.
-  20. Throttle bucketing mirrors search_contacts' substring lookup exactly
+  20. Guard counts (daily cap + hourly volume) include NULL-context legacy
+      contacts — the same population the read-only resolution accepts —
+      so repeat submissions against a legacy customer still hit the caps.
+  21. Throttle bucketing mirrors search_contacts' substring lookup exactly
       (any submission that resolves to a contact also counts against it);
       submitted email/phone are recorded in interaction metadata so new
       callback channels are never lost.
@@ -251,6 +254,6 @@ Parked hardening: per-IP/email rate-limit table; DB-side atomic cap guard (both 
 | `atlas_brain/templates/email/__init__.py` | 5 |
 | `atlas_brain/templates/email/estimate_confirmation.py` | 2 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 66 |
-| `plans/PR-EOM-Lead-Intake.md` | 256 |
+| `plans/PR-EOM-Lead-Intake.md` | 259 |
 | `tests/test_leads_intake.py` | 531 |
-| **Total** | **1215** |
+| **Total** | **1218** |

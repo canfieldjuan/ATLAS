@@ -72,7 +72,7 @@ async def _daily_submission_count(email: str, phone_digits: str) -> int:
         JOIN contacts c ON c.id = ci.contact_id
         WHERE ci.interaction_type = 'web_form'
           AND ci.occurred_at > NOW() - INTERVAL '1 day'
-          AND c.business_context_id = $1
+          AND (c.business_context_id = $1 OR c.business_context_id IS NULL)
           AND (($2 <> '' AND LOWER(c.email) = $2)
                OR ($3 <> '' AND regexp_replace(COALESCE(c.phone, ''), '[^0-9]', '', 'g')
                    LIKE '%' || RIGHT($3, 10) || '%'))
@@ -95,7 +95,7 @@ async def _hourly_ack_volume() -> int:
         JOIN contacts c ON c.id = ci.contact_id
         WHERE ci.interaction_type = 'web_form'
           AND ci.occurred_at > NOW() - INTERVAL '1 hour'
-          AND c.business_context_id = $1
+          AND (c.business_context_id = $1 OR c.business_context_id IS NULL)
         """,
         EOM_BUSINESS_CONTEXT_ID,
     ) or 0
