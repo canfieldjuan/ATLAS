@@ -127,7 +127,10 @@ def parse_events(events, tags, contact_type, is_commercial, label):
         raw_summary = (ev.summary or "").strip()
         raw_location = (ev.location or "").strip()
         raw_description = ics._strip_html(ev.description or "")
-        if not raw_summary or not raw_location:
+        # GoogleCalendarProvider maps a missing summary to "Untitled" --
+        # treat it as blank or nameless placeholder events import as
+        # customers (Codex round 15).
+        if not raw_summary or raw_summary.lower() == "untitled" or not raw_location:
             continue
 
         name, cancelled = ics._clean_summary(raw_summary, is_commercial)
@@ -175,27 +178,29 @@ def parse_events(events, tags, contact_type, is_commercial, label):
                 event_count=1,
                 cancelled=cancelled,
             )
-            if (phone or email) and ev.start:
-                by_address[addr_key]._ch_dt = ev.start
+            if ev.start:
+                if phone:
+                    by_address[addr_key]._phone_dt = ev.start
+                if email:
+                    by_address[addr_key]._email_dt = ev.start
         else:
             rec = by_address[addr_key]
             rec.event_count += 1
             if len(name) < len(rec.name):
                 rec.name = name
-            # The latest event's channel wins: the calendar is the live
-            # master, so a corrected number/email on a newer booking
-            # replaces the stale one (Codex round 13, R1).
-            newer = ev.start and (
-                getattr(rec, "_ch_dt", None) is None or ev.start > rec._ch_dt
-            )
-            if phone and (not rec.phone or newer):
+            # The latest event's channel wins, tracked PER FIELD so a newer
+            # email cannot make an older phone look fresh (Codex rounds
+            # 13+15, R1).
+            if phone and (not rec.phone or (ev.start and (
+                    getattr(rec, "_phone_dt", None) is None or ev.start > rec._phone_dt))):
                 rec.phone = phone
                 if ev.start:
-                    rec._ch_dt = ev.start
-            if email and (not rec.email or newer):
+                    rec._phone_dt = ev.start
+            if email and (not rec.email or (ev.start and (
+                    getattr(rec, "_email_dt", None) is None or ev.start > rec._email_dt))):
                 rec.email = email
                 if ev.start:
-                    rec._ch_dt = ev.start
+                    rec._email_dt = ev.start
             if not rec.contact_name and contact_name:
                 rec.contact_name = contact_name
             if not rec.notes and notes:
@@ -285,20 +290,22 @@ def dedup_records(records):
                 dt = _dtm.combine(r.last_event_date, _t.min).replace(tzinfo=_tz.utc)
             return dt
 
-        def _ch_key(r):
-            from datetime import datetime as _dtm, timezone as _tz
-            return (getattr(r, "_ch_dt", None) or _dt(r)
-                    or _dtm(1970, 1, 1, tzinfo=_tz.utc))
+        def _field_key(attr):
+            def key(r):
+                from datetime import datetime as _dtm, timezone as _tz
+                return (getattr(r, attr, None) or _dt(r)
+                        or _dtm(1970, 1, 1, tzinfo=_tz.utc))
+            return key
 
-        # Channels merge by event recency too, matching the in-calendar rule
-        # (Codex round 14, P1): the latest record with a value wins, not the
-        # first-processed calendar.
+        # Channels merge by PER-FIELD event recency, matching the
+        # in-calendar rule (Codex rounds 14-15, P1): the latest record with
+        # a value for THAT field wins.
         phones = [r for r in group if r.phone]
         if phones:
-            base.phone = max(phones, key=_ch_key).phone
+            base.phone = max(phones, key=_field_key("_phone_dt")).phone
         emails = [r for r in group if r.email]
         if emails:
-            base.email = max(emails, key=_ch_key).email
+            base.email = max(emails, key=_field_key("_email_dt")).email
 
         for rec in group[1:]:
             if len(rec.name) < len(base.name):
@@ -584,10 +591,16 @@ async def import_one(rec, crm, pool) -> str:
             contact_id = str(result.get("id", ""))
             outcome = "created"
             if contact_id:
-                await _guarded_update(
+                stamp = await _guarded_update(
                     pool, contact_id,
                     {"source": "calendar_import", "tags": data["tags"]},
                 )
+                if stamp is None:
+                    # Archived/reassigned within the create window: the row
+                    # exists but is unstamped -- say so instead of reporting
+                    # a clean create (Codex round 15, R6/R8).
+                    print(f"    note: contact {contact_id} changed before the "
+                          "provenance stamp; left unstamped")
         else:
             # Race-merged: reconcile exactly like any matched contact
             # (Codex round 7, R1/R8).
@@ -626,9 +639,12 @@ async def import_one(rec, crm, pool) -> str:
             # colliding with the old anchored row forever (Codex round 11,
             # R1/R6).
             metadata={
+                # Timestamp-scoped: a same-day newer booking advances the
+                # timeline too (Codex rounds 11+15, R1/R6).
                 "source_ref": (
-                    f"eom_live_calendar:{rec.address.lower()}"
-                    f":{rec.last_event_date.isoformat()}"
+                    f"eom_live_calendar:{rec.address.lower()}:"
+                    + (getattr(rec, "latest_event_dt", None)
+                       or rec.last_event_date).isoformat()
                 )
             },
         )

@@ -510,6 +510,35 @@ def test_latest_event_channels_replace_stale_ones():
         assert "1111" in rec.phone
 
 
+def test_channel_recency_is_tracked_per_field():
+    # Codex round 15 (P1): a newer email must not make an older phone look
+    # fresh -- Calendar A: May phone + July email; Calendar B: June phone.
+    cal_a = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL",
+                description="217-555-0000",
+                start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)),
+         _event("Jane Smith", "12 Oak St, Effingham, IL",
+                description="jane@example.com",
+                start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))],
+        ["commercial"], "customer", True, "Commercial")
+    cal_b = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL",
+                description="217-555-1111",
+                start=datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc))],
+        ["residential"], "customer", False, "Residential")
+    for records in (cal_a + cal_b, cal_b + cal_a):
+        merged = dedup_records(list(records))
+        assert len(merged) == 1
+        assert "1111" in merged[0].phone           # June phone beats May phone
+        assert merged[0].email == "jane@example.com"
+
+
+def test_untitled_placeholder_events_are_skipped():
+    # Codex round 15: the provider maps missing summaries to "Untitled".
+    events = [_event("Untitled", "12 Oak St, Effingham, IL")]
+    assert parse_events(events, ["residential"], "customer", False, "Residential") == []
+
+
 def test_cross_calendar_merge_prefers_latest_channels():
     # Codex round 14 (P1): the newest booking's phone wins across calendars,
     # regardless of which calendar is processed first.
@@ -776,5 +805,7 @@ def test_interaction_carries_stable_dedupe_anchor():
     assert crm.interactions, "interaction should be logged for dated records"
     meta = crm.interactions[0]["metadata"]
     assert meta["source_ref"].startswith("eom_live_calendar:")
-    assert meta["source_ref"].endswith(rec.last_event_date.isoformat())
+    anchor_suffix = (getattr(rec, "latest_event_dt", None)
+                     or rec.last_event_date).isoformat()
+    assert meta["source_ref"].endswith(anchor_suffix)
     assert crm.interactions[0]["interaction_type"] == "appointment"

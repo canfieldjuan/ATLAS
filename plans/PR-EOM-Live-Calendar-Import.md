@@ -158,8 +158,11 @@ Slice phase: vertical slice
       email) rides inside the claim CAS so a row corrected mid-race no
       longer matches the predicate (all asserted; Codex round 12).
   31. Cross-calendar channel merges follow the same event recency as
-      in-calendar (the newest booking's phone/email wins regardless of
-      calendar processing order; both orders asserted; Codex round 14, P1).
+      in-calendar, tracked PER FIELD (a newer email never makes an older
+      phone look fresh); provider "Untitled" placeholders are rejected;
+      interaction anchors are timestamp-scoped; and a failed post-create
+      stamp is reported, not silently dropped (all asserted; Codex rounds
+      14-15).
   30. The claim-CAS phone predicate is contains-match (provider parity, so
       ext-bearing stored contacts satisfy the CAS they matched by); same-day
       cross-calendar ties resolve by full timestamp; and the latest event's
@@ -247,6 +250,15 @@ stable `source_ref`.
 
 ## Waived (with reason)
 
+- Codex round 15, "Avoid unguarded provider merge on create races" (R4/R8):
+  a concurrent writer creating a matching contact in the window between
+  this script's own channel searches and `create_contact` routes through
+  the provider's OWN reviewed merge path instead of `_update_matched`.
+  Waived for the same recorded reason as the round-12 concurrency item:
+  single-operator runbook-serialized execution; the "damage" is the
+  provider's reviewed merge semantics (used by production intake) rather
+  than data loss; and the next sequential run reconciles the row through
+  the matched path (asserted idempotency).
 - Codex round 12, "Serialize address-only creates" (R8, concurrent-run
   duplicate window): two SIMULTANEOUS runs of this operator script could
   each miss the address lookup and both insert. Waived: the script is a
@@ -267,7 +279,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 48 passed.
+- `tests/test_eom_live_calendar_import.py` — 50 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.
