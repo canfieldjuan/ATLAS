@@ -10,7 +10,11 @@ again on #2158/#2161/#2163). Verified against current main:
   deliberate — `events[0]` sits behind explicit `if not events` /
   `len(events) == 1` guards (sweep false-positive), and both swallowed
   excepts are commented intentional fallbacks ("Already logged as
-  CRITICAL").
+  CRITICAL"). The `NO_RAISES_TESTS` component is ALSO accepted
+  deliberately: the tool's failure paths are log-and-degrade fallbacks by
+  design (voice-assistant convenience surface, no caller depends on
+  raises); adding failure-path raise tests is recorded below as deferred
+  test-debt rather than silently suppressed.
 - `scripts/import_eom_customers_live.py` (score 9): reviewed per-record
   operator patterns from the 18-round #2158 gauntlet, deliberately NOT
   baselined inside that PR per its round-4 review direction ("move the
@@ -42,6 +46,15 @@ Slice phase: vertical slice
      "ratchet gate passed" both).
   2. The diff contains ONLY the two entries + this doc (name-status
      verified).
+- Affected surfaces: CI maturity ratchet jobs for the `atlas_brain/tools`
+  and `scripts` lanes ONLY (baseline JSON inputs); no runtime, API, DB,
+  deploy, or money surface is touched.
+- Risk areas: (a) masking a FUTURE regression in the two named files — the
+  ratchet still fails on ANY score increase above these recorded values,
+  and capped-category counts cannot grow past their caps without raising
+  the total, so the guard's increase detection remains live; (b) test-debt
+  suppression — mitigated by recording the calendar raise-test debt as an
+  explicit deferred item below.
 - Reachability proof: CI ratchet jobs consume the baselines directly.
 - Reviewer rules triggered: R12, R14.
   - R12: CI config/baseline change only; no behavior, no secrets.
@@ -65,7 +78,10 @@ entry except the two named files to origin/main's values.
 
 ## Deferred
 
-- Nothing; closes #2159.
+- Failure-path raise tests for `atlas_brain/tools/calendar.py` (the
+  accepted `NO_RAISES_TESTS` debt) — a tools-lane test slice, deliberately
+  not smuggled into a baseline chore.
+- Otherwise nothing; closes #2159.
 
 ## Verification
 
