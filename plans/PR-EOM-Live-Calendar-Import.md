@@ -103,13 +103,14 @@ Slice phase: vertical slice
   14. Imported segment tags UNION with existing tags; recorded provenance
       like the intake's website/estimate_request is never erased
       (asserted; Codex round 4, R1).
-  15. A NULL-context legacy address-only row is claimed via the provider's
-      CAS (`claim_contact`) and updated, never duplicated; a concurrent
-      foreign claim fails closed to a fresh EOM row; the legacy page carries
-      the same archived guard AND is restricted to
-      `source = 'calendar_import'` provenance, so unknown-source legacy rows
-      at a shared address are never claimed (all asserted; Codex rounds 2-3,
-      R4/R8).
+  15. A NULL-context legacy row is claimed via a script-side CAS UPDATE
+      whose guards live INSIDE the statement (context NULL-or-same,
+      unarchived always, and `source='calendar_import'` additionally for
+      weak address-only identity) — a raced archive/source-correction makes
+      the CAS return no row and the record is created fresh, with the raced
+      row never tenant-stamped; channel-matched (phone/email) legacy rows
+      claim without the source predicate so a legacy web lead reconciles
+      instead of duplicating (all asserted; Codex rounds 2-3, 7-8, R4/R8).
   16. A repeat import of an unchanged calendar performs ZERO writes on
       matched contacts -- updates are diffed field-by-field and skipped
       when identical, counted 'unchanged' (asserted; Codex round 5, P1).
@@ -132,9 +133,13 @@ Slice phase: vertical slice
   22. Retries are self-repairing: a matched row carrying provider-default
       'manual' source (the signature of a failed post-create stamp) gets
       calendar provenance restored (asserted; Codex round 7, R6/R8).
-  23. A claimed legacy row is re-checked after the CAS; archived or
-      source-corrected races fail closed to a fresh create (asserted;
-      Codex round 7, R4/R8).
+  23. (superseded by 15's in-CAS guards, round 8)
+  24. The address-net SELECTs return `source`, so an address-only matched
+      web contact keeps its provenance instead of being treated as
+      provider-default manual (asserted; Codex round 8, P1).
+  25. Uppercase phone extensions (X42 / EXT 42) are normalized before
+      extraction so the base number is never corrupted (asserted against
+      the real extractor behavior; Codex round 8).
 - Reachability proof: operator script, invoked directly. The full CLI
   entrypoint (arg parsing, id resolution, `GoogleCalendarProvider.
   list_events` pagination, cross-calendar dedupe, exit code) was exercised
@@ -217,7 +222,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 33 passed.
+- `tests/test_eom_live_calendar_import.py` — 36 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.

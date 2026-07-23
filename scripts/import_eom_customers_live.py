@@ -138,7 +138,7 @@ def parse_events(events, tags, contact_type, is_commercial, label):
         if len(address) < 5:
             continue
 
-        phone = ics._extract_phone(raw_description)
+        phone = _extract_phone_live(raw_description)
         email = ics._extract_email(raw_description)
         contact_name = ics._extract_contact_name(raw_description)
         event_date = ev.start.date() if ev.start else None
@@ -206,6 +206,16 @@ def _phone_digits(phone: str) -> str:
     '5559999123' and miss the tenant contact (Codex round 5, R1/R8)."""
     base = re.split(r"(?:ext\.?|x)\s*\d+\s*$", phone, flags=re.IGNORECASE)[0]
     return "".join(c for c in base if c.isdigit())
+
+
+def _extract_phone_live(text: str):
+    """ics._extract_phone splits extensions case-sensitively, so 'X42'/'EXT 42'
+    leak extension digits into the base number ('755-599-9942 ext 42').
+    Lowercase the ext/x tokens ahead of extraction (Codex round 8)."""
+    normalized = re.sub(
+        r"(?i)\b(ext\.?|x)(?=\s*\d)", lambda m: m.group(0).lower(), text
+    )
+    return ics._extract_phone(normalized)
 
 
 def dedup_records(records):
@@ -320,7 +330,7 @@ async def resolve_by_address(pool, address: str):
     row = await pool.fetchrow(
         """
         SELECT id, full_name, address, contact_type, business_context_id,
-               tags, status, phone, email, notes
+               tags, status, phone, email, notes, source
         FROM contacts
         WHERE business_context_id = $1
           AND status != 'archived'
@@ -336,7 +346,7 @@ async def resolve_by_address(pool, address: str):
     legacy = await pool.fetchrow(
         """
         SELECT id, full_name, address, contact_type, business_context_id,
-               tags, status, phone, email, notes
+               tags, status, phone, email, notes, source
         FROM contacts
         WHERE business_context_id IS NULL
           AND status != 'archived'
@@ -360,6 +370,29 @@ def _diff_updates(existing: dict, data: dict) -> dict:
         elif existing.get(k) != v:
             changed[k] = v
     return changed
+
+
+async def claim_legacy_row(pool, contact_id: str, require_import_source: bool):
+    """CAS claim of a NULL-context legacy row with the FULL guard inside the
+    UPDATE itself: unarchived always, calendar_import provenance additionally
+    for weak (address-only) identity. A raced archive/source-correction makes
+    the predicate fail -> None -> caller creates fresh, and the row is never
+    tenant-stamped (Codex round 8, P1)."""
+    src_clause = "AND source = 'calendar_import'" if require_import_source else ""
+    return await pool.fetchrow(
+        f"""
+        UPDATE contacts
+           SET business_context_id = $2, updated_at = NOW()
+         WHERE id = $1
+           AND (business_context_id IS NULL OR business_context_id = $2)
+           AND status != 'archived'
+           {src_clause}
+        RETURNING id, full_name, address, contact_type, business_context_id,
+                  tags, status, phone, email, notes, source
+        """,
+        contact_id,
+        EOM_CONTEXT_ID,
+    )
 
 
 async def _update_matched(crm, existing: dict, data: dict):
@@ -403,6 +436,7 @@ async def import_one(rec, crm, pool) -> str:
     data = record_to_contact_data(rec)
 
     existing, needs_claim = None, False
+    claim_by_address = False
     if rec.phone:
         digits = _phone_digits(rec.phone)
         if len(digits) >= 10:
@@ -411,20 +445,19 @@ async def import_one(rec, crm, pool) -> str:
         existing, needs_claim = await _search_channel(crm, email=rec.email)
     if existing is None:
         existing, needs_claim = await resolve_by_address(pool, rec.address)
+        claim_by_address = needs_claim
 
     if existing is not None and needs_claim:
-        # Provider CAS: stamps the tenant only while the row is still NULL;
-        # None means a concurrent claim moved it to another tenant, in which
-        # case we fail closed and create a fresh EOM row.
-        existing = await crm.claim_contact(str(existing["id"]), EOM_CONTEXT_ID)
-        if existing is not None and (
-            existing.get("status") == "archived"
-            or existing.get("source") != "calendar_import"
-        ):
-            # The row changed between the SELECT and the claim (archived, or
-            # source corrected away): fail closed, never update it
-            # (Codex round 7, R4/R8).
-            existing = None
+        # Script-side CAS with the full guard IN the claim itself: the
+        # provider's claim_contact guards context only, which would leave a
+        # raced (archived / source-corrected) row tenant-stamped before any
+        # post-hoc re-check could reject it (Codex round 8, P1). Identity
+        # from a phone/email match is strong, so those claims require only
+        # unarchived; the weaker address-only match additionally requires
+        # calendar_import provenance (rounds 3+7 semantics, race-proof).
+        existing = await claim_legacy_row(
+            pool, str(existing["id"]), require_import_source=claim_by_address
+        )
 
     if existing is not None:
         contact_id, outcome = await _update_matched(crm, existing, data)

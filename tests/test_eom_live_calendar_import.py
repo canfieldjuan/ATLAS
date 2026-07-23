@@ -367,17 +367,54 @@ def test_retry_repairs_manual_source_after_failed_stamp():
     assert crm.updated[0][1]["source"] == "calendar_import"
 
 
-def test_claimed_row_recheck_fails_closed_on_races():
-    # Codex round 7 (R4/R8): archived or source-corrected between SELECT and
-    # CAS -> never updated; a fresh EOM row is created instead.
-    for raced in ({"status": "archived", "source": "calendar_import", "tags": []},
-                  {"status": "active", "source": "manual", "tags": []}):
-        rec = _record()
-        crm = StubCRM(claim_result=raced)
-        pool = StubPool(rows=[None, {"id": "legacy-id", "tags": []}])
-        outcome = asyncio.run(import_one(rec, crm, pool))
-        assert outcome == "created"
-        assert all(cid != "legacy-id" for cid, _ in crm.updated)
+def test_raced_legacy_rows_fail_closed_inside_the_cas():
+    # Codex rounds 7-8 (R4/R8): the archived/source guards live INSIDE the
+    # CAS UPDATE, so a raced row is never tenant-stamped -- the CAS simply
+    # returns no row and a fresh EOM contact is created.
+    rec = _record()
+    crm = StubCRM()
+    pool = StubPool(rows=[None, {"id": "legacy-id", "tags": []}, None])
+    outcome = asyncio.run(import_one(rec, crm, pool))
+    assert outcome == "created"
+    assert all(cid != "legacy-id" for cid, _ in crm.updated)
+
+
+def test_channel_matched_legacy_claim_does_not_require_import_source():
+    # Codex round 8: phone/email identity is strong -- a legacy web lead
+    # matched by phone is claimed (unarchived-guarded CAS, no source
+    # predicate) and reconciled with its provenance preserved.
+    rec = _record(phone="(217) 555-9999")
+    crm = StubCRM(legacy_hit={"id": "lead1", "tags": ["website"], "source": "web",
+                              "status": "active"})
+    pool = StubPool(rows=[{"id": "lead1", "tags": ["website"], "source": "web",
+                           "status": "active"}])
+    outcome = asyncio.run(import_one(rec, crm, pool))
+    assert outcome == "updated"
+    cas_sql = pool.queries[0][0]
+    assert "UPDATE contacts" in cas_sql
+    assert "status != 'archived'" in cas_sql
+    assert "source = 'calendar_import'" not in cas_sql
+    assert "source" not in crm.updated[0][1]             # 'web' preserved
+
+
+def test_address_select_carries_source_for_provenance():
+    # Codex round 8 (P1): the address-net SELECT must return source, or an
+    # address-only web contact would be treated as provider-default manual
+    # and get its provenance overwritten.
+    rec = _record()
+    crm = StubCRM()
+    pool = StubPool(rows=[{"id": "w", "tags": [], "source": "web", "status": "active"}])
+    asyncio.run(import_one(rec, crm, pool))
+    assert ", source" in pool.queries[0][0].replace("\n", " ")
+    assert "source" not in crm.updated[0][1]
+
+
+def test_uppercase_phone_extensions_normalize_before_matching():
+    # Codex round 8: 'X42'/'EXT 42' must not corrupt the base number.
+    events = [_event("Jane Smith", "12 Oak St, Effingham, IL",
+                     description="Call 217-555-9999 X42")]
+    rec = parse_events(events, ["residential"], "customer", False, "Residential")[0]
+    assert rec.phone == "217-555-9999 ext 42"
 
 
 def test_unchanged_contact_is_not_rewritten():
@@ -429,14 +466,20 @@ def test_cross_calendar_dedupe_preserves_cancellation_recency():
 
 
 def test_legacy_null_context_row_is_claimed_not_duplicated():
-    # Codex round 2 (R4/R8): a pre-#2155 NULL-context address-only contact is
-    # claimed through the provider CAS and updated, never duplicated.
+    # Codex rounds 2+8 (R4/R8): a pre-#2155 NULL-context address-only contact
+    # is claimed through a full-guard CAS UPDATE and updated, never duplicated.
     rec = _record()
-    crm = StubCRM(claim_result="row")
-    pool = StubPool(rows=[None, {"id": "legacy-id", "tags": []}])
+    crm = StubCRM()
+    pool = StubPool(rows=[None, {"id": "legacy-id", "tags": []},
+                          {"id": "legacy-id", "source": "calendar_import",
+                           "status": "inactive", "tags": []}])
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert outcome == "updated"
-    assert crm.claims == [("legacy-id", "effingham_maids")]
+    cas_sql = pool.queries[2][0]
+    assert "UPDATE contacts" in cas_sql
+    assert "status != 'archived'" in cas_sql
+    assert "source = 'calendar_import'" in cas_sql       # weak identity guard
+    assert "business_context_id IS NULL OR business_context_id = $2" in cas_sql
     assert crm.created == []
     assert crm.updated and crm.updated[0][0] == "legacy-id"
 
@@ -445,11 +488,10 @@ def test_concurrently_claimed_legacy_row_falls_through_to_create():
     # CAS returns None when another tenant claimed the row first: fail closed,
     # create a fresh EOM row instead of overwriting the foreign claim.
     rec = _record()
-    crm = StubCRM(claim_result=None)
-    pool = StubPool(rows=[None, {"id": "legacy-id", "tags": []}])
+    crm = StubCRM()
+    pool = StubPool(rows=[None, {"id": "legacy-id", "tags": []}, None])  # CAS loses
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert outcome == "created"
-    assert crm.claims == [("legacy-id", "effingham_maids")]
     # The only update is the post-create stamp -- the foreign-claimed
     # legacy row itself is never written.
     assert crm.updated == [("new-id", {"source": "calendar_import", "tags": ["residential"]})]
