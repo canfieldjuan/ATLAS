@@ -118,6 +118,16 @@ Slice phase: vertical slice
   10. `create_contact` dedupe searches carry `business_context_id` when the
       caller stamps one, and stay unscoped when not (both test-asserted).
   11. Mounted `POST /api/v1/leads/intake` returns 200/422/429 via TestClient.
+  12. Public response carries no CRM identifiers (contacts.py exposes
+      unauthenticated per-id reads; returning the UUID would map
+      email/phone -> id).
+  13. An existing EOM contact matched by email/phone is used as-is — never
+      merged, re-typed to lead, or identity-rewritten from public input.
+  14. Throttle identity is digit-normalized (formatting variants of one
+      phone share a cap bucket); payload caps fit the contacts schema
+      (email <=254, phone <=32).
+  15. Global hourly acknowledgement ceiling: past the cap the lead is still
+      captured but no email is sent.
 - Reachability proof: entrypoint `POST /api/v1/leads/intake` on the
   atlas_brain app (port 8012), already publicly proxied by Tailscale Funnel
   (`https://atlas-brain.tailc7bd29.ts.net/api` → `127.0.0.1:8012/api`;
@@ -190,12 +200,17 @@ reply_to=BUSINESS_EMAIL)` exactly like `mcp/email_server.py:169-174`.
 
 - Website-repo follow-up PR pointing the form JS at this endpoint (same arc).
 - Per-IP/email rate-limit table beyond honeypot+dedupe.
+- Cap atomicity (waived on review): the daily cap is a read-then-act check,
+  so a concurrent burst can briefly exceed it. Same pattern as the existing
+  public briefing gate; the cap still bounds sustained abuse, and the new
+  global hourly ceiling bounds the email blast radius. A DB-side atomic
+  guard is parked hardening.
 - Operator notification from Atlas (Web3Forms already emails the operator;
   duplicate channel deferred until Web3Forms cutover).
 - Phases 2–3 of issue #2151 (tenant stamping/read scoping; customer backfill).
 - Deploy env note: `ATLAS_EMAIL_DEFAULT_FROM=info@effinghamofficemaids.com`.
 
-Parked hardening: per-IP/email rate-limit table (above).
+Parked hardening: per-IP/email rate-limit table; DB-side atomic cap guard (both above).
 
 ## Verification
 
@@ -212,7 +227,7 @@ Parked hardening: per-IP/email rate-limit table (above).
 | File | LOC |
 |---|---:|
 | `atlas_brain/api/__init__.py` | 2 |
-| `atlas_brain/api/leads.py` | 217 |
+| `atlas_brain/api/leads.py` | 280 |
 | `atlas_brain/main.py` | 8 |
 | `atlas_brain/services/crm_provider.py` | 15 |
 | `atlas_brain/skills/email/cleaning_confirmation.md` | 2 |
@@ -221,6 +236,6 @@ Parked hardening: per-IP/email rate-limit table (above).
 | `atlas_brain/templates/email/__init__.py` | 5 |
 | `atlas_brain/templates/email/estimate_confirmation.py` | 2 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 66 |
-| `plans/PR-EOM-Lead-Intake.md` | 228 |
-| `tests/test_leads_intake.py` | 365 |
-| **Total** | **914** |
+| `plans/PR-EOM-Lead-Intake.md` | 241 |
+| `tests/test_leads_intake.py` | 439 |
+| **Total** | **1064** |

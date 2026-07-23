@@ -63,8 +63,9 @@ def _payload(**overrides):
     return LeadIntakeRequest(**base)
 
 
-def _crm(inserted: bool = True):
+def _crm(inserted: bool = True, existing: list | None = None):
     crm = MagicMock()
+    crm.search_contacts = AsyncMock(return_value=existing or [])
     crm.find_or_create_contact = AsyncMock(return_value={"id": "c-123"})
     crm.log_interaction = AsyncMock(return_value={"id": "i-1", "inserted": inserted})
     return crm
@@ -87,7 +88,7 @@ async def test_contact_stamped_with_eom_tenant_and_web_source():
     result = await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
 
     assert result["success"] is True
-    assert result["contact_id"] == "c-123"
+    assert "contact_id" not in result  # public response must not leak CRM ids
     kwargs = crm.find_or_create_contact.call_args.kwargs
     assert kwargs["business_context_id"] == EOM_BUSINESS_CONTEXT_ID == "effingham_maids"
     assert kwargs["contact_type"] == "lead"
@@ -95,6 +96,7 @@ async def test_contact_stamped_with_eom_tenant_and_web_source():
     assert kwargs["source_ref"] == "website_estimate_form"
     assert kwargs["tags"] == ["website", "estimate_request"]
     assert kwargs["email"] == "jane@example.com"
+    assert kwargs["phone"] == "2175550100"  # digits-only normalization
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +134,7 @@ async def test_honeypot_drops_silently_without_crm_or_email():
         _payload(website="http://spam.example"), crm=crm, email_provider=provider
     )
 
-    assert result == {"success": True, "contact_id": None, "email_sent": False}
+    assert result == {"success": True, "email_sent": False}
     crm.find_or_create_contact.assert_not_awaited()
     crm.log_interaction.assert_not_awaited()
     provider.send.assert_not_awaited()
@@ -350,6 +352,11 @@ def test_route_smoke_mounted_path_statuses():
     app.dependency_overrides[leads_mod._crm_dependency] = lambda: _crm()
     app.dependency_overrides[leads_mod._email_dependency] = lambda: _email_provider()
     app.dependency_overrides[leads_mod._daily_count_dependency] = lambda: fake_count
+
+    async def fake_volume():
+        return 0
+
+    app.dependency_overrides[leads_mod._ack_volume_dependency] = lambda: fake_volume
     client = TestClient(app)
 
     ok = client.post("/api/v1/leads/intake", json={"name": "Jane", "email": "jane@example.com"})
@@ -363,3 +370,70 @@ def test_route_smoke_mounted_path_statuses():
         "/api/v1/leads/intake", json={"name": "Jane", "email": "jane@example.com"}
     )
     assert throttled.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# PR #2153 review reconciliation — id non-exposure, no-mutation upsert,
+# normalized throttle identity, global ack volume cap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_existing_eom_contact_not_mutated_or_downgraded():
+    """A returning CUSTOMER requesting another estimate must not be rewritten
+    into a lead or have identity fields replaced by untrusted form input."""
+    existing = [{"id": "cust-9", "contact_type": "customer", "full_name": "Real Name"}]
+    crm, provider = _crm(existing=existing), _email_provider()
+
+    result = await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+
+    assert result["success"] is True
+    crm.find_or_create_contact.assert_not_awaited()  # no create, no merge
+    crm.log_interaction.assert_awaited()  # the request is still recorded
+    assert crm.log_interaction.call_args.kwargs["contact_id"] == "cust-9"
+    # resolution searches are tenant-scoped
+    for call in crm.search_contacts.await_args_list:
+        assert call.kwargs["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
+
+
+@pytest.mark.asyncio
+async def test_throttle_receives_digit_normalized_phone():
+    crm, provider = _crm(), _email_provider()
+    counter = AsyncMock(return_value=0)
+    await _process_lead_intake(
+        _payload(email="", phone="(217) 555-0100"),
+        crm=crm, email_provider=provider, daily_count=counter,
+    )
+    assert counter.await_args.args == ("", "2175550100")
+
+
+@pytest.mark.asyncio
+async def test_global_ack_volume_cap_skips_email_but_captures_lead():
+    crm, provider = _crm(), _email_provider()
+    volume = AsyncMock(return_value=1000)
+    result = await _process_lead_intake(
+        _payload(), crm=crm, email_provider=provider, ack_volume=volume
+    )
+    assert result["success"] is True
+    assert result["email_sent"] is False
+    provider.send.assert_not_awaited()
+    crm.log_interaction.assert_awaited()  # lead capture unaffected
+
+
+@pytest.mark.asyncio
+async def test_global_ack_volume_under_cap_sends():
+    crm, provider = _crm(), _email_provider()
+    volume = AsyncMock(return_value=0)
+    result = await _process_lead_intake(
+        _payload(), crm=crm, email_provider=provider, ack_volume=volume
+    )
+    assert result["email_sent"] is True
+    provider.send.assert_awaited()
+
+
+def test_payload_caps_fit_contacts_schema():
+    """migrations/035: email VARCHAR(256), phone VARCHAR(32) — API caps must
+    not admit values the CRM write would then reject with a 503."""
+    fields = LeadIntakeRequest.model_fields
+    assert fields["email"].metadata[0].max_length <= 256
+    assert fields["phone"].metadata[0].max_length <= 32

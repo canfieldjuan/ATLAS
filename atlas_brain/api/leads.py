@@ -26,14 +26,18 @@ _MIN_PHONE_DIGITS = 7
 # Server-side throttle (PR #2152 review, R3/R8): max submissions per
 # email-or-phone identity per rolling day, enforced BEFORE any side effect.
 MAX_DAILY_SUBMISSIONS = 5
+# Global acknowledgement-send ceiling (PR #2153 review, R3/R8): bounds the
+# unsolicited-email blast radius when an abuser streams unique addresses.
+# Leads are still captured past the cap; only the outbound email is skipped.
+GLOBAL_ACK_HOURLY_CAP = 20
 
 
 class LeadIntakeRequest(BaseModel):
     """Payload mirroring the website estimate form."""
 
     name: str = Field(min_length=1, max_length=200)
-    email: str = Field(default="", max_length=320)
-    phone: str = Field(default="", max_length=40)
+    email: str = Field(default="", max_length=254)
+    phone: str = Field(default="", max_length=32)
     service: str = Field(default="", max_length=120)
     frequency: str = Field(default="", max_length=120)
     square_feet: str = Field(default="", max_length=40)
@@ -51,8 +55,12 @@ class LeadRateLimitedError(RuntimeError):
     """Raised when an identity exceeds the daily submission cap."""
 
 
-async def _daily_submission_count(email: str, phone: str) -> int:
-    """Count today's web_form submissions for this identity (EOM-scoped)."""
+async def _daily_submission_count(email: str, phone_digits: str) -> int:
+    """Count today's web_form submissions for this identity (EOM-scoped).
+
+    Phones are compared on dialable digits so formatting variants of the same
+    number ("(217) 555-0100" vs "217-555-0100") share one cap bucket.
+    """
     from ..storage.database import get_db_pool
 
     pool = get_db_pool()
@@ -64,11 +72,30 @@ async def _daily_submission_count(email: str, phone: str) -> int:
         WHERE ci.interaction_type = 'web_form'
           AND ci.occurred_at > NOW() - INTERVAL '1 day'
           AND c.business_context_id = $1
-          AND (($2 <> '' AND LOWER(c.email) = $2) OR ($3 <> '' AND c.phone = $3))
+          AND (($2 <> '' AND LOWER(c.email) = $2)
+               OR ($3 <> '' AND regexp_replace(COALESCE(c.phone, ''), '\\D', '', 'g') = $3))
         """,
         EOM_BUSINESS_CONTEXT_ID,
         email,
-        phone,
+        phone_digits,
+    ) or 0
+
+
+async def _hourly_ack_volume() -> int:
+    """Global count of web_form intakes in the last hour (EOM-scoped)."""
+    from ..storage.database import get_db_pool
+
+    pool = get_db_pool()
+    return await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM contact_interactions ci
+        JOIN contacts c ON c.id = ci.contact_id
+        WHERE ci.interaction_type = 'web_form'
+          AND ci.occurred_at > NOW() - INTERVAL '1 hour'
+          AND c.business_context_id = $1
+        """,
+        EOM_BUSINESS_CONTEXT_ID,
     ) or 0
 
 
@@ -95,20 +122,21 @@ async def _process_lead_intake(
     crm: Any,
     email_provider: Any,
     daily_count: Optional[Any] = None,
+    ack_volume: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Core intake flow with injectable providers (unit-testable sans HTTP)."""
     if payload.website.strip():
         # Honeypot tripped: report success so bots learn nothing, touch nothing.
         logger.info("lead_intake: honeypot tripped; dropping submission silently")
-        return {"success": True, "contact_id": None, "email_sent": False}
+        return {"success": True, "email_sent": False}
 
     email = payload.email.strip().lower()
-    phone = payload.phone.strip()
+    phone_digits = re.sub(r"\D", "", payload.phone)
     # A phone with no dialable digits ("n/a", "-") is not a contact channel
     # (PR #2152 review, R1/R2).
-    if phone and len(re.sub(r"\D", "", phone)) < _MIN_PHONE_DIGITS:
-        phone = ""
-    if not email and not phone:
+    if len(phone_digits) < _MIN_PHONE_DIGITS:
+        phone_digits = ""
+    if not email and not phone_digits:
         raise LeadValidationError(
             "Provide an email address or a phone number with at least "
             f"{_MIN_PHONE_DIGITS} digits"
@@ -118,20 +146,36 @@ async def _process_lead_intake(
 
     # Throttle BEFORE any side effect (CRM write or email).
     if daily_count is not None:
-        recent = await daily_count(email, phone)
+        recent = await daily_count(email, phone_digits)
         if recent >= MAX_DAILY_SUBMISSIONS:
             raise LeadRateLimitedError("Daily submission limit reached")
 
-    contact = await crm.find_or_create_contact(
-        full_name=payload.name.strip(),
-        email=email or None,
-        phone=phone or None,
-        contact_type="lead",
-        source="web",
-        source_ref="website_estimate_form",
-        business_context_id=EOM_BUSINESS_CONTEXT_ID,
-        tags=["website", "estimate_request"],
-    )
+    # Resolve an existing EOM contact WITHOUT mutating it: public, untrusted
+    # input must never rewrite a stored identity or downgrade a customer to a
+    # lead (PR #2153 review, R3/R4). Only a brand-new contact gets created.
+    contact: Optional[dict[str, Any]] = None
+    if email:
+        matches = await crm.search_contacts(
+            email=email, business_context_id=EOM_BUSINESS_CONTEXT_ID
+        )
+        contact = matches[0] if matches else None
+    if contact is None and phone_digits:
+        matches = await crm.search_contacts(
+            phone=phone_digits, business_context_id=EOM_BUSINESS_CONTEXT_ID
+        )
+        contact = matches[0] if matches else None
+
+    if contact is None:
+        contact = await crm.find_or_create_contact(
+            full_name=payload.name.strip(),
+            email=email or None,
+            phone=phone_digits or None,
+            contact_type="lead",
+            source="web",
+            source_ref="website_estimate_form",
+            business_context_id=EOM_BUSINESS_CONTEXT_ID,
+            tags=["website", "estimate_request"],
+        )
     contact_id = contact.get("id")
     if not contact_id:
         raise RuntimeError("CRM returned contact without id")
@@ -154,27 +198,40 @@ async def _process_lead_intake(
 
     email_sent = False
     if email and freshly_logged:
-        try:
-            from ..templates.email import BUSINESS_EMAIL, format_request_acknowledgement
+        # Global send ceiling: past the hourly cap the lead is still captured
+        # but no acknowledgement goes out (PR #2153 review, R3/R8).
+        over_volume = False
+        if ack_volume is not None:
+            over_volume = (await ack_volume()) > GLOBAL_ACK_HOURLY_CAP
+        if over_volume:
+            logger.warning("lead_intake: global ack volume cap hit; skipping email")
+        else:
+            try:
+                from ..templates.email import BUSINESS_EMAIL, format_request_acknowledgement
 
-            subject, body = format_request_acknowledgement(
-                client_name=payload.name,
-                service=payload.service,
-                frequency=payload.frequency,
-            )
-            result = await email_provider.send(
-                to=[email],
-                subject=subject,
-                body=body,
-                reply_to=BUSINESS_EMAIL,
-            )
-            email_sent = bool(result.get("success", True)) if isinstance(result, dict) else True
-        except Exception:
-            # The acknowledgement must never fail the request: the CRM write
-            # is the source of truth and has already committed.
-            logger.exception("lead_intake: acknowledgement email failed for contact %s", contact_id)
+                subject, body = format_request_acknowledgement(
+                    client_name=payload.name,
+                    service=payload.service,
+                    frequency=payload.frequency,
+                )
+                result = await email_provider.send(
+                    to=[email],
+                    subject=subject,
+                    body=body,
+                    reply_to=BUSINESS_EMAIL,
+                )
+                email_sent = bool(result.get("success", True)) if isinstance(result, dict) else True
+            except Exception:
+                # The acknowledgement must never fail the request: the CRM
+                # write is the source of truth and has already committed.
+                logger.exception(
+                    "lead_intake: acknowledgement email failed for contact %s", contact_id
+                )
 
-    return {"success": True, "contact_id": str(contact_id), "email_sent": email_sent}
+    # Public response carries no CRM identifiers: contacts.py exposes
+    # unauthenticated per-id reads, so returning the UUID here would let an
+    # attacker map email/phone -> contact id (PR #2153 review, R3).
+    return {"success": True, "email_sent": email_sent}
 
 
 def _crm_dependency() -> Any:
@@ -193,12 +250,17 @@ def _daily_count_dependency() -> Any:
     return _daily_submission_count
 
 
+def _ack_volume_dependency() -> Any:
+    return _hourly_ack_volume
+
+
 @router.post("/intake")
 async def lead_intake(
     payload: LeadIntakeRequest,
     crm: Any = Depends(_crm_dependency),
     email_provider: Any = Depends(_email_dependency),
     daily_count: Any = Depends(_daily_count_dependency),
+    ack_volume: Any = Depends(_ack_volume_dependency),
 ) -> dict[str, Any]:
     """Receive an estimate-form submission from the public website."""
     try:
@@ -207,6 +269,7 @@ async def lead_intake(
             crm=crm,
             email_provider=email_provider,
             daily_count=daily_count,
+            ack_volume=ack_volume,
         )
     except LeadValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
