@@ -45,6 +45,9 @@ Slice phase: vertical slice
      (source-asserted) -- the veto is never silently absent.
   4. Guard keys derive from the same slice-A parser/identity semantics as
      the import itself (mechanism-asserted by reuse).
+  7. Equal-time same-name ties resolve to cancelled (the slice-A
+     determinism rule), independent of visit order (asserted; Codex
+     round 4).
   6. The fail-closed guard also catches SystemExit (missing calendar
      config surfaces as DEMOTION SKIPPED, never a mid-apply crash), and
      name keys apply latest-record-wins recency independently since the
@@ -95,7 +98,7 @@ reported, the rest demote unchanged.
 
 ## Verification
 
-- `tests/test_sync_eom_portal_customers.py` — 44 passed.
+- `tests/test_sync_eom_portal_customers.py` — 45 passed.
 - `tests/test_eom_live_calendar_import.py` — 55 passed (adjacent).
 - `python -m py_compile` — clean.
 - NOT run: the live sync (operator-run; the owner re-runs dry-run after

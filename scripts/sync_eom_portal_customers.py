@@ -450,7 +450,11 @@ async def fetch_calendar_guard_keys(months_back: int = 1, months_forward: int = 
             nm = rec.name.strip().lower()
             dt = getattr(rec, "latest_event_dt", None)
             cur = name_state.get(nm)
-            if cur is None or (dt and (cur[0] is None or dt > cur[0])):
+            if cur is None or (dt and (cur[0] is None or dt > cur[0])) or (
+                    dt and cur[0] and dt == cur[0]
+                    and rec.cancelled and not cur[1]):
+                # Equal-time ties resolve to cancelled, mirroring the
+                # slice-A determinism rule (Codex 2163 r4).
                 name_state[nm] = (dt, rec.cancelled)
         for rec in merged:
             if rec.cancelled:

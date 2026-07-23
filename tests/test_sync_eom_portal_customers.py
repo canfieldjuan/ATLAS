@@ -514,6 +514,15 @@ def test_demotion_refuses_without_the_calendar_guard():
     assert "(Exception, SystemExit)" in guard_block
 
 
+def test_equal_time_name_cancellation_tie_resolves_to_cancelled():
+    # Codex 2163 r4: same name, same timestamp, no shared channel -- the
+    # cancelled state wins in either visit order (source-asserted).
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    body = src.split("name_state.get(nm)")[1].split("for rec in merged")[0]
+    assert "dt == cur[0]" in body
+    assert "rec.cancelled and not cur[1]" in body
+
+
 def test_name_keys_respect_name_level_cancellation_recency():
     # Codex r3: same name, no shared channel -- the newer CANCELLED record
     # suppresses the name key emitted by the older active one.
