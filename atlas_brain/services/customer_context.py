@@ -152,7 +152,9 @@ class CustomerContextService:
                 return default if default is not None else []
 
         interactions_coro = _safe(
-            crm.get_interactions(contact_id, limit=max_interactions),
+            crm.get_interactions(
+                contact_id, limit=max_interactions,
+                business_context_id=business_context_id),
             "interactions",
         )
         appointments_coro = _safe(

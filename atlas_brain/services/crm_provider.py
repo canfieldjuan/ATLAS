@@ -535,21 +535,41 @@ class DatabaseCRMProvider:
         return result
 
     async def get_interactions(
-        self, contact_id: str, limit: int = 20
+        self, contact_id: str, limit: int = 20,
+        business_context_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
-        rows = await pool.fetch(
-            """
-            SELECT * FROM contact_interactions
-            WHERE contact_id = $1
-            ORDER BY occurred_at DESC
-            LIMIT $2
-            """,
-            contact_id,
-            limit,
-        )
+        if business_context_id:
+            # Atomic tenant predicate: the page only returns while the
+            # owning contact is still visible to this tenant (tenant page
+            # plus NULL-context legacy), closing the window between a
+            # caller's guard read and this query.
+            rows = await pool.fetch(
+                """
+                SELECT ci.* FROM contact_interactions ci
+                JOIN contacts c ON c.id = ci.contact_id
+                WHERE ci.contact_id = $1
+                  AND (c.business_context_id = $2 OR c.business_context_id IS NULL)
+                ORDER BY ci.occurred_at DESC
+                LIMIT $3
+                """,
+                contact_id,
+                business_context_id,
+                limit,
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT * FROM contact_interactions
+                WHERE contact_id = $1
+                ORDER BY occurred_at DESC
+                LIMIT $2
+                """,
+                contact_id,
+                limit,
+            )
         return [dict(r) for r in rows]
 
     async def get_contact_appointments(

@@ -110,6 +110,23 @@ def _visible_under_default(contact: "dict | None") -> bool:
     return contact.get("business_context_id") in (None, default)
 
 
+def _row_visible(
+    contact: "dict | None", business_context_id: "str | None"
+) -> bool:
+    """Visibility of a FETCHED contact row under the effective addressing.
+
+    Explicit tenant = exact page; default = tenant plus NULL-context legacy;
+    no scope = everything. Callers must apply this to the same row object
+    they return or act on -- checking one fetch and returning another
+    reopens the claim race (#2157 post-merge review).
+    """
+    if contact is None:
+        return False
+    if business_context_id:
+        return contact.get("business_context_id") == business_context_id
+    return _visible_under_default(contact)
+
+
 async def _guarded_contact(
     contact_id: str, business_context_id: "str | None" = None
 ) -> "tuple[bool, dict | None]":
@@ -122,15 +139,10 @@ async def _guarded_contact(
     default applies: the default tenant plus NULL-context legacy rows are
     visible. Foreign-tenant rows read as nonexistent (fail-closed).
     """
-    if business_context_id:
-        contact = await _provider().get_contact(contact_id)
-        if contact is None:
-            return False, None
-        return contact.get("business_context_id") == business_context_id, contact
-    if not _default_context():
+    if not business_context_id and not _default_context():
         return True, None
     contact = await _provider().get_contact(contact_id)
-    return _visible_under_default(contact), contact
+    return _row_visible(contact, business_context_id), contact
 
 
 async def _guard_contact_id(
@@ -142,18 +154,26 @@ async def _guard_contact_id(
 
 
 async def _scoped_search(provider, **kwargs):
-    """search_contacts honoring the default scope: tenant page first, then
-    the NULL-context legacy page (mirrors crm_provider's stamped dedupe)."""
+    """search_contacts honoring the default scope.
+
+    The visible population is the default tenant's page PLUS the
+    NULL-context legacy page: both are queried and merged (tenant rows
+    first, truncated to the caller's limit). A tenant hit must not hide
+    claimable legacy rows (#2157 post-merge review) -- the earlier
+    first-page-wins shape did exactly that. An explicit argument addresses
+    exactly one page; no default preserves legacy unscoped behavior.
+    """
     explicit = kwargs.pop("business_context_id", None)
     if explicit:
         return await provider.search_contacts(business_context_id=explicit, **kwargs)
     default = _default_context()
     if not default:
         return await provider.search_contacts(**kwargs)
-    results = await provider.search_contacts(business_context_id=default, **kwargs)
-    if results:
-        return results
-    return await provider.search_contacts(business_context_id_is_null=True, **kwargs)
+    tenant_rows = await provider.search_contacts(business_context_id=default, **kwargs)
+    legacy_rows = await provider.search_contacts(business_context_id_is_null=True, **kwargs)
+    merged = list(tenant_rows) + list(legacy_rows)
+    limit = kwargs.get("limit")
+    return merged[:limit] if limit else merged
 
 
 def _appointments_in_scope(
@@ -337,10 +357,10 @@ async def get_contact(contact_id: str, business_context_id: Optional[str] = None
                 return json.dumps({"found": True, "contact": results[0]}, default=str)
             return json.dumps({"found": False, "contact": None})
 
-        if not await _guard_contact_id(contact_id, business_context_id):
-            return json.dumps({"found": False, "contact": None})
+        # Single fetch: the row that is validated IS the row that is
+        # returned (a guard-then-refetch pair loses to a concurrent claim).
         contact = await _provider().get_contact(contact_id)
-        if contact is None:
+        if not _row_visible(contact, business_context_id):
             return json.dumps({"found": False, "contact": None})
         return json.dumps({"found": True, "contact": contact}, default=str)
     except Exception as exc:
@@ -625,7 +645,10 @@ async def get_interactions(
     try:
         if not await _guard_contact_id(contact_id, business_context_id):
             return json.dumps({"error": "Contact not found", "interactions": [], "count": 0})
-        interactions = await _provider().get_interactions(contact_id, limit=min(limit, 100))
+        interactions = await _provider().get_interactions(
+            contact_id, limit=min(limit, 100),
+            business_context_id=business_context_id or _default_context(),
+        )
         return json.dumps(
             {"interactions": interactions, "count": len(interactions)}, default=str
         )
@@ -773,6 +796,15 @@ async def get_customer_context(
             ctx = await svc.get_context_by_email(email, **kwargs)
 
         if ctx.is_empty:
+            return json.dumps({"found": False, "context": None})
+
+        # Validate the row the service actually fetched: its read and the
+        # guard's read are separate awaits, and a concurrent claim between
+        # them must not let a now-foreign contact serialize (#2157
+        # post-merge review).
+        if (business_context_id or _default_context()) and not _row_visible(
+            ctx.contact, business_context_id
+        ):
             return json.dumps({"found": False, "context": None})
 
         effective = business_context_id or _default_context()

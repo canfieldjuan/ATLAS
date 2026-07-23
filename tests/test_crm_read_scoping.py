@@ -89,11 +89,29 @@ async def test_search_applies_default_then_null_fallback(default_ctx, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_search_scoped_hit_skips_null_fallback(default_ctx, monkeypatch):
-    provider = _provider_mock(monkeypatch, search=[{"id": "c1", "business_context_id": EOM}])
+async def test_search_merges_tenant_and_legacy_pages(default_ctx, monkeypatch):
+    """A tenant hit must NOT hide claimable legacy rows: both pages are
+    queried and merged, tenant rows first (#2157 post-merge review)."""
+    provider = _provider_mock(monkeypatch)
+    provider.search_contacts = AsyncMock(side_effect=[
+        [{"id": "t1", "business_context_id": EOM}],
+        [{"id": "n1", "business_context_id": None}],
+    ])
     out = json.loads(await crm_srv.search_contacts(query="jane"))
     assert out["found"] is True
-    assert len(provider.search_contacts.await_args_list) == 1
+    assert [c["id"] for c in out["contacts"]] == ["t1", "n1"]
+    assert len(provider.search_contacts.await_args_list) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_merge_truncates_to_limit(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch)
+    provider.search_contacts = AsyncMock(side_effect=[
+        [{"id": "t1", "business_context_id": EOM}],
+        [{"id": "n1", "business_context_id": None}],
+    ])
+    out = json.loads(await crm_srv.search_contacts(query="jane", limit=1))
+    assert [c["id"] for c in out["contacts"]] == ["t1"]
 
 
 @pytest.mark.asyncio
@@ -220,6 +238,51 @@ async def test_list_contacts_explicit_context_single_page(default_ctx, monkeypat
     assert calls[0].kwargs["business_context_id"] == "churnsignals"
 
 
+@pytest.mark.asyncio
+async def test_get_contact_single_fetch_validates_returned_row(default_ctx, monkeypatch):
+    """TOCTOU regression (#2157 post-merge review): the row validated must
+    be the row returned. With guard-then-refetch, a NULL row claimed by
+    another tenant between the awaits serialized as found=true foreign."""
+    provider = _provider_mock(monkeypatch)
+    provider.get_contact = AsyncMock(side_effect=[LEGACY_NULL, FOREIGN])
+    out = json.loads(await crm_srv.get_contact(UUID))
+    assert out["found"] is True
+    assert out["contact"]["business_context_id"] is None
+    assert provider.get_contact.await_count == 1
+
+
+def test_row_visible_semantics(default_ctx):
+    assert crm_srv._row_visible(None, None) is False
+    assert crm_srv._row_visible(SAME, None) is True
+    assert crm_srv._row_visible(LEGACY_NULL, None) is True
+    assert crm_srv._row_visible(FOREIGN, None) is False
+    assert crm_srv._row_visible(FOREIGN, "churnsignals") is True
+    assert crm_srv._row_visible(LEGACY_NULL, EOM) is False  # explicit = exact
+
+
+def test_customer_context_validates_fetched_row_source():
+    """get_customer_context must validate ctx.contact (the service's own
+    fetch), not only the pre-guard read."""
+    src = (REPO / "atlas_brain/mcp/crm_server.py").read_text(encoding="utf-8")
+    validation = src.split("if ctx.is_empty:", 1)[1][:600]
+    assert "_row_visible(" in validation and "ctx.contact" in validation
+
+
+def test_provider_interactions_scope_is_atomic():
+    src = (REPO / "atlas_brain/services/crm_provider.py").read_text(encoding="utf-8")
+    block = src.split("async def get_interactions", 1)[1][:1400]
+    assert "JOIN contacts c ON c.id = ci.contact_id" in block
+    assert "c.business_context_id = $2 OR c.business_context_id IS NULL" in block
+
+
+@pytest.mark.asyncio
+async def test_get_interactions_passes_scope(default_ctx, monkeypatch):
+    provider = _provider_mock(monkeypatch, get=SAME)
+    await crm_srv.get_interactions(UUID)
+    call = provider.get_interactions.await_args
+    assert call.kwargs["business_context_id"] == EOM
+
+
 # ---------------------------------------------------------------------------
 # Explicit tenant override on id-addressed tools
 # ---------------------------------------------------------------------------
@@ -340,7 +403,7 @@ def test_call_repo_scopes_before_limit():
 def test_context_service_threads_scope_to_child_queries():
     src = (REPO / "atlas_brain/services/customer_context.py").read_text(encoding="utf-8")
     gather = src.split("async def _gather", 1)[1]
-    assert gather.count("business_context_id=business_context_id") >= 2
+    assert gather.count("business_context_id=business_context_id") >= 3
 
 
 def test_context_result_omits_emails_under_scope():
