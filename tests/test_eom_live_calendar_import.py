@@ -605,6 +605,17 @@ def test_failed_post_create_stamp_fails_the_run():
                           "skipped": 0, "errors": 1}) == 1
 
 
+def test_same_calendar_equal_start_tie_resolves_to_cancelled():
+    # Codex round 18: same-start duplicate bookings in ONE calendar resolve
+    # to cancelled regardless of event order.
+    same_start = datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc)
+    a = _event("Jane Smith", "12 Oak St, Effingham, IL", start=same_start)
+    b = _event("Jane Smith - CANCELLED", "12 Oak St, Effingham, IL", start=same_start)
+    for events in ([a, b], [b, a]):
+        rec = parse_events(events, ["residential"], "customer", False, "Residential")[0]
+        assert rec.cancelled is True
+
+
 def test_equal_timestamp_cancellation_tie_is_deterministic():
     # Codex round 17: same latest timestamp, one cancelled -> inactive,
     # regardless of input order.

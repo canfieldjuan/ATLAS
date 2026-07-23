@@ -157,6 +157,9 @@ Slice phase: vertical slice
       candidate order; and the matched identity (address / phone last-10 /
       email) rides inside the claim CAS so a row corrected mid-race no
       longer matches the predicate (all asserted; Codex round 12).
+  34. Same-calendar equal-start ties also resolve to cancelled (asserted;
+      Codex round 18); the final-update identity-predicate TOCTOU is
+      tracked in #2160 per the declared disposition rule.
   33. A failed post-create provenance stamp is a run FAILURE (non-zero
       exit), and equal-timestamp cancellation ties resolve to cancelled
       deterministically regardless of input order (asserted; Codex
@@ -286,7 +289,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 54 passed.
+- `tests/test_eom_live_calendar_import.py` — 55 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.
@@ -309,7 +312,7 @@ stable `source_ref`.
 | File | LOC |
 |---|---:|
 | `atlas_brain/config.py` | 13 |
-| `plans/PR-EOM-Live-Calendar-Import.md` | 321 |
-| `scripts/import_eom_customers_live.py` | 775 |
-| `tests/test_eom_live_calendar_import.py` | 875 |
-| **Total** | **1984** |
+| `plans/PR-EOM-Live-Calendar-Import.md` | 322 |
+| `scripts/import_eom_customers_live.py` | 778 |
+| `tests/test_eom_live_calendar_import.py` | 886 |
+| **Total** | **1999** |

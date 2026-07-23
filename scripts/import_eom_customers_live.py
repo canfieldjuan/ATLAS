@@ -161,7 +161,10 @@ def parse_events(events, tags, contact_type, is_commercial, label):
         addr_key = address.lower()
         if ev.start is not None:
             cur = latest_dt.get(addr_key)
-            if cur is None or ev.start > cur[0]:
+            # Equal-start ties resolve to cancelled deterministically,
+            # matching the cross-calendar rule (Codex rounds 17-18).
+            if cur is None or ev.start > cur[0] or (
+                    ev.start == cur[0] and cancelled and not cur[1]):
                 latest_dt[addr_key] = (ev.start, cancelled)
         if addr_key not in by_address:
             by_address[addr_key] = ics.CustomerRecord(
