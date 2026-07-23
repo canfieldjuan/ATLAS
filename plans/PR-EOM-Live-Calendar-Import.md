@@ -157,6 +157,11 @@ Slice phase: vertical slice
       candidate order; and the matched identity (address / phone last-10 /
       email) rides inside the claim CAS so a row corrected mid-race no
       longer matches the predicate (all asserted; Codex round 12).
+  30. The claim-CAS phone predicate is contains-match (provider parity, so
+      ext-bearing stored contacts satisfy the CAS they matched by); same-day
+      cross-calendar ties resolve by full timestamp; and the latest event's
+      phone/email replaces stale channels within an address, in any input
+      order (all asserted; Codex round 13).
   29. Interaction anchors are date-scoped: re-runs with the same latest
       booking dedupe, while each new latest booking advances the CRM
       timeline instead of colliding with the old anchor forever
@@ -259,7 +264,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 44 passed.
+- `tests/test_eom_live_calendar_import.py` — 47 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.

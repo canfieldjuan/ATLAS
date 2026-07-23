@@ -175,15 +175,27 @@ def parse_events(events, tags, contact_type, is_commercial, label):
                 event_count=1,
                 cancelled=cancelled,
             )
+            if (phone or email) and ev.start:
+                by_address[addr_key]._ch_dt = ev.start
         else:
             rec = by_address[addr_key]
             rec.event_count += 1
             if len(name) < len(rec.name):
                 rec.name = name
-            if not rec.phone and phone:
+            # The latest event's channel wins: the calendar is the live
+            # master, so a corrected number/email on a newer booking
+            # replaces the stale one (Codex round 13, R1).
+            newer = ev.start and (
+                getattr(rec, "_ch_dt", None) is None or ev.start > rec._ch_dt
+            )
+            if phone and (not rec.phone or newer):
                 rec.phone = phone
-            if not rec.email and email:
+                if ev.start:
+                    rec._ch_dt = ev.start
+            if email and (not rec.email or newer):
                 rec.email = email
+                if ev.start:
+                    rec._ch_dt = ev.start
             if not rec.contact_name and contact_name:
                 rec.contact_name = contact_name
             if not rec.notes and notes:
@@ -193,9 +205,11 @@ def parse_events(events, tags, contact_type, is_commercial, label):
 
     # The latest event (full timestamp) decides the cancellation state
     # (Codex rounds 3+5, R1): a newer CANCELLED booking re-flags the record
-    # even on the same calendar day as an active one.
-    for addr_key, (_, cancelled) in latest_dt.items():
+    # even on the same calendar day as an active one. The timestamp rides
+    # along for cross-calendar same-day ties (Codex round 13).
+    for addr_key, (dt, cancelled) in latest_dt.items():
         by_address[addr_key].cancelled = cancelled
+        by_address[addr_key].latest_event_dt = dt
 
     return list(by_address.values())
 
@@ -284,16 +298,24 @@ def dedup_records(records):
         for r in group:
             if r.address.lower() not in [a.lower() for a in base.all_addresses]:
                 base.all_addresses.append(r.address)
-        dated = [(r.last_event_date, r.cancelled, r.address) for r in group if r.last_event_date]
+        def _dt(r):
+            dt = getattr(r, "latest_event_dt", None)
+            if dt is None and r.last_event_date:
+                from datetime import datetime as _dtm, time as _t, timezone as _tz
+                dt = _dtm.combine(r.last_event_date, _t.min).replace(tzinfo=_tz.utc)
+            return dt
+        dated = [(_dt(r), r.cancelled, r.address, r.last_event_date)
+                 for r in group if _dt(r) is not None]
         if dated:
-            latest = max(d for d, _, _ in dated)
-            base.last_event_date = latest
-            base.cancelled = any(c for d, c, _ in dated if d == latest)
+            latest = max(d for d, _, _, _ in dated)
+            base.last_event_date = max(ld for _, _, _, ld in dated)
+            # full-timestamp recency decides cross-calendar too (round 13)
+            base.cancelled = next(c for d, c, _, _ in dated if d == latest)
             # The customer's CURRENT address is the latest-dated one; keep
             # every group address for fallback lookup so an existing
             # address-only contact at any of them is enriched, never
             # duplicated (Codex round 9, P1).
-            base.address = next(a for d, c, a in dated if d == latest)
+            base.address = next(a for d, _, a, _ in dated if d == latest)
         merged.append(base)
     return merged
 
@@ -397,7 +419,7 @@ async def claim_legacy_row(pool, contact_id: str, require_import_source: bool,
             id_clause = "AND LOWER(address) = LOWER($3)"
         elif kind == "phone":
             id_clause = ("AND regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g')"
-                         " LIKE '%' || $3")
+                         " LIKE '%' || $3 || '%'")
         elif kind == "email":
             id_clause = "AND LOWER(email) = LOWER($3)"
     args = [contact_id, EOM_CONTEXT_ID] + ([id_val] if id_clause else [])

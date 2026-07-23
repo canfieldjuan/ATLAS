@@ -461,6 +461,55 @@ def test_claim_cas_carries_matched_identity():
     assert "LOWER(address) = LOWER($3)" in cas_sql
 
 
+def test_claim_cas_phone_predicate_is_contains_not_suffix():
+    # Codex round 13: a stored '217-555-9999 ext 9' contact must satisfy the
+    # CAS the same way it satisfied the provider search (contains, not
+    # suffix).
+    rec = _record(phone="(217) 555-9999")
+    crm = StubCRM(legacy_hit={"id": "lead1", "tags": [], "source": "web",
+                              "status": "active"})
+    pool = StubPool(rows=[{"id": "lead1", "tags": [], "source": "web",
+                           "status": "active"}])
+    asyncio.run(import_one(rec, crm, pool))
+    cas_sql = [q for q, _ in pool.queries if "SET business_context_id" in q][0]
+    assert "LIKE '%' || $3 || '%'" in cas_sql
+
+
+def test_same_day_cross_calendar_tie_resolved_by_timestamp():
+    # Codex round 13 (R1): a later same-day active booking in ANOTHER
+    # calendar beats an earlier cancelled one, and vice versa.
+    morning_cancel = parse_events(
+        [_event("Jane Smith - CANCELLED", "12 Oak St, Effingham, IL",
+                description="217-555-8888",
+                start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))],
+        ["one_time"], "customer", False, "One-Time")
+    afternoon_active = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL",
+                description="217-555-8888",
+                start=datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc))],
+        ["residential"], "customer", False, "Residential")
+    merged = dedup_records(morning_cancel + afternoon_active)
+    assert merged[0].cancelled is False
+    merged = dedup_records(afternoon_active + morning_cancel)
+    assert merged[0].cancelled is False
+
+
+def test_latest_event_channels_replace_stale_ones():
+    # Codex round 13 (R1): the calendar is the live master -- a corrected
+    # number on a newer booking replaces the stale one.
+    events = [
+        _event("Jane Smith", "12 Oak St, Effingham, IL",
+               description="217-555-0000",
+               start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)),
+        _event("Jane Smith", "12 Oak St, Effingham, IL",
+               description="217-555-1111",
+               start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc)),
+    ]
+    for ordering in (events, list(reversed(events))):
+        rec = parse_events(ordering, ["residential"], "customer", False, "Residential")[0]
+        assert "1111" in rec.phone
+
+
 def test_merged_group_prefers_latest_address_and_carries_all():
     # Codex round 9 (P1): the surviving record uses the latest-dated
     # address, and every group address rides along for fallback lookup.
