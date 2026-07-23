@@ -1937,11 +1937,12 @@
   },
   "scripts/sync_eom_portal_customers.py": {
     "counts": {
+      "HEURISTIC_COMMENT": 1,
       "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 3
     },
-    "score": 14
+    "score": 15
   },
   "scripts/import_eom_customers_live.py": {
     "counts": {

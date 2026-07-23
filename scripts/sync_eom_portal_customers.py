@@ -32,6 +32,7 @@ import getpass
 import os
 import sys
 import uuid as _uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))          # sibling script import
@@ -414,14 +415,89 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
     return outcome, contact_id
 
 
-async def demote_unmatched(pool, matched_ids: set, apply: bool) -> tuple:
+async def fetch_calendar_guard_keys(months_back: int = 1, months_forward: int = 4):
+    """Owner rule (2026-07-23): the CALENDAR VETOES DEMOTION. Live booking
+    events (recent past through upcoming) yield phone/address/name keys; any
+    demotion candidate matching one is a CURRENT customer regardless of
+    portal state and is kept (reported for portal reconciliation)."""
+    from atlas_brain.services.calendar_provider import GoogleCalendarProvider
+
+    ids = live.resolve_calendar_ids(live.effective_calendar_env(os.environ), "all")
+    provider = GoogleCalendarProvider()
+    keys = {"phones": set(), "addrs": set(), "names": set()}
+    try:
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=months_back * 30)
+        end = now + timedelta(days=months_forward * 30)
+        all_records = []
+        for cal in live.BOOKING_CALENDARS:
+            events = await provider.list_events(
+                start=start, end=end, calendar_id=ids[cal["key"]]
+            )
+            all_records.extend(live.parse_events(
+                events, cal["tags"], "customer",
+                cal["key"] == "commercial", cal["label"],
+            ))
+        # Cross-calendar recency first (Codex 2163 r2): an older active event
+        # on one calendar must not veto when a NEWER cancellation on another
+        # calendar supersedes it -- the merged record's state decides.
+        merged = live.dedup_records(all_records)
+        # The merger unions by phone/address only, so same-NAME records
+        # without a shared channel stay separate: name keys get their own
+        # latest-record-wins pass (Codex 2163 r3).
+        name_state = {}
+        for rec in merged:
+            nm = rec.name.strip().lower()
+            dt = getattr(rec, "latest_event_dt", None)
+            cur = name_state.get(nm)
+            if cur is None or (dt and (cur[0] is None or dt > cur[0])) or (
+                    dt and cur[0] and dt == cur[0]
+                    and rec.cancelled and not cur[1]):
+                # Equal-time ties resolve to cancelled, mirroring the
+                # slice-A determinism rule (Codex 2163 r4).
+                name_state[nm] = (dt, rec.cancelled)
+        for rec in merged:
+            if rec.cancelled:
+                # A latest-event cancellation is evidence of ENDING, not
+                # currency -- it must not veto demotion (Codex 2163 r1-r2).
+                continue
+            if rec.phone:
+                digits = live._phone_digits(rec.phone)
+                if len(digits) >= 10:
+                    keys["phones"].add(digits[-10:])
+            for addr in getattr(rec, "all_addresses", None) or [rec.address]:
+                keys["addrs"].add(addr.lower())
+        for nm, (_, cancelled) in name_state.items():
+            if not cancelled:
+                keys["names"].add(nm)
+    finally:
+        await provider.aclose()
+    return keys
+
+
+def on_calendar(row: dict, guard_keys: dict) -> bool:
+    phone = str(row.get("phone") or "")
+    if phone:
+        digits = live._phone_digits(phone)
+        if len(digits) >= 10 and digits[-10:] in guard_keys["phones"]:
+            return True
+    addr = str(row.get("address") or "").strip().lower()
+    if addr and addr in guard_keys["addrs"]:
+        return True
+    name = str(row.get("full_name") or "").strip().lower()
+    return bool(name) and name in guard_keys["names"]
+
+
+async def demote_unmatched(pool, matched_ids: set, apply: bool,
+                           guard_keys: dict) -> tuple:
     """Previously-imported active 'customers' that matched no portal customer
-    this run become past customers. Only rows this pipeline claimed as
-    active (calendar_import / portal_sync provenance) are eligible; leads,
-    manual, web, and every other source are never touched."""
+    this run become past customers -- UNLESS they appear on the live booking
+    calendars (owner veto rule). Only rows this pipeline claimed as active
+    (calendar_import / portal_sync provenance) are eligible; leads, manual,
+    web, and every other source are never touched."""
     rows = await pool.fetch(
         """
-        SELECT id, full_name, tags FROM contacts
+        SELECT id, full_name, tags, phone, address FROM contacts
         WHERE business_context_id = $1
           AND contact_type = 'customer'
           AND status = 'active'
@@ -432,8 +508,14 @@ async def demote_unmatched(pool, matched_ids: set, apply: bool) -> tuple:
         list(DEMOTABLE_SOURCES),
     )
     demoted = 0
+    kept = 0
     for row in rows:
         if str(row["id"]) in matched_ids:
+            continue
+        if on_calendar(row, guard_keys):
+            kept += 1
+            print(f"  KEPT (on your calendar, missing from portal): "
+                  f"{row['full_name']} -- add them to the portal")
             continue
         print(f"  DEMOTE (past customer): {row['full_name']}")
         if not apply:
@@ -458,6 +540,9 @@ async def demote_unmatched(pool, matched_ids: set, apply: bool) -> tuple:
         )
         if result is not None:
             demoted += 1
+    if kept:
+        print(f"\n  {kept} calendar-active customer(s) kept; reconcile them "
+              "in the portal.")
     return demoted, len(rows)
 
 
@@ -535,7 +620,21 @@ async def run(args) -> int:
               "a partial match set must not drive demotions.")
         demoted, eligible = 0, 0
     else:
-        demoted, eligible = await demote_unmatched(pool, matched_ids, args.apply)
+        try:
+            guard_keys = await fetch_calendar_guard_keys()
+        except (Exception, SystemExit) as e:  # noqa: BLE001 -- fail closed;
+            # SystemExit included: missing calendar config must surface as
+            # the skip, not kill an --apply run mid-flight (Codex r3).
+            print(f"  DEMOTION SKIPPED: calendar guard unavailable ({e}) -- "
+                  "refusing to demote without the calendar veto check.")
+            counts["errors"] += 1
+            guard_keys = None
+        if guard_keys is None:
+            demoted, eligible = 0, 0
+        else:
+            demoted, eligible = await demote_unmatched(
+                pool, matched_ids, args.apply, guard_keys
+            )
 
     print(f"\n{'=' * 70}")
     if args.apply:

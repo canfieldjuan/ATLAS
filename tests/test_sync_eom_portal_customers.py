@@ -17,7 +17,8 @@ sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "tests"))
 
 from test_eom_live_calendar_import import StubCRM, StubPool  # noqa: E402
-from sync_eom_portal_customers import (  # noqa: E402
+from sync_eom_portal_customers import (
+    on_calendar,  # noqa: E402
     DEMOTABLE_SOURCES,
     customer_to_contact_data,
     demote_unmatched,
@@ -463,12 +464,81 @@ def test_already_stamped_id_is_not_an_error_or_rewrite():
 # Demotion
 # ---------------------------------------------------------------------------
 
+NO_GUARD = {"phones": set(), "addrs": set(), "names": set()}
+
+
+def test_calendar_veto_keys_match_phone_address_and_name():
+    # Owner rule (2026-07-23): the calendar vetoes demotion.
+    guard = {"phones": {"2175559999"}, "addrs": {"12 oak st, effingham, il"},
+             "names": {"jane smith"}}
+    assert on_calendar({"phone": "(217) 555-9999 ext 4"}, guard)
+    assert on_calendar({"address": "12 Oak St, Effingham, IL "}, guard)
+    assert on_calendar({"full_name": "Jane Smith"}, guard)
+    assert not on_calendar({"full_name": "Someone Else",
+                            "phone": "217-555-0000", "address": "9 Elm"}, guard)
+
+
+def test_cancelled_latest_calendar_records_do_not_veto():
+    # Codex 2163 rounds 1-2 (BLOCKER): cancellation excludes from the veto,
+    # decided on the CROSS-CALENDAR merged view (dedup_records runs before
+    # key emission, so a newer cancellation on another calendar supersedes
+    # an older active event).
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    body = src.split("def fetch_calendar_guard_keys")[1].split("def on_calendar")[0]
+    assert "live.dedup_records(all_records)" in body
+    assert "if rec.cancelled:" in body
+    assert body.index("live.dedup_records") < body.index("if rec.cancelled:")
+    assert body.index("if rec.cancelled:") < body.index("if rec.phone:")
+
+
+def test_calendar_active_candidates_are_kept_not_demoted():
+    pool = SyncPool(demotion_rows=[
+        {"id": "sched", "full_name": "On Schedule", "tags": [],
+         "phone": "217-555-9999", "address": "X"},
+        {"id": "gone", "full_name": "Moved Away", "tags": [],
+         "phone": None, "address": "Y"},
+    ])
+    guard = {"phones": {"2175559999"}, "addrs": set(), "names": set()}
+    demoted, eligible = asyncio.run(
+        demote_unmatched(pool, set(), apply=True, guard_keys=guard))
+    assert (demoted, eligible) == (1, 2)
+    assert pool.updates[0][0] == "gone"          # only the truly-gone one
+
+
+def test_demotion_refuses_without_the_calendar_guard():
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    guard_block = src.split("fetch_calendar_guard_keys()")[1].split("demote_unmatched(")[0]
+    assert "DEMOTION SKIPPED" in guard_block
+    assert 'counts["errors"] += 1' in guard_block
+    # Codex r3: SystemExit (missing calendar config) takes the same skip.
+    assert "(Exception, SystemExit)" in guard_block
+
+
+def test_equal_time_name_cancellation_tie_resolves_to_cancelled():
+    # Codex 2163 r4: same name, same timestamp, no shared channel -- the
+    # cancelled state wins in either visit order (source-asserted).
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    body = src.split("name_state.get(nm)")[1].split("for rec in merged")[0]
+    assert "dt == cur[0]" in body
+    assert "rec.cancelled and not cur[1]" in body
+
+
+def test_name_keys_respect_name_level_cancellation_recency():
+    # Codex r3: same name, no shared channel -- the newer CANCELLED record
+    # suppresses the name key emitted by the older active one.
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    body = src.split("def fetch_calendar_guard_keys")[1].split("def on_calendar")[0]
+    assert "name_state" in body
+    assert body.index("name_state") < body.index('keys["names"].add')
+
+
 def test_unmatched_previously_imported_actives_are_demoted():
     pool = SyncPool(demotion_rows=[
         {"id": "gone", "full_name": "Moved Away", "tags": ["residential"]},
         {"id": "still", "full_name": "Still Here", "tags": ["commercial"]},
     ])
-    demoted, eligible = asyncio.run(demote_unmatched(pool, {"still"}, apply=True))
+    demoted, eligible = asyncio.run(
+        demote_unmatched(pool, {"still"}, apply=True, guard_keys=NO_GUARD))
     assert (demoted, eligible) == (1, 2)
     cid, payload = pool.updates[0]
     assert cid == "gone"
@@ -488,7 +558,7 @@ def test_demotion_write_rechecks_eligibility():
 
 def test_demotion_candidates_are_provenance_scoped():
     pool = SyncPool(demotion_rows=[])
-    asyncio.run(demote_unmatched(pool, set(), apply=True))
+    asyncio.run(demote_unmatched(pool, set(), apply=True, guard_keys=NO_GUARD))
     sql, args = pool.queries[0]
     assert "contact_type = 'customer'" in sql
     assert "status = 'active'" in sql
@@ -509,6 +579,7 @@ def test_demotion_dry_run_counts_without_writing():
     pool = SyncPool(demotion_rows=[
         {"id": "gone", "full_name": "Moved Away", "tags": []},
     ])
-    demoted, eligible = asyncio.run(demote_unmatched(pool, set(), apply=False))
+    demoted, eligible = asyncio.run(
+        demote_unmatched(pool, set(), apply=False, guard_keys=NO_GUARD))
     assert (demoted, eligible) == (1, 1)
     assert pool.updates == []
