@@ -74,16 +74,15 @@ Slice phase: vertical slice
      reactivates it, in either input order (asserted; Codex round 3, R1);
      calendar events with `STATUS=cancelled` are skipped entirely
      (asserted).
-  5. Records with a phone or email route through `create_contact`'s
-     tenant-scoped dedupe and never consult the address net (asserted);
-     records with neither channel resolve by address first and update
-     rather than duplicate (both branches asserted).
+  5. Records with a phone or email resolve via tenant-scoped channel
+     search first (phone priority, extension-stripped) and only consult
+     the address net on a channel miss; records with neither channel
+     resolve by address and update rather than duplicate (asserted).
   6. Import interactions carry a stable `source_ref` anchor so re-runs
      dedupe (asserted).
-  7. A provider-merged (matched) contact receives the calendar-computed
-     `status` explicitly — the provider merge allowlist excludes it — and
-     no extra write happens when statuses already agree (both asserted;
-     Codex R1/R8).
+  7. A matched contact receives the calendar-computed `status` through
+     the diffed update path — the provider merge allowlist excludes it
+     (asserted; Codex R1/R8; zero-write case covered by criterion 16).
   8. Single-calendar mode requires only the selected calendar's env var
      (asserted; Codex R1).
   9. The address resolver excludes archived rows exactly like the
@@ -111,6 +110,18 @@ Slice phase: vertical slice
       `source = 'calendar_import'` provenance, so unknown-source legacy rows
       at a shared address are never claimed (all asserted; Codex rounds 2-3,
       R4/R8).
+  16. A repeat import of an unchanged calendar performs ZERO writes on
+      matched contacts -- updates are diffed field-by-field and skipped
+      when identical, counted 'unchanged' (asserted; Codex round 5, P1).
+  17. Trailing phone extensions are stripped before last-10 channel
+      matching (asserted; Codex round 5).
+  18. Matched updates never carry `source`; a returning website lead keeps
+      `source='web'` -- only newly created contacts stamp
+      `calendar_import` (asserted; Codex round 5).
+  19. Cross-calendar dedupe is TRANSITIVE over phone/address keys
+      (union-find), and same-day cancellation ordering is resolved at
+      full event-timestamp granularity within a calendar (asserted;
+      Codex round 5).
 - Reachability proof: operator script, invoked directly. The full CLI
   entrypoint (arg parsing, id resolution, `GoogleCalendarProvider.
   list_events` pagination, cross-calendar dedupe, exit code) was exercised
@@ -154,8 +165,11 @@ on any gap. `main` fetches each booking calendar through
 events to `parse_events` — a mirror of `parse_ics`'s per-event pipeline
 (summary cleaning, address normalization, phone/email/contact extraction,
 address-keyed richest-record merge) operating on provider `CalendarEvent`
-objects — then reuses `dedup_across_calendars` unchanged for cross-calendar
-merge. `record_to_contact_data` builds the stamped payload. `import_one`
+objects — then merges cross-calendar via `dedup_records` -- a union-find transitive
+merger (phone/address keys) applying the inherited field-merge rules with
+recency-based cancellation (the inherited `dedup_across_calendars` is not
+transitive and clears cancellation on any active record; replaced at
+reviewer direction, rounds 4-5). `record_to_contact_data` builds the stamped payload. `import_one`
 routes records with a phone/email through `create_contact` (tenant-scoped
 dedupe, lead-to-customer upgrade via merge) and address-only records through
 `resolve_by_address` -> `update_contact`, closing the duplicate-on-re-run
@@ -190,7 +204,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 22 passed.
+- `tests/test_eom_live_calendar_import.py` — 28 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.
@@ -213,7 +227,7 @@ stable `source_ref`.
 | File | LOC |
 |---|---:|
 | `atlas_brain/config.py` | 13 |
-| `plans/PR-EOM-Live-Calendar-Import.md` | 180 |
-| `scripts/import_eom_customers_live.py` | 425 |
-| `tests/test_eom_live_calendar_import.py` | 330 |
-| **Total** | **948** |
+| `plans/PR-EOM-Live-Calendar-Import.md` | 230 |
+| `scripts/import_eom_customers_live.py` | 545 |
+| `tests/test_eom_live_calendar_import.py` | 500 |
+| **Total** | **1288** |

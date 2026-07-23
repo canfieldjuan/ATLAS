@@ -27,6 +27,7 @@ Usage:
 import argparse
 import asyncio
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -113,8 +114,11 @@ def resolve_calendar_ids(env: dict, selected: str = "all") -> dict:
 def parse_events(events, tags, contact_type, is_commercial, label):
     """Mirror of ics.parse_ics's per-event pipeline, fed from provider
     CalendarEvent objects instead of ICS VEVENTs. Dedupe within one calendar
-    is by normalized address; richest contact info wins."""
+    is by normalized address; richest contact info wins. Cancellation recency
+    is tracked at full event-timestamp granularity so a same-day later
+    CANCELLED marker still wins (Codex round 5, R1)."""
     by_address = {}
+    latest_dt = {}   # addr_key -> (event datetime, cancelled)
 
     for ev in events:
         if (ev.status or "").lower() == "cancelled":
@@ -152,6 +156,10 @@ def parse_events(events, tags, contact_type, is_commercial, label):
         notes = " | ".join(notes_lines[:3])
 
         addr_key = address.lower()
+        if ev.start is not None:
+            cur = latest_dt.get(addr_key)
+            if cur is None or ev.start > cur[0]:
+                latest_dt[addr_key] = (ev.start, cancelled)
         if addr_key not in by_address:
             by_address[addr_key] = ics.CustomerRecord(
                 name=name,
@@ -182,37 +190,89 @@ def parse_events(events, tags, contact_type, is_commercial, label):
                 rec.notes = notes
             if event_date and (rec.last_event_date is None or event_date > rec.last_event_date):
                 rec.last_event_date = event_date
-                # The latest-dated event decides the cancellation state
-                # (Codex round 3, R1): a newer CANCELLED booking re-flags the
-                # record; it is not merely cleared by any older active one.
-                rec.cancelled = cancelled
+
+    # The latest event (full timestamp) decides the cancellation state
+    # (Codex rounds 3+5, R1): a newer CANCELLED booking re-flags the record
+    # even on the same calendar day as an active one.
+    for addr_key, (_, cancelled) in latest_dt.items():
+        by_address[addr_key].cancelled = cancelled
 
     return list(by_address.values())
 
 
+def _phone_digits(phone: str) -> str:
+    """Digits of the base number with any trailing extension stripped:
+    last-10 matching on '217-555-9999 ext 123' would otherwise search for
+    '5559999123' and miss the tenant contact (Codex round 5, R1/R8)."""
+    base = re.split(r"(?:ext\.?|x)\s*\d+\s*$", phone, flags=re.IGNORECASE)[0]
+    return "".join(c for c in base if c.isdigit())
+
+
 def dedup_records(records):
-    """Cross-calendar dedupe via the inherited merger, then restore
-    cancellation recency: the ICS merge clears `cancelled` whenever any
-    merged record is active, ignoring dates (Codex round 4, R1). The
-    latest-dated contributing record decides, matching the per-calendar
-    semantics."""
-    latest = {}
-    for rec in records:
-        if not rec.last_event_date:
-            continue
-        for key in filter(None, (ics._phone_key(rec.phone), rec.address.lower())):
-            cur = latest.get(key)
-            if cur is None or rec.last_event_date > cur[0]:
-                latest[key] = (rec.last_event_date, rec.cancelled)
-    merged = ics.dedup_across_calendars(records)
-    for rec in merged:
-        best = None
-        for key in filter(None, (ics._phone_key(rec.phone), rec.address.lower())):
-            cur = latest.get(key)
-            if cur and (best is None or cur[0] > best[0]):
-                best = cur
-        if best is not None:
-            rec.cancelled = best[1]
+    """Cross-calendar merge with TRANSITIVE phone/address identity.
+
+    Replaces the inherited ics.dedup_across_calendars for the live path
+    (Codex rounds 4-5, R1/R8): that merger is not transitive (a
+    phone-merged record keeps only its first address in the index, so a
+    later address-only event at the second address duplicates the customer)
+    and it clears cancellation whenever any merged record is active. Here:
+    union-find over phone/address keys, the inherited field-merge rules per
+    group, and recency-based cancellation — the latest event date decides,
+    with cancelled winning a same-date cross-calendar tie (conservative)."""
+    parent = list(range(len(records)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    key_owner = {}
+    for i, rec in enumerate(records):
+        keys = []
+        pk = ics._phone_key(rec.phone)
+        if pk:
+            keys.append(("phone", pk))
+        keys.append(("addr", rec.address.lower()))
+        for k in keys:
+            if k in key_owner:
+                ri, rj = find(key_owner[k]), find(i)
+                if ri != rj:
+                    parent[rj] = ri
+            else:
+                key_owner[k] = i
+
+    groups = {}
+    for i in range(len(records)):
+        groups.setdefault(find(i), []).append(records[i])
+
+    _TYPE = {"customer": 0, "lead": 1}
+    merged = []
+    for group in groups.values():
+        base = group[0]
+        for rec in group[1:]:
+            if len(rec.name) < len(base.name):
+                base.name = rec.name
+            if not base.phone and rec.phone:
+                base.phone = rec.phone
+            if not base.email and rec.email:
+                base.email = rec.email
+            if not base.contact_name and rec.contact_name:
+                base.contact_name = rec.contact_name
+            if not base.notes and rec.notes:
+                base.notes = rec.notes
+            for tag in rec.tags:
+                if tag not in base.tags:
+                    base.tags.append(tag)
+            if _TYPE.get(rec.contact_type, 99) < _TYPE.get(base.contact_type, 99):
+                base.contact_type = rec.contact_type
+            base.event_count += rec.event_count
+        dated = [(r.last_event_date, r.cancelled) for r in group if r.last_event_date]
+        if dated:
+            latest = max(d for d, _ in dated)
+            base.last_event_date = latest
+            base.cancelled = any(c for d, c in dated if d == latest)
+        merged.append(base)
     return merged
 
 
@@ -256,7 +316,9 @@ async def resolve_by_address(pool, address: str):
     (Codex round 2, R4/R8)."""
     row = await pool.fetchrow(
         """
-        SELECT id, tags FROM contacts
+        SELECT id, full_name, address, contact_type, business_context_id,
+               tags, status, phone, email, notes
+        FROM contacts
         WHERE business_context_id = $1
           AND status != 'archived'
           AND address IS NOT NULL AND LOWER(address) = LOWER($2)
@@ -270,7 +332,9 @@ async def resolve_by_address(pool, address: str):
         return row, False
     legacy = await pool.fetchrow(
         """
-        SELECT id, tags FROM contacts
+        SELECT id, full_name, address, contact_type, business_context_id,
+               tags, status, phone, email, notes
+        FROM contacts
         WHERE business_context_id IS NULL
           AND status != 'archived'
           AND source = 'calendar_import'
@@ -281,6 +345,18 @@ async def resolve_by_address(pool, address: str):
         address,
     )
     return legacy, legacy is not None
+
+
+def _diff_updates(existing: dict, data: dict) -> dict:
+    """Subset of `data` that actually differs from the stored row."""
+    changed = {}
+    for k, v in data.items():
+        if k == "tags":
+            if sorted(existing.get("tags") or []) != sorted(v or []):
+                changed[k] = v
+        elif existing.get(k) != v:
+            changed[k] = v
+    return changed
 
 
 async def _search_channel(crm, **channel):
@@ -305,7 +381,7 @@ async def import_one(rec, crm, pool) -> str:
 
     existing, needs_claim = None, False
     if rec.phone:
-        digits = "".join(c for c in rec.phone if c.isdigit())
+        digits = _phone_digits(rec.phone)
         if len(digits) >= 10:
             existing, needs_claim = await _search_channel(crm, phone=digits)
     if existing is None and rec.email:
@@ -326,8 +402,19 @@ async def import_one(rec, crm, pool) -> str:
         # 'estimate_request'] on a returning lead (Codex round 4, R1).
         prior = existing.get("tags") or []
         data["tags"] = sorted(set(prior) | set(data["tags"]))
-        await crm.update_contact(contact_id, data)
-        outcome = "updated"
+        # Never overwrite recorded origin on a matched contact: a returning
+        # website lead keeps source='web' (Codex round 5, R1). New contacts
+        # still stamp calendar_import on the create path below.
+        data.pop("source", None)
+        # Only write when something actually changed, so a repeat import of
+        # an unchanged calendar provably touches zero rows (Codex round 5,
+        # P1 idempotency).
+        updates = _diff_updates(existing, data)
+        if updates:
+            await crm.update_contact(contact_id, updates)
+            outcome = "updated"
+        else:
+            outcome = "unchanged"
     else:
         result = await crm.create_contact(data)
         contact_id = str(result.get("id", ""))
@@ -360,7 +447,7 @@ def exit_code_for(counts: dict) -> int:
 
 
 async def run_import(records, dry_run: bool) -> dict:
-    counts = {"created": 0, "updated": 0, "errors": 0}
+    counts = {"created": 0, "updated": 0, "unchanged": 0, "errors": 0}
     crm = None
     pool = None
     if not dry_run:
@@ -457,7 +544,7 @@ async def main():
     else:
         print(
             f"  Created: {counts['created']}   Updated: {counts['updated']}   "
-            f"Errors: {counts['errors']}"
+            f"Unchanged: {counts['unchanged']}   Errors: {counts['errors']}"
         )
     print(f"{'=' * 70}\n")
     return exit_code_for(counts)

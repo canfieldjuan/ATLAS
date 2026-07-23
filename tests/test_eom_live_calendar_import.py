@@ -21,6 +21,8 @@ sys.path.insert(0, str(REPO / "scripts"))
 from import_eom_customers_live import (  # noqa: E402
     BOOKING_CALENDARS,
     EOM_CONTEXT_ID,
+    _phone_digits,
+    dedup_records,
     effective_calendar_env,
     exit_code_for,
     import_one,
@@ -256,10 +258,79 @@ def test_address_only_record_creates_when_unmatched():
     assert crm.created[0]["business_context_id"] == "effingham_maids"
 
 
+def test_phone_digits_strips_trailing_extension():
+    # Codex round 5 (R1/R8): last-10 matching must use the base number.
+    assert _phone_digits("217-555-9999 ext 123") == "2175559999"
+    assert _phone_digits("217-555-9999 x42") == "2175559999"
+    assert _phone_digits("(217) 555-9999") == "2175559999"
+    assert _phone_digits("1-217-555-9999")[-10:] == "2175559999"
+
+
+def test_same_day_later_cancellation_wins():
+    # Codex round 5 (R1): recency compares full timestamps, so a later
+    # same-day CANCELLED marker re-flags the record -- and vice versa.
+    morning_active = _event("Jane Smith", "12 Oak St, Effingham, IL",
+                            start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))
+    afternoon_cancel = _event("Jane Smith - CANCELLED", "12 Oak St, Effingham, IL",
+                              start=datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc))
+    for events in ([morning_active, afternoon_cancel], [afternoon_cancel, morning_active]):
+        rec = parse_events(events, ["residential"], "customer", False, "Residential")[0]
+        assert rec.cancelled is True
+    morning_cancel = _event("Jane Smith - CANCELLED", "12 Oak St, Effingham, IL",
+                            start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))
+    afternoon_active = _event("Jane Smith", "12 Oak St, Effingham, IL",
+                              start=datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc))
+    rec = parse_events([morning_cancel, afternoon_active],
+                       ["residential"], "customer", False, "Residential")[0]
+    assert rec.cancelled is False
+
+
+def test_transitive_phone_address_dedupe():
+    # Codex round 5 (R1/R8): phone links addr A to addr B; a later
+    # address-only event at B must land on the same merged customer.
+    rec_a = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL", description="217-555-8888",
+                start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc))],
+        ["commercial"], "customer", True, "Commercial")
+    rec_b = parse_events(
+        [_event("Jane Smith", "77 Elm St, Effingham, IL", description="217-555-8888",
+                start=datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc))],
+        ["residential"], "customer", False, "Residential")
+    rec_b_only = parse_events(
+        [_event("Jane Smith", "77 Elm St, Effingham, IL",
+                start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))],
+        ["one_time"], "customer", False, "One-Time")
+    merged = dedup_records(rec_a + rec_b + rec_b_only)
+    assert len(merged) == 1
+    assert set(merged[0].tags) == {"commercial", "residential", "one_time"}
+    assert merged[0].event_count == 3
+
+
+def test_unchanged_contact_is_not_rewritten():
+    # Codex round 5 (P1): a repeat import of an unchanged calendar performs
+    # zero writes on matched contacts.
+    rec = _record(phone="(217) 555-9999")
+    stored = record_to_contact_data(rec)
+    stored.pop("source")
+    existing = {"id": "x", **stored}
+    crm = StubCRM(scoped_hit=existing)
+    outcome = asyncio.run(import_one(rec, crm, StubPool()))
+    assert outcome == "unchanged"
+    assert crm.updated == []
+    assert crm.created == []
+
+
+def test_matched_update_never_overwrites_source():
+    # Codex round 5 (R1): a returning website lead keeps source='web'.
+    rec = _record(phone="(217) 555-9999")
+    crm = StubCRM(scoped_hit={"id": "k", "tags": [], "source": "web", "status": "inactive"})
+    asyncio.run(import_one(rec, crm, StubPool()))
+    assert "source" not in crm.updated[0][1]
+
+
 def test_cross_calendar_dedupe_preserves_cancellation_recency():
     # Codex round 4 (R1): the latest-dated record decides `cancelled` across
     # calendars too -- the inherited merger's any-active-clears is corrected.
-    from import_eom_customers_live import dedup_records
     older_active = parse_events(
         [_event("Jane Smith", "12 Oak St, Effingham, IL",
                 description="217-555-8888",
