@@ -31,7 +31,7 @@ import logging
 import sys
 import uuid as _uuid
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -61,7 +61,24 @@ mcp = FastMCP(
 )
 
 
+_provider_override: "Callable[[], Any] | None" = None
+
+
+def set_provider_override(factory: "Callable[[], Any] | None") -> None:
+    """Install (or clear with ``None``) a CRM provider factory override.
+
+    Injection seam for unit tests, mirroring the FastAPI
+    ``dependency_overrides`` pattern used by the HTTP surface: tests supply a
+    fake provider through this public setter rather than patching module
+    internals.
+    """
+    global _provider_override
+    _provider_override = factory
+
+
 def _provider():
+    if _provider_override is not None:
+        return _provider_override()
     from ..services.crm_provider import get_crm_provider
 
     return get_crm_provider()

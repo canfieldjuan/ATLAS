@@ -48,6 +48,12 @@ def no_default(monkeypatch):
     monkeypatch.setattr(settings.mcp, "crm_default_business_context", None)
 
 
+@pytest.fixture(autouse=True)
+def _clear_provider_override():
+    yield
+    crm_srv.set_provider_override(None)
+
+
 def _provider_mock(monkeypatch, **overrides):
     provider = MagicMock()
     provider.search_contacts = AsyncMock(return_value=overrides.get("search", []))
@@ -58,7 +64,7 @@ def _provider_mock(monkeypatch, **overrides):
     provider.log_interaction = AsyncMock(return_value={"id": "i-1"})
     provider.get_interactions = AsyncMock(return_value=[])
     provider.get_contact_appointments = AsyncMock(return_value=[])
-    monkeypatch.setattr(crm_srv, "_provider", lambda: provider)
+    crm_srv.set_provider_override(lambda: provider)
     return provider
 
 
