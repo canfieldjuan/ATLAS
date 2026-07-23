@@ -429,25 +429,30 @@ async def fetch_calendar_guard_keys(months_back: int = 1, months_forward: int = 
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=months_back * 30)
         end = now + timedelta(days=months_forward * 30)
+        all_records = []
         for cal in live.BOOKING_CALENDARS:
             events = await provider.list_events(
                 start=start, end=end, calendar_id=ids[cal["key"]]
             )
-            for rec in live.parse_events(
+            all_records.extend(live.parse_events(
                 events, cal["tags"], "customer",
                 cal["key"] == "commercial", cal["label"],
-            ):
-                if rec.cancelled:
-                    # A latest-event cancellation is evidence of ENDING, not
-                    # currency -- it must not veto demotion (Codex 2163 r1).
-                    continue
-                if rec.phone:
-                    digits = live._phone_digits(rec.phone)
-                    if len(digits) >= 10:
-                        keys["phones"].add(digits[-10:])
-                for addr in getattr(rec, "all_addresses", None) or [rec.address]:
-                    keys["addrs"].add(addr.lower())
-                keys["names"].add(rec.name.strip().lower())
+            ))
+        # Cross-calendar recency first (Codex 2163 r2): an older active event
+        # on one calendar must not veto when a NEWER cancellation on another
+        # calendar supersedes it -- the merged record's state decides.
+        for rec in live.dedup_records(all_records):
+            if rec.cancelled:
+                # A latest-event cancellation is evidence of ENDING, not
+                # currency -- it must not veto demotion (Codex 2163 r1-r2).
+                continue
+            if rec.phone:
+                digits = live._phone_digits(rec.phone)
+                if len(digits) >= 10:
+                    keys["phones"].add(digits[-10:])
+            for addr in getattr(rec, "all_addresses", None) or [rec.address]:
+                keys["addrs"].add(addr.lower())
+            keys["names"].add(rec.name.strip().lower())
     finally:
         await provider.aclose()
     return keys

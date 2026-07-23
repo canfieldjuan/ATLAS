@@ -479,11 +479,15 @@ def test_calendar_veto_keys_match_phone_address_and_name():
 
 
 def test_cancelled_latest_calendar_records_do_not_veto():
-    # Codex 2163 round 1 (BLOCKER): a CANCELLED-latest record is evidence of
-    # ending -- source-asserted skip in the guard-key builder.
+    # Codex 2163 rounds 1-2 (BLOCKER): cancellation excludes from the veto,
+    # decided on the CROSS-CALENDAR merged view (dedup_records runs before
+    # key emission, so a newer cancellation on another calendar supersedes
+    # an older active event).
     src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
     body = src.split("def fetch_calendar_guard_keys")[1].split("def on_calendar")[0]
+    assert "live.dedup_records(all_records)" in body
     assert "if rec.cancelled:" in body
+    assert body.index("live.dedup_records") < body.index("if rec.cancelled:")
     assert body.index("if rec.cancelled:") < body.index("if rec.phone:")
 
 

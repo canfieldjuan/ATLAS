@@ -45,9 +45,11 @@ Slice phase: vertical slice
      (source-asserted) -- the veto is never silently absent.
   4. Guard keys derive from the same slice-A parser/identity semantics as
      the import itself (mechanism-asserted by reuse).
-  5. CANCELLED-latest calendar records never veto -- a cancellation marker
-     is evidence of ending, not currency (source-asserted; Codex round 1,
-     BLOCKER).
+  5. CANCELLED-latest calendar records never veto, decided on the
+     CROSS-CALENDAR merged view (`dedup_records` recency runs before key
+     emission, so a newer cancellation on another calendar supersedes an
+     older active event) -- source-asserted with ordering (Codex rounds
+     1-2, BLOCKER).
 - Reachability proof: operator script; the guard runs on every demotion
   pass; `on_calendar` and the kept/demoted split are driven by tests.
 - Reviewer rules triggered: R1, R2, R4, R6, R8, R14.
