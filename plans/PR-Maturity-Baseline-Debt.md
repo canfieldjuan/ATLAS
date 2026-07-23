@@ -50,11 +50,15 @@ Slice phase: vertical slice
   and `scripts` lanes ONLY (baseline JSON inputs); no runtime, API, DB,
   deploy, or money surface is touched.
 - Risk areas: (a) masking a FUTURE regression in the two named files — the
-  ratchet still fails on ANY score increase above these recorded values,
-  and capped-category counts cannot grow past their caps without raising
-  the total, so the guard's increase detection remains live; (b) test-debt
-  suppression — mitigated by recording the calendar raise-test debt as an
-  explicit deferred item below.
+  ratchet still fails on any TOTAL score increase above these recorded
+  values; however, categories ALREADY AT THEIR CAP (`UNGUARDED_INDEX`,
+  `WEAK_CONTRACT` in the scripts entry) are a genuine ratchet blind spot:
+  further additions in a capped-out category do not raise the total. This
+  is a mechanism-level property affecting every baselined file, not
+  introduced here; recorded honestly (corrected per review) and mitigations
+  (per-category ratcheting or sensitive-listing these codes for the
+  scripts lane) are deferred below. (b) test-debt suppression — mitigated
+  by recording the calendar raise-test debt as an explicit deferred item.
 - Reachability proof: CI ratchet jobs consume the baselines directly.
 - Reviewer rules triggered: R12, R14.
   - R12: CI config/baseline change only; no behavior, no secrets.
@@ -81,6 +85,10 @@ entry except the two named files to origin/main's values.
 - Failure-path raise tests for `atlas_brain/tools/calendar.py` (the
   accepted `NO_RAISES_TESTS` debt) — a tools-lane test slice, deliberately
   not smuggled into a baseline chore.
+- Per-category ratcheting (or sensitive-listing `UNGUARDED_INDEX` /
+  `WEAK_CONTRACT` for the scripts lane) to close the capped-category blind
+  spot — a `scripts/maturity_sweep.py` change, out of a baseline chore's
+  scope.
 - Otherwise nothing; closes #2159.
 
 ## Verification
@@ -92,7 +100,7 @@ entry except the two named files to origin/main's values.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Maturity-Baseline-Debt.md` | 75 |
+| `plans/PR-Maturity-Baseline-Debt.md` | 108 |
 | `tests/maturity_sweep/baseline_atlas_brain_tools.json` | 3 |
 | `tests/maturity_sweep/baseline_scripts.json` | 7 |
-| **Total** | **85** |
+| **Total** | **118** |
