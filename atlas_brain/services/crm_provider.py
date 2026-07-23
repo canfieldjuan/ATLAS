@@ -125,22 +125,31 @@ class DatabaseCRMProvider:
         phone = data.get("phone")
 
         # Tenant-scoped dedup: when the caller stamps a business_context_id,
-        # only match contacts within that tenant -- an EOM web lead must never
-        # resolve to (and mutate) a contact belonging to another context
-        # (PR #2152 review finding, R3/R4).
-        _scope: dict[str, Any] = {}
-        if data.get("business_context_id"):
-            _scope["business_context_id"] = data["business_context_id"]
+        # match contacts within that tenant OR historical contacts with no
+        # context yet (which the merge below then claims for the tenant) --
+        # but never a contact belonging to a DIFFERENT context
+        # (PR #2152/#2153 review findings, R3/R4/R5).
+        ctx = data.get("business_context_id")
+
+        def _ctx_compatible(candidate: dict[str, Any]) -> bool:
+            if not ctx:
+                return True
+            existing_ctx = candidate.get("business_context_id")
+            return existing_ctx is None or existing_ctx == ctx
 
         existing: Optional[dict[str, Any]] = None
         if phone:
-            matches = await self.search_contacts(phone=phone, **_scope)
-            if matches:
-                existing = matches[0]
+            matches = await self.search_contacts(phone=phone)
+            for m in matches:
+                if _ctx_compatible(m):
+                    existing = m
+                    break
         if existing is None and email:
-            matches = await self.search_contacts(email=email, **_scope)
-            if matches:
-                existing = matches[0]
+            matches = await self.search_contacts(email=email)
+            for m in matches:
+                if _ctx_compatible(m):
+                    existing = m
+                    break
 
         if existing is not None:
             # Merge any new non-null fields into the existing record

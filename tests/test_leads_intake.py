@@ -296,42 +296,67 @@ async def test_garbage_phone_dropped_when_email_present():
     assert crm.find_or_create_contact.call_args.kwargs["phone"] is None
 
 
-@pytest.mark.asyncio
-async def test_create_contact_dedupe_is_tenant_scoped():
-    """Provider-level regression for the cross-tenant mutation finding:
-    when data carries business_context_id, both dedupe searches must be
-    scoped to that tenant."""
+def _provider_with(matches):
     from atlas_brain.services.crm_provider import DatabaseCRMProvider
 
     provider = DatabaseCRMProvider.__new__(DatabaseCRMProvider)
-    provider.search_contacts = AsyncMock(return_value=[{"id": "existing-eom"}])
-    provider.update_contact = AsyncMock(return_value={"id": "existing-eom"})
+    provider.search_contacts = AsyncMock(return_value=matches)
+    provider.update_contact = AsyncMock(side_effect=lambda cid, u: {"id": cid, **u})
+    return provider
 
-    result = await provider.create_contact(
-        {
-            "full_name": "Jane Doe",
-            "email": "jane@example.com",
-            "phone": "2175550100",
-            "business_context_id": "effingham_maids",
-        }
+
+@pytest.mark.asyncio
+async def test_create_contact_dedupe_skips_foreign_tenant_matches_up_front():
+    """Cross-tenant regression: a stamped create must never resolve to a
+    contact that belongs to a DIFFERENT business context."""
+    provider = _provider_with(
+        [{"id": "b2b-1", "business_context_id": "churnsignals"}]
     )
-    assert result["id"] == "existing-eom"
-    for call in provider.search_contacts.await_args_list:
-        assert call.kwargs.get("business_context_id") == "effingham_maids"
+    # No compatible match -> falls through to the insert path, which needs a
+    # pool; patch it to observe the outcome.
+    import atlas_brain.storage.database as db_mod
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(return_value={"id": "new-eom"})
+    orig = db_mod.get_db_pool
+    db_mod.get_db_pool = lambda: pool
+    try:
+        result = await provider.create_contact(
+            {"full_name": "Jane", "email": "jane@example.com",
+             "business_context_id": "effingham_maids"}
+        )
+    finally:
+        db_mod.get_db_pool = orig
+    assert result["id"] == "new-eom"  # created fresh, foreign row untouched
+    provider.update_contact.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_create_contact_dedupe_unscoped_without_context():
-    """Without a stamped tenant the legacy global dedupe is preserved."""
-    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+async def test_create_contact_dedupe_claims_null_context_contact():
+    """Historical contacts with NULL context must still match a stamped
+    create (and get claimed), or every SMS/call linker would duplicate
+    existing customers until the Phase 2 backfill."""
+    provider = _provider_with(
+        [{"id": "legacy-1", "business_context_id": None}]
+    )
+    result = await provider.create_contact(
+        {"full_name": "Jane", "email": "jane@example.com",
+         "business_context_id": "effingham_maids"}
+    )
+    assert result["id"] == "legacy-1"
+    merged = provider.update_contact.await_args.args[1]
+    assert merged["business_context_id"] == "effingham_maids"  # claimed
 
-    provider = DatabaseCRMProvider.__new__(DatabaseCRMProvider)
-    provider.search_contacts = AsyncMock(return_value=[{"id": "existing-any"}])
-    provider.update_contact = AsyncMock(return_value={"id": "existing-any"})
 
-    await provider.create_contact({"full_name": "X", "email": "x@example.com"})
-    for call in provider.search_contacts.await_args_list:
-        assert "business_context_id" not in call.kwargs
+@pytest.mark.asyncio
+async def test_create_contact_dedupe_same_tenant_match_reused():
+    provider = _provider_with(
+        [{"id": "eom-1", "business_context_id": "effingham_maids"}]
+    )
+    result = await provider.create_contact(
+        {"full_name": "Jane", "email": "jane@example.com",
+         "business_context_id": "effingham_maids"}
+    )
+    assert result["id"] == "eom-1"
 
 
 def test_route_smoke_mounted_path_statuses():
@@ -391,7 +416,10 @@ async def test_existing_eom_contact_not_mutated_or_downgraded():
     crm.find_or_create_contact.assert_not_awaited()  # no create, no merge
     crm.log_interaction.assert_awaited()  # the request is still recorded
     assert crm.log_interaction.call_args.kwargs["contact_id"] == "cust-9"
-    # resolution searches are tenant-scoped
+    # resolution searches are tenant-scoped and PHONE-FIRST (phone is the
+    # more unique channel; a shared/mistyped email must not steal the match)
+    first = crm.search_contacts.await_args_list[0]
+    assert "phone" in first.kwargs
     for call in crm.search_contacts.await_args_list:
         assert call.kwargs["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
 
@@ -437,3 +465,17 @@ def test_payload_caps_fit_contacts_schema():
     fields = LeadIntakeRequest.model_fields
     assert fields["email"].metadata[0].max_length <= 256
     assert fields["phone"].metadata[0].max_length <= 32
+
+
+@pytest.mark.asyncio
+async def test_ack_volume_failure_skips_email_never_fails_request():
+    """PR #2153 round 3 (R6): a broken volume guard must not 503 a lead
+    that was already captured — email is skipped, request succeeds."""
+    crm, provider = _crm(), _email_provider()
+    volume = AsyncMock(side_effect=RuntimeError("db pool down"))
+    result = await _process_lead_intake(
+        _payload(), crm=crm, email_provider=provider, ack_volume=volume
+    )
+    assert result == {"success": True, "email_sent": False}
+    provider.send.assert_not_awaited()
+    crm.log_interaction.assert_awaited()

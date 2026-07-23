@@ -58,8 +58,9 @@ class LeadRateLimitedError(RuntimeError):
 async def _daily_submission_count(email: str, phone_digits: str) -> int:
     """Count today's web_form submissions for this identity (EOM-scoped).
 
-    Phones are compared on dialable digits so formatting variants of the same
-    number ("(217) 555-0100" vs "217-555-0100") share one cap bucket.
+    Phones share a cap bucket on their last 10 dialable digits — the same
+    semantics search_contacts uses for lookup — so formatting and
+    country-code variants of one number cannot dodge the cap.
     """
     from ..storage.database import get_db_pool
 
@@ -73,7 +74,8 @@ async def _daily_submission_count(email: str, phone_digits: str) -> int:
           AND ci.occurred_at > NOW() - INTERVAL '1 day'
           AND c.business_context_id = $1
           AND (($2 <> '' AND LOWER(c.email) = $2)
-               OR ($3 <> '' AND regexp_replace(COALESCE(c.phone, ''), '\\D', '', 'g') = $3))
+               OR ($3 <> '' AND RIGHT(regexp_replace(COALESCE(c.phone, ''), '[^0-9]', '', 'g'), 10)
+                   = RIGHT($3, 10)))
         """,
         EOM_BUSINESS_CONTEXT_ID,
         email,
@@ -153,15 +155,17 @@ async def _process_lead_intake(
     # Resolve an existing EOM contact WITHOUT mutating it: public, untrusted
     # input must never rewrite a stored identity or downgrade a customer to a
     # lead (PR #2153 review, R3/R4). Only a brand-new contact gets created.
+    # Phone first: the CRM treats phone as the more unique identity channel,
+    # and a mistyped/shared email must not steal a returning caller's record.
     contact: Optional[dict[str, Any]] = None
-    if email:
-        matches = await crm.search_contacts(
-            email=email, business_context_id=EOM_BUSINESS_CONTEXT_ID
-        )
-        contact = matches[0] if matches else None
-    if contact is None and phone_digits:
+    if phone_digits:
         matches = await crm.search_contacts(
             phone=phone_digits, business_context_id=EOM_BUSINESS_CONTEXT_ID
+        )
+        contact = matches[0] if matches else None
+    if contact is None and email:
+        matches = await crm.search_contacts(
+            email=email, business_context_id=EOM_BUSINESS_CONTEXT_ID
         )
         contact = matches[0] if matches else None
 
@@ -202,7 +206,14 @@ async def _process_lead_intake(
         # but no acknowledgement goes out (PR #2153 review, R3/R8).
         over_volume = False
         if ack_volume is not None:
-            over_volume = (await ack_volume()) > GLOBAL_ACK_HOURLY_CAP
+            try:
+                over_volume = (await ack_volume()) > GLOBAL_ACK_HOURLY_CAP
+            except Exception:
+                # The volume guard is part of the optional email path: if it
+                # cannot be evaluated, skip the send (fail-closed for email)
+                # but never fail the already-captured lead.
+                logger.exception("lead_intake: ack volume check failed; skipping email")
+                over_volume = True
         if over_volume:
             logger.warning("lead_intake: global ack volume cap hit; skipping email")
         else:
