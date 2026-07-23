@@ -6,7 +6,7 @@ Templates use Python string formatting with named placeholders.
 
 # Business contact info
 BUSINESS_NAME = "Effingham Office Maids"
-BUSINESS_ADDRESS = "503 S. 5th Street, Effingham IL, 62401"
+BUSINESS_ADDRESS = "1901 S. 4th St. Ste #1, Effingham IL 62401"
 BUSINESS_PHONE = "(217) 207-3097"
 BUSINESS_EMAIL = "info@effinghamofficemaids.com"
 BUSINESS_WEBSITE = "effinghamofficemaids.com"
