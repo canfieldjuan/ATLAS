@@ -437,6 +437,10 @@ async def fetch_calendar_guard_keys(months_back: int = 1, months_forward: int = 
                 events, cal["tags"], "customer",
                 cal["key"] == "commercial", cal["label"],
             ):
+                if rec.cancelled:
+                    # A latest-event cancellation is evidence of ENDING, not
+                    # currency -- it must not veto demotion (Codex 2163 r1).
+                    continue
                 if rec.phone:
                     digits = live._phone_digits(rec.phone)
                     if len(digits) >= 10:

@@ -45,6 +45,9 @@ Slice phase: vertical slice
      (source-asserted) -- the veto is never silently absent.
   4. Guard keys derive from the same slice-A parser/identity semantics as
      the import itself (mechanism-asserted by reuse).
+  5. CANCELLED-latest calendar records never veto -- a cancellation marker
+     is evidence of ending, not currency (source-asserted; Codex round 1,
+     BLOCKER).
 - Reachability proof: operator script; the guard runs on every demotion
   pass; `on_calendar` and the kept/demoted split are driven by tests.
 - Reviewer rules triggered: R1, R2, R4, R6, R8, R14.
@@ -58,6 +61,7 @@ Slice phase: vertical slice
 ### Files touched
 
 - `plans/PR-EOM-Calendar-Demotion-Guard.md`
+- `tests/maturity_sweep/baseline_scripts.json`
 - `scripts/sync_eom_portal_customers.py`
 - `tests/test_sync_eom_portal_customers.py`
 
@@ -85,7 +89,7 @@ reported, the rest demote unchanged.
 
 ## Verification
 
-- `tests/test_sync_eom_portal_customers.py` — 42 passed.
+- `tests/test_sync_eom_portal_customers.py` — 43 passed.
 - `tests/test_eom_live_calendar_import.py` — 55 passed (adjacent).
 - `python -m py_compile` — clean.
 - NOT run: the live sync (operator-run; the owner re-runs dry-run after
@@ -97,5 +101,6 @@ reported, the rest demote unchanged.
 |---|---:|
 | `plans/PR-EOM-Calendar-Demotion-Guard.md` | 105 |
 | `scripts/sync_eom_portal_customers.py` | 90 |
-| `tests/test_sync_eom_portal_customers.py` | 60 |
-| **Total** | **255** |
+| `tests/test_sync_eom_portal_customers.py` | 75 |
+| `tests/maturity_sweep/baseline_scripts.json` | 3 |
+| **Total** | **273** |

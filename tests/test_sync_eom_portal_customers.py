@@ -478,6 +478,15 @@ def test_calendar_veto_keys_match_phone_address_and_name():
                             "phone": "217-555-0000", "address": "9 Elm"}, guard)
 
 
+def test_cancelled_latest_calendar_records_do_not_veto():
+    # Codex 2163 round 1 (BLOCKER): a CANCELLED-latest record is evidence of
+    # ending -- source-asserted skip in the guard-key builder.
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    body = src.split("def fetch_calendar_guard_keys")[1].split("def on_calendar")[0]
+    assert "if rec.cancelled:" in body
+    assert body.index("if rec.cancelled:") < body.index("if rec.phone:")
+
+
 def test_calendar_active_candidates_are_kept_not_demoted():
     pool = SyncPool(demotion_rows=[
         {"id": "sched", "full_name": "On Schedule", "tags": [],
