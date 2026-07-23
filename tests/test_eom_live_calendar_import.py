@@ -21,6 +21,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 from import_eom_customers_live import (  # noqa: E402
     BOOKING_CALENDARS,
     EOM_CONTEXT_ID,
+    effective_calendar_env,
     exit_code_for,
     import_one,
     parse_events,
@@ -149,12 +150,20 @@ def test_contact_data_marks_cancelled_records_inactive():
 # ---------------------------------------------------------------------------
 
 class StubCRM:
-    def __init__(self, was_created=True, existing_status="active"):
+    def __init__(self, was_created=True, existing_status="active", claim_result="row"):
         self.was_created = was_created
         self.existing_status = existing_status
+        self.claim_result = claim_result   # "row" -> claim succeeds; None -> foreign claim
         self.created = []
         self.updated = []
+        self.claims = []
         self.interactions = []
+
+    async def claim_contact(self, contact_id, business_context_id):
+        self.claims.append((contact_id, business_context_id))
+        if self.claim_result == "row":
+            return {"id": contact_id, "business_context_id": business_context_id}
+        return None
 
     async def create_contact(self, data):
         self.created.append(data)
@@ -174,13 +183,15 @@ class StubCRM:
 
 
 class StubPool:
-    def __init__(self, row=None):
-        self.row = row
+    """rows are returned in fetchrow call order (tenant page, then NULL page)."""
+
+    def __init__(self, row=None, rows=None):
+        self.rows = list(rows) if rows is not None else [row]
         self.queries = []
 
     async def fetchrow(self, sql, *args):
         self.queries.append((sql, args))
-        return self.row
+        return self.rows.pop(0) if self.rows else None
 
 
 def _record(phone=None, email=None):
@@ -192,20 +203,64 @@ def _record(phone=None, email=None):
 def test_address_only_record_updates_existing_row():
     rec = _record()
     assert not rec.phone and not rec.email
-    crm, pool = StubCRM(), StubPool(row={"id": "existing-id"})
+    crm, pool = StubCRM(), StubPool(rows=[{"id": "existing-id"}])
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert outcome == "updated"
     assert crm.created == []
+    assert crm.claims == []               # same-tenant hit needs no claim
     assert crm.updated and crm.updated[0][0] == "existing-id"
 
 
 def test_address_only_record_creates_when_unmatched():
     rec = _record()
-    crm, pool = StubCRM(), StubPool(row=None)
+    crm, pool = StubCRM(), StubPool(rows=[None, None])
     outcome = asyncio.run(import_one(rec, crm, pool))
     assert outcome == "created"
     assert len(crm.created) == 1
     assert crm.created[0]["business_context_id"] == "effingham_maids"
+
+
+def test_legacy_null_context_row_is_claimed_not_duplicated():
+    # Codex round 2 (R4/R8): a pre-#2155 NULL-context address-only contact is
+    # claimed through the provider CAS and updated, never duplicated.
+    rec = _record()
+    crm = StubCRM(claim_result="row")
+    pool = StubPool(rows=[None, {"id": "legacy-id"}])
+    outcome = asyncio.run(import_one(rec, crm, pool))
+    assert outcome == "updated"
+    assert crm.claims == [("legacy-id", "effingham_maids")]
+    assert crm.created == []
+    assert crm.updated and crm.updated[0][0] == "legacy-id"
+
+
+def test_concurrently_claimed_legacy_row_falls_through_to_create():
+    # CAS returns None when another tenant claimed the row first: fail closed,
+    # create a fresh EOM row instead of overwriting the foreign claim.
+    rec = _record()
+    crm = StubCRM(claim_result=None)
+    pool = StubPool(rows=[None, {"id": "legacy-id"}])
+    outcome = asyncio.run(import_one(rec, crm, pool))
+    assert outcome == "created"
+    assert crm.claims == [("legacy-id", "effingham_maids")]
+    assert crm.updated == []
+    assert len(crm.created) == 1
+
+
+def test_settings_provide_ids_and_process_env_wins():
+    # Codex round 2 (R11): ids recorded in .env reach the script through typed
+    # settings; a raw env var still overrides for ad-hoc runs.
+    tools = SimpleNamespace(
+        eom_calendar_commercial="c@settings",
+        eom_calendar_residential="r@settings",
+        eom_calendar_one_time=None,
+    )
+    env = {"EOM_CALENDAR_RESIDENTIAL": "r@env", "EOM_CALENDAR_ONE_TIME": "o@env"}
+    merged = effective_calendar_env(env, tools=tools)
+    assert merged == {
+        "EOM_CALENDAR_COMMERCIAL": "c@settings",
+        "EOM_CALENDAR_RESIDENTIAL": "r@env",   # env beats settings
+        "EOM_CALENDAR_ONE_TIME": "o@env",      # settings gap filled by env
+    }
 
 
 def test_phone_record_uses_provider_dedupe_not_address_lookup():
@@ -237,12 +292,14 @@ def test_merged_contact_with_matching_status_gets_no_extra_write():
 
 def test_address_resolver_excludes_archived_rows():
     # Codex R4/R8: mirror the provider's own search guard so an import can
-    # never resurrect an archived contact.
+    # never resurrect an archived contact -- on BOTH pages (tenant + legacy).
     rec = _record()
-    crm, pool = StubCRM(), StubPool(row=None)
+    crm, pool = StubCRM(), StubPool(rows=[None, None])
     asyncio.run(import_one(rec, crm, pool))
-    sql = pool.queries[0][0]
-    assert "status != 'archived'" in sql
+    assert len(pool.queries) == 2
+    for sql, _ in pool.queries:
+        assert "status != 'archived'" in sql
+    assert "business_context_id IS NULL" in pool.queries[1][0]
 
 
 def test_exit_code_reflects_errors():

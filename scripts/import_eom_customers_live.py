@@ -44,22 +44,56 @@ BOOKING_CALENDARS = [
     {
         "key": "commercial",
         "env": "EOM_CALENDAR_COMMERCIAL",
+        "settings_attr": "eom_calendar_commercial",
         "tags": ["commercial"],
         "label": "Commercial Customers",
     },
     {
         "key": "residential",
         "env": "EOM_CALENDAR_RESIDENTIAL",
+        "settings_attr": "eom_calendar_residential",
         "tags": ["residential"],
         "label": "Residential Customers",
     },
     {
         "key": "one_time",
         "env": "EOM_CALENDAR_ONE_TIME",
+        "settings_attr": "eom_calendar_one_time",
         "tags": ["one_time"],
         "label": "One-Time Cleanings",
     },
 ]
+
+
+def effective_calendar_env(env: dict, tools=None) -> dict:
+    """Merge typed Atlas settings with raw environment variables.
+
+    The Atlas config loads .env/.env.local through pydantic-settings, so ids
+    recorded there (ATLAS_TOOLS_EOM_CALENDAR_*) never appear in os.environ
+    (Codex R11). Settings provide the base; the process environment wins so
+    an ad-hoc operator run can still override.
+    """
+    if tools is None:
+        try:
+            from atlas_brain.config import settings as _settings
+
+            tools = _settings.tools
+        except Exception as exc:  # noqa: BLE001 -- minimal envs run env-only
+            print(
+                f"  note: Atlas settings unavailable "
+                f"({exc.__class__.__name__}); using process env only"
+            )
+            tools = None
+    merged: dict = {}
+    if tools is not None:
+        for cal in BOOKING_CALENDARS:
+            val = getattr(tools, cal["settings_attr"], None)
+            if val:
+                merged[cal["env"]] = val
+    for cal in BOOKING_CALENDARS:
+        if env.get(cal["env"]):
+            merged[cal["env"]] = env[cal["env"]]
+    return merged
 
 
 def resolve_calendar_ids(env: dict, selected: str = "all") -> dict:
@@ -185,8 +219,14 @@ async def resolve_by_address(pool, address: str):
     customer would insert a duplicate row on every re-run. Archived rows are
     excluded exactly like the provider's own search path (crm_provider
     search_contacts), so an import can never resurrect an archived contact
-    (Codex R4/R8)."""
-    return await pool.fetchrow(
+    (Codex R4/R8).
+
+    Returns (row, needs_claim): the same-tenant page is checked first; a
+    NULL-context legacy row (pre-#2155 history that the provenance backfill
+    could not classify) is returned with needs_claim=True so the caller can
+    claim it through the provider's CAS instead of duplicating it
+    (Codex round 2, R4/R8)."""
+    row = await pool.fetchrow(
         """
         SELECT id FROM contacts
         WHERE business_context_id = $1
@@ -198,6 +238,20 @@ async def resolve_by_address(pool, address: str):
         EOM_CONTEXT_ID,
         address,
     )
+    if row:
+        return row, False
+    legacy = await pool.fetchrow(
+        """
+        SELECT id FROM contacts
+        WHERE business_context_id IS NULL
+          AND status != 'archived'
+          AND address IS NOT NULL AND LOWER(address) = LOWER($1)
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        address,
+    )
+    return legacy, legacy is not None
 
 
 async def import_one(rec, crm, pool) -> str:
@@ -217,7 +271,12 @@ async def import_one(rec, crm, pool) -> str:
             if contact_id and result.get("status") != data["status"]:
                 await crm.update_contact(contact_id, {"status": data["status"]})
     else:
-        row = await resolve_by_address(pool, rec.address)
+        row, needs_claim = await resolve_by_address(pool, rec.address)
+        if row and needs_claim:
+            # Provider CAS: stamps the tenant only while the row is still
+            # NULL; None means a concurrent claim moved it to another tenant,
+            # in which case we fail closed and create a fresh EOM row.
+            row = await crm.claim_contact(str(row["id"]), EOM_CONTEXT_ID)
         if row:
             contact_id = str(row["id"])
             await crm.update_contact(contact_id, data)
@@ -295,7 +354,7 @@ async def main():
     parser.add_argument("--months-forward", type=int, default=12)
     args = parser.parse_args()
 
-    calendar_ids = resolve_calendar_ids(os.environ, args.calendar)
+    calendar_ids = resolve_calendar_ids(effective_calendar_env(os.environ), args.calendar)
 
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=args.months_back * 30)

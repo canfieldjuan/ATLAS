@@ -87,12 +87,26 @@ Slice phase: vertical slice
      provider's search guard (asserted; Codex R4/R8).
   10. The script exits non-zero when any record errored (asserted;
       Codex R6).
+  11. Calendar ids resolve through typed `ATLAS_TOOLS_EOM_CALENDAR_*`
+      settings (which read .env/.env.local) with process-env override
+      (asserted; Codex round 2, R11).
+  12. A NULL-context legacy address-only row is claimed via the provider's
+      CAS (`claim_contact`) and updated, never duplicated; a concurrent
+      foreign claim fails closed to a fresh EOM row; the legacy page carries
+      the same archived guard (all asserted; Codex round 2, R4/R8).
 - Reachability proof: operator script, invoked directly; the extraction
   helpers execute on every event via `parse_events`, which the tests drive
   with representative summaries/locations/descriptions.
+- Reviewer rules triggered: R11 (dependencies & config: three optional
+  typed `ATLAS_TOOLS_EOM_CALENDAR_*` fields on `ToolsConfig`, default
+  None — absent config changes no behavior; added at reviewer direction,
+  round 2), R12 (env/config: calendar ids are deployment config read via
+  pydantic-settings from `.env`/`.env.local` with process-env override;
+  no ids or secrets enter the repo — grep-proven in Verification).
 
 ### Files touched
 
+- `atlas_brain/config.py`
 - `plans/PR-EOM-Live-Calendar-Import.md`
 - `scripts/import_eom_customers_live.py`
 - `tests/test_eom_live_calendar_import.py`
@@ -126,6 +140,10 @@ stable `source_ref`.
   phone/email uses the provider's reviewed dedupe untouched.
 - `contact_type` is always sent as `customer`, so `create_contact`'s merge
   can upgrade an existing lead but this script can never downgrade one.
+- Three optional typed fields on `ToolsConfig` (reviewer-directed, R11):
+  deployment records ids in `.env` as `ATLAS_TOOLS_EOM_CALENDAR_*`, which
+  pydantic-settings reads but `os.environ` never sees; the script resolves
+  settings first, process env wins.
 
 ## Deferred
 
@@ -137,7 +155,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 17 passed.
+- `tests/test_eom_live_calendar_import.py` — 20 passed.
 - `tests/test_tenant_stamping.py` — passed (adjacent, 8).
 - `tests/test_leads_intake.py` — passed (adjacent, 38).
 - `python -m py_compile` on both new Python files — clean.
@@ -149,7 +167,8 @@ stable `source_ref`.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-EOM-Live-Calendar-Import.md` | 165 |
-| `scripts/import_eom_customers_live.py` | 365 |
-| `tests/test_eom_live_calendar_import.py` | 265 |
-| **Total** | **795** |
+| `atlas_brain/config.py` | 13 |
+| `plans/PR-EOM-Live-Calendar-Import.md` | 180 |
+| `scripts/import_eom_customers_live.py` | 425 |
+| `tests/test_eom_live_calendar_import.py` | 330 |
+| **Total** | **948** |
