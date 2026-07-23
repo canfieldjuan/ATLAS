@@ -67,6 +67,56 @@ def _provider():
     return get_crm_provider()
 
 
+def _default_context() -> "str | None":
+    """Deployment-default tenant for read scoping (issue #2151).
+
+    When configured (ATLAS_MCP_CRM_DEFAULT_BUSINESS_CONTEXT), read tools that
+    receive no explicit business_context_id operate on that tenant's rows
+    plus NULL-context legacy rows (the claimable population established in
+    PR #2153). An explicit argument always wins; unset preserves the legacy
+    unscoped behavior.
+    """
+    from ..config import settings
+
+    return settings.mcp.crm_default_business_context or None
+
+
+def _visible_under_default(contact: "dict | None") -> bool:
+    """Tenant guard for id-addressed tools: with a default configured, a
+    contact belonging to a DIFFERENT tenant is reported as not found
+    (fail-closed, no cross-tenant existence leak)."""
+    if contact is None:
+        return False
+    default = _default_context()
+    if not default:
+        return True
+    return contact.get("business_context_id") in (None, default)
+
+
+async def _guard_contact_id(contact_id: str) -> bool:
+    """Resolve + tenant-check an id-addressed operation under the default
+    scope. Foreign-tenant rows read as nonexistent (fail-closed)."""
+    if not _default_context():
+        return True
+    contact = await _provider().get_contact(contact_id)
+    return _visible_under_default(contact)
+
+
+async def _scoped_search(provider, **kwargs):
+    """search_contacts honoring the default scope: tenant page first, then
+    the NULL-context legacy page (mirrors crm_provider's stamped dedupe)."""
+    explicit = kwargs.pop("business_context_id", None)
+    if explicit:
+        return await provider.search_contacts(business_context_id=explicit, **kwargs)
+    default = _default_context()
+    if not default:
+        return await provider.search_contacts(**kwargs)
+    results = await provider.search_contacts(business_context_id=default, **kwargs)
+    if results:
+        return results
+    return await provider.search_contacts(business_context_id_is_null=True, **kwargs)
+
+
 def _is_uuid(value: str) -> bool:
     """Check if a string is a valid UUID."""
     try:
@@ -100,11 +150,12 @@ async def search_contacts(
     phone: any format accepted (digits extracted automatically)
     limit: max results (default 20)
     """
-    if not any([query, phone, email, business_context_id]):
+    if not any([query, phone, email, business_context_id, _default_context()]):
         return json.dumps({"error": "At least one of query, phone, email, or business_context_id is required",
                            "found": False, "contacts": [], "count": 0})
     try:
-        results = await _provider().search_contacts(
+        results = await _scoped_search(
+            _provider(),
             query=query,
             phone=phone,
             email=email,
@@ -186,13 +237,13 @@ async def get_contact(contact_id: str) -> str:
     try:
         # If it doesn't look like a UUID, search by name instead
         if not _is_uuid(contact_id):
-            results = await _provider().search_contacts(query=contact_id, limit=1)
+            results = await _scoped_search(_provider(), query=contact_id, limit=1)
             if results:
                 return json.dumps({"found": True, "contact": results[0]}, default=str)
             return json.dumps({"found": False, "contact": None})
 
         contact = await _provider().get_contact(contact_id)
-        if contact is None:
+        if not _visible_under_default(contact):
             return json.dumps({"found": False, "contact": None})
         return json.dumps({"found": True, "contact": contact}, default=str)
     except Exception as exc:
@@ -238,7 +289,7 @@ async def create_contact(
             "city": city,
             "state": state,
             "zip": zip_code,
-            "business_context_id": business_context_id,
+            "business_context_id": business_context_id or _default_context(),
             "contact_type": contact_type,
             "notes": notes,
             "source": source,
@@ -296,6 +347,8 @@ async def update_contact(
         if not data:
             return json.dumps({"success": False, "error": "No fields provided to update"})
 
+        if not await _guard_contact_id(contact_id):
+            return json.dumps({"success": False, "error": "Contact not found"})
         updated = await _provider().update_contact(contact_id, data)
         if updated is None:
             return json.dumps({"success": False, "error": "Contact not found"})
@@ -321,6 +374,8 @@ async def delete_contact(contact_id: str) -> str:
         return json.dumps({"success": False, "error": "Invalid contact_id (must be UUID)"})
 
     try:
+        if not await _guard_contact_id(contact_id):
+            return json.dumps({"success": False, "error": "Contact not found"})
         success = await _provider().delete_contact(contact_id)
         return json.dumps({"success": success})
     except Exception as exc:
@@ -349,7 +404,7 @@ async def list_contacts(
     """
     try:
         contacts = await _provider().list_contacts(
-            business_context_id=business_context_id,
+            business_context_id=business_context_id or _default_context(),
             status=status,
             contact_type=contact_type,
             limit=min(limit, 200),
@@ -389,6 +444,8 @@ async def log_interaction(
         return json.dumps({"success": False, "error": "interaction_type is required"})
 
     try:
+        if not await _guard_contact_id(contact_id):
+            return json.dumps({"success": False, "error": "Contact not found"})
         interaction = await _provider().log_interaction(
             contact_id=contact_id,
             interaction_type=interaction_type,
@@ -417,6 +474,8 @@ async def get_interactions(contact_id: str, limit: int = 20) -> str:
         return json.dumps({"error": "Invalid contact_id (must be UUID)", "interactions": [], "count": 0})
 
     try:
+        if not await _guard_contact_id(contact_id):
+            return json.dumps({"error": "Contact not found", "interactions": [], "count": 0})
         interactions = await _provider().get_interactions(contact_id, limit=min(limit, 100))
         return json.dumps(
             {"interactions": interactions, "count": len(interactions)}, default=str
@@ -443,6 +502,8 @@ async def get_contact_appointments(contact_id: str) -> str:
         return json.dumps({"error": "Invalid contact_id (must be UUID)", "appointments": [], "count": 0})
 
     try:
+        if not await _guard_contact_id(contact_id):
+            return json.dumps({"error": "Contact not found", "appointments": [], "count": 0})
         appointments = await _provider().get_contact_appointments(contact_id)
         return json.dumps(
             {"appointments": appointments, "count": len(appointments)}, default=str

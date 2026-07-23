@@ -5246,6 +5246,14 @@ class MCPConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ATLAS_MCP_", env_file=ENV_FILES, extra="ignore")
 
     client_enabled: bool = Field(default=True, description="Enable Atlas as MCP client")
+    crm_default_business_context: str | None = Field(
+        default=None,
+        description=(
+            "Default business_context_id applied by CRM MCP read tools when the "
+            "caller passes none (issue #2151 read scoping). Scoped reads also "
+            "include NULL-context legacy rows; an explicit argument always wins."
+        ),
+    )
     crm_enabled: bool = Field(default=True, description="Enable CRM MCP server")
     email_enabled: bool = Field(default=True, description="Enable Email MCP server")
     calendar_enabled: bool = Field(default=True, description="Enable Calendar MCP server")
