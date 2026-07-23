@@ -77,6 +77,16 @@ Slice phase: vertical slice
      rather than duplicate (both branches asserted).
   6. Import interactions carry a stable `source_ref` anchor so re-runs
      dedupe (asserted).
+  7. A provider-merged (matched) contact receives the calendar-computed
+     `status` explicitly — the provider merge allowlist excludes it — and
+     no extra write happens when statuses already agree (both asserted;
+     Codex R1/R8).
+  8. Single-calendar mode requires only the selected calendar's env var
+     (asserted; Codex R1).
+  9. The address resolver excludes archived rows exactly like the
+     provider's search guard (asserted; Codex R4/R8).
+  10. The script exits non-zero when any record errored (asserted;
+      Codex R6).
 - Reachability proof: operator script, invoked directly; the extraction
   helpers execute on every event via `parse_events`, which the tests drive
   with representative summaries/locations/descriptions.
@@ -127,7 +137,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 12 passed.
+- `tests/test_eom_live_calendar_import.py` — 17 passed.
 - `tests/test_tenant_stamping.py` — passed (adjacent, 8).
 - `tests/test_leads_intake.py` — passed (adjacent, 38).
 - `python -m py_compile` on both new Python files — clean.
@@ -139,7 +149,7 @@ stable `source_ref`.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-EOM-Live-Calendar-Import.md` | 150 |
-| `scripts/import_eom_customers_live.py` | 339 |
-| `tests/test_eom_live_calendar_import.py` | 210 |
-| **Total** | **699** |
+| `plans/PR-EOM-Live-Calendar-Import.md` | 165 |
+| `scripts/import_eom_customers_live.py` | 365 |
+| `tests/test_eom_live_calendar_import.py` | 265 |
+| **Total** | **795** |

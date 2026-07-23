@@ -62,15 +62,18 @@ BOOKING_CALENDARS = [
 ]
 
 
-def resolve_calendar_ids(env: dict) -> dict:
+def resolve_calendar_ids(env: dict, selected: str = "all") -> dict:
     """Map calendar key -> calendar id from the environment, failing fast on
-    any missing variable so a partial import can't silently pass as a full one."""
-    missing = [c["env"] for c in BOOKING_CALENDARS if not env.get(c["env"])]
+    any missing variable so a partial import can't silently pass as a full one.
+    Only the selected calendar's variable is required in single-calendar mode
+    (Codex R1: a targeted rerun must not demand unrelated secrets)."""
+    wanted = [c for c in BOOKING_CALENDARS if selected in ("all", c["key"])]
+    missing = [c["env"] for c in wanted if not env.get(c["env"])]
     if missing:
         raise SystemExit(
             "Missing calendar id environment variable(s): " + ", ".join(missing)
         )
-    return {c["key"]: env[c["env"]] for c in BOOKING_CALENDARS}
+    return {c["key"]: env[c["env"]] for c in wanted}
 
 
 def parse_events(events, tags, contact_type, is_commercial, label):
@@ -179,11 +182,15 @@ def record_to_contact_data(rec) -> dict:
 async def resolve_by_address(pool, address: str):
     """Pre-resolution for records with no phone and no email: create_contact
     only dedupes on those two channels, so without this net an address-only
-    customer would insert a duplicate row on every re-run."""
+    customer would insert a duplicate row on every re-run. Archived rows are
+    excluded exactly like the provider's own search path (crm_provider
+    search_contacts), so an import can never resurrect an archived contact
+    (Codex R4/R8)."""
     return await pool.fetchrow(
         """
         SELECT id FROM contacts
         WHERE business_context_id = $1
+          AND status != 'archived'
           AND address IS NOT NULL AND LOWER(address) = LOWER($2)
         ORDER BY updated_at DESC
         LIMIT 1
@@ -200,7 +207,15 @@ async def import_one(rec, crm, pool) -> str:
     if rec.phone or rec.email:
         result = await crm.create_contact(data)
         contact_id = str(result.get("id", ""))
-        outcome = "created" if result.get("_was_created") else "updated"
+        if result.get("_was_created"):
+            outcome = "created"
+        else:
+            outcome = "updated"
+            # The provider's merge allowlist excludes `status`, so a matched
+            # contact would silently keep its old status (Codex R1/R8):
+            # persist the calendar-computed one explicitly.
+            if contact_id and result.get("status") != data["status"]:
+                await crm.update_contact(contact_id, {"status": data["status"]})
     else:
         row = await resolve_by_address(pool, rec.address)
         if row:
@@ -230,6 +245,12 @@ async def import_one(rec, crm, pool) -> str:
             metadata={"source_ref": f"eom_live_calendar:{rec.address.lower()}"},
         )
     return outcome
+
+
+def exit_code_for(counts: dict) -> int:
+    """Non-zero when any record failed: a partially populated customer master
+    must not read as success to a shell or operator runbook (Codex R6)."""
+    return 1 if counts.get("errors") else 0
 
 
 async def run_import(records, dry_run: bool) -> dict:
@@ -274,7 +295,7 @@ async def main():
     parser.add_argument("--months-forward", type=int, default=12)
     args = parser.parse_args()
 
-    calendar_ids = resolve_calendar_ids(os.environ)
+    calendar_ids = resolve_calendar_ids(os.environ, args.calendar)
 
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=args.months_back * 30)
@@ -333,7 +354,8 @@ async def main():
             f"Errors: {counts['errors']}"
         )
     print(f"{'=' * 70}\n")
+    return exit_code_for(counts)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

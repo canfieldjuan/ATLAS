@@ -21,6 +21,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 from import_eom_customers_live import (  # noqa: E402
     BOOKING_CALENDARS,
     EOM_CONTEXT_ID,
+    exit_code_for,
     import_one,
     parse_events,
     record_to_contact_data,
@@ -67,6 +68,18 @@ def test_resolve_calendar_ids_maps_all_three():
     assert resolve_calendar_ids(env) == {
         "commercial": "c@x", "residential": "r@x", "one_time": "o@x",
     }
+
+
+def test_single_calendar_mode_requires_only_its_own_id():
+    # Codex R1: a targeted rerun must not demand unrelated secrets.
+    env = {"EOM_CALENDAR_RESIDENTIAL": "r@x"}
+    assert resolve_calendar_ids(env, "residential") == {"residential": "r@x"}
+    try:
+        resolve_calendar_ids(env, "commercial")
+        raise AssertionError("expected SystemExit")
+    except SystemExit as e:
+        assert "EOM_CALENDAR_COMMERCIAL" in str(e)
+        assert "EOM_CALENDAR_ONE_TIME" not in str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -136,15 +149,20 @@ def test_contact_data_marks_cancelled_records_inactive():
 # ---------------------------------------------------------------------------
 
 class StubCRM:
-    def __init__(self, was_created=True):
+    def __init__(self, was_created=True, existing_status="active"):
         self.was_created = was_created
+        self.existing_status = existing_status
         self.created = []
         self.updated = []
         self.interactions = []
 
     async def create_contact(self, data):
         self.created.append(data)
-        return {"id": "new-id", "_was_created": self.was_created}
+        return {
+            "id": "new-id",
+            "_was_created": self.was_created,
+            "status": data["status"] if self.was_created else self.existing_status,
+        }
 
     async def update_contact(self, contact_id, data):
         self.updated.append((contact_id, data))
@@ -198,6 +216,39 @@ def test_phone_record_uses_provider_dedupe_not_address_lookup():
     assert outcome == "updated"          # _was_created False -> merged into existing
     assert pool.queries == []            # address net not consulted
     assert len(crm.created) == 1         # create_contact called (dedupes internally)
+
+
+def test_merged_contact_gets_calendar_computed_status():
+    # Codex R1/R8: the provider merge allowlist excludes `status`, so the
+    # import must persist it explicitly when the statuses differ.
+    rec = _record(phone="(217) 555-9999")
+    crm = StubCRM(was_created=False, existing_status="inactive")
+    outcome = asyncio.run(import_one(rec, crm, StubPool()))
+    assert outcome == "updated"
+    assert ("new-id", {"status": "active"}) in crm.updated
+
+
+def test_merged_contact_with_matching_status_gets_no_extra_write():
+    rec = _record(phone="(217) 555-9999")
+    crm = StubCRM(was_created=False, existing_status="active")
+    asyncio.run(import_one(rec, crm, StubPool()))
+    assert crm.updated == []
+
+
+def test_address_resolver_excludes_archived_rows():
+    # Codex R4/R8: mirror the provider's own search guard so an import can
+    # never resurrect an archived contact.
+    rec = _record()
+    crm, pool = StubCRM(), StubPool(row=None)
+    asyncio.run(import_one(rec, crm, pool))
+    sql = pool.queries[0][0]
+    assert "status != 'archived'" in sql
+
+
+def test_exit_code_reflects_errors():
+    # Codex R6: a partial import must not exit 0.
+    assert exit_code_for({"created": 5, "updated": 2, "errors": 0}) == 0
+    assert exit_code_for({"created": 5, "updated": 2, "errors": 1}) == 1
 
 
 def test_interaction_carries_stable_dedupe_anchor():
