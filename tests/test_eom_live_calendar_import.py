@@ -114,6 +114,30 @@ def test_parse_events_skips_cancelled_status_and_blank_fields():
     assert parse_events(events, ["one_time"], "customer", False, "One-Time") == []
 
 
+def test_latest_cancelled_event_wins_over_older_active():
+    # Codex round 3 (R1): a newer CANCELLED booking re-flags the record even
+    # when an older active event exists -- in either input order.
+    older_active = _event("Jane Smith", "12 Oak St, Effingham, IL",
+                          start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc))
+    newer_cancelled = _event("Jane Smith - CANCELLED", "12 Oak St, Effingham, IL",
+                             start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))
+    for events in ([older_active, newer_cancelled], [newer_cancelled, older_active]):
+        rec = parse_events(events, ["residential"], "customer", False, "Residential")[0]
+        assert rec.cancelled is True
+        assert record_to_contact_data(rec)["status"] == "inactive"
+
+
+def test_latest_active_event_wins_over_older_cancelled():
+    older_cancelled = _event("Jane Smith - CANCELLED", "12 Oak St, Effingham, IL",
+                             start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc))
+    newer_active = _event("Jane Smith", "12 Oak St, Effingham, IL",
+                          start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))
+    for events in ([older_cancelled, newer_active], [newer_active, older_cancelled]):
+        rec = parse_events(events, ["residential"], "customer", False, "Residential")[0]
+        assert rec.cancelled is False
+        assert record_to_contact_data(rec)["status"] == "active"
+
+
 def test_parse_events_extracts_email_from_description():
     events = [
         _event("Bob Jones", "5 Pine Rd, Effingham, IL",
@@ -300,6 +324,9 @@ def test_address_resolver_excludes_archived_rows():
     for sql, _ in pool.queries:
         assert "status != 'archived'" in sql
     assert "business_context_id IS NULL" in pool.queries[1][0]
+    # Codex round 3 (R4/R8): only rows with provable EOM provenance are
+    # claimable; unknown-source legacy rows at a shared address stay put.
+    assert "source = 'calendar_import'" in pool.queries[1][0]
 
 
 def test_exit_code_reflects_errors():

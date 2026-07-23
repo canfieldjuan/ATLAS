@@ -69,8 +69,11 @@ Slice phase: vertical slice
   3. Every imported contact carries `business_context_id='effingham_maids'`,
      `source='calendar_import'`, its segment tag, and
      `contact_type='customer'` (asserted).
-  4. Cancelled-summary records import as `status='inactive'`; calendar
-     events with `STATUS=cancelled` are skipped entirely (asserted).
+  4. The latest-dated event decides the cancellation state — a newer
+     CANCELLED booking re-flags a record inactive, a newer active booking
+     reactivates it, in either input order (asserted; Codex round 3, R1);
+     calendar events with `STATUS=cancelled` are skipped entirely
+     (asserted).
   5. Records with a phone or email route through `create_contact`'s
      tenant-scoped dedupe and never consult the address net (asserted);
      records with neither channel resolve by address first and update
@@ -93,22 +96,44 @@ Slice phase: vertical slice
   12. A NULL-context legacy address-only row is claimed via the provider's
       CAS (`claim_contact`) and updated, never duplicated; a concurrent
       foreign claim fails closed to a fresh EOM row; the legacy page carries
-      the same archived guard (all asserted; Codex round 2, R4/R8).
-- Reachability proof: operator script, invoked directly; the extraction
-  helpers execute on every event via `parse_events`, which the tests drive
-  with representative summaries/locations/descriptions.
-- Reviewer rules triggered: R11 (dependencies & config: three optional
-  typed `ATLAS_TOOLS_EOM_CALENDAR_*` fields on `ToolsConfig`, default
-  None — absent config changes no behavior; added at reviewer direction,
-  round 2), R12 (env/config: calendar ids are deployment config read via
-  pydantic-settings from `.env`/`.env.local` with process-env override;
-  no ids or secrets enter the repo — grep-proven in Verification).
+      the same archived guard AND is restricted to
+      `source = 'calendar_import'` provenance, so unknown-source legacy rows
+      at a shared address are never claimed (all asserted; Codex rounds 2-3,
+      R4/R8).
+- Reachability proof: operator script, invoked directly. The full CLI
+  entrypoint (arg parsing, id resolution, `GoogleCalendarProvider.
+  list_events` pagination, cross-calendar dedupe, exit code) was exercised
+  by a real `--dry-run` invocation against the three production booking
+  calendars: 7,163 events -> 93 unique customers, exit 0 (recorded in
+  Verification; Codex round 3, R2). The extraction helpers additionally
+  execute on every event via `parse_events`, which the tests drive with
+  representative summaries/locations/descriptions.
+- Reviewer rules triggered: R1, R2, R4, R6, R8, R11, R12, R14.
+  - R1: behavior matches #2151 Phase 3 and the #2156 watcher contract;
+    cancellation recency semantics asserted.
+  - R2: every acceptance criterion has a named test; the entrypoint is
+    evidenced by the recorded live dry-run.
+  - R4: data safety — tenant stamp, archived guard, provenance-restricted
+    CAS claim, no guessing.
+  - R6: the operator script exits non-zero on partial failure; per-record
+    errors are reported, never swallowed.
+  - R8: idempotency — provider dedupe, address net, interaction anchor,
+    second-run-zero-changes acceptance.
+  - R11: dependencies & config — three optional typed
+    `ATLAS_TOOLS_EOM_CALENDAR_*` fields on `ToolsConfig`, default None;
+    absent config changes no behavior (reviewer-directed, round 2).
+  - R12: env/config — calendar ids are deployment config read via
+    pydantic-settings from `.env`/`.env.local` with process-env override;
+    no ids or secrets enter the repo (grep-proven in Verification).
+  - R14: this contract is the reviewer's checklist; every criterion
+    states its assertion.
 
 ### Files touched
 
 - `atlas_brain/config.py`
 - `plans/PR-EOM-Live-Calendar-Import.md`
 - `scripts/import_eom_customers_live.py`
+- `tests/maturity_sweep/baseline_atlas_brain_tools.json`
 - `tests/test_eom_live_calendar_import.py`
 
 ## Mechanism
@@ -155,7 +180,15 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 20 passed.
+- `tests/test_eom_live_calendar_import.py` — 22 passed.
+- Live entrypoint verification: direct `--dry-run` against the three
+  production booking calendars — 7,163 events -> 93 unique customers,
+  correct segments, exit 0.
+- Maturity baseline note: touching `atlas_brain/config.py` woke the b2d
+  tools-lane ratchet, which flagged pre-existing drift in
+  `atlas_brain/tools/calendar.py` (12 -> 15) — a file this PR does not
+  touch (reproduced locally on the branch base). Baseline updated via the
+  sanctioned `--update-baseline` path to record that inherited state.
 - `tests/test_tenant_stamping.py` — passed (adjacent, 8).
 - `tests/test_leads_intake.py` — passed (adjacent, 38).
 - `python -m py_compile` on both new Python files — clean.

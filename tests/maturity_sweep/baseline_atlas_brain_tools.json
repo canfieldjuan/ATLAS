@@ -1,10 +1,17 @@
 {
+  "atlas_brain/tools/base.py": {
+    "counts": {
+      "HAPPY_PATH_TESTS": 1
+    },
+    "score": 4
+  },
   "atlas_brain/tools/calendar.py": {
     "counts": {
+      "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 2,
       "UNGUARDED_INDEX": 1
     },
-    "score": 12
+    "score": 15
   },
   "atlas_brain/tools/display.py": {
     "counts": {
@@ -28,10 +35,9 @@
   },
   "atlas_brain/tools/presence.py": {
     "counts": {
-      "HEURISTIC_COMMENT": 1,
-      "NO_RAISES_TESTS": 1
+      "HEURISTIC_COMMENT": 1
     },
-    "score": 4
+    "score": 1
   },
   "atlas_brain/tools/reminder.py": {
     "counts": {

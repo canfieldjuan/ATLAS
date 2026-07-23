@@ -182,8 +182,10 @@ def parse_events(events, tags, contact_type, is_commercial, label):
                 rec.notes = notes
             if event_date and (rec.last_event_date is None or event_date > rec.last_event_date):
                 rec.last_event_date = event_date
-            if not cancelled:
-                rec.cancelled = False
+                # The latest-dated event decides the cancellation state
+                # (Codex round 3, R1): a newer CANCELLED booking re-flags the
+                # record; it is not merely cleared by any older active one.
+                rec.cancelled = cancelled
 
     return list(by_address.values())
 
@@ -245,6 +247,7 @@ async def resolve_by_address(pool, address: str):
         SELECT id FROM contacts
         WHERE business_context_id IS NULL
           AND status != 'archived'
+          AND source = 'calendar_import'
           AND address IS NOT NULL AND LOWER(address) = LOWER($1)
         ORDER BY updated_at DESC
         LIMIT 1
