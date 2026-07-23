@@ -294,6 +294,27 @@ def test_dry_run_previews_link_conflicts():
     assert cid is None                       # not in the demotion-safe set
 
 
+def test_metadata_blind_conflict_probed_before_any_write():
+    # Codex A2 round 8 (BLOCKER): the address-fallback row's existing link
+    # is probed before the matched update can touch it.
+    crm = StubCRM()
+    pool = SyncPool(rows=[None, {"id": "addr-row", "tags": []}])
+    pool.already_stamped = 9
+    outcome, cid = asyncio.run(sync_one(_customer(primaryPhone=None), crm, pool,
+                                        apply=True))
+    assert outcome == "errors"
+    assert pool.updates == [] and pool.stamps == []
+
+
+def test_non_string_location_type_is_safe_and_preflighted():
+    # Codex A2 round 8 (BLOCKER): robust helper + roster preflight.
+    c = _customer(sites=[{"active": True, "address": "A", "locationType": 3}])
+    assert segment_tags(c) == ["portal"]
+    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
+    body = src.split("def _malformed")[1].split("invalid =")[0]
+    assert 'isinstance(x.get("locationType"), str)' in body
+
+
 def test_roster_preflight_rejects_malformed_sites():
     src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
     body = src.split("def _malformed")[1].split("invalid =")[0]

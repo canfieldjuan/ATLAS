@@ -102,7 +102,7 @@ def active_sites(customer: dict) -> list:
 def segment_tags(customer: dict) -> list:
     tags = {"portal"}
     for site in active_sites(customer):
-        lt = (site.get("locationType") or "").strip().lower()
+        lt = str(site.get("locationType") or "").strip().lower()
         if lt in ("residential", "commercial"):
             tags.add(lt)
     return sorted(tags)
@@ -320,6 +320,16 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
             return "update-planned", str(existing["id"])
         return "unchanged", str(existing["id"])
 
+    if existing is not None and "metadata" not in existing:
+        # Address-fallback rows are metadata-blind: probe the link BEFORE
+        # any matched write can activate/retag a conflicted row (Codex A2
+        # round 8, BLOCKER).
+        found, pid = await portal_id_current(pool, str(existing["id"]))
+        if found and pid not in (None, "") and pid != str(portal_id):
+            print(f"    ERROR: contact {existing['id']} already linked to "
+                  f"portal customer {pid}; refusing to relink")
+            return "errors", None
+
     if existing is not None:
         prior_pid = parse_meta(existing).get("portal_customer_id")
         if prior_pid is not None and str(prior_pid) != str(portal_id):
@@ -467,8 +477,13 @@ async def run(args) -> int:
         sites = c.get("sites")
         if sites is None:
             return False
-        return not isinstance(sites, list) or any(
-            not isinstance(x, dict) for x in sites
+        if not isinstance(sites, list) or any(
+                not isinstance(x, dict) for x in sites):
+            return True
+        return any(
+            x.get("locationType") is not None
+            and not isinstance(x.get("locationType"), str)
+            for x in sites
         )
 
     invalid = [c for c in customers if _malformed(c)]

@@ -80,6 +80,9 @@ Slice phase: vertical slice
       the CAS (the id link is the identity); a link to a FOREIGN tenant is
       ignored (reported) and resolution falls to the ladder (both
       asserted; Codex A2 round 1, BLOCKER).
+  18. Metadata-blind (address-fallback) matches probe the existing link
+      BEFORE any matched write; non-string locationType is both preflighted
+      and safe in the helper (all asserted; Codex A2 round 8).
   17. The relink guard also lives INSIDE the stamp SQL (metadata-blind
       address-fallback rows are protected), the refusal error names the
       existing link, dry-runs preview link conflicts when metadata is
@@ -183,7 +186,7 @@ run's matched ids.
 
 ## Verification
 
-- `tests/test_sync_eom_portal_customers.py` — 35 passed.
+- `tests/test_sync_eom_portal_customers.py` — 37 passed.
 - Maturity note: the scripts-lane ratchet baseline gains ONLY this PR's
   new script (deliberate per-record operator patterns recorded); the
   pre-existing unbaselined `import_eom_customers_live.py` (main's code,
@@ -199,8 +202,8 @@ run's matched ids.
 | File | LOC |
 |---|---:|
 | `atlas_brain/config.py` | 10 |
-| `plans/PR-EOM-Portal-Customer-Sync.md` | 200 |
-| `scripts/sync_eom_portal_customers.py` | 359 |
+| `plans/PR-EOM-Portal-Customer-Sync.md` | 211 |
+| `scripts/sync_eom_portal_customers.py` | 556 |
 | `tests/maturity_sweep/baseline_scripts.json` | 8 |
-| `tests/test_sync_eom_portal_customers.py` | 252 |
-| **Total** | **829** |
+| `tests/test_sync_eom_portal_customers.py` | 488 |
+| **Total** | **1273** |
