@@ -594,6 +594,34 @@ def test_merged_group_carries_latest_event_dt_and_timed_occurred_at():
     assert crm.interactions[0]["occurred_at"].endswith("14:30:00+00:00")
 
 
+def test_failed_post_create_stamp_fails_the_run():
+    # Codex round 17: an unstamped create is a run failure, not a clean exit.
+    rec = _record()
+    crm = StubCRM()
+    pool = StubPool(rows=[None, None], archived_ids={"new-id"})
+    outcome = asyncio.run(import_one(rec, crm, pool))
+    assert outcome == "errors"
+    assert exit_code_for({"created": 1, "updated": 0, "unchanged": 0,
+                          "skipped": 0, "errors": 1}) == 1
+
+
+def test_equal_timestamp_cancellation_tie_is_deterministic():
+    # Codex round 17: same latest timestamp, one cancelled -> inactive,
+    # regardless of input order.
+    active = parse_events(
+        [_event("Jane Smith", "12 Oak St, Effingham, IL", description="217-555-8888",
+                start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))],
+        ["one_time"], "customer", False, "One-Time")
+    cancelled = parse_events(
+        [_event("Jane Smith - CANCELLED", "12 Oak St, Effingham, IL",
+                description="217-555-8888",
+                start=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))],
+        ["residential"], "customer", False, "Residential")
+    for records in (active + cancelled, cancelled + active):
+        merged = dedup_records(list(records))
+        assert merged[0].cancelled is True
+
+
 def test_merged_group_prefers_latest_address_and_carries_all():
     # Codex round 9 (P1): the surviving record uses the latest-dated
     # address, and every group address rides along for fallback lookup.

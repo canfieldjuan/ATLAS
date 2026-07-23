@@ -332,8 +332,10 @@ def dedup_records(records):
             latest = max(d for d, _, _, _ in dated)
             base.latest_event_dt = latest
             base.last_event_date = max(ld for _, _, _, ld in dated)
-            # full-timestamp recency decides cross-calendar too (round 13)
-            base.cancelled = next(c for d, c, _, _ in dated if d == latest)
+            # full-timestamp recency decides cross-calendar too; an
+            # equal-timestamp tie resolves to cancelled deterministically,
+            # independent of input order (rounds 13+17)
+            base.cancelled = any(c for d, c, _, _ in dated if d == latest)
             # The customer's CURRENT address is the latest-dated one; keep
             # every group address for fallback lookup so an existing
             # address-only contact at any of them is enriched, never
@@ -600,10 +602,12 @@ async def import_one(rec, crm, pool) -> str:
                 )
                 if stamp is None:
                     # Archived/reassigned within the create window: the row
-                    # exists but is unstamped -- say so instead of reporting
-                    # a clean create (Codex round 15, R6/R8).
-                    print(f"    note: contact {contact_id} changed before the "
-                          "provenance stamp; left unstamped")
+                    # exists but is unstamped -- report it as a run FAILURE
+                    # so exit_code_for fails the run (Codex rounds 15+17,
+                    # R6/R8).
+                    print(f"    ERROR: contact {contact_id} changed before "
+                          "the provenance stamp; left unstamped")
+                    outcome = "errors"
         else:
             # Race-merged: reconcile exactly like any matched contact
             # (Codex round 7, R1/R8).

@@ -157,6 +157,10 @@ Slice phase: vertical slice
       candidate order; and the matched identity (address / phone last-10 /
       email) rides inside the claim CAS so a row corrected mid-race no
       longer matches the predicate (all asserted; Codex round 12).
+  33. A failed post-create provenance stamp is a run FAILURE (non-zero
+      exit), and equal-timestamp cancellation ties resolve to cancelled
+      deterministically regardless of input order (asserted; Codex
+      round 17).
   32. Email is a dedupe identity key alongside phone/address; merged
       groups propagate `latest_event_dt`; and logged interactions carry the
       real event time in `occurred_at` (all asserted; Codex round 16).
@@ -282,7 +286,7 @@ stable `source_ref`.
 
 ## Verification
 
-- `tests/test_eom_live_calendar_import.py` — 52 passed.
+- `tests/test_eom_live_calendar_import.py` — 54 passed.
 - Live entrypoint verification: direct `--dry-run` against the three
   production booking calendars — 7,163 events -> 93 unique customers,
   correct segments, exit 0.
@@ -305,7 +309,7 @@ stable `source_ref`.
 | File | LOC |
 |---|---:|
 | `atlas_brain/config.py` | 13 |
-| `plans/PR-EOM-Live-Calendar-Import.md` | 317 |
-| `scripts/import_eom_customers_live.py` | 771 |
-| `tests/test_eom_live_calendar_import.py` | 847 |
-| **Total** | **1948** |
+| `plans/PR-EOM-Live-Calendar-Import.md` | 321 |
+| `scripts/import_eom_customers_live.py` | 775 |
+| `tests/test_eom_live_calendar_import.py` | 875 |
+| **Total** | **1984** |
