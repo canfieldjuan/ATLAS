@@ -716,6 +716,18 @@ class ToolsConfig(BaseSettings):
     calendar_id: str = Field(default="primary", description="Calendar ID to query")
     calendar_cache_ttl: float = Field(default=300.0, description="Cache TTL in seconds")
 
+    # EOM booking calendars (live customer import, scripts/import_eom_customers_live.py).
+    # Ids are deployment config -- they stay in .env, never in this public repo.
+    eom_calendar_commercial: str | None = Field(
+        default=None, description="EOM Commercial Customers calendar id"
+    )
+    eom_calendar_residential: str | None = Field(
+        default=None, description="EOM Residential Customers calendar id"
+    )
+    eom_calendar_one_time: str | None = Field(
+        default=None, description="EOM One-Time Cleanings calendar id"
+    )
+
     # CalDAV calendar (provider-agnostic alternative to Google Calendar)
     # Works with Nextcloud, Apple Calendar, Fastmail, Proton Calendar, SOGo, Baikal, etc.
     caldav_url: str | None = Field(
