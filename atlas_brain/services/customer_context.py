@@ -318,10 +318,19 @@ class CustomerContextService:
 
     @staticmethod
     def _email_to_dict(email) -> dict:
-        """Convert a SentEmail dataclass/namedtuple to a plain dict."""
-        if hasattr(email, "__dict__"):
-            return {k: v for k, v in email.__dict__.items() if not k.startswith("_")}
-        return dict(email)
+        """Convert email history without exposing internal ownership metadata."""
+        if callable(getattr(email, "to_dict", None)):
+            result = email.to_dict()
+        elif hasattr(email, "__dict__"):
+            result = {
+                k: v
+                for k, v in email.__dict__.items()
+                if not k.startswith("_")
+            }
+        else:
+            result = dict(email)
+        result.pop("business_context_id", None)
+        return result
 
 
 _customer_context_service: Optional[CustomerContextService] = None

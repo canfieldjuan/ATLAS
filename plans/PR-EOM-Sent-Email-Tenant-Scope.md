@@ -127,7 +127,9 @@ it into `SentEmail`, and adds exact tenant equality before pagination.
 Customer-context queries combine current-address and metadata contact-ID
 identity inside that exact tenant predicate; unscoped callers retain the
 address-only behavior. `SentEmail.to_dict()` intentionally keeps its legacy
-shape so the global history tool does not expose a new field.
+shape. Customer-context serialization delegates to that projection and removes
+the tenant key from fallback mappings so neither scoped nor unscoped public
+context exposes internal ownership metadata.
 
 The EOM intake route injects the history repository. After the provider reports
 a successful acknowledgement, a separate guarded secondary write records the
@@ -196,6 +198,11 @@ Parked hardening: none.
   linkage, recipient-log PII, and global serializer compatibility gaps. All
   three were fixed and covered behaviorally; final review is against the
   publication head.
+- GitHub Codex review round 2 found customer-context serialization bypassed the
+  legacy `SentEmail.to_dict()` projection and leaked the new tenant member in
+  unscoped MCP responses. The serializer now uses the legacy projection,
+  strips the internal key from fallbacks, and the PostgreSQL MCP proof covers
+  the unscoped response.
 
 ## Estimated diff size
 
@@ -204,15 +211,15 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 11 |
 | `atlas_brain/api/leads.py` | 35 |
 | `atlas_brain/mcp/crm_server.py` | 27 |
-| `atlas_brain/services/customer_context.py` | 48 |
+| `atlas_brain/services/customer_context.py` | 65 |
 | `atlas_brain/storage/migrations/349_sent_emails_business_context.sql` | 26 |
 | `atlas_brain/storage/models.py` | 1 |
 | `atlas_brain/storage/repositories/email.py` | 109 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-EOM-Sent-Email-Tenant-Scope.md` | 218 |
+| `plans/PR-EOM-Sent-Email-Tenant-Scope.md` | 225 |
 | `plans/archive/PR-EOM-API-Contacts-Auth.md` | 0 |
 | `tests/test_crm_read_scoping.py` | 57 |
-| `tests/test_eom_sent_email_tenant_scope.py` | 500 |
+| `tests/test_eom_sent_email_tenant_scope.py` | 541 |
 | `tests/test_leads_intake.py` | 125 |
 | `tests/test_migrations_runner.py` | 22 |
-| **Total** | **1182** |
+| **Total** | **1247** |

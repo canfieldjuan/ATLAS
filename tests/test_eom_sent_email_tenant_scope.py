@@ -406,7 +406,7 @@ async def test_intake_history_and_scoped_context_are_tenant_exact(
         )
         assert scoped["found"] is True
         assert [row["subject"] for row in scoped["sent_emails"]] == [stored["subject"]]
-        assert scoped["sent_emails"][0]["business_context_id"] == TENANT
+        assert "business_context_id" not in scoped["sent_emails"][0]
         assert scoped["inbox_emails"] == []
         assert scoped["b2b_churn_signals"] == []
         assert scoped["email_sources_omitted_under_scope"] == ["inbox_emails"]
@@ -414,6 +414,47 @@ async def test_intake_history_and_scoped_context_are_tenant_exact(
         assert scoped["b2b_enrichment_omitted_under_scope"] is True
         context_service._get_inbox_emails.assert_not_awaited()
         context_service._get_b2b_churn_signals.assert_not_awaited()
+
+        monkeypatch.setattr(
+            settings.mcp,
+            "crm_default_business_context",
+            None,
+        )
+        unscoped_contact_id = await pool.fetchval(
+            """
+            INSERT INTO contacts (
+                full_name, email, business_context_id
+            )
+            VALUES ('Unscoped History', 'unscoped-history@example.com', NULL)
+            RETURNING id
+            """
+        )
+        await EmailRepository().create(
+            to_addresses=["unscoped-history@example.com"],
+            subject="unscoped compatibility",
+            body="legacy response shape",
+            business_context_id=TENANT,
+        )
+        unscoped_context = json.loads(
+            await crm_server.get_customer_context(
+                contact_id=str(unscoped_contact_id),
+                max_emails=10,
+            )
+        )
+        assert unscoped_context["found"] is True
+        assert [
+            row["subject"] for row in unscoped_context["sent_emails"]
+        ] == ["unscoped compatibility"]
+        assert all(
+            "business_context_id" not in row
+            for row in unscoped_context["sent_emails"]
+        )
+        monkeypatch.setattr(
+            settings.mcp,
+            "crm_default_business_context",
+            TENANT,
+        )
+
         missing_email_scoped = json.loads(
             await crm_server.get_customer_context(
                 contact_id=str(missing_email_contact["id"]),
