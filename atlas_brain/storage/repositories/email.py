@@ -36,6 +36,7 @@ class EmailRepository:
         attachments: Optional[list[str]] = None,
         resend_message_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        business_context_id: Optional[str] = None,
     ) -> SentEmail:
         """Create a new sent email record."""
         pool = get_db_pool()
@@ -45,6 +46,9 @@ class EmailRepository:
 
         email_id = uuid4()
         metadata_json = json.dumps(metadata or {})
+        normalized_context = self._normalize_business_context_id(
+            business_context_id
+        )
 
         try:
             row = await pool.fetchrow(
@@ -52,9 +56,12 @@ class EmailRepository:
                 INSERT INTO sent_emails (
                     id, to_addresses, cc_addresses, subject, body,
                     template_type, session_id, user_id, attachments,
-                    resend_message_id, sent_at, metadata
+                    resend_message_id, sent_at, metadata, business_context_id
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                    $12::jsonb, $13
+                )
                 RETURNING id, sent_at
                 """,
                 email_id,
@@ -69,14 +76,15 @@ class EmailRepository:
                 resend_message_id,
                 datetime.now(timezone.utc),
                 metadata_json,
+                normalized_context,
             )
 
             if row:
                 logger.info(
-                    "Saved sent email %s: to=%s subject=%s",
+                    "Saved sent email %s: template=%s context=%s",
                     email_id,
-                    to_addresses,
-                    subject[:50],
+                    template_type,
+                    normalized_context,
                 )
                 return SentEmail(
                     id=row["id"],
@@ -91,6 +99,7 @@ class EmailRepository:
                     resend_message_id=resend_message_id,
                     sent_at=row["sent_at"],
                     metadata=metadata or {},
+                    business_context_id=normalized_context,
                 )
 
             raise DatabaseOperationError("create sent email", Exception("No row returned"))
@@ -101,7 +110,11 @@ class EmailRepository:
             logger.error("Failed to create sent email: %s", e)
             raise DatabaseOperationError("create sent email", e)
 
-    async def get_by_id(self, email_id: UUID) -> Optional[SentEmail]:
+    async def get_by_id(
+        self,
+        email_id: UUID,
+        business_context_id: Optional[str] = None,
+    ) -> Optional[SentEmail]:
         """Get a sent email by ID."""
         pool = get_db_pool()
 
@@ -109,15 +122,24 @@ class EmailRepository:
             raise DatabaseUnavailableError("get sent email by id")
 
         try:
+            params: list[Any] = [email_id]
+            context_condition = ""
+            if business_context_id is not None:
+                context_condition = " AND business_context_id = $2"
+                params.append(
+                    self._normalize_business_context_id(business_context_id)
+                )
+
             row = await pool.fetchrow(
-                """
+                f"""
                 SELECT id, to_addresses, cc_addresses, subject, body,
                        template_type, session_id, user_id, attachments,
-                       resend_message_id, sent_at, metadata
+                       resend_message_id, sent_at, metadata,
+                       business_context_id
                 FROM sent_emails
-                WHERE id = $1
+                WHERE id = $1{context_condition}
                 """,
-                email_id,
+                *params,
             )
 
             if row:
@@ -139,6 +161,8 @@ class EmailRepository:
         until: Optional[datetime] = None,
         limit: int = 50,
         offset: int = 0,
+        business_context_id: Optional[str] = None,
+        contact_id: Optional[str] = None,
     ) -> list[SentEmail]:
         """
         Query sent emails with filters.
@@ -152,6 +176,9 @@ class EmailRepository:
             until: Filter emails sent before this time
             limit: Maximum number to return
             offset: Number of records to skip
+            business_context_id: Exact tenant scope; excludes NULL legacy rows
+            contact_id: Match history linked through metadata; when combined
+                with to_address, either identity may match
         """
         limit = min(limit, 500)
         pool = get_db_pool()
@@ -179,10 +206,23 @@ class EmailRepository:
                 params.append(template_type)
                 param_idx += 1
 
+            identity_conditions = []
             if to_address:
-                conditions.append(f"${param_idx} = ANY(to_addresses)")
+                identity_conditions.append(f"${param_idx} = ANY(to_addresses)")
                 params.append(to_address)
                 param_idx += 1
+
+            if contact_id:
+                identity_conditions.append(
+                    f"metadata->>'contact_id' = ${param_idx}"
+                )
+                params.append(str(contact_id))
+                param_idx += 1
+
+            if identity_conditions:
+                conditions.append(
+                    "(" + " OR ".join(identity_conditions) + ")"
+                )
 
             if since:
                 conditions.append(f"sent_at >= ${param_idx}")
@@ -192,6 +232,13 @@ class EmailRepository:
             if until:
                 conditions.append(f"sent_at <= ${param_idx}")
                 params.append(until)
+                param_idx += 1
+
+            if business_context_id is not None:
+                conditions.append(f"business_context_id = ${param_idx}")
+                params.append(
+                    self._normalize_business_context_id(business_context_id)
+                )
                 param_idx += 1
 
             where_clause = ""
@@ -209,7 +256,8 @@ class EmailRepository:
                 f"""
                 SELECT id, to_addresses, cc_addresses, subject, body,
                        template_type, session_id, user_id, attachments,
-                       resend_message_id, sent_at, metadata
+                       resend_message_id, sent_at, metadata,
+                       business_context_id
                 FROM sent_emails
                 {where_clause}
                 ORDER BY sent_at DESC
@@ -230,27 +278,40 @@ class EmailRepository:
         hours: int = 24,
         user_id: Optional[UUID] = None,
         limit: int = 20,
+        business_context_id: Optional[str] = None,
     ) -> list[SentEmail]:
         """Get emails sent in the last N hours."""
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
-        return await self.query(user_id=user_id, since=since, limit=limit)
+        return await self.query(
+            user_id=user_id,
+            since=since,
+            limit=limit,
+            business_context_id=business_context_id,
+        )
 
     async def get_today(
         self,
         user_id: Optional[UUID] = None,
         limit: int = 50,
+        business_context_id: Optional[str] = None,
     ) -> list[SentEmail]:
         """Get emails sent today."""
         today_start = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        return await self.query(user_id=user_id, since=today_start, limit=limit)
+        return await self.query(
+            user_id=user_id,
+            since=today_start,
+            limit=limit,
+            business_context_id=business_context_id,
+        )
 
     async def count(
         self,
         user_id: Optional[UUID] = None,
         template_type: Optional[str] = None,
         since: Optional[datetime] = None,
+        business_context_id: Optional[str] = None,
     ) -> int:
         """Count emails matching filters."""
         pool = get_db_pool()
@@ -276,6 +337,13 @@ class EmailRepository:
             if since:
                 conditions.append(f"sent_at >= ${param_idx}")
                 params.append(since)
+                param_idx += 1
+
+            if business_context_id is not None:
+                conditions.append(f"business_context_id = ${param_idx}")
+                params.append(
+                    self._normalize_business_context_id(business_context_id)
+                )
                 param_idx += 1
 
             where_clause = ""
@@ -328,6 +396,18 @@ class EmailRepository:
         except (ValueError, IndexError):
             return 0
 
+    @staticmethod
+    def _normalize_business_context_id(value: Optional[str]) -> Optional[str]:
+        """Validate and normalize an explicitly supplied tenant key."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("business_context_id must not be blank")
+        if len(normalized) > 64:
+            raise ValueError("business_context_id must be at most 64 characters")
+        return normalized
+
     def _row_to_email(self, row) -> SentEmail:
         """Convert a database row to a SentEmail object."""
         metadata = row["metadata"]
@@ -349,6 +429,7 @@ class EmailRepository:
             resend_message_id=row["resend_message_id"],
             sent_at=row["sent_at"],
             metadata=metadata,
+            business_context_id=row["business_context_id"],
         )
 
 

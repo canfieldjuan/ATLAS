@@ -179,3 +179,25 @@ def test_appointment_operating_fields_migration_is_additive_and_constrained():
     assert "chk_appointments_assigned_cleaner" in migration
     assert "chk_appointments_per_visit_price" in migration
     assert "DROP " not in migration.upper()
+
+
+def test_sent_email_tenant_migration_is_additive_replay_safe_and_unclassified():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "349_sent_emails_business_context.sql"
+    ).read_text()
+    upper = migration.upper()
+
+    assert "ADD COLUMN IF NOT EXISTS business_context_id VARCHAR(64)" in migration
+    assert "chk_sent_emails_business_context_nonblank" in migration
+    assert "business_context_id IS NULL" in migration
+    assert "btrim(business_context_id) <> ''" in migration
+    assert "idx_sent_emails_context_sent_at" in migration
+    assert "WHERE business_context_id IS NOT NULL" in migration
+    assert "UPDATE sent_emails" not in migration
+    assert "SET DEFAULT" not in upper
+    assert "SET NOT NULL" not in upper
+    assert "DROP " not in upper
