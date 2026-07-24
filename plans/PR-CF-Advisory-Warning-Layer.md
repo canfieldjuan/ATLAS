@@ -122,13 +122,12 @@ so one qualified assertion cannot hide a separate unqualified one;
 report-shape matching drops context-free nouns (draft/ranked/faqs);
 international phone formats are redacted AND block the gate (+country-code
 patterns; over-matching feeds redaction/blocking, both fail-closed).
-The workflow tooling-test install line also gains httpx (surfaced by the
-merged #2117 bundle on this PR's CI; same class as its jsonschema fix).
+The httpx workflow dependency this PR's CI surfaced was split into
+PR #2183 (trusted-base execution means an in-PR workflow edit can never
+fix its own CI) and is merged on main.
 
 ### Files touched
 
-- `.github/workflows/pre_push_audit.yml` (round 1: httpx in the
-  tooling-test install line)
 - `atlas_brain/schemas/content_factory.py`
 - `atlas_brain/services/content_factory_copy_verification.py`
 - `atlas_brain/services/content_factory_runner.py`
@@ -177,7 +176,6 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/pre_push_audit.yml` | 2 |
 | `atlas_brain/schemas/content_factory.py` | 75 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 175 |
 | `atlas_brain/services/content_factory_runner.py` | 25 |
