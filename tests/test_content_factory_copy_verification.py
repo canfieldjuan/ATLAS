@@ -576,3 +576,45 @@ def test_multiline_claim_keyword_stays_schema_valid():
         }
     )
     assert audit.advisory_warnings == generated
+
+
+# --- round-7 review fixes ---
+
+
+def test_qualifier_after_dash_does_not_consume_earlier_claim():
+    """Clause granularity: a dash-separated qualifier governs its own
+    proposition, not the claim before the dash."""
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "We draft every answer regardless — when evidence exists support "
+        "reviews tickets."
+    )
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_assignment_to_metadata_is_not_owner_coverage():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Each is assigned to a severity."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_assignment_to_team_still_suppresses():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Each is assigned to the billing team."
+    )
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_terminator_plus_newline_is_one_boundary():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("Intro.\nWe draft an answer.")
+    assert any(
+        "sentence 2" in w for w in warnings if w.startswith("unqualified-answer-claim")
+    )

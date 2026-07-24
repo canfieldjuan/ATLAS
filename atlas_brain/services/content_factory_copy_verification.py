@@ -152,9 +152,14 @@ _OWNER_SUBJECTS = (
     "content|docs|documentation|legal|team|teams|owner|owners|department|"
     "departments|group|groups|lane|lanes"
 )
+_OWNER_TARGETS = (
+    _OWNER_SUBJECTS + "|reviewer|reviewers|person|people|staff|manager|"
+    "managers|lead|leads|nobody"
+)
 _OWNER_ROUTING_RE = re.compile(
-    r"\b(?:owner\s+lane|owned\s+by|assigned\s+to|"
-    r"route[sd]?\s+(?:to|each|the)|"
+    r"\b(?:owner\s+lane|owned\s+by|"
+    r"assigned\s+to\s+(?:the\s+|an?\s+)?(?:owning\s+)?(?:" + _OWNER_TARGETS + r")\b|"
+    r"route[sd]?\s+(?:to\s+(?:the\s+|an?\s+)?(?:owning\s+)?(?:" + _OWNER_TARGETS + r")\b|each\s+\w+|the\s+owning\b)|"
     r"(?:" + _OWNER_SUBJECTS + r")\s+(?:\w+\s+)?owns?\b|"
     r"who\s+needs\s+to\s+(?:fix|review)|needs\s+to\s+(?:fix|review))",
     re.I,
@@ -173,9 +178,14 @@ def _has_affirmative_owner_routing(
     free of negation/absence language: 'no one is assigned to them',
     'assigned to nobody', 'not routed to Billing', and 'routing remains
     unresolved' all fail to count as coverage (review rounds 3-4)."""
+    clause_negated: dict[int, bool] = {}
     for match in _OWNER_ROUTING_RE.finditer(text):
-        _index, (start, end) = _span_for(clause_bounds, match.start())
-        if not _ROUTING_NEGATION_RE.search(text[start:end]):
+        index, (start, end) = _span_for(clause_bounds, match.start())
+        if index not in clause_negated:
+            clause_negated[index] = bool(
+                _ROUTING_NEGATION_RE.search(text[start:end])
+            )
+        if not clause_negated[index]:
             return True
     return False
 _OWNERSHIP_RE = re.compile(
@@ -237,7 +247,9 @@ def _claim_hits(text: str) -> list[str]:
 # "bob@example.com about", and "E.g. we draft" do not inflate the locator
 # (review rounds 5-6). Erring toward FEWER splits keeps locators <= the
 # human count.
-_SENTENCE_BOUNDARY_RE = re.compile(r"[.!?]+(?=\s+[A-Z\"'(]|\s*\Z)|\n+")
+_SENTENCE_BOUNDARY_RE = re.compile(
+    r"[.!?]+\s+(?=[A-Z\"'(])|[.!?]+\s*\Z|\n+"
+)
 
 
 def _boundary_spans(
@@ -264,8 +276,14 @@ def _span_for(
     return index, spans[index]
 
 
+# Clause = the minimal punctuation-delimited proposition. Dashes, slashes,
+# and parentheses are boundaries too (review round 7), so a qualifier can
+# only excuse a claim it shares the proposition with; the per-clause COUNT
+# stays as the fail-closed backstop for separators not listed here.
 _CLAUSE_BOUNDARY_RE = re.compile(
-    r"[.!?;,:\n]|\b(?:and|or|but|however|while|whereas|although|yet)\b", re.I
+    r"[.!?;,:\n()/\u2014\u2013]|\s-\s|"
+    r"\b(?:and|or|but|however|while|whereas|although|yet)\b",
+    re.I,
 )
 
 

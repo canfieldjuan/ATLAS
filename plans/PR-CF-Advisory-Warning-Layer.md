@@ -86,6 +86,19 @@ Slice phase: vertical slice
   R5 (no gating change, old artifacts validate), R10 (advisory logic
   lives beside the gate it complements), R14.
 
+### Review round 7 (Codex)
+
+Four findings, all fixed: clause granularity tightened -- dashes, slashes,
+and parentheses are clause boundaries, so a qualifier must share the
+minimal punctuation-delimited proposition with the claim it excuses (the
+dash-attack "We draft every answer regardless — when evidence exists ..."
+now warns) while the per-clause count remains the fail-closed backstop;
+assignment/routing targets must be owner-like ("assigned to a severity"
+is not coverage, "assigned to the billing team" is); a sentence
+terminator plus trailing newline is ONE boundary (normal Markdown
+paragraphs no longer inflate locators); routing negation is evaluated
+once per clause (cached -- removes the last rescan hot spot).
+
 ### Review round 6 (Codex)
 
 Six findings, all fixed: qualifier association is now CLAUSE-scoped and
@@ -223,7 +236,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 190 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 194 passed (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered
