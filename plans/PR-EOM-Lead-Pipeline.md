@@ -18,13 +18,19 @@ adjacent product behavior is included.
 - Root cause: lead lifecycle attributes are absent from the canonical contact
   persistence and CRM port. The intake path cannot initialize pipeline state,
   and the operator surface cannot persist or query actionable follow-ups.
+  Additionally, treating "the row was a lead" as the only pipeline-write
+  precondition permits one `UPDATE` to demote that row while setting lead-only
+  fields; SQL-shape assertions alone cannot prove the due query's observable
+  tenant, cutoff, ordering, and limit behavior.
 - Correct fix must touch/change: extend the existing contact record with
   backward-compatible lead stage, owner, and next-follow-up fields; carry those
   fields through the canonical CRM provider; expose tenant-scoped MCP operations
   that update a visible lead and query visible leads needing follow-up; and have
   the real EOM intake entrypoint assign the initial stage only when it creates a
-  new lead. Prove the migration, provider behavior, tenant boundary, idempotent
-  re-intake behavior, and real entrypoint-to-persisted-state path.
+  new lead. Reject a pipeline write that simultaneously changes
+  `contact_type` away from `lead`. Prove the migration, provider behavior,
+  tenant boundary, due-query filtering/order/limit against real rows,
+  idempotent re-intake behavior, and real entrypoint-to-persisted-state path.
 - Must not change: the existing definition of a lead
   (`contacts.contact_type = 'lead'`), contact visibility/legacy-claim semantics
   from #2157/#2165, existing customer or non-lead records, acknowledgement
@@ -102,17 +108,19 @@ initial stage on creation and leaves an existing row's pipeline state intact.
 - Existing `create_contact`/`update_contact` callers that omit the three new
   fields keep their prior SQL and merge behavior; the CRM MCP compatibility
   tests cover the unchanged generic paths.
+- A lead may still be deliberately demoted in an update that does not also
+  write pipeline fields; only the contradictory atomic combination is rejected.
 - The additive migration uses a normal partial index rather than a concurrent
   index because the live contacts table is small; rollback is the direct
   removal of the optional index/columns if deployment must be reversed.
 - A dedicated leads table is rejected because it would duplicate contact
   identity and tenant ownership for three contact-lifecycle attributes.
-- The storage maturity baseline accepts two `get_db_pool` test seams
-  (`INTERNAL_MOCK` 32 -> 34). One captures the provider's exact SQL/arguments;
-  the other routes the production provider through disposable real Postgres
-  for the entrypoint proof. Adding a production pool-injection surface solely
-  for these tests would widen the runtime contract without improving the
-  vertical behavior.
+- The storage maturity baseline accepts one `get_db_pool` test seam
+  (`INTERNAL_MOCK` 32 -> 33) that routes the production provider through
+  disposable real Postgres for the entrypoint and due-query proof. The former
+  SQL-capturing mock was removed in favor of observable rows. Adding a
+  production pool-injection surface solely for the remaining integration seam
+  would widen the runtime contract without improving the vertical behavior.
 
 ## Deferred
 
@@ -127,7 +135,7 @@ Parked hardening: none.
 ## Verification
 
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas@127.0.0.1:55432/atlas_migration_tests /home/juan-canfield/Desktop/Atlas/.venv/bin/python -m pytest tests/test_crm_read_scoping.py tests/test_eom_lead_pipeline_integration.py tests/test_leads_intake.py tests/test_migrations_runner.py -q`
-  - passed: 107 (disposable Postgres 16 container)
+  - passed: 106 (disposable Postgres 16 container)
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m pytest tests/test_mcp_servers.py -q -k 'CRM or crm'`
   - passed: 22; deselected: 58
 - /home/juan-canfield/Desktop/Atlas/.venv/bin/python scripts/audit_mcp_tool_names_match_docs.py
@@ -154,12 +162,12 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 74 |
 | `atlas_brain/api/leads.py` | 1 |
 | `atlas_brain/mcp/crm_server.py` | 166 |
-| `atlas_brain/services/crm_provider.py` | 81 |
+| `atlas_brain/services/crm_provider.py` | 88 |
 | `atlas_brain/storage/migrations/346_contact_lead_pipeline.sql` | 21 |
-| `plans/PR-EOM-Lead-Pipeline.md` | 165 |
+| `plans/PR-EOM-Lead-Pipeline.md` | 173 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 4 |
-| `tests/test_crm_read_scoping.py` | 154 |
-| `tests/test_eom_lead_pipeline_integration.py` | 114 |
+| `tests/test_crm_read_scoping.py` | 124 |
+| `tests/test_eom_lead_pipeline_integration.py` | 189 |
 | `tests/test_leads_intake.py` | 20 |
 | `tests/test_migrations_runner.py` | 17 |
-| **Total** | **817** |
+| **Total** | **877** |

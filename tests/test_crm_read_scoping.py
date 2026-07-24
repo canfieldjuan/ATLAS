@@ -336,51 +336,21 @@ async def test_due_lead_list_uses_one_sql_scoped_population(
 
 
 @pytest.mark.asyncio
-async def test_provider_filters_due_leads_before_order_and_limit(monkeypatch):
-    from atlas_brain.services.crm_provider import DatabaseCRMProvider
-    import atlas_brain.storage.database as db_mod
-
-    pool = MagicMock()
-    pool.fetch = AsyncMock(return_value=[])
-    monkeypatch.setattr(db_mod, "get_db_pool", lambda: pool)
-    cutoff = datetime(2026, 7, 24, 22, tzinfo=timezone.utc)
-
-    await DatabaseCRMProvider().list_contacts(
-        business_context_id=EOM,
-        include_unclaimed_legacy=True,
-        contact_type="lead",
-        next_follow_up_before=cutoff,
-        limit=10,
-    )
-
-    sql = " ".join(pool.fetch.await_args.args[0].split())
-    assert "(business_context_id = $2 OR business_context_id IS NULL)" in sql
-    assert "contact_type = $3" in sql
-    assert "next_follow_up_at <= $4" in sql
-    assert sql.index("WHERE") < sql.index("ORDER BY") < sql.index("LIMIT")
-    assert pool.fetch.await_args.args[1:] == (
-        "active", EOM, "lead", cutoff, 10, 0
-    )
-
-    pool.fetchrow = AsyncMock(return_value=None)
-    await DatabaseCRMProvider().update_contact(
-        UUID, {"lead_stage": "qualified"}
-    )
-    update_sql = " ".join(pool.fetchrow.await_args.args[0].split())
-    assert "WHERE id = $1 AND contact_type = $4" in update_sql
-    assert pool.fetchrow.await_args.args[-1] == "lead"
-
-
-@pytest.mark.asyncio
 async def test_provider_rejects_pipeline_fields_on_new_non_lead():
     from atlas_brain.services.crm_provider import DatabaseCRMProvider
 
+    provider = DatabaseCRMProvider()
     with pytest.raises(ValueError, match="contact_type='lead'"):
-        await DatabaseCRMProvider().create_contact({
+        await provider.create_contact({
             "full_name": "Customer",
             "contact_type": "customer",
             "lead_stage": "new",
         })
+    with pytest.raises(ValueError, match="contact_type='lead'"):
+        await provider.update_contact(
+            UUID,
+            {"contact_type": "customer", "lead_stage": "qualified"},
+        )
 
 
 @pytest.mark.asyncio

@@ -373,6 +373,13 @@ class DatabaseCRMProvider:
             for key in ("lead_stage", "lead_owner", "next_follow_up_at")
         )
         if pipeline_requested:
+            if (
+                "contact_type" in updates
+                and updates["contact_type"] != "lead"
+            ):
+                raise ValueError(
+                    "Lead pipeline fields require contact_type='lead'"
+                )
             if require_contact_type not in (None, "lead"):
                 raise ValueError(
                     "Lead pipeline fields require contact_type='lead'"

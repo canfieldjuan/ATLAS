@@ -93,22 +93,97 @@ async def test_intake_to_pipeline_roundtrip_preserves_managed_state(monkeypatch)
                 },
                 require_contact_type="lead",
             )
+            with pytest.raises(ValueError, match="contact_type='lead'"):
+                await provider.update_contact(
+                    str(contact["id"]),
+                    {
+                        "contact_type": "customer",
+                        "lead_stage": "converted",
+                    },
+                )
             repeated = await client.post("/api/v1/leads/intake", json=payload)
             assert repeated.status_code == 200
 
         persisted = await conn.fetchrow(
             """
-            SELECT lead_stage, lead_owner, next_follow_up_at
+            SELECT contact_type, lead_stage, lead_owner, next_follow_up_at
             FROM contacts
             WHERE id = $1
             """,
             contact["id"],
         )
         assert dict(persisted) == {
+            "contact_type": "lead",
             "lead_stage": "qualified",
             "lead_owner": "Juan",
             "next_follow_up_at": follow_up,
         }
+
+        await conn.executemany(
+            """
+            INSERT INTO contacts (
+                full_name, business_context_id, contact_type, status,
+                lead_stage, next_follow_up_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            [
+                (
+                    "Foreign Earlier",
+                    "churnsignals",
+                    "lead",
+                    "active",
+                    "qualified",
+                    datetime(2026, 7, 25, 12, tzinfo=timezone.utc),
+                ),
+                (
+                    "Non-lead Earlier",
+                    "effingham_maids",
+                    "customer",
+                    "active",
+                    "qualified",
+                    datetime(2026, 7, 25, 13, tzinfo=timezone.utc),
+                ),
+                (
+                    "Legacy Due",
+                    None,
+                    "lead",
+                    "active",
+                    "qualified",
+                    datetime(2026, 7, 25, 16, tzinfo=timezone.utc),
+                ),
+                (
+                    "Archived Earlier",
+                    "effingham_maids",
+                    "lead",
+                    "archived",
+                    "qualified",
+                    datetime(2026, 7, 25, 11, tzinfo=timezone.utc),
+                ),
+                (
+                    "Tenant Future",
+                    "effingham_maids",
+                    "lead",
+                    "active",
+                    "qualified",
+                    datetime(2026, 7, 25, 17, tzinfo=timezone.utc),
+                ),
+            ],
+        )
+        due = await provider.list_contacts(
+            business_context_id="effingham_maids",
+            include_unclaimed_legacy=True,
+            contact_type="lead",
+            lead_stage="qualified",
+            next_follow_up_before=datetime(
+                2026, 7, 25, 16, tzinfo=timezone.utc
+            ),
+            limit=2,
+        )
+        assert [row["full_name"] for row in due] == [
+            "Pipeline Proof",
+            "Legacy Due",
+        ]
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
