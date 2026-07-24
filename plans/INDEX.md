@@ -1,6 +1,6 @@
 # Plan archive index
 
-1407 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1408 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -978,6 +978,7 @@
 - [PR-Diff-Budget-Required-Check](archive/PR-Diff-Budget-Required-Check.md) - lane: Workflow/process | phase: Vertical slice
 - [PR-Docker-Baseimage-Security-Bumps](archive/PR-Docker-Baseimage-Security-Bumps.md) - lane: infra/docker-base-images | phase: Production hardening
 - [PR-Docs-Preserve-Product-Audit-Notes](archive/PR-Docs-Preserve-Product-Audit-Notes.md) - lane: docs/product-history-preservation | phase: Workflow/process
+- [PR-EOM-Complaints-Tracking](archive/PR-EOM-Complaints-Tracking.md) - lane: eom-crm/complaints | phase: Vertical slice
 - [PR-EOM-Lead-Pipeline](archive/PR-EOM-Lead-Pipeline.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
 - [PR-ESLint-10-Web-Batch](archive/PR-ESLint-10-Web-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-Evaluator-Pattern-Precision-Contract](archive/PR-Evaluator-Pattern-Precision-Contract.md) - lane: workflow/process | phase: Workflow/process

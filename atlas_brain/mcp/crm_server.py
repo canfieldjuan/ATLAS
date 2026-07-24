@@ -22,6 +22,7 @@ Tools:
     close_customer_service_ticket --close a complaint with a resolution
     log_interaction         --record a customer touch-point
     get_interactions        --retrieve interaction history
+    update_contact_appointment_operations --set recurrence, cleaner, and price
     get_contact_appointments --fetch appointments linked to a contact
     get_customer_context     --unified view: contact + interactions + calls + emails
 
@@ -36,6 +37,7 @@ import sys
 import uuid as _uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -144,6 +146,32 @@ def _ticket_optional_text(
     if value is None:
         return None
     return _ticket_text(value, field, max_length)
+
+
+def _appointment_price(value: str) -> Decimal:
+    """Parse an exact appointment price without binary-float rounding."""
+    try:
+        normalized = value.strip()
+        if not normalized or len(normalized) > 64:
+            raise InvalidOperation
+        parsed = Decimal(normalized)
+    except (AttributeError, InvalidOperation) as exc:
+        raise ValueError("per_visit_price must be numeric") from exc
+    if not parsed.is_finite():
+        raise ValueError("per_visit_price must be finite")
+    if parsed < 0:
+        raise ValueError("per_visit_price must be non-negative")
+    if parsed > Decimal("9999999999.99"):
+        raise ValueError("per_visit_price exceeds the database limit")
+    try:
+        cents = parsed.quantize(Decimal("0.01"))
+    except InvalidOperation as exc:
+        raise ValueError(
+            "per_visit_price must have at most 2 decimal places"
+        ) from exc
+    if cents != parsed:
+        raise ValueError("per_visit_price must have at most 2 decimal places")
+    return cents
 
 
 def _visible_under_default(contact: "dict | None") -> bool:
@@ -1065,8 +1093,114 @@ async def get_interactions(
 
 
 # ---------------------------------------------------------------------------
-# Tool: get_contact_appointments
+# Tools: linked appointment operations
 # ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def update_contact_appointment_operations(
+    contact_id: str,
+    appointment_id: str,
+    recurrence_interval: Optional[int] = None,
+    recurrence_unit: Optional[str] = None,
+    assigned_cleaner: Optional[str] = None,
+    per_visit_price: Optional[str] = None,
+    business_context_id: Optional[str] = None,
+) -> str:
+    """
+    Update operating facts on one appointment linked to a CRM contact.
+
+    Recurrence is expressed as every recurrence_interval recurrence_unit,
+    where unit is day, week, or month. Omitted fields remain unchanged.
+    Price is a decimal string so the persisted visit price is exact.
+    """
+    if not _is_uuid(contact_id):
+        return json.dumps({
+            "success": False,
+            "error": "Invalid contact_id (must be UUID)",
+        })
+    if not _is_uuid(appointment_id):
+        return json.dumps({
+            "success": False,
+            "error": "Invalid appointment_id (must be UUID)",
+        })
+
+    effective = (
+        business_context_id
+        if business_context_id is not None
+        else _default_context()
+    )
+    if effective is None or not effective.strip():
+        return json.dumps({
+            "success": False,
+            "error": "business_context_id is required",
+        })
+
+    try:
+        if (recurrence_interval is None) != (recurrence_unit is None):
+            raise ValueError(
+                "recurrence_interval and recurrence_unit must be provided together"
+            )
+
+        data: dict[str, Any] = {}
+        if recurrence_interval is not None:
+            if (
+                not isinstance(recurrence_interval, int)
+                or isinstance(recurrence_interval, bool)
+                or recurrence_interval < 1
+                or recurrence_interval > 365
+            ):
+                raise ValueError(
+                    "recurrence_interval must be between 1 and 365"
+                )
+            normalized_unit = (
+                recurrence_unit.strip().lower()
+                if isinstance(recurrence_unit, str)
+                else ""
+            )
+            if normalized_unit not in {"day", "week", "month"}:
+                raise ValueError(
+                    "recurrence_unit must be day, week, or month"
+                )
+            data["recurrence_interval"] = recurrence_interval
+            data["recurrence_unit"] = normalized_unit
+        if assigned_cleaner is not None:
+            data["assigned_cleaner"] = _ticket_text(
+                assigned_cleaner,
+                "assigned_cleaner",
+                128,
+            )
+        if per_visit_price is not None:
+            data["per_visit_price"] = _appointment_price(per_visit_price)
+        if not data:
+            raise ValueError("No appointment operating fields provided")
+
+        appointment = (
+            await _provider().update_contact_appointment_operations(
+                contact_id=contact_id,
+                appointment_id=appointment_id,
+                business_context_id=_ticket_text(
+                    effective,
+                    "business_context_id",
+                    64,
+                ),
+                data=data,
+            )
+        )
+        if appointment is None:
+            return json.dumps({
+                "success": False,
+                "error": "Appointment not found",
+            })
+        return json.dumps({
+            "success": True,
+            "appointment": appointment,
+        }, default=str)
+    except ValueError as exc:
+        return json.dumps({"success": False, "error": str(exc)})
+    except Exception:
+        logger.exception("update_contact_appointment_operations error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
 
 @mcp.tool()
 async def get_contact_appointments(

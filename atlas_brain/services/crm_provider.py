@@ -818,6 +818,72 @@ class DatabaseCRMProvider:
             )
         return [dict(r) for r in rows]
 
+    async def update_contact_appointment_operations(
+        self,
+        *,
+        contact_id: str,
+        appointment_id: str,
+        business_context_id: str,
+        data: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Claim a visible contact and update one linked tenant appointment."""
+        from ..storage.database import get_db_pool
+
+        allowed = {
+            "recurrence_interval",
+            "recurrence_unit",
+            "assigned_cleaner",
+            "per_visit_price",
+        }
+        updates = {key: value for key, value in data.items() if key in allowed}
+        if not updates:
+            return None
+
+        params: list[Any] = [contact_id, appointment_id, business_context_id]
+        assignments: list[str] = []
+        for key, value in updates.items():
+            params.append(value)
+            assignments.append(f"{key} = ${len(params)}")
+        assignments.append("updated_at = NOW()")
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            f"""
+            WITH target_appointment AS (
+                SELECT id, contact_id
+                FROM appointments
+                WHERE id = $2
+                  AND contact_id = $1
+                  AND business_context_id = $3
+            ),
+            visible_contact AS (
+                UPDATE contacts AS contact
+                   SET business_context_id = $3,
+                       updated_at = CASE
+                           WHEN contact.business_context_id IS NULL THEN NOW()
+                           ELSE contact.updated_at
+                       END
+                  FROM target_appointment AS appointment
+                 WHERE contact.id = appointment.contact_id
+                   AND contact.status != 'archived'
+                   AND (
+                       contact.business_context_id IS NULL
+                       OR contact.business_context_id = $3
+                   )
+                 RETURNING contact.id
+            )
+            UPDATE appointments AS appointment
+               SET {', '.join(assignments)}
+              FROM visible_contact AS contact
+             WHERE appointment.id = $2
+               AND appointment.contact_id = contact.id
+               AND appointment.business_context_id = $3
+             RETURNING appointment.*
+            """,
+            *params,
+        )
+        return dict(row) if row else None
+
     async def get_contact_appointments(
         self, contact_id: str, business_context_id: Optional[str] = None
     ) -> list[dict[str, Any]]:
@@ -827,13 +893,32 @@ class DatabaseCRMProvider:
         if business_context_id:
             rows = await pool.fetch(
                 """
-                SELECT id, start_time, end_time, service_type, status,
-                       customer_name, customer_phone, customer_email,
-                       customer_address, notes, created_at, business_context_id
-                FROM appointments
-                WHERE contact_id = $1
-                  AND business_context_id = $2
-                ORDER BY start_time DESC
+                SELECT appointment.id,
+                       appointment.start_time,
+                       appointment.end_time,
+                       appointment.service_type,
+                       appointment.status,
+                       appointment.customer_name,
+                       appointment.customer_phone,
+                       appointment.customer_email,
+                       appointment.customer_address,
+                       appointment.notes,
+                       appointment.created_at,
+                       appointment.business_context_id,
+                       appointment.recurrence_interval,
+                       appointment.recurrence_unit,
+                       appointment.assigned_cleaner,
+                       appointment.per_visit_price
+                FROM appointments AS appointment
+                JOIN contacts AS contact
+                  ON contact.id = appointment.contact_id
+                WHERE appointment.contact_id = $1
+                  AND appointment.business_context_id = $2
+                  AND (
+                      contact.business_context_id IS NULL
+                      OR contact.business_context_id = $2
+                  )
+                ORDER BY appointment.start_time DESC
                 LIMIT 50
                 """,
                 contact_id,
@@ -844,7 +929,9 @@ class DatabaseCRMProvider:
                 """
                 SELECT id, start_time, end_time, service_type, status,
                        customer_name, customer_phone, customer_email,
-                       customer_address, notes, created_at, business_context_id
+                       customer_address, notes, created_at, business_context_id,
+                       recurrence_interval, recurrence_unit, assigned_cleaner,
+                       per_visit_price
                 FROM appointments
                 WHERE contact_id = $1
                 ORDER BY start_time DESC

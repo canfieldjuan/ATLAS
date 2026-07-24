@@ -12,9 +12,11 @@ on:
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
       - "atlas_brain/storage/migrations/347_customer_service_tickets.sql"
+      - "atlas_brain/storage/migrations/348_appointment_operating_fields.sql"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_lead_pipeline_integration.py"
+      - "tests/test_eom_recurring_appointments_integration.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
   push:
@@ -27,9 +29,11 @@ on:
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
       - "atlas_brain/storage/migrations/347_customer_service_tickets.sql"
+      - "atlas_brain/storage/migrations/348_appointment_operating_fields.sql"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_lead_pipeline_integration.py"
+      - "tests/test_eom_recurring_appointments_integration.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
 
@@ -74,6 +78,7 @@ jobs:
             tests/test_crm_read_scoping.py \
             tests/test_eom_complaints_integration.py \
             tests/test_eom_lead_pipeline_integration.py \
+            tests/test_eom_recurring_appointments_integration.py \
             tests/test_leads_intake.py \
             tests/test_migrations_runner.py \
             -q
