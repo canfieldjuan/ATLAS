@@ -82,6 +82,23 @@ Slice phase: vertical slice
   R5 (no gating change, old artifacts validate), R10 (advisory logic
   lives beside the gate it complements), R14.
 
+### Review round 5 (Codex)
+
+Five findings, all fixed — two structurally: (1) qualifier handling moved
+from boundary enumeration to FAIL-CLOSED ASSOCIATION: each qualifier
+occurrence excuses at most one claim (nearest in its sentence), so no
+separator style — present or future — can hide a second claim behind a
+qualified neighbor; (2) the schema is now the choke point: EditorialAuditV2
+validates every warning against the bounded deterministic grammar
+(static lines or code+sentence+alphabetic-keyword locators), so a DIRECT
+writer cannot persist free text or PII either — the canonical strings
+moved to the contract layer and the producer is lockstep-tested against
+the grammar. Also: `owns` suppression bounded to owner-like subjects
+("Caching owns the latency" no longer counts as routing); boundary-span
+starts cached with the spans (true O(log n) lookups); sentence locators
+count real sentences ("Version 2.1" does not split, "Really?!" is one
+boundary).
+
 ### Review round 4 (Codex)
 
 Four findings, all fixed — the big one structurally: advisory warnings no
@@ -183,7 +200,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 178 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 186 passed (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered

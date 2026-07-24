@@ -46,6 +46,7 @@ docs/schemas/ (generated, not hand-written).
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -67,6 +68,28 @@ _BASE_CONFIG = ConfigDict(extra="forbid", serialize_by_alias=True)
 # non-empty result is required. Used for citation fields whose blankness would
 # silently defeat the "every claim is traceable" invariant.
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+# Canonical advisory-warning strings + bounded grammar (#2181 round 5).
+# The schema is the choke point: EVERY persisted v2 warning must be either a
+# known static line or match the deterministic locator grammar (code +
+# sentence number + short alphabetic keyword). Free text -- and therefore
+# anything PII-shaped -- is unrepresentable, no matter which writer produced
+# the artifact.
+ADVISORY_CTA_REMINDER = (
+    "reminder: confirm the CTA matches the channel and offer posture"
+)
+ADVISORY_OWNER_ROUTING_WARNING = (
+    "owner-routing-coverage: draft explains the report shape but omits "
+    "owner routing or who should review the fix"
+)
+_ADVISORY_STATIC_WARNINGS = frozenset(
+    {ADVISORY_CTA_REMINDER, ADVISORY_OWNER_ROUTING_WARNING}
+)
+_ADVISORY_GRAMMAR_RE = re.compile(
+    r"^(?:unqualified-answer-claim|unqualified-ownership-claim): "
+    r"sentence [1-9]\d{0,5} \('[A-Za-z][A-Za-z /-]{0,58}'\)$"
+)
+
 
 Confidence = Literal["high", "medium", "low"]
 Recommendation = Literal["promote", "revise"]
@@ -232,6 +255,24 @@ class EditorialAuditV2(BaseModel):
     advisory_warnings: list[str] = Field(default_factory=list)
     recommendation: Recommendation = "revise"
     prompt_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _advisory_warnings_bounded(self) -> "EditorialAuditV2":
+        # Choke point for ALL writers (runner or direct): warnings must be a
+        # known static line or match the deterministic locator grammar --
+        # free-text (and so PII-shaped) entries are rejected at validation,
+        # before the store persists anything.
+        for warning in self.advisory_warnings:
+            if warning in _ADVISORY_STATIC_WARNINGS:
+                continue
+            if _ADVISORY_GRAMMAR_RE.fullmatch(warning):
+                continue
+            raise ValueError(
+                "advisory_warnings entries must be deterministic checklist "
+                "lines (bounded locator grammar); free-text evidence is not "
+                "representable"
+            )
+        return self
 
     @model_validator(mode="after")
     def _promote_requires_passing_verdict(self) -> "EditorialAuditV2":

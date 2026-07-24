@@ -44,7 +44,11 @@ from __future__ import annotations
 import bisect
 import re
 
-from atlas_brain.schemas.content_factory import CopyVerification
+from atlas_brain.schemas.content_factory import (
+    ADVISORY_CTA_REMINDER,
+    ADVISORY_OWNER_ROUTING_WARNING,
+    CopyVerification,
+)
 
 # Forbidden-claim catalogue. Each pattern targets a promote-blocking category and matches
 # the common inflections/modifiers of that category, not a single fixture wording. Still a
@@ -143,9 +147,15 @@ _REPORT_SHAPE_RE = re.compile(
     r"(?:ranks?|lists?|shows?|includes?|names?|delivers?|contains?|identifies|surfaces?|highlights?)\b",
     re.I,
 )
+_OWNER_SUBJECTS = (
+    "engineering|product|support|cx|policy|ops|operations|billing|success|"
+    "content|docs|documentation|legal|team|teams|owner|owners|department|"
+    "departments|group|groups|lane|lanes"
+)
 _OWNER_ROUTING_RE = re.compile(
     r"\b(?:owner\s+lane|owned\s+by|assigned\s+to|"
-    r"route[sd]?\s+(?:to|each|the)|routing|\w+\s+owns\b|"
+    r"route[sd]?\s+(?:to|each|the)|routing|"
+    r"(?:" + _OWNER_SUBJECTS + r")\s+(?:\w+\s+)?owns?\b|"
     r"who\s+needs\s+to\s+(?:fix|review)|needs\s+to\s+(?:fix|review))",
     re.I,
 )
@@ -157,19 +167,19 @@ _ROUTING_NEGATION_RE = re.compile(
 
 
 def _has_affirmative_owner_routing(
-    text: str, clause_spans: "list[tuple[int, int]]"
+    text: str, clause_bounds: "tuple[list[int], list[tuple[int, int]]]"
 ) -> bool:
     """True only for a routing/ownership relation whose COMPLETE clause is
     free of negation/absence language: 'no one is assigned to them',
     'assigned to nobody', 'not routed to Billing', and 'routing remains
     unresolved' all fail to count as coverage (review rounds 3-4)."""
     for match in _OWNER_ROUTING_RE.finditer(text):
-        _index, (start, end) = _span_for(clause_spans, match.start())
+        _index, (start, end) = _span_for(clause_bounds, match.start())
         if not _ROUTING_NEGATION_RE.search(text[start:end]):
             return True
     return False
 _OWNERSHIP_RE = re.compile(
-    r"\b(?:engineering|product|support|cx|policy|ops|operations|billing|success|content|docs|documentation|legal|team|owner)s?\s+(?:owns?|is\s+responsible\s+for|are\s+responsible\s+for|should\s+own|must\s+own)\b|\bowned\s+by\b",
+    r"\b(?:engineering|product|support|cx|policy|ops|operations|billing|success|content|docs|documentation|legal|team|owner)s?\s+(?:\w+\s+)?(?:owns?|is\s+responsible\s+for|are\s+responsible\s+for|should\s+own|must\s+own)\b|\bowned\s+by\b",
     re.I,
 )
 _OWNERSHIP_QUALIFIER_RE = re.compile(
@@ -177,9 +187,7 @@ _OWNERSHIP_QUALIFIER_RE = re.compile(
     re.I,
 )
 
-_CTA_REMINDER = (
-    "reminder: confirm the CTA matches the channel and offer posture"
-)
+_CTA_REMINDER = ADVISORY_CTA_REMINDER
 
 
 def _is_negated(text: str, start: int) -> bool:
@@ -223,27 +231,34 @@ def _claim_hits(text: str) -> list[str]:
     return hits
 
 
-_SENTENCE_BOUNDARY_RE = re.compile(r"[.!?\n]")
+# Sentence terminators: runs of .!? collapse to ONE boundary ("Really?!"),
+# and a period between digits ("Version 2.1") is not a terminator, so the
+# persisted sentence locators count sentences the way the reviewing human
+# does (review round 5).
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?:(?<!\d)\.(?!\d)|[!?])+|\n+")
 
 
-def _boundary_spans(text: str, boundary_re: "re.Pattern[str]") -> "list[tuple[int, int]]":
-    """Split ``text`` into (start, end) spans between boundary matches --
-    computed ONCE per document so per-match lookups are O(log n), not a
-    rescan of the whole draft (review round 4)."""
+def _boundary_spans(
+    text: str, boundary_re: "re.Pattern[str]"
+) -> "tuple[list[int], list[tuple[int, int]]]":
+    """(starts, spans) between boundary matches -- BOTH computed once per
+    document, so per-match lookups are a bisect over the cached starts
+    (review rounds 4-5: no per-lookup list rebuild)."""
     spans: list[tuple[int, int]] = []
     start = 0
     for match in boundary_re.finditer(text):
         spans.append((start, match.start()))
         start = match.end()
     spans.append((start, len(text)))
-    return spans
+    return [s for s, _ in spans], spans
 
 
 def _span_for(
-    spans: "list[tuple[int, int]]", position: int
+    bounds: "tuple[list[int], list[tuple[int, int]]]", position: int
 ) -> "tuple[int, tuple[int, int]]":
     """(index, span) of the precomputed span containing ``position``."""
-    index = max(0, bisect.bisect_right([s for s, _ in spans], position) - 1)
+    starts, spans = bounds
+    index = max(0, bisect.bisect_right(starts, position) - 1)
     return index, spans[index]
 
 
@@ -257,35 +272,53 @@ def _unqualified_claims(
     word_re: "re.Pattern[str]",
     qualifier_re: "re.Pattern[str]",
     code: str,
-    sentence_spans: "list[tuple[int, int]]",
-    clause_spans: "list[tuple[int, int]]",
+    sentence_bounds: "tuple[list[int], list[tuple[int, int]]]",
 ) -> list[str]:
-    """One warning per (code, sentence) for each claim whose OWN clause
-    carries none of the accepted qualifier phrases. Coordinated claims split
-    on and/or too, so a qualifier can only excuse the claim it governs.
+    """One warning per (code, sentence) for each claim not excused by its OWN
+    qualifier. FAIL-CLOSED ASSOCIATION (review round 5): each qualifier
+    occurrence excuses at most ONE claim -- its nearest neighbor in the same
+    sentence -- so no separator style (comma, dash, slash, parenthesis, or
+    anything future) can let a single qualified assertion hide a second,
+    unqualified one. Extra unmatched qualifiers excuse nothing.
 
     Warnings carry NO free text -- only the claim code, the 1-based sentence
-    number, and the matched keyword (word characters by construction). The
-    reviewing human locates the sentence in the draft artifact sitting next
-    to the audit; nothing PII-shaped can reach the persisted warning
-    (review round 4: the free-text evidence seam is closed, not patched).
+    number, and the matched keyword (alphabetic by construction; the schema
+    enforces this grammar at the persistence choke point). The reviewing
+    human locates the numbered sentence in the draft artifact beside the
+    audit.
     """
-    warnings: list[str] = []
-    seen: set[tuple[str, int]] = set()
+    claims_by_sentence: dict[int, list[re.Match]] = {}
     for match in word_re.finditer(text):
-        _clause_index, (clause_start, clause_end) = _span_for(
-            clause_spans, match.start()
-        )
-        if qualifier_re.search(text[clause_start:clause_end]):
-            continue
-        sentence_index, _span = _span_for(sentence_spans, match.start())
-        key = (code, sentence_index)
-        if key in seen:
-            continue
-        seen.add(key)
-        warnings.append(
-            f"{code}: sentence {sentence_index + 1} ({match.group(0).strip()!r})"
-        )
+        index, _span = _span_for(sentence_bounds, match.start())
+        claims_by_sentence.setdefault(index, []).append(match)
+    if not claims_by_sentence:
+        return []
+    qualifiers_by_sentence: dict[int, list[int]] = {}
+    for qualifier in qualifier_re.finditer(text):
+        index, _span = _span_for(sentence_bounds, qualifier.start())
+        qualifiers_by_sentence.setdefault(index, []).append(qualifier.start())
+
+    warnings: list[str] = []
+    for index in sorted(claims_by_sentence):
+        claims = claims_by_sentence[index]
+        excused: set[int] = set()
+        for qualifier_pos in qualifiers_by_sentence.get(index, ()):
+            nearest = None
+            nearest_distance = None
+            for claim_index, claim in enumerate(claims):
+                if claim_index in excused:
+                    continue
+                distance = abs(claim.start() - qualifier_pos)
+                if nearest is None or distance < nearest_distance:
+                    nearest, nearest_distance = claim_index, distance
+            if nearest is not None:
+                excused.add(nearest)
+        remaining = [c for i, c in enumerate(claims) if i not in excused]
+        if remaining:
+            warnings.append(
+                f"{code}: sentence {index + 1} "
+                f"({remaining[0].group(0).strip()!r})"
+            )
     return warnings
 
 
@@ -307,24 +340,21 @@ def advisory_warnings(text: str) -> list[str]:
     # Boundary spans are computed once per draft (review round 4); warnings
     # persist only code + sentence number + matched keyword, so no free-text
     # evidence (and therefore nothing PII-shaped) ever reaches the artifact.
-    sentence_spans = _boundary_spans(text, _SENTENCE_BOUNDARY_RE)
-    clause_spans = _boundary_spans(text, _CLAUSE_BOUNDARY_RE)
+    sentence_bounds = _boundary_spans(text, _SENTENCE_BOUNDARY_RE)
+    clause_bounds = _boundary_spans(text, _CLAUSE_BOUNDARY_RE)
 
     warnings = _unqualified_claims(
         text, _ANSWER_RE, _ANSWER_QUALIFIER_RE, "unqualified-answer-claim",
-        sentence_spans, clause_spans,
+        sentence_bounds,
     )
     warnings += _unqualified_claims(
         text, _OWNERSHIP_RE, _OWNERSHIP_QUALIFIER_RE,
-        "unqualified-ownership-claim", sentence_spans, clause_spans,
+        "unqualified-ownership-claim", sentence_bounds,
     )
     if _REPORT_SHAPE_RE.search(text) and not _has_affirmative_owner_routing(
-        text, clause_spans
+        text, clause_bounds
     ):
-        warnings.append(
-            "owner-routing-coverage: draft explains the report shape but omits "
-            "owner routing or who should review the fix"
-        )
+        warnings.append(ADVISORY_OWNER_ROUTING_WARNING)
     warnings.append(_CTA_REMINDER)
     return warnings
 

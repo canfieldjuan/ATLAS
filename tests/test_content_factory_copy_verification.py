@@ -405,3 +405,121 @@ def test_editorial_audit_v1_api_unchanged():
         {"schema": "editorial_audit.v1", "project_id": "p"}
     )
     assert audit.recommendation == "revise"
+
+
+# --- round-5 review fixes ---
+
+
+def test_qualifier_association_survives_any_separator():
+    """Fail-closed association: one qualifier excuses ONE claim, so no
+    separator style (em dash, slash, parens, or future ones) can hide a
+    second claim behind a neighboring qualified one."""
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    for text in (
+        "We draft one answer when evidence exists — we draft every other answer regardless.",
+        "We draft one answer when evidence exists / another answer regardless.",
+        "We draft one answer (when evidence exists) and another answer regardless.",
+    ):
+        warnings = advisory_warnings(text)
+        assert any(
+            w.startswith("unqualified-answer-claim:") for w in warnings
+        ), text
+
+
+def test_each_claim_with_its_own_qualifier_stays_silent():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "We draft an answer when evidence exists, and a resolution only if "
+        "the tickets contain proof."
+    )
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_inanimate_owns_does_not_suppress_routing():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Caching owns the latency."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_owner_team_owns_still_suppresses_routing():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. The billing team owns each fix."
+    )
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_sentence_locators_count_real_sentences():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("Version 2.1 provides an answer.")
+    assert any("sentence 1" in w for w in warnings if w.startswith("unqualified-answer-claim"))
+    warnings = advisory_warnings("Really?! We draft an answer.")
+    assert any("sentence 2" in w for w in warnings if w.startswith("unqualified-answer-claim"))
+
+
+def test_schema_rejects_free_text_advisory_warnings():
+    """Choke point: a DIRECT writer cannot persist free-text warnings — the
+    v2 contract only admits the bounded deterministic grammar."""
+    from pydantic import ValidationError
+
+    from atlas_brain.schemas.content_factory import EditorialAuditV2
+
+    with pytest.raises(ValidationError):
+        EditorialAuditV2.model_validate(
+            {
+                "schema": "editorial_audit.v2",
+                "project_id": "p",
+                "advisory_warnings": [
+                    "Contact bob@example.com or +44 20 7946 0958"
+                ],
+            }
+        )
+
+
+def test_schema_accepts_deterministic_warning_grammar():
+    from atlas_brain.schemas.content_factory import (
+        ADVISORY_CTA_REMINDER,
+        ADVISORY_OWNER_ROUTING_WARNING,
+        EditorialAuditV2,
+    )
+
+    audit = EditorialAuditV2.model_validate(
+        {
+            "schema": "editorial_audit.v2",
+            "project_id": "p",
+            "advisory_warnings": [
+                "unqualified-answer-claim: sentence 3 ('answer')",
+                ADVISORY_OWNER_ROUTING_WARNING,
+                ADVISORY_CTA_REMINDER,
+            ],
+        }
+    )
+    assert len(audit.advisory_warnings) == 3
+
+
+def test_generated_warnings_always_satisfy_schema_grammar():
+    """Producer/contract lockstep: everything advisory_warnings emits must
+    validate at the schema choke point."""
+    from atlas_brain.schemas.content_factory import EditorialAuditV2
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    generated = advisory_warnings(
+        "The Resolution Audit snapshot ranks repeated tickets. We draft the "
+        "answer for every ticket. Billing owns refunds. Really?! Version 2.1 "
+        "provides an answer at bob@example.com or 020/7946/0958."
+    )
+    audit = EditorialAuditV2.model_validate(
+        {
+            "schema": "editorial_audit.v2",
+            "project_id": "p",
+            "advisory_warnings": generated,
+        }
+    )
+    assert audit.advisory_warnings == generated
