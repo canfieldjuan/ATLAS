@@ -16,6 +16,10 @@ Tools:
     update_contact          --update contact fields
     delete_contact          --archive (soft-delete) a contact
     list_contacts           --paginated list with filters
+    open_customer_service_ticket --open a tenant-scoped complaint ticket
+    list_customer_service_tickets --list the tenant's complaint queue
+    update_customer_service_ticket --update an open complaint ticket
+    close_customer_service_ticket --close a complaint with a resolution
     log_interaction         --record a customer touch-point
     get_interactions        --retrieve interaction history
     get_contact_appointments --fetch appointments linked to a contact
@@ -123,6 +127,23 @@ def _pipeline_timestamp(value: str, field: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"{field} must include a UTC offset")
     return parsed.astimezone(timezone.utc)
+
+
+def _ticket_text(value: str, field: str, max_length: int) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field} is required")
+    if len(normalized) > max_length:
+        raise ValueError(f"{field} must be at most {max_length} characters")
+    return normalized
+
+
+def _ticket_optional_text(
+    value: "str | None", field: str, max_length: int
+) -> "str | None":
+    if value is None:
+        return None
+    return _ticket_text(value, field, max_length)
 
 
 def _visible_under_default(contact: "dict | None") -> bool:
@@ -706,6 +727,260 @@ async def list_contacts(
     except Exception as exc:
         logger.exception("list_contacts error")
         return json.dumps({"error": "Internal error", "contacts": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tools: customer-service complaint tickets
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def open_customer_service_ticket(
+    contact_id: str,
+    summary: str,
+    details: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    business_context_id: Optional[str] = None,
+) -> str:
+    """
+    Open a customer-service complaint ticket linked to a CRM contact.
+
+    The ticket is stamped with the explicit business_context_id or the
+    deployment default. A visible NULL-context legacy contact is atomically
+    claimed for that tenant. Archived, missing, and foreign contacts are
+    reported as not found.
+    """
+    if not _is_uuid(contact_id):
+        return json.dumps({
+            "success": False,
+            "error": "Invalid contact_id (must be UUID)",
+        })
+    effective = (
+        business_context_id
+        if business_context_id is not None
+        else _default_context()
+    )
+    if effective is None or not effective.strip():
+        return json.dumps({
+            "success": False,
+            "error": "business_context_id is required",
+        })
+
+    try:
+        ticket = await _provider().open_customer_service_ticket(
+            contact_id=contact_id,
+            business_context_id=_ticket_text(
+                effective, "business_context_id", 64
+            ),
+            summary=_ticket_text(summary, "summary", 500),
+            details=_ticket_optional_text(details, "details", 10000),
+            priority=_ticket_optional_text(priority, "priority", 64),
+            assignee=_ticket_optional_text(assignee, "assignee", 128),
+        )
+        if ticket is None:
+            return json.dumps({
+                "success": False,
+                "error": "Contact not found",
+            })
+        return json.dumps({"success": True, "ticket": ticket}, default=str)
+    except ValueError as exc:
+        return json.dumps({"success": False, "error": str(exc)})
+    except Exception:
+        logger.exception("open_customer_service_ticket error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def list_customer_service_tickets(
+    status: Optional[str] = "open",
+    contact_id: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    business_context_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> str:
+    """
+    List customer-service complaint tickets for one tenant.
+
+    status defaults to open; pass closed for resolved complaints or null for
+    both states. Optional contact_id, priority, and assignee filters are applied
+    before newest-first pagination.
+    """
+    effective = (
+        business_context_id
+        if business_context_id is not None
+        else _default_context()
+    )
+    if effective is None or not effective.strip():
+        return json.dumps({
+            "error": "business_context_id is required",
+            "tickets": [],
+            "count": 0,
+        })
+    if status not in (None, "open", "closed"):
+        return json.dumps({
+            "error": "status must be open, closed, or null",
+            "tickets": [],
+            "count": 0,
+        })
+    if contact_id is not None and not _is_uuid(contact_id):
+        return json.dumps({
+            "error": "Invalid contact_id (must be UUID)",
+            "tickets": [],
+            "count": 0,
+        })
+
+    try:
+        tickets = await _provider().list_customer_service_tickets(
+            business_context_id=_ticket_text(
+                effective, "business_context_id", 64
+            ),
+            status=status,
+            contact_id=contact_id,
+            priority=_ticket_optional_text(priority, "priority", 64),
+            assignee=_ticket_optional_text(assignee, "assignee", 128),
+            limit=min(max(limit, 1), 200),
+            offset=max(offset, 0),
+        )
+        return json.dumps(
+            {"tickets": tickets, "count": len(tickets)},
+            default=str,
+        )
+    except ValueError as exc:
+        return json.dumps({
+            "error": str(exc),
+            "tickets": [],
+            "count": 0,
+        })
+    except Exception:
+        logger.exception("list_customer_service_tickets error")
+        return json.dumps({
+            "error": "Internal error",
+            "tickets": [],
+            "count": 0,
+        })
+
+
+@mcp.tool()
+async def update_customer_service_ticket(
+    ticket_id: str,
+    summary: Optional[str] = None,
+    details: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    business_context_id: Optional[str] = None,
+) -> str:
+    """
+    Update mutable fields on an open customer-service complaint ticket.
+
+    Closed and foreign-tenant tickets are reported as not found or not open.
+    Closing is a separate operation so resolution is always recorded.
+    """
+    if not _is_uuid(ticket_id):
+        return json.dumps({
+            "success": False,
+            "error": "Invalid ticket_id (must be UUID)",
+        })
+    effective = (
+        business_context_id
+        if business_context_id is not None
+        else _default_context()
+    )
+    if effective is None or not effective.strip():
+        return json.dumps({
+            "success": False,
+            "error": "business_context_id is required",
+        })
+
+    try:
+        data = {
+            key: _ticket_optional_text(value, key, max_length)
+            for key, value, max_length in (
+                ("summary", summary, 500),
+                ("details", details, 10000),
+                ("priority", priority, 64),
+                ("assignee", assignee, 128),
+            )
+            if value is not None
+        }
+        if not data:
+            return json.dumps({
+                "success": False,
+                "error": "No fields provided to update",
+            })
+        ticket = await _provider().update_customer_service_ticket(
+            ticket_id=ticket_id,
+            business_context_id=_ticket_text(
+                effective, "business_context_id", 64
+            ),
+            data=data,
+        )
+        if ticket is None:
+            return json.dumps({
+                "success": False,
+                "error": "Ticket not found or not open",
+            })
+        return json.dumps({"success": True, "ticket": ticket}, default=str)
+    except ValueError as exc:
+        return json.dumps({"success": False, "error": str(exc)})
+    except Exception:
+        logger.exception("update_customer_service_ticket error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def close_customer_service_ticket(
+    ticket_id: str,
+    resolution: str,
+    business_context_id: Optional[str] = None,
+) -> str:
+    """
+    Close a customer-service complaint ticket with its resolution.
+
+    The first close records the resolution and timestamp. Repeated calls return
+    the already-closed ticket without replacing either value.
+    """
+    if not _is_uuid(ticket_id):
+        return json.dumps({
+            "success": False,
+            "error": "Invalid ticket_id (must be UUID)",
+        })
+    effective = (
+        business_context_id
+        if business_context_id is not None
+        else _default_context()
+    )
+    if effective is None or not effective.strip():
+        return json.dumps({
+            "success": False,
+            "error": "business_context_id is required",
+        })
+
+    try:
+        ticket = await _provider().close_customer_service_ticket(
+            ticket_id=ticket_id,
+            business_context_id=_ticket_text(
+                effective, "business_context_id", 64
+            ),
+            resolution=_ticket_text(resolution, "resolution", 10000),
+        )
+        if ticket is None:
+            return json.dumps({
+                "success": False,
+                "error": "Ticket not found",
+            })
+        already_closed = bool(ticket.pop("already_closed", False))
+        return json.dumps({
+            "success": True,
+            "ticket": ticket,
+            "already_closed": already_closed,
+        }, default=str)
+    except ValueError as exc:
+        return json.dumps({"success": False, "error": str(exc)})
+    except Exception:
+        logger.exception("close_customer_service_ticket error")
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------

@@ -137,3 +137,24 @@ def test_contact_lead_pipeline_migration_is_additive_and_indexed():
     assert "idx_contacts_lead_follow_up" in migration
     assert "WHERE contact_type = 'lead'" in migration
     assert "DROP " not in migration.upper()
+
+
+def test_customer_service_ticket_migration_is_additive_tenant_scoped_and_indexed():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "347_customer_service_tickets.sql"
+    ).read_text()
+
+    assert "CREATE TABLE IF NOT EXISTS customer_service_tickets" in migration
+    assert "contact_id UUID NOT NULL REFERENCES contacts(id)" in migration
+    assert "business_context_id VARCHAR(64) NOT NULL" in migration
+    assert "CHECK (btrim(business_context_id) <> '')" in migration
+    assert "CHECK (btrim(summary) <> '')" in migration
+    assert "CHECK (status IN ('open', 'closed'))" in migration
+    assert "NULLIF(btrim(resolution), '') IS NOT NULL" in migration
+    assert "idx_customer_service_tickets_open_queue" in migration
+    assert "WHERE status = 'open'" in migration
+    assert "DROP " not in migration.upper()

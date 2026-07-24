@@ -524,6 +524,180 @@ class DatabaseCRMProvider:
         )
         return [dict(r) for r in rows]
 
+    async def open_customer_service_ticket(
+        self,
+        *,
+        contact_id: str,
+        business_context_id: str,
+        summary: str,
+        details: Optional[str] = None,
+        priority: Optional[str] = None,
+        assignee: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Atomically claim a visible contact and open its tenant ticket."""
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            WITH visible_contact AS (
+                UPDATE contacts
+                   SET business_context_id = $2,
+                       updated_at = CASE
+                           WHEN business_context_id IS NULL THEN NOW()
+                           ELSE updated_at
+                       END
+                 WHERE id = $1
+                   AND status != 'archived'
+                   AND (
+                       business_context_id IS NULL
+                       OR business_context_id = $2
+                   )
+                 RETURNING id
+            )
+            INSERT INTO customer_service_tickets (
+                contact_id,
+                business_context_id,
+                summary,
+                details,
+                priority,
+                assignee
+            )
+            SELECT id, $2, $3, $4, $5, $6
+            FROM visible_contact
+            RETURNING *
+            """,
+            contact_id,
+            business_context_id,
+            summary,
+            details,
+            priority,
+            assignee,
+        )
+        return dict(row) if row else None
+
+    async def list_customer_service_tickets(
+        self,
+        *,
+        business_context_id: str,
+        status: Optional[str] = "open",
+        contact_id: Optional[str] = None,
+        priority: Optional[str] = None,
+        assignee: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List one tenant's tickets with every filter applied before paging."""
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = ["business_context_id = $1"]
+        params: list[Any] = [business_context_id]
+
+        for column, value in (
+            ("status", status),
+            ("contact_id", contact_id),
+            ("priority", priority),
+            ("assignee", assignee),
+        ):
+            if value is not None:
+                params.append(value)
+                conditions.append(f"{column} = ${len(params)}")
+
+        params.extend([limit, max(0, offset)])
+        rows = await pool.fetch(
+            f"""
+            SELECT *
+            FROM customer_service_tickets
+            WHERE {' AND '.join(conditions)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ${len(params) - 1} OFFSET ${len(params)}
+            """,
+            *params,
+        )
+        return [dict(row) for row in rows]
+
+    async def update_customer_service_ticket(
+        self,
+        *,
+        ticket_id: str,
+        business_context_id: str,
+        data: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Update mutable fields only while the tenant ticket is open."""
+        from ..storage.database import get_db_pool
+
+        allowed = {"summary", "details", "priority", "assignee"}
+        updates = {key: value for key, value in data.items() if key in allowed}
+        if not updates:
+            return None
+
+        params: list[Any] = [ticket_id, business_context_id]
+        assignments: list[str] = []
+        for key, value in updates.items():
+            params.append(value)
+            assignments.append(f"{key} = ${len(params)}")
+        assignments.append("updated_at = NOW()")
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            f"""
+            UPDATE customer_service_tickets
+               SET {', '.join(assignments)}
+             WHERE id = $1
+               AND business_context_id = $2
+               AND status = 'open'
+             RETURNING *
+            """,
+            *params,
+        )
+        return dict(row) if row else None
+
+    async def close_customer_service_ticket(
+        self,
+        *,
+        ticket_id: str,
+        business_context_id: str,
+        resolution: str,
+    ) -> Optional[dict[str, Any]]:
+        """Close once; retries return the original tenant-scoped resolution."""
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            WITH locked_ticket AS (
+                SELECT *
+                FROM customer_service_tickets
+                WHERE id = $1
+                  AND business_context_id = $2
+                FOR UPDATE
+            ),
+            closed_now AS (
+                UPDATE customer_service_tickets AS ticket
+                   SET status = 'closed',
+                       resolution = $3,
+                       closed_at = NOW(),
+                       updated_at = NOW()
+                  FROM locked_ticket
+                 WHERE ticket.id = locked_ticket.id
+                   AND locked_ticket.status = 'open'
+                 RETURNING ticket.*, false AS already_closed
+            )
+            SELECT * FROM closed_now
+            UNION ALL
+            SELECT locked_ticket.*, true AS already_closed
+            FROM locked_ticket
+            WHERE locked_ticket.status = 'closed'
+              AND NOT EXISTS (SELECT 1 FROM closed_now)
+            LIMIT 1
+            """,
+            ticket_id,
+            business_context_id,
+            resolution,
+        )
+        return dict(row) if row else None
+
     async def log_interaction(
         self,
         contact_id: str,
