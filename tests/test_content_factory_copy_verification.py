@@ -523,3 +523,56 @@ def test_generated_warnings_always_satisfy_schema_grammar():
         }
     )
     assert audit.advisory_warnings == generated
+
+
+# --- round-6 review fixes ---
+
+
+def test_unrelated_qualifier_in_other_clause_does_not_excuse():
+    """Clause-scoped association: a qualifier in one clause cannot excuse a
+    claim in another, even as the sentence's only claim."""
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "When evidence exists, support triages tickets, but we draft an "
+        "answer regardless."
+    )
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_bare_routing_noun_does_not_suppress():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("The report ranks issues. Routing takes time.")
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_sentence_locators_ignore_domain_and_abbreviation_periods():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("Contact bob@example.com about an answer.")
+    assert any(
+        "sentence 1" in w for w in warnings if w.startswith("unqualified-answer-claim")
+    )
+    warnings = advisory_warnings("E.g. we draft an answer.")
+    assert any(
+        "sentence 1" in w for w in warnings if w.startswith("unqualified-answer-claim")
+    )
+
+
+def test_multiline_claim_keyword_stays_schema_valid():
+    """Round-6 BLOCKER regression: a wrapped draft must not make the producer
+    emit a locator its own v2 grammar rejects."""
+    from atlas_brain.schemas.content_factory import EditorialAuditV2
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    generated = advisory_warnings("Billing\nreally owns refunds.")
+    assert any(w.startswith("unqualified-ownership-claim:") for w in generated)
+    audit = EditorialAuditV2.model_validate(
+        {
+            "schema": "editorial_audit.v2",
+            "project_id": "p",
+            "advisory_warnings": generated,
+        }
+    )
+    assert audit.advisory_warnings == generated

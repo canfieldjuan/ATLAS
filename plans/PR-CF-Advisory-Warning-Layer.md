@@ -41,14 +41,18 @@ Slice phase: vertical slice
 1. `atlas_brain/services/content_factory_copy_verification.py`:
    `advisory_warnings(text)` ports the tool's soft checks (unqualified
    answer claims, unqualified ownership claims, report-shape without
-   owner routing, unconditional honest-CTA reminder). The whole text is
-   PII-redacted BEFORE sentence extraction: the sentence splitter breaks
-   on the dot inside an email address, and per-sentence redaction leaks
-   the truncated fragment ("bob@example") -- found by this slice's own
-   probe; the source tool has the same flaw.
-2. `atlas_brain/schemas/content_factory.py`: `EditorialAudit` gains
-   `advisory_warnings: list[str]` (default empty). Deliberately NOT
-   referenced by any validator -- warnings never gate the recommendation.
+   owner routing, unconditional honest-CTA reminder). FINAL DESIGN
+   (review rounds 4-6): warnings are EVIDENCE-FREE -- claim code +
+   1-based sentence locator + grammar-safe keyword only, no draft text --
+   so nothing PII-shaped is representable; qualifier association is
+   clause-scoped and counting-based (fail-closed, linear); sentence/
+   clause spans are precomputed once per draft.
+2. `atlas_brain/schemas/content_factory.py`: `EditorialAuditV2`
+   (schema tag `editorial_audit.v2`) carries
+   `advisory_warnings: list[str]` and VALIDATES each entry against the
+   bounded deterministic grammar (persistence choke point for direct
+   writers); v1 (`EditorialAudit`, pre-change API) is FROZEN and stays
+   admissible. Warnings never gate the recommendation.
 3. `atlas_brain/services/content_factory_runner.py`:
    `_enforce_copy_verification` overwrites `advisory_warnings` from the
    edited body alongside the verdict; empty body clears the list
@@ -81,6 +85,23 @@ Slice phase: vertical slice
 - Reviewer rules triggered: R1 (#2136 item 2), R2 (both-direction tests),
   R5 (no gating change, old artifacts validate), R10 (advisory logic
   lives beside the gate it complements), R14.
+
+### Review round 6 (Codex)
+
+Six findings, all fixed: qualifier association is now CLAUSE-scoped and
+counting-based -- a qualifier only excuses claims inside its own clause
+and at most as many as there are qualifiers there, which simultaneously
+closes the cross-clause leak ("When evidence exists, support triages
+tickets, but we draft an answer regardless" warns), stays fail-closed
+under unknown separators, and is linear (no pairwise scan -- kills the
+8k-claim pathological case); the producer normalizes matched keywords to
+the schema's bounded alphabet (a wrapped "Billing\nreally owns" cannot
+invalidate a valid audit -- round-6 BLOCKER); bare "routing" no longer
+counts as owner coverage (a target relation is required); sentence
+terminators require a following capital/quote or end-of-text (domains
+and abbreviations do not inflate locators); and this plan's scope/
+Intentional text was reconciled to the shipped evidence-free versioned
+design.
 
 ### Review round 5 (Codex)
 
@@ -188,8 +209,10 @@ advisory output in audit.json without any new gate.
 - **Warnings never block** -- no validator references them; blocking
   advisory content would collapse the gate/checklist distinction #2136
   drew on purpose.
-- **Pre-redaction over per-sentence redaction** -- closes the
-  email-dot/sentence-split truncation leak this slice's probe found.
+- **Evidence-free warnings over redaction** (supersedes the interim
+  pre-redaction design): no draft text is persisted at all, so PII
+  safety holds by construction, enforced again at the schema choke
+  point -- not by any redaction pattern's completeness.
 
 ## Deferred
 
@@ -200,7 +223,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 186 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 190 passed (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered
@@ -210,11 +233,13 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 75 |
-| `atlas_brain/services/content_factory_copy_verification.py` | 175 |
-| `atlas_brain/services/content_factory_runner.py` | 25 |
+| `atlas_brain/schemas/content_factory.py` | 160 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 330 |
+| `atlas_brain/services/content_factory_runner.py` | 30 |
 | `atlas_brain/services/content_factory_store.py` | 12 |
-| `plans/PR-CF-Advisory-Warning-Layer.md` | 200 |
-| `tests/*` (three files) | 210 |
-| **Total** | **~700 gross (over the 400 soft cap; override rationale in
-"Why this slice exists")** |
+| `plans/PR-CF-Advisory-Warning-Layer.md` | 300 |
+| `tests/*` (three files) | 310 |
+| **Total** | **~1140 gross across six Codex rounds (over the 400 soft
+cap; override rationale in "Why this slice exists" -- the growth is
+review-round hardening of one indivisible behavior, itemized in the PR
+body's AI-reconciliation ledger)** |

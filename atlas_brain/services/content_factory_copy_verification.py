@@ -154,7 +154,7 @@ _OWNER_SUBJECTS = (
 )
 _OWNER_ROUTING_RE = re.compile(
     r"\b(?:owner\s+lane|owned\s+by|assigned\s+to|"
-    r"route[sd]?\s+(?:to|each|the)|routing|"
+    r"route[sd]?\s+(?:to|each|the)|"
     r"(?:" + _OWNER_SUBJECTS + r")\s+(?:\w+\s+)?owns?\b|"
     r"who\s+needs\s+to\s+(?:fix|review)|needs\s+to\s+(?:fix|review))",
     re.I,
@@ -232,10 +232,12 @@ def _claim_hits(text: str) -> list[str]:
 
 
 # Sentence terminators: runs of .!? collapse to ONE boundary ("Really?!"),
-# and a period between digits ("Version 2.1") is not a terminator, so the
-# persisted sentence locators count sentences the way the reviewing human
-# does (review round 5).
-_SENTENCE_BOUNDARY_RE = re.compile(r"(?:(?<!\d)\.(?!\d)|[!?])+|\n+")
+# and a terminator only counts when followed by the start of a new sentence
+# (whitespace + capital/quote) or end of text -- so "Version 2.1",
+# "bob@example.com about", and "E.g. we draft" do not inflate the locator
+# (review rounds 5-6). Erring toward FEWER splits keeps locators <= the
+# human count.
+_SENTENCE_BOUNDARY_RE = re.compile(r"[.!?]+(?=\s+[A-Z\"'(]|\s*\Z)|\n+")
 
 
 def _boundary_spans(
@@ -267,57 +269,67 @@ _CLAUSE_BOUNDARY_RE = re.compile(
 )
 
 
+_KEYWORD_DISALLOWED_RE = re.compile(r"[^A-Za-z /-]")
+
+
+def _grammar_safe_keyword(matched: str) -> str:
+    """Reduce a matched claim keyword to the schema's bounded alphabet.
+
+    Whitespace (including newlines from wrapped drafts) collapses to single
+    spaces and anything outside the grammar's charset is dropped, so the
+    producer can never emit a locator its own contract rejects (review
+    round 6: a wrapped "Billing\nreally owns" must not invalidate an
+    otherwise valid audit)."""
+    collapsed = " ".join(matched.split())
+    safe = _KEYWORD_DISALLOWED_RE.sub("", collapsed).strip()[:59]
+    return safe if safe and safe[0].isalpha() else "claim"
+
+
 def _unqualified_claims(
     text: str,
     word_re: "re.Pattern[str]",
     qualifier_re: "re.Pattern[str]",
     code: str,
     sentence_bounds: "tuple[list[int], list[tuple[int, int]]]",
+    clause_bounds: "tuple[list[int], list[tuple[int, int]]]",
 ) -> list[str]:
-    """One warning per (code, sentence) for each claim not excused by its OWN
-    qualifier. FAIL-CLOSED ASSOCIATION (review round 5): each qualifier
-    occurrence excuses at most ONE claim -- its nearest neighbor in the same
-    sentence -- so no separator style (comma, dash, slash, parenthesis, or
-    anything future) can let a single qualified assertion hide a second,
-    unqualified one. Extra unmatched qualifiers excuse nothing.
+    """One warning per (code, sentence) for each claim not excused within its
+    OWN CLAUSE. FAIL-CLOSED ASSOCIATION, clause-scoped (review rounds 5-6):
+    a qualifier only excuses claims in its clause, and excuses at most as
+    many claims as there are qualifiers there -- so neither an unknown
+    separator (em dash, slash, parens: no clause boundary, but counting
+    still catches the extra claim) nor an explicit boundary (comma/but: the
+    unrelated qualifier sits in another clause) can hide an unqualified
+    claim. Counting is linear; no pairwise scan (round-6 perf).
 
     Warnings carry NO free text -- only the claim code, the 1-based sentence
-    number, and the matched keyword (alphabetic by construction; the schema
-    enforces this grammar at the persistence choke point). The reviewing
-    human locates the numbered sentence in the draft artifact beside the
-    audit.
+    number, and the grammar-safe matched keyword; the schema enforces the
+    same grammar at the persistence choke point. The reviewing human locates
+    the numbered sentence in the draft artifact beside the audit.
     """
-    claims_by_sentence: dict[int, list[re.Match]] = {}
+    claims_by_clause: dict[int, list[re.Match]] = {}
     for match in word_re.finditer(text):
-        index, _span = _span_for(sentence_bounds, match.start())
-        claims_by_sentence.setdefault(index, []).append(match)
-    if not claims_by_sentence:
+        index, _span = _span_for(clause_bounds, match.start())
+        claims_by_clause.setdefault(index, []).append(match)
+    if not claims_by_clause:
         return []
-    qualifiers_by_sentence: dict[int, list[int]] = {}
+    qualifier_counts: dict[int, int] = {}
     for qualifier in qualifier_re.finditer(text):
-        index, _span = _span_for(sentence_bounds, qualifier.start())
-        qualifiers_by_sentence.setdefault(index, []).append(qualifier.start())
+        index, _span = _span_for(clause_bounds, qualifier.start())
+        qualifier_counts[index] = qualifier_counts.get(index, 0) + 1
 
     warnings: list[str] = []
-    for index in sorted(claims_by_sentence):
-        claims = claims_by_sentence[index]
-        excused: set[int] = set()
-        for qualifier_pos in qualifiers_by_sentence.get(index, ()):
-            nearest = None
-            nearest_distance = None
-            for claim_index, claim in enumerate(claims):
-                if claim_index in excused:
-                    continue
-                distance = abs(claim.start() - qualifier_pos)
-                if nearest is None or distance < nearest_distance:
-                    nearest, nearest_distance = claim_index, distance
-            if nearest is not None:
-                excused.add(nearest)
-        remaining = [c for i, c in enumerate(claims) if i not in excused]
-        if remaining:
+    seen_sentences: set[int] = set()
+    for index in sorted(claims_by_clause):
+        claims = claims_by_clause[index]
+        for claim in claims[qualifier_counts.get(index, 0):]:
+            sentence_index, _span = _span_for(sentence_bounds, claim.start())
+            if sentence_index in seen_sentences:
+                continue
+            seen_sentences.add(sentence_index)
             warnings.append(
-                f"{code}: sentence {index + 1} "
-                f"({remaining[0].group(0).strip()!r})"
+                f"{code}: sentence {sentence_index + 1} "
+                f"({_grammar_safe_keyword(claim.group(0))!r})"
             )
     return warnings
 
@@ -345,11 +357,11 @@ def advisory_warnings(text: str) -> list[str]:
 
     warnings = _unqualified_claims(
         text, _ANSWER_RE, _ANSWER_QUALIFIER_RE, "unqualified-answer-claim",
-        sentence_bounds,
+        sentence_bounds, clause_bounds,
     )
     warnings += _unqualified_claims(
         text, _OWNERSHIP_RE, _OWNERSHIP_QUALIFIER_RE,
-        "unqualified-ownership-claim", sentence_bounds,
+        "unqualified-ownership-claim", sentence_bounds, clause_bounds,
     )
     if _REPORT_SHAPE_RE.search(text) and not _has_affirmative_owner_routing(
         text, clause_bounds
