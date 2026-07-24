@@ -260,6 +260,84 @@ def test_row_visible_semantics(default_ctx):
     assert crm_srv._row_visible(LEGACY_NULL, EOM) is False  # explicit = exact
 
 
+class _StubCtx:
+    """Minimal CustomerContext stand-in for behavioral TOCTOU tests."""
+
+    def __init__(self, contact):
+        self.is_empty = False
+        self.contact = contact
+        self.interactions = []
+        self.appointments = []
+        self.call_transcripts = []
+        self.sent_emails = []
+        self.inbox_emails = []
+        self.b2b_churn_signals = []
+
+
+@pytest.mark.asyncio
+async def test_customer_context_refuses_row_claimed_mid_gather(default_ctx, monkeypatch):
+    """Behavioral TOCTOU regression (#2165 review): the pre-guard sees a
+    claimable NULL row, but the service's own fetch returns the row already
+    claimed by the other tenant -- the response must refuse, not serialize
+    the foreign contact."""
+    _provider_mock(monkeypatch, get=LEGACY_NULL)
+    from atlas_brain.services import customer_context as ccx
+
+    class _Svc:
+        async def get_context(self, contact_id, **kwargs):
+            return _StubCtx(dict(FOREIGN))
+
+    monkeypatch.setattr(ccx, "get_customer_context_service", lambda: _Svc())
+    out = json.loads(await crm_srv.get_customer_context(contact_id=UUID))
+    assert out == {"found": False, "context": None}
+
+
+@pytest.mark.asyncio
+async def test_customer_context_serializes_still_visible_row(default_ctx, monkeypatch):
+    _provider_mock(monkeypatch, get=SAME)
+    from atlas_brain.services import customer_context as ccx
+
+    class _Svc:
+        async def get_context(self, contact_id, **kwargs):
+            return _StubCtx(dict(SAME))
+
+    monkeypatch.setattr(ccx, "get_customer_context_service", lambda: _Svc())
+    out = json.loads(await crm_srv.get_customer_context(contact_id=UUID))
+    assert out["found"] is True
+    assert out["contact"]["business_context_id"] == EOM
+    assert out["emails_omitted_under_scope"] is True
+
+
+@pytest.mark.asyncio
+async def test_provider_interactions_scoped_query_executes_atomically(monkeypatch):
+    """Behavioral (#2165 review): the tenant predicate is bound in the SAME
+    statement as the page read -- join + bound params -- not applied after
+    the query; unscoped callers keep the legacy statement."""
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+    from atlas_brain.storage import database
+
+    captured = {}
+
+    class _Pool:
+        async def fetch(self, sql, *params):
+            captured["sql"] = " ".join(sql.split())
+            captured["params"] = params
+            return [{"id": "i-1"}]
+
+    monkeypatch.setattr(database, "get_db_pool", lambda: _Pool())
+    provider = DatabaseCRMProvider.__new__(DatabaseCRMProvider)
+
+    rows = await provider.get_interactions(UUID, limit=5, business_context_id=EOM)
+    assert rows == [{"id": "i-1"}]
+    assert "JOIN contacts c ON c.id = ci.contact_id" in captured["sql"]
+    assert "(c.business_context_id = $2 OR c.business_context_id IS NULL)" in captured["sql"]
+    assert captured["params"] == (UUID, EOM, 5)
+
+    await provider.get_interactions(UUID, limit=5)
+    assert "JOIN" not in captured["sql"]
+    assert captured["params"] == (UUID, 5)
+
+
 def test_customer_context_validates_fetched_row_source():
     """get_customer_context must validate ctx.contact (the service's own
     fetch), not only the pre-guard read."""
