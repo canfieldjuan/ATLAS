@@ -120,3 +120,20 @@ def test_repo_migration_prefix_collisions_are_only_historical_exceptions():
             "298_b2b_watchlist_preview_alert_policy.sql",
         ],
     }
+
+
+def test_contact_lead_pipeline_migration_is_additive_and_indexed():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "346_contact_lead_pipeline.sql"
+    ).read_text()
+
+    assert "ADD COLUMN IF NOT EXISTS lead_stage VARCHAR(64)" in migration
+    assert "ADD COLUMN IF NOT EXISTS lead_owner VARCHAR(128)" in migration
+    assert "ADD COLUMN IF NOT EXISTS next_follow_up_at TIMESTAMPTZ" in migration
+    assert "idx_contacts_lead_follow_up" in migration
+    assert "WHERE contact_type = 'lead'" in migration
+    assert "DROP " not in migration.upper()
