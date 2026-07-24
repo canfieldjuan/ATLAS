@@ -120,3 +120,62 @@ def test_repo_migration_prefix_collisions_are_only_historical_exceptions():
             "298_b2b_watchlist_preview_alert_policy.sql",
         ],
     }
+
+
+def test_contact_lead_pipeline_migration_is_additive_and_indexed():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "346_contact_lead_pipeline.sql"
+    ).read_text()
+
+    assert "ADD COLUMN IF NOT EXISTS lead_stage VARCHAR(64)" in migration
+    assert "ADD COLUMN IF NOT EXISTS lead_owner VARCHAR(128)" in migration
+    assert "ADD COLUMN IF NOT EXISTS next_follow_up_at TIMESTAMPTZ" in migration
+    assert "idx_contacts_lead_follow_up" in migration
+    assert "WHERE contact_type = 'lead'" in migration
+    assert "DROP " not in migration.upper()
+
+
+def test_customer_service_ticket_migration_is_additive_tenant_scoped_and_indexed():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "347_customer_service_tickets.sql"
+    ).read_text()
+
+    assert "CREATE TABLE IF NOT EXISTS customer_service_tickets" in migration
+    assert "contact_id UUID NOT NULL REFERENCES contacts(id)" in migration
+    assert "business_context_id VARCHAR(64) NOT NULL" in migration
+    assert "CHECK (btrim(business_context_id) <> '')" in migration
+    assert "CHECK (btrim(summary) <> '')" in migration
+    assert "CHECK (status IN ('open', 'closed'))" in migration
+    assert "NULLIF(btrim(resolution), '') IS NOT NULL" in migration
+    assert "idx_customer_service_tickets_open_queue" in migration
+    assert "WHERE status = 'open'" in migration
+    assert "DROP " not in migration.upper()
+
+
+def test_appointment_operating_fields_migration_is_additive_and_constrained():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "348_appointment_operating_fields.sql"
+    ).read_text()
+
+    assert "ADD COLUMN IF NOT EXISTS recurrence_interval SMALLINT" in migration
+    assert "ADD COLUMN IF NOT EXISTS recurrence_unit VARCHAR(16)" in migration
+    assert "ADD COLUMN IF NOT EXISTS assigned_cleaner VARCHAR(128)" in migration
+    assert "ADD COLUMN IF NOT EXISTS per_visit_price NUMERIC(12,2)" in migration
+    assert "chk_appointments_recurrence_pair" in migration
+    assert "recurrence_interval BETWEEN 1 AND 365" in migration
+    assert "recurrence_unit IN ('day', 'week', 'month')" in migration
+    assert "chk_appointments_assigned_cleaner" in migration
+    assert "chk_appointments_per_visit_price" in migration
+    assert "DROP " not in migration.upper()

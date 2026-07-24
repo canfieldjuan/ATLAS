@@ -17,7 +17,7 @@ accepted plan docs, and explicit operator decisions choose what to build next.
 | **B2B Churn Intelligence** | `atlas-churn-ui`, `atlas-intel-ui`, MCP `b2b_churn_server` (83 tools), 19 review sources, displacement graph, weekly reports, calibration loop, webhooks | **Shipped** — Intelligence Platform Roadmap phases 0–7 complete |
 | **Consumer Intelligence** | MCP `intelligence_server` (33 tools), brand registry, displacement edges, market reports, PDF export | **Shipped** — Consumer Roadmap phases 0–6+ complete |
 | **Content Ops Pipeline** | `extracted_content_pipeline/` (~77 KLOC), blog post + B2B campaign + landing page + report + sales-brief generation, signal extraction, generated-asset review API | **Active iteration** — 39 of 65 open plans; signal extraction + scope wiring + landing-page wired; 4 more generators pending LLM/repo factories |
-| **Communications + CRM + Calendar + Invoicing** | MCP servers (CRM 10, Email 9, Twilio 10, Calendar 8, Invoicing 18), Postgres `contacts`/`appointments`, Gmail/IMAP/Resend, Google Calendar/CalDAV, NocoDB admin UI | **Shipped** |
+| **Communications + CRM + Calendar + Invoicing** | MCP servers (CRM 10, Email 9, Twilio 10, Calendar 8, Invoicing 19), Postgres `contacts`/`appointments`, Gmail/IMAP/Resend, Google Calendar/CalDAV, NocoDB admin UI | **Shipped** |
 | **Knowledge graph memory** | MCP `memory_server` (15 tools), Postgres short-term + Neo4j/Graphiti long-term via `graphiti-wrapper` (port 8001) | **Shipped** |
 | **Universal scraper** | MCP `scraper_server` (5 tools), LLM-driven schema extraction, Playwright JS rendering | **Shipped** |
 | **Voice + Home Automation** | `atlas_brain/voice/`, ASR (Nemotron 0.6B, port 8081), wake-word + VAD + capture, Home Assistant + MQTT capability registry, intent dispatch | **Built but not yet routed through agent** — historical voice-to-voice context remains in `BUILD_SPEC.md`, but current work is governed by active issues/plans and `docs/CURRENT_PRODUCT_DISCIPLINE.md` |
@@ -240,7 +240,7 @@ atlas_brain/
 | Email                   | 8057 | 9     | `atlas_brain.mcp.email_server`        |
 | Twilio                  | 8058 | 10    | `atlas_brain.mcp.twilio_server`       |
 | Calendar                | 8059 | 8     | `atlas_brain.mcp.calendar_server`     |
-| Invoicing               | 8060 | 18    | `atlas_brain.mcp.invoicing_server`    |
+| Invoicing               | 8060 | 19    | `atlas_brain.mcp.invoicing_server`    |
 | Invoicing Readonly      | 8065 | 8     | `atlas_brain.mcp.invoicing_readonly_server` |
 | Content Ops Deflection Readonly | 8067 | 3 | `atlas_brain.mcp.content_ops_deflection_readonly_server` |
 | Content Ops Marketer Verify | 8068 | 1 | `atlas_brain.mcp.content_ops_marketer_verify_server` |
@@ -413,7 +413,7 @@ read-only invoicing OAuth pattern, Tailscale well-known route shape, discovery
 and e2e smoke requirements, and operator launcher checklist for future MCP
 servers.
 
-### CRM MCP Server (10 tools)
+### CRM MCP Server (15 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.crm_server
@@ -424,7 +424,10 @@ python -m atlas_brain.mcp.crm_server --sse
 
 Tools: `search_contacts`, `get_contact`, `create_contact`, `update_contact`,
 `delete_contact`, `list_contacts`, `log_interaction`, `get_interactions`,
-`get_contact_appointments`, `get_customer_context`
+`update_contact_appointment_operations`, `get_contact_appointments`,
+`get_customer_context`,
+`open_customer_service_ticket`, `list_customer_service_tickets`,
+`update_customer_service_ticket`, `close_customer_service_ticket`
 
 ### Email MCP Server (9 tools)
 ```bash
@@ -510,20 +513,28 @@ ATLAS_TOOLS_CALDAV_CALENDAR_URL=   # optional; auto-discovered via PROPFIND if b
 ATLAS_MCP_CALENDAR_PORT=8059  # Calendar MCP server (SSE mode only)
 ```
 
-### Invoicing MCP Server (18 tools)
+### Invoicing MCP Server (19 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.invoicing_server
 
-# SSE HTTP mode (port 8060)
-python -m atlas_brain.mcp.invoicing_server --sse
+# SSE HTTP mode (port 8060; bearer token is mandatory)
+ATLAS_MCP_AUTH_TOKEN=<long-random-token> python -m atlas_brain.mcp.invoicing_server --sse
 ```
 
 Tools: `create_invoice`, `get_invoice`, `list_invoices`, `update_invoice`,
-`send_invoice`, `record_payment`, `mark_void`, `customer_balance`,
+`send_invoice`, `record_customer_payment`, `record_payment`, `mark_void`, `customer_balance`,
 `payment_history`, `create_service`, `list_services`, `get_service`,
 `update_service`, `set_service_status`, `search_invoices`,
 `list_pending_drafts`, `approve_and_send`, `export_invoice_pdf`
+
+The EOM admin portal uses the separate FastAPI receivables surface, not MCP.
+Enable it only with a dedicated service token:
+
+```bash
+ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true
+ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN=<long-random-service-token>
+```
 
 ### Invoicing Readonly MCP Server (8 tools)
 ```bash

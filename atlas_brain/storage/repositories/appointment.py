@@ -121,6 +121,7 @@ class AppointmentRepository:
         status: str = "confirmed",
         upcoming_only: bool = True,
         limit: int = 10,
+        business_context_id: Optional[str] = None,
     ) -> list[dict]:
         """
         Get appointments by customer phone number.
@@ -150,6 +151,11 @@ class AppointmentRepository:
                 params.append(datetime.now(timezone.utc))
                 param_idx += 1
 
+            if business_context_id:
+                conditions.append(f"business_context_id = ${param_idx}")
+                params.append(business_context_id)
+                param_idx += 1
+
             params.append(limit)
 
             rows = await pool.fetch(
@@ -174,6 +180,7 @@ class AppointmentRepository:
         name: str,
         include_history: bool = True,
         limit: int = 10,
+        business_context_id: Optional[str] = None,
     ) -> list[dict]:
         """
         Search appointments by customer name (case-insensitive partial match).
@@ -201,6 +208,11 @@ class AppointmentRepository:
             if not include_history:
                 conditions.append(f"start_time > ${param_idx}")
                 params.append(datetime.now(timezone.utc))
+                param_idx += 1
+
+            if business_context_id:
+                conditions.append(f"business_context_id = ${param_idx}")
+                params.append(business_context_id)
                 param_idx += 1
 
             params.append(limit)

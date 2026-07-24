@@ -43,6 +43,6 @@ Compose the email in this exact order:
 - For **residential**: warmer, more personal tone
 - For **commercial**: slightly more formal, mention point of contact if known
 - Keep the entire email body under **175 words**
-- Always include business contact: (217) 821-2370 or info@effinghamofficemaids.com
+- Always include business contact: (217) 207-3097 or info@effinghamofficemaids.com
 - Subject line format: Your [Service Type] is Confirmed -- [Date]
 - Do NOT use markdown formatting in the email body -- plain text with line breaks only

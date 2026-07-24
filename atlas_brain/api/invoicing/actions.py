@@ -5,18 +5,29 @@ Provides endpoints triggered by ntfy action buttons:
 - GET  /{invoice_id}              -- view invoice details
 - POST /{invoice_id}/send         -- send invoice via email
 - POST /{invoice_id}/send-reminder -- send payment reminder
-- POST /{invoice_id}/mark-paid    -- quick-pay: record full amount
+- POST /{invoice_id}/mark-paid    -- retired quick-pay (always 410)
 """
 
 import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from .auth import require_receivables_api
 
 logger = logging.getLogger("atlas.api.invoicing")
 
-router = APIRouter(prefix="/invoicing", tags=["invoicing"])
+retired_router = APIRouter(
+    prefix="/invoicing",
+    tags=["invoicing"],
+)
+
+router = APIRouter(
+    prefix="/invoicing",
+    tags=["invoicing"],
+    dependencies=[Depends(require_receivables_api)],
+)
 
 
 async def _load_invoice(invoice_id: str) -> dict:
@@ -189,47 +200,13 @@ async def send_reminder(invoice_id: str):
 # POST /invoicing/{invoice_id}/mark-paid  -- Quick Pay
 # ---------------------------------------------------------------------------
 
-@router.post("/{invoice_id}/mark-paid")
+@retired_router.post("/{invoice_id}/mark-paid")
 async def mark_paid(invoice_id: str):
-    """Quick-pay: record full remaining amount as paid."""
-    from ...storage.repositories.invoice import get_invoice_repo
-
-    inv = await _load_invoice(invoice_id)
-    repo = get_invoice_repo()
-
-    if inv["status"] in ("paid", "void"):
-        raise HTTPException(400, f"Invoice already {inv['status']}")
-
-    amount_due = float(inv["amount_due"])
-    if amount_due <= 0:
-        raise HTTPException(400, "No amount due")
-
-    # Record payment for the full remaining amount
-    payment = await repo.record_payment(
-        invoice_id=inv["id"],
-        amount=amount_due,
-        payment_method="other",
-        notes="Quick-pay via ntfy action",
+    """Retired unsafe quick-pay endpoint."""
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Quick-pay was retired. Record a receipt with explicit customer, "
+            "method, date, and confirmed invoice allocations."
+        ),
     )
-
-    # CRM log
-    contact_id = inv.get("contact_id")
-    if contact_id:
-        try:
-            from ...services.crm_provider import get_crm_provider
-            crm = get_crm_provider()
-            await crm.log_interaction(
-                contact_id=str(contact_id),
-                interaction_type="invoice",
-                summary=f"Payment ${amount_due:.2f} on {inv['invoice_number']} (quick-pay)",
-            )
-        except Exception as e:
-            logger.warning("CRM log failed: %s", e)
-
-    logger.info("Invoice %s marked paid ($%.2f)", inv["invoice_number"], amount_due)
-    return {
-        "action": "mark_paid",
-        "invoice_number": inv["invoice_number"],
-        "amount_paid": amount_due,
-        "status": "paid",
-    }

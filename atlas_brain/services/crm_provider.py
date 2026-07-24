@@ -119,20 +119,75 @@ class DatabaseCRMProvider:
         always gets the most complete version.  This is application-level dedup;
         migration 037 should add a DB-level partial unique index for extra safety.
         """
+        pipeline_fields = ("lead_stage", "lead_owner", "next_follow_up_at")
+        if (
+            any(data.get(field) is not None for field in pipeline_fields)
+            and data.get("contact_type", "customer") != "lead"
+        ):
+            raise ValueError("Lead pipeline fields require contact_type='lead'")
+
         # --- dedup check ---
         raw_email = data.get("email")
         email = raw_email.lower() if raw_email else None
         phone = data.get("phone")
 
+        # Tenant-scoped dedup: when the caller stamps a business_context_id,
+        # match contacts within that tenant OR historical contacts with no
+        # context yet (which the merge below then claims for the tenant) --
+        # but never a contact belonging to a DIFFERENT context
+        # (PR #2152/#2153 review findings, R3/R4/R5).
+        ctx = data.get("business_context_id")
+
+        def _ctx_compatible(candidate: dict[str, Any]) -> bool:
+            if not ctx:
+                return True
+            existing_ctx = candidate.get("business_context_id")
+            return existing_ctx is None or existing_ctx == ctx
+
+        def _pick(matches: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+            # Prefer a real same-tenant contact over a NULL-context historical
+            # row so a claimable legacy row cannot shadow the tenant's own
+            # record (PR #2153 round 4, R4/R5).
+            if ctx:
+                for m in matches:
+                    if m.get("business_context_id") == ctx:
+                        return m
+            for m in matches:
+                if _ctx_compatible(m):
+                    return m
+            return None
+
+        async def _resolve(**channel: Any) -> Optional[dict[str, Any]]:
+            # Same-tenant page first, then the NULL-context (claimable) page
+            # directly -- both queries name their exact population, so a crowd
+            # of recently-updated foreign contacts can never page-starve the
+            # match (PR #2153 rounds 6-7, R4/R5).
+            if ctx:
+                scoped = await self.search_contacts(business_context_id=ctx, **channel)
+                if scoped:
+                    return scoped[0]
+                claimable = await self.search_contacts(
+                    business_context_id_is_null=True, **channel
+                )
+                return claimable[0] if claimable else None
+            return _pick(await self.search_contacts(**channel))
+
         existing: Optional[dict[str, Any]] = None
         if phone:
-            matches = await self.search_contacts(phone=phone)
-            if matches:
-                existing = matches[0]
+            existing = await _resolve(phone=phone)
         if existing is None and email:
-            matches = await self.search_contacts(email=email)
-            if matches:
-                existing = matches[0]
+            existing = await _resolve(email=email)
+
+        if existing is not None and ctx and existing.get("business_context_id") is None:
+            # Claim the NULL-context legacy match by compare-and-set before
+            # merging: a concurrent claim by another tenant leaves the row
+            # theirs and this create falls through to a fresh insert instead
+            # of overwriting their claim.
+            claimed = await self.claim_contact(str(existing["id"]), ctx)
+            if claimed is None:
+                existing = None
+            else:
+                existing = claimed
 
         if existing is not None:
             # Merge any new non-null fields into the existing record
@@ -168,9 +223,11 @@ class DatabaseCRMProvider:
                 id, full_name, first_name, last_name, email, phone,
                 address, city, state, zip, business_context_id,
                 contact_type, status, tags, notes, source, source_ref,
+                lead_stage, lead_owner, next_follow_up_at,
                 created_at, updated_at, metadata
             ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+                $18,$19,$20,$21,$22,$23::jsonb
             ) RETURNING *
             """,
             contact_id,
@@ -190,8 +247,11 @@ class DatabaseCRMProvider:
             data.get("notes"),
             data.get("source", "manual"),
             data.get("source_ref"),
-            now,   # created_at ($18)
-            now,   # updated_at ($19) -- same value on insert
+            data.get("lead_stage"),
+            data.get("lead_owner"),
+            data.get("next_follow_up_at"),
+            now,   # created_at ($21)
+            now,   # updated_at ($22) -- same value on insert
             metadata_json,
         )
         result = dict(row) if row else {}
@@ -232,13 +292,28 @@ class DatabaseCRMProvider:
         )
         return result
 
-    async def get_contact(self, contact_id: str) -> Optional[dict[str, Any]]:
+    async def get_contact(
+        self,
+        contact_id: str,
+        business_context_id: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
-        row = await pool.fetchrow(
-            "SELECT * FROM contacts WHERE id = $1", contact_id
-        )
+        if business_context_id:
+            row = await pool.fetchrow(
+                """
+                SELECT * FROM contacts
+                WHERE id = $1
+                  AND business_context_id = $2
+                """,
+                contact_id,
+                business_context_id,
+            )
+        else:
+            row = await pool.fetchrow(
+                "SELECT * FROM contacts WHERE id = $1", contact_id
+            )
         return dict(row) if row else None
 
     async def search_contacts(
@@ -247,6 +322,7 @@ class DatabaseCRMProvider:
         phone: Optional[str] = None,
         email: Optional[str] = None,
         business_context_id: Optional[str] = None,
+        business_context_id_is_null: bool = False,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         from ..storage.database import get_db_pool
@@ -271,6 +347,8 @@ class DatabaseCRMProvider:
             conditions.append(f"business_context_id = ${idx}")
             params.append(business_context_id)
             idx += 1
+        if business_context_id_is_null:
+            conditions.append("business_context_id IS NULL")
         if query:
             conditions.append(f"full_name ILIKE ${idx}")
             params.append(f"%{query[:200]}%")
@@ -289,7 +367,11 @@ class DatabaseCRMProvider:
         return [dict(r) for r in rows]
 
     async def update_contact(
-        self, contact_id: str, data: dict[str, Any]
+        self,
+        contact_id: str,
+        data: dict[str, Any],
+        *,
+        require_contact_type: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
         from ..storage.database import get_db_pool
 
@@ -298,9 +380,26 @@ class DatabaseCRMProvider:
             "full_name", "first_name", "last_name", "email", "phone",
             "address", "city", "state", "zip", "contact_type", "status",
             "tags", "notes", "business_context_id", "source", "source_ref",
-            "metadata",
+            "metadata", "lead_stage", "lead_owner", "next_follow_up_at",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
+        pipeline_requested = any(
+            key in updates
+            for key in ("lead_stage", "lead_owner", "next_follow_up_at")
+        )
+        if pipeline_requested:
+            if (
+                "contact_type" in updates
+                and updates["contact_type"] != "lead"
+            ):
+                raise ValueError(
+                    "Lead pipeline fields require contact_type='lead'"
+                )
+            if require_contact_type not in (None, "lead"):
+                raise ValueError(
+                    "Lead pipeline fields require contact_type='lead'"
+                )
+            require_contact_type = "lead"
         if "email" in updates and updates["email"]:
             updates["email"] = updates["email"].lower()
         if "metadata" in updates:
@@ -316,9 +415,40 @@ class DatabaseCRMProvider:
             set_parts.append(f"{key} = ${i}{cast}")
             params.append(val)
 
+        where = "id = $1"
+        if require_contact_type is not None:
+            params.append(require_contact_type)
+            where += f" AND contact_type = ${len(params)}"
+
         row = await pool.fetchrow(
-            f"UPDATE contacts SET {', '.join(set_parts)} WHERE id = $1 RETURNING *",
+            f"UPDATE contacts SET {', '.join(set_parts)} WHERE {where} RETURNING *",
             *params,
+        )
+        return dict(row) if row else None
+
+    async def claim_contact(
+        self, contact_id: str, business_context_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Compare-and-set claim of a legacy row for a tenant.
+
+        Stamps ``business_context_id`` only while the row is still NULL (or
+        already carries the same tenant, making the claim idempotent).
+        Returns None when a concurrent claim moved the row to a different
+        tenant, so callers can fail closed instead of overwriting it.
+        """
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            UPDATE contacts
+               SET business_context_id = $2, updated_at = NOW()
+             WHERE id = $1
+               AND (business_context_id IS NULL OR business_context_id = $2)
+             RETURNING *
+            """,
+            contact_id,
+            business_context_id,
         )
         return dict(row) if row else None
 
@@ -335,8 +465,13 @@ class DatabaseCRMProvider:
     async def list_contacts(
         self,
         business_context_id: Optional[str] = None,
+        business_context_id_is_null: bool = False,
+        include_unclaimed_legacy: bool = False,
         status: Optional[str] = "active",
         contact_type: Optional[str] = None,
+        lead_stage: Optional[str] = None,
+        lead_owner: Optional[str] = None,
+        next_follow_up_before: Optional[datetime] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -351,26 +486,232 @@ class DatabaseCRMProvider:
             conditions.append(f"status = ${idx}")
             params.append(status)
             idx += 1
+        if include_unclaimed_legacy and not business_context_id:
+            raise ValueError(
+                "include_unclaimed_legacy requires business_context_id"
+            )
+        if include_unclaimed_legacy and business_context_id_is_null:
+            raise ValueError(
+                "include_unclaimed_legacy conflicts with business_context_id_is_null"
+            )
         if business_context_id:
-            conditions.append(f"business_context_id = ${idx}")
+            operator = (
+                f"(business_context_id = ${idx} OR business_context_id IS NULL)"
+                if include_unclaimed_legacy
+                else f"business_context_id = ${idx}"
+            )
+            conditions.append(operator)
             params.append(business_context_id)
             idx += 1
+        if business_context_id_is_null:
+            conditions.append("business_context_id IS NULL")
         if contact_type:
             conditions.append(f"contact_type = ${idx}")
             params.append(contact_type)
             idx += 1
+        if lead_stage:
+            conditions.append(f"lead_stage = ${idx}")
+            params.append(lead_stage)
+            idx += 1
+        if lead_owner:
+            conditions.append(f"lead_owner = ${idx}")
+            params.append(lead_owner)
+            idx += 1
+        if next_follow_up_before is not None:
+            conditions.append(f"next_follow_up_at <= ${idx}")
+            params.append(next_follow_up_before)
+            idx += 1
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         params.extend([limit, max(0, offset)])
+        order_by = (
+            "next_follow_up_at ASC, full_name ASC"
+            if next_follow_up_before is not None
+            else "full_name ASC"
+        )
         rows = await pool.fetch(
             f"""
             SELECT * FROM contacts {where}
-            ORDER BY full_name ASC
+            ORDER BY {order_by}
             LIMIT ${idx} OFFSET ${idx + 1}
             """,
             *params,
         )
         return [dict(r) for r in rows]
+
+    async def open_customer_service_ticket(
+        self,
+        *,
+        contact_id: str,
+        business_context_id: str,
+        summary: str,
+        details: Optional[str] = None,
+        priority: Optional[str] = None,
+        assignee: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Atomically claim a visible contact and open its tenant ticket."""
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            WITH visible_contact AS (
+                UPDATE contacts
+                   SET business_context_id = $2,
+                       updated_at = CASE
+                           WHEN business_context_id IS NULL THEN NOW()
+                           ELSE updated_at
+                       END
+                 WHERE id = $1
+                   AND status != 'archived'
+                   AND (
+                       business_context_id IS NULL
+                       OR business_context_id = $2
+                   )
+                 RETURNING id
+            )
+            INSERT INTO customer_service_tickets (
+                contact_id,
+                business_context_id,
+                summary,
+                details,
+                priority,
+                assignee
+            )
+            SELECT id, $2, $3, $4, $5, $6
+            FROM visible_contact
+            RETURNING *
+            """,
+            contact_id,
+            business_context_id,
+            summary,
+            details,
+            priority,
+            assignee,
+        )
+        return dict(row) if row else None
+
+    async def list_customer_service_tickets(
+        self,
+        *,
+        business_context_id: str,
+        status: Optional[str] = "open",
+        contact_id: Optional[str] = None,
+        priority: Optional[str] = None,
+        assignee: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List one tenant's tickets with every filter applied before paging."""
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = ["business_context_id = $1"]
+        params: list[Any] = [business_context_id]
+
+        for column, value in (
+            ("status", status),
+            ("contact_id", contact_id),
+            ("priority", priority),
+            ("assignee", assignee),
+        ):
+            if value is not None:
+                params.append(value)
+                conditions.append(f"{column} = ${len(params)}")
+
+        params.extend([limit, max(0, offset)])
+        rows = await pool.fetch(
+            f"""
+            SELECT *
+            FROM customer_service_tickets
+            WHERE {' AND '.join(conditions)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ${len(params) - 1} OFFSET ${len(params)}
+            """,
+            *params,
+        )
+        return [dict(row) for row in rows]
+
+    async def update_customer_service_ticket(
+        self,
+        *,
+        ticket_id: str,
+        business_context_id: str,
+        data: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Update mutable fields only while the tenant ticket is open."""
+        from ..storage.database import get_db_pool
+
+        allowed = {"summary", "details", "priority", "assignee"}
+        updates = {key: value for key, value in data.items() if key in allowed}
+        if not updates:
+            return None
+
+        params: list[Any] = [ticket_id, business_context_id]
+        assignments: list[str] = []
+        for key, value in updates.items():
+            params.append(value)
+            assignments.append(f"{key} = ${len(params)}")
+        assignments.append("updated_at = NOW()")
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            f"""
+            UPDATE customer_service_tickets
+               SET {', '.join(assignments)}
+             WHERE id = $1
+               AND business_context_id = $2
+               AND status = 'open'
+             RETURNING *
+            """,
+            *params,
+        )
+        return dict(row) if row else None
+
+    async def close_customer_service_ticket(
+        self,
+        *,
+        ticket_id: str,
+        business_context_id: str,
+        resolution: str,
+    ) -> Optional[dict[str, Any]]:
+        """Close once; retries return the original tenant-scoped resolution."""
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            WITH locked_ticket AS (
+                SELECT *
+                FROM customer_service_tickets
+                WHERE id = $1
+                  AND business_context_id = $2
+                FOR UPDATE
+            ),
+            closed_now AS (
+                UPDATE customer_service_tickets AS ticket
+                   SET status = 'closed',
+                       resolution = $3,
+                       closed_at = NOW(),
+                       updated_at = NOW()
+                  FROM locked_ticket
+                 WHERE ticket.id = locked_ticket.id
+                   AND locked_ticket.status = 'open'
+                 RETURNING ticket.*, false AS already_closed
+            )
+            SELECT * FROM closed_now
+            UNION ALL
+            SELECT locked_ticket.*, true AS already_closed
+            FROM locked_ticket
+            WHERE locked_ticket.status = 'closed'
+              AND NOT EXISTS (SELECT 1 FROM closed_now)
+            LIMIT 1
+            """,
+            ticket_id,
+            business_context_id,
+            resolution,
+        )
+        return dict(row) if row else None
 
     async def log_interaction(
         self,
@@ -426,6 +767,9 @@ class DatabaseCRMProvider:
         )
         result = dict(row) if row else {}
         inserted = bool(result.pop("_inserted", False))
+        # Public flag for callers that gate side effects (e.g. acknowledgement
+        # emails) on first-time-vs-duplicate; the raw column is stripped above.
+        result["inserted"] = inserted
 
         if inserted:
             # Emit event for reasoning agent only for new interactions.
@@ -452,41 +796,179 @@ class DatabaseCRMProvider:
         return result
 
     async def get_interactions(
-        self, contact_id: str, limit: int = 20
+        self, contact_id: str, limit: int = 20,
+        business_context_id: Optional[str] = None,
+        include_unclaimed_legacy: bool = True,
     ) -> list[dict[str, Any]]:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
-        rows = await pool.fetch(
-            """
-            SELECT * FROM contact_interactions
-            WHERE contact_id = $1
-            ORDER BY occurred_at DESC
-            LIMIT $2
-            """,
-            contact_id,
-            limit,
-        )
+        if business_context_id:
+            contact_scope = (
+                "(c.business_context_id = $2 OR c.business_context_id IS NULL)"
+                if include_unclaimed_legacy
+                else "c.business_context_id = $2"
+            )
+            # Atomic tenant predicate: the page only returns while the owning
+            # contact remains visible under the caller's selected strict or
+            # tenant-plus-legacy mode.
+            rows = await pool.fetch(
+                f"""
+                SELECT ci.* FROM contact_interactions ci
+                JOIN contacts c ON c.id = ci.contact_id
+                WHERE ci.contact_id = $1
+                  AND {contact_scope}
+                ORDER BY ci.occurred_at DESC
+                LIMIT $3
+                """,
+                contact_id,
+                business_context_id,
+                limit,
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT * FROM contact_interactions
+                WHERE contact_id = $1
+                ORDER BY occurred_at DESC
+                LIMIT $2
+                """,
+                contact_id,
+                limit,
+            )
         return [dict(r) for r in rows]
 
+    async def update_contact_appointment_operations(
+        self,
+        *,
+        contact_id: str,
+        appointment_id: str,
+        business_context_id: str,
+        data: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Claim a visible contact and update one linked tenant appointment."""
+        from ..storage.database import get_db_pool
+
+        allowed = {
+            "recurrence_interval",
+            "recurrence_unit",
+            "assigned_cleaner",
+            "per_visit_price",
+        }
+        updates = {key: value for key, value in data.items() if key in allowed}
+        if not updates:
+            return None
+
+        params: list[Any] = [contact_id, appointment_id, business_context_id]
+        assignments: list[str] = []
+        for key, value in updates.items():
+            params.append(value)
+            assignments.append(f"{key} = ${len(params)}")
+        assignments.append("updated_at = NOW()")
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            f"""
+            WITH target_appointment AS (
+                SELECT id, contact_id
+                FROM appointments
+                WHERE id = $2
+                  AND contact_id = $1
+                  AND business_context_id = $3
+            ),
+            visible_contact AS (
+                UPDATE contacts AS contact
+                   SET business_context_id = $3,
+                       updated_at = CASE
+                           WHEN contact.business_context_id IS NULL THEN NOW()
+                           ELSE contact.updated_at
+                       END
+                  FROM target_appointment AS appointment
+                 WHERE contact.id = appointment.contact_id
+                   AND contact.status != 'archived'
+                   AND (
+                       contact.business_context_id IS NULL
+                       OR contact.business_context_id = $3
+                   )
+                 RETURNING contact.id
+            )
+            UPDATE appointments AS appointment
+               SET {', '.join(assignments)}
+              FROM visible_contact AS contact
+             WHERE appointment.id = $2
+               AND appointment.contact_id = contact.id
+               AND appointment.business_context_id = $3
+             RETURNING appointment.*
+            """,
+            *params,
+        )
+        return dict(row) if row else None
+
     async def get_contact_appointments(
-        self, contact_id: str
+        self,
+        contact_id: str,
+        business_context_id: Optional[str] = None,
+        include_unclaimed_legacy: bool = True,
     ) -> list[dict[str, Any]]:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
-        rows = await pool.fetch(
-            """
-            SELECT id, start_time, end_time, service_type, status,
-                   customer_name, customer_phone, customer_email,
-                   customer_address, notes, created_at
-            FROM appointments
-            WHERE contact_id = $1
-            ORDER BY start_time DESC
-            LIMIT 50
-            """,
-            contact_id,
-        )
+        if business_context_id:
+            contact_scope = (
+                """
+                (
+                    contact.business_context_id IS NULL
+                    OR contact.business_context_id = $2
+                )
+                """
+                if include_unclaimed_legacy
+                else "contact.business_context_id = $2"
+            )
+            rows = await pool.fetch(
+                f"""
+                SELECT appointment.id,
+                       appointment.start_time,
+                       appointment.end_time,
+                       appointment.service_type,
+                       appointment.status,
+                       appointment.customer_name,
+                       appointment.customer_phone,
+                       appointment.customer_email,
+                       appointment.customer_address,
+                       appointment.notes,
+                       appointment.created_at,
+                       appointment.business_context_id,
+                       appointment.recurrence_interval,
+                       appointment.recurrence_unit,
+                       appointment.assigned_cleaner,
+                       appointment.per_visit_price
+                FROM appointments AS appointment
+                JOIN contacts AS contact
+                  ON contact.id = appointment.contact_id
+                WHERE appointment.contact_id = $1
+                  AND appointment.business_context_id = $2
+                  AND {contact_scope}
+                ORDER BY appointment.start_time DESC
+                LIMIT 50
+                """,
+                contact_id,
+                business_context_id,
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT id, start_time, end_time, service_type, status,
+                       customer_name, customer_phone, customer_email,
+                       customer_address, notes, created_at, business_context_id,
+                       recurrence_interval, recurrence_unit, assigned_cleaner,
+                       per_visit_price
+                FROM appointments
+                WHERE contact_id = $1
+                ORDER BY start_time DESC
+                LIMIT 50
+                """,
+                contact_id,
+            )
         return [dict(r) for r in rows]
 
 

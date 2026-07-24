@@ -6,15 +6,24 @@ Provides CRUD operations for invoices and payments stored in PostgreSQL.
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from ..database import get_db_pool
 from ..exceptions import DatabaseUnavailableError, DatabaseOperationError
 
 logger = logging.getLogger("atlas.storage.invoice")
+
+
+@dataclass(frozen=True)
+class InvoicePaymentRecordOutcome:
+    """Internal singular-payment result with atomic replay classification."""
+
+    payment: dict[str, Any]
+    replayed: bool
 
 
 def _line_items_are_billable(items: list[dict]) -> bool:
@@ -47,6 +56,27 @@ def _line_items_with_amounts(items: list[dict], *, overwrite: bool) -> list[dict
 class InvoiceRepository:
     """Repository for invoice and payment storage and retrieval."""
 
+    def __init__(
+        self,
+        *,
+        pool: Any = None,
+        receivables_service: Any = None,
+    ) -> None:
+        self._pool_override = pool
+        self._receivables_service_override = receivables_service
+
+    def _get_pool(self) -> Any:
+        if self._pool_override is not None:
+            return self._pool_override
+        return get_db_pool()
+
+    def _get_receivables_service(self) -> Any:
+        if self._receivables_service_override is not None:
+            return self._receivables_service_override
+        from ...services.receivables import get_receivables_service
+
+        return get_receivables_service()
+
     # -- Invoice CRUD ----------------------------------------------
 
     async def create(
@@ -78,7 +108,7 @@ class InvoiceRepository:
         day of the period when invoicing past work (e.g. April 1 for an
         April-billing invoice issued in early May).
         """
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("create invoice")
 
@@ -161,7 +191,7 @@ class InvoiceRepository:
 
     async def get_by_id(self, invoice_id: UUID) -> Optional[dict]:
         """Get an invoice by ID."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get invoice by id")
 
@@ -175,7 +205,7 @@ class InvoiceRepository:
 
     async def get_by_source_ref(self, source_ref: str) -> Optional[dict]:
         """Get an invoice by source_ref (for deduplication)."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get invoice by source_ref")
 
@@ -191,7 +221,7 @@ class InvoiceRepository:
 
     async def get_by_number(self, invoice_number: str) -> Optional[dict]:
         """Get an invoice by invoice number (e.g. INV-2026-0001)."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get invoice by number")
 
@@ -208,7 +238,7 @@ class InvoiceRepository:
 
     async def get_by_contact_id(self, contact_id: UUID, limit: int = 20) -> list[dict]:
         """Get invoices for a CRM contact."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get invoices by contact")
 
@@ -240,7 +270,7 @@ class InvoiceRepository:
         void_reason: Optional[str] = None,
     ) -> None:
         """Update invoice status and related timestamps."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("update invoice status")
 
@@ -283,7 +313,7 @@ class InvoiceRepository:
         contact_name: Optional[str] = None,
     ) -> Optional[dict]:
         """Update a draft invoice. Only draft invoices can be edited."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("update invoice")
 
@@ -366,7 +396,7 @@ class InvoiceRepository:
         limit: int = 50,
     ) -> list[dict]:
         """Get outstanding invoices (sent, partial, overdue)."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get outstanding invoices")
 
@@ -401,7 +431,7 @@ class InvoiceRepository:
 
     async def get_overdue(self, as_of_date: Optional[date] = None) -> list[dict]:
         """Get invoices past due date that are still unpaid."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get overdue invoices")
 
@@ -411,7 +441,8 @@ class InvoiceRepository:
                 """
                 SELECT * FROM invoices
                 WHERE due_date < $1
-                  AND status IN ('sent', 'partial')
+                  AND status IN ('sent', 'partial', 'overdue')
+                  AND amount_due > 0
                 ORDER BY due_date ASC
                 LIMIT 500
                 """,
@@ -429,7 +460,7 @@ class InvoiceRepository:
 
     async def update_reminder(self, invoice_id: UUID) -> None:
         """Increment reminder count and update last_reminder_at."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("update invoice reminder")
 
@@ -460,7 +491,7 @@ class InvoiceRepository:
         limit: int = 50,
     ) -> list[dict]:
         """Search invoices with multiple filters."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("search invoices")
 
@@ -522,55 +553,84 @@ class InvoiceRepository:
         notes: Optional[str] = None,
         recorded_by: Optional[str] = None,
         metadata: Optional[dict] = None,
+        idempotency_key: Optional[str] = None,
     ) -> dict:
-        """Record a payment and auto-update invoice status."""
-        pool = get_db_pool()
-        if not pool.is_initialized:
-            raise DatabaseUnavailableError("record payment")
+        """Compatibility wrapper for a one-invoice receipt."""
+        outcome = await self.record_payment_with_outcome(
+            invoice_id=invoice_id,
+            amount=amount,
+            payment_method=payment_method,
+            payment_date=payment_date,
+            reference=reference,
+            notes=notes,
+            recorded_by=recorded_by,
+            metadata=metadata,
+            idempotency_key=idempotency_key,
+        )
+        return outcome.payment
 
-        payment_id = uuid4()
-        pay_date = payment_date or date.today()
-        now = datetime.now(timezone.utc)
-
+    async def record_payment_with_outcome(
+        self,
+        invoice_id: UUID,
+        amount: float,
+        payment_method: str = "other",
+        payment_date: Optional[date] = None,
+        reference: Optional[str] = None,
+        notes: Optional[str] = None,
+        recorded_by: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> InvoicePaymentRecordOutcome:
+        """Record one invoice payment and retain first-write/replay state internally."""
+        invoice = await self.get_by_id(invoice_id)
+        if not invoice:
+            raise DatabaseOperationError(
+                "record payment", Exception(f"Invoice not found: {invoice_id}")
+            )
         try:
-            # Insert payment
-            pay_row = await pool.fetchrow(
-                """
-                INSERT INTO invoice_payments (
-                    id, invoice_id, amount, payment_date, payment_method,
-                    reference, notes, recorded_by, created_at, metadata
+            # The long-lived singular MCP tool historically accepted calls without
+            # an idempotency key. Preserve that surface and its append semantics:
+            # two identical-looking receipts may be two real payments. Callers that
+            # need retry deduplication must supply and reuse an operation key.
+            compatibility_key = idempotency_key or f"invoice-repository-{uuid4()}"
+
+            receipt_outcome = (
+                await self._get_receivables_service().create_payment_with_outcome(
+                    contact_id=invoice.get("contact_id"),
+                    payer_name=invoice["customer_name"],
+                    total_amount=Decimal(str(amount)),
+                    payment_method=payment_method,
+                    received_date=payment_date or date.today(),
+                    allocations=[{"invoice_id": invoice_id, "amount": amount}],
+                    reference=reference,
+                    notes=notes,
+                    recorded_by=recorded_by,
+                    metadata=metadata,
+                    source="invoice_repository",
+                    idempotency_key=compatibility_key,
+                    enforce_api_methods=False,
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
-                RETURNING *
-                """,
-                payment_id,
-                invoice_id,
-                amount,
-                pay_date,
-                payment_method,
-                reference,
-                notes,
-                recorded_by,
-                now,
-                json.dumps(metadata or {}),
             )
-
-            # Recalculate amount_paid from all payments
-            await self._recalculate_amount_paid(invoice_id)
-
-            # Auto-derive status
-            inv = await self.get_by_id(invoice_id)
-            if inv:
-                if float(inv["amount_due"]) <= 0:
-                    await self.update_status(invoice_id, "paid", paid_at=now)
-                elif float(inv["amount_paid"]) > 0 and inv["status"] in ("sent", "overdue"):
-                    await self.update_status(invoice_id, "partial")
-
-            logger.info(
-                "Recorded payment %s on invoice %s: $%.2f via %s",
-                payment_id, invoice_id, amount, payment_method,
+            receipt = receipt_outcome.payment
+            allocation = next(
+                item
+                for item in receipt["allocations"]
+                if str(item["invoice_id"]) == str(invoice_id)
             )
-            return self._payment_row_to_dict(pay_row) if pay_row else {}
+            return InvoicePaymentRecordOutcome(
+                payment={
+                    **allocation,
+                    "payment_id": receipt["id"],
+                    "payment_date": receipt["received_date"],
+                    "payment_method": receipt["payment_method"],
+                    "reference": receipt.get("reference"),
+                    "notes": receipt.get("notes"),
+                    "recorded_by": receipt.get("recorded_by"),
+                    "idempotency_key": receipt.get("idempotency_key"),
+                    "status": receipt["status"],
+                },
+                replayed=receipt_outcome.replayed,
+            )
         except (DatabaseUnavailableError, DatabaseOperationError):
             raise
         except Exception as e:
@@ -579,15 +639,19 @@ class InvoiceRepository:
 
     async def get_payments(self, invoice_id: UUID) -> list[dict]:
         """Get all payments for an invoice."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get payments")
 
         try:
             rows = await pool.fetch(
                 """
-                SELECT * FROM invoice_payments
-                WHERE invoice_id = $1
+                SELECT ip.*, COALESCE(cp.status, 'legacy') AS payment_status,
+                       COALESCE(cp.total_amount, ip.amount) AS receipt_total_amount
+                FROM invoice_payments ip
+                LEFT JOIN customer_payments cp ON cp.id = ip.payment_id
+                WHERE ip.invoice_id = $1
+                  AND ip.reversed_at IS NULL
                 ORDER BY payment_date DESC
                 LIMIT 200
                 """,
@@ -601,7 +665,7 @@ class InvoiceRepository:
 
     async def get_customer_balance(self, contact_id: UUID) -> dict:
         """Get aggregate balance for a customer."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get customer balance")
 
@@ -631,7 +695,7 @@ class InvoiceRepository:
 
     async def get_payment_behavior(self, contact_id: UUID) -> dict:
         """Analyze payment behavior: on-time rate, avg days to pay."""
-        pool = get_db_pool()
+        pool = self._get_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get payment behavior")
 
@@ -645,9 +709,14 @@ class InvoiceRepository:
                         i.status,
                         i.total_amount,
                         i.amount_paid,
-                        MIN(p.payment_date) AS first_payment_date
+                        MIN(p.payment_date) FILTER (
+                            WHERE p.payment_id IS NULL
+                               OR cp.status IN ('legacy', 'received', 'deposited', 'cleared')
+                        ) AS first_payment_date
                     FROM invoices i
-                    LEFT JOIN invoice_payments p ON p.invoice_id = i.id
+                    LEFT JOIN invoice_payments p
+                      ON p.invoice_id = i.id AND p.reversed_at IS NULL
+                    LEFT JOIN customer_payments cp ON cp.id = p.payment_id
                     WHERE i.contact_id = $1
                       AND i.status NOT IN ('void', 'draft')
                     GROUP BY i.id
@@ -678,20 +747,8 @@ class InvoiceRepository:
     # -- Helpers ---------------------------------------------------
 
     async def _recalculate_amount_paid(self, invoice_id: UUID) -> None:
-        """Recalculate amount_paid from sum of payments."""
-        pool = get_db_pool()
-        await pool.execute(
-            """
-            UPDATE invoices
-            SET amount_paid = COALESCE(
-                (SELECT SUM(amount) FROM invoice_payments WHERE invoice_id = $1), 0
-            ),
-            updated_at = $2
-            WHERE id = $1
-            """,
-            invoice_id,
-            datetime.now(timezone.utc),
-        )
+        """Recalculate via the lifecycle-aware receivables ledger."""
+        await self._get_receivables_service().recalculate_invoice(invoice_id)
 
     def _row_to_dict(self, row) -> dict:
         """Convert an invoice database row to a dict."""

@@ -78,11 +78,30 @@ def test_model_for_dispatches_by_tag():
         model_for({"schema": "not_a_real.v1"})
 
 
-def test_empty_evidence_packet_is_valid():
-    # A packet with zero rows and logged gaps is a legitimate result.
+def test_empty_evidence_packet_with_gaps_is_valid():
+    # A packet with zero rows but logged gaps is the honest "no evidence" result.
     pkt = EvidencePacket.model_validate(EVIDENCE_EMPTY)
     assert pkt.evidence == []
     assert len(pkt.gaps) == 2
+
+
+def test_evidence_packet_without_evidence_or_gaps_rejected():
+    # A packet with neither evidence nor gaps cannot masquerade as an honest
+    # empty result -- it is indistinguishable from truncated worker output.
+    with pytest.raises(ValidationError):
+        EvidencePacket.model_validate(
+            {"schema": "evidence_packet.v1", "project_id": "p"}
+        )
+
+
+@pytest.mark.parametrize("blank_gaps", [[""], ["   "], ["real gap", ""]])
+def test_evidence_packet_blank_gap_rejected(blank_gaps):
+    # A blank/whitespace gap is not a logged gap; it must not satisfy the
+    # honest-empty-packet guard (gaps=[''] would otherwise slip past it).
+    with pytest.raises(ValidationError):
+        EvidencePacket.model_validate(
+            {"schema": "evidence_packet.v1", "project_id": "p", "gaps": blank_gaps}
+        )
 
 
 def test_evidence_row_without_source_id_is_rejected():
@@ -115,11 +134,10 @@ def test_brief_requires_project_and_request():
         ContentBrief.model_validate({"schema": "content_brief.v1"})
 
 
-def test_extra_keys_round_trip():
-    # extra='allow': an unknown key survives parse+dump during iteration.
-    data = {**BRIEF, "experimental_hint": "keep me"}
-    obj = ContentBrief.model_validate(data)
-    assert obj.model_dump(by_alias=True)["experimental_hint"] == "keep me"
+def test_extra_keys_rejected():
+    # extra='forbid': an unmodeled key fails closed rather than riding through.
+    with pytest.raises(ValidationError):
+        ContentBrief.model_validate({**BRIEF, "experimental_hint": "keep me"})
 
 
 def test_editorial_audit_defaults_to_revise():
@@ -148,6 +166,12 @@ def test_evidence_row_blank_quote_rejected():
 def test_evidence_row_blank_source_id_rejected():
     with pytest.raises(ValidationError):
         EvidenceRow.model_validate({"id": "e1", "quote": "real quote", "source_id": ""})
+
+
+def test_evidence_row_blank_id_rejected():
+    # A blank id cannot be referenced by Claim.source_id -> no-orphan-claim guard.
+    with pytest.raises(ValidationError):
+        EvidenceRow.model_validate({"id": "  ", "quote": "real quote", "source_id": "f#1"})
 
 
 def test_evidence_row_whitespace_only_rejected():

@@ -287,6 +287,9 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     logger.info("Atlas Brain starting up...")
     _enforce_paid_funnel_alert_channel(settings)
+    from .api.invoicing.auth import validate_receivables_api_config
+
+    validate_receivables_api_config(settings.invoicing)
 
     # Initialize database connection pool
     if db_settings.enabled:
@@ -964,6 +967,13 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
+
+# Path-scoped, credential-free CORS for the public EOM lead-intake form.
+# Added AFTER CORSMiddleware so it runs first and browser preflights for the
+# intake path are answered here instead of being rejected by the app-wide
+# credentialed policy (which deliberately excludes the marketing site).
+from .api.leads import LeadIntakeCORSMiddleware  # noqa: E402
+app.add_middleware(LeadIntakeCORSMiddleware)
 
 
 @app.get("/.well-known/security.txt", include_in_schema=False)

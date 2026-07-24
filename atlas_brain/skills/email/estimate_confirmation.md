@@ -41,6 +41,6 @@ Compose the email in this exact order:
 - For **residential** estimates: mention that pricing is typically provided during the visit
 - For **commercial** estimates: mention that a detailed proposal will follow the visit
 - Keep the entire email body under **150 words**
-- Always include business contact: (217) 821-2370 or info@effinghamofficemaids.com
+- Always include business contact: (217) 207-3097 or info@effinghamofficemaids.com
 - Subject line format: Your Estimate Appointment is Confirmed -- [Date]
 - Do NOT use markdown formatting in the email body -- plain text with line breaks only

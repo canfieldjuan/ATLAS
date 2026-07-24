@@ -716,6 +716,27 @@ class ToolsConfig(BaseSettings):
     calendar_id: str = Field(default="primary", description="Calendar ID to query")
     calendar_cache_ttl: float = Field(default=300.0, description="Cache TTL in seconds")
 
+    # EOM booking calendars (live customer import, scripts/import_eom_customers_live.py).
+    # Ids are deployment config -- they stay in .env, never in this public repo.
+    eom_calendar_commercial: str | None = Field(
+        default=None, description="EOM Commercial Customers calendar id"
+    )
+    eom_calendar_residential: str | None = Field(
+        default=None, description="EOM Residential Customers calendar id"
+    )
+    eom_calendar_one_time: str | None = Field(
+        default=None, description="EOM One-Time Cleanings calendar id"
+    )
+
+    # EOM portal sync (scripts/sync_eom_portal_customers.py). Optional
+    # non-interactive auth + base URL; the script prompts when absent.
+    eom_portal_token: str | None = Field(
+        default=None, description="Pre-obtained EOM portal admin token"
+    )
+    eom_portal_base_url: str | None = Field(
+        default=None, description="EOM portal backend base URL override"
+    )
+
     # CalDAV calendar (provider-agnostic alternative to Google Calendar)
     # Works with Nextcloud, Apple Calendar, Fastmail, Proton Calendar, SOGo, Baikal, etc.
     caldav_url: str | None = Field(
@@ -2238,6 +2259,14 @@ class InvoicingConfig(BaseSettings):
         env_prefix="ATLAS_INVOICING_", env_file=ENV_FILES, extra="ignore"
     )
     enabled: bool = Field(default=False, description="Enable invoicing system")
+    receivables_api_enabled: bool = Field(
+        default=False,
+        description="Enable the authenticated EOM receivables service API",
+    )
+    receivables_service_token: str = Field(
+        default="",
+        description="Bearer token accepted by the EOM receivables service API",
+    )
     default_payment_terms_days: int = Field(default=30, ge=1, le=365, description="Default days until due")
     default_tax_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Default tax rate (0.0-1.0)")
     reminders_enabled: bool = Field(default=True, description="Master toggle for the payment-reminder cron task")
@@ -5238,6 +5267,14 @@ class MCPConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ATLAS_MCP_", env_file=ENV_FILES, extra="ignore")
 
     client_enabled: bool = Field(default=True, description="Enable Atlas as MCP client")
+    crm_default_business_context: str | None = Field(
+        default=None,
+        description=(
+            "Default business_context_id applied by CRM MCP read tools when the "
+            "caller passes none (issue #2151 read scoping). Scoped reads also "
+            "include NULL-context legacy rows; an explicit argument always wins."
+        ),
+    )
     crm_enabled: bool = Field(default=True, description="Enable CRM MCP server")
     email_enabled: bool = Field(default=True, description="Enable Email MCP server")
     calendar_enabled: bool = Field(default=True, description="Enable Calendar MCP server")
