@@ -30,9 +30,13 @@ carries operator-authorized corrections and same-category coverage broadening:
 Categories (all promote-blocking -- "Do not post yet"): forbidden OUTCOME claims
 (guaranteed savings, fixed deflection %, ticket reductions), forbidden AUTOMATION claims
 (auto-publishing / auto-answering), REPLACING-AGENTS / avoided-hire claims, and raw
-contact PII (email / phone). The source tool's softer "needs human review" layer
-(answer/ownership qualifiers, owner-routing coverage, CTA reminder) is a later slice, as
-is wiring this producer into the runner / Phase 4.2 Filter.
+contact PII (email / phone).
+
+ADVISORY LAYER (#2136 item 2). ``advisory_warnings`` ports the source tool's softer
+"needs human review" checks: owner-routing coverage, unqualified answer/ownership
+claims, and the honest-CTA reminder. Warnings NEVER affect the verdict or promotion --
+they are a reviewer checklist persisted on the audit artifact. Evidence sentences are
+PII-redacted before recording, like the gate's claim hits.
 """
 
 from __future__ import annotations
@@ -108,6 +112,36 @@ _NEGATION_RE = re.compile(r"\b(?:no|not|never|without|cannot)\b|n't\b", re.I)
 _EMPHATIC_RE = re.compile(r"\bnot\s+(?:only|just)\b", re.I)
 
 
+# --- Advisory-layer patterns (ported from the operator's OWUI verifier tool) ---
+_ANSWER_RE = re.compile(
+    r"\b(answer|answers|resolution|resolutions|drafted answer)\b", re.I
+)
+_ANSWER_QUALIFIER_RE = re.compile(
+    r"\b(agent resolution|scoped resolution|when (?:that )?evidence exists|if (?:the )?tickets contain|no proven answer)\b",
+    re.I,
+)
+_REPORT_SHAPE_RE = re.compile(
+    r"\b(?:resolution\s+audit|resolution\s+snapshot|snapshot|report|audit|action\s+queue|ranked|ranks|drafts?|faqs?|repeated\s+questions?)\b",
+    re.I,
+)
+_OWNER_ROUTING_RE = re.compile(
+    r"\b(?:owner|owners|ownership|owner\s+lane|routing|route|routes|routed|department|team|product|billing|policy|process|documentation|docs|support\s+ops|operations|who\s+needs\s+to\s+(?:fix|review)|needs\s+to\s+(?:fix|review)|responsible)\b",
+    re.I,
+)
+_OWNERSHIP_RE = re.compile(
+    r"\b(?:engineering|product|support|cx|policy|ops|operations|billing|success|content|docs|documentation|legal)\s+(?:owns?|is responsible for|are responsible for|should own|must own)\b|\b(?:owned by|responsible for)\b",
+    re.I,
+)
+_OWNERSHIP_QUALIFIER_RE = re.compile(
+    r"\b(probable|probably|may|might|could|likely|often|appears|seems|investigate|route|routing|signal)\b",
+    re.I,
+)
+
+_CTA_REMINDER = (
+    "reminder: confirm the CTA matches the channel and offer posture"
+)
+
+
 def _is_negated(text: str, start: int) -> bool:
     """True when the claim at ``start`` is negated by the words IMMEDIATELY before it.
 
@@ -144,6 +178,67 @@ def _claim_hits(text: str) -> list[str]:
                 if not _is_negated(text, match.start()):
                     hits.append(f"{code}: {_redact_pii(match.group(0))}")
     return hits
+
+
+def _sentence_at(text: str, start: int) -> str:
+    """The sentence containing ``start`` (sentence marks: ``.!?`` or newline)."""
+    sentence_start = max(text.rfind(mark, 0, start) for mark in ".!?\n")
+    ends = [idx for mark in ".!?\n" if (idx := text.find(mark, start)) != -1]
+    sentence_end = min(ends) if ends else len(text)
+    return text[sentence_start + 1 : sentence_end].strip()
+
+
+def _unqualified_sentences(
+    text: str, word_re: "re.Pattern[str]", qualifier_re: "re.Pattern[str]", code: str
+) -> list[str]:
+    """"code: sentence" for each sentence that makes a claim with none of the
+    accepted qualifier phrases; the recorded sentence is PII-redacted."""
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for match in word_re.finditer(text):
+        sentence = _sentence_at(text, match.start())
+        if sentence in seen:
+            continue
+        seen.add(sentence)
+        if not qualifier_re.search(sentence):
+            warnings.append(f"{code}: {sentence or match.group(0)}")
+    return warnings
+
+
+def advisory_warnings(text: str) -> list[str]:
+    """Deterministic non-blocking reviewer checklist for draft copy (#2136
+    item 2, ported from the operator's OWUI verifier tool).
+
+    Produces "needs human review" warnings -- unqualified answer/resolution
+    claims, unqualified ownership assertions, report-shape copy that omits
+    owner routing, and the standing honest-CTA reminder. Warnings NEVER
+    change the ``verify_copy`` verdict and never block promotion; they are
+    persisted on the audit artifact for the approving human. The CTA
+    reminder is unconditional by design, mirroring the source tool: every
+    audit carries at least that one checklist line.
+    """
+    if not isinstance(text, str):
+        raise TypeError("advisory_warnings requires a string; draft body is text")
+
+    # PII is redacted from the WHOLE text before any sentence extraction: the
+    # sentence splitter breaks on the dot inside an email address, and the
+    # truncated remainder ("bob@example") would no longer match the redaction
+    # pattern -- per-sentence redaction leaks exactly that fragment.
+    text = _redact_pii(text)
+
+    warnings = _unqualified_sentences(
+        text, _ANSWER_RE, _ANSWER_QUALIFIER_RE, "unqualified-answer-claim"
+    )
+    warnings += _unqualified_sentences(
+        text, _OWNERSHIP_RE, _OWNERSHIP_QUALIFIER_RE, "unqualified-ownership-claim"
+    )
+    if _REPORT_SHAPE_RE.search(text) and not _OWNER_ROUTING_RE.search(text):
+        warnings.append(
+            "owner-routing-coverage: draft explains the report shape but omits "
+            "owner routing or who should review the fix"
+        )
+    warnings.append(_CTA_REMINDER)
+    return warnings
 
 
 def verify_copy(text: str) -> CopyVerification:

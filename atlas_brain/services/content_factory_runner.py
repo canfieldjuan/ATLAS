@@ -17,7 +17,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from atlas_brain.services.content_factory_copy_verification import verify_copy
+from atlas_brain.services.content_factory_copy_verification import (
+    advisory_warnings,
+    verify_copy,
+)
 from atlas_brain.services.content_factory_store import DEFAULT_ROOT, write_artifact
 
 DEFAULT_OWUI_URL = "http://127.0.0.1:8080"
@@ -124,8 +127,14 @@ def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
             "verdict": "fail",
             "hits": ["unverified-copy: edited_body_markdown is empty; nothing was verified"],
         }
+        # No copy, no checklist: worker-supplied warnings are discarded too.
+        artifact["advisory_warnings"] = []
         return
     artifact["copy_verification"] = verify_copy(edited).model_dump()
+    # Same self-report discipline as the verdict: the advisory checklist is
+    # computed deterministically from the edited copy, never taken from the
+    # worker (a fabricated empty list would blind the reviewing human).
+    artifact["advisory_warnings"] = advisory_warnings(edited)
 
 
 def run_stage(

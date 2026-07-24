@@ -190,6 +190,10 @@ class EditorialAudit(BaseModel):
     voice_pass: bool = False
     orphan_claims: list[str] = Field(default_factory=list)
     copy_verification: Optional[CopyVerification] = None
+    # Non-blocking reviewer checklist (#2136 item 2): deterministic advisory
+    # warnings from the copy-verification module. Deliberately NOT referenced
+    # by any validator -- warnings never gate the recommendation.
+    advisory_warnings: list[str] = Field(default_factory=list)
     recommendation: Recommendation = "revise"
     prompt_version: Optional[str] = None
 

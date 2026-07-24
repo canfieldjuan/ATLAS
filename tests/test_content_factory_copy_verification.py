@@ -192,3 +192,88 @@ def test_forbidden_copy_may_still_recommend_revise():
     audit = EditorialAudit.model_validate(_audit("Guaranteed savings for all.", "revise"))
     assert audit.recommendation == "revise"
     assert audit.copy_verification.verdict == "fail"
+
+
+# --- advisory warning layer (#2136 item 2): non-blocking reviewer checklist ---
+
+
+def test_advisory_flags_unqualified_answer_claim():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("We draft the answer for every repeated ticket.")
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_advisory_passes_qualified_answer_claim():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "We draft the answer only when that evidence exists in your tickets."
+    )
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_advisory_flags_unqualified_ownership_claim():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("Billing owns the refund backlog.")
+    assert any(w.startswith("unqualified-ownership-claim:") for w in warnings)
+
+
+def test_advisory_passes_qualified_ownership_claim():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("Billing probably owns the refund backlog.")
+    assert not any(w.startswith("unqualified-ownership-claim:") for w in warnings)
+
+
+def test_advisory_flags_report_shape_without_owner_routing():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("The Resolution Audit snapshot ranks repeated tickets.")
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_advisory_passes_report_shape_with_owner_routing():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The Resolution Audit snapshot ranks repeated tickets and names the owner "
+        "lane that needs to review each fix."
+    )
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_advisory_cta_reminder_is_always_present():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    assert advisory_warnings("Anything at all.")[-1].startswith("reminder:")
+
+
+def test_advisory_redacts_pii_in_recorded_sentences():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "Our answer desk replies from bob@example.com within a day."
+    )
+    joined = " ".join(warnings)
+    assert "bob@example.com" not in joined
+    assert "<redacted-email>" in joined
+
+
+def test_advisory_warnings_do_not_block_promotion():
+    """Warnings are a checklist, not a gate: a passing verdict may promote
+    regardless of how many advisory warnings ride along."""
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    body = "We draft the answer for every ticket."
+    audit = dict(_audit(body, "promote"))
+    audit["advisory_warnings"] = advisory_warnings(body)
+    validated = EditorialAudit.model_validate(audit)
+    assert validated.recommendation == "promote"
+    assert len(validated.advisory_warnings) >= 2  # claim warning + reminder
+
+
+def test_advisory_warnings_require_no_field_for_old_artifacts():
+    audit = EditorialAudit.model_validate(_audit(CLEAN, "revise"))
+    assert audit.advisory_warnings == []

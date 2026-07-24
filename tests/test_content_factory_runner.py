@@ -211,3 +211,38 @@ def test_custom_stage_audit_is_also_gated(tmp_path, monkeypatch):
     with pytest.raises(ValidationError):
         runner.run_stage("job1", "audit-v2", "m", "req", api_key="k", root=tmp_path)
     assert not job_dir("job1", root=tmp_path).exists()
+
+
+def test_enforce_overwrites_worker_supplied_advisory_warnings():
+    """The checklist is computed from the edited copy, never taken from the
+    worker: a fabricated empty list must not blind the reviewer."""
+    from atlas_brain.services.content_factory_runner import _enforce_copy_verification
+
+    artifact = {
+        "schema": "editorial_audit.v1",
+        "project_id": "p",
+        "edited_body_markdown": "We draft the answer for every repeated ticket.",
+        "recommendation": "revise",
+        "advisory_warnings": [],
+    }
+    _enforce_copy_verification(artifact)
+    assert any(
+        w.startswith("unqualified-answer-claim:")
+        for w in artifact["advisory_warnings"]
+    )
+    assert artifact["advisory_warnings"][-1].startswith("reminder:")
+
+
+def test_enforce_clears_warnings_with_empty_body():
+    from atlas_brain.services.content_factory_runner import _enforce_copy_verification
+
+    artifact = {
+        "schema": "editorial_audit.v1",
+        "project_id": "p",
+        "edited_body_markdown": "  ",
+        "recommendation": "revise",
+        "advisory_warnings": ["fabricated: looks reviewed"],
+    }
+    _enforce_copy_verification(artifact)
+    assert artifact["advisory_warnings"] == []
+    assert artifact["copy_verification"]["verdict"] == "fail"
