@@ -106,9 +106,15 @@ _RULES: dict[str, list[tuple[str, str]]] = {
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 _PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})\b")
 # International formats: a +country-code prefix followed by 7-12 digits with
-# optional separators ("+44 20 7946 0958"). Over-matching here is safe: this
-# feeds redaction and the PII block, both fail-closed directions.
+# optional separators ("+44 20 7946 0958"). REDACTION-ONLY: the gate's
+# blocking scope is a separate operator decision (this slice's contract
+# freezes verdict semantics); over-redacting evidence is harmless.
 _INTL_PHONE_RE = re.compile(r"\+\d{1,3}(?:[\s().-]?\d){7,12}\b")
+# Phone-SHAPED local formats without a country prefix ("020 7946 0958"):
+# 9-13 digits in separator-joined groups. Also redaction-only -- a false
+# positive costs a `<redacted-phone>` marker in advisory evidence, never a
+# verdict change.
+_PHONE_SHAPED_RE = re.compile(r"\b\d(?:[\s().-]?\d){8,12}\b")
 
 # A negation directly before the claim (no/not/never/without/cannot, or an -n't
 # contraction). "not only"/"not just" are emphatic, NOT negations, and are excluded.
@@ -126,17 +132,19 @@ _ANSWER_QUALIFIER_RE = re.compile(
     re.I,
 )
 _REPORT_SHAPE_RE = re.compile(
-    r"\b(?:resolution\s+audit|resolution\s+snapshot|snapshot|report|audit|action\s+queue)\b",
+    r"\b(?:resolution\s+audit|resolution\s+snapshot|action\s+queue)\b|"
+    r"\b(?:snapshot|report|audit)s?\s+(?:that\s+)?"
+    r"(?:ranks?|lists?|shows?|includes?|names?|delivers?|contains?|identifies|surfaces?|highlights?)\b",
     re.I,
 )
 _OWNER_ROUTING_RE = re.compile(
-    r"\b(?:owner|owners|ownership|owner\s+lane|routing|route[sd]?|owned\s+by|"
-    r"assigned\s+to|responsible\s+for|who\s+needs\s+to\s+(?:fix|review)|"
-    r"needs\s+to\s+(?:fix|review))\b",
+    r"\b(?:owner\s+lane|owned\s+by|assigned\s+to|responsible\s+for|"
+    r"route[sd]?\s+(?:to|each|the)|routing|\w+\s+owns\b|"
+    r"who\s+needs\s+to\s+(?:fix|review)|needs\s+to\s+(?:fix|review))",
     re.I,
 )
 _OWNERSHIP_RE = re.compile(
-    r"\b(?:engineering|product|support|cx|policy|ops|operations|billing|success|content|docs|documentation|legal)\s+(?:owns?|is responsible for|are responsible for|should own|must own)\b|\b(?:owned by|responsible for)\b",
+    r"\b(?:engineering|product|support|cx|policy|ops|operations|billing|success|content|docs|documentation|legal|team|owner)s?\s+(?:owns?|is\s+responsible\s+for|are\s+responsible\s+for|should\s+own|must\s+own)\b|\bowned\s+by\b",
     re.I,
 )
 _OWNERSHIP_QUALIFIER_RE = re.compile(
@@ -173,6 +181,7 @@ def _redact_pii(evidence: str) -> str:
     evidence = _EMAIL_RE.sub("<redacted-email>", evidence)
     evidence = _INTL_PHONE_RE.sub("<redacted-phone>", evidence)
     evidence = _PHONE_RE.sub("<redacted-phone>", evidence)
+    evidence = _PHONE_SHAPED_RE.sub("<redacted-phone>", evidence)
     return evidence
 
 
@@ -197,7 +206,7 @@ def _sentence_at(text: str, start: int) -> str:
 
 
 _CLAUSE_BOUNDARY_RE = re.compile(
-    r"[,;:]|\b(?:but|however|while|whereas|although|yet)\b", re.I
+    r"[.!?;,:\n]|\b(?:but|however|while|whereas|although|yet)\b", re.I
 )
 
 
@@ -292,7 +301,7 @@ def verify_copy(text: str) -> CopyVerification:
     # PII: block on a match, but redact the value out of the persisted hit.
     if _EMAIL_RE.search(text):
         hits.append("email: <redacted>")
-    if _PHONE_RE.search(text) or _INTL_PHONE_RE.search(text):
+    if _PHONE_RE.search(text):
         hits.append("phone: <redacted>")
 
     verdict = "fail" if hits else "pass"

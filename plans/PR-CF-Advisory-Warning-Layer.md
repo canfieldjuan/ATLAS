@@ -8,6 +8,13 @@ coverage, unqualified answer/ownership claims, honest-CTA reminder) exist
 only in the opt-in OWUI tool, so a pipeline audit carries no advisory
 signal for the approving human.
 
+This slice exceeds the 400-LOC soft cap and is indivisible: the advisory
+producer, the versioned contract that carries it (v2 + frozen v1), the
+runner normalization, and the both-direction precision tests are one
+reviewable behavior -- landing the producer without the versioned carrier
+would re-open the rollback hazard round 2 flagged, and landing the carrier
+without tests would ship unproven heuristics.
+
 ### Problem-derived contract
 
 - Root cause: the deterministic gate covers blocking categories only;
@@ -69,6 +76,23 @@ Slice phase: vertical slice
   R5 (no gating change, old artifacts validate), R10 (advisory logic
   lives beside the gate it complements), R14.
 
+### Review round 2 (Codex)
+
+Nine findings, all fixed: sentence terminators added to clause boundaries;
+owner-routing suppression requires AFFIRMATIVE assignment/review language
+(bare "owner" no longer suppresses "the owner is unknown"); report-shape
+matching is relational (report-noun + output-verb, or product terms) so
+"The compliance audit passed" is silent; responsibility claims need an
+owner-like subject; international AND local phone-shaped digit runs are
+redacted in advisory evidence but the GATE expansion was REVERTED (the
+slice contract freezes verdict semantics -- widening the PII block is a
+separate operator decision); `editorial_audit.v2` carries
+advisory_warnings while v1 is FROZEN and stays admissible for the audit
+stage (rollback-safe: no v1-tagged artifact ever carries the new field;
+the runner normalizes worker output to v2); a run_stage boundary test
+proves warning persistence at the real entrypoint; the plan size table
+was re-synced to the actual diff with this override rationale.
+
 ### Review round 1 (Codex)
 
 Five precision/PII findings on the ported heuristics, all fixed: owner-routing
@@ -89,9 +113,13 @@ merged #2117 bundle on this PR's CI; same class as its jsonschema fix).
 - `atlas_brain/schemas/content_factory.py`
 - `atlas_brain/services/content_factory_copy_verification.py`
 - `atlas_brain/services/content_factory_runner.py`
+- `atlas_brain/services/content_factory_store.py` (round 2: audit stage
+  admits both audit versions)
 - `plans/PR-CF-Advisory-Warning-Layer.md`
 - `tests/test_content_factory_copy_verification.py`
 - `tests/test_content_factory_runner.py`
+- `tests/test_content_factory_schemas.py` (round 2: v2 coverage + frozen-v1
+  proofs)
 
 ## Mechanism
 
@@ -120,7 +148,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 157 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 165 passed (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered
@@ -130,10 +158,12 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 6 |
-| `atlas_brain/services/content_factory_copy_verification.py` | 105 |
-| `atlas_brain/services/content_factory_runner.py` | 12 |
-| `plans/PR-CF-Advisory-Warning-Layer.md` | 120 |
-| `tests/test_content_factory_copy_verification.py` | 90 |
-| `tests/test_content_factory_runner.py` | 35 |
-| **Total** | **~368** |
+| `.github/workflows/pre_push_audit.yml` | 2 |
+| `atlas_brain/schemas/content_factory.py` | 75 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 175 |
+| `atlas_brain/services/content_factory_runner.py` | 25 |
+| `atlas_brain/services/content_factory_store.py` | 12 |
+| `plans/PR-CF-Advisory-Warning-Layer.md` | 200 |
+| `tests/*` (three files) | 210 |
+| **Total** | **~700 gross (over the 400 soft cap; override rationale in
+"Why this slice exists")** |

@@ -133,7 +133,7 @@ _BAD_BODY = "Guaranteed savings for every team."
 
 def _editor_json(body, recommendation="revise", **extra):
     audit = {
-        "schema": "editorial_audit.v1",
+        "schema": "editorial_audit.v2",
         "project_id": "resolution-audit",
         "edited_body_markdown": body,
         "recommendation": recommendation,
@@ -219,7 +219,7 @@ def test_enforce_overwrites_worker_supplied_advisory_warnings():
     from atlas_brain.services.content_factory_runner import _enforce_copy_verification
 
     artifact = {
-        "schema": "editorial_audit.v1",
+        "schema": "editorial_audit.v2",
         "project_id": "p",
         "edited_body_markdown": "We draft the answer for every repeated ticket.",
         "recommendation": "revise",
@@ -237,7 +237,7 @@ def test_enforce_clears_warnings_with_empty_body():
     from atlas_brain.services.content_factory_runner import _enforce_copy_verification
 
     artifact = {
-        "schema": "editorial_audit.v1",
+        "schema": "editorial_audit.v2",
         "project_id": "p",
         "edited_body_markdown": "  ",
         "recommendation": "revise",
@@ -246,3 +246,28 @@ def test_enforce_clears_warnings_with_empty_body():
     _enforce_copy_verification(artifact)
     assert artifact["advisory_warnings"] == []
     assert artifact["copy_verification"]["verdict"] == "fail"
+
+
+def test_run_stage_persists_deterministic_warnings_and_normalizes_v1(tmp_path, monkeypatch):
+    """Reachability proof at the real entrypoint (#2181 round 2): a worker
+    reply tagged v1 with a fabricated empty checklist is normalized to v2 and
+    persisted with the DETERMINISTIC advisory warnings."""
+    reply = json.dumps(
+        {
+            "schema": "editorial_audit.v1",
+            "project_id": "p",
+            "edited_body_markdown": "We draft the answer for every repeated ticket.",
+            "recommendation": "revise",
+        }
+    )
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-adv", "audit", "cf-editor-verifier", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert rec["schema"] == "editorial_audit.v2"
+    assert stored["schema"] == "editorial_audit.v2"
+    assert any(
+        w.startswith("unqualified-answer-claim:")
+        for w in stored["advisory_warnings"]
+    )
+    assert stored["advisory_warnings"][-1].startswith("reminder:")
+    assert stored["copy_verification"]["verdict"] == "pass"

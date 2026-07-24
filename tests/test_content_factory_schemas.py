@@ -142,7 +142,7 @@ def test_extra_keys_rejected():
 
 def test_editorial_audit_defaults_to_revise():
     audit = EditorialAudit.model_validate(
-        {"schema": "editorial_audit.v1", "project_id": "resolution-audit"}
+        {"schema": "editorial_audit.v2", "project_id": "resolution-audit"}
     )
     assert audit.recommendation == "revise"
     assert audit.voice_pass is False
@@ -214,7 +214,7 @@ def test_audit_promote_without_verification_rejected():
     with pytest.raises(ValidationError):
         EditorialAudit.model_validate(
             {
-                "schema": "editorial_audit.v1",
+                "schema": "editorial_audit.v2",
                 "project_id": "resolution-audit",
                 "recommendation": "promote",
             }
@@ -225,7 +225,7 @@ def test_audit_promote_with_failed_verdict_rejected():
     with pytest.raises(ValidationError):
         EditorialAudit.model_validate(
             {
-                "schema": "editorial_audit.v1",
+                "schema": "editorial_audit.v2",
                 "project_id": "resolution-audit",
                 "recommendation": "promote",
                 "copy_verification": {"verdict": "fail", "hits": ["guaranteed savings"]},
@@ -236,7 +236,7 @@ def test_audit_promote_with_failed_verdict_rejected():
 def test_audit_promote_with_passing_verdict_accepted():
     audit = EditorialAudit.model_validate(
         {
-            "schema": "editorial_audit.v1",
+            "schema": "editorial_audit.v2",
             "project_id": "resolution-audit",
             "recommendation": "promote",
             "copy_verification": {"verdict": "pass", "hits": []},
@@ -262,3 +262,58 @@ def test_model_dump_json_uses_canonical_schema_key():
     reparsed = json.loads(draft.model_dump_json())
     assert reparsed["schema"] == "draft.v1"
     assert model_for(reparsed) is DraftArtifact
+
+
+# --- editorial_audit versioning (#2181 round 2): v1 is FROZEN ---
+
+
+def test_editorial_audit_v1_still_validates_old_artifacts():
+    from atlas_brain.schemas.content_factory import EditorialAuditV1
+
+    audit = EditorialAuditV1.model_validate(
+        {"schema": "editorial_audit.v1", "project_id": "resolution-audit"}
+    )
+    assert audit.recommendation == "revise"
+
+
+def test_editorial_audit_v1_rejects_advisory_warnings_field():
+    """Rollback safety: the v1 shape is frozen, so a v1-tagged artifact can
+    never carry the v2-only field (and an old reader never sees one)."""
+    from pydantic import ValidationError
+
+    from atlas_brain.schemas.content_factory import EditorialAuditV1
+
+    with pytest.raises(ValidationError):
+        EditorialAuditV1.model_validate(
+            {
+                "schema": "editorial_audit.v1",
+                "project_id": "p",
+                "advisory_warnings": ["x"],
+            }
+        )
+
+
+def test_editorial_audit_v1_promote_gate_still_enforced():
+    from pydantic import ValidationError
+
+    from atlas_brain.schemas.content_factory import EditorialAuditV1
+
+    with pytest.raises(ValidationError):
+        EditorialAuditV1.model_validate(
+            {
+                "schema": "editorial_audit.v1",
+                "project_id": "p",
+                "recommendation": "promote",
+            }
+        )
+
+
+def test_model_for_dispatches_both_audit_versions():
+    from atlas_brain.schemas.content_factory import (
+        EditorialAudit,
+        EditorialAuditV1,
+        model_for,
+    )
+
+    assert model_for({"schema": "editorial_audit.v1"}) is EditorialAuditV1
+    assert model_for({"schema": "editorial_audit.v2"}) is EditorialAudit

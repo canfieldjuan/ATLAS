@@ -164,7 +164,7 @@ def test_non_string_rejected():
 
 def _audit(text, recommendation):
     return {
-        "schema": "editorial_audit.v1",
+        "schema": "editorial_audit.v2",
         "project_id": "resolution-audit",
         "recommendation": recommendation,
         "copy_verification": verify_copy(text).model_dump(),
@@ -274,7 +274,7 @@ def test_advisory_warnings_do_not_block_promotion():
     assert len(validated.advisory_warnings) >= 2  # claim warning + reminder
 
 
-def test_advisory_warnings_require_no_field_for_old_artifacts():
+def test_advisory_warnings_default_empty_on_v2():
     audit = EditorialAudit.model_validate(_audit(CLEAN, "revise"))
     assert audit.advisory_warnings == []
 
@@ -324,8 +324,20 @@ def test_advisory_redacts_international_phone():
     assert "<redacted-phone>" in joined
 
 
-def test_gate_blocks_international_phone():
-    assert verify_copy("Call us at +44 20 7946 0958 today.").verdict == "fail"
+def test_gate_scope_unchanged_for_international_phone():
+    """Round-2 revert: the slice contract freezes verdict semantics, so the
+    international matcher is redaction-only; widening the gate's PII block is
+    a separate operator decision (standing catalogue policy)."""
+    assert verify_copy("Call us at +44 20 7946 0958 today.").verdict == "pass"
+
+
+def test_advisory_redacts_local_phone_shape():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("Our answer desk is at 020 7946 0958.")
+    joined = " ".join(warnings)
+    assert "7946" not in joined
+    assert "<redacted-phone>" in joined
 
 
 def test_gate_ignores_plus_versions_and_short_numbers():

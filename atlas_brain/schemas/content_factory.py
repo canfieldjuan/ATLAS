@@ -177,13 +177,47 @@ class CopyVerification(BaseModel):
     hits: list[str] = Field(default_factory=list)
 
 
-class EditorialAudit(BaseModel):
-    """audit.json -- voice edit + the verify verdict; the model cannot self-promote."""
+class EditorialAuditV1(BaseModel):
+    """audit.json (v1, FROZEN) -- voice edit + the verify verdict.
+
+    The v1 shape is frozen so artifacts already on disk (and any rolled-back
+    reader) keep validating byte-for-byte; ``advisory_warnings`` lives only on
+    v2 (#2136 item 2). Do not add fields here.
+    """
 
     model_config = _BASE_CONFIG
 
     artifact_schema: Literal["editorial_audit.v1"] = Field(alias="schema")
     schema_version: int = 1
+    project_id: str
+    draft_revision: int = 1
+    edited_body_markdown: str = ""
+    voice_pass: bool = False
+    orphan_claims: list[str] = Field(default_factory=list)
+    copy_verification: Optional[CopyVerification] = None
+    recommendation: Recommendation = "revise"
+    prompt_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _promote_requires_passing_verdict(self) -> "EditorialAuditV1":
+        # The model cannot self-promote: a 'promote' recommendation is only valid
+        # when the deterministic copy-verification verdict is 'pass'.
+        if self.recommendation == "promote":
+            cv = self.copy_verification
+            if cv is None or cv.verdict != "pass":
+                raise ValueError(
+                    "recommendation 'promote' requires copy_verification.verdict == 'pass'"
+                )
+        return self
+
+
+class EditorialAudit(BaseModel):
+    """audit.json (v2) -- v1 plus the non-blocking advisory checklist."""
+
+    model_config = _BASE_CONFIG
+
+    artifact_schema: Literal["editorial_audit.v2"] = Field(alias="schema")
+    schema_version: int = 2
     project_id: str
     draft_revision: int = 1
     edited_body_markdown: str = ""
@@ -254,7 +288,8 @@ ARTIFACT_MODELS: dict[str, type[BaseModel]] = {
     "content_brief.v1": ContentBrief,
     "evidence_packet.v1": EvidencePacket,
     "draft.v1": DraftArtifact,
-    "editorial_audit.v1": EditorialAudit,
+    "editorial_audit.v1": EditorialAuditV1,
+    "editorial_audit.v2": EditorialAudit,
     "manifest.v1": ArtifactManifest,
 }
 
