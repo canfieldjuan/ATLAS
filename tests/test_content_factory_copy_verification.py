@@ -277,3 +277,64 @@ def test_advisory_warnings_do_not_block_promotion():
 def test_advisory_warnings_require_no_field_for_old_artifacts():
     audit = EditorialAudit.model_validate(_audit(CLEAN, "revise"))
     assert audit.advisory_warnings == []
+
+
+# --- round-1 review fixes: advisory precision + international PII ---
+
+
+def test_advisory_topic_noun_does_not_suppress_routing_warning():
+    """Bare topic nouns (billing/product/team) are not owner routing."""
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("The snapshot ranks repeated billing questions.")
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_advisory_product_name_is_not_an_answer_claim():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The Resolution Audit ranks repeated tickets and names the owner lane."
+    )
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+    warnings = advisory_warnings("The Resolution Snapshot is ready.")
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_advisory_qualifier_in_one_clause_does_not_hide_another_claim():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "We draft one answer when evidence exists, but we draft every other "
+        "answer regardless."
+    )
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings)
+    warnings = advisory_warnings(
+        "Billing probably owns refunds, but Product owns every escalation."
+    )
+    assert any(w.startswith("unqualified-ownership-claim:") for w in warnings)
+
+
+def test_advisory_redacts_international_phone():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("Our answer desk is at +44 20 7946 0958.")
+    joined = " ".join(warnings)
+    assert "7946" not in joined
+    assert "<redacted-phone>" in joined
+
+
+def test_gate_blocks_international_phone():
+    assert verify_copy("Call us at +44 20 7946 0958 today.").verdict == "fail"
+
+
+def test_gate_ignores_plus_versions_and_short_numbers():
+    assert verify_copy("Supports version +2.5 and 2026+ planning.").verdict == "pass"
+
+
+def test_advisory_bare_draft_or_ranked_is_not_report_shape():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    for text in ("This draft is ready for review.", "Ranked choice voting is supported."):
+        warnings = advisory_warnings(text)
+        assert not any(w.startswith("owner-routing-coverage:") for w in warnings), text

@@ -105,6 +105,10 @@ _RULES: dict[str, list[tuple[str, str]]] = {
 # marker -- otherwise the gate would duplicate the very PII it exists to block.
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 _PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})\b")
+# International formats: a +country-code prefix followed by 7-12 digits with
+# optional separators ("+44 20 7946 0958"). Over-matching here is safe: this
+# feeds redaction and the PII block, both fail-closed directions.
+_INTL_PHONE_RE = re.compile(r"\+\d{1,3}(?:[\s().-]?\d){7,12}\b")
 
 # A negation directly before the claim (no/not/never/without/cannot, or an -n't
 # contraction). "not only"/"not just" are emphatic, NOT negations, and are excluded.
@@ -114,18 +118,21 @@ _EMPHATIC_RE = re.compile(r"\bnot\s+(?:only|just)\b", re.I)
 
 # --- Advisory-layer patterns (ported from the operator's OWUI verifier tool) ---
 _ANSWER_RE = re.compile(
-    r"\b(answer|answers|resolution|resolutions|drafted answer)\b", re.I
+    r"\b(?:drafted\s+answers?|answers?|resolutions?(?!\s+(?:audit|snapshot)))\b",
+    re.I,
 )
 _ANSWER_QUALIFIER_RE = re.compile(
     r"\b(agent resolution|scoped resolution|when (?:that )?evidence exists|if (?:the )?tickets contain|no proven answer)\b",
     re.I,
 )
 _REPORT_SHAPE_RE = re.compile(
-    r"\b(?:resolution\s+audit|resolution\s+snapshot|snapshot|report|audit|action\s+queue|ranked|ranks|drafts?|faqs?|repeated\s+questions?)\b",
+    r"\b(?:resolution\s+audit|resolution\s+snapshot|snapshot|report|audit|action\s+queue)\b",
     re.I,
 )
 _OWNER_ROUTING_RE = re.compile(
-    r"\b(?:owner|owners|ownership|owner\s+lane|routing|route|routes|routed|department|team|product|billing|policy|process|documentation|docs|support\s+ops|operations|who\s+needs\s+to\s+(?:fix|review)|needs\s+to\s+(?:fix|review)|responsible)\b",
+    r"\b(?:owner|owners|ownership|owner\s+lane|routing|route[sd]?|owned\s+by|"
+    r"assigned\s+to|responsible\s+for|who\s+needs\s+to\s+(?:fix|review)|"
+    r"needs\s+to\s+(?:fix|review))\b",
     re.I,
 )
 _OWNERSHIP_RE = re.compile(
@@ -164,6 +171,7 @@ def _redact_pii(evidence: str) -> str:
     claim that happens to span a contact string ("Guaranteed 618-555-9876 savings") does
     not persist raw PII into the git-backed audit metadata via the claim hit."""
     evidence = _EMAIL_RE.sub("<redacted-email>", evidence)
+    evidence = _INTL_PHONE_RE.sub("<redacted-phone>", evidence)
     evidence = _PHONE_RE.sub("<redacted-phone>", evidence)
     return evidence
 
@@ -188,20 +196,45 @@ def _sentence_at(text: str, start: int) -> str:
     return text[sentence_start + 1 : sentence_end].strip()
 
 
+_CLAUSE_BOUNDARY_RE = re.compile(
+    r"[,;:]|\b(?:but|however|while|whereas|although|yet)\b", re.I
+)
+
+
+def _clause_at(text: str, start: int) -> str:
+    """The clause containing ``start``: the sentence around it, narrowed to the
+    span between clause boundaries. A qualifier in one clause must not excuse
+    a separate claim in another ("...when evidence exists, but we draft every
+    other answer regardless")."""
+    boundaries = [
+        (m.start(), m.end()) for m in _CLAUSE_BOUNDARY_RE.finditer(text)
+    ]
+    clause_start = max(
+        (end for (b_start, end) in boundaries if end <= start), default=0
+    )
+    clause_end = min(
+        (b_start for (b_start, _end) in boundaries if b_start >= start),
+        default=len(text),
+    )
+    return text[clause_start:clause_end]
+
+
 def _unqualified_sentences(
     text: str, word_re: "re.Pattern[str]", qualifier_re: "re.Pattern[str]", code: str
 ) -> list[str]:
-    """"code: sentence" for each sentence that makes a claim with none of the
-    accepted qualifier phrases; the recorded sentence is PII-redacted."""
+    """"code: sentence" for each claim whose OWN clause carries none of the
+    accepted qualifier phrases (per-clause, so one qualified assertion cannot
+    hide a separate unqualified one in the same sentence)."""
     warnings: list[str] = []
     seen: set[str] = set()
     for match in word_re.finditer(text):
         sentence = _sentence_at(text, match.start())
+        if qualifier_re.search(_clause_at(text, match.start())):
+            continue
         if sentence in seen:
             continue
         seen.add(sentence)
-        if not qualifier_re.search(sentence):
-            warnings.append(f"{code}: {sentence or match.group(0)}")
+        warnings.append(f"{code}: {sentence or match.group(0)}")
     return warnings
 
 
@@ -259,7 +292,7 @@ def verify_copy(text: str) -> CopyVerification:
     # PII: block on a match, but redact the value out of the persisted hit.
     if _EMAIL_RE.search(text):
         hits.append("email: <redacted>")
-    if _PHONE_RE.search(text):
+    if _PHONE_RE.search(text) or _INTL_PHONE_RE.search(text):
         hits.append("phone: <redacted>")
 
     verdict = "fail" if hits else "pass"

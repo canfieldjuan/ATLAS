@@ -69,8 +69,23 @@ Slice phase: vertical slice
   R5 (no gating change, old artifacts validate), R10 (advisory logic
   lives beside the gate it complements), R14.
 
+### Review round 1 (Codex)
+
+Five precision/PII findings on the ported heuristics, all fixed: owner-routing
+suppression requires relational routing language (bare topic nouns like
+"billing" no longer suppress); product names (Resolution Audit/Snapshot) are
+excluded from the answer-claim detector; qualifiers are evaluated per CLAUSE
+so one qualified assertion cannot hide a separate unqualified one;
+report-shape matching drops context-free nouns (draft/ranked/faqs);
+international phone formats are redacted AND block the gate (+country-code
+patterns; over-matching feeds redaction/blocking, both fail-closed).
+The workflow tooling-test install line also gains httpx (surfaced by the
+merged #2117 bundle on this PR's CI; same class as its jsonschema fix).
+
 ### Files touched
 
+- `.github/workflows/pre_push_audit.yml` (round 1: httpx in the
+  tooling-test install line)
 - `atlas_brain/schemas/content_factory.py`
 - `atlas_brain/services/content_factory_copy_verification.py`
 - `atlas_brain/services/content_factory_runner.py`
@@ -105,7 +120,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 150 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 157 passed (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered
