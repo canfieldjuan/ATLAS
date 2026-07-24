@@ -268,23 +268,44 @@ class CallTranscriptRepository:
     async def get_by_contact_id(
         self, contact_id: str, limit: int = 20,
         business_context_id: Optional[str] = None,
+        include_unclaimed_legacy: bool = True,
     ) -> list[dict]:
         """Get call transcripts linked to a CRM contact.
 
         With ``business_context_id``, rows are limited to that tenant plus
-        NULL-context legacy rows (scoped before LIMIT).
+        NULL-context legacy rows by default (scoped before LIMIT). Set
+        ``include_unclaimed_legacy`` false for strict tenant-only surfaces.
         """
         pool = get_db_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get by contact id")
 
         try:
-            if business_context_id:
+            if business_context_id and not include_unclaimed_legacy:
+                rows = await pool.fetch(
+                    """
+                    SELECT transcript.* FROM call_transcripts AS transcript
+                    JOIN contacts AS contact
+                      ON contact.id = transcript.contact_id
+                    WHERE transcript.contact_id = $1
+                      AND transcript.business_context_id = $2
+                      AND contact.business_context_id = $2
+                    ORDER BY transcript.created_at DESC
+                    LIMIT $3
+                    """,
+                    contact_id,
+                    business_context_id,
+                    limit,
+                )
+            elif business_context_id:
                 rows = await pool.fetch(
                     """
                     SELECT * FROM call_transcripts
                     WHERE contact_id = $1
-                      AND (business_context_id = $2 OR business_context_id IS NULL)
+                      AND (
+                          business_context_id = $2
+                          OR business_context_id IS NULL
+                      )
                     ORDER BY created_at DESC
                     LIMIT $3
                     """,
@@ -353,6 +374,7 @@ class CallTranscriptRepository:
         intent: Optional[str] = None,
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
+        business_context_id: Optional[str] = None,
         limit: int = 50,
     ) -> list[dict]:
         """Search call transcripts with filters.
@@ -368,6 +390,10 @@ class CallTranscriptRepository:
         params: list = []
         idx = 1
 
+        if business_context_id:
+            conditions.append(f"business_context_id = ${idx}")
+            params.append(business_context_id)
+            idx += 1
         if keyword:
             conditions.append(
                 f"(transcript ILIKE ${idx} OR summary ILIKE ${idx})"

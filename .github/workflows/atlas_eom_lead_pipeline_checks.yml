@@ -7,14 +7,17 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_eom_lead_pipeline_checks.yml"
+      - "atlas_brain/api/contacts.py"
       - "atlas_brain/api/leads.py"
       - "atlas_brain/mcp/crm_server.py"
       - "atlas_brain/services/crm_provider.py"
+      - "atlas_brain/storage/repositories/call_transcript.py"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
       - "atlas_brain/storage/migrations/347_customer_service_tickets.sql"
       - "atlas_brain/storage/migrations/348_appointment_operating_fields.sql"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
+      - "tests/test_eom_contacts_api_tenant_scope.py"
       - "tests/test_eom_lead_pipeline_integration.py"
       - "tests/test_eom_recurring_appointments_integration.py"
       - "tests/test_leads_intake.py"
@@ -24,14 +27,17 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_eom_lead_pipeline_checks.yml"
+      - "atlas_brain/api/contacts.py"
       - "atlas_brain/api/leads.py"
       - "atlas_brain/mcp/crm_server.py"
       - "atlas_brain/services/crm_provider.py"
+      - "atlas_brain/storage/repositories/call_transcript.py"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
       - "atlas_brain/storage/migrations/347_customer_service_tickets.sql"
       - "atlas_brain/storage/migrations/348_appointment_operating_fields.sql"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
+      - "tests/test_eom_contacts_api_tenant_scope.py"
       - "tests/test_eom_lead_pipeline_integration.py"
       - "tests/test_eom_recurring_appointments_integration.py"
       - "tests/test_leads_intake.py"
@@ -77,6 +83,7 @@ jobs:
           python -m pytest \
             tests/test_crm_read_scoping.py \
             tests/test_eom_complaints_integration.py \
+            tests/test_eom_contacts_api_tenant_scope.py \
             tests/test_eom_lead_pipeline_integration.py \
             tests/test_eom_recurring_appointments_integration.py \
             tests/test_leads_intake.py \

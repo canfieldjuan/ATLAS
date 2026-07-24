@@ -609,8 +609,15 @@ def test_provider_claim_contact_is_compare_and_set():
 
 def test_call_repo_scopes_before_limit():
     src = (REPO / "atlas_brain/storage/repositories/call_transcript.py").read_text(encoding="utf-8")
-    block = src.split("async def get_by_contact_id", 1)[1][:1200]
-    assert "business_context_id = $2 OR business_context_id IS NULL" in block
+    block = src.split("async def get_by_contact_id", 1)[1].split(
+        "async def get_recent", 1
+    )[0]
+    legacy_block = block.split("elif business_context_id:", 1)[1]
+    assert "business_context_id = $2" in legacy_block
+    assert "business_context_id IS NULL" in legacy_block
+    assert legacy_block.index("business_context_id IS NULL") < legacy_block.index(
+        "LIMIT $3"
+    )
 
 
 def test_context_service_threads_scope_to_child_queries():
