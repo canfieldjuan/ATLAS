@@ -250,15 +250,20 @@ def test_advisory_cta_reminder_is_always_present():
     assert advisory_warnings("Anything at all.")[-1].startswith("reminder:")
 
 
-def test_advisory_redacts_pii_in_recorded_sentences():
+def test_advisory_warnings_carry_no_free_text():
+    """Round-4 class fix: warnings persist only code + sentence number +
+    matched keyword, so PII can never reach the artifact -- no redaction
+    completeness argument required."""
     from atlas_brain.services.content_factory_copy_verification import advisory_warnings
 
     warnings = advisory_warnings(
         "Our answer desk replies from bob@example.com within a day."
     )
     joined = " ".join(warnings)
-    assert "bob@example.com" not in joined
-    assert "<redacted-email>" in joined
+    assert "bob@example" not in joined
+    assert any(
+        w.startswith("unqualified-answer-claim: sentence 1 (") for w in warnings
+    )
 
 
 def test_advisory_warnings_do_not_block_promotion():
@@ -315,13 +320,24 @@ def test_advisory_qualifier_in_one_clause_does_not_hide_another_claim():
     assert any(w.startswith("unqualified-ownership-claim:") for w in warnings)
 
 
-def test_advisory_redacts_international_phone():
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Our answer desk is at +44 20 7946 0958.",
+        "Our answer desk is at 020 7946 0958.",
+        "Our answer desk is at 020/7946/0958.",
+        "Answers are available at 020 - 7946 - 0958.",
+        "Our answer desk is at 618-555-9876.",
+    ],
+)
+def test_advisory_never_persists_phone_fragments(sentence):
+    """Any separator style, any country format: with evidence-free warnings
+    the number cannot appear because no draft text is persisted at all."""
     from atlas_brain.services.content_factory_copy_verification import advisory_warnings
 
-    warnings = advisory_warnings("Our answer desk is at +44 20 7946 0958.")
-    joined = " ".join(warnings)
-    assert "7946" not in joined
-    assert "<redacted-phone>" in joined
+    joined = " ".join(advisory_warnings(sentence))
+    for fragment in ("7946", "0958", "5559876", "555-9876"):
+        assert fragment not in joined
 
 
 def test_gate_scope_unchanged_for_international_phone():
@@ -331,13 +347,7 @@ def test_gate_scope_unchanged_for_international_phone():
     assert verify_copy("Call us at +44 20 7946 0958 today.").verdict == "pass"
 
 
-def test_advisory_redacts_local_phone_shape():
-    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
 
-    warnings = advisory_warnings("Our answer desk is at 020 7946 0958.")
-    joined = " ".join(warnings)
-    assert "7946" not in joined
-    assert "<redacted-phone>" in joined
 
 
 def test_gate_ignores_plus_versions_and_short_numbers():
@@ -355,15 +365,13 @@ def test_advisory_bare_draft_or_ranked_is_not_report_shape():
 # --- round-3 review fixes ---
 
 
-def test_advisory_masks_arbitrary_separator_digit_runs():
-    """Class backstop: no separator-style enumeration -- any 5+ digit run
-    with single non-word separators is masked in evidence."""
-    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
-
-    warnings = advisory_warnings("Our answer desk is at 020/7946/0958.")
-    joined = " ".join(warnings)
-    assert "7946" not in joined
-    assert "redacted" in joined
+def test_gate_hit_evidence_still_masks_digit_runs():
+    """The gate's claim-hit evidence (which DOES record matched phrases)
+    keeps the digit-run backstop."""
+    result = verify_copy("Guaranteed 61855598761 savings for all.")
+    assert result.verdict == "fail"
+    joined = " ".join(result.hits)
+    assert "5559876" not in joined
 
 
 def test_advisory_negated_routing_does_not_suppress_warning():

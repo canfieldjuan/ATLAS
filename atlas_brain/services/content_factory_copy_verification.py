@@ -41,6 +41,7 @@ PII-redacted before recording, like the gate's claim hits.
 
 from __future__ import annotations
 
+import bisect
 import re
 
 from atlas_brain.schemas.content_factory import CopyVerification
@@ -149,21 +150,22 @@ _OWNER_ROUTING_RE = re.compile(
     re.I,
 )
 _ROUTING_NEGATION_RE = re.compile(
-    r"\b(?:no|not|never|none|nobody|without|cannot|isn|aren)\b|n't\b", re.I
+    r"\b(?:no|not|never|none|nobody|without|cannot|isn|aren|unresolved|"
+    r"unknown|unassigned|undecided)\b|n't\b",
+    re.I,
 )
 
 
-def _has_affirmative_owner_routing(text: str) -> bool:
-    """True only for a routing/ownership relation that is NOT negated in its
-    own clause: 'no one is assigned to them' and 'they are not routed to
-    Billing' are explicit ABSENCE of routing, which must not count as
-    coverage (review round 3)."""
+def _has_affirmative_owner_routing(
+    text: str, clause_spans: "list[tuple[int, int]]"
+) -> bool:
+    """True only for a routing/ownership relation whose COMPLETE clause is
+    free of negation/absence language: 'no one is assigned to them',
+    'assigned to nobody', 'not routed to Billing', and 'routing remains
+    unresolved' all fail to count as coverage (review rounds 3-4)."""
     for match in _OWNER_ROUTING_RE.finditer(text):
-        segment_start = 0
-        for boundary in _CLAUSE_BOUNDARY_RE.finditer(text[: match.start()]):
-            segment_start = boundary.end()
-        prefix_window = " ".join(text[segment_start : match.start()].split()[-4:])
-        if not _ROUTING_NEGATION_RE.search(prefix_window):
+        _index, (start, end) = _span_for(clause_spans, match.start())
+        if not _ROUTING_NEGATION_RE.search(text[start:end]):
             return True
     return False
 _OWNERSHIP_RE = re.compile(
@@ -221,53 +223,69 @@ def _claim_hits(text: str) -> list[str]:
     return hits
 
 
-def _sentence_at(text: str, start: int) -> str:
-    """The sentence containing ``start`` (sentence marks: ``.!?`` or newline)."""
-    sentence_start = max(text.rfind(mark, 0, start) for mark in ".!?\n")
-    ends = [idx for mark in ".!?\n" if (idx := text.find(mark, start)) != -1]
-    sentence_end = min(ends) if ends else len(text)
-    return text[sentence_start + 1 : sentence_end].strip()
+_SENTENCE_BOUNDARY_RE = re.compile(r"[.!?\n]")
+
+
+def _boundary_spans(text: str, boundary_re: "re.Pattern[str]") -> "list[tuple[int, int]]":
+    """Split ``text`` into (start, end) spans between boundary matches --
+    computed ONCE per document so per-match lookups are O(log n), not a
+    rescan of the whole draft (review round 4)."""
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for match in boundary_re.finditer(text):
+        spans.append((start, match.start()))
+        start = match.end()
+    spans.append((start, len(text)))
+    return spans
+
+
+def _span_for(
+    spans: "list[tuple[int, int]]", position: int
+) -> "tuple[int, tuple[int, int]]":
+    """(index, span) of the precomputed span containing ``position``."""
+    index = max(0, bisect.bisect_right([s for s, _ in spans], position) - 1)
+    return index, spans[index]
 
 
 _CLAUSE_BOUNDARY_RE = re.compile(
-    r"[.!?;,:\n]|\b(?:but|however|while|whereas|although|yet)\b", re.I
+    r"[.!?;,:\n]|\b(?:and|or|but|however|while|whereas|although|yet)\b", re.I
 )
 
 
-def _clause_at(text: str, start: int) -> str:
-    """The clause containing ``start``: the sentence around it, narrowed to the
-    span between clause boundaries. A qualifier in one clause must not excuse
-    a separate claim in another ("...when evidence exists, but we draft every
-    other answer regardless")."""
-    boundaries = [
-        (m.start(), m.end()) for m in _CLAUSE_BOUNDARY_RE.finditer(text)
-    ]
-    clause_start = max(
-        (end for (b_start, end) in boundaries if end <= start), default=0
-    )
-    clause_end = min(
-        (b_start for (b_start, _end) in boundaries if b_start >= start),
-        default=len(text),
-    )
-    return text[clause_start:clause_end]
-
-
-def _unqualified_sentences(
-    text: str, word_re: "re.Pattern[str]", qualifier_re: "re.Pattern[str]", code: str
+def _unqualified_claims(
+    text: str,
+    word_re: "re.Pattern[str]",
+    qualifier_re: "re.Pattern[str]",
+    code: str,
+    sentence_spans: "list[tuple[int, int]]",
+    clause_spans: "list[tuple[int, int]]",
 ) -> list[str]:
-    """"code: sentence" for each claim whose OWN clause carries none of the
-    accepted qualifier phrases (per-clause, so one qualified assertion cannot
-    hide a separate unqualified one in the same sentence)."""
+    """One warning per (code, sentence) for each claim whose OWN clause
+    carries none of the accepted qualifier phrases. Coordinated claims split
+    on and/or too, so a qualifier can only excuse the claim it governs.
+
+    Warnings carry NO free text -- only the claim code, the 1-based sentence
+    number, and the matched keyword (word characters by construction). The
+    reviewing human locates the sentence in the draft artifact sitting next
+    to the audit; nothing PII-shaped can reach the persisted warning
+    (review round 4: the free-text evidence seam is closed, not patched).
+    """
     warnings: list[str] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, int]] = set()
     for match in word_re.finditer(text):
-        sentence = _sentence_at(text, match.start())
-        if qualifier_re.search(_clause_at(text, match.start())):
+        _clause_index, (clause_start, clause_end) = _span_for(
+            clause_spans, match.start()
+        )
+        if qualifier_re.search(text[clause_start:clause_end]):
             continue
-        if sentence in seen:
+        sentence_index, _span = _span_for(sentence_spans, match.start())
+        key = (code, sentence_index)
+        if key in seen:
             continue
-        seen.add(sentence)
-        warnings.append(f"{code}: {sentence or match.group(0)}")
+        seen.add(key)
+        warnings.append(
+            f"{code}: sentence {sentence_index + 1} ({match.group(0).strip()!r})"
+        )
     return warnings
 
 
@@ -286,19 +304,23 @@ def advisory_warnings(text: str) -> list[str]:
     if not isinstance(text, str):
         raise TypeError("advisory_warnings requires a string; draft body is text")
 
-    # PII is redacted from the WHOLE text before any sentence extraction: the
-    # sentence splitter breaks on the dot inside an email address, and the
-    # truncated remainder ("bob@example") would no longer match the redaction
-    # pattern -- per-sentence redaction leaks exactly that fragment.
-    text = _redact_pii(text)
+    # Boundary spans are computed once per draft (review round 4); warnings
+    # persist only code + sentence number + matched keyword, so no free-text
+    # evidence (and therefore nothing PII-shaped) ever reaches the artifact.
+    sentence_spans = _boundary_spans(text, _SENTENCE_BOUNDARY_RE)
+    clause_spans = _boundary_spans(text, _CLAUSE_BOUNDARY_RE)
 
-    warnings = _unqualified_sentences(
-        text, _ANSWER_RE, _ANSWER_QUALIFIER_RE, "unqualified-answer-claim"
+    warnings = _unqualified_claims(
+        text, _ANSWER_RE, _ANSWER_QUALIFIER_RE, "unqualified-answer-claim",
+        sentence_spans, clause_spans,
     )
-    warnings += _unqualified_sentences(
-        text, _OWNERSHIP_RE, _OWNERSHIP_QUALIFIER_RE, "unqualified-ownership-claim"
+    warnings += _unqualified_claims(
+        text, _OWNERSHIP_RE, _OWNERSHIP_QUALIFIER_RE,
+        "unqualified-ownership-claim", sentence_spans, clause_spans,
     )
-    if _REPORT_SHAPE_RE.search(text) and not _has_affirmative_owner_routing(text):
+    if _REPORT_SHAPE_RE.search(text) and not _has_affirmative_owner_routing(
+        text, clause_spans
+    ):
         warnings.append(
             "owner-routing-coverage: draft explains the report shape but omits "
             "owner routing or who should review the fix"

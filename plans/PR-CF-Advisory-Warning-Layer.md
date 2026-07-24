@@ -82,6 +82,23 @@ Slice phase: vertical slice
   R5 (no gating change, old artifacts validate), R10 (advisory logic
   lives beside the gate it complements), R14.
 
+### Review round 4 (Codex)
+
+Four findings, all fixed — the big one structurally: advisory warnings no
+longer persist ANY free draft text. Each warning records only the claim
+code, the 1-based sentence number, and the matched keyword (word
+characters by construction), so the no-raw-PII criterion holds by
+construction instead of by redaction completeness ("020 - 7946 - 0958"
+and every future separator style included). The reviewer locates the
+sentence in the draft artifact beside the audit. Consequences: sentence/
+clause boundaries are precomputed once per draft with O(log n) lookups
+(kills the quadratic rescan finding); qualifiers bind per coordinated
+clause (and/or are boundaries now, so "one answer when evidence exists
+and another answer regardless" warns); owner-routing coverage requires a
+negation-free COMPLETE clause ("assigned to nobody", "routing remains
+unresolved" now warn). The gate's claim-hit evidence (which does record
+matched phrases) keeps the digit-run redaction backstop.
+
 ### Review round 3 (Codex)
 
 Four findings, all fixed: `EditorialAudit` keeps its pre-change v1 API
@@ -166,7 +183,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 165 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 178 passed (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered
