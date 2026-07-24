@@ -306,6 +306,8 @@ async def test_customer_context_serializes_still_visible_row(default_ctx, monkey
     assert out["found"] is True
     assert out["contact"]["business_context_id"] == EOM
     assert out["emails_omitted_under_scope"] is True
+    assert out["b2b_enrichment_omitted_under_scope"] is True
+    assert out["b2b_churn_signals"] == []
 
 
 @pytest.mark.asyncio
