@@ -77,6 +77,7 @@ Slice phase: Vertical slice
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/storage/migrations/346_contact_lead_pipeline.sql`
 - `plans/PR-EOM-Lead-Pipeline.md`
+- `tests/maturity_sweep/baseline_atlas_brain_storage.json`
 - `tests/test_crm_read_scoping.py`
 - `tests/test_eom_lead_pipeline_integration.py`
 - `tests/test_leads_intake.py`
@@ -106,6 +107,12 @@ initial stage on creation and leaves an existing row's pipeline state intact.
   removal of the optional index/columns if deployment must be reversed.
 - A dedicated leads table is rejected because it would duplicate contact
   identity and tenant ownership for three contact-lifecycle attributes.
+- The storage maturity baseline accepts two `get_db_pool` test seams
+  (`INTERNAL_MOCK` 32 -> 34). One captures the provider's exact SQL/arguments;
+  the other routes the production provider through disposable real Postgres
+  for the entrypoint proof. Adding a production pool-injection surface solely
+  for these tests would widen the runtime contract without improving the
+  vertical behavior.
 
 ## Deferred
 
@@ -135,6 +142,8 @@ Parked hardening: none.
   - passed.
 - Plan sync check
   - passed.
+- `/home/juan-canfield/Desktop/Atlas/.venv/bin/python scripts/maturity_sweep.py atlas_brain/storage --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_storage.json --min-score 8`
+  - passed: no brittleness above the recorded intentional baseline.
 - ATLAS_CURRENT_PR_BODY_FILE=/tmp/eom-lead-pipeline-pr-body.md ATLAS_SESSION_STATE_FILE=SESSION_STATE.codex-eom-lead-pipeline.local.md bash scripts/local_pr_review.sh
   - passed; the pre-existing plans-archive backlog was advisory only.
 
@@ -147,9 +156,10 @@ Parked hardening: none.
 | `atlas_brain/mcp/crm_server.py` | 166 |
 | `atlas_brain/services/crm_provider.py` | 81 |
 | `atlas_brain/storage/migrations/346_contact_lead_pipeline.sql` | 21 |
-| `plans/PR-EOM-Lead-Pipeline.md` | 155 |
+| `plans/PR-EOM-Lead-Pipeline.md` | 165 |
+| `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 4 |
 | `tests/test_crm_read_scoping.py` | 154 |
 | `tests/test_eom_lead_pipeline_integration.py` | 114 |
 | `tests/test_leads_intake.py` | 20 |
 | `tests/test_migrations_runner.py` | 17 |
-| **Total** | **803** |
+| **Total** | **817** |
