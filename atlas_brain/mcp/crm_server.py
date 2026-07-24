@@ -1339,16 +1339,19 @@ async def get_customer_context(
         if ctx.is_empty:
             return json.dumps({"found": False, "context": None})
 
-        # Validate the row the service actually fetched: its read and the
-        # guard's read are separate awaits, and a concurrent claim between
-        # them must not let a now-foreign contact serialize (#2157
-        # post-merge review).
-        if (business_context_id or _default_context()) and not _row_visible(
-            ctx.contact, business_context_id
-        ):
-            return json.dumps({"found": False, "context": None})
-
         effective = business_context_id or _default_context()
+        # Re-fetch ownership after every child-source await. A reassignment
+        # during the gather must fail closed before any child data serializes.
+        # Pass the explicit argument to _row_visible so deployment-default
+        # scope retains tenant-plus-NULL legacy visibility.
+        if effective:
+            latest_contact = await _provider().get_contact(
+                str(ctx.contact["id"])
+            )
+            if not _row_visible(latest_contact, business_context_id):
+                return json.dumps({"found": False, "context": None})
+            ctx.contact = latest_contact
+
         result: dict = {
             "found": True,
             "contact": ctx.contact,
@@ -1357,10 +1360,7 @@ async def get_customer_context(
                 ctx.appointments, business_context_id),
             "call_transcripts": _calls_in_scope(
                 ctx.call_transcripts, business_context_id),
-            # Email history is gathered by address and carries no tenant
-            # column, so under a scope it is omitted (fail closed) until the
-            # email store is tenant-addressable.
-            "sent_emails": [] if effective else ctx.sent_emails,
+            "sent_emails": ctx.sent_emails,
             "inbox_emails": [] if effective else ctx.inbox_emails,
             # B2B churn enrichment is keyed by email domain against a global
             # table with no tenant column -- omitted under a scope like the
@@ -1369,6 +1369,7 @@ async def get_customer_context(
         }
         if effective:
             result["emails_omitted_under_scope"] = True
+            result["email_sources_omitted_under_scope"] = ["inbox_emails"]
             result["b2b_enrichment_omitted_under_scope"] = True
 
         return json.dumps(result, default=str)

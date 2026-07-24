@@ -169,12 +169,25 @@ class CustomerContextService:
             "call_transcripts",
         )
         emails_coro = _safe(
-            self._get_sent_emails(contact, max_emails),
+            self._get_sent_emails(
+                contact,
+                max_emails,
+                business_context_id=business_context_id,
+                contact_id=(
+                    contact_id
+                    if business_context_id is not None
+                    else None
+                ),
+            ),
             "sent_emails",
         )
-        inbox_coro = _safe(
-            self._get_inbox_emails(contact, max_emails),
-            "inbox_emails",
+        inbox_coro = (
+            asyncio.sleep(0, result=[])
+            if business_context_id is not None
+            else _safe(
+                self._get_inbox_emails(contact, max_emails),
+                "inbox_emails",
+            )
         )
         sms_coro = _safe(
             sms_repo.get_by_contact_id(contact_id, limit=max_sms),
@@ -184,9 +197,13 @@ class CustomerContextService:
             inv_repo.get_by_contact_id(contact_id, limit=max_invoices),
             "invoices",
         )
-        b2b_coro = _safe(
-            self._get_b2b_churn_signals(contact),
-            "b2b_churn_signals",
+        b2b_coro = (
+            asyncio.sleep(0, result=[])
+            if business_context_id is not None
+            else _safe(
+                self._get_b2b_churn_signals(contact),
+                "b2b_churn_signals",
+            )
         )
 
         interactions, appointments, calls, emails, inbox, sms, invoices, b2b = await asyncio.gather(
@@ -250,17 +267,26 @@ class CustomerContextService:
             return []
 
     async def _get_sent_emails(
-        self, contact: dict, limit: int,
+        self,
+        contact: dict,
+        limit: int,
+        business_context_id: Optional[str] = None,
+        contact_id: Optional[str] = None,
     ) -> list[dict]:
-        """Find sent emails addressed to this contact's email."""
+        """Find sent emails addressed to this contact within an exact tenant."""
         email_addr = contact.get("email")
-        if not email_addr:
+        if not email_addr and not contact_id:
             return []
 
         from ..storage.repositories.email import get_email_repo
 
         repo = get_email_repo()
-        results = await repo.query(to_address=email_addr, limit=limit)
+        results = await repo.query(
+            to_address=email_addr,
+            limit=limit,
+            business_context_id=business_context_id,
+            contact_id=contact_id,
+        )
         return [self._email_to_dict(e) for e in results]
 
     async def _get_inbox_emails(

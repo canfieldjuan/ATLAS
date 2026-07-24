@@ -94,8 +94,16 @@ def _crm(inserted: bool = True, existing: list | None = None):
 
 def _email_provider(success: bool = True):
     provider = MagicMock()
-    provider.send = AsyncMock(return_value={"success": success})
+    provider.send = AsyncMock(
+        return_value={"success": success, "message_id": "provider-message-1"}
+    )
     return provider
+
+
+def _email_history():
+    history = MagicMock()
+    history.create = AsyncMock(return_value=MagicMock())
+    return history
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +256,83 @@ async def test_acknowledgement_send_wiring_reply_to_business_email():
     assert "estimate request" in send_kwargs["subject"].lower()
 
 
+@pytest.mark.asyncio
+async def test_successful_acknowledgement_records_tenant_history():
+    crm, provider, history = _crm(), _email_provider(), _email_history()
+
+    result = await _process_lead_intake(
+        _payload(),
+        crm=crm,
+        email_provider=provider,
+        email_history=history,
+    )
+
+    assert result["email_sent"] is True
+    history.create.assert_awaited_once()
+    kwargs = history.create.await_args.kwargs
+    assert kwargs["to_addresses"] == ["jane@example.com"]
+    assert kwargs["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
+    assert kwargs["template_type"] == "request_acknowledgement"
+    assert kwargs["resend_message_id"] == "provider-message-1"
+    assert kwargs["metadata"] == {
+        "source": "website_estimate_form",
+        "contact_id": "c-123",
+    }
+
+
+@pytest.mark.asyncio
+async def test_refused_acknowledgement_does_not_record_history():
+    crm, provider, history = _crm(), _email_provider(False), _email_history()
+
+    result = await _process_lead_intake(
+        _payload(),
+        crm=crm,
+        email_provider=provider,
+        email_history=history,
+    )
+
+    assert result["email_sent"] is False
+    history.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_history_failure_does_not_flip_successful_delivery():
+    crm, provider, history = _crm(), _email_provider(), _email_history()
+    history.create.side_effect = RuntimeError("history unavailable")
+
+    result = await _process_lead_intake(
+        _payload(),
+        crm=crm,
+        email_provider=provider,
+        email_history=history,
+    )
+
+    assert result == {"success": True, "email_sent": True}
+    provider.send.assert_awaited_once()
+    history.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "inserted"),
+    [
+        (_payload(website="spam"), True),
+        (_payload(), False),
+    ],
+)
+async def test_non_send_paths_do_not_record_history(payload, inserted):
+    crm, provider, history = _crm(inserted=inserted), _email_provider(), _email_history()
+
+    await _process_lead_intake(
+        payload,
+        crm=crm,
+        email_provider=provider,
+        email_history=history,
+    )
+
+    history.create.assert_not_awaited()
+
+
 def test_template_guardrails_no_prices_no_quotes_correct_phone():
     subject, body = format_request_acknowledgement(
         client_name="Jane", service="residential", frequency="bi-weekly"
@@ -276,15 +361,20 @@ def test_template_omits_request_line_when_fields_empty():
 
 @pytest.mark.asyncio
 async def test_daily_cap_blocks_before_any_side_effect():
-    crm, provider = _crm(), _email_provider()
+    crm, provider, history = _crm(), _email_provider(), _email_history()
     counter = AsyncMock(return_value=MAX_DAILY_SUBMISSIONS)
     with pytest.raises(LeadRateLimitedError):
         await _process_lead_intake(
-            _payload(), crm=crm, email_provider=provider, daily_count=counter
+            _payload(),
+            crm=crm,
+            email_provider=provider,
+            daily_count=counter,
+            email_history=history,
         )
     crm.find_or_create_contact.assert_not_awaited()
     crm.log_interaction.assert_not_awaited()
     provider.send.assert_not_awaited()
+    history.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -410,6 +500,7 @@ def test_route_smoke_mounted_path_statuses():
     app.include_router(leads_mod.router, prefix="/api/v1")
     app.dependency_overrides[leads_mod._crm_dependency] = lambda: _crm()
     app.dependency_overrides[leads_mod._email_dependency] = lambda: _email_provider()
+    app.dependency_overrides[leads_mod._email_history_dependency] = _email_history
     app.dependency_overrides[leads_mod._daily_count_dependency] = lambda: fake_count
 
     async def fake_volume():
@@ -490,15 +581,39 @@ async def test_throttle_receives_digit_normalized_phone():
 
 @pytest.mark.asyncio
 async def test_global_ack_volume_cap_skips_email_but_captures_lead():
-    crm, provider = _crm(), _email_provider()
+    crm, provider, history = _crm(), _email_provider(), _email_history()
     volume = AsyncMock(return_value=1000)
     result = await _process_lead_intake(
-        _payload(), crm=crm, email_provider=provider, ack_volume=volume
+        _payload(),
+        crm=crm,
+        email_provider=provider,
+        ack_volume=volume,
+        email_history=history,
     )
     assert result["success"] is True
     assert result["email_sent"] is False
     provider.send.assert_not_awaited()
+    history.create.assert_not_awaited()
     crm.log_interaction.assert_awaited()  # lead capture unaffected
+
+
+@pytest.mark.asyncio
+async def test_disabled_acknowledgement_does_not_record_history(monkeypatch):
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.email, "enabled", False)
+    crm, provider, history = _crm(), _email_provider(), _email_history()
+
+    result = await _process_lead_intake(
+        _payload(),
+        crm=crm,
+        email_provider=provider,
+        email_history=history,
+    )
+
+    assert result["email_sent"] is False
+    provider.send.assert_not_awaited()
+    history.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio

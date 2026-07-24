@@ -200,6 +200,7 @@ async def _process_lead_intake(
     email_provider: Any,
     daily_count: Optional[Any] = None,
     ack_volume: Optional[Any] = None,
+    email_history: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Core intake flow with injectable providers (unit-testable sans HTTP)."""
     if payload.website.strip():
@@ -328,6 +329,32 @@ async def _process_lead_intake(
                     reply_to=BUSINESS_EMAIL,
                 )
                 email_sent = bool(result.get("success", True)) if isinstance(result, dict) else True
+                if email_sent and email_history is not None:
+                    try:
+                        message_id = None
+                        if isinstance(result, dict):
+                            message_id = result.get("message_id") or result.get("id")
+                        await email_history.create(
+                            to_addresses=[email],
+                            subject=subject,
+                            body=body,
+                            template_type="request_acknowledgement",
+                            resend_message_id=message_id,
+                            metadata={
+                                "source": "website_estimate_form",
+                                "contact_id": str(contact_id),
+                            },
+                            business_context_id=EOM_BUSINESS_CONTEXT_ID,
+                        )
+                    except Exception:
+                        # Delivery already succeeded. History is secondary
+                        # evidence and must not flip the public outcome or
+                        # retry the acknowledgement.
+                        logger.exception(
+                            "lead_intake: acknowledgement history write failed "
+                            "for contact %s",
+                            contact_id,
+                        )
             except Exception:
                 # The acknowledgement must never fail the request: the CRM
                 # write is the source of truth and has already committed.
@@ -361,6 +388,12 @@ def _ack_volume_dependency() -> Any:
     return _hourly_ack_volume
 
 
+def _email_history_dependency() -> Any:
+    from ..storage.repositories.email import get_email_repo
+
+    return get_email_repo()
+
+
 @router.post("/intake")
 async def lead_intake(
     payload: LeadIntakeRequest,
@@ -368,6 +401,7 @@ async def lead_intake(
     email_provider: Any = Depends(_email_dependency),
     daily_count: Any = Depends(_daily_count_dependency),
     ack_volume: Any = Depends(_ack_volume_dependency),
+    email_history: Any = Depends(_email_history_dependency),
 ) -> dict[str, Any]:
     """Receive an estimate-form submission from the public website.
 
@@ -381,6 +415,7 @@ async def lead_intake(
             email_provider=email_provider,
             daily_count=daily_count,
             ack_volume=ack_volume,
+            email_history=email_history,
         )
     except LeadValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
