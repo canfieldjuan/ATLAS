@@ -413,7 +413,7 @@ read-only invoicing OAuth pattern, Tailscale well-known route shape, discovery
 and e2e smoke requirements, and operator launcher checklist for future MCP
 servers.
 
-### CRM MCP Server (10 tools)
+### CRM MCP Server (14 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.crm_server
@@ -424,7 +424,9 @@ python -m atlas_brain.mcp.crm_server --sse
 
 Tools: `search_contacts`, `get_contact`, `create_contact`, `update_contact`,
 `delete_contact`, `list_contacts`, `log_interaction`, `get_interactions`,
-`get_contact_appointments`, `get_customer_context`
+`get_contact_appointments`, `get_customer_context`,
+`open_customer_service_ticket`, `list_customer_service_tickets`,
+`update_customer_service_ticket`, `close_customer_service_ticket`
 
 ### Email MCP Server (9 tools)
 ```bash

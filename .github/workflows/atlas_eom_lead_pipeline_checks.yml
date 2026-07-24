@@ -11,7 +11,9 @@ on:
       - "atlas_brain/mcp/crm_server.py"
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
+      - "atlas_brain/storage/migrations/347_customer_service_tickets.sql"
       - "tests/test_crm_read_scoping.py"
+      - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_lead_pipeline_integration.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
@@ -24,7 +26,9 @@ on:
       - "atlas_brain/mcp/crm_server.py"
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
+      - "atlas_brain/storage/migrations/347_customer_service_tickets.sql"
       - "tests/test_crm_read_scoping.py"
+      - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_lead_pipeline_integration.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
@@ -68,6 +72,7 @@ jobs:
         run: |
           python -m pytest \
             tests/test_crm_read_scoping.py \
+            tests/test_eom_complaints_integration.py \
             tests/test_eom_lead_pipeline_integration.py \
             tests/test_leads_intake.py \
             tests/test_migrations_runner.py \
