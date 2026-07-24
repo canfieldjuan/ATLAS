@@ -292,13 +292,28 @@ class DatabaseCRMProvider:
         )
         return result
 
-    async def get_contact(self, contact_id: str) -> Optional[dict[str, Any]]:
+    async def get_contact(
+        self,
+        contact_id: str,
+        business_context_id: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
-        row = await pool.fetchrow(
-            "SELECT * FROM contacts WHERE id = $1", contact_id
-        )
+        if business_context_id:
+            row = await pool.fetchrow(
+                """
+                SELECT * FROM contacts
+                WHERE id = $1
+                  AND business_context_id = $2
+                """,
+                contact_id,
+                business_context_id,
+            )
+        else:
+            row = await pool.fetchrow(
+                "SELECT * FROM contacts WHERE id = $1", contact_id
+            )
         return dict(row) if row else None
 
     async def search_contacts(
@@ -783,21 +798,26 @@ class DatabaseCRMProvider:
     async def get_interactions(
         self, contact_id: str, limit: int = 20,
         business_context_id: Optional[str] = None,
+        include_unclaimed_legacy: bool = True,
     ) -> list[dict[str, Any]]:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
         if business_context_id:
-            # Atomic tenant predicate: the page only returns while the
-            # owning contact is still visible to this tenant (tenant page
-            # plus NULL-context legacy), closing the window between a
-            # caller's guard read and this query.
+            contact_scope = (
+                "(c.business_context_id = $2 OR c.business_context_id IS NULL)"
+                if include_unclaimed_legacy
+                else "c.business_context_id = $2"
+            )
+            # Atomic tenant predicate: the page only returns while the owning
+            # contact remains visible under the caller's selected strict or
+            # tenant-plus-legacy mode.
             rows = await pool.fetch(
-                """
+                f"""
                 SELECT ci.* FROM contact_interactions ci
                 JOIN contacts c ON c.id = ci.contact_id
                 WHERE ci.contact_id = $1
-                  AND (c.business_context_id = $2 OR c.business_context_id IS NULL)
+                  AND {contact_scope}
                 ORDER BY ci.occurred_at DESC
                 LIMIT $3
                 """,
@@ -885,14 +905,27 @@ class DatabaseCRMProvider:
         return dict(row) if row else None
 
     async def get_contact_appointments(
-        self, contact_id: str, business_context_id: Optional[str] = None
+        self,
+        contact_id: str,
+        business_context_id: Optional[str] = None,
+        include_unclaimed_legacy: bool = True,
     ) -> list[dict[str, Any]]:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
         if business_context_id:
-            rows = await pool.fetch(
+            contact_scope = (
                 """
+                (
+                    contact.business_context_id IS NULL
+                    OR contact.business_context_id = $2
+                )
+                """
+                if include_unclaimed_legacy
+                else "contact.business_context_id = $2"
+            )
+            rows = await pool.fetch(
+                f"""
                 SELECT appointment.id,
                        appointment.start_time,
                        appointment.end_time,
@@ -914,10 +947,7 @@ class DatabaseCRMProvider:
                   ON contact.id = appointment.contact_id
                 WHERE appointment.contact_id = $1
                   AND appointment.business_context_id = $2
-                  AND (
-                      contact.business_context_id IS NULL
-                      OR contact.business_context_id = $2
-                  )
+                  AND {contact_scope}
                 ORDER BY appointment.start_time DESC
                 LIMIT 50
                 """,

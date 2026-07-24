@@ -2,25 +2,34 @@
 Contact and call transcript endpoints.
 
 Provides:
-- GET /contacts/{id}/timeline -- unified chronological view of all customer activity
+- GET /contacts/{id}/timeline -- tenant-scoped chronological customer activity
 - GET /comms/calls/search -- search call transcripts by keyword, date, contact, intent
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..services.customer_context import get_customer_context_service
+from ..auth.dependencies import AuthUser, require_auth
+from ..services.crm_provider import get_crm_provider
 from ..storage.repositories.call_transcript import get_call_transcript_repo
 
 logger = logging.getLogger("atlas.api.contacts")
 
 router = APIRouter(tags=["contacts"])
+
+
+async def require_crm_operator(
+    user: AuthUser = Depends(require_auth),
+) -> AuthUser:
+    """Restrict cross-tenant CRM reads to the platform operator."""
+    if bool(getattr(user, "is_platform_admin", False)):
+        return user
+    raise HTTPException(status_code=403, detail="Platform admin access required")
 
 
 # ---------------------------------------------------------------------------
@@ -30,28 +39,77 @@ router = APIRouter(tags=["contacts"])
 @router.get("/contacts/{contact_id}/timeline")
 async def contact_timeline(
     contact_id: str,
+    business_context_id: str = Query(..., min_length=1, max_length=64),
     limit: int = Query(default=50, ge=1, le=200),
+    _user: AuthUser = Depends(require_crm_operator),
 ):
     """Unified chronological timeline for a contact.
 
-    Merges interactions, call transcripts, appointments, and emails
-    into a single sorted feed.
+    Merges tenant-addressable interactions, call transcripts, and
+    appointments into a single sorted feed. Email history is omitted until
+    its stores carry tenant ownership.
     """
-    svc = get_customer_context_service()
-    ctx = await svc.get_context(
-        contact_id=contact_id,
-        max_interactions=limit,
-        max_calls=limit,
-        max_appointments=limit,
-        max_emails=limit,
+    business_context_id = _business_context(business_context_id)
+    crm = get_crm_provider()
+    call_repo = get_call_transcript_repo()
+
+    contact = await crm.get_contact(
+        contact_id,
+        business_context_id=business_context_id,
     )
-    if ctx.is_empty:
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    async def _safe(coro, label: str):
+        try:
+            return await coro
+        except Exception as exc:
+            logger.warning("Contact timeline %s failed: %s", label, exc)
+            return []
+
+    interactions, appointments, calls = await asyncio.gather(
+        _safe(
+            crm.get_interactions(
+                contact_id,
+                limit=limit,
+                business_context_id=business_context_id,
+                include_unclaimed_legacy=False,
+            ),
+            "interactions",
+        ),
+        _safe(
+            crm.get_contact_appointments(
+                contact_id,
+                business_context_id=business_context_id,
+                include_unclaimed_legacy=False,
+            ),
+            "appointments",
+        ),
+        _safe(
+            call_repo.get_by_contact_id(
+                contact_id,
+                limit=limit,
+                business_context_id=business_context_id,
+                include_unclaimed_legacy=False,
+            ),
+            "call transcripts",
+        ),
+    )
+
+    # Revalidate the exact row after the last child await. Each child query
+    # also joins current contact ownership, and this final read prevents a
+    # contact reassignment during the gather from returning a stale 200.
+    contact = await crm.get_contact(
+        contact_id,
+        business_context_id=business_context_id,
+    )
+    if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
 
     events: list[dict] = []
 
     # Interactions
-    for ix in ctx.interactions:
+    for ix in interactions:
         ts = ix.get("occurred_at")
         events.append({
             "type": "interaction",
@@ -62,7 +120,7 @@ async def contact_timeline(
         })
 
     # Call transcripts
-    for call in ctx.call_transcripts:
+    for call in calls:
         ts = call.get("created_at")
         events.append({
             "type": "call",
@@ -76,7 +134,7 @@ async def contact_timeline(
         })
 
     # Appointments
-    for appt in ctx.appointments:
+    for appt in appointments[:limit]:
         ts = appt.get("start_time")
         events.append({
             "type": "appointment",
@@ -87,28 +145,6 @@ async def contact_timeline(
             "notes": appt.get("notes", ""),
         })
 
-    # Sent emails
-    for em in ctx.sent_emails:
-        ts = em.get("sent_at")
-        events.append({
-            "type": "email_sent",
-            "subtype": "",
-            "timestamp": _to_iso(ts),
-            "summary": em.get("subject", ""),
-            "id": str(em.get("id", "")),
-        })
-
-    # Inbox emails
-    for em in ctx.inbox_emails:
-        ts = em.get("date") or em.get("received_at")
-        events.append({
-            "type": "email_received",
-            "subtype": "",
-            "timestamp": _to_iso(ts),
-            "summary": em.get("subject", ""),
-            "id": str(em.get("id", "")),
-        })
-
     # Sort descending by timestamp (most recent first)
     events.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
 
@@ -117,9 +153,10 @@ async def contact_timeline(
 
     return {
         "contact_id": contact_id,
-        "contact_name": ctx.display_name,
+        "contact_name": contact.get("full_name") or "Unknown",
         "total_events": len(events),
         "events": events,
+        "emails_omitted_under_scope": True,
     }
 
 
@@ -134,9 +171,12 @@ async def search_calls(
     intent: Optional[str] = Query(default=None, description="Filter by extracted intent"),
     from_date: Optional[str] = Query(default=None, description="Start date (ISO 8601)"),
     to_date: Optional[str] = Query(default=None, description="End date (ISO 8601)"),
+    business_context_id: str = Query(..., min_length=1, max_length=64),
     limit: int = Query(default=50, ge=1, le=200),
+    _user: AuthUser = Depends(require_crm_operator),
 ):
     """Search call transcripts with keyword and structured filters."""
+    business_context_id = _business_context(business_context_id)
     repo = get_call_transcript_repo()
 
     from_dt = _parse_date(from_date) if from_date else None
@@ -148,6 +188,7 @@ async def search_calls(
         intent=intent,
         from_date=from_dt,
         to_date=to_dt,
+        business_context_id=business_context_id,
         limit=limit,
     )
 
@@ -178,6 +219,16 @@ async def search_calls(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _business_context(value: str) -> str:
+    context = value.strip()
+    if not context:
+        raise HTTPException(
+            status_code=422,
+            detail="business_context_id must not be blank",
+        )
+    return context
+
 
 def _ensure_dict(val) -> dict:
     """Coerce JSONB value to dict. asyncpg usually returns dicts but some
