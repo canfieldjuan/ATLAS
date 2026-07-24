@@ -23,9 +23,15 @@ without tests would ship unproven heuristics.
   to the gate; persist its output on the audit artifact; inject it in the
   runner with the same self-report discipline as the verdict (worker
   claims discarded); change NO gating behavior.
-- Must not change: `verify_copy` verdict semantics, the promote validator,
-  the store, the OWUI tool (it is the source and already carries this
-  layer, re-synced v0.2.0).
+- Correct fix must also (contract REVISED in round 3, per the review):
+  version the audit contract (v2 carries the checklist; v1 frozen) and
+  admit both versions at the store's audit stage -- persisting the new
+  field is impossible without the version-admission touch, so the store's
+  STAGE_SCHEMAS/admission check is IN scope for exactly that change.
+- Must not change: `verify_copy` verdict semantics, the promote
+  validator, any other store behavior, the OWUI tool (it is the source
+  and already carries this layer, re-synced v0.2.0), the pre-#2181
+  `EditorialAudit.model_validate(v1_payload)` API.
 
 ## Scope (this PR)
 
@@ -75,6 +81,19 @@ Slice phase: vertical slice
 - Reviewer rules triggered: R1 (#2136 item 2), R2 (both-direction tests),
   R5 (no gating change, old artifacts validate), R10 (advisory logic
   lives beside the gate it complements), R14.
+
+### Review round 3 (Codex)
+
+Four findings, all fixed: `EditorialAudit` keeps its pre-change v1 API
+(the v2 contract is `EditorialAuditV2`; registry dispatches both);
+evidence redaction gains a CLASS backstop -- any 5+ digit run joined by
+single non-word separators is masked (`020/7946/0958` included), ending
+the format-enumeration game on the evidence path; owner-routing coverage
+requires a NON-NEGATED affirmative relation ("no one is assigned",
+"not routed to Billing" now warn; bare "responsible for" no longer
+suppresses); and this contract's "must not change the store" line was
+revised to name the version-admission touch the v2 artifact requires
+(the contradiction the review flagged).
 
 ### Review round 2 (Codex)
 

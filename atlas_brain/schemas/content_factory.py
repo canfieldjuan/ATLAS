@@ -177,12 +177,14 @@ class CopyVerification(BaseModel):
     hits: list[str] = Field(default_factory=list)
 
 
-class EditorialAuditV1(BaseModel):
+class EditorialAudit(BaseModel):
     """audit.json (v1, FROZEN) -- voice edit + the verify verdict.
 
-    The v1 shape is frozen so artifacts already on disk (and any rolled-back
-    reader) keep validating byte-for-byte; ``advisory_warnings`` lives only on
-    v2 (#2136 item 2). Do not add fields here.
+    Keeps the pre-#2181 class name and shape so existing consumers of
+    ``EditorialAudit.model_validate(v1_payload)`` are unaffected. The v1
+    shape is frozen so artifacts already on disk (and any rolled-back
+    reader) keep validating byte-for-byte; ``advisory_warnings`` lives only
+    on ``EditorialAuditV2`` (#2136 item 2). Do not add fields here.
     """
 
     model_config = _BASE_CONFIG
@@ -199,7 +201,7 @@ class EditorialAuditV1(BaseModel):
     prompt_version: Optional[str] = None
 
     @model_validator(mode="after")
-    def _promote_requires_passing_verdict(self) -> "EditorialAuditV1":
+    def _promote_requires_passing_verdict(self) -> "EditorialAudit":
         # The model cannot self-promote: a 'promote' recommendation is only valid
         # when the deterministic copy-verification verdict is 'pass'.
         if self.recommendation == "promote":
@@ -211,7 +213,7 @@ class EditorialAuditV1(BaseModel):
         return self
 
 
-class EditorialAudit(BaseModel):
+class EditorialAuditV2(BaseModel):
     """audit.json (v2) -- v1 plus the non-blocking advisory checklist."""
 
     model_config = _BASE_CONFIG
@@ -232,7 +234,7 @@ class EditorialAudit(BaseModel):
     prompt_version: Optional[str] = None
 
     @model_validator(mode="after")
-    def _promote_requires_passing_verdict(self) -> "EditorialAudit":
+    def _promote_requires_passing_verdict(self) -> "EditorialAuditV2":
         # The model cannot self-promote: a 'promote' recommendation is only valid
         # when the deterministic copy-verification verdict is 'pass'.
         if self.recommendation == "promote":
@@ -288,8 +290,8 @@ ARTIFACT_MODELS: dict[str, type[BaseModel]] = {
     "content_brief.v1": ContentBrief,
     "evidence_packet.v1": EvidencePacket,
     "draft.v1": DraftArtifact,
-    "editorial_audit.v1": EditorialAuditV1,
-    "editorial_audit.v2": EditorialAudit,
+    "editorial_audit.v1": EditorialAudit,
+    "editorial_audit.v2": EditorialAuditV2,
     "manifest.v1": ArtifactManifest,
 }
 

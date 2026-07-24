@@ -141,7 +141,9 @@ def test_extra_keys_rejected():
 
 
 def test_editorial_audit_defaults_to_revise():
-    audit = EditorialAudit.model_validate(
+    from atlas_brain.schemas.content_factory import EditorialAuditV2
+
+    audit = EditorialAuditV2.model_validate(
         {"schema": "editorial_audit.v2", "project_id": "resolution-audit"}
     )
     assert audit.recommendation == "revise"
@@ -210,9 +212,15 @@ def test_attribute_name_only_tag_rejected():
         )
 
 
+def _v2():
+    from atlas_brain.schemas.content_factory import EditorialAuditV2
+
+    return EditorialAuditV2
+
+
 def test_audit_promote_without_verification_rejected():
     with pytest.raises(ValidationError):
-        EditorialAudit.model_validate(
+        _v2().model_validate(
             {
                 "schema": "editorial_audit.v2",
                 "project_id": "resolution-audit",
@@ -223,7 +231,7 @@ def test_audit_promote_without_verification_rejected():
 
 def test_audit_promote_with_failed_verdict_rejected():
     with pytest.raises(ValidationError):
-        EditorialAudit.model_validate(
+        _v2().model_validate(
             {
                 "schema": "editorial_audit.v2",
                 "project_id": "resolution-audit",
@@ -234,7 +242,7 @@ def test_audit_promote_with_failed_verdict_rejected():
 
 
 def test_audit_promote_with_passing_verdict_accepted():
-    audit = EditorialAudit.model_validate(
+    audit = _v2().model_validate(
         {
             "schema": "editorial_audit.v2",
             "project_id": "resolution-audit",
@@ -268,9 +276,7 @@ def test_model_dump_json_uses_canonical_schema_key():
 
 
 def test_editorial_audit_v1_still_validates_old_artifacts():
-    from atlas_brain.schemas.content_factory import EditorialAuditV1
-
-    audit = EditorialAuditV1.model_validate(
+    audit = EditorialAudit.model_validate(
         {"schema": "editorial_audit.v1", "project_id": "resolution-audit"}
     )
     assert audit.recommendation == "revise"
@@ -281,10 +287,8 @@ def test_editorial_audit_v1_rejects_advisory_warnings_field():
     never carry the v2-only field (and an old reader never sees one)."""
     from pydantic import ValidationError
 
-    from atlas_brain.schemas.content_factory import EditorialAuditV1
-
     with pytest.raises(ValidationError):
-        EditorialAuditV1.model_validate(
+        EditorialAudit.model_validate(
             {
                 "schema": "editorial_audit.v1",
                 "project_id": "p",
@@ -296,10 +300,8 @@ def test_editorial_audit_v1_rejects_advisory_warnings_field():
 def test_editorial_audit_v1_promote_gate_still_enforced():
     from pydantic import ValidationError
 
-    from atlas_brain.schemas.content_factory import EditorialAuditV1
-
     with pytest.raises(ValidationError):
-        EditorialAuditV1.model_validate(
+        EditorialAudit.model_validate(
             {
                 "schema": "editorial_audit.v1",
                 "project_id": "p",
@@ -311,9 +313,9 @@ def test_editorial_audit_v1_promote_gate_still_enforced():
 def test_model_for_dispatches_both_audit_versions():
     from atlas_brain.schemas.content_factory import (
         EditorialAudit,
-        EditorialAuditV1,
+        EditorialAuditV2,
         model_for,
     )
 
-    assert model_for({"schema": "editorial_audit.v1"}) is EditorialAuditV1
-    assert model_for({"schema": "editorial_audit.v2"}) is EditorialAudit
+    assert model_for({"schema": "editorial_audit.v1"}) is EditorialAudit
+    assert model_for({"schema": "editorial_audit.v2"}) is EditorialAuditV2

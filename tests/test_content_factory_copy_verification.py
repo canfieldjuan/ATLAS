@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from atlas_brain.schemas.content_factory import EditorialAudit
+from atlas_brain.schemas.content_factory import EditorialAuditV2
 from atlas_brain.services.content_factory_copy_verification import verify_copy
 
 
@@ -178,18 +178,18 @@ CLEAN = (
 
 
 def test_clean_copy_can_be_promoted():
-    audit = EditorialAudit.model_validate(_audit(CLEAN, "promote"))
+    audit = EditorialAuditV2.model_validate(_audit(CLEAN, "promote"))
     assert audit.recommendation == "promote"
     assert audit.copy_verification.verdict == "pass"
 
 
 def test_forbidden_copy_cannot_be_promoted():
     with pytest.raises(ValidationError):
-        EditorialAudit.model_validate(_audit("Guaranteed savings for all.", "promote"))
+        EditorialAuditV2.model_validate(_audit("Guaranteed savings for all.", "promote"))
 
 
 def test_forbidden_copy_may_still_recommend_revise():
-    audit = EditorialAudit.model_validate(_audit("Guaranteed savings for all.", "revise"))
+    audit = EditorialAuditV2.model_validate(_audit("Guaranteed savings for all.", "revise"))
     assert audit.recommendation == "revise"
     assert audit.copy_verification.verdict == "fail"
 
@@ -269,13 +269,13 @@ def test_advisory_warnings_do_not_block_promotion():
     body = "We draft the answer for every ticket."
     audit = dict(_audit(body, "promote"))
     audit["advisory_warnings"] = advisory_warnings(body)
-    validated = EditorialAudit.model_validate(audit)
+    validated = EditorialAuditV2.model_validate(audit)
     assert validated.recommendation == "promote"
     assert len(validated.advisory_warnings) >= 2  # claim warning + reminder
 
 
 def test_advisory_warnings_default_empty_on_v2():
-    audit = EditorialAudit.model_validate(_audit(CLEAN, "revise"))
+    audit = EditorialAuditV2.model_validate(_audit(CLEAN, "revise"))
     assert audit.advisory_warnings == []
 
 
@@ -350,3 +350,50 @@ def test_advisory_bare_draft_or_ranked_is_not_report_shape():
     for text in ("This draft is ready for review.", "Ranked choice voting is supported."):
         warnings = advisory_warnings(text)
         assert not any(w.startswith("owner-routing-coverage:") for w in warnings), text
+
+
+# --- round-3 review fixes ---
+
+
+def test_advisory_masks_arbitrary_separator_digit_runs():
+    """Class backstop: no separator-style enumeration -- any 5+ digit run
+    with single non-word separators is masked in evidence."""
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("Our answer desk is at 020/7946/0958.")
+    joined = " ".join(warnings)
+    assert "7946" not in joined
+    assert "redacted" in joined
+
+
+def test_advisory_negated_routing_does_not_suppress_warning():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    for text in (
+        "The report ranks issues, but no one is assigned to them.",
+        "The report ranks issues; they are not routed to Billing.",
+    ):
+        warnings = advisory_warnings(text)
+        assert any(
+            w.startswith("owner-routing-coverage:") for w in warnings
+        ), text
+
+
+def test_advisory_affirmative_routing_still_suppresses():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues, and each one is routed to the owning team."
+    )
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_editorial_audit_v1_api_unchanged():
+    """Pre-#2181 consumers keep working: EditorialAudit still validates a
+    v1 payload."""
+    from atlas_brain.schemas.content_factory import EditorialAudit
+
+    audit = EditorialAudit.model_validate(
+        {"schema": "editorial_audit.v1", "project_id": "p"}
+    )
+    assert audit.recommendation == "revise"

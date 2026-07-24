@@ -115,6 +115,11 @@ _INTL_PHONE_RE = re.compile(r"\+\d{1,3}(?:[\s().-]?\d){7,12}\b")
 # positive costs a `<redacted-phone>` marker in advisory evidence, never a
 # verdict change.
 _PHONE_SHAPED_RE = re.compile(r"\b\d(?:[\s().-]?\d){8,12}\b")
+# Class backstop for evidence (review round 3): ANY run of 5+ digits joined by
+# at most one non-word separator each ("020/7946/0958", "10,000.55") is masked
+# before persisting. No enumeration of separator styles can be complete, so
+# the evidence path masks the whole class; over-redaction is harmless there.
+_DIGIT_RUN_RE = re.compile(r"\d(?:[^\w\n]?\d){4,}")
 
 # A negation directly before the claim (no/not/never/without/cannot, or an -n't
 # contraction). "not only"/"not just" are emphatic, NOT negations, and are excluded.
@@ -138,11 +143,29 @@ _REPORT_SHAPE_RE = re.compile(
     re.I,
 )
 _OWNER_ROUTING_RE = re.compile(
-    r"\b(?:owner\s+lane|owned\s+by|assigned\s+to|responsible\s+for|"
+    r"\b(?:owner\s+lane|owned\s+by|assigned\s+to|"
     r"route[sd]?\s+(?:to|each|the)|routing|\w+\s+owns\b|"
     r"who\s+needs\s+to\s+(?:fix|review)|needs\s+to\s+(?:fix|review))",
     re.I,
 )
+_ROUTING_NEGATION_RE = re.compile(
+    r"\b(?:no|not|never|none|nobody|without|cannot|isn|aren)\b|n't\b", re.I
+)
+
+
+def _has_affirmative_owner_routing(text: str) -> bool:
+    """True only for a routing/ownership relation that is NOT negated in its
+    own clause: 'no one is assigned to them' and 'they are not routed to
+    Billing' are explicit ABSENCE of routing, which must not count as
+    coverage (review round 3)."""
+    for match in _OWNER_ROUTING_RE.finditer(text):
+        segment_start = 0
+        for boundary in _CLAUSE_BOUNDARY_RE.finditer(text[: match.start()]):
+            segment_start = boundary.end()
+        prefix_window = " ".join(text[segment_start : match.start()].split()[-4:])
+        if not _ROUTING_NEGATION_RE.search(prefix_window):
+            return True
+    return False
 _OWNERSHIP_RE = re.compile(
     r"\b(?:engineering|product|support|cx|policy|ops|operations|billing|success|content|docs|documentation|legal|team|owner)s?\s+(?:owns?|is\s+responsible\s+for|are\s+responsible\s+for|should\s+own|must\s+own)\b|\bowned\s+by\b",
     re.I,
@@ -182,6 +205,7 @@ def _redact_pii(evidence: str) -> str:
     evidence = _INTL_PHONE_RE.sub("<redacted-phone>", evidence)
     evidence = _PHONE_RE.sub("<redacted-phone>", evidence)
     evidence = _PHONE_SHAPED_RE.sub("<redacted-phone>", evidence)
+    evidence = _DIGIT_RUN_RE.sub("<redacted-number>", evidence)
     return evidence
 
 
@@ -274,7 +298,7 @@ def advisory_warnings(text: str) -> list[str]:
     warnings += _unqualified_sentences(
         text, _OWNERSHIP_RE, _OWNERSHIP_QUALIFIER_RE, "unqualified-ownership-claim"
     )
-    if _REPORT_SHAPE_RE.search(text) and not _OWNER_ROUTING_RE.search(text):
+    if _REPORT_SHAPE_RE.search(text) and not _has_affirmative_owner_routing(text):
         warnings.append(
             "owner-routing-coverage: draft explains the report shape but omits "
             "owner routing or who should review the fix"
