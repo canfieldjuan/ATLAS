@@ -294,12 +294,19 @@ async def test_customer_context_refuses_row_claimed_mid_gather(default_ctx, monk
 
 @pytest.mark.asyncio
 async def test_customer_context_serializes_still_visible_row(default_ctx, monkeypatch):
+    """The omission assertions only prove something if the stub SEEDS each
+    omitted source non-empty -- an empty-in/empty-out check passes even
+    when the serializer regresses (Codex, #2172)."""
     _provider_mock(monkeypatch, get=SAME)
     from atlas_brain.services import customer_context as ccx
 
     class _Svc:
         async def get_context(self, contact_id, **kwargs):
-            return _StubCtx(dict(SAME))
+            ctx = _StubCtx(dict(SAME))
+            ctx.sent_emails = [{"subject": "old estimate thread"}]
+            ctx.inbox_emails = [{"subject": "customer reply"}]
+            ctx.b2b_churn_signals = [{"vendor": "acme-saas"}]
+            return ctx
 
     monkeypatch.setattr(ccx, "get_customer_context_service", lambda: _Svc())
     out = json.loads(await crm_srv.get_customer_context(contact_id=UUID))
@@ -307,6 +314,8 @@ async def test_customer_context_serializes_still_visible_row(default_ctx, monkey
     assert out["contact"]["business_context_id"] == EOM
     assert out["emails_omitted_under_scope"] is True
     assert out["b2b_enrichment_omitted_under_scope"] is True
+    assert out["sent_emails"] == []
+    assert out["inbox_emails"] == []
     assert out["b2b_churn_signals"] == []
 
 
