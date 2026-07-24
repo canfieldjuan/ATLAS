@@ -404,16 +404,58 @@ async def test_customer_context_refuses_row_claimed_mid_gather(default_ctx, monk
     claimable NULL row, but the service's own fetch returns the row already
     claimed by the other tenant -- the response must refuse, not serialize
     the foreign contact."""
-    _provider_mock(monkeypatch, get=LEGACY_NULL)
+    provider = _provider_mock(monkeypatch)
+    provider.get_contact = AsyncMock(side_effect=[LEGACY_NULL, FOREIGN])
     from atlas_brain.services import customer_context as ccx
 
     class _Svc:
         async def get_context(self, contact_id, **kwargs):
-            return _StubCtx(dict(FOREIGN))
+            return _StubCtx(dict(LEGACY_NULL))
 
     monkeypatch.setattr(ccx, "get_customer_context_service", lambda: _Svc())
     out = json.loads(await crm_srv.get_customer_context(contact_id=UUID))
     assert out == {"found": False, "context": None}
+    assert provider.get_contact.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_explicit_context_refuses_row_cleared_mid_gather(
+    default_ctx, monkeypatch
+):
+    provider = _provider_mock(monkeypatch)
+    provider.get_contact = AsyncMock(side_effect=[SAME, LEGACY_NULL])
+    from atlas_brain.services import customer_context as ccx
+
+    class _Svc:
+        async def get_context(self, contact_id, **kwargs):
+            return _StubCtx(dict(SAME))
+
+    monkeypatch.setattr(ccx, "get_customer_context_service", lambda: _Svc())
+    out = json.loads(
+        await crm_srv.get_customer_context(
+            contact_id=UUID,
+            business_context_id=EOM,
+        )
+    )
+    assert out == {"found": False, "context": None}
+
+
+@pytest.mark.asyncio
+async def test_default_context_retains_null_legacy_visibility_mid_gather(
+    default_ctx, monkeypatch
+):
+    provider = _provider_mock(monkeypatch)
+    provider.get_contact = AsyncMock(side_effect=[SAME, LEGACY_NULL])
+    from atlas_brain.services import customer_context as ccx
+
+    class _Svc:
+        async def get_context(self, contact_id, **kwargs):
+            return _StubCtx(dict(SAME))
+
+    monkeypatch.setattr(ccx, "get_customer_context_service", lambda: _Svc())
+    out = json.loads(await crm_srv.get_customer_context(contact_id=UUID))
+    assert out["found"] is True
+    assert out["contact"]["business_context_id"] is None
 
 
 @pytest.mark.asyncio
@@ -437,8 +479,9 @@ async def test_customer_context_serializes_still_visible_row(default_ctx, monkey
     assert out["found"] is True
     assert out["contact"]["business_context_id"] == EOM
     assert out["emails_omitted_under_scope"] is True
+    assert out["email_sources_omitted_under_scope"] == ["inbox_emails"]
     assert out["b2b_enrichment_omitted_under_scope"] is True
-    assert out["sent_emails"] == []
+    assert out["sent_emails"] == [{"subject": "old estimate thread"}]
     assert out["inbox_emails"] == []
     assert out["b2b_churn_signals"] == []
 
@@ -624,14 +667,6 @@ def test_context_service_threads_scope_to_child_queries():
     src = (REPO / "atlas_brain/services/customer_context.py").read_text(encoding="utf-8")
     gather = src.split("async def _gather", 1)[1]
     assert gather.count("business_context_id=business_context_id") >= 3
-
-
-def test_context_result_omits_emails_under_scope():
-    src = (REPO / "atlas_brain/mcp/crm_server.py").read_text(encoding="utf-8")
-    assert '"sent_emails": [] if effective else ctx.sent_emails' in src
-    assert "emails_omitted_under_scope" in src
-    assert '"b2b_churn_signals": [] if effective else ctx.b2b_churn_signals' in src
-    assert "b2b_enrichment_omitted_under_scope" in src
 
 
 @pytest.mark.asyncio
