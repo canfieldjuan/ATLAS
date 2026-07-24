@@ -31,6 +31,7 @@ import logging
 import sys
 import uuid as _uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -96,6 +97,32 @@ def _default_context() -> "str | None":
     from ..config import settings
 
     return settings.mcp.crm_default_business_context or None
+
+
+def _pipeline_text(value: str, field: str, max_length: int) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field} cannot be empty; use its clear flag")
+    if len(normalized) > max_length:
+        raise ValueError(f"{field} must be at most {max_length} characters")
+    return normalized
+
+
+def _pipeline_timestamp(value: str, field: str) -> datetime:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field} cannot be empty; use clear_next_follow_up")
+    if len(normalized) > 64:
+        raise ValueError(f"{field} must be at most 64 characters")
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an ISO 8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field} must include a UTC offset")
+    return parsed.astimezone(timezone.utc)
 
 
 def _visible_under_default(contact: "dict | None") -> bool:
@@ -436,6 +463,11 @@ async def update_contact(
     notes: Optional[str] = None,
     status: Optional[str] = None,
     tags: Optional[list[str]] = None,
+    lead_stage: Optional[str] = None,
+    lead_owner: Optional[str] = None,
+    next_follow_up_at: Optional[str] = None,
+    clear_lead_owner: bool = False,
+    clear_next_follow_up: bool = False,
     business_context_id: Optional[str] = None,
 ) -> str:
     """
@@ -443,6 +475,9 @@ async def update_contact(
 
     Only supply fields you want to change.
     status: active | inactive | archived
+    lead_stage / lead_owner: pipeline values for lead contacts only.
+    next_follow_up_at: ISO 8601 timestamp with a UTC offset, for leads only.
+    clear_lead_owner / clear_next_follow_up: explicitly clear those fields.
     business_context_id: addresses which tenant page the contact is looked
     up on (explicit override of the deployment default); it is NOT an
     updatable field.
@@ -451,6 +486,19 @@ async def update_contact(
         return json.dumps({"success": False, "error": "Invalid contact_id (must be UUID)"})
 
     try:
+        if clear_lead_owner and lead_owner is not None:
+            return json.dumps({
+                "success": False,
+                "error": "lead_owner and clear_lead_owner are mutually exclusive",
+            })
+        if clear_next_follow_up and next_follow_up_at is not None:
+            return json.dumps({
+                "success": False,
+                "error": (
+                    "next_follow_up_at and clear_next_follow_up are mutually exclusive"
+                ),
+            })
+
         data = {
             k: v for k, v in {
                 "full_name": full_name,
@@ -465,21 +513,62 @@ async def update_contact(
                 "tags": tags,
             }.items() if v is not None
         }
+        pipeline_requested = any((
+            lead_stage is not None,
+            lead_owner is not None,
+            next_follow_up_at is not None,
+            clear_lead_owner,
+            clear_next_follow_up,
+        ))
+        if lead_stage is not None:
+            data["lead_stage"] = _pipeline_text(
+                lead_stage, "lead_stage", 64
+            )
+        if lead_owner is not None:
+            data["lead_owner"] = _pipeline_text(
+                lead_owner, "lead_owner", 128
+            )
+        elif clear_lead_owner:
+            data["lead_owner"] = None
+        if next_follow_up_at is not None:
+            data["next_follow_up_at"] = _pipeline_timestamp(
+                next_follow_up_at, "next_follow_up_at"
+            )
+        elif clear_next_follow_up:
+            data["next_follow_up_at"] = None
         if not data:
             return json.dumps({"success": False, "error": "No fields provided to update"})
 
         allowed, existing = await _guarded_contact(contact_id, business_context_id)
         if not allowed:
             return json.dumps({"success": False, "error": "Contact not found"})
+        if pipeline_requested and existing is None:
+            existing = await _provider().get_contact(contact_id)
+            if existing is None:
+                return json.dumps({"success": False, "error": "Contact not found"})
+        if pipeline_requested and existing.get("contact_type") != "lead":
+            return json.dumps({
+                "success": False,
+                "error": "Lead pipeline fields require a lead contact",
+            })
         # Claim-on-write: an update from a scoped session takes ownership of
         # the NULL-context legacy row, so corrected data stops being visible
         # to every tenant as unclaimed legacy.
         if not await _claim_if_legacy(contact_id, existing, business_context_id):
             return json.dumps({"success": False, "error": "Contact not found"})
-        updated = await _provider().update_contact(contact_id, data)
+        if pipeline_requested:
+            updated = await _provider().update_contact(
+                contact_id,
+                data,
+                require_contact_type="lead",
+            )
+        else:
+            updated = await _provider().update_contact(contact_id, data)
         if updated is None:
             return json.dumps({"success": False, "error": "Contact not found"})
         return json.dumps({"success": True, "contact": updated}, default=str)
+    except ValueError as exc:
+        return json.dumps({"success": False, "error": str(exc)})
     except Exception as exc:
         logger.exception("update_contact error")
         return json.dumps({"success": False, "error": "Internal error"})
@@ -527,6 +616,9 @@ async def list_contacts(
     business_context_id: Optional[str] = None,
     status: str = "active",
     contact_type: Optional[str] = None,
+    lead_stage: Optional[str] = None,
+    lead_owner: Optional[str] = None,
+    next_follow_up_before: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
 ) -> str:
@@ -535,42 +627,82 @@ async def list_contacts(
 
     status:       active (default) | inactive | archived
     contact_type: customer | lead | prospect | vendor
+    lead_stage / lead_owner: exact-match lead pipeline filters.
+    next_follow_up_before: include leads due at or before this ISO 8601
+        timestamp; a UTC offset is required.
     limit / offset: for pagination
 
-    With a deployment default tenant configured and no explicit
-    business_context_id, results merge the default tenant's page with the
-    NULL-context legacy page (offset applies to each page; the merged
-    result is truncated to limit).
+    With a deployment default tenant and no explicit business_context_id,
+    pipeline-filtered calls query the tenant-plus-legacy population in one SQL
+    statement so due ordering and pagination are global. Other list calls keep
+    the established two-page merge behavior.
     """
     try:
         provider = _provider()
         default = _default_context()
         capped = min(limit, 200)
+        pipeline_filtered = any((
+            lead_stage is not None,
+            lead_owner is not None,
+            next_follow_up_before is not None,
+        ))
+        if pipeline_filtered and contact_type not in (None, "lead"):
+            return json.dumps({
+                "error": "Lead pipeline filters require contact_type='lead'",
+                "contacts": [],
+                "count": 0,
+            })
+        effective_contact_type = "lead" if pipeline_filtered else contact_type
+        normalized_stage = (
+            _pipeline_text(lead_stage, "lead_stage", 64)
+            if lead_stage is not None
+            else None
+        )
+        normalized_owner = (
+            _pipeline_text(lead_owner, "lead_owner", 128)
+            if lead_owner is not None
+            else None
+        )
+        due_before = (
+            _pipeline_timestamp(
+                next_follow_up_before, "next_follow_up_before"
+            )
+            if next_follow_up_before is not None
+            else None
+        )
+        filters = {
+            "status": status,
+            "contact_type": effective_contact_type,
+            "lead_stage": normalized_stage,
+            "lead_owner": normalized_owner,
+            "next_follow_up_before": due_before,
+            "limit": capped,
+            "offset": offset,
+        }
         if business_context_id or not default:
             contacts = await provider.list_contacts(
                 business_context_id=business_context_id,
-                status=status,
-                contact_type=contact_type,
-                limit=capped,
-                offset=offset,
+                **filters,
+            )
+        elif pipeline_filtered:
+            contacts = await provider.list_contacts(
+                business_context_id=default,
+                include_unclaimed_legacy=True,
+                **filters,
             )
         else:
             tenant_rows = await provider.list_contacts(
                 business_context_id=default,
-                status=status,
-                contact_type=contact_type,
-                limit=capped,
-                offset=offset,
+                **filters,
             )
             legacy_rows = await provider.list_contacts(
                 business_context_id_is_null=True,
-                status=status,
-                contact_type=contact_type,
-                limit=capped,
-                offset=offset,
+                **filters,
             )
             contacts = (tenant_rows + legacy_rows)[:capped]
         return json.dumps({"contacts": contacts, "count": len(contacts)}, default=str)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc), "contacts": [], "count": 0})
     except Exception as exc:
         logger.exception("list_contacts error")
         return json.dumps({"error": "Internal error", "contacts": [], "count": 0})

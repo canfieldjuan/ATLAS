@@ -266,6 +266,7 @@ async def _process_lead_intake(
             source_ref="website_estimate_form",
             business_context_id=EOM_BUSINESS_CONTEXT_ID,
             tags=["website", "estimate_request"],
+            lead_stage="new",
         )
     contact_id = contact.get("id")
     if not contact_id:

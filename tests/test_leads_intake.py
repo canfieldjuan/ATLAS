@@ -116,6 +116,7 @@ async def test_contact_stamped_with_eom_tenant_and_web_source():
     assert kwargs["source"] == "web"
     assert kwargs["source_ref"] == "website_estimate_form"
     assert kwargs["tags"] == ["website", "estimate_request"]
+    assert kwargs["lead_stage"] == "new"
     assert kwargs["email"] == "jane@example.com"
     assert kwargs["phone"] == "2175550100"  # digits-only normalization
 
@@ -455,6 +456,25 @@ async def test_existing_eom_contact_not_mutated_or_downgraded():
     # shared/mistyped email must not steal the match)
     first = crm.search_contacts.await_args_list[0]
     assert "phone" in first.kwargs
+
+
+@pytest.mark.asyncio
+async def test_repeat_intake_does_not_reset_existing_lead_pipeline():
+    existing = [{
+        "id": "lead-9",
+        "contact_type": "lead",
+        "business_context_id": EOM_BUSINESS_CONTEXT_ID,
+        "lead_stage": "qualified",
+        "lead_owner": "Juan",
+        "next_follow_up_at": "2026-07-24T15:00:00+00:00",
+    }]
+    crm, provider = _crm(existing=existing), _email_provider()
+
+    await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+
+    crm.find_or_create_contact.assert_not_awaited()
+    crm.update_contact.assert_not_called()
+    assert crm.log_interaction.call_args.kwargs["contact_id"] == "lead-9"
 
 
 @pytest.mark.asyncio

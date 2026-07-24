@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -227,6 +228,129 @@ async def test_list_contacts_merges_null_page_under_default(default_ctx, monkeyp
     assert calls[0].kwargs["business_context_id"] == EOM
     assert calls[1].kwargs["business_context_id_is_null"] is True
     assert [c["id"] for c in out["contacts"]] == ["t1", "n1"]
+
+
+@pytest.mark.asyncio
+async def test_update_lead_pipeline_is_scoped_and_requires_lead(
+    default_ctx, monkeypatch
+):
+    provider = _provider_mock(
+        monkeypatch,
+        get={**SAME, "contact_type": "lead"},
+    )
+    out = json.loads(await crm_srv.update_contact(
+        UUID,
+        lead_stage=" qualified ",
+        lead_owner=" Juan ",
+        next_follow_up_at="2026-07-24T10:00:00-05:00",
+    ))
+
+    assert out["success"] is True
+    args, kwargs = provider.update_contact.await_args
+    assert args[0] == UUID
+    assert args[1] == {
+        "lead_stage": "qualified",
+        "lead_owner": "Juan",
+        "next_follow_up_at": datetime(2026, 7, 24, 15, tzinfo=timezone.utc),
+    }
+    assert kwargs == {"require_contact_type": "lead"}
+
+
+@pytest.mark.asyncio
+async def test_update_lead_pipeline_rejects_non_lead_and_foreign(
+    default_ctx, monkeypatch
+):
+    provider = _provider_mock(
+        monkeypatch,
+        get={**SAME, "contact_type": "customer"},
+    )
+    not_lead = json.loads(await crm_srv.update_contact(UUID, lead_stage="new"))
+    assert not_lead["success"] is False
+    assert "lead contact" in not_lead["error"]
+    provider.update_contact.assert_not_awaited()
+
+    provider.get_contact.return_value = {**FOREIGN, "contact_type": "lead"}
+    foreign = json.loads(await crm_srv.update_contact(UUID, lead_stage="new"))
+    assert foreign == {"success": False, "error": "Contact not found"}
+    provider.update_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_lead_pipeline_clear_and_validation(default_ctx, monkeypatch):
+    provider = _provider_mock(
+        monkeypatch,
+        get={**SAME, "contact_type": "lead"},
+    )
+    cleared = json.loads(await crm_srv.update_contact(
+        UUID, clear_lead_owner=True, clear_next_follow_up=True
+    ))
+    assert cleared["success"] is True
+    assert provider.update_contact.await_args.args[1] == {
+        "lead_owner": None,
+        "next_follow_up_at": None,
+    }
+
+    provider.update_contact.reset_mock()
+    invalid = json.loads(await crm_srv.update_contact(
+        UUID, next_follow_up_at="2026-07-24T10:00:00"
+    ))
+    assert invalid["success"] is False
+    assert "UTC offset" in invalid["error"]
+    provider.update_contact.assert_not_awaited()
+
+
+def test_pipeline_input_boundaries():
+    assert crm_srv._pipeline_text("x" * 64, "lead_stage", 64) == "x" * 64
+    with pytest.raises(ValueError, match="at most 64"):
+        crm_srv._pipeline_text("x" * 65, "lead_stage", 64)
+    assert crm_srv._pipeline_timestamp(
+        "2026-07-24T22:00:00Z", "next_follow_up_at"
+    ) == datetime(2026, 7, 24, 22, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="at most 64"):
+        crm_srv._pipeline_timestamp("2" * 65, "next_follow_up_at")
+
+
+@pytest.mark.asyncio
+async def test_due_lead_list_uses_one_sql_scoped_population(
+    default_ctx, monkeypatch
+):
+    provider = _provider_mock(monkeypatch)
+    provider.list_contacts.return_value = [{"id": "due-1"}]
+
+    out = json.loads(await crm_srv.list_contacts(
+        lead_stage="qualified",
+        next_follow_up_before="2026-07-24T17:00:00-05:00",
+        limit=10,
+    ))
+
+    assert [row["id"] for row in out["contacts"]] == ["due-1"]
+    provider.list_contacts.assert_awaited_once()
+    kwargs = provider.list_contacts.await_args.kwargs
+    assert kwargs["business_context_id"] == EOM
+    assert kwargs["include_unclaimed_legacy"] is True
+    assert kwargs["contact_type"] == "lead"
+    assert kwargs["lead_stage"] == "qualified"
+    assert kwargs["next_follow_up_before"] == datetime(
+        2026, 7, 24, 22, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_rejects_pipeline_fields_on_new_non_lead():
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    provider = DatabaseCRMProvider()
+    with pytest.raises(ValueError, match="contact_type='lead'"):
+        await provider.create_contact({
+            "full_name": "Customer",
+            "contact_type": "customer",
+            "lead_stage": "new",
+        })
+    with pytest.raises(ValueError, match="contact_type='lead'"):
+        await provider.update_contact(
+            UUID,
+            {"contact_type": "customer", "lead_stage": "qualified"},
+        )
 
 
 @pytest.mark.asyncio

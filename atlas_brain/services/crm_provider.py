@@ -119,6 +119,13 @@ class DatabaseCRMProvider:
         always gets the most complete version.  This is application-level dedup;
         migration 037 should add a DB-level partial unique index for extra safety.
         """
+        pipeline_fields = ("lead_stage", "lead_owner", "next_follow_up_at")
+        if (
+            any(data.get(field) is not None for field in pipeline_fields)
+            and data.get("contact_type", "customer") != "lead"
+        ):
+            raise ValueError("Lead pipeline fields require contact_type='lead'")
+
         # --- dedup check ---
         raw_email = data.get("email")
         email = raw_email.lower() if raw_email else None
@@ -216,9 +223,11 @@ class DatabaseCRMProvider:
                 id, full_name, first_name, last_name, email, phone,
                 address, city, state, zip, business_context_id,
                 contact_type, status, tags, notes, source, source_ref,
+                lead_stage, lead_owner, next_follow_up_at,
                 created_at, updated_at, metadata
             ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+                $18,$19,$20,$21,$22,$23::jsonb
             ) RETURNING *
             """,
             contact_id,
@@ -238,8 +247,11 @@ class DatabaseCRMProvider:
             data.get("notes"),
             data.get("source", "manual"),
             data.get("source_ref"),
-            now,   # created_at ($18)
-            now,   # updated_at ($19) -- same value on insert
+            data.get("lead_stage"),
+            data.get("lead_owner"),
+            data.get("next_follow_up_at"),
+            now,   # created_at ($21)
+            now,   # updated_at ($22) -- same value on insert
             metadata_json,
         )
         result = dict(row) if row else {}
@@ -340,7 +352,11 @@ class DatabaseCRMProvider:
         return [dict(r) for r in rows]
 
     async def update_contact(
-        self, contact_id: str, data: dict[str, Any]
+        self,
+        contact_id: str,
+        data: dict[str, Any],
+        *,
+        require_contact_type: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
         from ..storage.database import get_db_pool
 
@@ -349,9 +365,26 @@ class DatabaseCRMProvider:
             "full_name", "first_name", "last_name", "email", "phone",
             "address", "city", "state", "zip", "contact_type", "status",
             "tags", "notes", "business_context_id", "source", "source_ref",
-            "metadata",
+            "metadata", "lead_stage", "lead_owner", "next_follow_up_at",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
+        pipeline_requested = any(
+            key in updates
+            for key in ("lead_stage", "lead_owner", "next_follow_up_at")
+        )
+        if pipeline_requested:
+            if (
+                "contact_type" in updates
+                and updates["contact_type"] != "lead"
+            ):
+                raise ValueError(
+                    "Lead pipeline fields require contact_type='lead'"
+                )
+            if require_contact_type not in (None, "lead"):
+                raise ValueError(
+                    "Lead pipeline fields require contact_type='lead'"
+                )
+            require_contact_type = "lead"
         if "email" in updates and updates["email"]:
             updates["email"] = updates["email"].lower()
         if "metadata" in updates:
@@ -367,8 +400,13 @@ class DatabaseCRMProvider:
             set_parts.append(f"{key} = ${i}{cast}")
             params.append(val)
 
+        where = "id = $1"
+        if require_contact_type is not None:
+            params.append(require_contact_type)
+            where += f" AND contact_type = ${len(params)}"
+
         row = await pool.fetchrow(
-            f"UPDATE contacts SET {', '.join(set_parts)} WHERE id = $1 RETURNING *",
+            f"UPDATE contacts SET {', '.join(set_parts)} WHERE {where} RETURNING *",
             *params,
         )
         return dict(row) if row else None
@@ -413,8 +451,12 @@ class DatabaseCRMProvider:
         self,
         business_context_id: Optional[str] = None,
         business_context_id_is_null: bool = False,
+        include_unclaimed_legacy: bool = False,
         status: Optional[str] = "active",
         contact_type: Optional[str] = None,
+        lead_stage: Optional[str] = None,
+        lead_owner: Optional[str] = None,
+        next_follow_up_before: Optional[datetime] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -429,8 +471,21 @@ class DatabaseCRMProvider:
             conditions.append(f"status = ${idx}")
             params.append(status)
             idx += 1
+        if include_unclaimed_legacy and not business_context_id:
+            raise ValueError(
+                "include_unclaimed_legacy requires business_context_id"
+            )
+        if include_unclaimed_legacy and business_context_id_is_null:
+            raise ValueError(
+                "include_unclaimed_legacy conflicts with business_context_id_is_null"
+            )
         if business_context_id:
-            conditions.append(f"business_context_id = ${idx}")
+            operator = (
+                f"(business_context_id = ${idx} OR business_context_id IS NULL)"
+                if include_unclaimed_legacy
+                else f"business_context_id = ${idx}"
+            )
+            conditions.append(operator)
             params.append(business_context_id)
             idx += 1
         if business_context_id_is_null:
@@ -439,13 +494,30 @@ class DatabaseCRMProvider:
             conditions.append(f"contact_type = ${idx}")
             params.append(contact_type)
             idx += 1
+        if lead_stage:
+            conditions.append(f"lead_stage = ${idx}")
+            params.append(lead_stage)
+            idx += 1
+        if lead_owner:
+            conditions.append(f"lead_owner = ${idx}")
+            params.append(lead_owner)
+            idx += 1
+        if next_follow_up_before is not None:
+            conditions.append(f"next_follow_up_at <= ${idx}")
+            params.append(next_follow_up_before)
+            idx += 1
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         params.extend([limit, max(0, offset)])
+        order_by = (
+            "next_follow_up_at ASC, full_name ASC"
+            if next_follow_up_before is not None
+            else "full_name ASC"
+        )
         rows = await pool.fetch(
             f"""
             SELECT * FROM contacts {where}
-            ORDER BY full_name ASC
+            ORDER BY {order_by}
             LIMIT ${idx} OFFSET ${idx + 1}
             """,
             *params,
