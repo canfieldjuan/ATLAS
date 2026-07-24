@@ -142,6 +142,8 @@ Slice phase: Functional validation
 
 ### Files touched
 
+- `.github/workflows/pre_push_audit.yml` (round 3: jsonschema in the
+  tooling-test install line)
 - `docs/local_mcp_model_eval_runbook.md`
 - `plans/PR-Local-Model-MCP-Qualification-V2.md`
 - `requirements.content_ops_ci.txt`
@@ -219,6 +221,17 @@ ignored JSONL; summaries remain redacted.
   redesign, or Open WebUI worker configuration.
 
 Parked hardening: none.
+
+## Review round 3 (2026-07-24)
+
+Eight Codex grader/loader findings fixed with regressions (clause
+boundaries incl. dashes/parentheses; send-class success detector with
+passive/denominal coverage replacing the generic write matcher on the
+missing-approval gate; fail-closed malformed contract fields; load-time
+side_effect_tools requirement for missing-approval cases; off-surface
+calls blocked before argument retry; summary redaction of forbidden
+output and identifiers; jsonschema in the pre-push workflow install;
+swallowed-exception restructure for the scripts-lane ratchet).
 
 ## Verification
 
