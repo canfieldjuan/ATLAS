@@ -5,9 +5,18 @@ Configuration is loaded from environment variables with sensible defaults.
 """
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    SecretStr,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .config_defaults import (
@@ -18,6 +27,8 @@ from .config_defaults import (
 
 ENV_FILES = (".env", ".env.local")
 DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL = "anthropic/claude-sonnet-4-5"
+_IMAP_PORT_ADAPTER = TypeAdapter(Annotated[int, Field(ge=1, le=65535)])
+_IMAP_SSL_ADAPTER = TypeAdapter(bool)
 
 
 class LLMGatewayConfig(BaseSettings):
@@ -804,10 +815,103 @@ class AlertsConfig(BaseSettings):
     ntfy_topic: str = Field(default="atlas-alerts", description="ntfy topic for alerts")
 
 
+class InboxMailboxBinding(BaseModel):
+    """One CRM business context's authorized IMAP inbox."""
+
+    model_config = {"extra": "forbid", "hide_input_in_errors": True}
+
+    provider: Literal["imap"]
+    imap_host: str = ""
+    imap_port: int = Field(default=993, ge=1, le=65535)
+    imap_username: str = ""
+    imap_password: SecretStr = SecretStr("")
+    imap_ssl: bool = True
+    imap_mailbox: str = "INBOX"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_and_preflight_credentials(cls, value: Any) -> Any:
+        """Normalize while keeping raw credentials out of validation errors."""
+        if not isinstance(value, dict):
+            return {"provider": "__invalid_binding_mapping__"}
+        data = dict(value)
+        provider = data.get("provider")
+        sentinels = {
+            "__invalid_context_mapping__",
+            "__invalid_context_type__",
+            "__invalid_context_blank__",
+            "__invalid_binding_fields__",
+            "__invalid_secret_type__",
+            "__invalid_binding_mapping__",
+            "__invalid_provider__",
+            "__invalid_field_type__",
+            "__invalid_field_value__",
+            "__invalid_imap_missing__",
+        }
+        if set(data) == {"provider"} and provider in sentinels:
+            return data
+        if provider != "imap":
+            return {"provider": "__invalid_provider__"}
+        allowed = {
+            "provider", "imap_host", "imap_port", "imap_username",
+            "imap_password", "imap_ssl", "imap_mailbox",
+        }
+        if set(data) - allowed:
+            return {"provider": "__invalid_binding_fields__"}
+        password = data.get("imap_password")
+        if isinstance(password, SecretStr):
+            password = password.get_secret_value()
+        required = (data.get("imap_host"), data.get("imap_username"), password)
+        if not all(isinstance(item, str) and item.strip() for item in required):
+            return {"provider": "__invalid_imap_missing__"}
+        data["imap_host"] = data["imap_host"].strip()
+        data["imap_username"] = data["imap_username"].strip()
+        try:
+            data["imap_port"] = _IMAP_PORT_ADAPTER.validate_python(
+                data.get("imap_port", 993)
+            )
+            data["imap_ssl"] = _IMAP_SSL_ADAPTER.validate_python(
+                data.get("imap_ssl", True)
+            )
+        except ValidationError:
+            return {"provider": "__invalid_field_type__"}
+        mailbox = data.get("imap_mailbox")
+        if mailbox is not None:
+            if not isinstance(mailbox, str):
+                return {"provider": "__invalid_field_type__"}
+            data["imap_mailbox"] = mailbox.strip()
+        return data
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _reject_invalid_provider_binding(cls, value: Any) -> Any:
+        errors = {
+            "__invalid_imap_missing__":
+                "IMAP inbox bindings require host, username, and password",
+            "__invalid_context_mapping__": "Inbox context bindings must be a mapping",
+            "__invalid_context_type__": "Inbox binding contexts must be strings",
+            "__invalid_context_blank__": "Inbox binding context must not be blank",
+            "__invalid_binding_fields__": "Inbox binding has unsupported fields",
+            "__invalid_secret_type__": "Inbox credentials must be strings",
+            "__invalid_binding_mapping__": "Inbox bindings must be mappings",
+            "__invalid_provider__": "Inbox mailbox provider must be imap",
+            "__invalid_field_type__": "Inbox binding field types are invalid",
+            "__invalid_field_value__": "Inbox binding field values are invalid",
+        }
+        if value in errors:
+            raise ValueError(errors[value])
+        return value
+
+
 class EmailConfig(BaseSettings):
     """Email tool configuration (Resend API + Gmail + IMAP)."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_EMAIL_", env_file=ENV_FILES, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_EMAIL_",
+        env_file=ENV_FILES,
+        extra="ignore",
+        hide_input_in_errors=True,
+    )
 
     enabled: bool = Field(default=False, description="Enable email tool")
     gmail_send_enabled: bool = Field(
@@ -840,6 +944,48 @@ class EmailConfig(BaseSettings):
     imap_password: str = Field(default="", description="IMAP password or app-specific password")
     imap_ssl: bool = Field(default=True, description="Use SSL/TLS for IMAP connection")
     imap_mailbox: str = Field(default="INBOX", description="Default IMAP mailbox to read from")
+    inbox_context_bindings: dict[str, InboxMailboxBinding] = Field(
+        default_factory=dict,
+        description=(
+            "Explicit CRM business_context_id to inbox credential bindings. "
+            "Scoped CRM reads refuse contexts absent from this map."
+        ),
+    )
+
+    @field_validator("inbox_context_bindings", mode="before")
+    @classmethod
+    def _normalize_inbox_context_bindings(cls, value: Any) -> Any:
+        def invalid(context: str, code: str) -> dict[str, dict[str, str]]:
+            return {context: {"provider": code}}
+
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            return invalid(
+                "__invalid_context_mapping__",
+                "__invalid_context_mapping__",
+            )
+        normalized: dict[str, Any] = {}
+        for raw_context, binding in value.items():
+            if not isinstance(raw_context, str):
+                return invalid(
+                    "__invalid_context_type__",
+                    "__invalid_context_type__",
+                )
+            if not raw_context.strip():
+                return invalid(
+                    "__invalid_context_blank__",
+                    "__invalid_context_blank__",
+                )
+            if isinstance(binding, BaseModel):
+                binding = binding.model_dump()
+            if not isinstance(binding, dict):
+                return invalid(
+                    "__invalid_binding_mapping__",
+                    "__invalid_binding_mapping__",
+                )
+            normalized[raw_context] = binding
+        return normalized
 
 
 class EmailDraftConfig(BaseSettings):
