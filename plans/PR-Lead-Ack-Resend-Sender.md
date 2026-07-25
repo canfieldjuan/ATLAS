@@ -68,30 +68,32 @@ Slice phase: vertical slice
    Same file family, plain-text reflow so it renders human-formatted; all
    existing copy guardrails preserved.
 5. Proof: `tests/test_leads_intake.py` extended -- the acknowledgement send now
-   asserts `provider="resend"` + `from_email` (info@); plus two composite-routing
-   unit tests (Composite override skips Gmail even when available; default still
-   prefers Gmail). The `email_tool` force_resend gate is verified by inspection,
-   not a direct unit test, to avoid mocking the unit under test (real-adapter
-   rule / maturity-sweep INTERNAL_MOCK ratchet).
+   asserts `provider="resend"` + `from_email` (info@); plus an **integration
+   test through the real Composite -> ResendEmailProvider -> EmailTool path**
+   (Codex R2), mocking only the external Gmail and Resend transports: a forced
+   send selects the Resend transport from info@ (and would fail if force_resend
+   were dropped -> Gmail), and a default send still selects Gmail. That test
+   mocks first-party transports, so `tests/maturity_sweep/baseline_atlas_brain_tools.json`
+   is bumped for `email.py`/`gmail.py` (INTERNAL_MOCK 0->1 each) -- the sanctioned
+   ratchet mechanism for the reviewer-endorsed external-transport mocks.
 
 ### Review Contract
 
 - Acceptance criteria:
   1. The acknowledgement send call carries `provider="resend"` and a `from_email`
      containing `info@effinghamofficemaids.com` (test-asserted).
-  2. `CompositeEmailProvider.send(provider="resend")` calls Resend and does NOT
-     call Gmail even when `self._gmail.is_available()` is True (test-asserted);
-     `provider` never leaks into the underlying provider kwargs.
-  3. `CompositeEmailProvider.send` with no override still prefers Gmail when
-     available (default path for all other callers unchanged; test-asserted).
-  4. `ResendEmailProvider.send` stamps `force_resend=True` and `email_tool.execute`
-     yields the Gmail-first gate to it -- verified by **inspection** and the
-     end-to-end composite route, NOT by a direct `email_tool` unit test: mocking
-     `email_tool`'s own HTTP client / transport (the only way to unit-test its
-     send) is mocking the unit under test, which trips the maturity-sweep
-     INTERNAL_MOCK ratchet and violates the repo's real-adapter rule. The two
-     force_resend one-liners are covered by the composite skip-Gmail test above
-     plus code review.
+  2. Through the REAL Composite -> ResendEmailProvider -> EmailTool stack (only
+     the external Gmail/Resend transports mocked): a forced send
+     (`provider="resend"`) selects the **Resend** transport with `from` = info@
+     and never calls the Gmail transport -- so a dropped `force_resend` stamp or
+     an EmailTool that ignored it (production routing the acknowledgement back
+     through Gmail) fails this test (Codex R2, test-asserted).
+  3. The same real stack with no override still selects the **Gmail** transport
+     and does not touch the Resend transport (default path for all other callers
+     unchanged; test-asserted).
+  4. The integration test mocks first-party transports; the tools-lane maturity
+     baseline is bumped (email.py/gmail.py INTERNAL_MOCK 0->1) via the sanctioned
+     `--update-baseline` mechanism, surgically (only those two entries change).
   5. Existing acknowledgement guardrails hold: no `$`, no "quote"/"same-day",
      `(217) 207-3097` present, `within 24 hours` present, request-line echo,
      empty-name fallback (unchanged tests stay green).
@@ -122,6 +124,7 @@ Slice phase: vertical slice
 - `atlas_brain/templates/email/request_acknowledgement.py`
 - `atlas_brain/tools/email.py`
 - `plans/PR-Lead-Ack-Resend-Sender.md`
+- `tests/maturity_sweep/baseline_atlas_brain_tools.json`
 - `tests/test_leads_intake.py`
 
 ## Mechanism
@@ -183,6 +186,7 @@ Parked hardening: none.
 | `atlas_brain/services/email_provider.py` | 12 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 20 |
 | `atlas_brain/tools/email.py` | 5 |
-| `plans/PR-Lead-Ack-Resend-Sender.md` | 185 |
-| `tests/test_leads_intake.py` | 55 |
-| **Total** | **289** |
+| `plans/PR-Lead-Ack-Resend-Sender.md` | 195 |
+| `tests/maturity_sweep/baseline_atlas_brain_tools.json` | 9 |
+| `tests/test_leads_intake.py` | 86 |
+| **Total** | **339** |

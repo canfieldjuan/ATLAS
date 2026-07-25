@@ -835,43 +835,77 @@ async def test_callback_channels_prepended_within_dedupe_prefix():
 # ---------------------------------------------------------------------------
 
 
+class _FakeResendResponse:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"id": "resend-msg-1"}
+
+
+class _FakeHTTPClient:
+    """Stand-in for httpx.AsyncClient -- the external Resend transport."""
+
+    posted: list = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def post(self, url, json=None, headers=None):
+        type(self).posted.append(json)
+        return _FakeResendResponse()
+
+    async def aclose(self):
+        return None
+
+
 @pytest.mark.asyncio
-async def test_composite_provider_resend_override_skips_gmail():
-    """provider="resend" bypasses Gmail even when Gmail is available, so the
-    send goes out from the verified domain sender."""
+async def test_forced_resend_routes_through_real_stack(monkeypatch):
+    """Integration through the REAL Composite -> ResendEmailProvider -> EmailTool
+    path, mocking ONLY the external Gmail and Resend transports (Codex R2). A
+    forced send must select the Resend transport from info@ -- and would fail if
+    ResendEmailProvider stopped stamping force_resend or EmailTool ignored it
+    (production would then route the acknowledgement back through Gmail). A
+    default send must still select Gmail (unchanged for every other caller)."""
+    import httpx
+
+    from atlas_brain.config import settings
+    from atlas_brain.services import google_oauth
     from atlas_brain.services.email_provider import CompositeEmailProvider
+    from atlas_brain.tools import email as email_mod
+    from atlas_brain.tools import gmail as gmail_mod
 
-    comp = CompositeEmailProvider()
-    comp._gmail = MagicMock()
-    comp._gmail.is_available = AsyncMock(return_value=True)
-    comp._gmail.send = AsyncMock(return_value={"transport": "gmail"})
-    comp._resend = MagicMock()
-    comp._resend.send = AsyncMock(return_value={"transport": "resend"})
+    # External Resend transport (third-party httpx).
+    _FakeHTTPClient.posted = []
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeHTTPClient)
+    monkeypatch.setattr(email_mod.email_tool, "_client", None)  # rebuild w/ fake httpx
+    monkeypatch.setattr(settings.email, "api_key", "re_test_key")
+    monkeypatch.setattr(settings.email, "gmail_send_enabled", True)
 
-    result = await comp.send(
-        to=["x@example.com"], subject="s", body="b", provider="resend"
+    # External Gmail transport: credentials present + a transport spy, so a
+    # dropped force_resend would visibly select Gmail here.
+    store = MagicMock()
+    store.get_credentials = MagicMock(return_value="cred")
+    monkeypatch.setattr(google_oauth, "get_google_token_store", lambda: store)
+    gmail_transport = MagicMock()
+    gmail_transport.send = AsyncMock(return_value={"id": "gmail-1", "threadId": "t"})
+    monkeypatch.setattr(gmail_mod, "get_gmail_transport", lambda: gmail_transport)
+
+    comp = CompositeEmailProvider()  # real GmailEmailProvider + ResendEmailProvider
+
+    forced = await comp.send(
+        to=["x@example.com"],
+        subject="s",
+        body="b",
+        from_email="info@effinghamofficemaids.com",
+        provider="resend",
     )
-    assert result["transport"] == "resend"
-    comp._gmail.send.assert_not_called()
-    comp._resend.send.assert_awaited_once()
-    # provider is a named param and must not leak into the resend call kwargs
-    assert "provider" not in comp._resend.send.call_args.kwargs
+    assert forced["transport"] == "resend"
+    gmail_transport.send.assert_not_called()
+    assert len(_FakeHTTPClient.posted) == 1
+    assert _FakeHTTPClient.posted[0]["from"] == "info@effinghamofficemaids.com"
 
-
-@pytest.mark.asyncio
-async def test_composite_provider_default_still_prefers_gmail():
-    """Without an override, the default Gmail-first behavior is unchanged for
-    every other Atlas email path."""
-    from atlas_brain.services.email_provider import CompositeEmailProvider
-
-    comp = CompositeEmailProvider()
-    comp._gmail = MagicMock()
-    comp._gmail.is_available = AsyncMock(return_value=True)
-    comp._gmail.send = AsyncMock(return_value={"transport": "gmail"})
-    comp._resend = MagicMock()
-    comp._resend.send = AsyncMock(return_value={"transport": "resend"})
-
-    result = await comp.send(to=["x@example.com"], subject="s", body="b")
-    assert result["transport"] == "gmail"
-    comp._gmail.send.assert_awaited_once()
-    comp._resend.send.assert_not_called()
+    # Default send: real stack still prefers Gmail; Resend transport not touched.
+    await comp.send(to=["x@example.com"], subject="s", body="b")
+    gmail_transport.send.assert_awaited_once()
+    assert len(_FakeHTTPClient.posted) == 1
