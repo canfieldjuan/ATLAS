@@ -91,6 +91,18 @@ Slice phase: vertical slice
   each with both-direction probes; the module contract remains
   best-effort-backstop with the human approval as the real gate), R14.
 
+### Review round 13 (Codex)
+
+Five findings, all fixed in the engine: the digit theorem masks Unicode
+decimal digits in every script (the ASCII class was the hole); routing
+and report-shape polarity use range intersection across the whole
+relation ("Billing never owns them" and "The report does not rank
+issues" are denials); report binding requires SUBJECT-position anaphora
+or a determiner + report-item-noun subject -- this reverses the
+round-12 clause-wide rule at the reviewer's direction (fail-closed:
+"owns each fix" object anaphora no longer binds and the test flipped
+accordingly); routing subject state is cached per clause (linear).
+
 ### Review round 12 (Codex) -- the hardening rewrite
 
 Operator direction: no brittle heuristics in production. The advisory
@@ -331,7 +343,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 231 passed (266 with adjacent suites) (12 new advisory tests, 2 new runner
+- Content-factory suites: 238 passed (273 with adjacent suites) (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered

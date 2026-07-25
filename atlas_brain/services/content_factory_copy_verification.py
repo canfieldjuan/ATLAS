@@ -119,7 +119,7 @@ _EMPHATIC_RE = re.compile(r"\bnot\s+(?:only|just)\b", re.I)
 # THEOREM PASS (rounds 10-12): after the readable substitutions, every
 # remaining digit character in persisted evidence is masked. There is no
 # separator grammar left to enumerate -- a digit cannot survive.
-_ANY_DIGIT_RE = re.compile(r"[0-9]")
+_ANY_DIGIT_RE = re.compile(r"\d")  # Unicode decimal digits, every script
 
 
 def _is_negated(text: str, start: int) -> bool:
@@ -268,6 +268,10 @@ _COPULAR_ABSENCE_RE = re.compile(
 # proposition ("Each is assigned to ...").
 _ANAPHORIC_SUBJECTS = frozenset(
     {"each", "every", "all", "it", "they", "these", "those", "everything", "both"}
+)
+_REPORT_ITEM_NOUNS = frozenset(
+    {"issue", "issues", "ticket", "tickets", "fix", "fixes", "item", "items",
+     "question", "questions", "finding", "findings"}
 )
 
 _CTA_REMINDER = ADVISORY_CTA_REMINDER
@@ -494,7 +498,9 @@ def _routing_relation_affirmative(
     scope covers it, no copular absence follows it ("the owner lane is
     unknown"), and no label-style absence trails its clause
     ("Owner lane: TBD" / "Owner lane -- unassigned")."""
-    if _position_negated(text, clause_bounds, match.start(), negation_cache):
+    if _range_negated(
+        text, clause_bounds, match.start(), match.end(), negation_cache
+    ):
         return False
     if _COPULAR_ABSENCE_RE.match(text, match.end()):
         return False
@@ -528,12 +534,21 @@ def _report_shape_sentences(
         for position, token in enumerate(tokens):
             if token.group(0).lower() not in _REPORT_NOUNS:
                 continue
-            if _position_negated(text, clause_bounds, token.start(), negation_cache):
-                continue
             window = tokens[position + 1 : position + 5]
-            if any(w.group(0).lower() in _SHAPE_VERBS for w in window):
-                sentences.add(_sentence_of(sentence_bounds, token.start()))
-                break
+            shape_verb = next(
+                (w for w in window if w.group(0).lower() in _SHAPE_VERBS), None
+            )
+            if shape_verb is None:
+                continue
+            # Polarity across the whole noun-to-verb relation: "The report
+            # does not rank issues" is a denial, not a shape assertion.
+            if _range_negated(
+                text, clause_bounds, token.start(), shape_verb.end(),
+                negation_cache,
+            ):
+                continue
+            sentences.add(_sentence_of(sentence_bounds, token.start()))
+            break
     return sentences
 
 
@@ -549,6 +564,7 @@ def _routing_covers_report(
     whose clause subject is anaphoric (each/every/it/they/...) and so refers
     back to the report's items. An unrelated ownership statement about a
     different object elsewhere in the draft does not count (round 12)."""
+    subject_cache: dict[int, bool] = {}
     for match in _OWNER_ROUTING_RE.finditer(text):
         if not _routing_relation_affirmative(
             text, match, clause_bounds, negation_cache
@@ -558,11 +574,22 @@ def _routing_covers_report(
         if sentence in report_sentences:
             return True
         if any(sentence > report for report in report_sentences):
-            _index, span = _span_for(clause_bounds, match.start())
-            tokens = _clause_tokens(text, span)
-            if any(
-                token.group(0).lower() in _ANAPHORIC_SUBJECTS for token in tokens
-            ):
+            index, span = _span_for(clause_bounds, match.start())
+            if index not in subject_cache:
+                tokens = _clause_tokens(text, span)
+                first = tokens[0].group(0).lower() if tokens else ""
+                second = tokens[1].group(0).lower() if len(tokens) > 1 else ""
+                # Subject position only (round 13): the clause must be ABOUT
+                # the report's items -- an anaphoric subject ("Each is
+                # assigned...") or a determiner + report-item noun ("These
+                # issues are routed..."). An anaphoric token buried in an
+                # unrelated object ("owns invoices for each customer") does
+                # not bind.
+                subject_cache[index] = first in _ANAPHORIC_SUBJECTS or (
+                    first in ("the", "these", "those")
+                    and second in _REPORT_ITEM_NOUNS
+                )
+            if subject_cache[index]:
                 return True
     return False
 

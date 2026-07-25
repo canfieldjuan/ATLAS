@@ -444,11 +444,24 @@ def test_inanimate_owns_does_not_suppress_routing():
     assert any(w.startswith("owner-routing-coverage:") for w in warnings)
 
 
-def test_owner_team_owns_still_suppresses_routing():
+def test_object_position_anaphora_does_not_bind_routing():
+    """Round 13 reversed the round-12 direction: only SUBJECT-position
+    anaphora binds a later routing clause to the report ("Each is
+    assigned..."); an anaphor buried in the object ("owns each fix") does
+    not -- fail-closed, the warning fires."""
     from atlas_brain.services.content_factory_copy_verification import advisory_warnings
 
     warnings = advisory_warnings(
         "The report ranks issues. The billing team owns each fix."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_report_item_subject_binds_routing():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. These issues are owned by the billing team."
     )
     assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
 
@@ -992,3 +1005,46 @@ def test_invariant_all_outputs_satisfy_schema_grammar():
         assert audit.advisory_warnings == generated
         joined = " ".join(generated)
         assert "@" not in joined and "Alice" not in joined
+
+
+# --- round-13 review fixes ---
+
+
+def test_gate_masks_unicode_digits():
+    """Digit theorem covers every decimal script, not just ASCII."""
+    result = verify_copy("Guaranteed ٠٢٠__٧٩٤٦ savings.")
+    joined = " ".join(result.hits)
+    assert not any(ch.isdigit() for ch in joined), joined
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The report does not rank issues.",
+        "The audit never lists problems.",
+        "The snapshot cannot show trends.",
+    ],
+)
+def test_negated_shape_verb_is_not_report_shape(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(text)
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings), text
+
+
+def test_in_match_routing_negation_does_not_cover():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues, but Billing never owns them."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_object_anaphora_in_unrelated_ownership_does_not_bind():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Billing owns invoices for each customer."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
