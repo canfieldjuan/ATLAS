@@ -112,8 +112,9 @@ def segment_tags(customer: dict) -> list:
 
 def customer_to_contact_data(customer: dict) -> dict:
     """Contact payload for one portal customer. The tenant stamp is
-    non-negotiable; `source`/`tags` ride the slice-A controlled write paths,
-    not the create call (race rules, slice A rounds 6-7)."""
+    non-negotiable. New rows receive the complete payload in their initial
+    insert; existing rows preserve recorded provenance and replace only the
+    portal-managed tags through the atomic reconciliation."""
     data = {
         "full_name": str(customer.get("name") or "").strip(),
         "contact_type": "customer",
@@ -157,7 +158,7 @@ async def resolve_contact(customer: dict, data: dict, crm, pool):
             EOM_CONTEXT_ID,
         )
         if row:
-            return row, False, None
+            return row, False, ("portal_id", str(pid))
 
     atlas_id = customer.get("atlasContactId")
     if atlas_id is not None:
@@ -180,11 +181,11 @@ async def resolve_contact(customer: dict, data: dict, crm, pool):
         if row:
             ctx = row.get("business_context_id")
             if ctx == EOM_CONTEXT_ID:
-                return row, False, None
+                return row, False, ("id", str(atlas_id))
             if ctx is None:
                 # Designed link to a legacy NULL-context row: claim it via
                 # the CAS (the id link IS the identity) -- Codex A2 round 1.
-                return row, True, None
+                return row, True, ("id", str(atlas_id))
             # Linked to a FOREIGN tenant: fail closed, fall to the ladder
             # and report rather than writing across tenants.
             print(f"    note: atlasContactId {atlas_id} belongs to tenant "
@@ -210,6 +211,61 @@ async def resolve_contact(customer: dict, data: dict, crm, pool):
     return None, False, None
 
 
+def portal_identity_keys(customer: dict, data: dict) -> set[tuple[str, str]]:
+    """Normalized roster identities used only by the write preflight."""
+    keys: set[tuple[str, str]] = set()
+    if data.get("phone"):
+        digits = live._phone_digits(data["phone"])
+        if len(digits) >= 10:
+            keys.add(("phone", digits[-10:]))
+    if data.get("email"):
+        keys.add(("email", str(data["email"]).strip().lower()))
+    for site in active_sites(customer):
+        address = str(site.get("address") or "").strip().lower()
+        if address:
+            keys.add(("address", address))
+    return keys
+
+
+async def preflight_roster(customers: list, crm, pool):
+    """Resolve the whole roster read-only and report cross-roster collisions.
+
+    Apply consumes these cached resolutions, so a later duplicate cannot be
+    discovered only after an earlier row has already been written.
+    """
+    identity_owners: dict[tuple[str, str], int] = {}
+    contact_owners: dict[str, int] = {}
+    resolutions = {}
+    errors: list[str] = []
+    for customer in customers:
+        portal_id = int(customer["id"])
+        data = customer_to_contact_data(customer)
+        for key in portal_identity_keys(customer, data):
+            prior = identity_owners.get(key)
+            if prior is not None and prior != portal_id:
+                errors.append(
+                    f"portal customers {prior} and {portal_id} share normalized "
+                    f"{key[0]} identity"
+                )
+            else:
+                identity_owners[key] = portal_id
+        resolved = await resolve_contact(customer, data, crm, pool)
+        resolutions[portal_id] = resolved
+        existing = resolved[0]
+        if existing is None:
+            continue
+        contact_id = str(existing["id"])
+        prior = contact_owners.get(contact_id)
+        if prior is not None and prior != portal_id:
+            errors.append(
+                f"portal customers {prior} and {portal_id} resolve to CRM "
+                f"contact {contact_id}"
+            )
+        else:
+            contact_owners[contact_id] = portal_id
+    return resolutions, errors
+
+
 def parse_meta(existing: dict):
     """asyncpg can deliver JSONB as str; absent metadata (narrow SELECTs)
     reads as unknown ({})."""
@@ -227,48 +283,128 @@ def portal_final_tags(existing: dict, data: dict) -> list:
     return sorted((prior - MANAGED_TAGS) | set(data["tags"]))
 
 
-async def _update_matched_portal(pool, existing: dict, data: dict):
-    """Portal-authoritative matched write: managed tags are REPLACED (an
-    active portal match sheds past_customer), foreign tags preserved;
-    provenance and tenant stamps never resent; diffed; archive/tenant
-    guards inside the UPDATE (Codex A2 round 4)."""
+async def reconcile_portal_contact(
+    pool,
+    existing: dict,
+    data: dict,
+    portal_id: int,
+    *,
+    needs_claim: bool,
+    identity,
+):
+    """Atomically claim/link/reconcile one existing portal contact.
+
+    The portal-link, tenant/archive, and resolution-identity predicates guard
+    the first and only mutation. A rejected statement therefore writes
+    nothing, including on provider create races.
+    """
     contact_id = str(existing["id"])
     payload = dict(data)
-    payload["tags"] = portal_final_tags(existing, data)
     payload.pop("source", None)
     payload.pop("business_context_id", None)
-    updates = live._diff_updates(existing, payload)
-    if not updates:
-        return contact_id, "unchanged"
-    row = await live._guarded_update(pool, contact_id, updates)
-    if row is None:
-        print(f"    note: contact {contact_id} archived mid-run; write skipped")
-        return contact_id, "skipped"
-    return contact_id, "updated"
+    payload.pop("tags", None)
 
-
-async def stamp_portal_id(pool, contact_id: str, portal_id: int):
-    """Guarded jsonb merge of metadata.portal_customer_id -- the slice-B
-    watcher predicate. Same archive/tenant guards as every other write."""
-    return await pool.fetchrow(
-        """
-        UPDATE contacts
-           SET metadata = COALESCE(metadata, '{}'::jsonb)
-                          || jsonb_build_object('portal_customer_id', $2::int),
-               updated_at = NOW()
-         WHERE id = $1
-           AND status != 'archived'
-           AND business_context_id = $3
-           AND (metadata->>'portal_customer_id' IS NULL
-                OR metadata->>'portal_customer_id' = $2::text)
-           AND COALESCE(metadata->>'portal_customer_id', '')
-               IS DISTINCT FROM $2::text
-        RETURNING id
-        """,
-        contact_id,
-        portal_id,
-        EOM_CONTEXT_ID,
+    args = [contact_id, portal_id, EOM_CONTEXT_ID]
+    sets = [
+        "business_context_id = $3",
+        (
+            "metadata = COALESCE(metadata, '{}'::jsonb) "
+            "|| jsonb_build_object('portal_customer_id', $2::int)"
+        ),
+    ]
+    # Compute managed tags from the locked live row. A stale preflight snapshot
+    # must never erase a foreign tag added between resolution and this statement.
+    args.append(data["tags"])
+    desired_tags_param = len(args)
+    args.append(sorted(MANAGED_TAGS))
+    managed_tags_param = len(args)
+    desired_tags_sql = (
+        "ARRAY("
+        "SELECT DISTINCT tag FROM unnest("
+        "COALESCE(contacts.tags, '{}'::text[]) "
+        f"|| ${desired_tags_param}::text[]) AS tag "
+        f"WHERE NOT (tag = ANY(${managed_tags_param}::text[])) "
+        f"OR tag = ANY(${desired_tags_param}::text[]) "
+        "ORDER BY tag)"
     )
+    sets.append(
+        f"tags = {desired_tags_sql}"
+    )
+    change_conditions = [
+        "contacts.business_context_id IS DISTINCT FROM $3",
+        "contacts.metadata->>'portal_customer_id' IS DISTINCT FROM $2::text",
+        f"contacts.tags IS DISTINCT FROM {desired_tags_sql}",
+    ]
+    for column, value in payload.items():
+        args.append(value.lower() if column == "email" and value else value)
+        sets.append(f"{column} = ${len(args)}")
+        change_conditions.append(
+            f"contacts.{column} IS DISTINCT FROM ${len(args)}"
+        )
+
+    identity_clause = ""
+    source_clause = ""
+    if identity:
+        kind, value = identity
+        if kind == "address":
+            args.append(value)
+            identity_clause = f"AND LOWER(address) = LOWER(${len(args)})"
+            if needs_claim:
+                source_clause = "AND source = 'calendar_import'"
+        elif kind == "phone":
+            args.append(value)
+            identity_clause = (
+                "AND regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') "
+                f"LIKE '%' || ${len(args)} || '%'"
+            )
+        elif kind == "email":
+            args.append(value)
+            identity_clause = f"AND LOWER(email) = LOWER(${len(args)})"
+        elif kind == "portal_id":
+            identity_clause = (
+                "AND metadata->>'portal_customer_id' = $2::text"
+            )
+        # kind == "id" is already guarded by the primary-key predicate.
+
+    tenant_clause = (
+        "(business_context_id IS NULL OR business_context_id = $3)"
+        if needs_claim
+        else "business_context_id = $3"
+    )
+    row = await pool.fetchrow(
+        f"""
+        WITH live AS MATERIALIZED (
+            SELECT id
+            FROM contacts
+            WHERE id = $1
+              AND status != 'archived'
+              AND {tenant_clause}
+              AND (metadata->>'portal_customer_id' IS NULL
+                   OR metadata->>'portal_customer_id' = $2::text)
+              {source_clause}
+              {identity_clause}
+            FOR UPDATE
+        ),
+        updated AS (
+            UPDATE contacts
+               SET {", ".join(sets)}, updated_at = NOW()
+              FROM live
+             WHERE contacts.id = live.id
+               AND ({" OR ".join(change_conditions)})
+            RETURNING contacts.id
+        )
+        SELECT live.id, EXISTS (SELECT 1 FROM updated) AS changed
+        FROM live
+        """,
+        *args,
+    )
+    if row is None:
+        print(
+            f"    ERROR: contact {contact_id} changed identity, tenant, archive "
+            "state, or portal link before atomic reconciliation; nothing written"
+        )
+        return contact_id, "rejected"
+    return contact_id, "updated" if row["changed"] else "unchanged"
 
 
 async def portal_id_current(pool, contact_id: str):
@@ -286,7 +422,7 @@ async def portal_id_current(pool, contact_id: str):
     return (row is not None), (row.get("pid") if row else None)
 
 
-async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
+async def sync_one(customer: dict, crm, pool, apply: bool, *, resolved=None) -> tuple:
     """Sync a single portal customer; returns (outcome, contact_id)."""
     data = customer_to_contact_data(customer)
     if not data["full_name"]:
@@ -304,7 +440,12 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
               "usable id; nothing written")
         return "errors", None
 
-    existing, needs_claim, identity = await resolve_contact(customer, data, crm, pool)
+    if resolved is None:
+        existing, needs_claim, identity = await resolve_contact(
+            customer, data, crm, pool
+        )
+    else:
+        existing, needs_claim, identity = resolved
     if not apply:
         # Dry-run reports the matched id (demotion preview accuracy) AND
         # computes the real diff/stamp need, so a clean re-run previews
@@ -335,16 +476,6 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
             return "update-planned", str(existing["id"])
         return "unchanged", str(existing["id"])
 
-    if existing is not None and "metadata" not in existing:
-        # Address-fallback rows are metadata-blind: probe the link BEFORE
-        # any matched write can activate/retag a conflicted row (Codex A2
-        # round 8, BLOCKER).
-        found, pid = await portal_id_current(pool, str(existing["id"]))
-        if found and pid not in (None, "") and pid != str(portal_id):
-            print(f"    ERROR: contact {existing['id']} already linked to "
-                  f"portal customer {pid}; refusing to relink")
-            return "errors", None
-
     if existing is not None:
         prior_pid = parse_meta(existing).get("portal_customer_id")
         if prior_pid is not None and str(prior_pid) != str(portal_id):
@@ -356,62 +487,36 @@ async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
                   f"{portal_id}")
             return "errors", None
 
-    if existing is not None and needs_claim:
-        existing = await live.claim_legacy_row(
-            pool, str(existing["id"]),
-            require_import_source=(identity is not None and identity[0] == "address"),
+    if existing is not None:
+        contact_id, outcome = await reconcile_portal_contact(
+            pool,
+            existing,
+            data,
+            portal_id,
+            needs_claim=needs_claim,
             identity=identity,
         )
-
-    if existing is not None:
-        contact_id, outcome = await _update_matched_portal(pool, existing, data)
-        if outcome == "skipped":
-            return "skipped", contact_id
+        if outcome == "rejected":
+            return "errors", None
     else:
         create_data = dict(data)
-        create_data.pop("source", None)
-        create_data.pop("tags", None)
-        # The resolver already proved no match with its extension-stripped
-        # semantics; create_contact's internal %last-10% dedupe is WEAKER
-        # and could wrong-match a raw/ext-bearing phone -- so the phone
-        # rides the controlled post-create stamp instead (Codex A2 r5).
-        create_data.pop("phone", None)
-        result = await crm.create_contact(create_data)
+        create_data["metadata"] = {"portal_customer_id": portal_id}
+        result = await crm.create_contact(create_data, merge_existing=False)
         contact_id = str(result.get("id", ""))
         if result.get("_was_created"):
             outcome = "created"
-            if contact_id:
-                stamp_payload = {"source": "portal_sync", "tags": data["tags"]}
-                if data.get("phone"):
-                    stamp_payload["phone"] = data["phone"]
-                stamp = await live._guarded_update(
-                    pool, contact_id, stamp_payload,
-                )
-                if stamp is None:
-                    print(f"    ERROR: contact {contact_id} changed before the "
-                          "provenance stamp; left unstamped")
-                    return "errors", contact_id
         else:
-            contact_id, outcome = await _update_matched_portal(pool, result, data)
-            if outcome == "skipped":
-                return "skipped", contact_id
-
-    if contact_id:
-        stamped = await stamp_portal_id(pool, contact_id, portal_id)
-        if stamped is None:
-            found, pid = await portal_id_current(pool, contact_id)
-            if found and pid == str(portal_id):
-                pass  # clean re-run: already stamped
-            elif found and pid not in (None, ""):
-                # The in-SQL guard refused a relink (address-fallback rows
-                # carry no metadata for the app-side check -- Codex A2 r7).
-                print(f"    ERROR: contact {contact_id} already linked to "
-                      f"portal customer {pid}; refusing to relink")
+            race_identity = ("email", data["email"]) if data.get("email") else None
+            contact_id, outcome = await reconcile_portal_contact(
+                pool,
+                result,
+                data,
+                portal_id,
+                needs_claim=False,
+                identity=race_identity,
+            )
+            if outcome == "rejected":
                 return "errors", None
-            else:
-                print(f"    ERROR: portal-id stamp rejected for contact "
-                      f"{contact_id}")
-                return "errors", contact_id
     return outcome, contact_id
 
 
@@ -597,13 +702,34 @@ async def run(args) -> int:
               "nothing written.")
         return 1
 
+    resolutions = {}
+    if args.apply:
+        try:
+            resolutions, collision_errors = await preflight_roster(
+                customers, crm, pool
+            )
+        except Exception as e:  # noqa: BLE001 -- no writes have started
+            print(f"\n  ABORTED: roster preflight failed ({e}); nothing written.")
+            return 1
+        if collision_errors:
+            for error in collision_errors:
+                print(f"  COLLISION: {error}")
+            print(
+                f"\n  ABORTED: {len(collision_errors)} roster collision(s); "
+                "nothing written."
+            )
+            return 1
+
     matched_ids: set = set()
     for customer in sorted(customers, key=lambda c: str(c.get("name") or "").lower()):
         try:
             print(f"  {str(customer.get('name') or '(unnamed)'):<45} "
                   f"sites={len(active_sites(customer))} "
                   f"[{','.join(segment_tags(customer))}]")
-            outcome, contact_id = await sync_one(customer, crm, pool, args.apply)
+            resolved = resolutions.get(customer["id"]) if args.apply else None
+            outcome, contact_id = await sync_one(
+                customer, crm, pool, args.apply, resolved=resolved
+            )
             counts[outcome] += 1
             if contact_id:
                 matched_ids.add(contact_id)

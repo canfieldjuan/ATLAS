@@ -110,7 +110,12 @@ class DatabaseCRMProvider:
         except Exception:
             return False
 
-    async def create_contact(self, data: dict[str, Any]) -> dict[str, Any]:
+    async def create_contact(
+        self,
+        data: dict[str, Any],
+        *,
+        merge_existing: bool = True,
+    ) -> dict[str, Any]:
         """
         Create a contact, returning an existing one if phone or email already matches.
 
@@ -118,6 +123,12 @@ class DatabaseCRMProvider:
         existing record is updated with any non-null fields from `data` so the caller
         always gets the most complete version.  This is application-level dedup;
         migration 037 should add a DB-level partial unique index for extra safety.
+
+        ``merge_existing=False`` is the portal-reconciliation race seam: only a
+        same-tenant email match is returned, without claiming or updating it.
+        Phone is intentionally not used in that mode because the provider's
+        substring matcher is weaker than the portal sync's normalized resolver.
+        The default preserves every existing caller's claim-and-merge behavior.
         """
         pipeline_fields = ("lead_stage", "lead_owner", "next_follow_up_at")
         if (
@@ -166,6 +177,8 @@ class DatabaseCRMProvider:
                 scoped = await self.search_contacts(business_context_id=ctx, **channel)
                 if scoped:
                     return scoped[0]
+                if not merge_existing:
+                    return None
                 claimable = await self.search_contacts(
                     business_context_id_is_null=True, **channel
                 )
@@ -173,12 +186,17 @@ class DatabaseCRMProvider:
             return _pick(await self.search_contacts(**channel))
 
         existing: Optional[dict[str, Any]] = None
-        if phone:
+        if phone and merge_existing:
             existing = await _resolve(phone=phone)
         if existing is None and email:
             existing = await _resolve(email=email)
 
-        if existing is not None and ctx and existing.get("business_context_id") is None:
+        if (
+            merge_existing
+            and existing is not None
+            and ctx
+            and existing.get("business_context_id") is None
+        ):
             # Claim the NULL-context legacy match by compare-and-set before
             # merging: a concurrent claim by another tenant leaves the row
             # theirs and this create falls through to a fresh insert instead
@@ -188,6 +206,11 @@ class DatabaseCRMProvider:
                 existing = None
             else:
                 existing = claimed
+
+        if existing is not None and not merge_existing:
+            result = dict(existing)
+            result["_was_created"] = False
+            return result
 
         if existing is not None:
             # Merge any new non-null fields into the existing record
