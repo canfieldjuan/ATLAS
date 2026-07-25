@@ -142,7 +142,7 @@ Parked hardening: none.
 
 - Command: python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py -q - 129 passed.
+  tests/test_sync_eom_portal_customers.py -q - 131 passed.
 - Command: python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py tests/test_eom_execution_receipts.py -
   passed.
@@ -170,15 +170,19 @@ Parked hardening: none.
 - Receipted execution now rejects staged or unstaged tracked-file changes before
   entering either operator runtime, so the recorded `HEAD` cannot conceal
   modified dependencies.
+- Non-ignored untracked files now fail the same source check, preventing local
+  modules under import roots from shadowing reviewed dependencies.
+- Every recorded changed UUID or aggregate count atomically replaces and syncs
+  the in-progress artifact, preserving partial-run evidence before finalization.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 33 |
-| `plans/PR-EOM-Execution-Receipts.md` | 184 |
-| `scripts/eom_execution_receipt.py` | 268 |
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 34 |
+| `plans/PR-EOM-Execution-Receipts.md` | 188 |
+| `scripts/eom_execution_receipt.py` | 282 |
 | `scripts/import_eom_customers_live.py` | 71 |
 | `scripts/sync_eom_portal_customers.py` | 96 |
-| `tests/test_eom_execution_receipts.py` | 496 |
-| **Total** | **1148** |
+| `tests/test_eom_execution_receipts.py` | 569 |
+| **Total** | **1240** |

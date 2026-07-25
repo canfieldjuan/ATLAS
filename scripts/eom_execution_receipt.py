@@ -54,7 +54,7 @@ def _clean_git_sha(repo_root: Path) -> str:
             "git",
             "status",
             "--porcelain=v1",
-            "--untracked-files=no",
+            "--untracked-files=all",
             "--ignore-submodules=none",
         ],
         cwd=repo_root,
@@ -63,9 +63,7 @@ def _clean_git_sha(repo_root: Path) -> str:
         text=True,
     )
     if status.stdout:
-        raise RuntimeError(
-            "receipted execution requires a clean tracked worktree"
-        )
+        raise RuntimeError("receipted execution requires a clean worktree")
     return _git_sha(repo_root)
 
 
@@ -210,18 +208,36 @@ class EomExecutionReceipt:
             source.unlink(missing_ok=True)
             self._fsync_directory()
 
+    def _persist_in_progress(self) -> None:
+        staged_path = self.in_progress_path.with_name(
+            f"{self.in_progress_path.name}.{uuid.uuid4()}.tmp"
+        )
+        try:
+            self._write_exclusive(staged_path, self._payload)
+            os.replace(staged_path, self.in_progress_path)
+            self._fsync_directory()
+        finally:
+            staged_path.unlink(missing_ok=True)
+
     def set_outcome_counts(self, counts: Mapping[str, int]) -> None:
         self._payload["outcome_counts"] = _validated_counts(
             counts, OUTCOME_KEYS, "outcome count"
         )
+        self._persist_in_progress()
 
     def set_portal_totals(self, totals: Mapping[str, int]) -> None:
         self._payload["portal_totals"] = _validated_counts(
             totals, PORTAL_TOTAL_KEYS, "portal total"
         )
+        self._persist_in_progress()
 
     def record_changed_contact_id(self, contact_id: str | uuid.UUID) -> None:
-        self._changed_contact_ids.add(str(uuid.UUID(str(contact_id))))
+        normalized = str(uuid.UUID(str(contact_id)))
+        if normalized in self._changed_contact_ids:
+            return
+        self._changed_contact_ids.add(normalized)
+        self._payload["changed_contact_ids"] = sorted(self._changed_contact_ids)
+        self._persist_in_progress()
 
     def final_path_for(self, exit_code: int) -> Path:
         return self.receipt_dir / f"{self._final_stem}.exit-{exit_code}.json"
@@ -236,11 +252,7 @@ class EomExecutionReceipt:
         self._payload["exit_code"] = exit_code
         self._payload["changed_contact_ids"] = sorted(self._changed_contact_ids)
 
-        staged_path = self.in_progress_path.with_name(
-            f"{self.in_progress_path.name}.{uuid.uuid4()}.tmp"
-        )
-        self._write_exclusive(staged_path, self._payload)
-        os.replace(staged_path, self.in_progress_path)
+        self._persist_in_progress()
 
         final_path = self.final_path_for(exit_code)
         os.link(self.in_progress_path, final_path)

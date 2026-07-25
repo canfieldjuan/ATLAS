@@ -23,9 +23,10 @@ local development, but an operator run should always supply it. Each run first
 creates a mode-0600 `.in-progress.json` artifact, then publishes one unique
 `.exit-N.json` receipt without overwriting an existing file.
 
-Receipted runs also reject staged or unstaged changes to tracked files. Run only
-from the exact clean checkout whose `HEAD` SHA should appear in the receipt;
-untracked local files do not alter the executed tracked source and are ignored.
+Receipted runs reject staged, unstaged, or non-ignored untracked files. Run only
+from the exact clean checkout whose `HEAD` SHA should appear in the receipt.
+Changed-contact UUIDs and aggregate counts are atomically persisted to the
+in-progress artifact as they are recorded, before finalization.
 
 Receipts contain only source bindings, UTC lifecycle timestamps, non-PII
 counts, and changed contact UUIDs. They never contain portal credentials,

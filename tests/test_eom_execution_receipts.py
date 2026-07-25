@@ -215,6 +215,39 @@ def test_initial_in_progress_entry_is_directory_fsynced(tmp_path, monkeypatch):
     receipt.finalize(0)
 
 
+def test_recorded_mutation_evidence_is_durable_before_finalization(
+    tmp_path, monkeypatch
+):
+    fsynced_types = []
+    real_fsync = os.fsync
+
+    def recording_fsync(descriptor):
+        fsynced_types.append(stat.S_IFMT(os.fstat(descriptor).st_mode))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    receipt = _receipt(tmp_path)
+    fsynced_types.clear()
+
+    receipt.record_changed_contact_id(CONTACT_A)
+    payload = json.loads(receipt.in_progress_path.read_text())
+    assert payload["changed_contact_ids"] == [CONTACT_A]
+    assert payload["ended_at_utc"] is None
+    assert fsynced_types == [stat.S_IFREG, stat.S_IFDIR]
+
+    receipt.set_outcome_counts({"updated": 1})
+    payload = json.loads(receipt.in_progress_path.read_text())
+    assert payload["outcome_counts"] == {"updated": 1}
+
+    receipt.set_portal_totals({"demoted": 0, "eligible": 1, "kept": 1})
+    payload = json.loads(receipt.in_progress_path.read_text())
+    assert payload["portal_totals"] == {
+        "demoted": 0,
+        "eligible": 1,
+        "kept": 1,
+    }
+
+
 def test_receipt_rejects_dirty_tracked_worktree(tmp_path):
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
@@ -247,7 +280,47 @@ def test_receipt_rejects_dirty_tracked_worktree(tmp_path):
     dependency.write_text("VALUE = 2\n")
 
     with pytest.raises(
-        RuntimeError, match="requires a clean tracked worktree"
+        RuntimeError, match="requires a clean worktree"
+    ):
+        EomExecutionReceipt(
+            receipt_dir=tmp_path / "receipts",
+            tool="import_eom_customers_live",
+            mode="write",
+            script_path=script,
+        )
+
+
+def test_receipt_rejects_untracked_import_shadow(tmp_path):
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    scripts.mkdir(parents=True)
+    script = scripts / "operator.py"
+    script.write_text("import httpx\n")
+    subprocess_options = {
+        "cwd": repo,
+        "check": True,
+        "capture_output": True,
+        "text": True,
+    }
+    receipt_module.subprocess.run(["git", "init", "-q"], **subprocess_options)
+    receipt_module.subprocess.run(["git", "add", "."], **subprocess_options)
+    receipt_module.subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Receipt Test",
+            "-c",
+            "user.email=receipt-test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        **subprocess_options,
+    )
+    (scripts / "httpx.py").write_text("raise RuntimeError('shadowed')\n")
+
+    with pytest.raises(
+        RuntimeError, match="requires a clean worktree"
     ):
         EomExecutionReceipt(
             receipt_dir=tmp_path / "receipts",
