@@ -64,6 +64,25 @@ def _clean_git_sha(repo_root: Path) -> str:
     )
     if status.stdout:
         raise RuntimeError("receipted execution requires a clean worktree")
+    tracked_python = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.py"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    for relative_source in tracked_python.stdout.split("\0"):
+        if not relative_source:
+            continue
+        source = repo_root / relative_source
+        legacy_cache = source.with_suffix(f"{source.suffix}c")
+        cache_dir = source.parent / "__pycache__"
+        if legacy_cache.exists() or any(
+            cache_dir.glob(f"{source.stem}.*.pyc")
+        ):
+            raise RuntimeError(
+                "receipted execution rejects cached bytecode for tracked source"
+            )
     return _git_sha(repo_root)
 
 
@@ -248,16 +267,29 @@ class EomExecutionReceipt:
         if type(exit_code) is not int or exit_code < 0:
             raise ValueError("exit code must be a non-negative integer")
 
-        self._payload["ended_at_utc"] = _utc_now()
-        self._payload["exit_code"] = exit_code
-        self._payload["changed_contact_ids"] = sorted(self._changed_contact_ids)
-
-        self._persist_in_progress()
-
         final_path = self.final_path_for(exit_code)
-        os.link(self.in_progress_path, final_path)
+        final_payload = {
+            **self._payload,
+            "ended_at_utc": _utc_now(),
+            "exit_code": exit_code,
+            "changed_contact_ids": sorted(self._changed_contact_ids),
+        }
+        staged_path = self.in_progress_path.with_name(
+            f"{self.in_progress_path.name}.{uuid.uuid4()}.tmp"
+        )
+        try:
+            self._write_exclusive(staged_path, final_payload)
+            os.link(staged_path, final_path)
+            self._fsync_directory()
+        except BaseException:
+            staged_path.unlink(missing_ok=True)
+            self._fsync_directory()
+            raise
+
         self.in_progress_path.unlink()
+        staged_path.unlink()
         self._fsync_directory()
+        self._payload = final_payload
         self._finalized = True
         return final_path
 

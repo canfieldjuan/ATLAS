@@ -142,7 +142,7 @@ Parked hardening: none.
 
 - Command: python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py -q - 131 passed.
+  tests/test_sync_eom_portal_customers.py -q - 132 passed.
 - Command: python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py tests/test_eom_execution_receipts.py -
   passed.
@@ -174,15 +174,19 @@ Parked hardening: none.
   modules under import roots from shadowing reviewed dependencies.
 - Every recorded changed UUID or aggregate count atomically replaces and syncs
   the in-progress artifact, preserving partial-run evidence before finalization.
+- Cached bytecode for tracked Python source now fails closed even when Git
+  ignores the cache and otherwise reports a clean checkout.
+- Final-name collisions leave the durable in-progress artifact unfinalized
+  instead of recording an exit state that was never successfully published.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 34 |
-| `plans/PR-EOM-Execution-Receipts.md` | 188 |
-| `scripts/eom_execution_receipt.py` | 280 |
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 36 |
+| `plans/PR-EOM-Execution-Receipts.md` | 192 |
+| `scripts/eom_execution_receipt.py` | 312 |
 | `scripts/import_eom_customers_live.py` | 71 |
 | `scripts/sync_eom_portal_customers.py` | 96 |
-| `tests/test_eom_execution_receipts.py` | 569 |
-| **Total** | **1238** |
+| `tests/test_eom_execution_receipts.py` | 636 |
+| **Total** | **1343** |

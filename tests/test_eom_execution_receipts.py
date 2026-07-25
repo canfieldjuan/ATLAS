@@ -6,6 +6,7 @@ import hashlib
 import asyncio
 import json
 import os
+import py_compile
 import stat
 import sys
 import uuid
@@ -133,6 +134,9 @@ def test_final_collision_never_overwrites_and_preserves_in_progress(tmp_path):
     assert collision.read_text() == "existing artifact\n"
     assert receipt.in_progress_path.exists()
     assert stat.S_IMODE(receipt.in_progress_path.stat().st_mode) == 0o600
+    recovery_payload = json.loads(receipt.in_progress_path.read_text())
+    assert recovery_payload["ended_at_utc"] is None
+    assert recovery_payload["exit_code"] is None
 
 
 @pytest.mark.parametrize(
@@ -321,6 +325,69 @@ def test_receipt_rejects_untracked_import_shadow(tmp_path):
 
     with pytest.raises(
         RuntimeError, match="requires a clean worktree"
+    ):
+        EomExecutionReceipt(
+            receipt_dir=tmp_path / "receipts",
+            tool="import_eom_customers_live",
+            mode="write",
+            script_path=script,
+        )
+
+
+def test_receipt_rejects_ignored_bytecode_for_tracked_source(tmp_path):
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    scripts.mkdir(parents=True)
+    script = scripts / "operator.py"
+    dependency = scripts / "dependency.py"
+    (repo / ".gitignore").write_text("__pycache__/\n*.pyc\n")
+    script.write_text("from dependency import VALUE\n")
+    dependency.write_text("VALUE = 1\n")
+    subprocess_options = {
+        "cwd": repo,
+        "check": True,
+        "capture_output": True,
+        "text": True,
+    }
+    receipt_module.subprocess.run(["git", "init", "-q"], **subprocess_options)
+    receipt_module.subprocess.run(["git", "add", "."], **subprocess_options)
+    receipt_module.subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Receipt Test",
+            "-c",
+            "user.email=receipt-test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        **subprocess_options,
+    )
+    clean_stat = dependency.stat()
+    dependency.write_text("VALUE = 2\n")
+    py_compile.compile(str(dependency), doraise=True)
+    dependency.write_text("VALUE = 1\n")
+    os.utime(
+        dependency,
+        ns=(clean_stat.st_atime_ns, clean_stat.st_mtime_ns),
+    )
+    assert (
+        receipt_module.subprocess.run(
+            [
+                "git",
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ],
+            **subprocess_options,
+        ).stdout
+        == ""
+    )
+
+    with pytest.raises(
+        RuntimeError, match="rejects cached bytecode"
     ):
         EomExecutionReceipt(
             receipt_dir=tmp_path / "receipts",

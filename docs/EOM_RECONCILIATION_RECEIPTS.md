@@ -25,6 +25,8 @@ creates a mode-0600 `.in-progress.json` artifact, then publishes one unique
 
 Receipted runs reject staged, unstaged, or non-ignored untracked files. Run only
 from the exact clean checkout whose `HEAD` SHA should appear in the receipt.
+Ignored Python bytecode caches for tracked source are also rejected; remove
+repository-local `__pycache__`/`.pyc` artifacts before an operator run.
 Changed-contact UUIDs and aggregate counts are atomically persisted to the
 in-progress artifact as they are recorded, before finalization.
 
