@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,11 +24,12 @@ from sync_eom_portal_customers import (  # noqa: E402
     MANAGED_TAGS,
     customer_to_contact_data,
     demote_unmatched,
+    fetch_calendar_guard_keys,
+    on_calendar,
     preflight_roster,
     portal_login,
     segment_tags,
     sync_one,
-    on_calendar,
 )
 
 
@@ -695,45 +697,99 @@ def test_clean_preflight_snapshot_still_reconciles_against_locked_live_row():
 # Demotion
 # ---------------------------------------------------------------------------
 
-NO_GUARD = {"phones": set(), "addrs": set(), "names": set()}
+NO_GUARD = {
+    "phones": set(), "emails": set(), "addrs": set(), "names": set(),
+}
 
 
-def test_calendar_veto_keys_match_phone_address_and_name():
+def test_calendar_veto_keys_match_phone_email_address_and_name():
     # Owner rule (2026-07-23): the calendar vetoes demotion.
     guard = {"phones": {"2175559999"}, "addrs": {"12 oak st, effingham, il"},
-             "names": {"jane smith"}}
+             "emails": {"jane@example.com"}, "names": {"jane smith"}}
     assert on_calendar({"phone": "(217) 555-9999 ext 4"}, guard)
+    assert on_calendar({"email": " Jane@Example.COM "}, guard)
     assert on_calendar({"address": "12 Oak St, Effingham, IL "}, guard)
     assert on_calendar({"full_name": "Jane Smith"}, guard)
     assert not on_calendar({"full_name": "Someone Else",
-                            "phone": "217-555-0000", "address": "9 Elm"}, guard)
+                            "phone": "217-555-0000", "address": "9 Elm",
+                            "email": "other@example.com"}, guard)
 
 
-def test_cancelled_latest_calendar_records_do_not_veto():
-    # Codex 2163 rounds 1-2 (BLOCKER): cancellation excludes from the veto,
-    # decided on the CROSS-CALENDAR merged view (dedup_records runs before
-    # key emission, so a newer cancellation on another calendar supersedes
-    # an older active event).
-    src = (REPO / "scripts" / "sync_eom_portal_customers.py").read_text()
-    body = src.split("def fetch_calendar_guard_keys")[1].split("def on_calendar")[0]
-    assert "live.dedup_records(all_records)" in body
-    assert "if rec.cancelled:" in body
-    assert body.index("live.dedup_records") < body.index("if rec.cancelled:")
-    assert body.index("if rec.cancelled:") < body.index("if rec.phone:")
+def test_calendar_guard_uses_real_producer_for_email_and_cancellation(
+        monkeypatch):
+    from atlas_brain.services import calendar_provider
 
+    now = datetime.now(timezone.utc)
+    active = calendar_provider.CalendarEvent(
+        uid="active",
+        summary="Active Customer",
+        location="1 Active St, Effingham, IL",
+        description=" ACTIVE@Example.COM ",
+        start=now,
+        end=now + timedelta(hours=1),
+    )
+    older = calendar_provider.CalendarEvent(
+        uid="older",
+        summary="Cancelled Customer",
+        location="2 Cancelled St, Effingham, IL",
+        description="stale@example.com",
+        start=now - timedelta(days=2),
+        end=now - timedelta(days=2) + timedelta(hours=1),
+    )
+    cancellation = calendar_provider.CalendarEvent(
+        uid="cancelled",
+        summary="Cancelled Customer - CANCELLED",
+        location="2 Cancelled St, Effingham, IL",
+        description="",
+        start=now - timedelta(days=1),
+        end=now - timedelta(days=1) + timedelta(hours=1),
+    )
 
-def test_calendar_active_candidates_are_kept_not_demoted():
+    class FakeGoogleCalendarProvider:
+        calls = []
+        closed = False
+
+        async def list_events(self, *, start, end, calendar_id):
+            self.calls.append(calendar_id)
+            return {
+                "commercial@test": [active],
+                "residential@test": [older],
+                "one-time@test": [cancellation],
+            }[calendar_id]
+
+        async def aclose(self):
+            type(self).closed = True
+
+    monkeypatch.setattr(
+        calendar_provider, "GoogleCalendarProvider", FakeGoogleCalendarProvider
+    )
+    monkeypatch.setenv("EOM_CALENDAR_COMMERCIAL", "commercial@test")
+    monkeypatch.setenv("EOM_CALENDAR_RESIDENTIAL", "residential@test")
+    monkeypatch.setenv("EOM_CALENDAR_ONE_TIME", "one-time@test")
+
+    keys = asyncio.run(fetch_calendar_guard_keys())
+
+    assert keys["emails"] == {"active@example.com"}
+    assert FakeGoogleCalendarProvider.calls == [
+        "commercial@test", "residential@test", "one-time@test",
+    ]
+    assert FakeGoogleCalendarProvider.closed is True
     pool = SyncPool(demotion_rows=[
-        {"id": "sched", "full_name": "On Schedule", "tags": [],
-         "phone": "217-555-9999", "address": "X"},
+        {"id": "active", "full_name": "Different CRM Name", "tags": [],
+         "phone": None, "email": " ACTIVE@Example.COM ", "address": "X"},
+        {"id": "cancelled", "full_name": "Former CRM Name", "tags": [],
+         "phone": None, "email": "stale@example.com", "address": "Y"},
         {"id": "gone", "full_name": "Moved Away", "tags": [],
-         "phone": None, "address": "Y"},
+         "phone": None, "email": "other@example.com", "address": "Z"},
     ])
-    guard = {"phones": {"2175559999"}, "addrs": set(), "names": set()}
     demoted, eligible = asyncio.run(
-        demote_unmatched(pool, set(), apply=True, guard_keys=guard))
-    assert (demoted, eligible) == (1, 2)
-    assert pool.updates[0][0] == "gone"          # only the truly-gone one
+        demote_unmatched(pool, set(), apply=True, guard_keys=keys))
+
+    assert (demoted, eligible) == (2, 3)
+    assert [contact_id for contact_id, _ in pool.updates] == [
+        "cancelled", "gone",
+    ]
+    assert "email" in pool.queries[0][0]
 
 
 def test_demotion_refuses_without_the_calendar_guard():

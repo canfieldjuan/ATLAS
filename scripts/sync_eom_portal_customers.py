@@ -522,14 +522,14 @@ async def sync_one(customer: dict, crm, pool, apply: bool, *, resolved=None) -> 
 
 async def fetch_calendar_guard_keys(months_back: int = 1, months_forward: int = 4):
     """Owner rule (2026-07-23): the CALENDAR VETOES DEMOTION. Live booking
-    events (recent past through upcoming) yield phone/address/name keys; any
-    demotion candidate matching one is a CURRENT customer regardless of
+    events (recent past through upcoming) yield phone/email/address/name keys;
+    any demotion candidate matching one is a CURRENT customer regardless of
     portal state and is kept (reported for portal reconciliation)."""
     from atlas_brain.services.calendar_provider import GoogleCalendarProvider
 
     ids = live.resolve_calendar_ids(live.effective_calendar_env(os.environ), "all")
     provider = GoogleCalendarProvider()
-    keys = {"phones": set(), "addrs": set(), "names": set()}
+    keys = {"phones": set(), "emails": set(), "addrs": set(), "names": set()}
     try:
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=months_back * 30)
@@ -547,9 +547,9 @@ async def fetch_calendar_guard_keys(months_back: int = 1, months_forward: int = 
         # on one calendar must not veto when a NEWER cancellation on another
         # calendar supersedes it -- the merged record's state decides.
         merged = live.dedup_records(all_records)
-        # The merger unions by phone/address only, so same-NAME records
-        # without a shared channel stay separate: name keys get their own
-        # latest-record-wins pass (Codex 2163 r3).
+        # The merger unions by phone/email/address, so same-NAME records
+        # without a shared identity channel stay separate: name keys get
+        # their own latest-record-wins pass (Codex 2163 r3).
         name_state = {}
         for rec in merged:
             nm = rec.name.strip().lower()
@@ -570,6 +570,8 @@ async def fetch_calendar_guard_keys(months_back: int = 1, months_forward: int = 
                 digits = live._phone_digits(rec.phone)
                 if len(digits) >= 10:
                     keys["phones"].add(digits[-10:])
+            if rec.email:
+                keys["emails"].add(rec.email.strip().lower())
             for addr in getattr(rec, "all_addresses", None) or [rec.address]:
                 keys["addrs"].add(addr.lower())
         for nm, (_, cancelled) in name_state.items():
@@ -586,6 +588,9 @@ def on_calendar(row: dict, guard_keys: dict) -> bool:
         digits = live._phone_digits(phone)
         if len(digits) >= 10 and digits[-10:] in guard_keys["phones"]:
             return True
+    email = str(row.get("email") or "").strip().lower()
+    if email and email in guard_keys["emails"]:
+        return True
     addr = str(row.get("address") or "").strip().lower()
     if addr and addr in guard_keys["addrs"]:
         return True
@@ -602,7 +607,7 @@ async def demote_unmatched(pool, matched_ids: set, apply: bool,
     web, and every other source are never touched."""
     rows = await pool.fetch(
         """
-        SELECT id, full_name, tags, phone, address FROM contacts
+        SELECT id, full_name, tags, phone, email, address FROM contacts
         WHERE business_context_id = $1
           AND contact_type = 'customer'
           AND status = 'active'
