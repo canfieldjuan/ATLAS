@@ -29,9 +29,11 @@ Each run creates a mode-0600 `.in-progress.json` artifact before the Calendar
 runtime, then exclusively publishes one `.exit-N.json` receipt.
 
 Receipted runs pipe the receipt launcher from the reviewed `HEAD` object into
-Python's isolated `-I` startup. The launcher authenticates the checkout before
-loading the Calendar entrypoint from the same exact Git SHA, so the mutable
-worktree entrypoint never executes first. Direct
+Python's isolated `-I` startup. The launcher authenticates the checkout,
+materializes every tracked Python module from the same exact Git SHA into a
+private read-only snapshot, and runs the Calendar entrypoint and its
+repository-local imports from that snapshot. Mutable worktree code therefore
+cannot enter after preflight. Direct
 `python -I scripts/import_eom_customers_live.py --receipt-dir ...` invocation
 is rejected.
 

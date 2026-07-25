@@ -21,10 +21,12 @@ result.
   directory is supplied.
 - A receipted run must establish source trust before any mutable
   repository-local entrypoint or dependency can execute. It must pipe a
-  launcher from `HEAD` into isolated Python, load the real entrypoint from the
-  validated Git object, directly compare tracked Python bytes/modes with
-  `HEAD`, and reject untracked divergence, ignored import artifacts, ignored
-  package/module-file symlinks, and cached bytecode.
+  launcher from `HEAD` into isolated Python, materialize every tracked Python
+  module from the validated Git object into a private read-only snapshot,
+  execute the real entrypoint and imports from that snapshot, directly compare
+  tracked Python bytes/modes with `HEAD`, and reject untracked divergence,
+  ignored import artifacts, ignored package/module-file symlinks, and cached
+  bytecode.
 - The receipt must be created before the runtime, use mode 0600, bind the exact
   Git SHA and executed script SHA-256, persist only allowlisted counts and
   changed contact UUIDs, and finalize every normal or exceptional exit without
@@ -40,8 +42,8 @@ Max files: 5
 
 1. Keep one shared execution-receipt lifecycle.
 2. Bootstrap its source-trust preflight from the reviewed Git object, then load
-   the Calendar entrypoint from that exact Git SHA before exposing repository
-   import roots.
+   the Calendar entrypoint and repository-local dependencies from a private
+   read-only snapshot of that exact Git SHA.
 3. Wire Calendar dry-run/write evidence and mutation UUID recording end to end.
 4. Document the private operator directory and add lifecycle plus real-process
    boundary proofs.
@@ -57,12 +59,14 @@ Max files: 5
 - Structural repair: a receipted invocation pipes the allowlisted launcher from
   `HEAD` into Python `-I`. The launcher compares every tracked Python worktree
   blob and executable mode directly with the `HEAD` tree, runs the remaining
-  ignored/cache checks, and only then executes the Calendar entrypoint loaded
-  from that exact Git SHA.
+  ignored/cache checks, materializes all tracked Python blobs from that exact
+  Git SHA into a private read-only snapshot, and executes the Calendar
+  entrypoint plus later repository imports from the snapshot.
 - Proof: process tests execute with hostile `PYTHONPATH` startup hooks,
   a self-restoring mutable entrypoint, self-removing ignored shadows, ignored
-  package/module-file symlinks, and a modified `skip-worktree` dependency. None
-  can execute before rejection.
+  package/module-file symlinks, a modified `skip-worktree` dependency, and a
+  concurrent post-preflight dependency rewrite. Rejected inputs never execute;
+  the concurrent rewrite cannot displace the reviewed snapshot.
 
 ### Review Contract
 
@@ -71,8 +75,8 @@ Max files: 5
     imports or async runtime; unreceipted dry-run remains available.
   - [ ] Receipted dry-run/write starts from the `HEAD`-loaded isolated
     launcher, authenticates the checkout, and executes the allowlisted Calendar
-    entrypoint from the validated Git SHA before any mutable entrypoint or
-    repository dependency can run.
+    entrypoint plus later repository imports from a private read-only snapshot
+    of the validated Git SHA.
   - [ ] Source trust rejects tracked/untracked divergence, index-hidden tracked
     byte or mode changes, ignored import shadows, package and module-file
     symlinks, and cached bytecode.
@@ -89,15 +93,17 @@ Max files: 5
   git show HEAD:scripts/eom_execution_receipt.py into
   python -I - --launch-reviewed scripts/import_eom_customers_live.py
   --receipt-dir ...; a valid run publishes the observable mode-0600
-  .exit-N.json receipt, while hostile process fixtures exit nonzero without
-  executing their marker payloads or creating a receipt.
+  .exit-N.json receipt. A write-mode process fixture performs an observable
+  mutation and finalizes that receipt; hostile fixtures exit nonzero without
+  executing marker payloads, and a concurrent worktree rewrite does not execute
+  the replacement dependency.
 - Affected surfaces: the EOM Calendar operator CLI, its source-authentication
   bootstrap, ignored-import classifier, receipt persistence/finalization, the
   private receipt artifact, operator runbook, and focused process/unit tests.
-- Risk areas: false source attestation, arbitrary local code execution before
-  trust, ignored import shadowing, customer mutation without durable evidence,
-  atomic receipt publication, invocation compatibility, and CI maturity
-  classification.
+- Risk areas: false source attestation, preflight-to-import TOCTOU, arbitrary
+  local code execution before trust, ignored import shadowing, customer
+  mutation without durable evidence, atomic receipt publication, invocation
+  compatibility, and CI maturity classification.
 - Reviewer rules triggered: R1, R2, R3, R5, R6, R8, R10, R12, R13, R14.
 
 
@@ -116,10 +122,11 @@ root, and empty-path entry from `sys.path` before parsing receipt policy with
 the standard library. A receipted operator command instead pipes the shared
 launcher from the `HEAD` Git object into isolated Python. The launcher compares
 tracked Python blobs/modes directly with the resolved tree, executes the
-remaining clean-source checks, and then loads the allowlisted Calendar
-entrypoint from that exact Git SHA. The entrypoint adds local import roots only
-after those checks succeed. Receipt construction reuses the returned Git SHA,
-hashes the matching Calendar script, and creates the durable in-progress
+remaining clean-source checks, then batch-loads every tracked Python blob into
+a private mode-0500/0400 snapshot. The allowlisted Calendar entrypoint and all
+later repository imports resolve from that snapshot, while cwd-relative
+operator data remains outside it. Receipt construction reuses the returned Git
+SHA, hashes the snapshot Calendar script, and creates the durable in-progress
 artifact before entering the async runtime.
 
 The helper has no generic metadata sink: callers can record only allowlisted
@@ -154,23 +161,26 @@ Parked hardening: none.
 
 - `python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py -q` — 151 passed.
+  tests/test_sync_eom_portal_customers.py -q` — 155 passed.
 - Current-head boundary selection (`isolated or sitecustomize or skip_worktree
-  or evidence_failure or reviewed_launcher or module_file_symlink`) — 12
+  or evidence_failure or reviewed_launcher or module_file_symlink`) — 16
   passed.
 - Ruff and Python byte compilation on the receipt helper, Calendar entrypoint,
   and receipt tests — passed.
 - Exact scripts maturity ratchet — passed with no baseline change.
 - Exact failed `atlas-brain-b2c-core-risk` maturity matrix group (reasoning,
   security, and storage) — passed with no baseline change.
+- Real-repository snapshot benchmark — 2,306 tracked Python files materialized
+  in 0.382 seconds.
 - Guard class-closure advisory — passed.
 - `git diff --check` — passed.
 
 ### Review reconciliation
 
 - The documented receipted CLI pipes the launcher from `HEAD` into `python -I
-  -`; it authenticates the checkout and loads the entrypoint from the validated
-  Git SHA before mutable entrypoint code can execute.
+  -`; it authenticates the checkout and loads the entrypoint plus all later
+  repository Python imports from a private read-only snapshot of the validated
+  Git SHA.
 - Tracked Python content and executable modes are read through no-follow file
   descriptors and compared with the `HEAD` tree's Git blob identities.
 - Ignored module-file symlinks are normalized through the same import-suffix
@@ -182,14 +192,20 @@ Parked hardening: none.
 - The mid-contact health regression uses an explicit dependency seam instead
   of mocking the first-party database singleton, preserving the maturity
   baseline.
+- Process-level write proofs now cover missing-receipt rejection before local
+  imports, one observable CRM mutation with a finalized exit-0 receipt, and a
+  concurrent post-preflight CRM dependency rewrite that never executes.
+- The targeted residential/window usage example is explicitly an unreceipted
+  dry run; production targeting continues to use the documented reviewed
+  launcher pipeline.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 47 |
-| `plans/PR-EOM-Execution-Receipts.md` | 195 |
-| `scripts/eom_execution_receipt.py` | 493 |
-| `scripts/import_eom_customers_live.py` | 168 |
-| `tests/test_eom_execution_receipts.py` | 1005 |
-| **Total** | **1908** |
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 49 |
+| `plans/PR-EOM-Execution-Receipts.md` | 211 |
+| `scripts/eom_execution_receipt.py` | 574 |
+| `scripts/import_eom_customers_live.py` | 171 |
+| `tests/test_eom_execution_receipts.py` | 1267 |
+| **Total** | **2272** |

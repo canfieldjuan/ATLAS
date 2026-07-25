@@ -23,7 +23,8 @@ Usage:
   git show HEAD:scripts/eom_execution_receipt.py | python -I - \
     --launch-reviewed scripts/import_eom_customers_live.py \
     --receipt-dir /private/state
-  python scripts/import_eom_customers_live.py --calendar residential --months-back 12
+  python scripts/import_eom_customers_live.py --dry-run \
+    --calendar residential --months-back 12
 """
 
 import sys

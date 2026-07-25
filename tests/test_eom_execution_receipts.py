@@ -10,6 +10,7 @@ import py_compile
 import shutil
 import stat
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -329,7 +330,7 @@ def test_receipt_rejects_untracked_import_shadow(tmp_path):
         )
 
 
-def _calendar_process_fixture(tmp_path, ignored_path):
+def _calendar_process_fixture(tmp_path, ignored_path, extra_files=None):
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
     scripts.mkdir(parents=True)
@@ -338,6 +339,10 @@ def _calendar_process_fixture(tmp_path, ignored_path):
     (scripts / "import_calendar_contacts.py").write_text(
         '"""Minimal fixture; source preflight must run before this import."""\n'
     )
+    for relative_path, source in (extra_files or {}).items():
+        destination = repo / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(source)
     (repo / ".gitignore").write_text(f"/{ignored_path}\n")
     subprocess_options = {
         "cwd": repo,
@@ -374,6 +379,9 @@ def _run_receipted_calendar(
     isolated=True,
     env=None,
     entrypoint="scripts/import_eom_customers_live.py",
+    dry_run=True,
+    include_receipt=True,
+    extra_args=(),
 ):
     launcher_source = receipt_module.subprocess.run(
         ["git", "show", "HEAD:scripts/eom_execution_receipt.py"],
@@ -390,11 +398,13 @@ def _run_receipted_calendar(
             "-",
             "--launch-reviewed",
             entrypoint,
-            "--dry-run",
-            "--receipt-dir",
-            str(receipt_dir),
         ]
     )
+    if dry_run:
+        command.append("--dry-run")
+    if include_receipt:
+        command.extend(["--receipt-dir", str(receipt_dir)])
+    command.extend(extra_args)
     return receipt_module.subprocess.run(
         command,
         cwd=repo,
@@ -404,6 +414,95 @@ def _run_receipted_calendar(
         input=launcher_source,
         env=env,
     )
+
+
+def _write_process_fixture_files(tmp_path, *, wait_for_rewrite=False):
+    mutation_marker = tmp_path / "trusted-mutation"
+    ready_marker = tmp_path / "calendar-fetch-started"
+    release_marker = tmp_path / "dependency-rewrite-complete"
+    wait_block = ""
+    if wait_for_rewrite:
+        wait_block = (
+            f"        Path({str(ready_marker)!r}).write_text('ready')\n"
+            f"        while not Path({str(release_marker)!r}).exists():\n"
+            "            await asyncio.sleep(0.01)\n"
+        )
+    files = {
+        "scripts/import_calendar_contacts.py": (
+            "from dataclasses import dataclass\n"
+            "import re\n"
+            "_PHONE_RE = re.compile(r'.*\\\\d.*')\n"
+            "_EMAIL_RE = re.compile(r'.+@.+')\n"
+            "@dataclass\n"
+            "class CustomerRecord:\n"
+            "    name: str\n"
+            "    address: str\n"
+            "    phone: str | None\n"
+            "    email: str | None\n"
+            "    contact_name: str | None\n"
+            "    notes: str\n"
+            "    tags: list\n"
+            "    contact_type: str\n"
+            "    source_calendar: str\n"
+            "    last_event_date: object\n"
+            "    event_count: int\n"
+            "    cancelled: bool\n"
+            "def _strip_html(value): return value\n"
+            "def _clean_summary(value, _commercial):\n"
+            "    return value.replace(' - CANCELLED', ''), 'CANCELLED' in value\n"
+            "def _normalize_address(value): return value.strip()\n"
+            "def _extract_email(_value): return None\n"
+            "def _extract_contact_name(_value): return None\n"
+            "def _extract_phone(value):\n"
+            "    digits = ''.join(char for char in value if char.isdigit())\n"
+            "    return digits or None\n"
+        ),
+        "atlas_brain/__init__.py": "",
+        "atlas_brain/services/__init__.py": "",
+        "atlas_brain/storage/__init__.py": "",
+        "atlas_brain/services/calendar_provider.py": (
+            "import asyncio\n"
+            "from datetime import datetime, timezone\n"
+            "from pathlib import Path\n"
+            "class Event:\n"
+            "    status = 'confirmed'\n"
+            "    summary = 'Snapshot Customer'\n"
+            "    location = '123 Snapshot Lane, Effingham, IL'\n"
+            "    description = '2175550101'\n"
+            "    start = datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc)\n"
+            "class GoogleCalendarProvider:\n"
+            "    async def list_events(self, **_kwargs):\n"
+            f"{wait_block}"
+            "        return [Event()]\n"
+            "    async def aclose(self): return None\n"
+        ),
+        "atlas_brain/services/crm_provider.py": (
+            "from pathlib import Path\n"
+            "CONTACT_ID = '11111111-1111-1111-1111-111111111111'\n"
+            "class CRM:\n"
+            "    async def search_contacts(self, **_kwargs): return []\n"
+            "    async def create_contact(self, _payload):\n"
+            f"        Path({str(mutation_marker)!r}).write_text(CONTACT_ID)\n"
+            "        return {'id': CONTACT_ID, '_was_created': True}\n"
+            "    async def log_interaction(self, **_kwargs):\n"
+            "        return {'inserted': False}\n"
+            "def get_crm_provider(): return CRM()\n"
+        ),
+        "atlas_brain/storage/database.py": (
+            "class Pool:\n"
+            "    async def initialize(self): return None\n"
+            "    async def fetchrow(self, query, *args):\n"
+            "        if 'SELECT status' in query:\n"
+            "            return {'status': 'active', "
+            "'business_context_id': 'effingham_maids'}\n"
+            "        if 'UPDATE contacts' in query:\n"
+            "            return {'id': args[0]}\n"
+            "        return None\n"
+            "_POOL = Pool()\n"
+            "def get_db_pool(): return _POOL\n"
+        ),
+    }
+    return files, mutation_marker, ready_marker, release_marker
 
 
 def test_process_receipt_requires_isolated_python_startup(tmp_path):
@@ -418,6 +517,31 @@ def test_process_receipt_requires_isolated_python_startup(tmp_path):
     assert result.returncode == 1
     assert "requires isolated Python startup" in result.stderr
     assert list(receipt_dir.iterdir()) == []
+
+
+def test_reviewed_launcher_snapshot_is_private_and_read_only(tmp_path):
+    repo, scripts, _receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+    snapshot = tmp_path / "reviewed-python"
+    snapshot.mkdir(mode=0o700)
+
+    try:
+        receipt_module._materialize_reviewed_python(
+            repo, receipt_module._git_sha(repo), snapshot
+        )
+        reviewed_entrypoint = snapshot / "scripts" / (
+            "import_eom_customers_live.py"
+        )
+        assert reviewed_entrypoint.read_bytes() == (
+            scripts / "import_eom_customers_live.py"
+        ).read_bytes()
+        assert stat.S_IMODE(snapshot.stat().st_mode) == 0o500
+        assert stat.S_IMODE(reviewed_entrypoint.stat().st_mode) == 0o400
+    finally:
+        receipt_module._remove_reviewed_python(snapshot)
+
+    assert not snapshot.exists()
 
 
 def test_direct_receipted_entrypoint_requires_reviewed_launcher(tmp_path):
@@ -460,6 +584,136 @@ def test_reviewed_launcher_rejects_unallowlisted_entrypoint(tmp_path):
     assert result.returncode == 1
     assert "unsupported reviewed EOM entrypoint" in result.stderr
     assert list(receipt_dir.iterdir()) == []
+
+
+def test_reviewed_launcher_rejects_write_without_receipt_before_import(
+    tmp_path
+):
+    marker = tmp_path / "local-import-executed"
+    extra_files = {
+        "scripts/import_calendar_contacts.py": (
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).write_text('executed')\n"
+        )
+    }
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral", extra_files=extra_files
+    )
+
+    result = _run_receipted_calendar(
+        repo,
+        scripts,
+        receipt_dir,
+        dry_run=False,
+        include_receipt=False,
+    )
+
+    assert result.returncode == 2
+    assert "live writes require --receipt-dir" in result.stderr
+    assert not marker.exists()
+    assert list(receipt_dir.iterdir()) == []
+
+
+def test_reviewed_launcher_write_mutates_and_finalizes_receipt(tmp_path):
+    extra_files, mutation_marker, _ready, _release = (
+        _write_process_fixture_files(tmp_path)
+    )
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral", extra_files=extra_files
+    )
+    env = {
+        **os.environ,
+        "EOM_CALENDAR_RESIDENTIAL": "residential-fixture",
+    }
+
+    result = _run_receipted_calendar(
+        repo,
+        scripts,
+        receipt_dir,
+        dry_run=False,
+        extra_args=("--calendar", "residential"),
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert mutation_marker.read_text() == CONTACT_A
+    final_path, payload = _load_only_final(receipt_dir)
+    assert final_path.name.endswith(".exit-0.json")
+    assert payload["git_sha"] == receipt_module._git_sha(repo)
+    assert payload["outcome_counts"]["created"] == 1
+    assert payload["changed_contact_ids"] == [CONTACT_A]
+
+
+def test_reviewed_launcher_write_ignores_concurrent_worktree_rewrite(
+    tmp_path
+):
+    extra_files, mutation_marker, ready_marker, release_marker = (
+        _write_process_fixture_files(tmp_path, wait_for_rewrite=True)
+    )
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral", extra_files=extra_files
+    )
+    launcher_source = receipt_module.subprocess.run(
+        ["git", "show", "HEAD:scripts/eom_execution_receipt.py"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    untrusted_marker = tmp_path / "untrusted-dependency-executed"
+    dependency = repo / "atlas_brain" / "services" / "crm_provider.py"
+    env = {
+        **os.environ,
+        "EOM_CALENDAR_RESIDENTIAL": "residential-fixture",
+    }
+    command = [
+        sys.executable,
+        "-I",
+        "-",
+        "--launch-reviewed",
+        "scripts/import_eom_customers_live.py",
+        "--receipt-dir",
+        str(receipt_dir),
+        "--calendar",
+        "residential",
+    ]
+    process = receipt_module.subprocess.Popen(
+        command,
+        cwd=repo,
+        stdin=receipt_module.subprocess.PIPE,
+        stdout=receipt_module.subprocess.PIPE,
+        stderr=receipt_module.subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    try:
+        process.stdin.write(launcher_source)
+        process.stdin.close()
+        process.stdin = None
+        deadline = time.monotonic() + 10
+        while not ready_marker.exists() and process.poll() is None:
+            if time.monotonic() >= deadline:
+                raise AssertionError("reviewed process did not reach Calendar fetch")
+            time.sleep(0.01)
+        assert ready_marker.exists()
+        dependency.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(untrusted_marker)!r}).write_text('executed')\n"
+            "raise RuntimeError('mutable dependency executed')\n"
+        )
+        release_marker.write_text("continue")
+        stdout, stderr = process.communicate(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+    assert process.returncode == 0, (stdout, stderr)
+    assert mutation_marker.read_text() == CONTACT_A
+    assert not untrusted_marker.exists()
+    _final_path, payload = _load_only_final(receipt_dir)
+    assert payload["git_sha"] == receipt_module._git_sha(repo)
+    assert payload["changed_contact_ids"] == [CONTACT_A]
 
 
 def test_isolated_process_blocks_sitecustomize_before_preflight(tmp_path):
@@ -693,13 +947,21 @@ def test_reviewed_launcher_authenticates_entrypoint_before_execution():
     source_preflight = launcher_source.index(
         "git_sha = establish_source_trust(repo_root)"
     )
+    snapshot_materialization = launcher_source.index(
+        "_materialize_reviewed_python(repo_root, git_sha, snapshot_root)"
+    )
     reviewed_source_read = launcher_source.index(
-        '["git", "show", f"{git_sha}:{relative_entrypoint}"]'
+        "source = source_path.read_bytes()"
     )
     entrypoint_execution = launcher_source.index(
         'exec(compile(source, str(source_path), "exec"), namespace)'
     )
-    assert source_preflight < reviewed_source_read < entrypoint_execution
+    assert (
+        source_preflight
+        < snapshot_materialization
+        < reviewed_source_read
+        < entrypoint_execution
+    )
 
     bootstrap_admission = calendar_source.index(
         '_receipt_module = sys.modules.get("eom_execution_receipt")'

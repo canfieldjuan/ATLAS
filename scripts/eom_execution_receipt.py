@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import importlib.machinery
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -91,10 +94,12 @@ def _ignored_path_can_supply_code(
     return _module_path_is_importable(module_parts)
 
 
-def _verify_tracked_python_matches_head(repo_root: Path) -> None:
-    """Compare tracked Python bytes and executable modes directly with HEAD."""
+def _tracked_python_entries(
+    repo_root: Path, revision: str
+) -> list[tuple[str, str, str]]:
+    """Return validated mode, blob, and path tuples for tracked Python."""
     tree = subprocess.run(
-        ["git", "ls-tree", "-r", "-z", "--full-tree", "HEAD"],
+        ["git", "ls-tree", "-r", "-z", "--full-tree", revision],
         cwd=repo_root,
         check=True,
         capture_output=True,
@@ -117,6 +122,12 @@ def _verify_tracked_python_matches_head(repo_root: Path) -> None:
                 "receipted execution requires regular tracked Python source"
             )
         entries.append((mode, object_id, relative_path))
+    return entries
+
+
+def _verify_tracked_python_matches_head(repo_root: Path) -> None:
+    """Compare tracked Python bytes and executable modes directly with HEAD."""
+    entries = _tracked_python_entries(repo_root, "HEAD")
 
     for expected_mode, expected_hash, relative_path in entries:
         source = repo_root / relative_path
@@ -152,6 +163,74 @@ def _verify_tracked_python_matches_head(repo_root: Path) -> None:
             raise RuntimeError(
                 "receipted execution requires tracked Python source to match HEAD"
             )
+
+
+def _materialize_reviewed_python(
+    repo_root: Path, git_sha: str, snapshot_root: Path
+) -> None:
+    """Write the validated revision's Python tree into a private snapshot."""
+    entries = _tracked_python_entries(repo_root, git_sha)
+    batch = subprocess.run(
+        ["git", "cat-file", "--batch"],
+        cwd=repo_root,
+        check=True,
+        input="".join(
+            f"{object_id}\n" for _mode, object_id, _path in entries
+        ).encode("ascii"),
+        capture_output=True,
+        text=False,
+    ).stdout
+    stream = io.BytesIO(batch)
+    files: list[Path] = []
+    directories = {snapshot_root}
+    for _mode, object_id, relative_path in entries:
+        header = stream.readline().decode("ascii").rstrip("\n").split()
+        if (
+            len(header) != 3
+            or header[0] != object_id
+            or header[1] != "blob"
+            or not header[2].isdigit()
+        ):
+            raise RuntimeError("could not read reviewed Python source from Git")
+        source = stream.read(int(header[2]))
+        if len(source) != int(header[2]) or stream.read(1) != b"\n":
+            raise RuntimeError("could not read reviewed Python source from Git")
+        relative = PurePosixPath(relative_path)
+        destination = snapshot_root.joinpath(*relative.parts)
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        directories.update(destination.parents)
+        descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o400,
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(source)
+        files.append(destination)
+    if stream.read():
+        raise RuntimeError("unexpected reviewed Python source from Git")
+
+    for path in files:
+        path.chmod(0o400)
+    for directory in sorted(
+        (path for path in directories if path.is_relative_to(snapshot_root)),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        directory.chmod(0o500)
+
+
+def _remove_reviewed_python(snapshot_root: Path) -> None:
+    """Restore owner permissions only long enough to remove the snapshot."""
+    if not snapshot_root.exists():
+        return
+    for path in snapshot_root.rglob("*"):
+        if path.is_dir():
+            path.chmod(0o700)
+        else:
+            path.chmod(0o600)
+    snapshot_root.chmod(0o700)
+    shutil.rmtree(snapshot_root)
 
 
 def establish_source_trust(repo_root: Path) -> str:
@@ -466,27 +545,29 @@ def _launch_reviewed_entrypoint(argv: list[str]) -> None:
 
     repo_root = Path.cwd().resolve()
     git_sha = establish_source_trust(repo_root)
-    source_path = repo_root / relative_entrypoint
-    source = subprocess.run(
-        ["git", "show", f"{git_sha}:{relative_entrypoint}"],
-        cwd=repo_root,
-        check=True,
-        capture_output=True,
-    ).stdout
+    snapshot_root = Path(
+        tempfile.mkdtemp(prefix="atlas-eom-reviewed-python-")
+    )
+    try:
+        _materialize_reviewed_python(repo_root, git_sha, snapshot_root)
+        source_path = snapshot_root / relative_entrypoint
+        source = source_path.read_bytes()
 
-    bootstrap_module = sys.modules[__name__]
-    bootstrap_module._BOOTSTRAP_ENTRYPOINT = relative_entrypoint
-    bootstrap_module._BOOTSTRAP_GIT_SHA = git_sha
-    bootstrap_module._BOOTSTRAP_REPO_ROOT = str(repo_root)
-    sys.modules["eom_execution_receipt"] = bootstrap_module
-    sys.argv = [str(source_path), *argv[2:]]
-    namespace = {
-        "__name__": "__main__",
-        "__file__": str(source_path),
-        "__package__": None,
-        "__cached__": None,
-    }
-    exec(compile(source, str(source_path), "exec"), namespace)
+        bootstrap_module = sys.modules[__name__]
+        bootstrap_module._BOOTSTRAP_ENTRYPOINT = relative_entrypoint
+        bootstrap_module._BOOTSTRAP_GIT_SHA = git_sha
+        bootstrap_module._BOOTSTRAP_REPO_ROOT = str(snapshot_root)
+        sys.modules["eom_execution_receipt"] = bootstrap_module
+        sys.argv = [str(source_path), *argv[2:]]
+        namespace = {
+            "__name__": "__main__",
+            "__file__": str(source_path),
+            "__package__": None,
+            "__cached__": None,
+        }
+        exec(compile(source, str(source_path), "exec"), namespace)
+    finally:
+        _remove_reviewed_python(snapshot_root)
 
 
 if __name__ == "__main__":
