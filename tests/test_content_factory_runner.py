@@ -16,6 +16,7 @@ import pytest
 from pydantic import ValidationError
 
 import atlas_brain.services.content_factory_runner as runner
+from atlas_brain.services.content_factory_store import ArtifactStoreError
 from atlas_brain.services.content_factory_runner import (
     WorkerError,
     call_worker,
@@ -290,3 +291,150 @@ def test_run_stage_rejects_contradictory_v2_version(tmp_path, monkeypatch):
     with pytest.raises(ValidationError):
         runner.run_stage("job-v2v", "audit", "m", "req", api_key="k", root=tmp_path)
     assert not job_dir("job-v2v", root=tmp_path).exists()
+
+
+# --- Phase 6: repurposing + image-prompt gates at the real entrypoint ---
+
+
+def test_run_stage_overwrites_variant_verdicts_and_blocks_bad_ship(tmp_path, monkeypatch):
+    """A worker cannot ship an overclaiming variant: the runner recomputes
+    each variant's verdict from its own body, so a self-asserted
+    ready_to_publish becomes invalid and nothing persists."""
+    reply = json.dumps(
+        {
+            "schema": "repurposing.v1",
+            "project_id": "p",
+            "variants": [
+                {
+                    "channel": "linkedin",
+                    "body_markdown": "We guarantee savings for every team.",
+                    "derived_from_claims": ["e1"],
+                    "copy_verification": {"verdict": "pass", "hits": []},
+                }
+            ],
+            "ready_to_publish": True,
+        }
+    )
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ValidationError):
+        runner.run_stage("job-rp", "repurposing", "m", "req", api_key="k", root=tmp_path)
+    assert not job_dir("job-rp", root=tmp_path).exists()
+
+
+def test_run_stage_persists_clean_variants_with_computed_verdicts(tmp_path, monkeypatch):
+    reply = json.dumps(
+        {
+            "schema": "repurposing.v1",
+            "project_id": "p",
+            "variants": [
+                {
+                    "channel": "linkedin",
+                    "body_markdown": "Repeat tickets quietly consume agent hours.",
+                    "derived_from_claims": ["e1"],
+                }
+            ],
+            "ready_to_publish": False,
+        }
+    )
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-rp2", "repurposing", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["variants"][0]["copy_verification"]["verdict"] == "pass"
+    assert stored["variants"][0]["advisory_warnings"][-1].startswith("reminder:")
+
+
+def test_run_stage_blank_variant_body_fails_closed(tmp_path, monkeypatch):
+    reply = json.dumps(
+        {
+            "schema": "repurposing.v1",
+            "project_id": "p",
+            "variants": [
+                {
+                    "channel": "x",
+                    "body_markdown": "   ",
+                    "derived_from_claims": ["e1"],
+                    "copy_verification": {"verdict": "pass", "hits": []},
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    # blank body is rejected by the contract (NonEmptyStr) -- nothing persists
+    with pytest.raises(ValidationError):
+        runner.run_stage("job-rp3", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_run_stage_gates_image_prompt_text(tmp_path, monkeypatch):
+    """Banned copy inside a PROMPT would be rendered into the artwork, where
+    no text check would see it -- the gate runs on the prompt itself."""
+    reply = json.dumps(
+        {
+            "schema": "image_prompt.v1",
+            "project_id": "p",
+            "prompts": [
+                {
+                    "purpose": "hero",
+                    "prompt_text": "poster reading guaranteed savings for every team",
+                }
+            ],
+            "copy_verification": {"verdict": "pass", "hits": []},
+        }
+    )
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-img", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["copy_verification"]["verdict"] == "fail"
+    assert any("guaranteed-savings" in hit for hit in stored["copy_verification"]["hits"])
+
+
+def test_run_stage_image_prompt_pii_is_caught(tmp_path, monkeypatch):
+    reply = json.dumps(
+        {
+            "schema": "image_prompt.v1",
+            "project_id": "p",
+            "prompts": [
+                {"purpose": "card", "prompt_text": "business card reading bob@example.com"}
+            ],
+        }
+    )
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-img2", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["copy_verification"]["verdict"] == "fail"
+    # The VERDICT never carries the raw value (the persisted-evidence
+    # theorem); the prompt text itself is the artifact's payload and stays
+    # so a human can see what to fix -- same as a draft body.
+    assert "bob@example.com" not in json.dumps(stored["copy_verification"])
+    assert stored["copy_verification"]["hits"] == ["email: <redacted>"]
+
+
+def test_run_stage_clean_image_prompt_passes(tmp_path, monkeypatch):
+    reply = json.dumps(
+        {
+            "schema": "image_prompt.v1",
+            "project_id": "p",
+            "prompts": [
+                {"purpose": "hero", "prompt_text": "a tidy office desk in soft morning light"}
+            ],
+        }
+    )
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-img3", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["copy_verification"]["verdict"] == "pass"
+
+
+def test_stage_schema_mismatch_still_enforced_for_phase6(tmp_path, monkeypatch):
+    """A repurposing artifact cannot land under the image_prompt stage."""
+    reply = json.dumps(
+        {
+            "schema": "repurposing.v1",
+            "project_id": "p",
+            "variants": [
+                {"channel": "x", "body_markdown": "clean", "derived_from_claims": ["e1"]}
+            ],
+        }
+    )
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError):
+        runner.run_stage("job-mix", "image_prompt", "m", "req", api_key="k", root=tmp_path)

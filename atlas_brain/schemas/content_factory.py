@@ -95,6 +95,28 @@ _ADVISORY_GRAMMAR_RE = re.compile(
 )
 
 
+def _validate_advisory_warnings(warnings: "list[str]") -> None:
+    """Persistence choke point for ALL writers (runner or direct) on EVERY
+    artifact that carries advisory warnings.
+
+    A warning must be a known static line or match the deterministic locator
+    grammar -- free-text (and therefore PII-shaped) entries are rejected at
+    validation, before the store persists anything. Kept as one function so
+    the audit, the repurposing variants, and the image prompts cannot drift
+    into three different grammars.
+    """
+    for warning in warnings:
+        if warning in _ADVISORY_STATIC_WARNINGS:
+            continue
+        if _ADVISORY_GRAMMAR_RE.fullmatch(warning):
+            continue
+        raise ValueError(
+            "advisory_warnings entries must be deterministic checklist "
+            "lines (bounded locator grammar); free-text evidence is not "
+            "representable"
+        )
+
+
 Confidence = Literal["high", "medium", "low"]
 Recommendation = Literal["promote", "revise"]
 Verdict = Literal["pass", "fail"]
@@ -262,20 +284,7 @@ class EditorialAuditV2(BaseModel):
 
     @model_validator(mode="after")
     def _advisory_warnings_bounded(self) -> "EditorialAuditV2":
-        # Choke point for ALL writers (runner or direct): warnings must be a
-        # known static line or match the deterministic locator grammar --
-        # free-text (and so PII-shaped) entries are rejected at validation,
-        # before the store persists anything.
-        for warning in self.advisory_warnings:
-            if warning in _ADVISORY_STATIC_WARNINGS:
-                continue
-            if _ADVISORY_GRAMMAR_RE.fullmatch(warning):
-                continue
-            raise ValueError(
-                "advisory_warnings entries must be deterministic checklist "
-                "lines (bounded locator grammar); free-text evidence is not "
-                "representable"
-            )
+        _validate_advisory_warnings(self.advisory_warnings)
         return self
 
     @model_validator(mode="after")
@@ -331,6 +340,114 @@ class ArtifactManifest(BaseModel):
     created_at: Optional[str] = None
 
 
+class ChannelVariant(BaseModel):
+    """One channel-specific rewrite of an approved draft.
+
+    A variant is the copy that actually SHIPS, so it carries its own
+    deterministic verdict rather than inheriting the draft's: a rewrite can
+    introduce an overclaim the source never made.
+    """
+
+    model_config = _BASE_CONFIG
+
+    # Non-blank: a variant with no channel cannot be routed, and one with no
+    # body is not a variant.
+    channel: NonEmptyStr
+    body_markdown: NonEmptyStr
+    # Claim lineage back to the source draft's claims/evidence ids. A variant
+    # with no lineage is an orphan -- it asserts something the approved draft
+    # never established, which is exactly the "repurposer invents claims"
+    # failure this field exists to make visible.
+    derived_from_claims: list[NonEmptyStr] = Field(default_factory=list)
+    copy_verification: Optional[CopyVerification] = None
+    advisory_warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _advisory_warnings_bounded(self) -> "ChannelVariant":
+        _validate_advisory_warnings(self.advisory_warnings)
+        return self
+
+
+class RepurposingPackage(BaseModel):
+    """repurposing.json -- channel variants derived from an approved draft.
+
+    ``ready_to_publish`` is the variant-level analogue of the editorial
+    audit's promote gate: the model cannot declare a package shippable while
+    any variant carries a failing deterministic verdict.
+    """
+
+    model_config = _BASE_CONFIG
+
+    artifact_schema: Literal["repurposing.v1"] = Field(alias="schema")
+    schema_version: Literal[1] = 1
+    project_id: str
+    source_draft_revision: int = 1
+    variants: list[ChannelVariant] = Field(default_factory=list)
+    ready_to_publish: bool = False
+    prompt_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _package_invariants(self) -> "RepurposingPackage":
+        # An empty package is not a repurposing result; it is a no-op that
+        # would otherwise persist as if work had been done.
+        if not self.variants:
+            raise ValueError("repurposing package requires at least one variant")
+        # One channel per variant: two variants on the same channel means an
+        # ambiguous "which one ships?" downstream.
+        channels = [variant.channel.casefold() for variant in self.variants]
+        if len(channels) != len(set(channels)):
+            raise ValueError("duplicate channel in repurposing variants")
+        if self.ready_to_publish:
+            for variant in self.variants:
+                verdict = variant.copy_verification
+                if verdict is None or verdict.verdict != "pass":
+                    raise ValueError(
+                        "ready_to_publish requires every variant to carry "
+                        "copy_verification.verdict == 'pass'"
+                    )
+        return self
+
+
+class ImagePrompt(BaseModel):
+    """One text-to-image prompt. TEXT ONLY -- generation is a separate,
+    human-triggered, VRAM-guarded step (epic #2109 Phase 6 keeps the prompt
+    designer and the generator split)."""
+
+    model_config = _BASE_CONFIG
+
+    purpose: NonEmptyStr
+    prompt_text: NonEmptyStr
+    negative_prompt: str = ""
+    aspect_ratio: str = "1:1"
+
+
+class ImagePromptSet(BaseModel):
+    """image_prompt.json -- image prompts derived from an approved draft.
+
+    Prompt text is gated like body copy: a diffusion model will happily
+    render a banned claim or a contact string INTO the artwork, where no
+    downstream text check would ever see it.
+    """
+
+    model_config = _BASE_CONFIG
+
+    artifact_schema: Literal["image_prompt.v1"] = Field(alias="schema")
+    schema_version: Literal[1] = 1
+    project_id: str
+    source_draft_revision: int = 1
+    prompts: list[ImagePrompt] = Field(default_factory=list)
+    copy_verification: Optional[CopyVerification] = None
+    advisory_warnings: list[str] = Field(default_factory=list)
+    prompt_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _prompt_set_invariants(self) -> "ImagePromptSet":
+        if not self.prompts:
+            raise ValueError("image prompt set requires at least one prompt")
+        _validate_advisory_warnings(self.advisory_warnings)
+        return self
+
+
 ARTIFACT_MODELS: dict[str, type[BaseModel]] = {
     "content_brief.v1": ContentBrief,
     "evidence_packet.v1": EvidencePacket,
@@ -338,6 +455,8 @@ ARTIFACT_MODELS: dict[str, type[BaseModel]] = {
     "editorial_audit.v1": EditorialAudit,
     "editorial_audit.v2": EditorialAuditV2,
     "manifest.v1": ArtifactManifest,
+    "repurposing.v1": RepurposingPackage,
+    "image_prompt.v1": ImagePromptSet,
 }
 
 

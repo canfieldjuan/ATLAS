@@ -42,6 +42,10 @@ STAGE_SCHEMAS = {
     # working; runner-persisted audits are normalized to v2.
     "audit": ("editorial_audit.v1", "editorial_audit.v2"),
     "manifest": ("manifest.v1",),
+    # Phase 6: channel variants and image prompts derived from an approved
+    # draft. Both are gated by the runner exactly like the audit.
+    "repurposing": ("repurposing.v1",),
+    "image_prompt": ("image_prompt.v1",),
 }
 
 _GIT_NAME = "Content Factory"

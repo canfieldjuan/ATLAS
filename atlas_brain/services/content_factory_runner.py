@@ -101,6 +101,69 @@ def call_worker(
     return content or ""
 
 
+_REPURPOSING_SCHEMA = "repurposing.v1"
+_IMAGE_PROMPT_SCHEMA = "image_prompt.v1"
+
+
+def _deterministic_verdict(text: str, *, empty_reason: str) -> "tuple[dict, list[str]]":
+    """(verdict, warnings) computed from ``text``. Blank text fails closed:
+    with nothing verified, no artifact may carry a passing verdict."""
+    if not text.strip():
+        return (
+            {"verdict": "fail", "hits": [f"unverified-copy: {empty_reason}"]},
+            [],
+        )
+    return verify_copy(text).model_dump(), advisory_warnings(text)
+
+
+def _enforce_repurposing(artifact: dict[str, Any]) -> None:
+    """OVERWRITE each variant's verdict/checklist from its own body.
+
+    Variants are the copy that ships, so each is verified independently and
+    the worker's self-reported values are discarded -- the same discipline
+    that makes the editorial audit unable to self-promote. A variant whose
+    body is blank fails closed, which in turn makes a worker-asserted
+    ``ready_to_publish`` invalid at contract validation.
+    """
+    if artifact.get("schema") != _REPURPOSING_SCHEMA:
+        return
+    variants = artifact.get("variants")
+    if not isinstance(variants, list):
+        return
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        verdict, warnings = _deterministic_verdict(
+            str(variant.get("body_markdown") or ""),
+            empty_reason="body_markdown is empty; nothing was verified",
+        )
+        variant["copy_verification"] = verdict
+        variant["advisory_warnings"] = warnings
+
+
+def _enforce_image_prompts(artifact: dict[str, Any]) -> None:
+    """Gate the PROMPT TEXT itself: a diffusion model will render a banned
+    claim or a contact string into the artwork, where no downstream text
+    check would ever see it. Verified over every prompt's text and negative
+    prompt together."""
+    if artifact.get("schema") != _IMAGE_PROMPT_SCHEMA:
+        return
+    prompts = artifact.get("prompts")
+    if not isinstance(prompts, list):
+        return
+    parts: list[str] = []
+    for prompt in prompts:
+        if isinstance(prompt, dict):
+            parts.append(str(prompt.get("prompt_text") or ""))
+            parts.append(str(prompt.get("negative_prompt") or ""))
+    combined = "\n".join(part for part in parts if part)
+    verdict, warnings = _deterministic_verdict(
+        combined, empty_reason="prompt text is empty; nothing was verified"
+    )
+    artifact["copy_verification"] = verdict
+    artifact["advisory_warnings"] = warnings
+
+
 def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
     """For ANY editorial audit (gated by schema, not stage name -- see below), OVERWRITE
     copy_verification with the deterministic verdict computed from the edited copy,
@@ -174,4 +237,6 @@ def run_stage(
             f"stage {stage!r}: worker {model!r} returned no JSON artifact"
         )
     _enforce_copy_verification(artifact)
+    _enforce_repurposing(artifact)
+    _enforce_image_prompts(artifact)
     return write_artifact(job_id, stage, artifact, root=root)
