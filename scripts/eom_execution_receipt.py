@@ -64,6 +64,21 @@ def _clean_git_sha(repo_root: Path) -> str:
     )
     if status.stdout:
         raise RuntimeError("receipted execution requires a clean worktree")
+    ignored = subprocess.run(
+        ["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    for relative_path in ignored.stdout.split("\0"):
+        if relative_path.endswith(".py") and (
+            "/" not in relative_path
+            or relative_path.startswith(("scripts/", "atlas_brain/"))
+        ):
+            raise RuntimeError(
+                "receipted execution rejects ignored Python import shadows"
+            )
     tracked_python = subprocess.run(
         ["git", "ls-files", "-z", "--", "*.py"],
         cwd=repo_root,
@@ -134,7 +149,8 @@ class EomExecutionReceipt:
             raise ValueError("unsupported EOM receipt tool or mode")
 
         directory = Path(receipt_dir).expanduser()
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not directory.exists():
+            raise ValueError("receipt directory must already exist")
         directory_stat = directory.lstat()
         if not stat.S_ISDIR(directory_stat.st_mode) or stat.S_ISLNK(
             directory_stat.st_mode
@@ -159,6 +175,7 @@ class EomExecutionReceipt:
         self.in_progress_path = directory / f"{stem}.in-progress.json"
         self._final_stem = stem
         self._finalized = False
+        self._persistence_error: Exception | None = None
         self._payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "receipt_id": str(run_id),
@@ -242,13 +259,13 @@ class EomExecutionReceipt:
         self._payload["outcome_counts"] = _validated_counts(
             counts, OUTCOME_KEYS, "outcome count"
         )
-        self._persist_in_progress()
+        self._persist_recorded_evidence()
 
     def set_portal_totals(self, totals: Mapping[str, int]) -> None:
         self._payload["portal_totals"] = _validated_counts(
             totals, PORTAL_TOTAL_KEYS, "portal total"
         )
-        self._persist_in_progress()
+        self._persist_recorded_evidence()
 
     def record_changed_contact_id(self, contact_id: str | uuid.UUID) -> None:
         normalized = str(uuid.UUID(str(contact_id)))
@@ -256,7 +273,15 @@ class EomExecutionReceipt:
             return
         self._changed_contact_ids.add(normalized)
         self._payload["changed_contact_ids"] = sorted(self._changed_contact_ids)
-        self._persist_in_progress()
+        self._persist_recorded_evidence()
+
+    def _persist_recorded_evidence(self) -> None:
+        if self._persistence_error is not None:
+            return
+        try:
+            self._persist_in_progress()
+        except Exception as exc:
+            self._persistence_error = exc
 
     def final_path_for(self, exit_code: int) -> Path:
         return self.receipt_dir / f"{self._final_stem}.exit-{exit_code}.json"
@@ -264,6 +289,10 @@ class EomExecutionReceipt:
     def finalize(self, exit_code: int) -> Path:
         if self._finalized:
             raise RuntimeError("receipt is already finalized")
+        if self._persistence_error is not None:
+            raise RuntimeError(
+                "could not durably record reconciliation evidence"
+            ) from self._persistence_error
         if type(exit_code) is not int or exit_code < 0:
             raise ValueError("exit code must be a non-negative integer")
 
@@ -289,11 +318,14 @@ class EomExecutionReceipt:
             staged_path.unlink(missing_ok=True)
             raise
 
-        self.in_progress_path.unlink()
-        staged_path.unlink()
-        self._fsync_directory()
         self._payload = final_payload
         self._finalized = True
+        try:
+            self.in_progress_path.unlink()
+            staged_path.unlink()
+            self._fsync_directory()
+        except OSError:
+            return final_path
         return final_path
 
 

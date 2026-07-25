@@ -142,7 +142,7 @@ Parked hardening: none.
 
 - Command: python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py -q - 135 passed.
+  tests/test_sync_eom_portal_customers.py -q - 138 passed.
 - Command: python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py tests/test_eom_execution_receipts.py -
   passed.
@@ -183,15 +183,20 @@ Parked hardening: none.
   self-reject.
 - A failed post-link publication sync removes only the link created by that
   attempt and retains the unfinalized recovery artifact.
+- Ignored Python source in either repository import root now fails closed.
+- Evidence persistence errors are deferred until finalization so an already
+  started guarded CRM reconciliation can finish before the run fails.
+- Receipt directories must pre-exist, avoiding an unsynced parent-directory
+  creation boundary; post-commit cleanup errors retain the synced final result.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 38 |
-| `plans/PR-EOM-Execution-Receipts.md` | 197 |
-| `scripts/eom_execution_receipt.py` | 315 |
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 39 |
+| `plans/PR-EOM-Execution-Receipts.md` | 202 |
+| `scripts/eom_execution_receipt.py` | 347 |
 | `scripts/import_eom_customers_live.py` | 72 |
 | `scripts/sync_eom_portal_customers.py` | 97 |
-| `tests/test_eom_execution_receipts.py` | 759 |
-| **Total** | **1478** |
+| `tests/test_eom_execution_receipts.py` | 819 |
+| **Total** | **1576** |

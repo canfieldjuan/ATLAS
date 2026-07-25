@@ -18,8 +18,9 @@ python scripts/sync_eom_portal_customers.py --apply --receipt-dir "$EOM_RECEIPT_
 python scripts/sync_eom_portal_customers.py --receipt-dir "$EOM_RECEIPT_DIR"
 ```
 
-Write/apply modes reject a missing receipt directory. Dry runs may omit it for
-local development, but an operator run should always supply it. Each run first
+Write/apply modes reject a missing receipt directory. The supplied private
+directory must already exist. Dry runs may omit it for local development, but
+an operator run should always supply it. Each run first
 creates a mode-0600 `.in-progress.json` artifact, then publishes one unique
 `.exit-N.json` receipt without overwriting an existing file.
 

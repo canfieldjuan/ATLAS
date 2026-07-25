@@ -283,12 +283,15 @@ def test_receipt_rejects_dirty_tracked_worktree(tmp_path):
         **subprocess_options,
     )
     dependency.write_text("VALUE = 2\n")
+    receipt_dir = tmp_path / "receipts"
+    receipt_dir.mkdir()
+    receipt_dir.chmod(0o700)
 
     with pytest.raises(
         RuntimeError, match="requires a clean worktree"
     ):
         EomExecutionReceipt(
-            receipt_dir=tmp_path / "receipts",
+            receipt_dir=receipt_dir,
             tool="import_eom_customers_live",
             mode="write",
             script_path=script,
@@ -323,12 +326,42 @@ def test_receipt_rejects_untracked_import_shadow(tmp_path):
         **subprocess_options,
     )
     (scripts / "httpx.py").write_text("raise RuntimeError('shadowed')\n")
+    receipt_dir = tmp_path / "receipts"
+    receipt_dir.mkdir()
+    receipt_dir.chmod(0o700)
 
     with pytest.raises(
         RuntimeError, match="requires a clean worktree"
     ):
         EomExecutionReceipt(
-            receipt_dir=tmp_path / "receipts",
+            receipt_dir=receipt_dir,
+            tool="import_eom_customers_live",
+            mode="write",
+            script_path=script,
+        )
+
+
+def test_receipt_rejects_ignored_python_import_shadow(tmp_path):
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    scripts.mkdir(parents=True)
+    script = scripts / "operator.py"
+    script.write_text("import httpx\n")
+    (repo / ".gitignore").write_text("scripts/httpx.py\n")
+    subprocess_options = {
+        "cwd": repo, "check": True, "capture_output": True, "text": True,
+    }
+    receipt_module.subprocess.run(["git", "init", "-q"], **subprocess_options)
+    receipt_module.subprocess.run(["git", "add", "."], **subprocess_options)
+    receipt_module.subprocess.run(
+        ["git", "-c", "user.name=Receipt Test", "-c",
+         "user.email=receipt-test@example.invalid", "commit", "-qm", "fixture"],
+        **subprocess_options,
+    )
+    (scripts / "httpx.py").write_text("raise RuntimeError('shadowed')\n")
+    with pytest.raises(RuntimeError, match="ignored Python import shadows"):
+        EomExecutionReceipt(
+            receipt_dir=tmp_path,
             tool="import_eom_customers_live",
             mode="write",
             script_path=script,
@@ -386,12 +419,15 @@ def test_receipt_rejects_ignored_bytecode_for_tracked_source(tmp_path):
         ).stdout
         == ""
     )
+    receipt_dir = tmp_path / "receipts"
+    receipt_dir.mkdir()
+    receipt_dir.chmod(0o700)
 
     with pytest.raises(
         RuntimeError, match="rejects cached bytecode"
     ):
         EomExecutionReceipt(
-            receipt_dir=tmp_path / "receipts",
+            receipt_dir=receipt_dir,
             tool="import_eom_customers_live",
             mode="write",
             script_path=script,
@@ -469,6 +505,8 @@ def test_clean_real_entrypoints_do_not_create_or_reject_own_bytecode(tmp_path):
         **subprocess_options,
     )
     calendar_receipts = tmp_path / "calendar-receipts"
+    calendar_receipts.mkdir()
+    calendar_receipts.chmod(0o700)
     env = dict(os.environ)
     env.update(
         {
@@ -518,6 +556,28 @@ def test_failed_publication_sync_removes_new_final_link(tmp_path, monkeypatch):
     recovery_payload = json.loads(receipt.in_progress_path.read_text())
     assert recovery_payload["ended_at_utc"] is None
     assert recovery_payload["exit_code"] is None
+
+
+def test_receipt_directory_must_preexist(tmp_path):
+    with pytest.raises(ValueError, match="must already exist"):
+        _receipt(tmp_path / "missing")
+
+
+def test_evidence_failure_is_deferred_until_finalize(tmp_path, monkeypatch):
+    receipt = _receipt(tmp_path)
+    calls = []
+
+    def fail_persist():
+        calls.append("persist")
+        raise OSError("storage failed")
+
+    monkeypatch.setattr(receipt, "_persist_in_progress", fail_persist)
+    receipt.record_changed_contact_id(CONTACT_A)
+    calls.append("reconciliation-completed")
+
+    assert calls == ["persist", "reconciliation-completed"]
+    with pytest.raises(RuntimeError, match="durably record"):
+        receipt.finalize(0)
 
 
 @pytest.mark.parametrize(
