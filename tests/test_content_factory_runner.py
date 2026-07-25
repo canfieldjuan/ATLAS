@@ -1282,6 +1282,18 @@ def test_oracle_international_vanity_with_dial_evidence_fails(
     assert runner._prompt_contact_hits(prompt) != [], prompt
 
 
+@pytest.mark.parametrize("prefix", ["+81", "+44", "0044"])
+@pytest.mark.parametrize("whitespace", [" ", "\t", "\u00a0"])
+@pytest.mark.parametrize("width", range(1, 9))
+def test_oracle_international_vanity_accepts_numeric_whitespace_runs(
+    prefix, whitespace, width
+):
+    """Whitespace formatting cannot erase explicit international dial evidence."""
+    gap = whitespace * width
+    prompt = f"Call {prefix}{gap}3 FLOWERS today"
+    assert runner._prompt_contact_hits(prompt) != [], prompt
+
+
 @pytest.mark.parametrize("lead", ["212", "305", "415", "617", "800"])
 @pytest.mark.parametrize(
     "art_direction",
@@ -1292,6 +1304,13 @@ def test_oracle_three_digit_art_direction_is_not_detached_vanity(
 ):
     """A keypad coincidence in ordinary prose is not contact evidence."""
     prompt = f"room {lead} {art_direction}, editorial photograph"
+    assert runner._prompt_contact_hits(prompt) == [], prompt
+
+
+@pytest.mark.parametrize("whitespace", ["  ", "\t\t", "\u00a0\u00a0"])
+def test_numeric_whitespace_runs_do_not_promote_detached_prose(whitespace):
+    """A wider separator is formatting, not dial intent."""
+    prompt = f"room 212{whitespace}art deco sign, editorial photograph"
     assert runner._prompt_contact_hits(prompt) == [], prompt
 
 

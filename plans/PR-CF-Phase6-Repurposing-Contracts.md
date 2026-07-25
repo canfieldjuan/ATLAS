@@ -488,6 +488,25 @@ evidence, while three-digit values crossed with art-direction phrases admit.
 The dispatch tests replace the committed draft inside the worker boundary, so
 moving the snapshot back after dispatch makes them fail.
 
+### Review round 11 (Codex, follow-up PR #2201)
+
+Two findings, both verified against the published follow-up before acting and
+fixed at the generating operation rather than at the reported strings.
+
+1. **P1 — removing ignorables after NFKC left composition-sensitive aliases.**
+   A combining grapheme joiner between a base and combining mark could block
+   canonical composition before being removed, so `é` and
+   `e<U+034F><U+0301>` remained distinct routing keys. Routing now removes the
+   full default-ignorable/format/control class before NFKC. Generated proofs
+   cross four canonical compositions with four ignorable marks.
+2. **P1 — the numeric separator grammar accepted one whitespace code point.**
+   Extra formatting whitespace split an international phoneword before its
+   explicit prefix and keypad spelling could be evaluated together. Numeric
+   groups now consume a whitespace run as one separator. The existing group
+   cap, compact E.164 symbol bound, explicit international prefix, and bounded
+   intent gate remain unchanged; generated proofs vary prefixes, whitespace
+   classes, and run widths, with detached prose proving the passing side.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -543,10 +562,11 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 714 passed (incl. the round-6 contact oracle, round-7
+    # -> 805 passed (incl. the round-6 contact oracle, round-7
     #    content-binding probes, round-8 descriptive-number boundary, and
     #    rounds 9-10 separator-partition, international/detached-prose,
-    #    IDNA, dispatch-binding, and committed-residue proofs)
+    #    IDNA, dispatch-binding, and committed-residue proofs, plus round-11
+    #    canonical-composition and whitespace-run class proofs)
     #
     # Mutation check on the round-8 lock test: removing `with job_lock(...)`
     # from run_stage makes test_run_stage_holds_job_lock_across_validation_
@@ -562,11 +582,11 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 43 |
+| `atlas_brain/schemas/content_factory.py` | 60 |
 | `atlas_brain/services/content_factory_runner.py` | 233 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 202 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 185 |
-| `tests/test_content_factory_runner.py` | 286 |
-| `tests/test_content_factory_schemas.py` | 40 |
-| **Total** | **1091** |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 222 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 207 |
+| `tests/test_content_factory_runner.py` | 305 |
+| `tests/test_content_factory_schemas.py` | 68 |
+| **Total** | **1197** |

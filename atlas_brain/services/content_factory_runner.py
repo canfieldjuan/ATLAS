@@ -215,7 +215,7 @@ _NANP_RE = re.compile(r"\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b")
 # is the next word rather than part of the number ("07700 900123 today").
 # Attachment, not casing, is what distinguishes them.
 _DIAL_TOKEN_RE = re.compile(
-    r"(?<!\w)[+]?\d[\dA-Za-z]*(?:(?:[\s](?=\d)|[.\-])[\dA-Za-z]+){0,5}"
+    r"(?<!\w)[+]?\d[\dA-Za-z]*(?:(?:\s+(?=\d)|[.\-])[\dA-Za-z]+){0,5}"
 )
 
 

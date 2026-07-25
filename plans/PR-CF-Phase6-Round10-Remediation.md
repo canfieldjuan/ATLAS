@@ -9,7 +9,10 @@ international vanity contact data passes, ordinary three-digit renderer prose
 can be rejected as a phone number, default-ignorable Unicode marks split one
 channel into multiple routing identities, worker responses can be stamped
 against a same-revision draft they did not see, and IDNA-equivalent domain
-separators bypass email gating.
+separators bypass email gating. Current-head review then found that two class
+boundaries were still incomplete: the routing key removed ignorables only
+after they could affect normalization, and the dial-token grammar treated a
+whitespace separator as exactly one code point rather than a run.
 
 This production-hardening follow-up carries the already verified correction
 onto the merged mainline. It preserves the Phase 6 product shape and closes the
@@ -21,15 +24,20 @@ reported classes at their shared classifier and execution seams.
   phone evidence while restricting phoneword validity to NANP, so it was
   simultaneously over-broad on detached prose and under-broad on explicit
   international phonewords. The routing key removed only `Cf`/`Cc`, not the
-  Unicode default-ignorable marks that also have no routing identity. The
-  runner fingerprinted after the worker returned, so its fingerprint attested
-  to persistence-time state rather than dispatch-time source. Email matching
+  Unicode default-ignorable marks that also have no routing identity, then
+  removed the broader class after NFKC even though an ignorable can block
+  canonical composition. The dial-token grammar modeled a whitespace
+  separator as one character rather than the entire separator run. The runner
+  fingerprinted after the worker returned, so its fingerprint attested to
+  persistence-time state rather than dispatch-time source. Email matching
   recognized only the ASCII spelling of an IDNA label separator.
 - Correct fix must touch/change: the Phase 6 runner's single contact-admission
   decision, its committed-source dispatch/persistence boundary, the channel
   routing key, and both-direction tests at the real `run_stage` entrypoint.
-  Canonical store reads must remain committed-object reads so a source snapshot
-  cannot be replaced by worktree residue.
+  Default-ignorables must be removed before normalization, and numeric
+  whitespace must be consumed as one separator run while compact dial symbols
+  remain E.164-bounded. Canonical store reads must remain committed-object
+  reads so a source snapshot cannot be replaced by worktree residue.
 - Must not change: Phase 6 artifact schema tags/field shapes, editorial
   decision semantics, negative-prompt exclusion semantics, body-copy verifier
   policy, image generation, worker wrappers, or any EOM/CRM lane.
@@ -69,6 +77,11 @@ Max files: 7
      email verdict as ASCII dot without leaking the raw address into hits.
   6. Prior Phase 6 gate, store, schema, and intake tests remain green; maturity,
      guard-closure, plan, static, and diff audits pass.
+  7. A default-ignorable inserted between a base and combining mark cannot
+     prevent canonically equivalent channel labels from colliding.
+  8. One or more whitespace code points between international numeric groups
+     preserve the same phoneword verdict without widening the compact E.164
+     symbol bound or promoting detached prose without dial intent.
 - Reachability proof: `run_stage(job_id, stage, model, user_content, ...)` calls
   the worker, applies prompt enforcement, compares committed source identity
   under `job_lock`, validates, and writes. Tests replace the committed draft
@@ -125,13 +138,15 @@ Max files: 7
 
 The runner preserves a leading `+`, keypad-maps mixed tokens, and classifies
 explicit international phonewords as ambiguous structural candidates governed
-by the existing bounded intent window. Space-joined candidate extensions use
-that same intent requirement; attached domestic vanity syntax remains
-unambiguous. Email matching translates the three IDNA domain-stop equivalents
-only for admission.
+by the existing bounded intent window. Numeric groups consume a whitespace run
+as one separator; `_dial_shape` still removes separators before enforcing the
+7-15 digit E.164 bound. Space-joined candidate extensions use that same intent
+requirement; attached domestic vanity syntax remains unambiguous. Email
+matching translates the three IDNA domain-stop equivalents only for admission.
 
 The schema defines the Unicode default-ignorable ranges once, excludes them
-from visible-only content, and removes them from the NFKC/casefold routing key.
+from visible-only content, and removes them before the NFKC/casefold routing
+key so an ignored code point cannot alter composition.
 
 `run_stage` reads the committed draft fingerprint before `call_worker`. After
 the response is enforced, it takes `job_lock`, rejects any source-derived
@@ -147,6 +162,9 @@ than correctness.
   the reported false-positive class.
 - International phonewords require an explicit international prefix and intent.
   Arbitrary letter/digit prose is not promoted to contact data.
+- Whitespace run length is not dial evidence. The existing numeric-group cap,
+  compact symbol bound, explicit international prefix, and intent gate remain
+  the bounded evidence.
 - The default-ignorable routing normalization is broader than the two reported
   code points by design; one invisible Unicode property is one defect class.
 - The originating Phase 6 plan remains modified in this follow-up so its
@@ -155,7 +173,8 @@ than correctness.
 
 ## Deferred
 
-- None for the five round-10 findings.
+- None for the five round-10 findings or the two current-head class-boundary
+  findings.
 - Existing Phase 6 deferrals remain: ComfyUI generation, OWUI wrappers, and
   Phase 7 manifest entries.
 
@@ -163,7 +182,10 @@ Parked hardening: none.
 
 ## Verification
 
-- Focused content-factory/intake suite: 714 passed.
+- Focused content-factory/intake suite: 805 passed.
+- Current-head review regressions: 25 routing-key cases and 111 phoneword
+  cases passed, including generated canonical-composition and whitespace-run
+  classes.
 - Ruff, `python -m py_compile`, and `git diff --check`: passed on the exact
   follow-up tree.
 - Schema maturity ratchet: no new brittleness.
@@ -175,11 +197,11 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 43 |
+| `atlas_brain/schemas/content_factory.py` | 60 |
 | `atlas_brain/services/content_factory_runner.py` | 233 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 202 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 185 |
-| `tests/test_content_factory_runner.py` | 286 |
-| `tests/test_content_factory_schemas.py` | 40 |
-| **Total** | **1091** |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 222 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 207 |
+| `tests/test_content_factory_runner.py` | 305 |
+| `tests/test_content_factory_schemas.py` | 68 |
+| **Total** | **1197** |

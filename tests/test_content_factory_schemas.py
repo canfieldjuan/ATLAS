@@ -628,3 +628,31 @@ def test_default_ignorables_cannot_split_duplicate_channels(invisible):
                 _variant(channel=f"email{invisible}"),
             ])
         )
+
+
+@pytest.mark.parametrize(
+    ("composed", "base", "combining_mark"),
+    [
+        ("é", "e", "\u0301"),
+        ("Å", "A", "\u030a"),
+        ("ñ", "n", "\u0303"),
+        ("ö", "o", "\u0308"),
+    ],
+)
+@pytest.mark.parametrize(
+    "invisible",
+    ["\u034f", "\ufe0f", "\u180b", "\U000e0100"],
+)
+def test_default_ignorables_cannot_block_routing_key_composition(
+    composed, base, combining_mark, invisible
+):
+    """Removing an ignorable must happen before canonical composition."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError, match="duplicate channel"):
+        RepurposingPackage.model_validate(
+            _package([
+                _variant(channel=composed),
+                _variant(channel=f"{base}{invisible}{combining_mark}"),
+            ])
+        )

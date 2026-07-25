@@ -132,20 +132,20 @@ def _is_default_ignorable(char: str) -> bool:
 def _routing_key(channel: str) -> str:
     """Comparison key for a routing label.
 
-    NFKC first (canonically equivalent spellings are one channel to a reader),
-    then DROP Unicode default-ignorables plus format/control characters --
-    zero-width joiners, bidi marks, variation selectors, combining grapheme
-    joiners, and the like occupy no routing identity, so a label carrying them
-    must not read as a second channel (#2192 rounds 9-10).
+    DROP Unicode default-ignorables plus format/control characters before
+    NFKC, then normalize canonically equivalent spellings to one reader-visible
+    channel. The order matters: a combining grapheme joiner between a base and
+    combining mark can block composition if it survives until normalization.
+    Zero-width joiners, bidi marks, variation selectors, combining grapheme
+    joiners, and the like occupy no routing identity (#2192 rounds 9-10).
     """
-    normalized = unicodedata.normalize("NFKC", channel)
     stripped = "".join(
         ch
-        for ch in normalized
+        for ch in channel
         if unicodedata.category(ch) not in ("Cf", "Cc")
         and not _is_default_ignorable(ch)
     )
-    return stripped.strip().casefold()
+    return unicodedata.normalize("NFKC", stripped).strip().casefold()
 
 
 def _has_visible_content(text: str) -> bool:
@@ -521,13 +521,10 @@ class RepurposingPackage(BaseModel):
             raise ValueError("repurposing package requires at least one variant")
         # One channel per variant: two variants on the same channel means an
         # ambiguous "which one ships?" downstream.
-        # NFKC first: canonically equivalent spellings (NFC vs NFD) are the
-        # same channel to a reader, so casefold alone leaves the very
-        # ambiguity this check exists to prevent (round 5).
-        # Zero-width and control characters are dropped before comparing: they
-        # carry no visible width, so "email" and "email​" are the SAME
-        # channel to a reader and to anything routing on the label, and
-        # keeping them made a visually identical duplicate pass (round 9).
+        # Zero-width/default-ignorable and control characters are dropped
+        # BEFORE NFKC so they cannot block composition. Canonically equivalent
+        # spellings (NFC vs NFD) then become the same channel to a reader.
+        # "email" and "email​" likewise carry one routing identity.
         channels = [_routing_key(variant.channel) for variant in self.variants]
         if len(channels) != len(set(channels)):
             raise ValueError("duplicate channel in repurposing variants")
