@@ -142,7 +142,7 @@ Parked hardening: none.
 
 - Command: python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py -q - 132 passed.
+  tests/test_sync_eom_portal_customers.py -q - 135 passed.
 - Command: python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py tests/test_eom_execution_receipts.py -
   passed.
@@ -178,15 +178,20 @@ Parked hardening: none.
   ignores the cache and otherwise reports a clean checkout.
 - Final-name collisions leave the durable in-progress artifact unfinalized
   instead of recording an exit state that was never successfully published.
+- Both entrypoints disable bytecode writes before their local imports, and a
+  clean direct Calendar entrypoint smoke proves the preflight does not
+  self-reject.
+- A failed post-link publication sync removes only the link created by that
+  attempt and retains the unfinalized recovery artifact.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 36 |
-| `plans/PR-EOM-Execution-Receipts.md` | 192 |
-| `scripts/eom_execution_receipt.py` | 312 |
-| `scripts/import_eom_customers_live.py` | 71 |
-| `scripts/sync_eom_portal_customers.py` | 96 |
-| `tests/test_eom_execution_receipts.py` | 636 |
-| **Total** | **1343** |
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 38 |
+| `plans/PR-EOM-Execution-Receipts.md` | 197 |
+| `scripts/eom_execution_receipt.py` | 315 |
+| `scripts/import_eom_customers_live.py` | 72 |
+| `scripts/sync_eom_portal_customers.py` | 97 |
+| `tests/test_eom_execution_receipts.py` | 759 |
+| **Total** | **1478** |

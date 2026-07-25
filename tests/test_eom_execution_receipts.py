@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import py_compile
+import shutil
 import stat
 import sys
 import uuid
@@ -395,6 +396,128 @@ def test_receipt_rejects_ignored_bytecode_for_tracked_source(tmp_path):
             mode="write",
             script_path=script,
         )
+
+
+def test_entrypoints_disable_bytecode_before_local_imports():
+    calendar_source = (
+        SCRIPTS / "import_eom_customers_live.py"
+    ).read_text()
+    portal_source = (
+        SCRIPTS / "sync_eom_portal_customers.py"
+    ).read_text()
+
+    calendar_disable = calendar_source.index("sys.dont_write_bytecode = True")
+    assert calendar_disable < calendar_source.index(
+        "import import_calendar_contacts as ics"
+    )
+    assert calendar_disable < calendar_source.index(
+        "from eom_execution_receipt import"
+    )
+
+    portal_disable = portal_source.index("sys.dont_write_bytecode = True")
+    assert portal_disable < portal_source.index(
+        "import import_eom_customers_live as live"
+    )
+    assert portal_disable < portal_source.index(
+        "from eom_execution_receipt import"
+    )
+
+
+def test_clean_real_entrypoints_do_not_create_or_reject_own_bytecode(tmp_path):
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    scripts.mkdir(parents=True)
+    for name in (
+        "eom_execution_receipt.py",
+        "import_eom_customers_live.py",
+        "sync_eom_portal_customers.py",
+    ):
+        shutil.copy2(SCRIPTS / name, scripts / name)
+    (scripts / "import_calendar_contacts.py").write_text(
+        '"""Minimal import-only fixture for the EOM entrypoint smoke test."""\n'
+    )
+    services = repo / "atlas_brain" / "services"
+    services.mkdir(parents=True)
+    (repo / "atlas_brain" / "__init__.py").write_text("")
+    (services / "__init__.py").write_text("")
+    (services / "calendar_provider.py").write_text(
+        "class GoogleCalendarProvider:\n"
+        "    async def list_events(self, **_kwargs):\n"
+        "        return []\n"
+        "    async def aclose(self):\n"
+        "        return None\n"
+    )
+    subprocess_options = {
+        "cwd": repo,
+        "check": True,
+        "capture_output": True,
+        "text": True,
+    }
+    receipt_module.subprocess.run(["git", "init", "-q"], **subprocess_options)
+    receipt_module.subprocess.run(["git", "add", "."], **subprocess_options)
+    receipt_module.subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Receipt Test",
+            "-c",
+            "user.email=receipt-test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        **subprocess_options,
+    )
+    calendar_receipts = tmp_path / "calendar-receipts"
+    env = dict(os.environ)
+    env.update(
+        {
+            "EOM_CALENDAR_COMMERCIAL": "commercial-fixture",
+            "EOM_CALENDAR_RESIDENTIAL": "residential-fixture",
+            "EOM_CALENDAR_ONE_TIME": "one-time-fixture",
+            "PYTHONPATH": str(repo),
+        }
+    )
+    receipt_module.subprocess.run(
+        [
+            sys.executable,
+            str(scripts / "import_eom_customers_live.py"),
+            "--dry-run",
+            "--receipt-dir",
+            str(calendar_receipts),
+        ],
+        env=env,
+        **subprocess_options,
+    )
+    receipt_module.subprocess.run(
+        [
+            sys.executable,
+            str(scripts / "sync_eom_portal_customers.py"),
+            "--help",
+        ],
+        env=env,
+        **subprocess_options,
+    )
+
+    assert list(repo.rglob("*.pyc")) == []
+    assert len(list(calendar_receipts.glob("*.exit-0.json"))) == 1
+
+
+def test_failed_publication_sync_removes_new_final_link(tmp_path, monkeypatch):
+    receipt = _receipt(tmp_path)
+    final_path = receipt.final_path_for(0)
+
+    def fail_directory_sync():
+        raise OSError("storage sync failed")
+
+    monkeypatch.setattr(receipt, "_fsync_directory", fail_directory_sync)
+    with pytest.raises(OSError, match="storage sync failed"):
+        receipt.finalize(0)
+
+    assert not final_path.exists()
+    recovery_payload = json.loads(receipt.in_progress_path.read_text())
+    assert recovery_payload["ended_at_utc"] is None
+    assert recovery_payload["exit_code"] is None
 
 
 @pytest.mark.parametrize(

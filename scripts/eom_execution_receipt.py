@@ -277,13 +277,16 @@ class EomExecutionReceipt:
         staged_path = self.in_progress_path.with_name(
             f"{self.in_progress_path.name}.{uuid.uuid4()}.tmp"
         )
+        linked = False
         try:
             self._write_exclusive(staged_path, final_payload)
             os.link(staged_path, final_path)
+            linked = True
             self._fsync_directory()
         except BaseException:
+            if linked:
+                final_path.unlink(missing_ok=True)
             staged_path.unlink(missing_ok=True)
-            self._fsync_directory()
             raise
 
         self.in_progress_path.unlink()
