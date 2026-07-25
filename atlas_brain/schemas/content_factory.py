@@ -103,18 +103,47 @@ _ADVISORY_GRAMMAR_RE = re.compile(
 )
 
 
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),  # combining grapheme joiner
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),  # Mongolian variation selectors
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),  # variation selectors
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),  # tags and supplementary variation selectors
+)
+
+
+def _is_default_ignorable(char: str) -> bool:
+    codepoint = ord(char)
+    return any(start <= codepoint <= end for start, end in _DEFAULT_IGNORABLE_RANGES)
+
+
 def _routing_key(channel: str) -> str:
     """Comparison key for a routing label.
 
     NFKC first (canonically equivalent spellings are one channel to a reader),
-    then DROP format and control characters -- zero-width joiners, bidi marks
-    and the like occupy no visible width, so a label carrying them is
-    indistinguishable from one that does not and must not read as a second,
-    separate channel (#2192 round 9).
+    then DROP Unicode default-ignorables plus format/control characters --
+    zero-width joiners, bidi marks, variation selectors, combining grapheme
+    joiners, and the like occupy no routing identity, so a label carrying them
+    must not read as a second channel (#2192 rounds 9-10).
     """
     normalized = unicodedata.normalize("NFKC", channel)
     stripped = "".join(
-        ch for ch in normalized if not unicodedata.category(ch) in ("Cf", "Cc")
+        ch
+        for ch in normalized
+        if unicodedata.category(ch) not in ("Cf", "Cc")
+        and not _is_default_ignorable(ch)
     )
     return stripped.strip().casefold()
 
@@ -131,7 +160,9 @@ def _has_visible_content(text: str) -> bool:
     marks, e.g. a lone U+FE0F) cannot stand alone as content.
     """
     return any(
-        not unicodedata.category(char).startswith(("C", "Z", "M")) for char in text
+        not unicodedata.category(char).startswith(("C", "Z", "M"))
+        and not _is_default_ignorable(char)
+        for char in text
     )
 
 

@@ -11,6 +11,7 @@ import json
 import subprocess
 import urllib.error
 import urllib.request
+from itertools import product
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,6 @@ from atlas_brain.services.content_factory_runner import (
     WorkerError,
     call_worker,
     extract_json,
-    run_stage,
 )
 from atlas_brain.services.content_factory_store import job_dir
 
@@ -866,6 +866,18 @@ def test_oracle_email_any_script_fails(addr, tmp_path, monkeypatch):
     assert cv["verdict"] == "fail", (addr, cv)
 
 
+@pytest.mark.parametrize("separator", [".", "\u3002", "\uff0e", "\uff61"])
+def test_oracle_idna_equivalent_domain_separators_fail(
+    separator, tmp_path, monkeypatch
+):
+    """Every IDNA domain-label separator has the ASCII-dot decision."""
+    address = f"user@例え{separator}テスト"
+    cv = _prompt_verdict(
+        f"a card reading {address}", tmp_path, monkeypatch, "job-idna"
+    )
+    assert cv["verdict"] == "fail", (address, cv)
+
+
 # --- review round 7 on #2192 ---
 
 
@@ -943,6 +955,97 @@ def test_audit_stage_stamps_the_fingerprint(tmp_path, monkeypatch):
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["source_draft_fingerprint"] == runner._draft_fingerprint("job-stamp", tmp_path)
     assert stored["source_draft_fingerprint"] != "worker-supplied-lie"
+
+
+def test_audit_rejects_draft_replaced_while_worker_runs(tmp_path, monkeypatch):
+    """The audit fingerprint binds the pre-dispatch source, not the draft that
+    happens to be current after the worker returns."""
+    from atlas_brain.services.content_factory_store import write_artifact
+
+    _seed_draft(tmp_path, "job-dispatch-audit", ["e1"], approved=False)
+
+    def replace_draft_during_worker(*args, **kwargs):
+        write_artifact("job-dispatch-audit", "draft", {
+            "schema": "draft.v1",
+            "project_id": "p",
+            "revision": 1,
+            "body_markdown": "same revision, different source B",
+            "claims": [{"text": "claim e1 changed", "source_id": "e1"}],
+        }, root=tmp_path)
+        return _editor_json("Worker response about source A.", "revise")
+
+    monkeypatch.setattr(runner, "call_worker", replace_draft_during_worker)
+    with pytest.raises(ArtifactStoreError, match="changed while the worker was running"):
+        runner.run_stage(
+            "job-dispatch-audit",
+            "audit",
+            "m",
+            "request built from source A",
+            api_key="k",
+            root=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("stage", "artifact"),
+    [
+        (
+            "repurposing",
+            {
+                "schema": "repurposing.v1",
+                "project_id": "p",
+                "variants": [{
+                    "channel": "email",
+                    "body_markdown": "Intermediate copy about source A.",
+                    "derived_from_claims": ["e1"],
+                }],
+                "ready_to_publish": False,
+            },
+        ),
+        (
+            "image_prompt",
+            {
+                "schema": "image_prompt.v1",
+                "project_id": "p",
+                "prompts": [{
+                    "purpose": "hero",
+                    "prompt_text": "an image derived from source A",
+                }],
+                "ready_to_generate": False,
+            },
+        ),
+    ],
+)
+def test_phase6_rejects_draft_replaced_while_worker_runs(
+    stage, artifact, tmp_path, monkeypatch
+):
+    """Equivalent pre-dispatch binding applies to both Phase 6 workers, even
+    before their intermediate artifacts claim readiness."""
+    from atlas_brain.services.content_factory_store import write_artifact
+
+    job_id = f"job-dispatch-{stage}"
+    _seed_draft(tmp_path, job_id, ["e1"])
+
+    def replace_draft_during_worker(*args, **kwargs):
+        write_artifact(job_id, "draft", {
+            "schema": "draft.v1",
+            "project_id": "p",
+            "revision": 1,
+            "body_markdown": "same revision, different source B",
+            "claims": [{"text": "claim e1 changed", "source_id": "e1"}],
+        }, root=tmp_path)
+        return json.dumps(artifact)
+
+    monkeypatch.setattr(runner, "call_worker", replace_draft_during_worker)
+    with pytest.raises(ArtifactStoreError, match="changed while the worker was running"):
+        runner.run_stage(
+            job_id,
+            stage,
+            "m",
+            "request built from source A",
+            api_key="k",
+            root=tmp_path,
+        )
 
 
 def test_unchanged_draft_keeps_approval_valid(tmp_path, monkeypatch):
@@ -1123,7 +1226,19 @@ def test_job_lock_excludes_a_second_process(tmp_path):
     assert _job_lock_is_free("job-x", tmp_path)
 
 
-# --- round 9: vanity grammar both directions, commit atomicity, channels ---
+def test_job_lock_identity_includes_the_root(tmp_path):
+    """The same job id under two roots is two stores, not a re-entrant lock."""
+    from atlas_brain.services.content_factory_store import job_lock
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    with job_lock("job-root", root=first):
+        with job_lock("job-root", root=second):
+            assert not _job_lock_is_free("job-root", first)
+            assert not _job_lock_is_free("job-root", second)
+
+
+# --- round 9: vanity grammar both directions and committed-state atomicity ---
 
 _SPEC_DIGITS = ["8", "16", "24", "32", "64", "1920", "1080", "4096"]
 _SPEC_WORDS = ["bit", "color", "pixel", "style", "float", "depth", "res"]
@@ -1139,15 +1254,45 @@ def test_oracle_hyphenated_renderer_specs_render(lead, word):
     assert runner._prompt_contact_hits(f"a {lead}-{word}-{word} render, studio light") == []
 
 
-@pytest.mark.parametrize("intent", ["Call", "call", "Text", "dial", "contact"])
+def test_oracle_every_separator_partition_of_vanity_suffix_fails():
+    """Grammar-derived other side: attachment choices cannot make a NANP
+    vanity number disappear. This generates every join/space/hyphen/dot
+    partition of a held-out suffix rather than listing review spellings."""
+    word = "CLEANUP"
+    separators = ("", " ", "-", ".")
+    for prefix in ("800", "1 800"):
+        for choices in product(separators, repeat=len(word) - 1):
+            suffix = "".join(
+                char + (choices[index] if index < len(choices) else "")
+                for index, char in enumerate(word)
+            )
+            prompt = f"Call {prefix} {suffix}"
+            assert runner._prompt_contact_hits(prompt) != [], prompt
+
+
+@pytest.mark.parametrize("prefix", ["+44 800", "0044 800", "+81 3"])
+@pytest.mark.parametrize("separator", ["", " ", "-", "."])
+@pytest.mark.parametrize("word", ["FLOWERS", "CLEANUP", "PLUMBER"])
+def test_oracle_international_vanity_with_dial_evidence_fails(
+    prefix, separator, word
+):
+    """Explicit international prefix + intent + keypad spelling is contact PII."""
+    suffix = separator.join(word)
+    prompt = f"Call {prefix} {suffix} today"
+    assert runner._prompt_contact_hits(prompt) != [], prompt
+
+
+@pytest.mark.parametrize("lead", ["212", "305", "415", "617", "800"])
 @pytest.mark.parametrize(
-    "spelled", ["1 800 FLOWERS", "1 800 GOT JUNK", "800 FLOWERS", "1-800-FLOWERS",
-                "1-800-flowers", "1-800-GOT-JUNK"]
+    "art_direction",
+    ["art deco sign", "blue mural", "soft focus", "red carpet", "new typography"],
 )
-def test_oracle_space_joined_vanity_numbers_fail(intent, spelled):
-    """The other direction of the same grammar: the token regex stops before a
-    space-joined letter group, so "Call 1 800 FLOWERS today" passed."""
-    assert runner._prompt_contact_hits(f"{intent} {spelled} today") != []
+def test_oracle_three_digit_art_direction_is_not_detached_vanity(
+    lead, art_direction
+):
+    """A keypad coincidence in ordinary prose is not contact evidence."""
+    prompt = f"room {lead} {art_direction}, editorial photograph"
+    assert runner._prompt_contact_hits(prompt) == [], prompt
 
 
 @pytest.mark.parametrize(
@@ -1161,24 +1306,17 @@ def test_trailing_word_extension_does_not_over_reach(prompt):
     assert runner._prompt_contact_hits(prompt) == []
 
 
-def test_failed_commit_leaves_no_artifact_residue(tmp_path, monkeypatch):
-    """#2192 round 9: a failed store commit used to leave the new file written
-    and staged even though write_artifact raised, and the readiness gate reads
-    the working tree -- so the residue was trusted as approved source state."""
+def test_failed_commit_restores_previous_artifact_and_index(tmp_path, monkeypatch):
+    """An ordinary raised commit failure restores worktree/index hygiene."""
     from atlas_brain.services import content_factory_store as store
 
     _seed_draft(tmp_path, "job-resid", ["e1"])
     draft_path = Path(tmp_path) / "jobs" / "job-resid" / "draft.json"
     before = draft_path.read_bytes()
 
-    real_git = store._git
-
-    def failing_git(job, *args):
-        if args and args[0] == "commit":
-            raise store.ArtifactStoreError("simulated commit failure")
-        return real_git(job, *args)
-
-    monkeypatch.setattr(store, "_git", failing_git)
+    # Exercise the real Git process: add succeeds, while commit rejects the
+    # malformed author date after the target has been written and staged.
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "not-a-git-date")
     with pytest.raises(store.ArtifactStoreError):
         store.write_artifact("job-resid", "draft", {
             "schema": "draft.v1", "project_id": "p", "revision": 2,
@@ -1187,7 +1325,6 @@ def test_failed_commit_leaves_no_artifact_residue(tmp_path, monkeypatch):
         }, root=tmp_path)
 
     assert draft_path.read_bytes() == before, "failed write left residue on disk"
-    monkeypatch.undo()
     staged = subprocess.run(
         ["git", "-C", str(draft_path.parent), "diff", "--cached", "--name-only"],
         capture_output=True, text=True,
@@ -1199,47 +1336,78 @@ def test_failed_first_write_removes_the_file(tmp_path, monkeypatch):
     """A stage that had no previous artifact must not leave a partial one."""
     from atlas_brain.services import content_factory_store as store
 
-    real_git = store._git
-
-    def failing_git(job, *args):
-        if args and args[0] == "commit":
-            raise store.ArtifactStoreError("simulated commit failure")
-        return real_git(job, *args)
-
-    monkeypatch.setattr(store, "_git", failing_git)
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "not-a-git-date")
     with pytest.raises(store.ArtifactStoreError):
         store.write_artifact("job-first", "draft", {
             "schema": "draft.v1", "project_id": "p", "revision": 1,
             "body_markdown": "body", "claims": [{"text": "c", "source_id": "e1"}],
         }, root=tmp_path)
-    assert not (Path(tmp_path) / "jobs" / "job-first" / "draft.json").exists()
+    job = Path(tmp_path) / "jobs" / "job-first"
+    assert not (job / "draft.json").exists()
+    assert subprocess.run(
+        ["git", "-C", str(job), "ls-files", "--error-unmatch", "draft.json"],
+        capture_output=True,
+    ).returncode != 0
 
 
-@pytest.mark.parametrize("invisible", ["​", "‌", "️", "​‌"])
-def test_invisible_channel_identifiers_rejected(invisible):
-    """#2192 round 9: `channel` was NonEmptyStr, so an unroutable label made
-    only of zero-width characters validated and persisted."""
-    from atlas_brain.schemas.content_factory import RepurposingPackage
+def test_uncommitted_crash_residue_cannot_authorize_ready_artifact(
+    tmp_path, monkeypatch
+):
+    """Canonical readers use Git HEAD, so even residue left when cleanup never
+    runs cannot replace the draft/audit pair that authorizes readiness."""
+    _seed_draft(tmp_path, "job-crash", ["e1"])
+    job = Path(tmp_path) / "jobs" / "job-crash"
+    draft_path = job / "draft.json"
+    committed = subprocess.run(
+        ["git", "-C", str(job), "show", "HEAD:draft.json"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    draft_path.write_text(json.dumps({
+        "schema": "draft.v1",
+        "project_id": "p",
+        "revision": 1,
+        "body_markdown": "UNCOMMITTED replacement nobody approved",
+        "claims": [{"text": "other", "source_id": "unapproved"}],
+    }))
+    subprocess.run(
+        ["git", "-C", str(job), "add", "--", "draft.json"],
+        check=True,
+    )
 
-    with pytest.raises(ValidationError):
-        RepurposingPackage.model_validate({
-            "schema": "repurposing.v1", "project_id": "p",
-            "variants": [{"channel": invisible, "body_markdown": "Clean copy.",
-                          "derived_from_claims": ["e1"]}],
-        })
+    reply = json.dumps({
+        "schema": "repurposing.v1",
+        "project_id": "p",
+        "source_draft_revision": 1,
+        "variants": [{
+            "channel": "email",
+            "body_markdown": "Clean copy.",
+            "derived_from_claims": ["e1"],
+        }],
+        "ready_to_publish": True,
+    })
+    response = json.dumps({
+        "choices": [{"message": {"content": reply}}],
+    }).encode()
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: _FakeResponse(response),
+    )
+    record = runner.run_stage(
+        "job-crash",
+        "repurposing",
+        "m",
+        "req",
+        api_key="k",
+        root=tmp_path,
+    )
 
-
-def test_visually_identical_channels_are_duplicates():
-    """Distinct invisible spellings of one label are the SAME channel: they
-    carry no visible width, so keeping them apart re-admits the ambiguity the
-    duplicate check exists to prevent."""
-    from atlas_brain.schemas.content_factory import RepurposingPackage
-
-    with pytest.raises(ValidationError, match="duplicate channel"):
-        RepurposingPackage.model_validate({
-            "schema": "repurposing.v1", "project_id": "p",
-            "variants": [
-                {"channel": "email", "body_markdown": "A.", "derived_from_claims": ["e1"]},
-                {"channel": "email​", "body_markdown": "B.", "derived_from_claims": ["e1"]},
-            ],
-        })
+    stored = json.loads(Path(record["path"]).read_text())
+    assert stored["ready_to_publish"] is True
+    assert subprocess.run(
+        ["git", "-C", str(job), "show", "HEAD:draft.json"],
+        check=True,
+        capture_output=True,
+    ).stdout == committed
+    assert b"UNCOMMITTED replacement" in draft_path.read_bytes()

@@ -19,9 +19,6 @@ from pathlib import Path
 from typing import Any
 
 from atlas_brain.services.content_factory_copy_verification import (
-    _EMAIL_RE,
-    _INTL_PHONE_RE,
-    _PHONE_RE,
     advisory_warnings,
     literal_claim_hits,
     verify_copy,
@@ -30,8 +27,8 @@ from atlas_brain.schemas.content_factory import model_for
 from atlas_brain.services.content_factory_store import (
     DEFAULT_ROOT,
     ArtifactStoreError,
-    job_dir,
     job_lock,
+    read_committed_artifact_bytes,
     write_artifact,
 )
 
@@ -196,6 +193,10 @@ def _enforce_repurposing(artifact: dict[str, Any]) -> None:
 _ANY_EMAIL_RE = re.compile(
     r"[^\s@,;:()<>\[\]]+@[^\s@,;:()<>\[\]]+\.[^\s@,;:()<>\[\]]{2,}"
 )
+# IDNA treats these full-width/ideographic stops as domain-label separators.
+# Normalize only for the admission decision; the raw prompt is never copied
+# into a finding.
+_IDNA_DOT_TRANSLATION = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
 
 _DIAL_INTENT_RE = re.compile(
     r"\b(?:call|calling|dial|dialling|dialing|phone|telephone|tel|text|txt|"
@@ -214,7 +215,7 @@ _NANP_RE = re.compile(r"\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b")
 # is the next word rather than part of the number ("07700 900123 today").
 # Attachment, not casing, is what distinguishes them.
 _DIAL_TOKEN_RE = re.compile(
-    r"\b[+]?\d[\dA-Za-z]*(?:(?:[\s](?=\d)|[.\-])[\dA-Za-z]+){0,5}"
+    r"(?<!\w)[+]?\d[\dA-Za-z]*(?:(?:[\s](?=\d)|[.\-])[\dA-Za-z]+){0,5}"
 )
 
 
@@ -263,7 +264,7 @@ _KEYPAD = str.maketrans(
 )
 
 
-def _is_vanity_number(parts: "list[str]") -> bool:
+def _is_vanity_number(parts: "list[str]", *, international: bool = False) -> bool:
     """Is this mixed digit/letter token a dialable vanity number?
 
     Letters in a vanity number are DIGIT SUBSTITUTES, so the test is whether
@@ -272,22 +273,30 @@ def _is_vanity_number(parts: "list[str]") -> bool:
     "16-bit-color", "1920-1080-pixel" and "8-bit-style" all have letters
     attached to digits (#2192 round 9).
 
-    Two conditions, both from the numbering plan rather than a word list:
+    Domestic candidates require two conditions, both from the numbering plan
+    rather than a word list:
 
       * the leading digit group is an AREA CODE -- exactly 3 digits, or a "1"
         country prefix followed by 3. "16-bit-color" leads with 2 digits and
         "1920-1080-pixel" with 4, so neither can be a dialable prefix.
       * the keypad-mapped digits form a syntactically valid NANP number.
     """
-    if not any(p.isdigit() for p in parts):
+    if not any(p.isalpha() for p in parts) or not any(p.isdigit() for p in parts):
         return False
+    mapped = "".join(parts).translate(_KEYPAD)
+    if international:
+        # ``00`` is an international access prefix, not part of the E.164
+        # number. An explicit +/00 prefix plus dial intent supplies the
+        # structural evidence that detached international phonewords need.
+        e164_digits = mapped[2:] if mapped.startswith("00") else mapped
+        return e164_digits.isdigit() and 7 <= len(e164_digits) <= 15
     digit_groups = [p for p in parts if p.isdigit()]
     lead = digit_groups[0]
     if lead == "1" and len(digit_groups) > 1:
         lead = digit_groups[1]
     if len(lead) != 3:
         return False
-    return _is_nanp_digits("".join(parts).translate(_KEYPAD))
+    return _is_nanp_digits(mapped)
 
 
 def _dial_shape(token: str) -> str:
@@ -297,7 +306,8 @@ def _dial_shape(token: str) -> str:
     "5551234567" is one unbroken 10-digit run -- nothing describes artwork
     that way -- while "255 255 255" is [3,3,3] and "1920 1080" is [4,4].
     """
-    parts = [p for p in re.split(r"[\s.\-]+", token.lstrip("+")) if p]
+    stripped = token.lstrip("+")
+    parts = [p for p in re.split(r"[\s.\-]+", stripped) if p]
     if not parts:
         return "none"
     # A MIXED alphanumeric group is not a number: "1920x1080" is a canvas
@@ -306,9 +316,16 @@ def _dial_shape(token: str) -> str:
     if any(not (p.isdigit() or p.isalpha()) for p in parts):
         return "none"
     compact = "".join(parts)
-    if not 7 <= len(compact) <= 15:
+    symbol_limit = 17 if stripped.startswith("00") else 15
+    if not 7 <= len(compact) <= symbol_limit:
         return "none"
     if any(p.isalpha() for p in parts):
+        international = token.startswith("+") or stripped.startswith("00")
+        if international and _is_vanity_number(parts, international=True):
+            # Explicit international prefix is strong structure, but unlike a
+            # fully numeric E.164 token the detached letters remain ambiguous
+            # prose. Dial intent supplies the other side of the evidence gate.
+            return "unbroken"
         return "unambiguous" if _is_vanity_number(parts) else "none"
     groups = tuple(len(p) for p in parts)
     if compact.startswith("0") and 9 <= len(compact) <= 15 and len(groups) > 1:
@@ -330,22 +347,33 @@ def _dial_shape(token: str) -> str:
     return "grouped"
 
 
-_TRAILING_ALPHA_RE = re.compile(r"\s+[A-Za-z]+")
+_TRAILING_ALPHA_RE = re.compile(r"\s+[A-Za-z]+(?:[.\-][A-Za-z]+)*")
+_MAX_DIAL_SYMBOLS = 17  # 00 access prefix plus E.164's 15-digit maximum
 
 
 def _token_candidates(text: str, match: "re.Match[str]") -> "list[str]":
-    """The matched token, plus the same token extended by up to three
-    following space-joined alpha words -- the spelled part of a vanity number
-    ("1 800 GOT JUNK"), which the separator grammar cannot absorb without also
-    swallowing ordinary trailing words ("07700 900123 today")."""
+    """The matched token plus every still-dialable alpha-word extension.
+
+    The token regex deliberately stops before space-joined letters so it does
+    not swallow ordinary prose after a numeric token. Vanity suffixes may use
+    spaces, though, and an arbitrary word-count cap leaves the same grammar
+    open. Extend until the international dial bound is exceeded; later words
+    can only make the candidate longer, so no dialable candidate is skipped.
+    Detached extensions are not evidence by themselves: `_phone_evidence`
+    also requires nearby dial intent before admitting one as contact PII.
+    """
     candidates = [match.group(0)]
     end = match.end()
-    for _ in range(3):
+    while True:
         extension = _TRAILING_ALPHA_RE.match(text, end)
         if extension is None:
             break
+        candidate = text[match.start() : extension.end()]
+        compact = re.sub(r"[\s.\-]+", "", candidate.lstrip("+"))
+        if len(compact) > _MAX_DIAL_SYMBOLS:
+            break
+        candidates.append(candidate)
         end = extension.end()
-        candidates.append(text[match.start() : end])
     return candidates
 
 
@@ -357,38 +385,72 @@ def _gap_profile(gap: str) -> "tuple[int, bool]":
     return len(tokens), "\x00" in tokens
 
 
+def _has_near_intent(
+    text: str,
+    start: int,
+    end: int,
+    intents: "list[tuple[int, int]]",
+    *,
+    limit: int,
+    allow_boundary: bool,
+) -> bool:
+    """Whether a dial verb governs the candidate span under a bounded window."""
+    for intent_start, intent_end in intents:
+        if intent_end <= start:
+            gap = text[intent_end:start]
+        elif end <= intent_start:
+            gap = text[end:intent_start]
+        else:
+            return True
+        distance, crossed = _gap_profile(gap)
+        if distance <= limit and (allow_boundary or not crossed):
+            return True
+    return False
+
+
 def _phone_evidence(text: str) -> bool:
     """Positive evidence that ``text`` carries a dialable number."""
     if _E164_RE.search(text) or _NANP_RE.search(text):
         return True
     intents = [(m.start(), m.end()) for m in _DIAL_INTENT_RE.finditer(text)]
     for match in _DIAL_TOKEN_RE.finditer(text):
-        # Both directions of the grammar. The token regex stops before a
-        # SPACE-joined letter group, so "Call 1 800 FLOWERS today" yielded only
-        # "1 800" and passed. Extending the candidate by up to three following
-        # alpha words recovers it, and cannot over-reach because the vanity
-        # test still demands an area-code prefix and a valid NANP mapping --
-        # "255 255 255 blue" and "1920 1080 pixel" both fail that (round 9).
-        if any(
-            _dial_shape(candidate) == "unambiguous"
-            for candidate in _token_candidates(text, match)
-        ):
+        # Attached vanity spelling is structural evidence. A SPACE-joined
+        # suffix is not: "212 art deco" can keypad-map to a valid NANP number
+        # while remaining ordinary renderer prose. Detached candidates must
+        # therefore also sit under bounded dial intent. This same rule admits
+        # explicit international phonewords such as "+44 800 FLOWERS" without
+        # pretending they are NANP numbers.
+        candidates = _token_candidates(text, match)
+        base_shape = _dial_shape(candidates[0])
+        if base_shape == "unambiguous":
             return True
-        shape = _dial_shape(match.group(0))
+        for candidate in candidates[1:]:
+            if _dial_shape(candidate) == "none":
+                continue
+            candidate_end = match.start() + len(candidate)
+            if _has_near_intent(
+                text,
+                match.start(),
+                candidate_end,
+                intents,
+                limit=_UNBROKEN_WINDOW,
+                allow_boundary=True,
+            ):
+                return True
+        shape = base_shape
         if shape == "none":
             continue
         unbroken = shape == "unbroken"
         limit = _UNBROKEN_WINDOW if unbroken else _GROUPED_WINDOW
-        for start, end in intents:
-            if end <= match.start():
-                gap = text[end : match.start()]
-            elif match.end() <= start:
-                gap = text[match.end() : start]
-            else:
-                return True
-            distance, crossed = _gap_profile(gap)
-            if distance <= limit and (unbroken or not crossed):
-                return True
+        if _has_near_intent(
+            text,
+            match.start(),
+            match.end(),
+            intents,
+            limit=limit,
+            allow_boundary=unbroken,
+        ):
+            return True
     return False
 
 
@@ -398,7 +460,7 @@ def _prompt_contact_hits(text: str) -> list[str]:
     Fails on evidence of contact intent; stays silent on description.
     """
     hits: list[str] = []
-    if _ANY_EMAIL_RE.search(text):
+    if _ANY_EMAIL_RE.search(text.translate(_IDNA_DOT_TRANSLATION)):
         hits.append("email: <redacted>")
     if _phone_evidence(text):
         hits.append("phone: <redacted>")
@@ -521,13 +583,20 @@ def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
 
 
 def _read_job_artifact(
-    job_id: str, root: "Path | str", name: str
+    job_id: str, root: "Path | str", stage: str
 ) -> "dict[str, Any] | None":
-    """A persisted artifact from the job folder, or None when unreadable."""
-    path = job_dir(job_id, root=root) / name
+    """A committed artifact from the job's Git tree, or None when unreadable.
+
+    The worktree and index are mutable implementation state. A failed commit
+    or abrupt process exit may leave bytes there that no commit records; those
+    bytes are never canonical readiness input.
+    """
+    raw = read_committed_artifact_bytes(job_id, stage, root=root)
+    if raw is None:
+        return None
     try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
+        data = json.loads(raw)
+    except (TypeError, ValueError):
         return None
     return data if isinstance(data, dict) else None
 
@@ -544,27 +613,55 @@ def _draft_claim_ids(draft: "dict[str, Any]") -> "set[str]":
 
 
 def _draft_fingerprint(job_id: str, root: "Path | str") -> "str | None":
-    """SHA-256 of the draft artifact's bytes as persisted by the store.
+    """SHA-256 of the committed draft artifact's canonical bytes.
 
-    The store writes a canonical form, so this is stable for identical
-    content and changes the moment the draft body or claims change --
+    The store commits a canonical form, so this is stable for identical
+    content and changes when a committed draft body or claims change --
     including a same-revision rerun, which a revision number cannot detect.
+    Uncommitted worktree/index residue is deliberately invisible here.
     """
-    path = job_dir(job_id, root=root) / "draft.json"
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        return None
+    raw = read_committed_artifact_bytes(job_id, "draft", root=root)
+    return hashlib.sha256(raw).hexdigest() if raw is not None else None
 
 
 def _stamp_draft_fingerprint(
-    artifact: dict[str, Any], job_id: str, root: "Path | str"
+    artifact: dict[str, Any], dispatch_fingerprint: "str | None"
 ) -> None:
-    """Bind an audit to the draft content it actually reviewed. Runner-set,
-    never worker-supplied -- the same discipline as the verdict."""
+    """Bind an audit to the committed draft present when dispatch began.
+
+    Runner-set, never worker-supplied -- the same discipline as the verdict.
+    """
     if artifact.get("schema") not in _EDITOR_SCHEMAS:
         return
-    artifact["source_draft_fingerprint"] = _draft_fingerprint(job_id, root)
+    artifact["source_draft_fingerprint"] = dispatch_fingerprint
+
+
+_SOURCE_BOUND_SCHEMAS = frozenset(
+    (*_EDITOR_SCHEMAS, _REPURPOSING_SCHEMA, _IMAGE_PROMPT_SCHEMA)
+)
+
+
+def _require_dispatch_source_unchanged(
+    artifact: dict[str, Any],
+    job_id: str,
+    root: "Path | str",
+    dispatch_fingerprint: "str | None",
+) -> None:
+    """Reject a worker result when its source changed while it was running.
+
+    The source snapshot is taken immediately before dispatch. Re-reading it
+    under the job lock closes the worker-time race without holding a filesystem
+    lock across a potentially long network call. All source-derived artifacts
+    use the same check, including unready intermediate Phase 6 results.
+    """
+    if artifact.get("schema") not in _SOURCE_BOUND_SCHEMAS:
+        return
+    current = _draft_fingerprint(job_id, root)
+    if current != dispatch_fingerprint:
+        raise ArtifactStoreError(
+            "the committed draft changed while the worker was running; discard "
+            "the stale response and rerun the stage against the current draft"
+        )
 
 
 def _enforce_lineage(artifact: dict[str, Any], job_id: str, root: "Path | str") -> None:
@@ -594,7 +691,7 @@ def _enforce_lineage(artifact: dict[str, Any], job_id: str, root: "Path | str") 
     if not ready:
         return
 
-    draft = _read_job_artifact(job_id, root, "draft.json")
+    draft = _read_job_artifact(job_id, root, "draft")
     if draft is None:
         raise ArtifactStoreError(
             "readiness requires a readable draft artifact in the job folder "
@@ -604,7 +701,7 @@ def _enforce_lineage(artifact: dict[str, Any], job_id: str, root: "Path | str") 
     # The plan's premise is that Phase 6 derives from an APPROVED draft.
     # Existence proves the draft ran, not that a human/gate cleared it, so
     # require the job's audit to have promoted it (round 4).
-    audit = _read_job_artifact(job_id, root, "audit.json")
+    audit = _read_job_artifact(job_id, root, "audit")
     if audit is None or audit.get("recommendation") != "promote":
         raise ArtifactStoreError(
             "readiness requires an audit artifact recommending 'promote'; "
@@ -684,6 +781,10 @@ def run_stage(
     ValueError / pydantic ValidationError (from the store) if the artifact fails
     its contract -- so a malformed or self-promoting stage output is never persisted.
     """
+    # Snapshot the committed source BEFORE dispatch. A worker response is about
+    # this source, not whichever same-revision draft happens to exist when the
+    # network call returns.
+    dispatch_fingerprint = _draft_fingerprint(job_id, root)
     reply = call_worker(model, user_content, api_key=api_key, base_url=base_url)
     artifact = extract_json(reply)
     if artifact is None:
@@ -693,12 +794,14 @@ def run_stage(
     _enforce_copy_verification(artifact)
     _enforce_repurposing(artifact)
     _enforce_image_prompts(artifact)
-    # Everything that READS the job folder and everything that WRITES it must
-    # sit inside one lock. Stamping reads draft.json, the readiness gate reads
-    # it again to verify the fingerprint, and the commit lands after both --
-    # a concurrent draft rerun anywhere in that window would otherwise ship a
-    # "ready" artifact against copy no audit covered (#2192 round 8).
+    # Everything that re-checks the source, reads readiness state, or writes the
+    # job sits inside one lock. The pre-dispatch snapshot is compared first;
+    # lineage/readiness is then decided against that same committed state and
+    # the result commits before the lock is released (#2192 rounds 8-10).
     with job_lock(job_id, root=root):
-        _stamp_draft_fingerprint(artifact, job_id, root)
+        _require_dispatch_source_unchanged(
+            artifact, job_id, root, dispatch_fingerprint
+        )
+        _stamp_draft_fingerprint(artifact, dispatch_fingerprint)
         _enforce_lineage(artifact, job_id, root)
         return write_artifact(job_id, stage, artifact, root=root)
