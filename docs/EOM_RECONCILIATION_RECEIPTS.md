@@ -1,41 +1,33 @@
-# EOM reconciliation execution receipts
+# EOM Calendar execution receipts
 
-Use a private directory under the operator's local state directory:
+Create a private directory under the operator's local state directory:
 
 ```bash
-export EOM_RECEIPT_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/atlas/eom-reconciliation"
+export EOM_RECEIPT_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/atlas/eom-calendar-import"
 mkdir -p "$EOM_RECEIPT_DIR"
 chmod 700 "$EOM_RECEIPT_DIR"
 ```
 
-Supply that directory for the complete production sequence:
+Supply it for the production Calendar sequence:
 
 ```bash
 python scripts/import_eom_customers_live.py --dry-run --receipt-dir "$EOM_RECEIPT_DIR"
 python scripts/import_eom_customers_live.py --receipt-dir "$EOM_RECEIPT_DIR"
-python scripts/sync_eom_portal_customers.py --receipt-dir "$EOM_RECEIPT_DIR"
-python scripts/sync_eom_portal_customers.py --apply --receipt-dir "$EOM_RECEIPT_DIR"
-python scripts/sync_eom_portal_customers.py --receipt-dir "$EOM_RECEIPT_DIR"
+python scripts/import_eom_customers_live.py --dry-run --receipt-dir "$EOM_RECEIPT_DIR"
 ```
 
-Write/apply modes reject a missing receipt directory. The supplied private
-directory must already exist. Dry runs may omit it for local development, but
-an operator run should always supply it. Each run first
-creates a mode-0600 `.in-progress.json` artifact, then publishes one unique
-`.exit-N.json` receipt without overwriting an existing file.
+Live writes reject a missing receipt directory. A supplied directory must
+already exist, be owned by the current user, and not be group/world writable.
+Each run creates a mode-0600 `.in-progress.json` artifact before the Calendar
+runtime, then exclusively publishes one `.exit-N.json` receipt.
 
-Receipted runs reject staged, unstaged, or non-ignored untracked files. Run only
-from the exact clean checkout whose `HEAD` SHA should appear in the receipt.
-Ignored Python source, bytecode, or native-extension artifacts that can name a
-module/package beneath either CLI import root are also rejected, as are
-bytecode caches for tracked source. Remove repository-local import shadows and
-`__pycache__`/`.pyc` artifacts before an operator run.
-The two entrypoints disable new bytecode writes before importing local modules,
-so a clean checkout does not create and then reject its own cache files.
-Changed-contact UUIDs and aggregate counts are atomically persisted to the
-in-progress artifact as they are recorded, before finalization.
+Receipted runs establish source trust before repository-local imports. They
+reject tracked or untracked changes, ignored Python import shadows, ignored
+package symlinks beneath the CLI import roots, and bytecode caches for tracked
+source. Run from the exact clean checkout whose `HEAD` SHA belongs in the
+receipt.
 
 Receipts contain only source bindings, UTC lifecycle timestamps, non-PII
-counts, and changed contact UUIDs. They never contain portal credentials,
-tokens, runtime URLs, or customer names, emails, phones, or addresses. Keep the
+counts, and changed contact UUIDs. They never contain credentials, tokens,
+runtime URLs, or customer names, emails, phones, or addresses. Keep the
 directory private and do not commit or attach its contents to a public issue.

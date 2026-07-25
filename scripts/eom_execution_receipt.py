@@ -16,7 +16,6 @@ from typing import Any, Callable, Mapping
 SCHEMA_VERSION = 1
 TOOL_MODES = {
     "import_eom_customers_live": {"dry-run", "write"},
-    "sync_eom_portal_customers": {"dry-run", "apply"},
 }
 OUTCOME_KEYS = {
     "created",
@@ -28,7 +27,6 @@ OUTCOME_KEYS = {
     "update-planned",
     "import-planned",
 }
-PORTAL_TOTAL_KEYS = {"demoted", "eligible", "kept"}
 _PYTHON_IMPORT_SUFFIXES = tuple(
     sorted(
         {
@@ -60,13 +58,23 @@ def _git_sha(repo_root: Path) -> str:
     return value
 
 
-def _ignored_path_is_python_import_artifact(relative_path: str) -> bool:
-    """Return whether an ignored path can name code under a CLI import root."""
+def _module_path_is_importable(parts: tuple[str, ...]) -> bool:
+    return bool(parts) and all(
+        part.isidentifier() and not part.startswith(".") for part in parts
+    )
+
+
+def _ignored_path_can_supply_code(
+    repo_root: Path, relative_path: str
+) -> bool:
+    """Return whether an ignored entry can supply code from an import root."""
     if not relative_path:
         return False
     path = PurePosixPath(relative_path)
     if path.is_absolute() or ".." in path.parts:
         return True
+    if (repo_root / path).is_symlink():
+        return _module_path_is_importable(path.parts)
 
     artifact_stem = None
     for suffix in _PYTHON_IMPORT_SUFFIXES:
@@ -79,13 +87,11 @@ def _ignored_path_is_python_import_artifact(relative_path: str) -> bool:
     module_parts = (*path.parts[:-1], artifact_stem)
     if not module_parts or any(not part for part in module_parts):
         return True
-    return all(
-        not part.startswith(".") and "." not in part
-        for part in module_parts
-    )
+    return _module_path_is_importable(module_parts)
 
 
-def _clean_git_sha(repo_root: Path) -> str:
+def establish_source_trust(repo_root: Path) -> str:
+    """Validate checkout inputs before any repository-local import executes."""
     status = subprocess.run(
         [
             "git",
@@ -109,7 +115,7 @@ def _clean_git_sha(repo_root: Path) -> str:
         text=True,
     )
     for relative_path in ignored.stdout.split("\0"):
-        if _ignored_path_is_python_import_artifact(relative_path):
+        if _ignored_path_can_supply_code(repo_root, relative_path):
             raise RuntimeError(
                 "receipted execution rejects ignored Python import shadows"
             )
@@ -217,11 +223,10 @@ class EomExecutionReceipt:
             "mode": mode,
             "started_at_utc": started,
             "ended_at_utc": None,
-            "git_sha": git_sha or _clean_git_sha(script.parent.parent),
+            "git_sha": git_sha or establish_source_trust(script.parent.parent),
             "script_sha256": _script_sha256(script),
             "exit_code": None,
             "outcome_counts": {},
-            "portal_totals": None,
             "changed_contact_ids": [],
         }
         self._changed_contact_ids: set[str] = set()
@@ -292,12 +297,6 @@ class EomExecutionReceipt:
     def set_outcome_counts(self, counts: Mapping[str, int]) -> None:
         self._payload["outcome_counts"] = _validated_counts(
             counts, OUTCOME_KEYS, "outcome count"
-        )
-        self._persist_recorded_evidence()
-
-    def set_portal_totals(self, totals: Mapping[str, int]) -> None:
-        self._payload["portal_totals"] = _validated_counts(
-            totals, PORTAL_TOTAL_KEYS, "portal total"
         )
         self._persist_recorded_evidence()
 

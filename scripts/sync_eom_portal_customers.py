@@ -35,15 +35,10 @@ import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).parent))          # sibling script import
 sys.path.insert(0, str(Path(__file__).parent.parent))   # atlas_brain import
 
 import import_eom_customers_live as live  # noqa: E402  (slice-A machinery)
-from eom_execution_receipt import (  # noqa: E402
-    EomExecutionReceipt,
-    run_receipted,
-)
 
 EOM_CONTEXT_ID = live.EOM_CONTEXT_ID
 DEFAULT_BASE_URL = "https://eom-timetracker.onrender.com"
@@ -291,7 +286,7 @@ async def portal_id_current(pool, contact_id: str):
     return (row is not None), (row.get("pid") if row else None)
 
 
-async def sync_one(customer: dict, crm, pool, apply: bool, receipt=None) -> tuple:
+async def sync_one(customer: dict, crm, pool, apply: bool) -> tuple:
     """Sync a single portal customer; returns (outcome, contact_id)."""
     data = customer_to_contact_data(customer)
     if not data["full_name"]:
@@ -367,13 +362,9 @@ async def sync_one(customer: dict, crm, pool, apply: bool, receipt=None) -> tupl
             require_import_source=(identity is not None and identity[0] == "address"),
             identity=identity,
         )
-        if existing is not None and receipt is not None:
-            receipt.record_changed_contact_id(existing["id"])
 
     if existing is not None:
         contact_id, outcome = await _update_matched_portal(pool, existing, data)
-        if outcome == "updated" and receipt is not None:
-            receipt.record_changed_contact_id(contact_id)
         if outcome == "skipped":
             return "skipped", contact_id
     else:
@@ -389,8 +380,6 @@ async def sync_one(customer: dict, crm, pool, apply: bool, receipt=None) -> tupl
         contact_id = str(result.get("id", ""))
         if result.get("_was_created"):
             outcome = "created"
-            if contact_id and receipt is not None:
-                receipt.record_changed_contact_id(contact_id)
             if contact_id:
                 stamp_payload = {"source": "portal_sync", "tags": data["tags"]}
                 if data.get("phone"):
@@ -403,20 +392,12 @@ async def sync_one(customer: dict, crm, pool, apply: bool, receipt=None) -> tupl
                           "provenance stamp; left unstamped")
                     return "errors", contact_id
         else:
-            if contact_id and receipt is not None:
-                # create_contact's default existing-match path always calls
-                # update_contact for this non-empty payload before returning.
-                receipt.record_changed_contact_id(contact_id)
             contact_id, outcome = await _update_matched_portal(pool, result, data)
-            if outcome == "updated" and receipt is not None:
-                receipt.record_changed_contact_id(contact_id)
             if outcome == "skipped":
                 return "skipped", contact_id
 
     if contact_id:
         stamped = await stamp_portal_id(pool, contact_id, portal_id)
-        if stamped is not None and receipt is not None:
-            receipt.record_changed_contact_id(contact_id)
         if stamped is None:
             found, pid = await portal_id_current(pool, contact_id)
             if found and pid == str(portal_id):
@@ -508,8 +489,7 @@ def on_calendar(row: dict, guard_keys: dict) -> bool:
 
 
 async def demote_unmatched(pool, matched_ids: set, apply: bool,
-                           guard_keys: dict, receipt=None,
-                           receipt_totals: dict | None = None) -> tuple:
+                           guard_keys: dict) -> tuple:
     """Previously-imported active 'customers' that matched no portal customer
     this run become past customers -- UNLESS they appear on the live booking
     calendars (owner veto rule). Only rows this pipeline claimed as active
@@ -529,29 +509,17 @@ async def demote_unmatched(pool, matched_ids: set, apply: bool,
     )
     demoted = 0
     kept = 0
-    if receipt_totals is not None:
-        receipt_totals.update(demoted=0, eligible=len(rows), kept=0)
-        if receipt is not None:
-            receipt.set_portal_totals(receipt_totals)
     for row in rows:
         if str(row["id"]) in matched_ids:
             continue
         if on_calendar(row, guard_keys):
             kept += 1
-            if receipt_totals is not None:
-                receipt_totals["kept"] = kept
-                if receipt is not None:
-                    receipt.set_portal_totals(receipt_totals)
             print(f"  KEPT (on your calendar, missing from portal): "
                   f"{row['full_name']} -- add them to the portal")
             continue
         print(f"  DEMOTE (past customer): {row['full_name']}")
         if not apply:
             demoted += 1
-            if receipt_totals is not None:
-                receipt_totals["demoted"] = demoted
-                if receipt is not None:
-                    receipt.set_portal_totals(receipt_totals)
             continue
         tags = sorted(set(row["tags"] or []) | {"past_customer"})
         result = await pool.fetchrow(
@@ -572,29 +540,17 @@ async def demote_unmatched(pool, matched_ids: set, apply: bool,
         )
         if result is not None:
             demoted += 1
-            if receipt is not None:
-                receipt.record_changed_contact_id(result["id"])
-            if receipt_totals is not None:
-                receipt_totals["demoted"] = demoted
-                if receipt is not None:
-                    receipt.set_portal_totals(receipt_totals)
     if kept:
         print(f"\n  {kept} calendar-active customer(s) kept; reconcile them "
               "in the portal.")
-    if receipt_totals is not None:
-        receipt_totals["kept"] = kept
     return demoted, len(rows)
 
 
-async def run(args, receipt=None) -> int:
+async def run(args) -> int:
     import httpx
 
     counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0,
               "errors": 0, "create-planned": 0, "update-planned": 0}
-    receipt_totals = {"demoted": 0, "eligible": 0, "kept": 0}
-    if receipt is not None:
-        receipt.set_outcome_counts(counts)
-        receipt.set_portal_totals(receipt_totals)
     with httpx.Client(timeout=30.0) as client:
         token = portal_login(client, args.base_url, os.environ)
         customers = fetch_portal_customers(client, args.base_url, token)
@@ -639,10 +595,6 @@ async def run(args, receipt=None) -> int:
                   f"name={c.get('name')!r}")
         print(f"\n  ABORTED: {len(invalid)} malformed portal record(s); "
               "nothing written.")
-        counts["errors"] = len(invalid)
-        if receipt is not None:
-            receipt.set_outcome_counts(counts)
-            receipt.set_portal_totals(receipt_totals)
         return 1
 
     matched_ids: set = set()
@@ -651,17 +603,13 @@ async def run(args, receipt=None) -> int:
             print(f"  {str(customer.get('name') or '(unnamed)'):<45} "
                   f"sites={len(active_sites(customer))} "
                   f"[{','.join(segment_tags(customer))}]")
-            outcome, contact_id = await sync_one(
-                customer, crm, pool, args.apply, receipt=receipt
-            )
+            outcome, contact_id = await sync_one(customer, crm, pool, args.apply)
             counts[outcome] += 1
             if contact_id:
                 matched_ids.add(contact_id)
         except Exception as e:  # noqa: BLE001 -- operator script: report, continue
             print(f"    ERROR: {customer.get('name')} -- {e}")
             counts["errors"] += 1
-        if receipt is not None:
-            receipt.set_outcome_counts(counts)
 
     print(f"\n{'-' * 70}")
     if counts["errors"]:
@@ -685,15 +633,8 @@ async def run(args, receipt=None) -> int:
             demoted, eligible = 0, 0
         else:
             demoted, eligible = await demote_unmatched(
-                pool,
-                matched_ids,
-                args.apply,
-                guard_keys,
-                receipt=receipt,
-                receipt_totals=receipt_totals,
+                pool, matched_ids, args.apply, guard_keys
             )
-    receipt_totals["demoted"] = demoted
-    receipt_totals["eligible"] = eligible
 
     print(f"\n{'=' * 70}")
     if args.apply:
@@ -705,13 +646,10 @@ async def run(args, receipt=None) -> int:
               f"update {counts['update-planned']}, demote {demoted} "
               f"(of {eligible} eligible). Run with --apply to write.")
     print(f"{'=' * 70}\n")
-    if receipt is not None:
-        receipt.set_outcome_counts(counts)
-        receipt.set_portal_totals(receipt_totals)
     return 1 if counts["errors"] else 0
 
 
-def _parser() -> argparse.ArgumentParser:
+def main():
     parser = argparse.ArgumentParser(
         description="Sync the portal Customer aggregate into the Atlas CRM"
     )
@@ -723,27 +661,8 @@ def _parser() -> argparse.ArgumentParser:
         or settings_default("eom_portal_base_url")
         or DEFAULT_BASE_URL,
     )
-    parser.add_argument(
-        "--receipt-dir",
-        help="Private execution-receipt directory; required with --apply",
-    )
-    return parser
-
-
-def main(argv=None):
-    parser = _parser()
-    args = parser.parse_args(argv)
-    if args.apply and not args.receipt_dir:
-        parser.error("--apply requires --receipt-dir")
-    receipt = None
-    if args.receipt_dir:
-        receipt = EomExecutionReceipt(
-            receipt_dir=args.receipt_dir,
-            tool="sync_eom_portal_customers",
-            mode="apply" if args.apply else "dry-run",
-            script_path=Path(__file__),
-        )
-    return run_receipted(receipt, lambda: asyncio.run(run(args, receipt=receipt)))
+    args = parser.parse_args()
+    return asyncio.run(run(args))
 
 
 if __name__ == "__main__":

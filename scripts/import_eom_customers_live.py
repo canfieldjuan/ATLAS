@@ -24,23 +24,87 @@ Usage:
   python scripts/import_eom_customers_live.py --calendar residential --months-back 12
 """
 
+import sys
+
+sys.dont_write_bytecode = True
+if __name__ == "__main__":
+    _script_import_root = sys.path[0]
+    _repo_import_root = _script_import_root.rpartition("/")[0]
+    sys.path[:] = [
+        entry
+        for entry in sys.path
+        if entry not in {"", _script_import_root, _repo_import_root}
+    ]
+
 import argparse
 import asyncio
 import os
 import re
-import sys
+import subprocess
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.dont_write_bytecode = True
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Import EOM customers from the live booking calendars"
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Preview only -- no DB writes")
+    parser.add_argument(
+        "--calendar",
+        choices=["commercial", "residential", "one_time", "all"],
+        default="all",
+    )
+    parser.add_argument("--months-back", type=int, default=24)
+    parser.add_argument("--months-forward", type=int, default=12)
+    parser.add_argument(
+        "--receipt-dir",
+        help="Private execution-receipt directory; required for live writes",
+    )
+    return parser
+
+
+def _trusted_receipt_module(repo_root: Path):
+    """Load the receipt boundary from HEAD, then validate before local imports."""
+    helper_path = repo_root / "scripts" / "eom_execution_receipt.py"
+    source = subprocess.run(
+        ["git", "show", "HEAD:scripts/eom_execution_receipt.py"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    module = types.ModuleType("eom_execution_receipt")
+    module.__file__ = str(helper_path)
+    exec(compile(source, str(helper_path), "exec"), module.__dict__)
+    git_sha = module.establish_source_trust(repo_root)
+    sys.modules[module.__name__] = module
+    return module, git_sha
+
+
+_direct_args = None
+_validated_git_sha = None
+_receipt_module = None
+if __name__ == "__main__":
+    _direct_parser = _parser()
+    _direct_args = _direct_parser.parse_args()
+    if not _direct_args.dry_run and not _direct_args.receipt_dir:
+        _direct_parser.error("live writes require --receipt-dir")
+    if _direct_args.receipt_dir:
+        _receipt_module, _validated_git_sha = _trusted_receipt_module(
+            Path(__file__).resolve().parent.parent
+        )
+
 sys.path.insert(0, str(Path(__file__).parent))          # sibling script import
 sys.path.insert(0, str(Path(__file__).parent.parent))   # atlas_brain import
 
 import import_calendar_contacts as ics  # noqa: E402  (reused extraction core)
-from eom_execution_receipt import (  # noqa: E402
-    EomExecutionReceipt,
-    run_receipted,
-)
+
+if _receipt_module is None:
+    import eom_execution_receipt as _receipt_module  # noqa: E402
+
+EomExecutionReceipt = _receipt_module.EomExecutionReceipt
+run_receipted = _receipt_module.run_receipted
 
 EOM_CONTEXT_ID = "effingham_maids"
 
@@ -728,25 +792,6 @@ async def run_import(records, dry_run: bool, receipt=None) -> dict:
     return counts
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Import EOM customers from the live booking calendars"
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Preview only -- no DB writes")
-    parser.add_argument(
-        "--calendar",
-        choices=["commercial", "residential", "one_time", "all"],
-        default="all",
-    )
-    parser.add_argument("--months-back", type=int, default=24)
-    parser.add_argument("--months-forward", type=int, default=12)
-    parser.add_argument(
-        "--receipt-dir",
-        help="Private execution-receipt directory; required for live writes",
-    )
-    return parser
-
-
 async def run(args, receipt=None):
 
     calendar_ids = resolve_calendar_ids(effective_calendar_env(os.environ), args.calendar)
@@ -814,7 +859,7 @@ async def run(args, receipt=None):
 
 def main(argv=None) -> int:
     parser = _parser()
-    args = parser.parse_args(argv)
+    args = _direct_args if argv is None and _direct_args is not None else parser.parse_args(argv)
     if not args.dry_run and not args.receipt_dir:
         parser.error("live writes require --receipt-dir")
     receipt = None
@@ -824,6 +869,7 @@ def main(argv=None) -> int:
             tool="import_eom_customers_live",
             mode="dry-run" if args.dry_run else "write",
             script_path=Path(__file__),
+            git_sha=_validated_git_sha,
         )
     return run_receipted(receipt, lambda: asyncio.run(run(args, receipt=receipt)))
 

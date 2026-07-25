@@ -1,11 +1,9 @@
-"""Execution-receipt contract for the two EOM reconciliation CLIs."""
+"""Execution-receipt contract for the EOM live Calendar importer."""
 
 from __future__ import annotations
 
 import hashlib
 import asyncio
-import importlib.machinery
-import itertools
 import json
 import os
 import py_compile
@@ -23,16 +21,11 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(REPO / "tests"))
 
 import import_eom_customers_live as calendar_import  # noqa: E402
-import sync_eom_portal_customers as portal_sync  # noqa: E402
 import eom_execution_receipt as receipt_module  # noqa: E402
 from test_eom_live_calendar_import import (  # noqa: E402
     StubCRM,
     StubPool,
     _record,
-)
-from test_sync_eom_portal_customers import (  # noqa: E402
-    SyncPool,
-    _customer,
 )
 from eom_execution_receipt import (  # noqa: E402
     EomExecutionReceipt,
@@ -92,7 +85,6 @@ def test_receipt_is_private_source_bound_and_allowlisted(tmp_path):
         "script_sha256",
         "exit_code",
         "outcome_counts",
-        "portal_totals",
         "changed_contact_ids",
     }
     assert payload["git_sha"] == GIT_SHA
@@ -246,15 +238,6 @@ def test_recorded_mutation_evidence_is_durable_before_finalization(
     payload = json.loads(receipt.in_progress_path.read_text())
     assert payload["outcome_counts"] == {"updated": 1}
 
-    receipt.set_portal_totals({"demoted": 0, "eligible": 1, "kept": 1})
-    payload = json.loads(receipt.in_progress_path.read_text())
-    assert payload["portal_totals"] == {
-        "demoted": 0,
-        "eligible": 1,
-        "kept": 1,
-    }
-
-
 def test_receipt_rejects_dirty_tracked_worktree(tmp_path):
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
@@ -343,111 +326,101 @@ def test_receipt_rejects_untracked_import_shadow(tmp_path):
         )
 
 
-_IMPORTABLE_ARTIFACT_PREFIXES = (
-    "",
-    "httpx/",
-    "vendor_namespace/deep/",
-    "scripts/",
-    "scripts/vendor_package/",
-)
-_IMPORTABLE_ARTIFACT_NAMES = (
-    "__init__.py",
-    "client.py",
-    "client.pyc",
-    f"client{importlib.machinery.EXTENSION_SUFFIXES[0]}",
-)
-
-
-@pytest.mark.parametrize(
-    "artifact_path",
-    (
-        f"{prefix}{artifact_name}"
-        for prefix, artifact_name in itertools.product(
-            _IMPORTABLE_ARTIFACT_PREFIXES,
-            _IMPORTABLE_ARTIFACT_NAMES,
-        )
-    ),
-)
-def test_receipt_rejects_ignored_python_import_artifact(
-    tmp_path, artifact_path
-):
+def _calendar_process_fixture(tmp_path, ignored_path):
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
     scripts.mkdir(parents=True)
-    script = scripts / "operator.py"
-    script.write_text("import httpx\n")
-    (repo / ".gitignore").write_text(f"/{artifact_path}\n")
+    for name in ("eom_execution_receipt.py", "import_eom_customers_live.py"):
+        shutil.copy2(SCRIPTS / name, scripts / name)
+    (scripts / "import_calendar_contacts.py").write_text(
+        '"""Minimal fixture; source preflight must run before this import."""\n'
+    )
+    (repo / ".gitignore").write_text(f"/{ignored_path}\n")
     subprocess_options = {
-        "cwd": repo, "check": True, "capture_output": True, "text": True,
+        "cwd": repo,
+        "check": True,
+        "capture_output": True,
+        "text": True,
     }
     receipt_module.subprocess.run(["git", "init", "-q"], **subprocess_options)
     receipt_module.subprocess.run(["git", "add", "."], **subprocess_options)
     receipt_module.subprocess.run(
-        ["git", "-c", "user.name=Receipt Test", "-c",
-         "user.email=receipt-test@example.invalid", "commit", "-qm", "fixture"],
+        [
+            "git",
+            "-c",
+            "user.name=Receipt Test",
+            "-c",
+            "user.email=receipt-test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
         **subprocess_options,
     )
-    artifact = repo / artifact_path
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_bytes(b"unreviewed import artifact\n")
-    with pytest.raises(RuntimeError, match="ignored Python import shadows"):
-        EomExecutionReceipt(
-            receipt_dir=tmp_path,
-            tool="import_eom_customers_live",
-            mode="write",
-            script_path=script,
-        )
-
-
-@pytest.mark.parametrize(
-    "artifact_path",
-    (
-        ".venv/lib/python/site-packages/httpx/__init__.py",
-        ".cache/shadow.pyc",
-        "generated.v1/shadow.py",
-        "scripts/.cache/shadow.py",
-        "docs/example.txt",
-    ),
-)
-def test_receipt_allows_ignored_non_import_path(tmp_path, artifact_path):
-    repo = tmp_path / "repo"
-    scripts = repo / "scripts"
-    scripts.mkdir(parents=True)
-    script = scripts / "operator.py"
-    script.write_text("import httpx\n")
-    (repo / ".gitignore").write_text(f"/{artifact_path}\n")
-    subprocess_options = {
-        "cwd": repo, "check": True, "capture_output": True, "text": True,
-    }
-    receipt_module.subprocess.run(["git", "init", "-q"], **subprocess_options)
-    receipt_module.subprocess.run(["git", "add", "."], **subprocess_options)
-    receipt_module.subprocess.run(
-        ["git", "-c", "user.name=Receipt Test", "-c",
-         "user.email=receipt-test@example.invalid", "commit", "-qm", "fixture"],
-        **subprocess_options,
-    )
-    artifact = repo / artifact_path
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_bytes(b"not importable through the inserted roots\n")
     receipt_dir = tmp_path / "receipts"
     receipt_dir.mkdir()
     receipt_dir.chmod(0o700)
+    return repo, scripts, receipt_dir
 
-    receipt = EomExecutionReceipt(
-        receipt_dir=receipt_dir,
-        tool="import_eom_customers_live",
-        mode="write",
-        script_path=script,
+
+def _run_receipted_calendar(repo, scripts, receipt_dir):
+    return receipt_module.subprocess.run(
+        [
+            sys.executable,
+            str(scripts / "import_eom_customers_live.py"),
+            "--dry-run",
+            "--receipt-dir",
+            str(receipt_dir),
+        ],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
     )
 
-    assert receipt.in_progress_path.exists()
+
+def test_process_preflight_blocks_self_removing_shadow_before_import(tmp_path):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, "scripts/json.py"
+    )
+    marker = tmp_path / "shadow-executed"
+    shadow = scripts / "json.py"
+    shadow.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "Path(__file__).unlink()\n"
+        "raise RuntimeError('ignored shadow executed')\n"
+    )
+
+    result = _run_receipted_calendar(repo, scripts, receipt_dir)
+
+    assert result.returncode != 0
+    assert "rejects ignored Python import shadows" in result.stderr
+    assert not marker.exists()
+    assert shadow.exists()
+    assert list(receipt_dir.iterdir()) == []
 
 
-@pytest.mark.parametrize("relative_path", ("/tmp/shadow.py", "../shadow.py"))
-def test_ignored_import_artifact_predicate_fails_closed_on_malformed_path(
-    relative_path,
+@pytest.mark.parametrize("package_kind", ("regular", "namespace"))
+def test_process_preflight_rejects_ignored_package_symlink(
+    tmp_path, package_kind
 ):
-    assert receipt_module._ignored_path_is_python_import_artifact(relative_path)
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, "scripts/shadow_package"
+    )
+    target = tmp_path / f"{package_kind}-target"
+    target.mkdir()
+    if package_kind == "regular":
+        (target / "__init__.py").write_text("VALUE = 'unreviewed'\n")
+    else:
+        (target / "child.py").write_text("VALUE = 'unreviewed'\n")
+    (scripts / "shadow_package").symlink_to(target, target_is_directory=True)
+
+    result = _run_receipted_calendar(repo, scripts, receipt_dir)
+
+    assert result.returncode != 0
+    assert "rejects ignored Python import shadows" in result.stderr
+    assert list(receipt_dir.iterdir()) == []
 
 
 def test_receipt_rejects_ignored_bytecode_for_tracked_source(tmp_path):
@@ -516,40 +489,28 @@ def test_receipt_rejects_ignored_bytecode_for_tracked_source(tmp_path):
         )
 
 
-def test_entrypoints_disable_bytecode_before_local_imports():
+def test_entrypoint_bootstraps_source_trust_before_local_imports():
     calendar_source = (
         SCRIPTS / "import_eom_customers_live.py"
-    ).read_text()
-    portal_source = (
-        SCRIPTS / "sync_eom_portal_customers.py"
     ).read_text()
 
     calendar_disable = calendar_source.index("sys.dont_write_bytecode = True")
     assert calendar_disable < calendar_source.index(
         "import import_calendar_contacts as ics"
     )
-    assert calendar_disable < calendar_source.index(
-        "from eom_execution_receipt import"
+    source_preflight = calendar_source.index(
+        "_receipt_module, _validated_git_sha = _trusted_receipt_module"
     )
-
-    portal_disable = portal_source.index("sys.dont_write_bytecode = True")
-    assert portal_disable < portal_source.index(
-        "import import_eom_customers_live as live"
-    )
-    assert portal_disable < portal_source.index(
-        "from eom_execution_receipt import"
+    assert source_preflight < calendar_source.index(
+        "import import_calendar_contacts as ics"
     )
 
 
-def test_clean_real_entrypoints_do_not_create_or_reject_own_bytecode(tmp_path):
+def test_clean_real_entrypoint_does_not_create_or_reject_own_bytecode(tmp_path):
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
     scripts.mkdir(parents=True)
-    for name in (
-        "eom_execution_receipt.py",
-        "import_eom_customers_live.py",
-        "sync_eom_portal_customers.py",
-    ):
+    for name in ("eom_execution_receipt.py", "import_eom_customers_live.py"):
         shutil.copy2(SCRIPTS / name, scripts / name)
     (scripts / "import_calendar_contacts.py").write_text(
         '"""Minimal import-only fixture for the EOM entrypoint smoke test."""\n'
@@ -609,16 +570,6 @@ def test_clean_real_entrypoints_do_not_create_or_reject_own_bytecode(tmp_path):
         env=env,
         **subprocess_options,
     )
-    receipt_module.subprocess.run(
-        [
-            sys.executable,
-            str(scripts / "sync_eom_portal_customers.py"),
-            "--help",
-        ],
-        env=env,
-        **subprocess_options,
-    )
-
     assert list(repo.rglob("*.pyc")) == []
     assert len(list(calendar_receipts.glob("*.exit-0.json"))) == 1
 
@@ -662,14 +613,7 @@ def test_evidence_failure_is_deferred_until_finalize(tmp_path, monkeypatch):
         receipt.finalize(0)
 
 
-@pytest.mark.parametrize(
-    ("module", "argv"),
-    [
-        (calendar_import, []),
-        (portal_sync, ["--apply"]),
-    ],
-)
-def test_write_modes_require_receipt_before_async_runtime(module, argv, monkeypatch):
+def test_write_mode_requires_receipt_before_async_runtime(monkeypatch):
     entered = False
 
     async def forbidden_run(*_args, **_kwargs):
@@ -677,70 +621,48 @@ def test_write_modes_require_receipt_before_async_runtime(module, argv, monkeypa
         entered = True
         return 0
 
-    monkeypatch.setattr(module, "run", forbidden_run)
+    monkeypatch.setattr(calendar_import, "run", forbidden_run)
     with pytest.raises(SystemExit) as raised:
-        module.main(argv)
+        calendar_import.main([])
     assert raised.value.code == 2
     assert entered is False
 
 
-@pytest.mark.parametrize(
-    ("module", "argv"),
-    [
-        (calendar_import, ["--dry-run"]),
-        (portal_sync, []),
-    ],
-)
-def test_dry_runs_may_omit_receipt(module, argv, monkeypatch):
+def test_dry_run_may_omit_receipt(monkeypatch):
     observed = []
 
     async def fake_run(_args, receipt=None):
         observed.append(receipt)
         return 0
 
-    monkeypatch.setattr(module, "run", fake_run)
-    assert module.main(argv) == 0
+    monkeypatch.setattr(calendar_import, "run", fake_run)
+    assert calendar_import.main(["--dry-run"]) == 0
     assert observed == [None]
 
 
-@pytest.mark.parametrize(
-    ("module", "argv", "tool", "mode"),
-    [
-        (
-            calendar_import,
-            ["--dry-run"],
-            "import_eom_customers_live",
-            "dry-run",
-        ),
-        (
-            portal_sync,
-            ["--apply"],
-            "sync_eom_portal_customers",
-            "apply",
-        ),
-    ],
-)
 def test_real_cli_creates_in_progress_before_runtime_and_finalizes(
-    module, argv, tool, mode, monkeypatch, tmp_path
+    monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(receipt_module, "_clean_git_sha", lambda _root: GIT_SHA)
+    monkeypatch.setattr(
+        receipt_module, "establish_source_trust", lambda _root: GIT_SHA
+    )
 
     async def fake_run(_args, receipt=None):
         assert receipt is not None
         assert receipt.in_progress_path.exists()
         assert stat.S_IMODE(receipt.in_progress_path.stat().st_mode) == 0o600
         receipt.set_outcome_counts({"errors": 0})
-        if tool == "sync_eom_portal_customers":
-            receipt.set_portal_totals({"demoted": 1, "eligible": 2, "kept": 1})
         receipt.record_changed_contact_id(CONTACT_A)
         return 0
 
-    monkeypatch.setattr(module, "run", fake_run)
-    assert module.main([*argv, "--receipt-dir", str(tmp_path)]) == 0
+    monkeypatch.setattr(calendar_import, "run", fake_run)
+    assert calendar_import.main(
+        ["--dry-run", "--receipt-dir", str(tmp_path)]
+    ) == 0
 
     _path, payload = _load_only_final(tmp_path)
-    assert payload["tool"] == tool
-    assert payload["mode"] == mode
+    assert payload["tool"] == "import_eom_customers_live"
+    assert payload["mode"] == "dry-run"
     assert payload["changed_contact_ids"] == [CONTACT_A]
     assert payload["exit_code"] == 0
 
@@ -748,47 +670,9 @@ def test_real_cli_creates_in_progress_before_runtime_and_finalizes(
 class _Recorder:
     def __init__(self):
         self.contact_ids = []
-        self.portal_totals = {}
 
     def record_changed_contact_id(self, contact_id):
         self.contact_ids.append(str(contact_id))
-
-    def set_portal_totals(self, totals):
-        self.portal_totals = dict(totals)
-
-
-def test_portal_demotion_records_returned_contact_uuid():
-    class Pool:
-        async def fetch(self, *_args):
-            return [
-                {
-                    "id": CONTACT_A,
-                    "full_name": "redacted",
-                    "tags": [],
-                    "phone": None,
-                    "email": None,
-                    "address": None,
-                }
-            ]
-
-        async def fetchrow(self, *_args):
-            return {"id": CONTACT_A}
-
-    recorder = _Recorder()
-    totals = {}
-    demoted, eligible = asyncio.run(
-        portal_sync.demote_unmatched(
-            Pool(),
-            set(),
-            apply=True,
-            guard_keys={"phones": set(), "emails": set(), "addrs": set(), "names": set()},
-            receipt=recorder,
-            receipt_totals=totals,
-        )
-    )
-    assert (demoted, eligible) == (1, 1)
-    assert totals == {"demoted": 1, "eligible": 1, "kept": 0}
-    assert recorder.contact_ids == [CONTACT_A]
 
 
 def test_calendar_create_records_changed_contact_id():
@@ -830,7 +714,6 @@ def test_calendar_interaction_only_write_records_changed_contact_id():
     assert outcome == "unchanged"
     assert recorder.contact_ids == [CONTACT_A]
 
-
 def test_calendar_race_merge_records_contact_even_when_followup_is_unchanged(
     monkeypatch,
 ):
@@ -858,44 +741,4 @@ def test_calendar_race_merge_records_contact_even_when_followup_is_unchanged(
     )
 
     assert outcome == "unchanged"
-    assert recorder.contact_ids == [CONTACT_A]
-
-
-def test_portal_race_merge_records_contact_even_when_followup_is_unchanged(
-    monkeypatch,
-):
-    class RaceCRM(StubCRM):
-        async def create_contact(self, data):
-            self.created.append(data)
-            return {
-                "id": CONTACT_A,
-                "_was_created": False,
-                **portal_sync.customer_to_contact_data(_customer()),
-                "metadata": {"portal_customer_id": 7},
-            }
-
-    async def unchanged(_pool, existing, _data):
-        return str(existing["id"]), "unchanged"
-
-    async def already_stamped(_pool, _contact_id):
-        return True, "7"
-
-    async def no_stamp(_pool, _contact_id, _portal_id):
-        return None
-
-    monkeypatch.setattr(portal_sync, "_update_matched_portal", unchanged)
-    monkeypatch.setattr(portal_sync, "stamp_portal_id", no_stamp)
-    monkeypatch.setattr(portal_sync, "portal_id_current", already_stamped)
-    recorder = _Recorder()
-    outcome, contact_id = asyncio.run(
-        portal_sync.sync_one(
-            _customer(),
-            RaceCRM(),
-            SyncPool(rows=[None, None, None, None]),
-            apply=True,
-            receipt=recorder,
-        )
-    )
-
-    assert (outcome, contact_id) == ("unchanged", CONTACT_A)
     assert recorder.contact_ids == [CONTACT_A]
