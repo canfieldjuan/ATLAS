@@ -211,6 +211,36 @@ pattern as #2181's advisory engine. The classifiers are now written as
 two-directional decisions with both error sides pinned by parametrized
 probes, which is the shape that finally held there.
 
+### Review round 6 (Codex) — classifier redesign
+
+One finding, and it named the real problem: the phone check was still a
+"reject known-bad, admit the rest" enumeration. Evidence: `1-800-GOT-JUNK`
+passed (hyphenated vanity spelling) while `RGB palette 255 255 255` was
+rejected as PII.
+
+**Redesigned as an EVIDENCE-GATED decision.** Rounds 3-6 each failed
+because the rule asked "do these digits look like a phone number?", which
+has no closed answer -- dates, RGB triples, dimensions and dialable numbers
+share a digit grammar. It now requires positive evidence of contact intent,
+of which there are exactly two kinds:
+
+* **structural** — an unambiguous dialable form (E.164 `+`/`00` prefix, or
+  the NANP 3-3-4 shape). Nothing describes artwork this way, so these fail
+  with no other context.
+* **lexical** — a dial-intent verb (call/text/dial/ring/reach...) near a
+  dialable token. This is what makes "Call 1-800-GOT-JUNK" contact data
+  when its digits alone are not.
+
+Absent both, digits are description and the prompt passes. Token
+continuation groups are restricted to digits or uppercase runs so a token
+cannot swallow the following lowercase word.
+
+**Generative oracle** replaces the hand-listed fixtures: 6 intents x 11
+dialable forms (66 cases) must fail; 11 descriptive strings x 3 scene
+templates (33 cases) must pass; structural forms must fail without any
+intent word; and 4 email forms across scripts must fail. The hand-listed
+phone tests from rounds 4-5 were removed as superseded.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -263,7 +293,8 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 388 passed (79 new: 30 contract invariants, 49 run_stage gates)
+    # -> 475 passed (166 new; the growth is the round-6 generative
+    #    oracle: 66 must-fail x 33 must-pass contact cases)
 
 - `python -m py_compile` clean (SyntaxWarning as error) on touched modules.
 - NOT run: live worker pass (no wrappers wired yet, by design).
@@ -274,9 +305,9 @@ Parked hardening: none new.
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 209 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 20 |
-| `atlas_brain/services/content_factory_runner.py` | 271 |
+| `atlas_brain/services/content_factory_runner.py` | 296 |
 | `atlas_brain/services/content_factory_store.py` | 4 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 282 |
-| `tests/test_content_factory_runner.py` | 578 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 313 |
+| `tests/test_content_factory_runner.py` | 569 |
 | `tests/test_content_factory_schemas.py` | 269 |
-| **Total** | **1633** |
+| **Total** | **1680** |

@@ -751,47 +751,6 @@ def test_cross_project_derivation_blocked(tmp_path, monkeypatch):
         runner.run_stage("job-xproj", "repurposing", "m", "req", api_key="k", root=tmp_path)
 
 
-@pytest.mark.parametrize("phone", [
-    "Call 0044 20 7946 0958",
-    "Call us at +442079460958",
-    "reach us: (555) 123-4567",
-    "dial 555.123.4567 today",
-    "ring 07700 900123 now",
-])
-def test_prompt_phone_class_is_closed(phone, tmp_path, monkeypatch):
-    """Class-level: any 7+ digit run under tolerant separators, no matter
-    the dialling convention."""
-    reply = json.dumps({
-        "schema": "image_prompt.v1", "project_id": "p",
-        "prompts": [{"purpose": "hero", "prompt_text": phone}],
-    })
-    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-ph", "image_prompt", "m", "req", api_key="k", root=tmp_path)
-    stored = json.loads(Path(rec["path"]).read_text())
-    assert stored["copy_verification"]["verdict"] == "fail", (phone, stored["copy_verification"])
-    assert "phone: <redacted>" in " ".join(stored["copy_verification"]["hits"])
-
-
-@pytest.mark.parametrize("ok_text", [
-    "a tidy desk in soft morning light",
-    "a wall clock showing 9:45",
-    "a room with 3 windows and 2 chairs",
-])
-def test_ordinary_prompt_numbers_still_pass(ok_text, tmp_path, monkeypatch):
-    """The other side: short numbers in normal descriptions are not PII."""
-    reply = json.dumps({
-        "schema": "image_prompt.v1", "project_id": "p",
-        "prompts": [{"purpose": "hero", "prompt_text": ok_text}],
-    })
-    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-ok", "image_prompt", "m", "req", api_key="k", root=tmp_path)
-    stored = json.loads(Path(rec["path"]).read_text())
-    assert stored["copy_verification"]["verdict"] == "pass", (ok_text, stored["copy_verification"])
-
-
-# --- review round 5 on #2192 ---
-
-
 def test_stale_audit_cannot_approve_newer_draft(tmp_path, monkeypatch):
     """A revision-1 approval does not authorize revision-2 copy."""
     from atlas_brain.services.content_factory_store import write_artifact
@@ -836,35 +795,67 @@ def test_foreign_project_audit_cannot_approve(tmp_path, monkeypatch):
         runner.run_stage("job-xaudit", "repurposing", "m", "req", api_key="k", root=tmp_path)
 
 
-@pytest.mark.parametrize("bad", [
-    "Call 1-800-FLOWERS",
-    "Call 0044 20 7946 0958",
-    "reach us: (555) 123-4567",
-    "ring 07700 900123 now",
-    "email josé@example.com",
-    "write to user@例え.テスト",
-])
-def test_prompt_contact_data_fails_both_scripts(bad, tmp_path, monkeypatch):
-    reply = json.dumps({"schema": "image_prompt.v1", "project_id": "p",
-                        "prompts": [{"purpose": "hero", "prompt_text": bad}]})
-    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-c5", "image_prompt", "m", "req", api_key="k", root=tmp_path)
-    cv = json.loads(Path(rec["path"]).read_text())["copy_verification"]
-    assert cv["verdict"] == "fail", (bad, cv)
 
 
-@pytest.mark.parametrize("ok", [
-    "calendar showing 2026-07-25",
-    "a wall clock showing 9:45",
-    "invoice dated 07/25/2026",
-    "a room with 3 windows and 2 chairs",
-    "address plaque reading 12 Elm",
-])
-def test_ordinary_numeric_description_passes(ok, tmp_path, monkeypatch):
-    """The other direction: dated/counted artwork is not contact data."""
+# --- review round 6: generative oracle for the contact classifier ---------
+#
+# Built from grammars rather than a fixture list, so the decision is
+# exercised across the space instead of the examples that happened to be
+# reported. Both error directions are asserted.
+
+_INTENTS = ["Call", "Text", "Dial", "Reach us at", "Phone", "Ring"]
+_DIALABLE = [
+    "1-800-GOT-JUNK", "1-800-FLOWERS",          # vanity, letters
+    "+442079460958", "+44 20 7946 0958",        # E.164
+    "0044 20 7946 0958",                        # 00 prefix
+    "(555) 123-4567", "555-123-4567",           # NANP
+    "555.123.4567", "5551234567",               # separators / unbroken
+    "07700 900123", "07700900123",              # local, long
+]
+_DESCRIPTIVE = [
+    "RGB palette 255 255 255", "canvas 1920 1080 pixels",
+    "calendar showing 2026-07-25", "invoice dated 07/25/2026",
+    "a wall clock showing 9:45", "a room with 3 windows and 2 chairs",
+    "address plaque reading 12 Elm", "serial 12345678 engraved on a plate",
+    "ISO 4217 currency chart", "recipe calls for 2 cups and 3 eggs",
+    "a tidy desk in soft morning light",
+]
+_SCENES = ["a poster of {}", "signage reading {}", "{} on a storefront window"]
+
+
+def _prompt_verdict(text, tmp_path, monkeypatch, job):
     reply = json.dumps({"schema": "image_prompt.v1", "project_id": "p",
-                        "prompts": [{"purpose": "hero", "prompt_text": ok}]})
+                        "prompts": [{"purpose": "hero", "prompt_text": text}]})
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-o5", "image_prompt", "m", "req", api_key="k", root=tmp_path)
-    cv = json.loads(Path(rec["path"]).read_text())["copy_verification"]
-    assert cv["verdict"] == "pass", (ok, cv)
+    rec = runner.run_stage(job, "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    return json.loads(Path(rec["path"]).read_text())["copy_verification"]
+
+
+@pytest.mark.parametrize("number", _DIALABLE)
+@pytest.mark.parametrize("intent", _INTENTS)
+def test_oracle_dial_intent_plus_number_always_fails(number, intent, tmp_path, monkeypatch):
+    cv = _prompt_verdict(f"{intent} {number} today", tmp_path, monkeypatch, "job-or1")
+    assert cv["verdict"] == "fail", (intent, number, cv)
+
+
+@pytest.mark.parametrize("text", _DESCRIPTIVE)
+@pytest.mark.parametrize("scene", _SCENES)
+def test_oracle_descriptive_numbers_never_fail(text, scene, tmp_path, monkeypatch):
+    """No dial intent and no dialable structure -> digits are description."""
+    cv = _prompt_verdict(scene.format(text), tmp_path, monkeypatch, "job-or2")
+    assert cv["verdict"] == "pass", (scene, text, cv)
+
+
+@pytest.mark.parametrize("number", ["+442079460958", "(555) 123-4567", "555-123-4567"])
+def test_oracle_structural_forms_fail_without_intent(number, tmp_path, monkeypatch):
+    """E.164 and NANP are unambiguous: no intent word needed."""
+    cv = _prompt_verdict(f"a poster showing {number}", tmp_path, monkeypatch, "job-or3")
+    assert cv["verdict"] == "fail", (number, cv)
+
+
+@pytest.mark.parametrize("addr", [
+    "bob@example.com", "josé@example.com", "user@例え.テスト", "a.b+tag@sub.domain.co.uk",
+])
+def test_oracle_email_any_script_fails(addr, tmp_path, monkeypatch):
+    cv = _prompt_verdict(f"a card reading {addr}", tmp_path, monkeypatch, "job-or4")
+    assert cv["verdict"] == "fail", (addr, cv)

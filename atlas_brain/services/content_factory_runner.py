@@ -111,50 +111,6 @@ def call_worker(
     return content or ""
 
 
-# --- prompt contact-PII classifiers -------------------------------------
-#
-# These are deliberately NOT the body-copy patterns. A prompt is an
-# instruction about to be rendered into pixels, so the decision has to hold
-# in BOTH directions: contact data must fail, and ordinary numeric/textual
-# description (dates, times, counts, dimensions) must pass. Rounds 3-5 all
-# broke on one side or the other of exactly this, so the shape is now:
-# candidate -> reject known non-contact shapes -> require contact evidence.
-
-# Address-shaped token, script-independent: closes internationalized email
-# (unicode local parts, IDN domains) that an ASCII pattern misses.
-_ANY_EMAIL_RE = re.compile(r"[^\s@,;:()<>\[\]]+@[^\s@,;:()<>\[\]]+\.[^\s@,;:()<>\[\]]{2,}")
-
-# Digit sequences with phone-ish separators, then filtered below.
-_DIGIT_SEQ_RE = re.compile(r"[+\d][\d\s().\-\u2010-\u2015]{5,}\d")
-# Shapes that are NOT contact data however many digits they carry.
-_NON_CONTACT_SHAPES = (
-    re.compile(r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$"),      # 2026-07-25
-    re.compile(r"^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}$"),     # 07/25/2026
-    re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$"),            # 9:45
-)
-# Vanity numbers carry letters, so digit counting alone never sees them.
-_VANITY_PHONE_RE = re.compile(r"\b1[\s.\-]?[89]\d{2}[\s.\-]?[A-Za-z][A-Za-z0-9]{5,}\b")
-
-
-def _prompt_contact_hits(text: str) -> list[str]:
-    """Contact-PII findings for renderer instructions, both directions."""
-    hits: list[str] = []
-    if _ANY_EMAIL_RE.search(text):
-        hits.append("email: <redacted>")
-    if _VANITY_PHONE_RE.search(text):
-        hits.append("phone: <redacted>")
-        return hits
-    for match in _DIGIT_SEQ_RE.finditer(text):
-        token = match.group(0).strip()
-        if any(shape.match(token) for shape in _NON_CONTACT_SHAPES):
-            continue
-        digits = re.sub(r"\D", "", token)
-        # E.164 allows up to 15; below 7 is not a dialable number.
-        if 7 <= len(digits) <= 15:
-            hits.append("phone: <redacted>")
-            break
-    return hits
-
 _REPURPOSING_SCHEMA = "repurposing.v1"
 _IMAGE_PROMPT_SCHEMA = "image_prompt.v1"
 
@@ -193,6 +149,75 @@ def _enforce_repurposing(artifact: dict[str, Any]) -> None:
         )
         variant["copy_verification"] = verdict
         variant["advisory_warnings"] = warnings
+
+
+# --- prompt contact-PII classifiers -------------------------------------
+#
+# EVIDENCE-GATED, not pattern-enumerated. Rounds 3-6 each broke because the
+# rule asked "do these digits look like a phone number?" -- a question with
+# no closed answer, since dates, RGB triples, dimensions and dialable
+# numbers share a digit grammar. The decision now asks for POSITIVE
+# EVIDENCE of contact intent, of which there are exactly two kinds:
+#
+#   1. structural  -- an unambiguous dialable form (E.164 "+"/"00" prefix,
+#                     or the NANP 3-3-4 shape). Nothing describes artwork
+#                     this way.
+#   2. lexical     -- a dial-intent verb ("call", "text", "reach"...) near
+#                     a dial-shaped token, which is what makes
+#                     "Call 1-800-GOT-JUNK" contact data even though its
+#                     digits alone are not.
+#
+# Absent both, digits are just description and the prompt passes. That is
+# what makes "RGB palette 255 255 255" and "calendar showing 2026-07-25"
+# safe without enumerating them.
+
+_ANY_EMAIL_RE = re.compile(
+    r"[^\s@,;:()<>\[\]]+@[^\s@,;:()<>\[\]]+\.[^\s@,;:()<>\[\]]{2,}"
+)
+
+_DIAL_INTENT_RE = re.compile(
+    r"\b(?:call|calling|dial|dialling|dialing|phone|telephone|tel|text|txt|"
+    r"sms|ring|hotline|helpline|whatsapp|contact|reach)\b",
+    re.I,
+)
+# E.164 / international: explicit + or 00 prefix then 7-15 digits.
+_E164_RE = re.compile(r"(?:\+|\b00)[\d\s().\-]{7,20}\d")
+# North American 3-3-4, the one local shape that is unambiguous.
+_NANP_RE = re.compile(r"\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b")
+# A token someone could dial: starts with a digit, 7+ alphanumerics once
+# separators are stripped (covers 1-800-GOT-JUNK and 07700 900123 alike).
+# Continuation groups must be digits or an uppercase run (vanity numbers
+# are conventionally capitalised), so a token cannot swallow the ordinary
+# lowercase word that follows it ("07700 900123 today").
+_DIAL_TOKEN_RE = re.compile(
+    r"\b[+]?\d[\dA-Z]*(?:[\s.\-](?:\d+|[A-Z]{2,})){0,5}"
+)
+
+
+def _looks_dialable(token: str) -> bool:
+    compact = re.sub(r"[^0-9A-Za-z]", "", token)
+    return 7 <= len(compact) <= 15 and any(ch.isdigit() for ch in compact)
+
+
+def _prompt_contact_hits(text: str) -> list[str]:
+    """Contact-PII findings for renderer instructions.
+
+    Fails on evidence of contact intent; stays silent on description.
+    """
+    hits: list[str] = []
+    if _ANY_EMAIL_RE.search(text):
+        hits.append("email: <redacted>")
+
+    if _E164_RE.search(text) or _NANP_RE.search(text):
+        hits.append("phone: <redacted>")
+        return hits
+
+    if _DIAL_INTENT_RE.search(text):
+        for match in _DIAL_TOKEN_RE.finditer(text):
+            if _looks_dialable(match.group(0)):
+                hits.append("phone: <redacted>")
+                break
+    return hits
 
 
 def _enforce_image_prompts(artifact: dict[str, Any]) -> None:
