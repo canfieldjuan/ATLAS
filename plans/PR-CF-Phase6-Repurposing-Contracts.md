@@ -491,10 +491,10 @@ moving the snapshot back after dispatch makes them fail.
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
-- `atlas_brain/services/content_factory_copy_verification.py`
 - `atlas_brain/services/content_factory_runner.py`
 - `atlas_brain/services/content_factory_store.py`
 - `plans/PR-CF-Phase6-Repurposing-Contracts.md`
+- `plans/PR-CF-Phase6-Round10-Remediation.md`
 - `tests/test_content_factory_runner.py`
 - `tests/test_content_factory_schemas.py`
 
@@ -562,11 +562,11 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 297 |
-| `atlas_brain/services/content_factory_copy_verification.py` | 20 |
-| `atlas_brain/services/content_factory_runner.py` | 660 |
-| `atlas_brain/services/content_factory_store.py` | 165 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 572 |
-| `tests/test_content_factory_runner.py` | 1127 |
-| `tests/test_content_factory_schemas.py` | 309 |
-| **Total** | **3150** |
+| `atlas_brain/schemas/content_factory.py` | 43 |
+| `atlas_brain/services/content_factory_runner.py` | 233 |
+| `atlas_brain/services/content_factory_store.py` | 102 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 198 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 173 |
+| `tests/test_content_factory_runner.py` | 286 |
+| `tests/test_content_factory_schemas.py` | 40 |
+| **Total** | **1075** |
