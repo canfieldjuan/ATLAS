@@ -287,31 +287,68 @@ _REPORT_ITEM_NOUNS = frozenset(
 _CTA_REMINDER = ADVISORY_CTA_REMINDER
 
 
-def _boundary_spans(
-    text: str, boundary_re: "re.Pattern[str]"
-) -> "tuple[list[int], list[tuple[int, int]]]":
-    """(starts, spans) between boundary matches, computed once per draft so
-    per-position lookups are a bisect over the cached starts."""
+_ABBREVIATIONS = frozenset(
+    {"dr", "mr", "mrs", "ms", "prof", "inc", "ltd", "co", "corp", "dept",
+     "vs", "etc", "jr", "sr", "st", "fig", "approx", "dept", "est"}
+)
+_FOCUS_MODIFIERS = frozenset({"only", "even", "just", "especially", "particularly"})
+_LAST_WORD_RE = re.compile(r"([A-Za-z][\w'-]*)\s*$")
+
+
+def _sentence_structure(text: str) -> "tuple[list[int], list[tuple[int, int]]]":
+    """Sentence spans with abbreviation protection: a period run is not a
+    terminator when the word before it is a known abbreviation or a single
+    initial ("Dr. Billing", "J. Smith") -- locators must count sentences the
+    way the reviewing human does."""
     spans: list[tuple[int, int]] = []
     start = 0
-    for match in boundary_re.finditer(text):
+    for match in _SENTENCE_BOUNDARY_RE.finditer(text):
+        marks = set(match.group(0).strip()) - set("\n \t")
+        if marks and marks <= {"."}:
+            before = _LAST_WORD_RE.search(text[: match.start()])
+            if before is not None:
+                word = before.group(1).lower()
+                if word in _ABBREVIATIONS or len(word) == 1:
+                    continue
         spans.append((start, match.start()))
         start = match.end()
     spans.append((start, len(text)))
     return [s for s, _e in spans], spans
 
 
-def _clause_boundary_kinds(text: str) -> "list[str]":
-    """kinds[i] describes the boundary between clause i and clause i+1:
-    "word" for adjunct/coordinator openers (when/if/that/and/...), "punct"
-    for punctuation (comma, dash, paren, slash, colon...). Postmodifying
-    qualifier government may only cross word boundaries -- a dash or comma
-    starts a NEW proposition, so a trailing qualifier there does not attach
-    to the preceding claim."""
-    return [
-        "word" if match.group(0).strip().isalpha() else "punct"
-        for match in _CLAUSE_BOUNDARY_RE.finditer(text)
-    ]
+def _clause_structure(
+    text: str,
+) -> "tuple[tuple[list[int], list[tuple[int, int]]], list[str]]":
+    """Clause spans plus boundary kinds from ONE filtered pass (they must
+    stay aligned). Coordinators split propositions, not phrases: "and"/"or"
+    is NOT a boundary when it joins two -ly adverbs ("clearly and
+    consistently ranks") or introduces a short trailing noun phrase of at
+    most two tokens ("...answers or resolutions."), which keeps a denial's
+    scope over its coordinated objects."""
+    spans: list[tuple[int, int]] = []
+    kinds: list[str] = []
+    start = 0
+    for match in _CLAUSE_BOUNDARY_RE.finditer(text):
+        word = match.group(0).strip().lower()
+        if word in ("and", "or"):
+            before = _LAST_WORD_RE.search(text[: match.start()])
+            after = re.match(r"\s*([\w'-]+)", text[match.end() :])
+            if (
+                before is not None
+                and after is not None
+                and before.group(1).lower().endswith("ly")
+                and after.group(1).lower().endswith("ly")
+            ):
+                continue
+            next_boundary = _CLAUSE_BOUNDARY_RE.search(text, match.end())
+            segment_end = next_boundary.start() if next_boundary else len(text)
+            if len(text[match.end() : segment_end].split()) <= 2:
+                continue
+        spans.append((start, match.start()))
+        kinds.append("word" if word.isalpha() else "punct")
+        start = match.end()
+    spans.append((start, len(text)))
+    return ([s for s, _e in spans], spans), kinds
 
 
 def _span_for(
@@ -434,10 +471,16 @@ def _unqualified_claims(
         qualifier_clauses.add(index)
 
     _starts, clause_spans = clause_bounds
-    # Adjacency skips token-free clauses (boundary runs like "when that"
-    # create empty spans between openers).
+    # Adjacency skips clauses with no substantive tokens: boundary runs
+    # ("when that") leave empty spans, and a bare focus modifier ("Only
+    # when evidence exists, ...") is part of the fronted qualifier, not a
+    # proposition of its own.
     content = [
-        bool(_clause_tokens(text, span)) for span in clause_spans
+        any(
+            token.group(0).lower() not in _FOCUS_MODIFIERS
+            for token in _clause_tokens(text, span)
+        )
+        for span in clause_spans
     ]
 
     def _next_content(index: int) -> "int | None":
@@ -662,11 +705,9 @@ def advisory_warnings(text: str) -> list[str]:
     if not isinstance(text, str):
         raise TypeError("advisory_warnings requires a string; draft body is text")
 
-    sentence_bounds = _boundary_spans(text, _SENTENCE_BOUNDARY_RE)
-    clause_bounds = _boundary_spans(text, _CLAUSE_BOUNDARY_RE)
+    sentence_bounds = _sentence_structure(text)
+    clause_bounds, boundary_kinds = _clause_structure(text)
     negation_cache: dict[int, list[tuple[int, int]]] = {}
-
-    boundary_kinds = _clause_boundary_kinds(text)
     warnings = _unqualified_claims(
         text, _ANSWER_CLAIM_RE, _ANSWER_QUALIFIER_RE, "unqualified-answer-claim",
         sentence_bounds, clause_bounds, boundary_kinds, negation_cache,

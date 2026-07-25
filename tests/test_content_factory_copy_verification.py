@@ -1122,3 +1122,64 @@ def test_locator_grammar_boundary_probe():
                 "advisory_warnings": ["unqualified-answer-claim: sentence 0"],
             }
         )
+
+
+# --- round-15 review fixes ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Dr. Billing drafts answers for customers.",
+        "J. Smith drafts answers for customers.",
+        "Acme Inc. drafts answers for customers.",
+    ],
+)
+def test_abbreviation_periods_stay_in_sentence(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(text)
+    assert any(
+        w == "unqualified-answer-claim: sentence 1" for w in warnings
+    ), (text, warnings)
+
+
+def test_coordinated_adverbs_keep_report_shape():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report clearly and consistently ranks issues by severity."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_coordinated_objects_stay_in_denial_scope():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("We do not draft answers or resolutions.")
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_proposition_coordination_still_splits():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "We draft one answer when evidence exists and another answer regardless."
+    )
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Only when evidence exists, we draft answers.",
+        "Only if the tickets contain proof, we draft resolutions.",
+    ],
+)
+def test_focus_modifier_fronted_qualifier_governs(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(text)
+    assert not any(
+        w.startswith("unqualified-answer-claim:") for w in warnings
+    ), (text, warnings)
