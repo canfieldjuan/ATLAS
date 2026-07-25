@@ -254,6 +254,11 @@ async def test_acknowledgement_send_wiring_reply_to_business_email():
     assert send_kwargs["to"] == ["jane@example.com"]
     assert send_kwargs["reply_to"] == "info@effinghamofficemaids.com"
     assert "estimate request" in send_kwargs["subject"].lower()
+    # Routed through Resend so it originates from the verified brand domain
+    # sender (info@...) rather than the Gmail account.
+    assert send_kwargs["provider"] == "resend"
+    assert send_kwargs["from_email"].startswith("Effingham Office Maids")
+    assert "info@effinghamofficemaids.com" in send_kwargs["from_email"]
 
 
 @pytest.mark.asyncio
@@ -823,3 +828,89 @@ async def test_callback_channels_prepended_within_dedupe_prefix():
     )
     summary = crm.log_interaction.call_args.kwargs["summary"]
     assert summary.startswith("Callback: jane@example.com, 2175550100")
+
+
+# ---------------------------------------------------------------------------
+# 8. Resend provider routing (send lead acknowledgement from info@ via Resend)
+# ---------------------------------------------------------------------------
+
+
+class _FakeResendResponse:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"id": "resend-msg-1"}
+
+
+class _FakeHTTPClient:
+    """Stand-in for httpx.AsyncClient -- the external Resend transport."""
+
+    posted: list = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def post(self, url, json=None, headers=None):
+        type(self).posted.append(json)
+        return _FakeResendResponse()
+
+    async def aclose(self):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_forced_resend_routes_through_real_stack(monkeypatch):
+    """Integration through the REAL Composite -> ResendEmailProvider -> EmailTool
+    path, mocking ONLY the external Gmail and Resend transports (Codex R2). A
+    forced send must select the Resend transport from info@ -- and would fail if
+    ResendEmailProvider stopped stamping force_resend or EmailTool ignored it
+    (production would then route the acknowledgement back through Gmail). A
+    default send must still select Gmail (unchanged for every other caller)."""
+    from atlas_brain.services import google_oauth
+    from atlas_brain.services.email_provider import CompositeEmailProvider
+    from atlas_brain.tools import email as email_mod
+    from atlas_brain.tools import gmail as gmail_mod
+    from atlas_brain.tools.email import EmailTool
+
+    # External Resend transport: give a FRESH EmailTool a fake HTTP client so the
+    # Resend send never touches the network -- hermetic under any run order (the
+    # shared singleton can be left holding a real httpx client + real key by an
+    # earlier test, which is why patching httpx/_client on it is not enough).
+    # ResendEmailProvider.send re-imports email_tool from the module, so swapping
+    # the module attribute makes it use our controlled instance.
+    _FakeHTTPClient.posted = []
+    fresh_tool = EmailTool()
+    monkeypatch.setattr(fresh_tool, "_client", _FakeHTTPClient())
+    monkeypatch.setattr(fresh_tool._config, "enabled", True)
+    monkeypatch.setattr(fresh_tool._config, "api_key", "re_test_key")
+    monkeypatch.setattr(fresh_tool._config, "gmail_send_enabled", True)
+    monkeypatch.setattr(email_mod, "email_tool", fresh_tool)
+
+    # External Gmail transport: credentials present + a transport spy, so a
+    # dropped force_resend would visibly select Gmail here.
+    store = MagicMock()
+    store.get_credentials = MagicMock(return_value="cred")
+    monkeypatch.setattr(google_oauth, "get_google_token_store", lambda: store)
+    gmail_transport = MagicMock()
+    gmail_transport.send = AsyncMock(return_value={"id": "gmail-1", "threadId": "t"})
+    monkeypatch.setattr(gmail_mod, "get_gmail_transport", lambda: gmail_transport)
+
+    comp = CompositeEmailProvider()  # real GmailEmailProvider + ResendEmailProvider
+
+    forced = await comp.send(
+        to=["x@example.com"],
+        subject="s",
+        body="b",
+        from_email="info@effinghamofficemaids.com",
+        provider="resend",
+    )
+    assert forced["transport"] == "resend"
+    gmail_transport.send.assert_not_called()
+    assert len(_FakeHTTPClient.posted) == 1
+    assert _FakeHTTPClient.posted[0]["from"] == "info@effinghamofficemaids.com"
+
+    # Default send: real stack still prefers Gmail; Resend transport not touched.
+    await comp.send(to=["x@example.com"], subject="s", body="b")
+    gmail_transport.send.assert_awaited_once()
+    assert len(_FakeHTTPClient.posted) == 1

@@ -15,10 +15,17 @@
   },
   "atlas_brain/tools/email.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 2
     },
-    "score": 9
+    "score": 13
+  },
+  "atlas_brain/tools/gmail.py": {
+    "counts": {
+      "INTERNAL_MOCK": 1
+    },
+    "score": 4
   },
   "atlas_brain/tools/notify.py": {
     "counts": {

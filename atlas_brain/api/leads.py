@@ -315,18 +315,27 @@ async def _process_lead_intake(
             logger.warning("lead_intake: global ack volume cap hit; skipping email")
         else:
             try:
-                from ..templates.email import BUSINESS_EMAIL, format_request_acknowledgement
+                from ..templates.email import (
+                    BUSINESS_EMAIL,
+                    BUSINESS_NAME,
+                    format_request_acknowledgement,
+                )
 
                 subject, body = format_request_acknowledgement(
                     client_name=payload.name,
                     service=payload.service,
                     frequency=payload.frequency,
                 )
+                # Route this transactional acknowledgement through Resend so it
+                # comes from the verified brand domain (info@...) rather than
+                # the Gmail account. Other Atlas email is unaffected.
                 result = await email_provider.send(
                     to=[email],
                     subject=subject,
                     body=body,
+                    from_email=f"{BUSINESS_NAME} <{BUSINESS_EMAIL}>",
                     reply_to=BUSINESS_EMAIL,
+                    provider="resend",
                 )
                 email_sent = bool(result.get("success", True)) if isinstance(result, dict) else True
                 if email_sent and email_history is not None:
