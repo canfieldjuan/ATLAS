@@ -190,7 +190,7 @@ def _has_affirmative_owner_routing(
             return True
     return False
 _OWNERSHIP_RE = re.compile(
-    r"\b(?:engineering|product|support|cx|policy|ops|operations|billing|success|content|docs|documentation|legal|team|owner)s?\s+(?:\w+\s+)?(?:owns?|is\s+responsible\s+for|are\s+responsible\s+for|should\s+own|must\s+own)\b|\bowned\s+by\b",
+    r"\b(?:engineering|product|support|cx|policy|ops|operations|billing|success|content|docs|documentation|legal|team|owner)s?\s+(?:\w+\s+){0,2}(?:owns?|is\s+responsible\s+for|are\s+responsible\s+for|should\s+own|must\s+own)\b|\bowned\s+by\b",
     re.I,
 )
 _OWNERSHIP_QUALIFIER_RE = re.compile(
@@ -353,9 +353,11 @@ def _unqualified_claims(
     if not claims_by_clause:
         return []
     qualifier_counts: dict[int, int] = {}
+    qualifier_first_pos: dict[int, int] = {}
     for qualifier in qualifier_re.finditer(text):
         index, _span = _span_for(clause_bounds, qualifier.start())
         qualifier_counts[index] = qualifier_counts.get(index, 0) + 1
+        qualifier_first_pos.setdefault(index, qualifier.start())
 
     warnings: list[str] = []
     seen_sentences: set[int] = set()
@@ -369,10 +371,13 @@ def _unqualified_claims(
         available = qualifier_counts.get(index, 0)
         prev = index - 1
         if (
-            prev in qualifier_counts
+            prev in qualifier_first_pos
             and prev not in claims_by_clause
-            and _span_for(sentence_bounds, clause_bounds[0][prev])[0]
-            == _span_for(sentence_bounds, clause_bounds[0][index])[0]
+            # Same-sentence bound, compared at the QUALIFIER's and CLAIM's
+            # actual positions (clause starts sit in boundary whitespace and
+            # can map to the wrong sentence).
+            and _span_for(sentence_bounds, qualifier_first_pos[prev])[0]
+            == _span_for(sentence_bounds, claims[0].start())[0]
         ):
             available += qualifier_counts[prev]
         for claim in claims[available:]:
