@@ -302,8 +302,10 @@ class EmailTool:
         if loaded_attachments:
             logger.info("Adding %d attachment(s) to email", len(loaded_attachments))
 
-        # Try Gmail first when configured
-        if self._config.gmail_send_enabled:
+        # Try Gmail first when configured, unless the caller forced Resend
+        # (e.g. a transactional send that must originate from the verified
+        # domain sender rather than the Gmail account).
+        if self._config.gmail_send_enabled and not params.get("force_resend"):
             gmail_result = await self._try_gmail_send(
                 to_list, subject, body, from_email, params, loaded_attachments,
             )

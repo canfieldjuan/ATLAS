@@ -254,6 +254,11 @@ async def test_acknowledgement_send_wiring_reply_to_business_email():
     assert send_kwargs["to"] == ["jane@example.com"]
     assert send_kwargs["reply_to"] == "info@effinghamofficemaids.com"
     assert "estimate request" in send_kwargs["subject"].lower()
+    # Routed through Resend so it originates from the verified brand domain
+    # sender (info@...) rather than the Gmail account.
+    assert send_kwargs["provider"] == "resend"
+    assert send_kwargs["from_email"].startswith("Effingham Office Maids")
+    assert "info@effinghamofficemaids.com" in send_kwargs["from_email"]
 
 
 @pytest.mark.asyncio
@@ -823,3 +828,112 @@ async def test_callback_channels_prepended_within_dedupe_prefix():
     )
     summary = crm.log_interaction.call_args.kwargs["summary"]
     assert summary.startswith("Callback: jane@example.com, 2175550100")
+
+
+# ---------------------------------------------------------------------------
+# 8. Resend provider routing (send lead acknowledgement from info@ via Resend)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_composite_provider_resend_override_skips_gmail():
+    """provider="resend" bypasses Gmail even when Gmail is available, so the
+    send goes out from the verified domain sender."""
+    from atlas_brain.services.email_provider import CompositeEmailProvider
+
+    comp = CompositeEmailProvider()
+    comp._gmail = MagicMock()
+    comp._gmail.is_available = AsyncMock(return_value=True)
+    comp._gmail.send = AsyncMock(return_value={"transport": "gmail"})
+    comp._resend = MagicMock()
+    comp._resend.send = AsyncMock(return_value={"transport": "resend"})
+
+    result = await comp.send(
+        to=["x@example.com"], subject="s", body="b", provider="resend"
+    )
+    assert result["transport"] == "resend"
+    comp._gmail.send.assert_not_called()
+    comp._resend.send.assert_awaited_once()
+    # provider is a named param and must not leak into the resend call kwargs
+    assert "provider" not in comp._resend.send.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_composite_provider_default_still_prefers_gmail():
+    """Without an override, the default Gmail-first behavior is unchanged for
+    every other Atlas email path."""
+    from atlas_brain.services.email_provider import CompositeEmailProvider
+
+    comp = CompositeEmailProvider()
+    comp._gmail = MagicMock()
+    comp._gmail.is_available = AsyncMock(return_value=True)
+    comp._gmail.send = AsyncMock(return_value={"transport": "gmail"})
+    comp._resend = MagicMock()
+    comp._resend.send = AsyncMock(return_value={"transport": "resend"})
+
+    result = await comp.send(to=["x@example.com"], subject="s", body="b")
+    assert result["transport"] == "gmail"
+    comp._gmail.send.assert_awaited_once()
+    comp._resend.send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resend_provider_forces_resend_in_email_tool(monkeypatch):
+    """The Resend provider must tell email_tool to skip its Gmail-first
+    preference, and forward the explicit from_email."""
+    from atlas_brain.services.email_provider import ResendEmailProvider
+    from atlas_brain.tools import email as email_tool_mod
+
+    captured: dict = {}
+
+    async def _fake_execute(params):
+        captured.update(params)
+        result = MagicMock()
+        result.success = True
+        result.data = {"success": True}
+        return result
+
+    monkeypatch.setattr(email_tool_mod.email_tool, "execute", _fake_execute)
+
+    provider = ResendEmailProvider()
+    await provider.send(
+        to=["x@example.com"],
+        subject="s",
+        body="b",
+        from_email="info@effinghamofficemaids.com",
+        reply_to="info@effinghamofficemaids.com",
+    )
+    assert captured["force_resend"] is True
+    assert captured["from_email"] == "info@effinghamofficemaids.com"
+    assert captured["reply_to"] == "info@effinghamofficemaids.com"
+
+
+@pytest.mark.asyncio
+async def test_email_tool_force_resend_bypasses_gmail(monkeypatch):
+    """The email_tool Gmail-first gate must yield to force_resend; without it,
+    Gmail is still attempted first (default behavior preserved)."""
+    from atlas_brain.tools.email import email_tool
+
+    monkeypatch.setattr(email_tool._config, "gmail_send_enabled", True)
+    monkeypatch.setattr(email_tool._config, "api_key", "re_test_key")
+    gmail_spy = AsyncMock(return_value=None)
+    monkeypatch.setattr(email_tool, "_try_gmail_send", gmail_spy)
+    send_spy = AsyncMock(return_value={"id": "resend-1"})
+    monkeypatch.setattr(email_tool, "_send_email", send_spy)
+
+    base = {
+        "to": "x@example.com",
+        "subject": "s",
+        "body": "b",
+        "from_email": "info@effinghamofficemaids.com",
+    }
+
+    forced = await email_tool.execute({**base, "force_resend": True})
+    assert forced.success is True
+    gmail_spy.assert_not_called()
+    send_spy.assert_awaited_once()
+
+    # Reverse: no force_resend -> Gmail is attempted first as before.
+    gmail_spy.reset_mock()
+    await email_tool.execute(dict(base))
+    gmail_spy.assert_awaited_once()

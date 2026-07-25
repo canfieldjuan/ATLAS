@@ -608,6 +608,9 @@ class ResendEmailProvider:
             "to": ", ".join(to),
             "subject": subject,
             "body": body,
+            # This provider is Resend by definition; never let the underlying
+            # email_tool fall back to its Gmail-first preference.
+            "force_resend": True,
         }
         if from_email:
             params["from_email"] = from_email
@@ -668,8 +671,16 @@ class CompositeEmailProvider:
         to: list[str],
         subject: str,
         body: str,
+        provider: Optional[str] = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        # Explicit provider override: transactional callers (e.g. the lead
+        # acknowledgement) pass provider="resend" so the message goes out from
+        # the verified domain sender via Resend instead of the Gmail account.
+        # provider is a named param, so it is never forwarded in **kwargs to
+        # the underlying providers.
+        if provider == "resend":
+            return await self._resend.send(to=to, subject=subject, body=body, **kwargs)
         if await self._gmail.is_available():
             try:
                 return await self._gmail.send(to=to, subject=subject, body=body, **kwargs)
