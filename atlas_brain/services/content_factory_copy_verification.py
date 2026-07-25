@@ -160,7 +160,7 @@ _OWNER_ROUTING_RE = re.compile(
     r"\b(?:owner\s+lane|"
     r"owned\s+by\s+(?:the\s+|an?\s+)?(?:owning\s+)?(?:" + _OWNER_TARGETS + r")\b|"
     r"assigned\s+to\s+(?:the\s+|an?\s+)?(?:owning\s+)?(?:" + _OWNER_TARGETS + r")\b|"
-    r"route[sd]?\s+(?:to\s+(?:the\s+|an?\s+)?(?:owning\s+)?(?:" + _OWNER_TARGETS + r")\b|each\s+\w+|the\s+owning\b)|"
+    r"route[sd]?\s+(?:each\s+\w+\s+)?to\s+(?:the\s+|an?\s+)?(?:owning\s+)?(?:" + _OWNER_TARGETS + r")\b|"
     r"(?:" + _OWNER_SUBJECTS + r")\s+(?:\w+\s+)?owns?\b|"
     r"who\s+needs\s+to\s+(?:fix|review)|needs\s+to\s+(?:fix|review))",
     re.I,
@@ -252,8 +252,11 @@ def _claim_hits(text: str) -> list[str]:
 # sentence/block: a blank line, or a line beginning with a capital/quote.
 # Markdown soft wraps ("long\nwrapped answer") stay in their sentence
 # (review round 8).
+# A single newline is NEVER a sentence boundary (soft wraps can precede
+# proper nouns too -- capitalization is not the signal); only a blank line
+# is a structural block break (review round 9).
 _SENTENCE_BOUNDARY_RE = re.compile(
-    r"[.!?]+\s+(?=[A-Z\"'(])|[.!?]+\s*\Z|\n\s*\n+|\n+(?=\s*[A-Z\"'(])"
+    r"[.!?]+\s+(?=[A-Z\"'(])|[.!?]+\s*\Z|\n\s*\n+"
 )
 
 
@@ -339,10 +342,12 @@ def _unqualified_claims(
     claims_by_clause: dict[int, list[re.Match]] = {}
     for match in word_re.finditer(text):
         index, (clause_start, _end) = _span_for(clause_bounds, match.start())
-        # Polarity (review round 8): an explicitly negated match is a DENIAL
-        # of the behavior, not an unqualified assertion -- "We do not draft
-        # answers" makes no claim to warn about.
-        if _CLAIM_NEGATION_RE.search(text[clause_start : match.start()]):
+        # Polarity (review rounds 8-9): an explicitly negated match is a
+        # DENIAL, not an unqualified assertion -- but emphatic "not only"/
+        # "not just" is affirmative (same distinction the blocking gate
+        # draws), so "We not only draft answers" still registers.
+        prefix = text[clause_start : match.start()]
+        if _CLAIM_NEGATION_RE.search(prefix) and not _EMPHATIC_RE.search(prefix):
             continue
         claims_by_clause.setdefault(index, []).append(match)
     if not claims_by_clause:
@@ -356,13 +361,20 @@ def _unqualified_claims(
     seen_sentences: set[int] = set()
     for index in sorted(claims_by_clause):
         claims = claims_by_clause[index]
-        # Fronted qualifiers (review round 8): a qualifier whose own clause
-        # holds NO claim ("When evidence exists, ...") carries forward to
-        # excuse claims in the IMMEDIATELY following clause -- one clause
-        # only, so it can never suppress an unrelated later claim.
+        # Fronted qualifiers (review rounds 8-9): a qualifier whose own
+        # clause holds NO claim ("When evidence exists, ...") carries
+        # forward to the IMMEDIATELY following clause, and only WITHIN the
+        # same sentence -- a qualifier from a completed sentence can never
+        # excuse the next sentence's claim.
         available = qualifier_counts.get(index, 0)
-        if index - 1 in qualifier_counts and index - 1 not in claims_by_clause:
-            available += qualifier_counts[index - 1]
+        prev = index - 1
+        if (
+            prev in qualifier_counts
+            and prev not in claims_by_clause
+            and _span_for(sentence_bounds, clause_bounds[0][prev])[0]
+            == _span_for(sentence_bounds, clause_bounds[0][index])[0]
+        ):
+            available += qualifier_counts[prev]
         for claim in claims[available:]:
             sentence_index, _span = _span_for(sentence_bounds, claim.start())
             if sentence_index in seen_sentences:

@@ -84,7 +84,25 @@ Slice phase: vertical slice
   canonical; the tool is the synced copy).
 - Reviewer rules triggered: R1 (#2136 item 2), R2 (both-direction tests),
   R5 (no gating change, old artifacts validate), R10 (advisory logic
-  lives beside the gate it complements), R14.
+  lives beside the gate it complements), R13 (open-text classifier:
+  every review round's finding was closed as a CLASS -- evidence-free
+  locators, bounded warning grammar at the schema, clause-scoped counting
+  association, polarity with emphatic exclusion, owner-target routing --
+  each with both-direction probes; the module contract remains
+  best-effort-backstop with the human approval as the real gate), R14.
+
+### Review round 9 (Codex)
+
+Five findings, all fixed: the fronted-qualifier carry is bounded to the
+SAME SENTENCE (a completed sentence's qualifier can never excuse the next
+sentence's claim); emphatic "not only"/"not just" is affirmative in the
+polarity check (mirroring the blocking gate); a single newline is never a
+sentence boundary -- only a blank line is structural (capitalization is
+not the signal, so wraps before proper nouns stay in place); every
+routing alternative now requires an owner-like target ("routes each issue
+by severity" is not coverage); and the Review Contract explicitly
+declares R13 with the class-closure discipline this classifier is held
+to.
 
 ### Review round 8 (Codex)
 
@@ -249,7 +267,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 203 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 209 passed (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered

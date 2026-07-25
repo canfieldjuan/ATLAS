@@ -698,3 +698,57 @@ def test_positive_claims_still_warn_after_polarity_check():
         w.startswith("unqualified-ownership-claim:")
         for w in advisory_warnings("Billing owns refunds.")
     )
+
+
+# --- round-9 review fixes ---
+
+
+def test_qualifier_from_prior_sentence_does_not_carry():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "Support reviews tickets when evidence exists. We draft answers regardless."
+    )
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_emphatic_not_only_still_registers_claims():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    assert any(
+        w.startswith("unqualified-answer-claim:")
+        for w in advisory_warnings("We not only draft answers for every ticket.")
+    )
+    assert any(
+        w.startswith("unqualified-ownership-claim:")
+        for w in advisory_warnings("Billing not only owns refunds.")
+    )
+
+
+def test_soft_wrap_before_proper_noun_stays_in_sentence():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "This sentence wraps before the\nBilling answer for customers."
+    )
+    assert any(
+        "sentence 1" in w for w in warnings if w.startswith("unqualified-answer-claim")
+    )
+
+
+def test_routing_by_metadata_is_not_owner_coverage():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues and routes each issue by severity."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_routing_each_issue_to_team_still_suppresses():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues and routes each issue to the owning team."
+    )
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
