@@ -1268,7 +1268,10 @@ async def get_customer_context(
         )
 
     try:
-        from ..services.customer_context import get_customer_context_service
+        from ..services.customer_context import (
+            CustomerContextService,
+            get_customer_context_service,
+        )
 
         kwargs = {
             "max_interactions": min(max_interactions, 50),
@@ -1350,8 +1353,34 @@ async def get_customer_context(
             )
             if not _row_visible(latest_contact, business_context_id):
                 return json.dumps({"found": False, "context": None})
+            queried_inbox_address = getattr(
+                ctx,
+                "inbox_email_query_address",
+                None,
+            )
+            latest_inbox_address = CustomerContextService._normalize_ascii_mailbox(
+                latest_contact.get("email")
+            )
+            if ctx.inbox_emails and (
+                not isinstance(queried_inbox_address, str)
+                or latest_inbox_address is None
+                or not CustomerContextService._same_ascii_mailbox(
+                    queried_inbox_address,
+                    latest_inbox_address,
+                )
+            ):
+                logger.warning(
+                    "CustomerContext inbox results discarded after contact "
+                    "email changed during aggregation for %s",
+                    ctx.contact["id"],
+                )
+                ctx.inbox_emails = []
             ctx.contact = latest_contact
 
+        inbox_email_source_omitted = bool(
+            effective
+            and getattr(ctx, "inbox_email_source_omitted", True)
+        )
         result: dict = {
             "found": True,
             "contact": ctx.contact,
@@ -1361,15 +1390,20 @@ async def get_customer_context(
             "call_transcripts": _calls_in_scope(
                 ctx.call_transcripts, business_context_id),
             "sent_emails": ctx.sent_emails,
-            "inbox_emails": [] if effective else ctx.inbox_emails,
+            "inbox_emails": (
+                [] if inbox_email_source_omitted else ctx.inbox_emails
+            ),
             # B2B churn enrichment is keyed by email domain against a global
             # table with no tenant column -- omitted under a scope like the
             # email history (the B2B MCP server is the scoped surface for it).
             "b2b_churn_signals": [] if effective else ctx.b2b_churn_signals,
         }
         if effective:
-            result["emails_omitted_under_scope"] = True
-            result["email_sources_omitted_under_scope"] = ["inbox_emails"]
+            omitted_email_sources = (
+                ["inbox_emails"] if inbox_email_source_omitted else []
+            )
+            result["emails_omitted_under_scope"] = bool(omitted_email_sources)
+            result["email_sources_omitted_under_scope"] = omitted_email_sources
             result["b2b_enrichment_omitted_under_scope"] = True
 
         return json.dumps(result, default=str)
