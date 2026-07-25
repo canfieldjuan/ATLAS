@@ -992,6 +992,14 @@ findings are formally-identical re-litigation of a green contract; here the
 findings are real, and each patch shifts the boundary and exposes the adjacent
 case.
 
+**Counting the trigger under squash-amend.** Builder branches are amended into a
+single commit (§1c), so "3 consecutive pushes" is not observable from the commit
+graph -- a branch showing one commit may have absorbed a dozen review cycles.
+Read the trigger as **3 consecutive review iterations** (a push and the review
+round it draws), not 3 commits. How to count those iterations mechanically is
+deliberately not specified here: it belongs in a `scripts/` checker with the
+fixture tests 3h/3i require, not as untested procedure in prose (see #2198).
+
 When this trips, the next push may NOT add another example-scoped patch (another
 token, regex, vocabulary row, or oracle fixture). It must carry a **Decision-Seam
 Analysis** in the plan / PR body:
@@ -1054,6 +1062,92 @@ collapses a class to one choke point. Gate the method at plan time (primary);
 slice for surface (secondary). The general form -- pick the structural solution
 over the enumerative one, which is also the smaller diff -- is why the
 evidence-gated rewrite shrank both the code and the thread count together.
+
+### 3k.4. Open-execution work: take the closed-surface component
+
+3k.1 and 3k.3 govern an open **input** space -- free text, producer-supplied
+structure. This section governs the other open space: **execution**. Here the
+unbounded axis is not the input but the schedule: thread and process
+interleavings, cancellation points, crash points, partial writes, descriptor and
+path races. A durability or concurrency protocol, a lock/lease, a cache with a
+coherence requirement, a rotation or retry state machine, and a crash-safe file
+replacement all live here. None of them is a guard, sanitizer, or classifier, so
+3k.1 and 3k.3 do not admit them by their own terms and an open-execution slice
+can reach review ungated. That is the gap this section closes.
+
+The failure signature is identical to the open-input one: each round reports a
+real, previously-unenumerated schedule; the only available fix is another
+special case; the PR body accretes those special cases as intent.
+
+1. **Prefer the component whose surface is already closed.** At the fork, take
+   the option whose failure cases someone else has already enumerated -- a
+   database transaction over a hand-rolled file lease, an existing lock service
+   over a bespoke `flock` protocol, an established library over a protocol
+   written for this slice. Durable, concurrent, per-tenant state is a row, not a
+   file. This is 3k.3's "pick the structural solution over the enumerative one"
+   applied to execution.
+2. **State the execution model, whichever option you took.** Selecting a
+   closed-surface component narrows the seam; it does not remove it. A component
+   supplies primitives, not your application invariant: a read-modify-write under
+   an insufficient isolation level still loses updates, and a lock service does
+   not define your crash or cancellation behavior. So every open-execution plan
+   states the model **its own surface** admits, and for a selected component
+   which of that component's guarantees close which part of the seam.
+
+   This section deliberately does **not** carry the list of failure modes to
+   cover. A fixed list is itself an enumeration, and the mode it omits is the one
+   that bites: interleaving, cancellation, crash, duplicate and out-of-order
+   delivery, and lease expiry with stale-holder fencing were each caught as a
+   real omission during this section's own review, one per round, and the next
+   one is on no list yet. Derive the modes from the surface instead. R8 in
+   `docs/REVIEWER_RULES.md` is the floor for anything that retries or redelivers;
+   a surface with leases, clocks, or partitions owes the modes those admit.
+
+   The invariants must hold for **every** interleaving the model admits; anything
+   not covered is stated as an explicit assumption, never just omitted. "Correct
+   under a bounded set of interleavings" is the enumerative answer in formal
+   dress -- the schedule left out of the set is the one that corrupts state. A
+   plan that instead lists schedules to handle -- "drain cancellation here",
+   "fsync there", "reject FIFOs" -- is the same enumeration without even the
+   model, and is rejected at the plan stage before it is written.
+3. **Name what you rejected -- only if you hand-rolled.** A slice that took the
+   closed-surface component has no rejected component to name and must not be
+   asked to invent one. A slice that hand-rolled states which component it
+   rejected and why it does not fit, on top of the model required by 2.
+4. **One execution surface per slice.** Do not land a concurrency/durability
+   subsystem inside a PR whose stated purpose is something else (a privacy
+   boundary, a feature, a migration). Split it: the feature ships against the
+   closed-surface component; the subsystem ships alone if it is genuinely needed.
+
+Reviewer enforcement lives in the open-execution row of the path-trigger table in
+`docs/REVIEWER_RULES.md` (R8 + R2). Like the guard row it is deliberately
+prose-only -- no path glob identifies a durability protocol, since the same
+module paths carry ordinary code -- so `scripts/audit_review_rules_triggered.py`
+surfaces it as an explicit advisory finding per 3g rather than deriving it. A
+plan whose slice is open-execution work and whose Review Contract omits R8 fails
+that surfacing. The reviewer checks 1, 2, and 4 for every such slice, and 3 only
+where the slice hand-rolled.
+
+**Why:** #2184 (scoped mailbox binding) is the case. Its stated purpose was an
+authorization boundary -- bind each CRM business context to one mailbox. It also
+grew `ScopedGmailTokenStore`, a 15-method cross-process durability protocol
+(`flock` lease, double fsync, `fstat`-verified no-follow descriptors,
+FIFO/socket/symlink rejection, monotonic generation ancestry with cycle
+detection, repeated-cancellation draining at three call sites) -- while
+the project already runs Postgres with a repository layer, where this state is a
+row and the ordering it hand-rolls is a transaction. (That alternative needs new
+schema: `atlas_brain/storage/repositories/business_context.py` writes a fixed
+business-profile column list with no token or binding field, and its `get` and
+`upsert` are separate pool operations, not one compare-and-swap. "Add a column
+and a transaction" is still a far smaller and better-tested surface than a
+bespoke cross-process lease -- but it is a build, not a drop-in.) Because none of
+this is a guard,
+3k.1/3k.3 never applied; it reached 12 bot rounds, and its *Intentional* section
+now records schedule patches as design intent ("the FIFO nonblocking regression
+starts its deadline only after the spawned reader has completed
+interpreter/import setup"). Review cost is not predicted by diff size --
+#2117 (+2813) took 3 rounds, #2181 (+2569) took 20 -- it is predicted by whether
+the slice hand-rolled an open surface.
 
 ### 3l. PR fix mode (constrain the fix loop)
 
