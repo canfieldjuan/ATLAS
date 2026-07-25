@@ -102,15 +102,19 @@ runtime. When a receipt is requested, the shared helper resolves the repository
 HEAD, hashes the executed script, creates a UUID-named in-progress file with
 `O_EXCL` and mode 0600, and passes a recorder into the existing run. The
 recorder exposes only count, demotion-total, and UUID methods; it has no generic
-metadata sink.
+metadata sink. Existing receipt directories must be real, owned by the current
+effective user, and not group/world writable.
 
 The CLI wrapper maps normal and exceptional exits to an exit code and finalizes
 in a `try`/`except` boundary. Finalization rewrites the owned in-progress
 artifact with complete data, hard-links it to an exclusive final filename, and
 only then removes the in-progress name. A pre-existing final name makes the
-link fail instead of overwriting. Calendar import and portal sync add UUIDs at
-the existing successful mutation points; portal demotion adds the returned ID,
-and the portal run publishes kept/demotion totals without customer text.
+link fail instead of overwriting. The directory is synced after initial
+in-progress publication and final renaming/linking so both namespace
+transitions are durable. Calendar import and portal sync add UUIDs at the
+existing successful mutation points, including interaction-only Calendar
+writes; portal demotion adds the returned ID, and the portal run publishes
+kept/demotion totals without customer text.
 
 ## Intentional
 
@@ -135,27 +139,35 @@ Parked hardening: none.
 
 - Command: python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py
-  tests/test_reconcile_eom_portal_site.py -q - 143 passed.
+  tests/test_sync_eom_portal_customers.py -q - 119 passed.
 - Command: python -m ruff check scripts/eom_execution_receipt.py
-  scripts/import_eom_customers_live.py scripts/sync_eom_portal_customers.py
-  tests/test_eom_execution_receipts.py - passed.
-- Command: python -m py_compile on all four modified/new Python files; both EOM
-  entrypoints with --help - passed.
+  scripts/import_eom_customers_live.py tests/test_eom_execution_receipts.py -
+  passed.
+- Command: python -m py_compile on the three review-touched Python files -
+  passed.
 - Command: python scripts/maturity_sweep.py scripts --tests-root tests
-  --baseline tests/maturity_sweep/baseline_scripts.json --top 25 - ratchet passed with
-  no baseline change.
+  --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8
+  --sensitive-glob 'scripts/**' - ratchet passed with no baseline change.
 - Command: git diff --check - passed.
 - Pending at push: managed local PR review through scripts/push_pr.sh.
+
+### Review reconciliation
+
+- Calendar interaction-only inserts now add their contact UUID to the receipt.
+- Bare `SystemExit()` now records the Python exit status 0.
+- Existing receipt directories with a foreign owner or group/world write bits
+  are rejected before artifact creation.
+- Initial in-progress publication now syncs its directory entry before the
+  operator mutation can begin.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 29 |
-| `plans/PR-EOM-Execution-Receipts.md` | 161 |
-| `scripts/eom_execution_receipt.py` | 210 |
-| `scripts/import_eom_customers_live.py` | 62 |
+| `plans/PR-EOM-Execution-Receipts.md` | 173 |
+| `scripts/eom_execution_receipt.py` | 226 |
+| `scripts/import_eom_customers_live.py` | 66 |
 | `scripts/sync_eom_portal_customers.py` | 92 |
-| `tests/test_eom_execution_receipts.py` | 294 |
-| **Total** | **848** |
+| `tests/test_eom_execution_receipts.py` | 346 |
+| **Total** | **932** |

@@ -645,7 +645,7 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
         # source_ref inside metadata is a dedupe anchor (migration 256): the
         # same address never accumulates duplicate import interactions across
         # re-runs.
-        await crm.log_interaction(
+        interaction = await crm.log_interaction(
             contact_id=contact_id,
             interaction_type="appointment",
             summary=(
@@ -672,6 +672,8 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
                 )
             },
         )
+        if interaction.get("inserted") is True and receipt is not None:
+            receipt.record_changed_contact_id(contact_id)
     return outcome
 
 

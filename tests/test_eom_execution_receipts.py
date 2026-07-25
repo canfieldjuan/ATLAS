@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import asyncio
 import json
+import os
 import stat
 import sys
 import uuid
@@ -132,6 +133,7 @@ def test_final_collision_never_overwrites_and_preserves_in_progress(tmp_path):
 @pytest.mark.parametrize(
     ("failure", "expected_exit"),
     [
+        (SystemExit(), 0),
         (SystemExit(7), 7),
         (RuntimeError("failed"), 1),
         (KeyboardInterrupt(), 130),
@@ -151,6 +153,30 @@ def test_exception_exit_is_finalized_before_reraising(
     assert f".exit-{expected_exit}.json" in final_path.name
     assert payload["exit_code"] == expected_exit
     assert payload["ended_at_utc"].endswith("Z")
+
+
+def test_preexisting_receipt_directory_must_not_be_writable_by_others(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+
+    with pytest.raises(ValueError, match="must not be writable by other users"):
+        _receipt(shared)
+
+
+def test_initial_in_progress_entry_is_directory_fsynced(tmp_path, monkeypatch):
+    fsynced_types = []
+    real_fsync = os.fsync
+
+    def recording_fsync(descriptor):
+        fsynced_types.append(stat.S_IFMT(os.fstat(descriptor).st_mode))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    receipt = _receipt(tmp_path)
+
+    assert fsynced_types == [stat.S_IFREG, stat.S_IFDIR]
+    receipt.finalize(0)
 
 
 @pytest.mark.parametrize(
@@ -292,3 +318,29 @@ def test_calendar_create_records_changed_contact_id():
     )
     assert outcome == "created"
     assert set(recorder.contact_ids) == {"new-id"}
+
+
+def test_calendar_interaction_only_write_records_changed_contact_id():
+    rec = _record(phone="(217) 555-9999")
+    existing = {
+        "id": CONTACT_A,
+        **calendar_import.record_to_contact_data(rec),
+    }
+
+    class InteractionCRM(StubCRM):
+        async def log_interaction(self, **kwargs):
+            self.interactions.append(kwargs)
+            return {"id": "interaction-1", "inserted": True}
+
+    recorder = _Recorder()
+    outcome = asyncio.run(
+        calendar_import.import_one(
+            rec,
+            InteractionCRM(scoped_hit=existing),
+            StubPool(),
+            receipt=recorder,
+        )
+    )
+
+    assert outcome == "unchanged"
+    assert recorder.contact_ids == [CONTACT_A]

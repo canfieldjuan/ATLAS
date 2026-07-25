@@ -70,6 +70,8 @@ def _exit_code_for_exception(exc: BaseException) -> int:
     if isinstance(exc, KeyboardInterrupt):
         return 130
     if isinstance(exc, SystemExit):
+        if exc.code is None:
+            return 0
         return exc.code if type(exc.code) is int else 1
     return 1
 
@@ -98,6 +100,10 @@ class EomExecutionReceipt:
             directory_stat.st_mode
         ):
             raise ValueError("receipt directory must be a real directory")
+        if directory_stat.st_uid != os.geteuid():
+            raise ValueError("receipt directory must be owned by the current user")
+        if directory_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("receipt directory must not be writable by other users")
 
         script = Path(script_path).resolve()
         run_id = receipt_id or uuid.uuid4()
@@ -128,6 +134,7 @@ class EomExecutionReceipt:
         }
         self._changed_contact_ids: set[str] = set()
         self._write_exclusive(self.in_progress_path, self._payload)
+        self._fsync_directory()
 
     @staticmethod
     def _serialized(payload: Mapping[str, Any]) -> bytes:
@@ -135,11 +142,14 @@ class EomExecutionReceipt:
 
     @classmethod
     def _write_exclusive(cls, path: Path, payload: Mapping[str, Any]) -> None:
-        descriptor = os.open(
-            path,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            0o600,
-        )
+        try:
+            descriptor = os.open(
+                path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+        except OSError as exc:
+            raise RuntimeError(f"could not create receipt artifact: {path.name}") from exc
         try:
             with os.fdopen(descriptor, "wb", closefd=False) as handle:
                 handle.write(cls._serialized(payload))
@@ -147,6 +157,16 @@ class EomExecutionReceipt:
                 os.fsync(handle.fileno())
         finally:
             os.close(descriptor)
+
+    def _fsync_directory(self) -> None:
+        try:
+            directory_fd = os.open(self.receipt_dir, os.O_RDONLY)
+        except OSError as exc:
+            raise RuntimeError("could not open receipt directory for fsync") from exc
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def set_outcome_counts(self, counts: Mapping[str, int]) -> None:
         self._payload["outcome_counts"] = _validated_counts(
@@ -174,20 +194,16 @@ class EomExecutionReceipt:
         self._payload["exit_code"] = exit_code
         self._payload["changed_contact_ids"] = sorted(self._changed_contact_ids)
 
-        temporary = self.in_progress_path.with_name(
+        staged_path = self.in_progress_path.with_name(
             f"{self.in_progress_path.name}.{uuid.uuid4()}.tmp"
         )
-        self._write_exclusive(temporary, self._payload)
-        os.replace(temporary, self.in_progress_path)
+        self._write_exclusive(staged_path, self._payload)
+        os.replace(staged_path, self.in_progress_path)
 
         final_path = self.final_path_for(exit_code)
         os.link(self.in_progress_path, final_path)
         self.in_progress_path.unlink()
-        directory_fd = os.open(self.receipt_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        self._fsync_directory()
         self._finalized = True
         return final_path
 
