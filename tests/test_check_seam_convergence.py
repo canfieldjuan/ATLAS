@@ -1,14 +1,14 @@
 """Tests for the seam-convergence advisory breaker (AGENTS 3k.2).
 
-Exercises the pure core (bot_findings / assign_findings_to_pushes /
-find_trip / evaluate) with synthetic GraphQL node shapes -- both directions per
-AGENTS 3i: a flat or rising same-seam run trips, while a converging run, a
-single noisy push, scattered findings, and a PR that already carries a
-Decision-Seam Analysis all stay clean.
+Exercises the pure core (bot_review_rounds / window_is_flat_or_rising /
+leading_path / find_trip / body_declares_seam_analysis / evaluate) with
+synthetic GraphQL node shapes -- both directions per AGENTS 3i: a flat or rising
+same-seam run trips, while a converging run, a strictly declining run, a single
+noisy round, scattered findings, a window whose last round moved to a different
+file, and a body that only mentions the phrase all stay clean.
 
-The last test replays the real ATLAS #2181 shape (94 findings over 20 pushes,
-dead flat, every round on one file) and pins the trip to push 3 -- the whole
-point of the detector is that it fires 17 pushes before that loop ended.
+The regression block at the end pins the five review findings from PR #2199, and
+the last test replays the real ATLAS #2181 round shape.
 """
 from __future__ import annotations
 
@@ -29,98 +29,55 @@ _SPEC.loader.exec_module(mod)
 # --- helpers -----------------------------------------------------------------
 
 
-def commit(day: int, hour: int = 0) -> dict:
-    return {"commit": {"oid": f"sha{day}{hour}", "committedDate": f"2026-07-{day:02d}T{hour:02d}:00:00Z"}}
-
-
-def thread(day: int, hour: int, path: str, login: str = "chatgpt-codex-connector[bot]") -> dict:
+def review(hour: int, paths: list[str], login: str = "chatgpt-codex-connector[bot]") -> dict:
     return {
-        "path": path,
-        "comments": {
-            "nodes": [
-                {"author": {"login": login}, "createdAt": f"2026-07-{day:02d}T{hour:02d}:30:00Z"}
-            ]
-        },
+        "submittedAt": f"2026-07-01T{hour:02d}:00:00Z",
+        "author": {"login": login},
+        "comments": {"nodes": [{"path": p} for p in paths]},
     }
 
 
 def rounds_from(counts: list[int], path: str = "svc/classifier.py") -> list:
-    """Build push rounds carrying `counts[i]` findings each, all on one path."""
-    commits = [commit(1, i) for i in range(len(counts))]
-    findings: list[tuple[str, str]] = []
-    for i, n in enumerate(counts):
-        for _ in range(n):
-            findings.append((f"2026-07-01T{i:02d}:30:00Z", path))
-    return mod.assign_findings_to_pushes(commits, findings)
+    """One bot review per entry, each raising `counts[i]` findings on one path."""
+    return mod.bot_review_rounds(
+        [review(i, [path] * n) for i, n in enumerate(counts) if n], ("codex",)
+    )
 
 
-# --- bot_findings ------------------------------------------------------------
+# --- bot_review_rounds -------------------------------------------------------
 
 
-def test_bot_findings_keeps_codex_and_copilot() -> None:
-    nodes = [thread(1, 1, "a.py"), thread(1, 2, "b.py", login="copilot-pull-request-reviewer")]
-    assert len(mod.bot_findings(nodes, ("copilot", "codex"))) == 2
+def test_rounds_keep_codex_and_copilot() -> None:
+    nodes = [review(1, ["a.py"]), review(2, ["b.py"], login="copilot-pull-request-reviewer")]
+    assert len(mod.bot_review_rounds(nodes, ("copilot", "codex"))) == 2
 
 
-def test_bot_findings_drops_human_authors() -> None:
-    nodes = [thread(1, 1, "a.py", login="canfieldjuan")]
-    assert mod.bot_findings(nodes, ("copilot", "codex")) == []
+def test_rounds_drop_human_reviews() -> None:
+    assert mod.bot_review_rounds([review(1, ["a.py"], login="canfieldjuan")], ("codex",)) == []
 
 
-def test_bot_findings_honours_bot_override() -> None:
-    nodes = [thread(1, 1, "a.py", login="some-other-bot")]
-    assert mod.bot_findings(nodes, ("some-other",)) != []
+def test_rounds_honour_bot_override() -> None:
+    assert mod.bot_review_rounds([review(1, ["a.py"], login="some-other-bot")], ("some-other",))
 
 
-def test_bot_findings_skips_threads_without_comments() -> None:
-    assert mod.bot_findings([{"path": "a.py", "comments": {"nodes": []}}], ("codex",)) == []
+def test_review_without_inline_comments_is_not_a_round() -> None:
+    """An approval or summary-only submission is not a round of findings."""
+    assert mod.bot_review_rounds([review(1, [])], ("codex",)) == []
 
 
-def test_bot_findings_skips_missing_timestamp() -> None:
-    node = {"path": "a.py", "comments": {"nodes": [{"author": {"login": "codex"}}]}}
-    assert mod.bot_findings([node], ("codex",)) == []
+def test_review_without_timestamp_is_skipped() -> None:
+    node = review(1, ["a.py"])
+    node["submittedAt"] = ""
+    assert mod.bot_review_rounds([node], ("codex",)) == []
 
 
-def test_bot_findings_counts_resolved_threads() -> None:
-    """A closed thread is the instance-patch 3k.2 looks for; it must still count."""
-    node = thread(1, 1, "a.py")
-    node["isResolved"] = True
-    assert len(mod.bot_findings([node], ("codex",))) == 1
+def test_rounds_are_ordered_by_submission_time() -> None:
+    rounds = mod.bot_review_rounds([review(9, ["a.py"]), review(1, ["b.py"])], ("codex",))
+    assert [r.submitted_at for r in rounds] == sorted(r.submitted_at for r in rounds)
+    assert [r.index for r in rounds] == [1, 2]
 
 
-# --- assign_findings_to_pushes -----------------------------------------------
-
-
-def test_findings_bucket_into_the_preceding_push() -> None:
-    commits = [commit(1, 0), commit(1, 5)]
-    findings = [("2026-07-01T01:00:00Z", "a.py"), ("2026-07-01T06:00:00Z", "b.py")]
-    rounds = mod.assign_findings_to_pushes(commits, findings)
-    assert [r.count for r in rounds] == [1, 1]
-
-
-def test_finding_before_every_push_is_dropped() -> None:
-    rounds = mod.assign_findings_to_pushes([commit(2, 0)], [("2026-07-01T00:00:00Z", "a.py")])
-    assert [r.count for r in rounds] == [0]
-
-
-def test_no_commits_yields_no_rounds() -> None:
-    assert mod.assign_findings_to_pushes([], [("2026-07-01T00:00:00Z", "a.py")]) == []
-
-
-def test_commits_are_ordered_by_date_not_input_order() -> None:
-    rounds = mod.assign_findings_to_pushes([commit(1, 9), commit(1, 1)], [])
-    assert [r.pushed_at for r in rounds] == sorted(r.pushed_at for r in rounds)
-
-
-# --- find_trip: the boundary, both sides -------------------------------------
-
-
-def test_converging_run_does_not_trip() -> None:
-    assert mod.find_trip(rounds_from([5, 2, 0])) is None
-
-
-def test_halving_run_does_not_trip() -> None:
-    assert mod.find_trip(rounds_from([8, 4, 3])) is None
+# --- trend rule, both sides --------------------------------------------------
 
 
 def test_flat_run_trips() -> None:
@@ -132,41 +89,95 @@ def test_rising_run_trips() -> None:
     assert mod.find_trip(rounds_from([3, 5, 7])) is not None
 
 
-def test_exactly_at_the_ratio_trips() -> None:
-    """4 is exactly half of 8: not yet trending to zero, so it trips."""
-    assert mod.find_trip(rounds_from([8, 5, 4])) is not None
+def test_noisy_flat_run_trips() -> None:
+    """ATLAS #2181's first window: 5, 9, 4 is noise around a flat trend."""
+    assert mod.find_trip(rounds_from([5, 9, 4])) is not None
 
 
-def test_two_pushes_do_not_trip() -> None:
+def test_strictly_declining_run_does_not_trip() -> None:
+    assert mod.find_trip(rounds_from([8, 6, 4])) is None
+
+
+def test_converging_run_does_not_trip() -> None:
+    assert mod.find_trip(rounds_from([9, 4, 1])) is None
+
+
+def test_two_rounds_do_not_trip() -> None:
     assert mod.find_trip(rounds_from([9, 9])) is None
 
 
-def test_zero_finding_push_breaks_the_streak() -> None:
-    assert mod.find_trip(rounds_from([5, 0, 5])) is None
-
-
-def test_single_noisy_push_does_not_trip() -> None:
-    assert mod.find_trip(rounds_from([40, 0, 0])) is None
+def test_single_noisy_round_does_not_trip() -> None:
+    assert mod.find_trip(rounds_from([40, 3, 1])) is None
 
 
 def test_scattered_findings_do_not_trip() -> None:
-    """Same counts, but spread over many files: review breadth, not one seam."""
-    commits = [commit(1, i) for i in range(3)]
-    findings = []
-    for i in range(3):
-        for j in range(5):
-            findings.append((f"2026-07-01T{i:02d}:30:00Z", f"file{j}.py"))
-    assert mod.find_trip(mod.assign_findings_to_pushes(commits, findings)) is None
+    """Same counts spread over many files: review breadth, not one seam."""
+    nodes = [review(i, [f"file{j}.py" for j in range(5)]) for i in range(3)]
+    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex",))) is None
 
 
-def test_trip_names_the_dominant_seam() -> None:
-    commits = [commit(1, i) for i in range(3)]
-    findings = []
-    for i in range(3):
-        findings += [(f"2026-07-01T{i:02d}:30:00Z", "seam.py")] * 4
-        findings.append((f"2026-07-01T{i:02d}:30:00Z", "other.py"))
-    trip = mod.find_trip(mod.assign_findings_to_pushes(commits, findings))
+def test_trip_names_the_leading_seam() -> None:
+    nodes = [review(i, ["seam.py"] * 4 + ["other.py"]) for i in range(3)]
+    trip = mod.find_trip(mod.bot_review_rounds(nodes, ("codex",)))
     assert trip is not None and trip[1] == "seam.py"
+
+
+# --- leading_path ------------------------------------------------------------
+
+
+def test_leading_path_allows_exact_plurality() -> None:
+    """#2181 round 3 is exactly 50%; requiring a majority would miss it."""
+    assert mod.leading_path(["a.py", "a.py", "b.py", "c.py"]) == "a.py"
+
+
+def test_leading_path_returns_none_on_a_tie() -> None:
+    assert mod.leading_path(["a.py", "b.py"]) is None
+
+
+def test_leading_path_returns_none_when_empty() -> None:
+    assert mod.leading_path([]) is None
+
+
+# --- Decision-Seam Analysis marker -------------------------------------------
+
+_REAL_SECTION = (
+    "## Decision-Seam Analysis\n"
+    "The seam is the single admit verdict for a transcript line. It is an open\n"
+    "category that no pattern list closes, so we evidence-gate it and fix the\n"
+    "decision structurally with a warn-by-default direction.\n"
+)
+
+
+def test_real_seam_section_suppresses_the_trip() -> None:
+    tripped, _seam, messages = mod.evaluate(rounds_from([5, 4, 5]), _REAL_SECTION)
+    assert tripped is False
+    assert any("SATISFIED" in m for m in messages)
+
+
+def test_bare_mention_does_not_suppress() -> None:
+    assert mod.body_declares_seam_analysis("No Decision-Seam Analysis has been completed") is False
+
+
+def test_promise_of_a_future_analysis_does_not_suppress() -> None:
+    assert mod.body_declares_seam_analysis("Deferred: add a Decision-Seam Analysis later") is False
+
+
+def test_empty_seam_section_does_not_suppress() -> None:
+    assert mod.body_declares_seam_analysis("## Decision-Seam Analysis\n\nTBD\n") is False
+
+
+def test_seam_section_without_a_disposition_does_not_suppress() -> None:
+    body = (
+        "## Decision-Seam Analysis\n"
+        "The seam is the admit verdict, and it is over-broad because the category\n"
+        "of inputs it must recognise cannot be enumerated by any list of patterns.\n"
+    )
+    assert mod.body_declares_seam_analysis(body) is False
+
+
+def test_seam_section_ends_at_the_next_heading() -> None:
+    body = "## Decision-Seam Analysis\n\n## Verification\nfixed the seam decision here, at length, with detail\n"
+    assert mod.body_declares_seam_analysis(body) is False
 
 
 # --- evaluate ----------------------------------------------------------------
@@ -179,52 +190,80 @@ def test_evaluate_reports_trip_without_seam_analysis() -> None:
     assert any("3k.2 tripped" in m for m in messages)
 
 
-def test_evaluate_suppressed_by_seam_analysis_in_body() -> None:
-    body = "## Decision-Seam Analysis\nThe seam is the admit verdict."
-    tripped, seam, messages = mod.evaluate(rounds_from([5, 4, 5]), body)
-    assert tripped is False
-    assert seam == "svc/classifier.py"
-    assert any("SATISFIED" in m for m in messages)
-
-
-def test_seam_analysis_marker_is_case_insensitive() -> None:
-    assert mod.body_has_seam_analysis("decision-seam ANALYSIS follows") is True
-    assert mod.body_has_seam_analysis("no such section") is False
-
-
 def test_evaluate_clean_run_reports_ok() -> None:
-    tripped, seam, messages = mod.evaluate(rounds_from([5, 2, 0]), "")
+    tripped, seam, messages = mod.evaluate(rounds_from([9, 4, 1]), "")
     assert tripped is False and seam is None
     assert any(m.startswith("OK:") for m in messages)
 
 
 def test_evaluate_handles_empty_pr() -> None:
-    tripped, seam, messages = mod.evaluate([], "")
+    tripped, seam, _messages = mod.evaluate([], "")
     assert tripped is False and seam is None
 
 
 def test_annotation_points_at_the_seam_and_bans_the_next_patch() -> None:
-    rounds = rounds_from([5, 4, 5])
-    text = mod.annotation("svc/classifier.py", rounds)
+    text = mod.annotation("svc/classifier.py", rounds_from([5, 4, 5]))
     assert text.startswith("::warning file=svc/classifier.py::")
     assert "may NOT add another token, regex, vocabulary row, or oracle fixture" in text
     assert "Decision-Seam Analysis" in text
 
 
+# --- regressions for the five findings on PR #2199 ---------------------------
+
+
+def test_regression_multi_commit_push_still_trips() -> None:
+    """Finding 1: rounds are review submissions, so commits-per-push is moot.
+
+    The commit-keyed model bucketed three two-commit pushes as [0,n,0,n,0,n] and
+    the synthetic zeros suppressed the trip entirely.
+    """
+    nodes = [review(h, ["seam.py"] * 5) for h in (1, 3, 5)]
+    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex",))) is not None
+
+
+def test_regression_negated_marker_does_not_fail_open() -> None:
+    """Finding 2: substring matching suppressed on 'No Decision-Seam Analysis'."""
+    tripped, _seam, _messages = mod.evaluate(
+        rounds_from([5, 4, 5]), "No Decision-Seam Analysis has been completed"
+    )
+    assert tripped is True
+
+
+def test_regression_seam_must_lead_the_last_round() -> None:
+    """Finding 4: 6a, 6a, 5b tripped and named a.py though b.py leads round 3."""
+    nodes = [
+        review(0, ["a.py"] * 6),
+        review(1, ["a.py"] * 6),
+        review(2, ["b.py"] * 5),
+    ]
+    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex",))) is None
+
+
+def test_regression_endpoint_ratio_no_longer_trips_a_decline() -> None:
+    """Finding 5a: [8,6,4] is declining, not flat or rising."""
+    assert mod.window_is_flat_or_rising([8, 6, 4]) is False
+
+
+def test_regression_one_noisy_round_cannot_disguise_a_collapse() -> None:
+    """Finding 5b: [4,100,2] passed the endpoint test; the mean rejects it."""
+    assert mod.window_is_flat_or_rising([4, 100, 2]) is False
+
+
 # --- real-world replay: ATLAS #2181 ------------------------------------------
 
 
-def test_atlas_2181_shape_trips_at_push_three() -> None:
-    """The observed per-push finding counts on ATLAS #2181, one seam throughout.
+def test_atlas_2181_shape_trips_at_round_three() -> None:
+    """The observed per-round finding counts on ATLAS #2181, one seam throughout.
 
-    20 pushes, 94 findings, dead flat. The detector must fire at push 3 -- with
-    17 pushes and 76 findings still to come -- not somewhere near the end.
+    18 bot review rounds, dead flat. The detector must fire at round 3 -- with
+    15 rounds still to come -- not somewhere near the end.
     """
-    observed = [5, 9, 4, 3, 1, 5, 6, 4, 4, 5, 6, 3, 6, 5, 5, 4, 3, 5, 6, 5]
-    rounds = rounds_from(observed, path="atlas_brain/services/content_factory_copy_verification.py")
-    assert sum(r.count for r in rounds) == 94
+    observed = [5, 9, 4, 3, 1, 5, 6, 4, 4, 5, 6, 3, 6, 5, 5, 4, 3, 5]
+    seam = "atlas_brain/services/content_factory_copy_verification.py"
+    rounds = rounds_from(observed, path=seam)
+    assert sum(r.count for r in rounds) == 83
     trip = mod.find_trip(rounds)
     assert trip is not None
-    trip_index, seam, _window = trip
+    trip_index, trip_seam, _window = trip
     assert trip_index == 3
-    assert seam.endswith("content_factory_copy_verification.py")
+    assert trip_seam == seam

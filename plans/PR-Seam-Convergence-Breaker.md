@@ -71,18 +71,19 @@ Max files: 4
 
 Acceptance criteria, checked one by one:
 
-1. The detector trips on ATLAS #2181 at push 3 and names
+1. The detector trips on ATLAS #2181 at round 3 and names
    `atlas_brain/services/content_factory_copy_verification.py`.
 2. It does not trip on #2174, #2175, or #2133 -- the last proving it keys on
    non-convergence rather than diff size.
-3. It trips on #2158 and #2161, the two other known spirals.
+3. It trips on #2158 (round 6) and #2161 (round 3), the two other known spirals.
 4. It exits 0 on a trip. `--strict` exists but is not wired into CI.
 5. A Decision-Seam Analysis in the PR body suppresses the trip.
-6. A push with zero findings breaks the streak; two pushes never trip; findings
-   scattered across files never trip.
+6. A strictly declining run never trips; two rounds never trip; findings scattered
+   across files never trip; a window whose last round moved to another file never
+   trips; a body that only mentions the phrase never suppresses.
 7. The workflow requests only `contents: read` and `pull-requests: read`, uses
-   `pull_request` rather than `pull_request_target`, and therefore needs no entry in
-   `ALLOWED_PULL_REQUEST_TARGET_JOBS`.
+   `pull_request` plus the review events rather than `pull_request_target`, and
+   therefore needs no entry in `ALLOWED_PULL_REQUEST_TARGET_JOBS`.
 8. No existing file is modified.
 
 **Reachability proof:** the real entrypoint is the `seam-convergence` job on
@@ -108,32 +109,40 @@ dependency).
 
 ## Mechanism
 
-`bot_findings` filters review threads to bot-authored ones and returns
-`(created_at, path)` pairs. Unlike the reconciliation check it deliberately counts
-resolved and outdated threads too: a thread the builder already closed is exactly
-the instance-patch 3k.2 looks for, so excluding it would hide the pattern.
+`bot_review_rounds` turns each bot review submission into one round carrying the
+paths it raised findings on. **A review, not a commit, is the unit**: a review is
+the bot's response to a push, whereas one push can contain several commits, which
+would split a single round into synthetic empty ones and break a real streak.
+Reviews with no inline comments are skipped rather than recorded as zero, since an
+approval is not a round of findings.
 
-`assign_findings_to_pushes` buckets each finding into the latest commit at or before
-its creation time. Pushes are the unit because 3k.2 counts "consecutive pushes";
-wall-clock gaps are not deterministic. A finding predating every commit belongs to no
-push and is dropped.
+`window_is_flat_or_rising` implements 3k.2's "flat or rising ... not trending to
+zero" as two conditions: a strictly decreasing run never trips, however slowly it
+declines; and the final round must still carry at least half the window mean, so a
+single noisy round cannot disguise a collapse.
 
-`find_trip` slides a 3-push window. It trips when every push in the window has at
-least one finding, the last push still carries at least half the first push's count
-(not trending to zero), and one file accounts for more than half the window's
-findings. A zero-finding push breaks the streak, because the bot finding nothing is
-convergence.
+`find_trip` slides a 3-round window and additionally requires the seam to **lead
+every round** in the window and hold a majority across it. Leading is plurality,
+not majority, because on a real spiral the seam leads each round without
+necessarily exceeding half of it. A window whose latest round has moved to a
+different file is not the same decision re-litigated and does not trip.
 
-`evaluate` returns the trip plus a per-push table, and suppresses the trip when the
-PR body already carries a Decision-Seam Analysis -- the builder has then done what
-3k.2 asks. The body is read from `ATLAS_CURRENT_PR_BODY_FILE` when CI provides it,
-matching how `scripts/check_guard_class_closure.py` reads its waiver marker.
+`body_declares_seam_analysis` fails closed. It requires a real
+`Decision-Seam Analysis` heading, a section long enough to hold an argument, a
+named seam or decision, and one of 3k.2's three dispositions, so a body that only
+mentions the phrase (or promises one later) does not suppress the warning.
 
-On a trip the detector prints a `::warning file=<seam>::` annotation naming the seam
-and restating 3k.2's required next action, then returns 0.
+On a trip the detector prints a `::warning file=<seam>::` annotation naming the
+seam and restating 3k.2's required next action, then returns 0.
 
 ## Intentional
 
+- **Rounds are bot review submissions, not commits.** A push can carry several
+  commits, and commit dates can differ from push times; keying on reviews removes
+  both problems at the root rather than reconstructing push boundaries.
+- **Review events are enrolled alongside pushes.** A push-only trigger would stay
+  silent until a fourth push had already made the patch the breaker exists to
+  prevent, and would never fire if the builder stopped after the third review.
 - **Advisory, exits 0.** Not a round cap. The operator rejected capping (2026-07-25):
   it counts the symptom, and the preserved 2026-07-10 nuance is that on
   classifier/PII/gate surfaces the findings are real, so capping ships defects. This
@@ -171,29 +180,33 @@ and restating 3k.2's required next action, then returns 0.
 Commands run locally, with results:
 
 1. Detector unit tests -- `python -m pytest tests/test_check_seam_convergence.py -q
-   --noconftest` -- **27 passed**.
-2. Live replay, must trip -- the detector run against PR 2181 in this repository
-   reported: tripped at push 3, findings per push 5, 9, 4, seam
-   `atlas_brain/services/content_factory_copy_verification.py`, exit 0, with the full
-   20-push table printed.
+   --noconftest` -- **34 passed**, including a regression test for each of the five
+   review findings on this PR.
+2. Live replay, must trip -- the detector run against PR 2181 reported: tripped at
+   round 3, findings per round 5, 9, 4, seam
+   `atlas_brain/services/content_factory_copy_verification.py`, exit 0.
 3. Live replay, must stay silent -- PRs 2174, 2175 and 2133 each reported "OK: no
-   window of 3 consecutive pushes with same-seam findings that are not trending to
-   zero", exit 0. 2133 is the largest diff sampled, proving the detector does not key
-   on size.
-4. Second-side probe on the other known spirals -- PR 2158 tripped at push 3 on
-   the live EOM customer-import script (4, 2, 4); PR 2161 tripped at push 3 on
-   the EOM portal customer-sync script (4, 11, 3).
-5. ASCII gate -- the repository ASCII check for Python files passed.
+   window of 3 consecutive rounds...", exit 0. 2133 is the largest diff sampled
+   (+5,641), proving the detector does not key on size.
+4. Second-side probe on the other known spirals -- PR 2158 tripped at round 6 on the
+   live EOM customer-import script (4, 5, 3); PR 2161 tripped at round 3 on the EOM
+   portal customer-sync script (4, 11, 3).
+5. Workflow security posture audit -- passed, with no warning attributed to the new
+   workflow.
+6. Plan doc audit, plan/code consistency, and reviewer rules triggered -- all pass.
+7. Repository ASCII check for Python files -- passed.
+8. Maturity sweep on the scripts lane -- the detector scores 6, matching the 3k.1
+   sibling and below the lane's min-score of 8, so no baseline entry is added.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/seam_convergence.yml` | 72 |
-| `plans/PR-Seam-Convergence-Breaker.md` | 202 |
-| `scripts/check_seam_convergence.py` | 373 |
-| `tests/test_check_seam_convergence.py` | 230 |
-| **Total** | **877** |
+| `.github/workflows/seam_convergence.yml` | 88 |
+| `plans/PR-Seam-Convergence-Breaker.md` | 215 |
+| `scripts/check_seam_convergence.py` | 416 |
+| `tests/test_check_seam_convergence.py` | 270 |
+| **Total** | **989** |
 
 Over the 400 LOC soft cap and carrying a diff-budget override in the PR body: the
 detector is ~350 lines and the remainder is the both-direction test suite the R13

@@ -12,13 +12,24 @@ name: Seam Convergence Breaker
 # This is NOT a round cap: it never fails and never stops a PR. Capping counts
 # the symptom, and on surfaces where the findings are real it would ship defects.
 #
-# Deliberately runs on `pull_request`, not `pull_request_target`: the unit 3k.2
-# measures IS the push, no PR-ref content is executed with elevated rights, the
-# token stays read-only, and no entry is needed in
-# ALLOWED_PULL_REQUEST_TARGET_JOBS. A PR can edit the detector in its own
-# checkout -- acceptable ONLY while advisory (gaming it silences a warning,
-# gates nothing); trusted-base execution is a named precondition for any
-# --strict/required promotion (see the plan's Deferred).
+# Deliberately runs on `pull_request`, not `pull_request_target`: no PR-ref
+# content is executed with elevated rights, the token stays read-only, and no
+# entry is needed in ALLOWED_PULL_REQUEST_TARGET_JOBS. A PR can edit the
+# detector in its own checkout -- acceptable ONLY while advisory (gaming it
+# silences a warning, gates nothing); trusted-base execution is a named
+# precondition for any --strict/required promotion (see the plan's Deferred).
+#
+# Review events are enrolled alongside the push events for the ordering reason
+# ai_reconciliation_live.yml documents at its own `on:` block: the third round of
+# bot findings lands AFTER that push's run has finished, so a push-only trigger
+# would stay silent until a fourth push had already submitted the example-scoped
+# patch the breaker exists to prevent -- and would never fire at all if the
+# builder stopped after the third review.
+#
+# On the review events GitHub resolves both this workflow and the default
+# checkout from the default branch, so those runs execute main's detector
+# against the PR -- trusted-base by construction, and inert until this file is
+# itself on main.
 
 permissions:
   contents: read
@@ -27,6 +38,10 @@ permissions:
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
   push:
     branches:
       - main
@@ -60,7 +75,7 @@ jobs:
       # crafted body cannot inject shell; the file feeds the Decision-Seam
       # Analysis marker check.
       - name: Seam-convergence breaker (advisory)
-        if: github.event_name == 'pull_request'
+        if: github.event_name != 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_BODY: ${{ github.event.pull_request.body }}
