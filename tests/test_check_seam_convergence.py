@@ -16,6 +16,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 _SPEC = importlib.util.spec_from_file_location(
     "check_seam_convergence",
     Path(__file__).resolve().parent.parent / "scripts" / "check_seam_convergence.py",
@@ -206,6 +208,46 @@ def test_annotation_points_at_the_seam_and_bans_the_next_patch() -> None:
     assert text.startswith("::warning file=svc/classifier.py::")
     assert "may NOT add another token, regex, vocabulary row, or oracle fixture" in text
     assert "Decision-Seam Analysis" in text
+
+
+# --- failure paths: the raises are contracts, so they are asserted -----------
+
+
+def test_gh_raises_on_a_failing_command() -> None:
+    """A non-zero gh exit must surface, never be read as an empty result."""
+    with pytest.raises(RuntimeError):
+        mod._gh(["anything"], "false")
+
+
+def test_fetch_reviews_raises_on_non_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A GitHub response that is not JSON is a retryable failure, not silence."""
+    monkeypatch.setattr(mod, "_gh", lambda args, gh: "<html>rate limited</html>")
+    with pytest.raises(RuntimeError, match="non-JSON"):
+        mod.fetch_reviews(1, "owner", "name", "gh")
+
+
+def test_main_returns_two_on_a_malformed_repo() -> None:
+    """Usage error exits 2 -- never 0, which would read as a clean run."""
+    assert mod.main(["--pr", "1", "--repo", "not-a-slug"]) == 2
+
+
+def test_main_returns_two_when_github_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args: object, **_kwargs: object) -> list[dict]:
+        raise RuntimeError("API down")
+
+    monkeypatch.setattr(mod, "fetch_reviews", boom)
+    assert mod.main(["--pr", "1", "--repo", "owner/name"]) == 2
+
+
+def test_unreadable_pr_body_falls_toward_tripping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A body that cannot be read must not silently count as satisfied."""
+    monkeypatch.delenv("ATLAS_CURRENT_PR_BODY_FILE", raising=False)
+
+    def boom(args: object, gh: object) -> str:
+        raise RuntimeError("no auth")
+
+    monkeypatch.setattr(mod, "_gh", boom)
+    assert mod._pr_body(1, "owner/name", "gh") == ""
 
 
 # --- regressions for the five findings on PR #2199 ---------------------------

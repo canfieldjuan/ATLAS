@@ -180,8 +180,9 @@ seam and restating 3k.2's required next action, then returns 0.
 Commands run locally, with results:
 
 1. Detector unit tests -- `python -m pytest tests/test_check_seam_convergence.py -q
-   --noconftest` -- **34 passed**, including a regression test for each of the five
-   review findings on this PR.
+   --noconftest` -- **39 passed**, including a regression test for each of the five
+   review findings on this PR and explicit `pytest.raises` coverage of every error
+   path the module contracts to raise on.
 2. Live replay, must trip -- the detector run against PR 2181 reported: tripped at
    round 3, findings per round 5, 9, 4, seam
    `atlas_brain/services/content_factory_copy_verification.py`, exit 0.
@@ -203,10 +204,10 @@ Commands run locally, with results:
 | File | LOC |
 |---|---:|
 | `.github/workflows/seam_convergence.yml` | 88 |
-| `plans/PR-Seam-Convergence-Breaker.md` | 215 |
+| `plans/PR-Seam-Convergence-Breaker.md` | 216 |
 | `scripts/check_seam_convergence.py` | 416 |
-| `tests/test_check_seam_convergence.py` | 270 |
-| **Total** | **989** |
+| `tests/test_check_seam_convergence.py` | 312 |
+| **Total** | **1032** |
 
 Over the 400 LOC soft cap and carrying a diff-budget override in the PR body: the
 detector is ~350 lines and the remainder is the both-direction test suite the R13
