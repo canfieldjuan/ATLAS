@@ -1048,3 +1048,77 @@ def test_object_anaphora_in_unrelated_ownership_does_not_bind():
         "The report ranks issues. Billing owns invoices for each customer."
     )
     assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+# --- round-14 review fixes ---
+
+
+def test_gate_masks_all_unicode_digit_categories():
+    """Category-complete: circled/superscript digits mask too (the predicate
+    is str.isdigit/isnumeric itself, not a regex class)."""
+    result = verify_copy("Guaranteed ⓪②⓪__⑦⑨④⑥ savings.")
+    joined = " ".join(result.hits)
+    assert not any(ch.isdigit() or ch.isnumeric() for ch in joined if ch != "#"), joined
+
+
+def test_same_sentence_unrelated_ownership_does_not_cover():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues, while Billing probably owns invoices."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_coordinated_verb_phrase_still_covers():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues and routes each issue to the owning team."
+    )
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_subject_determiner_denial_recognized():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("No support agent drafts answers.")
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_mid_clause_determiner_stays_narrow():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("With no delay we draft answers.")
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_negation_stops_at_causal_boundary():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "We do not draft answers because Billing owns refunds."
+    )
+    assert any(w.startswith("unqualified-ownership-claim:") for w in warnings)
+
+
+def test_locator_grammar_boundary_probe():
+    from atlas_brain.schemas.content_factory import EditorialAuditV2
+    from pydantic import ValidationError
+
+    audit = EditorialAuditV2.model_validate(
+        {
+            "schema": "editorial_audit.v2",
+            "project_id": "p",
+            "advisory_warnings": ["unqualified-answer-claim: sentence 1000000"],
+        }
+    )
+    assert audit.advisory_warnings
+    with pytest.raises(ValidationError):
+        EditorialAuditV2.model_validate(
+            {
+                "schema": "editorial_audit.v2",
+                "project_id": "p",
+                "advisory_warnings": ["unqualified-answer-claim: sentence 0"],
+            }
+        )

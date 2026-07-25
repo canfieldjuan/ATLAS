@@ -91,6 +91,22 @@ Slice phase: vertical slice
   each with both-direction probes; the module contract remains
   best-effort-backstop with the human approval as the real gate), R14.
 
+### Review round 14 (Codex)
+
+Five findings, all fixed: the digit choke point is CATEGORY-COMPLETE --
+the mask is the str.isdigit/isnumeric predicate itself, so circled/
+superscript and every other numeral class a word-character can admit is
+masked (no regex class to fall behind); same-sentence routing must also
+be ABOUT the report (same clause, a verb-initial coordinated verb
+phrase, or an anaphoric/report-item subject -- "while Billing probably
+owns invoices" no longer covers); a clause-initial determiner negation
+denies its whole proposition ("No support agent drafts answers") while
+mid-clause determiners stay narrow; causal openers (because/since/so/
+therefore/hence/thus) end negation scope, so "...because Billing owns
+refunds" keeps its affirmative claim; and the locator grammar bound was
+raised to ten digits, beyond any physically possible draft, with a
+boundary probe at the old limit.
+
 ### Review round 13 (Codex)
 
 Five findings, all fixed in the engine: the digit theorem masks Unicode
@@ -343,7 +359,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 238 passed (273 with adjacent suites) (12 new advisory tests, 2 new runner
+- Content-factory suites: 245 passed (280 with adjacent suites) (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered

@@ -119,7 +119,14 @@ _EMPHATIC_RE = re.compile(r"\bnot\s+(?:only|just)\b", re.I)
 # THEOREM PASS (rounds 10-12): after the readable substitutions, every
 # remaining digit character in persisted evidence is masked. There is no
 # separator grammar left to enumerate -- a digit cannot survive.
-_ANY_DIGIT_RE = re.compile(r"\d")  # Unicode decimal digits, every script
+def _mask_digit_chars(evidence: str) -> str:
+    """Category-complete digit choke point: any character Python classifies
+    as a digit OR numeric (decimal, circled, superscript, vulgar fractions,
+    every script) masks. The predicate IS the claim -- no regex class to
+    fall behind the word-character class the claim patterns admit."""
+    return "".join(
+        "#" if (ch.isdigit() or ch.isnumeric()) else ch for ch in evidence
+    )
 
 
 def _is_negated(text: str, start: int) -> bool:
@@ -139,7 +146,7 @@ def _redact_pii(evidence: str) -> str:
     evidence = _EMAIL_RE.sub("<redacted-email>", evidence)
     evidence = _INTL_PHONE_RE.sub("<redacted-phone>", evidence)
     evidence = _PHONE_RE.sub("<redacted-phone>", evidence)
-    return _ANY_DIGIT_RE.sub("#", evidence)
+    return _mask_digit_chars(evidence)
 
 
 def _claim_hits(text: str) -> list[str]:
@@ -191,7 +198,7 @@ _SENTENCE_BOUNDARY_RE = re.compile(
 # slashes, parens), coordinators, and relativizer/adjunct openers.
 _CLAUSE_BOUNDARY_RE = re.compile(
     r"[.!?;,:\n()/—–]|\s-\s|"
-    r"\b(?:and|or|but|however|while|whereas|although|yet|that|which|who|when|if|unless)\b",
+    r"\b(?:and|or|but|however|while|whereas|although|yet|that|which|who|when|if|unless|because|since|so|therefore|hence|thus)\b",
     re.I,
 )
 
@@ -269,6 +276,9 @@ _COPULAR_ABSENCE_RE = re.compile(
 _ANAPHORIC_SUBJECTS = frozenset(
     {"each", "every", "all", "it", "they", "these", "those", "everything", "both"}
 )
+_VERB_INITIAL_ROUTING = frozenset(
+    {"routes", "routed", "route", "assigned", "owned", "needs", "who"}
+)
 _REPORT_ITEM_NOUNS = frozenset(
     {"issue", "issues", "ticket", "tickets", "fix", "fixes", "item", "items",
      "question", "questions", "finding", "findings"}
@@ -329,8 +339,13 @@ def _negation_scopes(text: str, span: "tuple[int, int]") -> "list[tuple[int, int
     for position, token in enumerate(tokens):
         lower = token.group(0).lower()
         if lower in _DET_NEGATION:
-            end_token = tokens[min(position + 2, len(tokens) - 1)]
-            scopes.append((token.start(), end_token.end()))
+            if position == 0:
+                # Subject-position determiner ("No support agent drafts
+                # answers") denies the entire proposition.
+                scopes.append((token.start(), span[1]))
+            else:
+                end_token = tokens[min(position + 2, len(tokens) - 1)]
+                scopes.append((token.start(), end_token.end()))
         elif lower in _VERBAL_NEGATION or lower.endswith("n't"):
             if (
                 lower == "not"
@@ -565,6 +580,13 @@ def _routing_covers_report(
     back to the report's items. An unrelated ownership statement about a
     different object elsewhere in the draft does not count (round 12)."""
     subject_cache: dict[int, bool] = {}
+    shape_clauses: set[int] = set()
+    for product in _PRODUCT_TERM_RE.finditer(text):
+        shape_clauses.add(_span_for(clause_bounds, product.start())[0])
+    for noun_match in re.finditer(
+        r"\b(?:report|reports|audit|audits|snapshot|snapshots)\b", text, re.I
+    ):
+        shape_clauses.add(_span_for(clause_bounds, noun_match.start())[0])
     for match in _OWNER_ROUTING_RE.finditer(text):
         if not _routing_relation_affirmative(
             text, match, clause_bounds, negation_cache
@@ -572,7 +594,39 @@ def _routing_covers_report(
             continue
         sentence = _sentence_of(sentence_bounds, match.start())
         if sentence in report_sentences:
-            return True
+            index, span = _span_for(clause_bounds, match.start())
+            # Same-sentence evidence must still be ABOUT the report: same
+            # clause as the report noun, a verb-first clause (coordinated
+            # verb phrase sharing the report's subject: "... and routes
+            # each issue to ..."), or an anaphoric/report-item subject.
+            if index in shape_clauses:
+                return True
+            before = _clause_tokens(text, (span[0], match.start()))
+            match_first = match.group(0).split()[0].lower() if match.group(0).split() else ""
+            if not before and match_first in _VERB_INITIAL_ROUTING:
+                # Coordinated verb phrase sharing the report's subject:
+                # "... and routes each issue to the owning team." A clause
+                # whose match STARTS with its own subject ("Billing probably
+                # owns ...") is not coordination and must bind on its
+                # subject instead.
+                return True
+            subject_tokens = before or _clause_tokens(
+                text, (match.start(), span[1])
+            )
+            first = (
+                subject_tokens[0].group(0).lower() if subject_tokens else ""
+            )
+            second = (
+                subject_tokens[1].group(0).lower()
+                if len(subject_tokens) > 1
+                else ""
+            )
+            if first in _ANAPHORIC_SUBJECTS or (
+                first in ("the", "these", "those")
+                and second in _REPORT_ITEM_NOUNS
+            ):
+                return True
+            continue
         if any(sentence > report for report in report_sentences):
             index, span = _span_for(clause_bounds, match.start())
             if index not in subject_cache:

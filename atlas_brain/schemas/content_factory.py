@@ -85,9 +85,13 @@ ADVISORY_OWNER_ROUTING_WARNING = (
 _ADVISORY_STATIC_WARNINGS = frozenset(
     {ADVISORY_CTA_REMINDER, ADVISORY_OWNER_ROUTING_WARNING}
 )
+# Locator bound: up to 10 digits covers any physically possible draft (a
+# sentence needs >= 2 characters, so 10^9 sentences implies a multi-GB
+# body no worker response can carry) -- the producer can never emit a
+# locator this grammar rejects.
 _ADVISORY_GRAMMAR_RE = re.compile(
     r"^(?:unqualified-answer-claim|unqualified-ownership-claim): "
-    r"sentence [1-9]\d{0,5}$"
+    r"sentence [1-9]\d{0,9}$"
 )
 
 
