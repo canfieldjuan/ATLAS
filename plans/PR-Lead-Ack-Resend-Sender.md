@@ -68,9 +68,11 @@ Slice phase: vertical slice
    Same file family, plain-text reflow so it renders human-formatted; all
    existing copy guardrails preserved.
 5. Proof: `tests/test_leads_intake.py` extended -- the acknowledgement send now
-   asserts `provider="resend"` + `from_email` (info@); plus provider-routing
-   unit tests (Composite override skips Gmail; default still prefers Gmail;
-   ResendEmailProvider forces `force_resend`; email_tool honors it).
+   asserts `provider="resend"` + `from_email` (info@); plus two composite-routing
+   unit tests (Composite override skips Gmail even when available; default still
+   prefers Gmail). The `email_tool` force_resend gate is verified by inspection,
+   not a direct unit test, to avoid mocking the unit under test (real-adapter
+   rule / maturity-sweep INTERNAL_MOCK ratchet).
 
 ### Review Contract
 
@@ -82,14 +84,18 @@ Slice phase: vertical slice
      `provider` never leaks into the underlying provider kwargs.
   3. `CompositeEmailProvider.send` with no override still prefers Gmail when
      available (default path for all other callers unchanged; test-asserted).
-  4. `ResendEmailProvider.send` injects `force_resend=True` and forwards
-     `from_email`/`reply_to` into email_tool params (test-asserted).
-  5. `email_tool.execute` skips `_try_gmail_send` when `force_resend` is set and
-     still attempts Gmail first without it (both test-asserted).
-  6. Existing acknowledgement guardrails hold: no `$`, no "quote"/"same-day",
+  4. `ResendEmailProvider.send` stamps `force_resend=True` and `email_tool.execute`
+     yields the Gmail-first gate to it -- verified by **inspection** and the
+     end-to-end composite route, NOT by a direct `email_tool` unit test: mocking
+     `email_tool`'s own HTTP client / transport (the only way to unit-test its
+     send) is mocking the unit under test, which trips the maturity-sweep
+     INTERNAL_MOCK ratchet and violates the repo's real-adapter rule. The two
+     force_resend one-liners are covered by the composite skip-Gmail test above
+     plus code review.
+  5. Existing acknowledgement guardrails hold: no `$`, no "quote"/"same-day",
      `(217) 207-3097` present, `within 24 hours` present, request-line echo,
      empty-name fallback (unchanged tests stay green).
-  7. Copy: the 5-step "what happens next" renders as clean per-item paragraphs
+  6. Copy: the 5-step "what happens next" renders as clean per-item paragraphs
      (plain-text reflow), ASCII-only.
 - Reachability proof: entrypoint is the existing live `POST /api/v1/leads/intake`
   (atlas_brain app, Tailscale Funnel). Observable effect: the acknowledgement
@@ -98,12 +104,13 @@ Slice phase: vertical slice
 - Affected surfaces: `email_provider.py` send routing; `email_tool` Gmail gate;
   `leads.py` acknowledgement send; the acknowledgement copy template.
 - Risk areas: the shared send path is touched, but the default branch is
-  unchanged (guarded by tests 2/3/5); only `leads.py` opts into Resend. Requires
+  unchanged (guarded by test 3); only `leads.py` opts into Resend. Requires
   `ATLAS_EMAIL_API_KEY` set in the deploy env (operator: Resend account + domain
   verified + key ready, confirmed 2026-07-24) -- without it the send fails
   best-effort and the CRM capture still lands (existing behavior).
 - Reviewer rules triggered: R1 (matches operator request), R2 (test evidence:
-  extended + 4 new unit tests), R5 (backward compatibility: default provider
+  extended wiring test + 2 new composite-routing tests; email_tool gate by
+  inspection per real-adapter rule), R5 (backward compatibility: default provider
   selection unchanged for all non-leads callers), R6 (error handling: send stays
   best-effort; email failure never fails the lead), R11 (config:
   `ATLAS_EMAIL_API_KEY` deploy env), R14 (verify against codebase).
@@ -176,6 +183,6 @@ Parked hardening: none.
 | `atlas_brain/services/email_provider.py` | 12 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 20 |
 | `atlas_brain/tools/email.py` | 5 |
-| `plans/PR-Lead-Ack-Resend-Sender.md` | 175 |
-| `tests/test_leads_intake.py` | 115 |
-| **Total** | **339** |
+| `plans/PR-Lead-Ack-Resend-Sender.md` | 185 |
+| `tests/test_leads_intake.py` | 55 |
+| **Total** | **289** |
