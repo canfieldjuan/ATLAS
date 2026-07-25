@@ -91,6 +91,29 @@ Slice phase: vertical slice
   each with both-direction probes; the module contract remains
   best-effort-backstop with the human approval as the real gate), R14.
 
+### Review round 10 (Codex) -- fixes + the declared precision boundary
+
+Four findings fixed: the gate's digit-run mask allows multi-character
+separators ("020--7946--0958" in a claim hit is masked); claim polarity
+is evaluated across the subject-to-relation span (subject-first denials
+like "Billing never owns refunds" register as denials); routing negation
+is bound to the relation window, so unrelated absence language after the
+target ("...assigned to billing with no due date") does not invalidate
+coverage; and `EditorialAuditV2.schema_version` is `Literal[2]`.
+
+Two findings WAIVED as the declared precision boundary of this layer
+(recorded in the PR body's reconciliation): subordinate-modifier
+qualifier binding ("Billing owns refunds that may be disputed" -- the
+trailing "may" excusing the ownership claim) and Markdown-decorated
+sentence starts ("Intro. **We draft answers.**" locator off-by-one)
+require grammatical parsing, which a deterministic regex backstop
+deliberately does not attempt. The module contract has stated since
+Phase 4.1 that this layer is a best-effort backstop and the human
+approval before publish is the real gate; residual precision cases are
+operator-policy catalogue growth (#2136 item 4), not silent gaps -- the
+boundary is documented here, in the module docstring, and in the waiver
+ledger.
+
 ### Review round 9 (Codex)
 
 Five findings, all fixed: the fronted-qualifier carry is bounded to the
@@ -267,7 +290,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 209 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 215 passed (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered

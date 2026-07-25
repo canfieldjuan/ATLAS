@@ -752,3 +752,58 @@ def test_routing_each_issue_to_team_still_suppresses():
         "The report ranks issues and routes each issue to the owning team."
     )
     assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+# --- round-10 review fixes ---
+
+
+def test_gate_hits_mask_multi_separator_digit_runs():
+    result = verify_copy("Guaranteed 020--7946--0958 savings for all.")
+    assert result.verdict == "fail"
+    assert "7946" not in " ".join(result.hits)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Billing never owns refunds.",
+        "Billing does not own refunds.",
+        "Billing cannot own refunds.",
+    ],
+)
+def test_subject_first_denials_are_not_ownership_claims(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    assert not any(
+        w.startswith("unqualified-ownership-claim:")
+        for w in advisory_warnings(text)
+    ), text
+
+
+def test_unrelated_absence_after_target_keeps_routing_affirmative():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Each is assigned to billing with no due date."
+    )
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_negated_routing_target_still_warns():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Nothing is ever assigned to the billing team."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_v2_schema_version_is_pinned():
+    from pydantic import ValidationError
+
+    from atlas_brain.schemas.content_factory import EditorialAuditV2
+
+    with pytest.raises(ValidationError):
+        EditorialAuditV2.model_validate(
+            {"schema": "editorial_audit.v2", "project_id": "p", "schema_version": 1}
+        )

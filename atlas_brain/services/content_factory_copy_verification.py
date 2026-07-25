@@ -124,7 +124,7 @@ _PHONE_SHAPED_RE = re.compile(r"\b\d(?:[\s().-]?\d){8,12}\b")
 # at most one non-word separator each ("020/7946/0958", "10,000.55") is masked
 # before persisting. No enumeration of separator styles can be complete, so
 # the evidence path masks the whole class; over-redaction is harmless there.
-_DIGIT_RUN_RE = re.compile(r"\d(?:[^\w\n]?\d){4,}")
+_DIGIT_RUN_RE = re.compile(r"\d(?:[^\w\n]{0,4}\d){4,}")
 
 # A negation directly before the claim (no/not/never/without/cannot, or an -n't
 # contraction). "not only"/"not just" are emphatic, NOT negations, and are excluded.
@@ -166,8 +166,8 @@ _OWNER_ROUTING_RE = re.compile(
     re.I,
 )
 _ROUTING_NEGATION_RE = re.compile(
-    r"\b(?:no|not|never|none|nobody|without|cannot|isn|aren|unresolved|"
-    r"unknown|unassigned|undecided)\b|n't\b",
+    r"\b(?:no|not|never|none|nobody|nothing|neither|without|cannot|isn|aren|"
+    r"unresolved|unknown|unassigned|undecided)\b|n't\b",
     re.I,
 )
 
@@ -179,14 +179,15 @@ def _has_affirmative_owner_routing(
     free of negation/absence language: 'no one is assigned to them',
     'assigned to nobody', 'not routed to Billing', and 'routing remains
     unresolved' all fail to count as coverage (review rounds 3-4)."""
-    clause_negated: dict[int, bool] = {}
     for match in _OWNER_ROUTING_RE.finditer(text):
-        index, (start, end) = _span_for(clause_bounds, match.start())
-        if index not in clause_negated:
-            clause_negated[index] = bool(
-                _ROUTING_NEGATION_RE.search(text[start:end])
-            )
-        if not clause_negated[index]:
+        _index, (start, _end) = _span_for(clause_bounds, match.start())
+        # Negation is bound to the RELATION: the clause-bounded words just
+        # before the match through the match itself. Unrelated absence
+        # language after the target ("assigned to Billing with no due
+        # date") does not invalidate the routing (review round 10).
+        prefix = text[start : match.start()]
+        window = " ".join(prefix.split()[-4:]) + " " + text[match.start() : match.end()]
+        if not _ROUTING_NEGATION_RE.search(window):
             return True
     return False
 _OWNERSHIP_RE = re.compile(
@@ -346,8 +347,10 @@ def _unqualified_claims(
         # DENIAL, not an unqualified assertion -- but emphatic "not only"/
         # "not just" is affirmative (same distinction the blocking gate
         # draws), so "We not only draft answers" still registers.
-        prefix = text[clause_start : match.start()]
-        if _CLAIM_NEGATION_RE.search(prefix) and not _EMPHATIC_RE.search(prefix):
+        polarity_span = text[clause_start : match.end()]
+        if _CLAIM_NEGATION_RE.search(polarity_span) and not _EMPHATIC_RE.search(
+            polarity_span
+        ):
             continue
         claims_by_clause.setdefault(index, []).append(match)
     if not claims_by_clause:

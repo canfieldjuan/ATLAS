@@ -242,7 +242,7 @@ class EditorialAuditV2(BaseModel):
     model_config = _BASE_CONFIG
 
     artifact_schema: Literal["editorial_audit.v2"] = Field(alias="schema")
-    schema_version: int = 2
+    schema_version: Literal[2] = 2
     project_id: str
     draft_revision: int = 1
     edited_body_markdown: str = ""
