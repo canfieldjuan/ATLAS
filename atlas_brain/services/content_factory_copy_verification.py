@@ -506,7 +506,8 @@ def _unqualified_claims(
         # (the standing honest-gap form "no proven answer" matches as a
         # whole phrase and is unaffected).
         if re.match(
-            r"\s+(?:no|not|never|nothing|none)\b", text[qualifier.end() :]
+            r"\s+(?:[\w'\u2019-]+\s+){0,2}(?:no|not|never|nothing|none|zero)\b",
+            text[qualifier.end() :],
         ):
             continue
         index, _span = _span_for(clause_bounds, max(qualifier.end() - 1, 0))
@@ -626,7 +627,12 @@ def _report_shape_sentences(
     later in the same clause, outside any negation scope."""
     sentences: set[int] = set()
     for match in _PRODUCT_TERM_RE.finditer(text):
-        if not _position_negated(text, clause_bounds, match.start(), negation_cache):
+        _index, span = _span_for(clause_bounds, match.start())
+        # Polarity spans the whole assertion: "The Resolution Audit is not
+        # provided." denies the surface, so it is not report-shaped.
+        if not _range_negated(
+            text, clause_bounds, match.start(), span[1], negation_cache
+        ):
             sentences.add(_sentence_of(sentence_bounds, match.start()))
     _starts, clause_spans = clause_bounds
     for span in clause_spans:
@@ -634,7 +640,7 @@ def _report_shape_sentences(
         for position, token in enumerate(tokens):
             if token.group(0).lower() not in _REPORT_NOUNS:
                 continue
-            window = tokens[position + 1 : position + 5]
+            window = tokens[position + 1 : position + 9]
             shape_verb = next(
                 (w for w in window if w.group(0).lower() in _SHAPE_VERBS), None
             )
@@ -685,18 +691,29 @@ def _routing_covers_report(
             # clause as the report noun, a verb-first clause (coordinated
             # verb phrase sharing the report's subject: "... and routes
             # each issue to ..."), or an anaphoric/report-item subject.
-            if index in shape_clauses:
-                return True
-            if index not in tokens_cache:
-                tokens_cache[index] = _clause_tokens(text, span)
-            before = [
-                token
-                for token in tokens_cache[index]
-                if token.start() < match.start()
-            ]
             match_words = match.group(0).split()
             match_first = match_words[0].lower() if match_words else ""
-            if not before and match_first in _VERB_INITIAL_ROUTING:
+            each_object = re.search(
+                r"\beach\s+([\w'\u2019-]+)", match.group(0), re.I
+            )
+            routed_non_item = (
+                each_object is not None
+                and each_object.group(1).lower() not in _REPORT_ITEM_NOUNS
+            )
+            if index in shape_clauses:
+                # Sharing the report's clause is not enough when the match
+                # explicitly routes a NON-report object ("The report routes
+                # each invoice to Billing and ranks issues").
+                if not routed_non_item:
+                    return True
+                continue
+            if index not in tokens_cache:
+                tokens_cache[index] = _clause_tokens(text, span)
+            clause_tokens = tokens_cache[index]
+            has_before = bool(clause_tokens) and (
+                clause_tokens[0].start() < match.start()
+            )
+            if not has_before and match_first in _VERB_INITIAL_ROUTING:
                 # Coordinated verb phrase sharing the report's subject:
                 # "... and routes each issue to the owning team." The
                 # routed object must itself be a report item -- "routes
@@ -705,22 +722,18 @@ def _routing_covers_report(
                 each_object = re.search(
                     r"\beach\s+([\w'\u2019-]+)", match.group(0), re.I
                 )
-                if (
-                    each_object is None
-                    or each_object.group(1).lower() in _REPORT_ITEM_NOUNS
-                ):
+                if not routed_non_item:
                     return True
-            subject_tokens = before or _clause_tokens(
-                text, (match.start(), span[1])
-            )
-            first = (
-                subject_tokens[0].group(0).lower() if subject_tokens else ""
-            )
-            second = (
-                subject_tokens[1].group(0).lower()
-                if len(subject_tokens) > 1
-                else ""
-            )
+            if has_before:
+                first = clause_tokens[0].group(0).lower()
+                second = (
+                    clause_tokens[1].group(0).lower()
+                    if len(clause_tokens) > 1
+                    else ""
+                )
+            else:
+                first = match_first
+                second = match_words[1].lower() if len(match_words) > 1 else ""
             if first in _ANAPHORIC_SUBJECTS or (
                 first in ("the", "these", "those")
                 and second in _REPORT_ITEM_NOUNS

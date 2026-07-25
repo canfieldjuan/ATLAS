@@ -271,3 +271,22 @@ def test_run_stage_persists_deterministic_warnings_and_normalizes_v1(tmp_path, m
     )
     assert stored["advisory_warnings"][-1].startswith("reminder:")
     assert stored["copy_verification"]["verdict"] == "pass"
+
+
+def test_run_stage_rejects_contradictory_v2_version(tmp_path, monkeypatch):
+    """Round-18 regression: a worker reply already tagged v2 keeps its own
+    schema_version, so contradictory metadata fails validation instead of
+    being silently rewritten to 2."""
+    reply = json.dumps(
+        {
+            "schema": "editorial_audit.v2",
+            "schema_version": 999,
+            "project_id": "p",
+            "edited_body_markdown": "Clean copy.",
+            "recommendation": "revise",
+        }
+    )
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ValidationError):
+        runner.run_stage("job-v2v", "audit", "m", "req", api_key="k", root=tmp_path)
+    assert not job_dir("job-v2v", root=tmp_path).exists()

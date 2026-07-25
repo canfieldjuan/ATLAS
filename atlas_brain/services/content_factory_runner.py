@@ -125,9 +125,14 @@ def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
         return
     # Normalize to v2: the runner-persisted audit always carries the advisory
     # checklist field; v1 stays frozen for pre-existing artifacts and direct
-    # writers (rollback-safe -- see the contracts module).
+    # writers (rollback-safe -- see the contracts module). Only an original
+    # v1 reply gets its version synthesized -- a v2-tagged reply keeps its
+    # own schema_version so the Literal[2] validator rejects contradictory
+    # worker metadata instead of the runner laundering it.
+    if artifact.get("schema") == "editorial_audit.v1":
+        artifact["schema_version"] = 2
     artifact["schema"] = "editorial_audit.v2"
-    artifact["schema_version"] = 2
+    artifact.setdefault("schema_version", 2)
     edited = str(artifact.get("edited_body_markdown") or "")
     if not edited.strip():
         artifact["copy_verification"] = {

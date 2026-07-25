@@ -91,6 +91,22 @@ Slice phase: vertical slice
   each with both-direction probes; the module contract remains
   best-effort-backstop with the human approval as the real gate), R14.
 
+### Review round 18 (Codex)
+
+Six findings, all fixed: same-clause routing validates its routed object
+("The report routes each invoice to Billing and ranks issues" warns --
+the noun-to-verb window widened to eight tokens so the shape assertion
+is seen at all); qualifier complements are polarity-checked through
+bounded modifiers ("contain absolutely no proof" excuses nothing);
+product-term polarity spans the full assertion ("The Resolution Audit is
+not provided" is not report-shaped); per-match routing state is O(1)
+(clause token lists cached once, prefix presence by first-token position;
+timing probe); the runner only synthesizes schema_version when upgrading
+an original v1 reply, so contradictory v2 worker metadata is REJECTED by
+the Literal[2] validator instead of laundered (negative real-entrypoint
+probe); and this Verification section was refreshed with the exact final
+commands and counts.
+
 ### Review round 17 (Codex) -- final pre-merge round (operator decision)
 
 Five findings, all fixed: coordinated routing must route REPORT ITEMS
@@ -397,22 +413,39 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 245 passed (280 with adjacent suites) (12 new advisory tests, 2 new runner
-  tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
-- `python -m py_compile` on the three touched modules.
-- NOT run: live OWUI worker pass (advisory output shape is fully covered
-  by unit tests; next live pipeline run will carry the checklist).
+Final evidence (run 2026-07-25, after review round 18):
+
+    python -m pytest tests/test_content_factory_copy_verification.py \
+        tests/test_content_factory_runner.py \
+        tests/test_content_factory_schemas.py \
+        tests/test_content_factory_store.py \
+        tests/test_leads_intake.py -q
+    # -> 308 passed (105 content-factory test functions across the four
+    #    factory suites, including the 18-round adversarial regression
+    #    corpus, generative invariants, and two timing probes)
+
+    python scripts/maturity_sweep.py atlas_brain/mcp --tests-root tests \
+        --baseline tests/maturity_sweep/baseline_atlas_brain_mcp.json \
+        --min-score 8 --sensitive-glob '**/*'   # ratchet gate passed
+    python scripts/maturity_sweep.py atlas_brain/storage --tests-root tests \
+        --baseline tests/maturity_sweep/baseline_atlas_brain_storage.json \
+        --min-score 8 --sensitive-glob '**/*'   # ratchet gate passed
+
+- `python -m py_compile` clean (with SyntaxWarning promoted to error) on
+  every touched module.
+- NOT run: live OWUI worker pass (unit-covered; the next live pipeline
+  run carries the checklist).
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 88 |
-| `atlas_brain/services/content_factory_copy_verification.py` | 746 |
-| `atlas_brain/services/content_factory_runner.py` | 28 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 759 |
+| `atlas_brain/services/content_factory_runner.py` | 33 |
 | `atlas_brain/services/content_factory_store.py` | 17 |
-| `plans/PR-CF-Advisory-Warning-Layer.md` | 418 |
-| `tests/test_content_factory_copy_verification.py` | 1109 |
-| `tests/test_content_factory_runner.py` | 62 |
+| `plans/PR-CF-Advisory-Warning-Layer.md` | 451 |
+| `tests/test_content_factory_copy_verification.py` | 1161 |
+| `tests/test_content_factory_runner.py` | 81 |
 | `tests/test_content_factory_schemas.py` | 73 |
-| **Total** | **2541** |
+| **Total** | **2663** |

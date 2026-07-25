@@ -1291,3 +1291,55 @@ def test_same_sentence_routing_scan_is_linear():
     started = time.monotonic()
     advisory_warnings(draft)
     assert time.monotonic() - started < 2.0
+
+
+# --- round-18 review fixes ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "If the tickets contain absolutely no proof, we draft answers.",
+        "If the tickets contain definitely zero evidence, we draft answers.",
+    ],
+)
+def test_modified_negated_qualifier_does_not_excuse(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(text)
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings), text
+
+
+def test_same_clause_routing_of_non_items_does_not_cover():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report routes each invoice to Billing and ranks issues."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The Resolution Audit is not provided.",
+        "The Resolution Snapshot is never generated.",
+        "The action queue is not included.",
+    ],
+)
+def test_denied_product_terms_are_not_report_shape(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(text)
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings), text
+
+
+def test_repeated_ownership_clause_is_linear():
+    import time
+
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    draft = "The report ranks issues, " + "Billing owns invoices and " * 4000 + "more."
+    started = time.monotonic()
+    advisory_warnings(draft)
+    assert time.monotonic() - started < 2.5
