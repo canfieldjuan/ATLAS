@@ -46,6 +46,7 @@ docs/schemas/ (generated, not hand-written).
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -67,6 +68,32 @@ _BASE_CONFIG = ConfigDict(extra="forbid", serialize_by_alias=True)
 # non-empty result is required. Used for citation fields whose blankness would
 # silently defeat the "every claim is traceable" invariant.
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+# Canonical advisory-warning strings + bounded grammar (#2181 round 5).
+# The schema is the choke point: EVERY persisted v2 warning must be either a
+# known static line or match the deterministic locator grammar (code +
+# sentence number + short alphabetic keyword). Free text -- and therefore
+# anything PII-shaped -- is unrepresentable, no matter which writer produced
+# the artifact.
+ADVISORY_CTA_REMINDER = (
+    "reminder: confirm the CTA matches the channel and offer posture"
+)
+ADVISORY_OWNER_ROUTING_WARNING = (
+    "owner-routing-coverage: draft explains the report shape but omits "
+    "owner routing or who should review the fix"
+)
+_ADVISORY_STATIC_WARNINGS = frozenset(
+    {ADVISORY_CTA_REMINDER, ADVISORY_OWNER_ROUTING_WARNING}
+)
+# Locator bound: up to 10 digits covers any physically possible draft (a
+# sentence needs >= 2 characters, so 10^9 sentences implies a multi-GB
+# body no worker response can carry) -- the producer can never emit a
+# locator this grammar rejects.
+_ADVISORY_GRAMMAR_RE = re.compile(
+    r"^(?:unqualified-answer-claim|unqualified-ownership-claim): "
+    r"sentence [1-9]\d{0,9}$"
+)
+
 
 Confidence = Literal["high", "medium", "low"]
 Recommendation = Literal["promote", "revise"]
@@ -178,7 +205,14 @@ class CopyVerification(BaseModel):
 
 
 class EditorialAudit(BaseModel):
-    """audit.json -- voice edit + the verify verdict; the model cannot self-promote."""
+    """audit.json (v1, FROZEN) -- voice edit + the verify verdict.
+
+    Keeps the pre-#2181 class name and shape so existing consumers of
+    ``EditorialAudit.model_validate(v1_payload)`` are unaffected. The v1
+    shape is frozen so artifacts already on disk (and any rolled-back
+    reader) keep validating byte-for-byte; ``advisory_warnings`` lives only
+    on ``EditorialAuditV2`` (#2136 item 2). Do not add fields here.
+    """
 
     model_config = _BASE_CONFIG
 
@@ -195,6 +229,57 @@ class EditorialAudit(BaseModel):
 
     @model_validator(mode="after")
     def _promote_requires_passing_verdict(self) -> "EditorialAudit":
+        # The model cannot self-promote: a 'promote' recommendation is only valid
+        # when the deterministic copy-verification verdict is 'pass'.
+        if self.recommendation == "promote":
+            cv = self.copy_verification
+            if cv is None or cv.verdict != "pass":
+                raise ValueError(
+                    "recommendation 'promote' requires copy_verification.verdict == 'pass'"
+                )
+        return self
+
+
+class EditorialAuditV2(BaseModel):
+    """audit.json (v2) -- v1 plus the non-blocking advisory checklist."""
+
+    model_config = _BASE_CONFIG
+
+    artifact_schema: Literal["editorial_audit.v2"] = Field(alias="schema")
+    schema_version: Literal[2] = 2
+    project_id: str
+    draft_revision: int = 1
+    edited_body_markdown: str = ""
+    voice_pass: bool = False
+    orphan_claims: list[str] = Field(default_factory=list)
+    copy_verification: Optional[CopyVerification] = None
+    # Non-blocking reviewer checklist (#2136 item 2): deterministic advisory
+    # warnings from the copy-verification module. Deliberately NOT referenced
+    # by any validator -- warnings never gate the recommendation.
+    advisory_warnings: list[str] = Field(default_factory=list)
+    recommendation: Recommendation = "revise"
+    prompt_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _advisory_warnings_bounded(self) -> "EditorialAuditV2":
+        # Choke point for ALL writers (runner or direct): warnings must be a
+        # known static line or match the deterministic locator grammar --
+        # free-text (and so PII-shaped) entries are rejected at validation,
+        # before the store persists anything.
+        for warning in self.advisory_warnings:
+            if warning in _ADVISORY_STATIC_WARNINGS:
+                continue
+            if _ADVISORY_GRAMMAR_RE.fullmatch(warning):
+                continue
+            raise ValueError(
+                "advisory_warnings entries must be deterministic checklist "
+                "lines (bounded locator grammar); free-text evidence is not "
+                "representable"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _promote_requires_passing_verdict(self) -> "EditorialAuditV2":
         # The model cannot self-promote: a 'promote' recommendation is only valid
         # when the deterministic copy-verification verdict is 'pass'.
         if self.recommendation == "promote":
@@ -251,6 +336,7 @@ ARTIFACT_MODELS: dict[str, type[BaseModel]] = {
     "evidence_packet.v1": EvidencePacket,
     "draft.v1": DraftArtifact,
     "editorial_audit.v1": EditorialAudit,
+    "editorial_audit.v2": EditorialAuditV2,
     "manifest.v1": ArtifactManifest,
 }
 

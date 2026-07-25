@@ -35,11 +35,13 @@ _SAFE_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # so a mislabeled write (e.g. a draft under the "brief" stage) is rejected. An
 # unknown/custom stage is allowed to carry any artifact.
 STAGE_SCHEMAS = {
-    "brief": "content_brief.v1",
-    "evidence": "evidence_packet.v1",
-    "draft": "draft.v1",
-    "audit": "editorial_audit.v1",
-    "manifest": "manifest.v1",
+    "brief": ("content_brief.v1",),
+    "evidence": ("evidence_packet.v1",),
+    "draft": ("draft.v1",),
+    # v1 stays admissible: pre-#2136 artifacts and any direct writer keep
+    # working; runner-persisted audits are normalized to v2.
+    "audit": ("editorial_audit.v1", "editorial_audit.v2"),
+    "manifest": ("manifest.v1",),
 }
 
 _GIT_NAME = "Content Factory"
@@ -133,9 +135,10 @@ def write_artifact(
     # A known stage must carry its matching schema, so a mislabeled write cannot
     # land as a valid stage artifact.
     expected = STAGE_SCHEMAS.get(stage)
-    if expected is not None and tag != expected:
+    if expected is not None and tag not in expected:
         raise ArtifactStoreError(
-            f"stage/schema mismatch: stage {stage!r} expects {expected!r}, got {tag!r}"
+            f"stage/schema mismatch: stage {stage!r} expects one of {expected!r}, "
+            f"got {tag!r}"
         )
 
     # The manifest is the job index; its own job_id must match the folder it lands

@@ -17,14 +17,19 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from atlas_brain.services.content_factory_copy_verification import verify_copy
+from atlas_brain.services.content_factory_copy_verification import (
+    advisory_warnings,
+    verify_copy,
+)
 from atlas_brain.services.content_factory_store import DEFAULT_ROOT, write_artifact
 
 DEFAULT_OWUI_URL = "http://127.0.0.1:8080"
 
-# The editor stage's artifact schema. Its promote decision is gated (via #2116's
-# EditorialAudit contract) on copy_verification.verdict == "pass".
-_EDITOR_SCHEMA = "editorial_audit.v1"
+# The editor stage's artifact schemas. The promote decision is gated (via
+# #2116's EditorialAudit contract) on copy_verification.verdict == "pass".
+# Workers may still emit v1; the runner normalizes to v2 (which carries the
+# advisory checklist) before persisting.
+_EDITOR_SCHEMAS = ("editorial_audit.v1", "editorial_audit.v2")
 
 # A leading ```/```json fence and a trailing fence, so a fenced reply still
 # yields its JSON body.
@@ -108,7 +113,7 @@ def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
     worker-asserted "promote" invalid and the store rejects the artifact (fail closed);
     a "revise" recommendation still persists with the recorded hits.
 
-    Gating is by SCHEMA (``editorial_audit.v1``), not by the canonical "audit" stage name:
+    Gating is by SCHEMA (``editorial_audit.v1``/``v2``), not by the canonical "audit" stage name:
     the store lets a custom stage carry any artifact, and any editorial_audit.v1 can
     promote, so gating by stage name would let a custom-stage audit bypass the gate.
 
@@ -116,16 +121,32 @@ def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
     passing verdict (otherwise a worker could self-promote by omitting the edited body).
     Verifying the parent draft body in that case is a later refinement (#2136).
     """
-    if artifact.get("schema") != _EDITOR_SCHEMA:
+    if artifact.get("schema") not in _EDITOR_SCHEMAS:
         return
+    # Normalize to v2: the runner-persisted audit always carries the advisory
+    # checklist field; v1 stays frozen for pre-existing artifacts and direct
+    # writers (rollback-safe -- see the contracts module). Only an original
+    # v1 reply gets its version synthesized -- a v2-tagged reply keeps its
+    # own schema_version so the Literal[2] validator rejects contradictory
+    # worker metadata instead of the runner laundering it.
+    if artifact.get("schema") == "editorial_audit.v1":
+        artifact["schema_version"] = 2
+    artifact["schema"] = "editorial_audit.v2"
+    artifact.setdefault("schema_version", 2)
     edited = str(artifact.get("edited_body_markdown") or "")
     if not edited.strip():
         artifact["copy_verification"] = {
             "verdict": "fail",
             "hits": ["unverified-copy: edited_body_markdown is empty; nothing was verified"],
         }
+        # No copy, no checklist: worker-supplied warnings are discarded too.
+        artifact["advisory_warnings"] = []
         return
     artifact["copy_verification"] = verify_copy(edited).model_dump()
+    # Same self-report discipline as the verdict: the advisory checklist is
+    # computed deterministically from the edited copy, never taken from the
+    # worker (a fabricated empty list would blind the reviewing human).
+    artifact["advisory_warnings"] = advisory_warnings(edited)
 
 
 def run_stage(
