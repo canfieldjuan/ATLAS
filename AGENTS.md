@@ -1091,14 +1091,20 @@ special case; the PR body accretes those special cases as intent.
    supplies primitives, not your application invariant: a read-modify-write under
    an insufficient isolation level still loses updates, and a lock service does
    not define your crash or cancellation behavior. So every open-execution plan
-   states what can interleave, what can be cancelled, where a crash can land,
-   and -- wherever the surface can retry or redeliver (retry state machine,
-   webhook, queued job) -- what a duplicate or out-of-order attempt does, which
-   is R8's invariant and is not implied by the other three. For a selected
-   component, state which of its guarantees close which part of that seam
-   (isolation level, lock semantics, durability on crash). The
-   invariants must hold for **every** interleaving the model admits; anything not
-   covered is stated as an explicit assumption, never just omitted. "Correct
+   states the model **its own surface** admits, and for a selected component
+   which of that component's guarantees close which part of the seam.
+
+   This section deliberately does **not** carry the list of failure modes to
+   cover. A fixed list is itself an enumeration, and the mode it omits is the one
+   that bites: interleaving, cancellation, crash, duplicate and out-of-order
+   delivery, and lease expiry with stale-holder fencing were each caught as a
+   real omission during this section's own review, one per round, and the next
+   one is on no list yet. Derive the modes from the surface instead. R8 in
+   `docs/REVIEWER_RULES.md` is the floor for anything that retries or redelivers;
+   a surface with leases, clocks, or partitions owes the modes those admit.
+
+   The invariants must hold for **every** interleaving the model admits; anything
+   not covered is stated as an explicit assumption, never just omitted. "Correct
    under a bounded set of interleavings" is the enumerative answer in formal
    dress -- the schedule left out of the set is the one that corrupts state. A
    plan that instead lists schedules to handle -- "drain cancellation here",
