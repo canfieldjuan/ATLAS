@@ -91,6 +91,17 @@ Slice phase: vertical slice
   each with both-direction probes; the module contract remains
   best-effort-backstop with the human approval as the real gate), R14.
 
+### Review round 11 (Codex)
+
+Three findings, all fixed mechanically: the gate's digit-run mask treats
+newlines as separators (claim patterns cross lines, so multiline
+phone-shaped values in a hit are masked); a copular absence predicate
+immediately after a routing relation negates it ("the owner lane is
+unknown" warns) while unrelated trailing modifiers still do not; and
+claim polarity binds to the three words before the assertion plus the
+match span, so an earlier negative noun phrase ("With no delay we draft
+answers") is not read as a denial while genuine denials stay recognized.
+
 ### Review round 10 (Codex) -- fixes + the declared precision boundary
 
 Four findings fixed: the gate's digit-run mask allows multi-character
@@ -290,7 +301,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 215 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 220 passed (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered

@@ -807,3 +807,46 @@ def test_v2_schema_version_is_pinned():
         EditorialAuditV2.model_validate(
             {"schema": "editorial_audit.v2", "project_id": "p", "schema_version": 1}
         )
+
+
+# --- round-11 review fixes ---
+
+
+def test_gate_hits_mask_multiline_digit_runs():
+    result = verify_copy("Guaranteed 020--\n7946--\n0958 savings.")
+    assert result.verdict == "fail"
+    assert "7946" not in " ".join(result.hits)
+
+
+def test_owner_lane_unknown_is_not_coverage():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("The report ranks issues. The owner lane is unknown.")
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_trailing_modifier_still_keeps_routing_affirmative():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Each is assigned to billing with no due date."
+    )
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_unrelated_prefix_negation_does_not_deny_claim():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("With no delay we draft answers.")
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_genuine_denials_still_recognized_after_binding():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    for text in ("We do not draft answers.", "No answers are generated.",
+                 "Billing never owns refunds."):
+        assert not any(
+            w.startswith(("unqualified-answer-claim:", "unqualified-ownership-claim:"))
+            for w in advisory_warnings(text)
+        ), text
