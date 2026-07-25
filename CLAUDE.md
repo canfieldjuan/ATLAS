@@ -378,6 +378,10 @@ ATLAS_EMAIL_IMAP_USERNAME=
 ATLAS_EMAIL_IMAP_PASSWORD=         # For Gmail: 16-char app password (myaccount.google.com/apppasswords)
 ATLAS_EMAIL_IMAP_SSL=true
 ATLAS_EMAIL_IMAP_MAILBOX=INBOX
+
+# Scoped CRM inbox reads require an explicit JSON binding per business context.
+# This slice supports explicit IMAP credentials only.
+ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS='{"effingham_maids":{"provider":"imap","imap_host":"imap.gmail.com","imap_username":"office@example.com","imap_password":"app-password"}}'
 ```
 
 ## NocoDB CRM Setup
@@ -428,6 +432,13 @@ Tools: `search_contacts`, `get_contact`, `create_contact`, `update_contact`,
 `get_customer_context`,
 `open_customer_service_ticket`, `list_customer_service_tickets`,
 `update_customer_service_ticket`, `close_customer_service_ticket`
+
+Scoped get_customer_context inbox history is fail-closed. Configure
+ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS as a JSON object keyed by the exact CRM
+business_context_id; an unmapped context omits inbox_emails without opening
+the global IMAP/Gmail account. This slice accepts provider "imap" with the
+imap_* fields shown above. Scoped Gmail OAuth requires a separate
+database-backed credential-state slice.
 
 ### Email MCP Server (9 tools)
 ```bash

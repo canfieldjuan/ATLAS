@@ -36,7 +36,10 @@ import logging
 import re
 import threading
 from email.header import decode_header as _decode_header
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from ..config import InboxMailboxBinding
 
 logger = logging.getLogger("atlas.services.email_provider")
 
@@ -125,10 +128,15 @@ def _imap_search_criteria(query: str) -> str:
     return " ".join(criteria) if criteria else "ALL"
 
 
-def _parse_envelope(uid: str, raw_headers: bytes) -> dict[str, Any]:
+def _parse_envelope(
+    uid: str,
+    raw_headers: bytes,
+    *,
+    preserve_sender_evidence: bool = False,
+) -> dict[str, Any]:
     """Parse raw RFC 822 headers into a metadata dict."""
     msg = _email_stdlib.message_from_bytes(raw_headers)
-    return {
+    envelope = {
         "id": uid,
         "subject": _decode_mime_words(msg.get("Subject", "")),
         "from": _decode_mime_words(msg.get("From", "")),
@@ -142,6 +150,9 @@ def _parse_envelope(uid: str, raw_headers: bytes) -> dict[str, Any]:
         "reply_to": _decode_mime_words(msg.get("Reply-To", "")),
         "has_unsubscribe": msg.get("List-Unsubscribe") is not None,
     }
+    if preserve_sender_evidence:
+        envelope["_atlas_from_header_values"] = msg.get_all("From", [])
+    return envelope
 
 
 def _extract_body(msg: _email_stdlib.message.Message) -> str:
@@ -185,7 +196,7 @@ class IMAPEmailProvider:
         ATLAS_EMAIL_IMAP_MAILBOX   INBOX
     """
 
-    def __init__(self) -> None:
+    def __init__(self, binding: "InboxMailboxBinding | None" = None) -> None:
         self._host: str = ""
         self._port: int = 993
         self._username: str = ""
@@ -193,8 +204,17 @@ class IMAPEmailProvider:
         self._ssl: bool = True
         self._mailbox: str = "INBOX"
         self._loaded = False
+        self._preserve_sender_evidence = binding is not None
         self._cached_conn: imaplib.IMAP4 | None = None
         self._lock = threading.RLock()  # reentrant: _get_thread_sync calls _get_message_sync
+        if binding is not None:
+            self._host = binding.imap_host
+            self._port = binding.imap_port
+            self._username = binding.imap_username
+            self._password = binding.imap_password.get_secret_value()
+            self._ssl = binding.imap_ssl
+            self._mailbox = binding.imap_mailbox or "INBOX"
+            self._loaded = True
 
     def _load_config(self) -> None:
         if self._loaded:
@@ -348,7 +368,15 @@ class IMAPEmailProvider:
                         descriptor = item[0].decode() if isinstance(item[0], bytes) else str(item[0])
                         uid_match = re.search(r"UID (\d+)", descriptor)
                         uid = uid_match.group(1) if uid_match else str(i)
-                        messages.append(_parse_envelope(uid, header_bytes))
+                        messages.append(
+                            _parse_envelope(
+                                uid,
+                                header_bytes,
+                                preserve_sender_evidence=(
+                                    self._preserve_sender_evidence
+                                ),
+                            )
+                        )
                     i += 1
                 return messages
             except Exception:
@@ -751,3 +779,32 @@ def get_email_provider() -> CompositeEmailProvider:
     if _email_provider is None:
         _email_provider = CompositeEmailProvider()
     return _email_provider
+
+
+class UnmappedInboxContextError(LookupError):
+    """Raised before mailbox I/O when a CRM context has no inbox binding."""
+
+
+def get_scoped_inbox_provider(
+    business_context_id: str,
+) -> IMAPEmailProvider:
+    """Return the single inbox reader explicitly bound to a CRM context.
+
+    Scoped readers never use ``CompositeEmailProvider`` because its IMAP error
+    fallback could cross the authorization boundary into the global Gmail
+    account.
+    """
+    from ..config import settings
+
+    context = business_context_id
+    if not isinstance(context, str) or not context.strip():
+        raise UnmappedInboxContextError(
+            f"No inbox mailbox is bound to business context {context!r}"
+        )
+    binding = settings.email.inbox_context_bindings.get(context)
+    if binding is None:
+        raise UnmappedInboxContextError(
+            f"No inbox mailbox is bound to business context {context!r}"
+        )
+
+    return IMAPEmailProvider(binding)
