@@ -86,15 +86,15 @@ Max files: 5
 
 ## Mechanism
 
-On a direct invocation, the Calendar CLI first removes its script directory,
-repository root, and empty-path entry from `sys.path`. It can then use only
-standard-library code to parse receipt policy. A receipted run additionally
-requires Python isolated mode, reads the shared helper from the `HEAD` Git
-object, compares tracked Python blobs/modes directly with that tree, executes
-the remaining clean-source checks, and restores local import roots only after
-they succeed. Receipt construction reuses the returned Git SHA, hashes the
-executed Calendar script, and creates the durable in-progress artifact before
-entering the async runtime.
+A non-isolated direct invocation first removes its script directory, repository
+root, and empty-path entry from `sys.path` before parsing receipt policy with
+the standard library. A receipted run refuses that mode and requires Python
+isolated startup, which never exposes those repository roots. It then reads the
+shared helper from the `HEAD` Git object, compares tracked Python blobs/modes
+directly with that tree, executes the remaining clean-source checks, and adds
+local import roots only after they succeed. Receipt construction reuses the
+returned Git SHA, hashes the executed Calendar script, and creates the durable
+in-progress artifact before entering the async runtime.
 
 The helper has no generic metadata sink: callers can record only allowlisted
 non-negative counts and UUID contact IDs. Each evidence update atomically

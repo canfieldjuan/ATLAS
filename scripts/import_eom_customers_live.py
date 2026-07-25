@@ -27,7 +27,7 @@ Usage:
 import sys
 
 sys.dont_write_bytecode = True
-if __name__ == "__main__":
+if __name__ == "__main__" and not sys.flags.isolated:
     _script_import_root = sys.path[0]
     _repo_import_root = _script_import_root.rpartition("/")[0]
     sys.path[:] = [
