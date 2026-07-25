@@ -68,6 +68,38 @@ Max files: 5
   concurrent post-preflight dependency rewrite. Rejected inputs never execute;
   the concurrent rewrite cannot displace the reviewed snapshot.
 
+### Execution model
+
+- Selected closed-surface components: Git's content-addressed object database
+  supplies the exact immutable blobs for one resolved commit; the operating
+  system supplies a private temporary directory and owner-only read/execute
+  permissions. This slice composes those established primitives and introduces
+  no lock, lease, retry protocol, shared state machine, or cross-process
+  coordination component.
+- Admitted execution: the launcher resolves one SHA after preflight, batch-reads
+  every tracked Python blob by object ID, closes each snapshot file, removes
+  write permission from every snapshot file and directory, then executes the
+  entrypoint with only the snapshot's repository roots on `sys.path`.
+- Invariant for every admitted worktree-edit interleaving: once preflight
+  returns, no subsequent worktree Python edit can change entrypoint or
+  dependency bytes used by that run. The receipt SHA and script hash therefore
+  describe the code that can mutate CRM state.
+- Cancellation/crash boundary: normal exceptions and interpreter cancellation
+  remove the snapshot in `finally`; no CRM runtime starts before snapshot
+  completion. An uncatchable process or host termination may leave an
+  owner-private, read-only copy of public repository source in the system temp
+  directory. If termination lands after receipt construction, the existing
+  in-progress recovery artifact remains truthful and unfinalized.
+- Explicit assumptions: the local Git object database, Git executable, Python
+  interpreter/standard library, OS same-user isolation, and installed
+  third-party packages are trusted. A hostile same-UID process that tampers
+  with Git objects or the private temp directory is outside this local
+  source-attestation model. Operator configuration, credentials, and
+  cwd-relative data remain intentionally external inputs rather than reviewed
+  code.
+- Surface bound: this is the receipt launcher's single source-identity execution
+  surface. It does not add a second durability/concurrency subsystem.
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -204,8 +236,8 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 49 |
-| `plans/PR-EOM-Execution-Receipts.md` | 211 |
+| `plans/PR-EOM-Execution-Receipts.md` | 243 |
 | `scripts/eom_execution_receipt.py` | 574 |
 | `scripts/import_eom_customers_live.py` | 171 |
 | `tests/test_eom_execution_receipts.py` | 1267 |
-| **Total** | **2272** |
+| **Total** | **2304** |
