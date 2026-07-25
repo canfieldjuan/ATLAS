@@ -178,7 +178,7 @@ Parked hardening: none.
 | `atlas_brain/services/content_factory_runner.py` | 233 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
 | `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 202 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 173 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 184 |
 | `tests/test_content_factory_runner.py` | 286 |
 | `tests/test_content_factory_schemas.py` | 40 |
-| **Total** | **1079** |
+| **Total** | **1090** |
