@@ -76,17 +76,22 @@ contract.
 - The fake substitutes only the external Google provider. Parsing,
   cross-calendar deduplication, guard emission, matching, and demotion remain
   real.
+- PR #2193 is now the `main` baseline. Its atomic zero-write reconciliation,
+  provider seam, and roster preflight remain unchanged by this email-veto diff.
 
 ## Deferred
 
 - Durable reconciliation receipts remain a separate #2190 slice.
-- Atomic portal reconciliation remains separate PR #2193.
+- Production reconciliation remains operator-gated after the remaining Atlas
+  receipt blocker lands.
 
 Parked hardening: none.
 
 ## Verification
 
-- Focused pytest over the portal-sync and live-calendar import suites -- 99 passed; one third-party `pynvml` deprecation warning.
+- Combined focused pytest over portal sync, CRM read scoping, and live-calendar
+  import after merging #2193 -- 173 passed; one third-party `pynvml`
+  deprecation warning.
 - Ruff over the changed runtime file -- passed.
 - Ruff over the focused test with F401 and F841 ignored -- passed; those two findings pre-exist this diff in unrelated tests.
 - Python compilation of both changed Python files -- passed.
@@ -100,7 +105,7 @@ Parked hardening: none.
 |---|---:|
 | `REVIEW_MISSES.md` | 1 |
 | `docs/SESSION_BOOTSTRAP.md` | 1 |
-| `plans/PR-EOM-Calendar-Email-Veto.md` | 106 |
+| `plans/PR-EOM-Calendar-Email-Veto.md` | 111 |
 | `scripts/sync_eom_portal_customers.py` | 19 |
-| `tests/test_sync_eom_portal_customers.py` | 106 |
-| **Total** | **233** |
+| `tests/test_sync_eom_portal_customers.py` | 104 |
+| **Total** | **236** |
