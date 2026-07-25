@@ -26,8 +26,10 @@ creates a mode-0600 `.in-progress.json` artifact, then publishes one unique
 
 Receipted runs reject staged, unstaged, or non-ignored untracked files. Run only
 from the exact clean checkout whose `HEAD` SHA should appear in the receipt.
-Ignored Python bytecode caches for tracked source are also rejected; remove
-repository-local `__pycache__`/`.pyc` artifacts before an operator run.
+Ignored Python source, bytecode, or native-extension artifacts that can name a
+module/package beneath either CLI import root are also rejected, as are
+bytecode caches for tracked source. Remove repository-local import shadows and
+`__pycache__`/`.pyc` artifacts before an operator run.
 The two entrypoints disable new bytecode writes before importing local modules,
 so a clean checkout does not create and then reject its own cache files.
 Changed-contact UUIDs and aggregate counts are atomically persisted to the

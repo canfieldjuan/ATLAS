@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.machinery
 import json
 import os
 import stat
 import subprocess
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
 SCHEMA_VERSION = 1
@@ -28,6 +29,17 @@ OUTCOME_KEYS = {
     "import-planned",
 }
 PORTAL_TOTAL_KEYS = {"demoted", "eligible", "kept"}
+_PYTHON_IMPORT_SUFFIXES = tuple(
+    sorted(
+        {
+            *importlib.machinery.SOURCE_SUFFIXES,
+            *importlib.machinery.BYTECODE_SUFFIXES,
+            *importlib.machinery.EXTENSION_SUFFIXES,
+        },
+        key=len,
+        reverse=True,
+    )
+)
 
 
 def _utc_now() -> str:
@@ -46,6 +58,31 @@ def _git_sha(repo_root: Path) -> str:
     if len(value) != 40 or any(char not in "0123456789abcdef" for char in value):
         raise RuntimeError("git HEAD did not resolve to a full SHA")
     return value
+
+
+def _ignored_path_is_python_import_artifact(relative_path: str) -> bool:
+    """Return whether an ignored path can name code under a CLI import root."""
+    if not relative_path:
+        return False
+    path = PurePosixPath(relative_path)
+    if path.is_absolute() or ".." in path.parts:
+        return True
+
+    artifact_stem = None
+    for suffix in _PYTHON_IMPORT_SUFFIXES:
+        if path.name.endswith(suffix):
+            artifact_stem = path.name[: -len(suffix)]
+            break
+    if artifact_stem is None:
+        return False
+
+    module_parts = (*path.parts[:-1], artifact_stem)
+    if not module_parts or any(not part for part in module_parts):
+        return True
+    return all(
+        not part.startswith(".") and "." not in part
+        for part in module_parts
+    )
 
 
 def _clean_git_sha(repo_root: Path) -> str:
@@ -72,10 +109,7 @@ def _clean_git_sha(repo_root: Path) -> str:
         text=True,
     )
     for relative_path in ignored.stdout.split("\0"):
-        if relative_path.endswith(".py") and (
-            "/" not in relative_path
-            or relative_path.startswith(("scripts/", "atlas_brain/"))
-        ):
+        if _ignored_path_is_python_import_artifact(relative_path):
             raise RuntimeError(
                 "receipted execution rejects ignored Python import shadows"
             )

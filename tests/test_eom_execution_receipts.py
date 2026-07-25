@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
+import importlib.machinery
+import itertools
 import json
 import os
 import py_compile
@@ -341,13 +343,40 @@ def test_receipt_rejects_untracked_import_shadow(tmp_path):
         )
 
 
-def test_receipt_rejects_ignored_python_import_shadow(tmp_path):
+_IMPORTABLE_ARTIFACT_PREFIXES = (
+    "",
+    "httpx/",
+    "vendor_namespace/deep/",
+    "scripts/",
+    "scripts/vendor_package/",
+)
+_IMPORTABLE_ARTIFACT_NAMES = (
+    "__init__.py",
+    "client.py",
+    "client.pyc",
+    f"client{importlib.machinery.EXTENSION_SUFFIXES[0]}",
+)
+
+
+@pytest.mark.parametrize(
+    "artifact_path",
+    (
+        f"{prefix}{artifact_name}"
+        for prefix, artifact_name in itertools.product(
+            _IMPORTABLE_ARTIFACT_PREFIXES,
+            _IMPORTABLE_ARTIFACT_NAMES,
+        )
+    ),
+)
+def test_receipt_rejects_ignored_python_import_artifact(
+    tmp_path, artifact_path
+):
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
     scripts.mkdir(parents=True)
     script = scripts / "operator.py"
     script.write_text("import httpx\n")
-    (repo / ".gitignore").write_text("scripts/httpx.py\n")
+    (repo / ".gitignore").write_text(f"/{artifact_path}\n")
     subprocess_options = {
         "cwd": repo, "check": True, "capture_output": True, "text": True,
     }
@@ -358,7 +387,9 @@ def test_receipt_rejects_ignored_python_import_shadow(tmp_path):
          "user.email=receipt-test@example.invalid", "commit", "-qm", "fixture"],
         **subprocess_options,
     )
-    (scripts / "httpx.py").write_text("raise RuntimeError('shadowed')\n")
+    artifact = repo / artifact_path
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"unreviewed import artifact\n")
     with pytest.raises(RuntimeError, match="ignored Python import shadows"):
         EomExecutionReceipt(
             receipt_dir=tmp_path,
@@ -366,6 +397,57 @@ def test_receipt_rejects_ignored_python_import_shadow(tmp_path):
             mode="write",
             script_path=script,
         )
+
+
+@pytest.mark.parametrize(
+    "artifact_path",
+    (
+        ".venv/lib/python/site-packages/httpx/__init__.py",
+        ".cache/shadow.pyc",
+        "generated.v1/shadow.py",
+        "scripts/.cache/shadow.py",
+        "docs/example.txt",
+    ),
+)
+def test_receipt_allows_ignored_non_import_path(tmp_path, artifact_path):
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    scripts.mkdir(parents=True)
+    script = scripts / "operator.py"
+    script.write_text("import httpx\n")
+    (repo / ".gitignore").write_text(f"/{artifact_path}\n")
+    subprocess_options = {
+        "cwd": repo, "check": True, "capture_output": True, "text": True,
+    }
+    receipt_module.subprocess.run(["git", "init", "-q"], **subprocess_options)
+    receipt_module.subprocess.run(["git", "add", "."], **subprocess_options)
+    receipt_module.subprocess.run(
+        ["git", "-c", "user.name=Receipt Test", "-c",
+         "user.email=receipt-test@example.invalid", "commit", "-qm", "fixture"],
+        **subprocess_options,
+    )
+    artifact = repo / artifact_path
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"not importable through the inserted roots\n")
+    receipt_dir = tmp_path / "receipts"
+    receipt_dir.mkdir()
+    receipt_dir.chmod(0o700)
+
+    receipt = EomExecutionReceipt(
+        receipt_dir=receipt_dir,
+        tool="import_eom_customers_live",
+        mode="write",
+        script_path=script,
+    )
+
+    assert receipt.in_progress_path.exists()
+
+
+@pytest.mark.parametrize("relative_path", ("/tmp/shadow.py", "../shadow.py"))
+def test_ignored_import_artifact_predicate_fails_closed_on_malformed_path(
+    relative_path,
+):
+    assert receipt_module._ignored_path_is_python_import_artifact(relative_path)
 
 
 def test_receipt_rejects_ignored_bytecode_for_tracked_source(tmp_path):

@@ -23,7 +23,12 @@ boundary they prove.
 - Root cause: the two EOM mutation entrypoints have no fail-closed receipt
   contract. They can mutate contacts and interactions while retaining no
   durable, source-bound, non-PII artifact, so production-run claims depend on
-  terminal narrative rather than reproducible evidence.
+  terminal narrative rather than reproducible evidence. Within that contract,
+  the repository-source preflight made the same mistake one level down: it
+  recognized selected path examples instead of the structural class of Python
+  import artifacts beneath the CLIs' repository import roots. That open path
+  default allowed unreviewed package-directory source to execute under a
+  reviewed `HEAD`.
 - Correct fix must touch/change: add one shared receipt writer with an explicit
   field allowlist; require `--receipt-dir` before Calendar live-write or portal
   `--apply`; optionally receipt dry runs when the directory is supplied;
@@ -32,8 +37,13 @@ boundary they prove.
   SHA-256 of the executed script; collect only non-negative outcome/demotion/
   keep counts and valid changed contact UUIDs; finalize success and failure
   atomically under a unique name without overwriting; and prove those behaviors
-  through both real CLI parsers plus filesystem tests. Document the recommended
-  operator directory under `${XDG_STATE_HOME:-$HOME/.local/state}`.
+  through both real CLI parsers plus filesystem tests. The source preflight
+  must make one structural decision for every ignored filesystem path: reject
+  Python source, bytecode, or extension artifacts whose path can name a module
+  or package beneath either repository import root, including regular and
+  namespace-style package nesting; malformed or ambiguous artifact paths fail
+  closed. Document the recommended operator directory under
+  `${XDG_STATE_HOME:-$HOME/.local/state}`.
 - Must not change: Calendar extraction/dedupe/recency, CRM identity or write
   semantics, portal authentication/fetch behavior, demotion eligibility or
   veto policy, endpoints, schemas, configuration, credentials, customer data,
@@ -45,6 +55,7 @@ boundary they prove.
 
 Ownership lane: eom/operational-evidence
 Slice phase: Production hardening
+Max files: 7
 
 1. Add the shared private receipt lifecycle and wire it to the Calendar-import
    and portal-sync CLI entrypoints.
@@ -86,6 +97,22 @@ Slice phase: Production hardening
   binding, and regression of dry-run/write semantics.
 - Reviewer rules triggered: R1, R2, R3, R4, R6, R8, R10, R12, R14.
 
+### Decision-Seam Analysis
+
+- One decision: whether an ignored repository path can supply executable
+  Python code through either CLI's inserted import root.
+- Why the decision was wrong: it used an allowlist of known locations
+  (`scripts/`, `atlas_brain/`, and root modules), so its fall-through admitted
+  every unlisted package shape. Successive module, bytecode, ignored-source,
+  and package-directory findings were instances of that one under-broad seam.
+- Structural fix: derive the verdict from Python's bounded artifact suffixes
+  and dotted-module path grammar. Reject every matching source, bytecode, or
+  native-extension artifact; reject malformed relative paths by default.
+  Hidden/dotted storage paths that cannot form a module through these inserted
+  roots retain their documented neutral policy. A Cartesian-product test
+  covers root modules, regular packages, namespace-style nesting, both import
+  roots, artifact kinds, and neutral controls.
+
 ### Files touched
 
 - `docs/EOM_RECONCILIATION_RECEIPTS.md`
@@ -106,6 +133,10 @@ metadata sink. Existing receipt directories must be real, owned by the current
 effective user, and not group/world writable.
 Before either runtime can start, a short create/link/remove probe verifies that
 the selected filesystem supports the exclusive hard-link publication mechanism.
+The source preflight classifies ignored entries through one structural
+import-artifact predicate based on Python's supported source, bytecode, and
+extension suffixes plus module-path grammar; it no longer enumerates repository
+directories or reviewer examples.
 
 The CLI wrapper maps normal and exceptional exits to an exit code and finalizes
 in a `try`/`except` boundary. Finalization rewrites the owned in-progress
@@ -142,7 +173,10 @@ Parked hardening: none.
 
 - Command: python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py -q - 138 passed.
+  tests/test_sync_eom_portal_customers.py -q - 164 passed.
+- Command: focused ignored-import-artifact boundary selection - 27 passed,
+  including Cartesian-product source/bytecode/extension package paths,
+  neutral controls, and malformed-path fail-closed cases.
 - Command: python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py tests/test_eom_execution_receipts.py -
   passed.
@@ -184,6 +218,9 @@ Parked hardening: none.
 - A failed post-link publication sync removes only the link created by that
   attempt and retains the unfinalized recovery artifact.
 - Ignored Python source in either repository import root now fails closed.
+- Ignored Python import artifacts are classified structurally across root
+  modules, package directories, namespace-style nesting, and both CLI import
+  roots instead of by a location allowlist.
 - Evidence persistence errors are deferred until finalization so an already
   started guarded CRM reconciliation can finish before the run fails.
 - Receipt directories must pre-exist, avoiding an unsynced parent-directory
@@ -193,10 +230,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 39 |
-| `plans/PR-EOM-Execution-Receipts.md` | 202 |
-| `scripts/eom_execution_receipt.py` | 347 |
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 41 |
+| `plans/PR-EOM-Execution-Receipts.md` | 239 |
+| `scripts/eom_execution_receipt.py` | 381 |
 | `scripts/import_eom_customers_live.py` | 72 |
 | `scripts/sync_eom_portal_customers.py` | 97 |
-| `tests/test_eom_execution_receipts.py` | 819 |
-| **Total** | **1576** |
+| `tests/test_eom_execution_receipts.py` | 901 |
+| **Total** | **1731** |
