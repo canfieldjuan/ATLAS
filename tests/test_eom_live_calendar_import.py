@@ -206,7 +206,7 @@ class StubCRM:
             return {"id": contact_id, **self.claim_result}
         return None
 
-    async def create_contact(self, data):
+    async def create_contact(self, data, *, merge_existing=True):
         self.created.append(data)
         return {
             "id": "new-id",

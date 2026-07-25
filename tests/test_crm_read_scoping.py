@@ -741,6 +741,130 @@ async def test_create_contact_lost_claim_never_blind_merges():
     assert p.updates == []
 
 
+@pytest.mark.asyncio
+async def test_create_contact_non_merging_mode_returns_same_tenant_without_writes():
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    class _Provider(DatabaseCRMProvider):
+        def __init__(self):
+            self.searches = []
+            self.claim_calls = []
+            self.updates = []
+
+        async def search_contacts(self, **kwargs):
+            self.searches.append(kwargs)
+            if kwargs.get("business_context_id") == EOM:
+                return [{
+                    "id": UUID,
+                    "business_context_id": EOM,
+                    "email": "jane@example.com",
+                }]
+            raise AssertionError("non-merging mode must not query NULL fallback")
+
+        async def claim_contact(self, contact_id, business_context_id):
+            self.claim_calls.append((contact_id, business_context_id))
+            raise AssertionError("non-merging mode must not claim")
+
+        async def update_contact(self, contact_id, data):
+            self.updates.append((contact_id, data))
+            raise AssertionError("non-merging mode must not update")
+
+    p = _Provider()
+    result = await p.create_contact(
+        {
+            "phone": "2175550000",
+            "email": "jane@example.com",
+            "full_name": "Changed Name",
+            "business_context_id": EOM,
+        },
+        merge_existing=False,
+    )
+    assert result["id"] == UUID
+    assert result["_was_created"] is False
+    assert p.searches == [{
+        "business_context_id": EOM,
+        "email": "jane@example.com",
+    }]
+    assert p.claim_calls == [] and p.updates == []
+
+
+@pytest.mark.asyncio
+async def test_create_contact_non_merging_mode_skips_null_fallback_on_miss(monkeypatch):
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+    import atlas_brain.storage.database as database_mod
+
+    class _Provider(DatabaseCRMProvider):
+        def __init__(self):
+            self.searches = []
+
+        async def search_contacts(self, **kwargs):
+            self.searches.append(kwargs)
+            if kwargs.get("business_context_id_is_null"):
+                raise AssertionError("non-merging mode must not query NULL fallback")
+            return []
+
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(return_value={"id": "new-eom"})
+    monkeypatch.setattr(database_mod, "get_db_pool", lambda: pool)
+    p = _Provider()
+    result = await p.create_contact(
+        {
+            "phone": "2175550000",
+            "email": "new@example.com",
+            "full_name": "New",
+            "business_context_id": EOM,
+        },
+        merge_existing=False,
+    )
+    assert result["id"] == "new-eom"
+    assert result["_was_created"] is True
+    assert p.searches == [{
+        "business_context_id": EOM,
+        "email": "new@example.com",
+    }]
+    insert_args = pool.fetchrow.await_args.args
+    assert insert_args[6] == "2175550000"
+
+
+@pytest.mark.asyncio
+async def test_create_contact_default_still_claims_and_merges_legacy_match():
+    """Default compatibility is explicit: omitting the keyword keeps the old
+    NULL-tenant claim and merge path."""
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    class _Provider(DatabaseCRMProvider):
+        def __init__(self):
+            self.claim_calls = []
+            self.updates = []
+
+        async def search_contacts(self, **kwargs):
+            if kwargs.get("business_context_id_is_null"):
+                return [{
+                    "id": UUID,
+                    "business_context_id": None,
+                    "email": "jane@example.com",
+                }]
+            return []
+
+        async def claim_contact(self, contact_id, business_context_id):
+            self.claim_calls.append((contact_id, business_context_id))
+            return {"id": contact_id, "business_context_id": business_context_id}
+
+        async def update_contact(self, contact_id, data):
+            self.updates.append((contact_id, data))
+            return {"id": contact_id, **data}
+
+    p = _Provider()
+    result = await p.create_contact({
+        "email": "jane@example.com",
+        "full_name": "Jane",
+        "business_context_id": EOM,
+    })
+    assert result["_was_created"] is False
+    assert p.claim_calls == [(UUID, EOM)]
+    assert p.updates
+
+
 # ---------------------------------------------------------------------------
 # Appointment-fallback scope filter (pure)
 # ---------------------------------------------------------------------------
