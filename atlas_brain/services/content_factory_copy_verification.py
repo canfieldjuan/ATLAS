@@ -159,6 +159,26 @@ def _claim_hits(text: str) -> list[str]:
     return hits
 
 
+def literal_claim_hits(text: str) -> list[str]:
+    """Banned-claim matches with NO negation suppression.
+
+    Body copy earns negation handling: "we do not promise guaranteed
+    savings" is a denial and reads as one. A text-to-image PROMPT does not
+    -- it is an instruction to a renderer, and "poster reading do not
+    guarantee savings" still draws the forbidden words onto the poster. The
+    grammar around the phrase is invisible once it is pixels, so the phrase
+    itself is what matters (#2192 round 3).
+
+    Callers that want prose semantics keep using :func:`verify_copy`.
+    """
+    hits: list[str] = []
+    for category in ("outcomes", "automation", "replacing_agents"):
+        for code, pattern in _RULES[category]:
+            for match in re.finditer(pattern, text, re.I):
+                hits.append(f"{code}: {_redact_pii(match.group(0))}")
+    return hits
+
+
 def verify_copy(text: str) -> CopyVerification:
     """Deterministically verify draft copy, producing the ``CopyVerification``
     verdict the #2116 EditorialAudit contract requires for promotion.

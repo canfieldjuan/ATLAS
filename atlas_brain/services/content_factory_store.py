@@ -13,10 +13,14 @@ Each job folder is its own git repo, so every stage write is an auditable commit
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import subprocess
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +44,12 @@ STAGE_SCHEMAS = {
     "draft": ("draft.v1",),
     # v1 stays admissible: pre-#2136 artifacts and any direct writer keep
     # working; runner-persisted audits are normalized to v2.
-    "audit": ("editorial_audit.v1", "editorial_audit.v2"),
+    "audit": ("editorial_audit.v1", "editorial_audit.v2", "editorial_audit.v3"),
     "manifest": ("manifest.v1",),
+    # Phase 6: channel variants and image prompts derived from an approved
+    # draft. Both are gated by the runner exactly like the audit.
+    "repurposing": ("repurposing.v1",),
+    "image_prompt": ("image_prompt.v1",),
 }
 
 _GIT_NAME = "Content Factory"
@@ -61,6 +69,71 @@ def _safe_segment(value: str, kind: str) -> str:
 def job_dir(job_id: str, *, root: Path | str = DEFAULT_ROOT) -> Path:
     """Return the (guarded) folder that holds a job's artifacts."""
     return Path(root) / "jobs" / _safe_segment(job_id, "job_id")
+
+
+_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def job_lock(job_id: str, *, root: Path | str = DEFAULT_ROOT) -> Iterator[None]:
+    """Exclusive per-job lock covering a read-validate-write sequence.
+
+    Readiness enforcement READS draft.json and audit.json, decides, and only
+    then persists. Without mutual exclusion another stage run can replace the
+    draft inside that window, so a Phase 6 artifact lands as ready beside copy
+    its approving audit never covered: the fingerprint was checked against
+    content that no longer exists at write time (#2192 round 8). Validating
+    before writing is not enough when the thing validated against can move.
+
+    Re-entrant within a thread, so ``run_stage`` holds it across enforcement
+    while ``write_artifact`` takes it again without deadlocking; ``flock``
+    extends the exclusion across processes. The lock file lives OUTSIDE the
+    job folder so it never lands in the job's git history.
+    """
+    safe = _safe_segment(job_id, "job_id")
+    depth = getattr(_LOCK_STATE, "depth", None)
+    if depth is None:
+        depth = _LOCK_STATE.depth = {}
+    if depth.get(safe):
+        depth[safe] += 1
+        try:
+            yield
+        finally:
+            depth[safe] -= 1
+        return
+
+    locks = Path(root) / ".locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    handle = open(locks / f"{safe}.lock", "a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        depth[safe] = 1
+        yield
+    finally:
+        depth[safe] = 0
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def _restore_artifact(job: Path, path: Path, previous: "bytes | None") -> None:
+    """Undo a failed stage write: put back the previous bytes (or remove the
+    file if the stage had none) and unstage it, so a raised write_artifact
+    leaves no residue for the readiness gate to read as source state.
+
+    Best-effort by design -- this runs while an exception is propagating, and
+    a cleanup failure must not replace the original error.
+    """
+    try:
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(previous)
+        subprocess.run(
+            ["git", "-C", str(job), "reset", "-q", "--", path.name],
+            capture_output=True,
+        )
+    except OSError:
+        pass
 
 
 def _git(job: Path, *args: str) -> subprocess.CompletedProcess:
@@ -97,6 +170,23 @@ def _ensure_repo(job: Path) -> None:
 
 
 def write_artifact(
+    job_id: str,
+    stage: str,
+    artifact: dict[str, Any],
+    *,
+    root: Path | str = DEFAULT_ROOT,
+) -> dict[str, Any]:
+    """Persist a stage artifact under the job's exclusive lock.
+
+    See ``_write_artifact_locked`` for the validation and commit behavior. The
+    lock is re-entrant, so a caller that already holds it (``run_stage``, which
+    must cover its read-validate-write window) is not blocked by this one.
+    """
+    with job_lock(job_id, root=root):
+        return _write_artifact_locked(job_id, stage, artifact, root=root)
+
+
+def _write_artifact_locked(
     job_id: str,
     stage: str,
     artifact: dict[str, Any],
@@ -152,21 +242,34 @@ def write_artifact(
     job.mkdir(parents=True, exist_ok=True)
     _ensure_repo(job)
     path = job / f"{stage}.json"
-    path.write_text(json.dumps(canonical, indent=2, ensure_ascii=False) + "\n")
 
-    # Scope the staged-change check and the commit to THIS file, so an unrelated
-    # pre-staged file in the job repo cannot ride into this stage's commit and an
-    # identical rewrite still makes no empty commit.
-    _git(job, "add", "--", path.name)
-    unchanged = (
-        subprocess.run(
-            ["git", "-C", str(job), "diff", "--cached", "--quiet", "--", path.name]
-        ).returncode
-        == 0
-    )
-    if not unchanged:
-        _git(job, "commit", "-q", "-m", f"{stage}: {tag}", "--", path.name)
-    sha = _git(job, "rev-parse", "HEAD").stdout.strip()
+    # Persistence is ALL-OR-NOTHING. A failed commit used to leave the new file
+    # written and staged in the working tree even though write_artifact raised
+    # and no commit recorded the stage -- and the readiness gate reads the
+    # working tree, so that residue was then trusted as approved source state
+    # (#2192 round 9). On any failure the previous content is restored, or the
+    # file removed if the stage had none, before the error propagates.
+    had_previous = path.exists()
+    previous = path.read_bytes() if had_previous else None
+    try:
+        path.write_text(json.dumps(canonical, indent=2, ensure_ascii=False) + "\n")
+
+        # Scope the staged-change check and the commit to THIS file, so an
+        # unrelated pre-staged file in the job repo cannot ride into this
+        # stage's commit and an identical rewrite still makes no empty commit.
+        _git(job, "add", "--", path.name)
+        unchanged = (
+            subprocess.run(
+                ["git", "-C", str(job), "diff", "--cached", "--quiet", "--", path.name]
+            ).returncode
+            == 0
+        )
+        if not unchanged:
+            _git(job, "commit", "-q", "-m", f"{stage}: {tag}", "--", path.name)
+        sha = _git(job, "rev-parse", "HEAD").stdout.strip()
+    except Exception:
+        _restore_artifact(job, path, previous)
+        raise
 
     return {
         "job_id": job_id,

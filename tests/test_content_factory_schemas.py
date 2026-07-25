@@ -319,3 +319,272 @@ def test_model_for_dispatches_both_audit_versions():
 
     assert model_for({"schema": "editorial_audit.v1"}) is EditorialAudit
     assert model_for({"schema": "editorial_audit.v2"}) is EditorialAuditV2
+
+
+# --- Phase 6 contracts: repurposing variants + image prompts (#2109) ---
+
+
+def _variant(channel="linkedin", body="Clean copy about repeat tickets.", verdict="pass"):
+    return {
+        "channel": channel,
+        "body_markdown": body,
+        "derived_from_claims": ["e1"],
+        "copy_verification": {"verdict": verdict, "hits": []},
+    }
+
+
+def _package(variants, ready=False):
+    return {
+        "schema": "repurposing.v1",
+        "project_id": "resolution-audit",
+        "variants": variants,
+        "ready_to_publish": ready,
+    }
+
+
+def test_repurposing_requires_at_least_one_variant():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(_package([]))
+
+
+def test_repurposing_rejects_duplicate_channels():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([_variant(channel="linkedin"), _variant(channel="LinkedIn")])
+        )
+
+
+def test_repurposing_rejects_blank_variant_body():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(_package([_variant(body="   ")]))
+
+
+def test_ready_to_publish_requires_every_variant_passing():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package(
+                [_variant(channel="linkedin"), _variant(channel="x", verdict="fail")],
+                ready=True,
+            )
+        )
+
+
+def test_ready_to_publish_accepted_when_all_pass():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    pkg = RepurposingPackage.model_validate(
+        _package([_variant(channel="linkedin"), _variant(channel="x")], ready=True)
+    )
+    assert pkg.ready_to_publish is True
+
+
+def test_not_ready_package_may_carry_failing_variant():
+    """A failing variant is a legitimate intermediate state -- it just cannot
+    be declared shippable."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    pkg = RepurposingPackage.model_validate(
+        _package([_variant(verdict="fail")], ready=False)
+    )
+    assert pkg.variants[0].copy_verification.verdict == "fail"
+
+
+def test_variant_advisory_warnings_share_the_bounded_grammar():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    variant = _variant()
+    variant["advisory_warnings"] = ["Contact bob@example.com"]
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(_package([variant]))
+
+
+def test_image_prompt_set_requires_a_prompt():
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    with pytest.raises(ValidationError):
+        ImagePromptSet.model_validate(
+            {"schema": "image_prompt.v1", "project_id": "p", "prompts": []}
+        )
+
+
+def test_image_prompt_set_accepts_valid_prompt():
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    ps = ImagePromptSet.model_validate(
+        {
+            "schema": "image_prompt.v1",
+            "project_id": "p",
+            "prompts": [{"purpose": "hero", "prompt_text": "a clean desk, soft light"}],
+        }
+    )
+    assert ps.prompts[0].aspect_ratio == "1:1"
+
+
+def test_phase6_schemas_dispatch():
+    from atlas_brain.schemas.content_factory import (
+        ImagePromptSet,
+        RepurposingPackage,
+        model_for,
+    )
+
+    assert model_for({"schema": "repurposing.v1"}) is RepurposingPackage
+    assert model_for({"schema": "image_prompt.v1"}) is ImagePromptSet
+
+
+# --- review round 1 on #2192 ---
+
+
+def test_variant_without_lineage_is_rejected():
+    """Orphan variants must be unrepresentable, not merely discouraged."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    v = _variant()
+    del v["derived_from_claims"]
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(_package([v]))
+
+
+def test_variant_with_empty_lineage_is_rejected():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([{**_variant(), "derived_from_claims": []}])
+        )
+
+
+def test_mixed_lineage_package_is_rejected():
+    """One traceable variant does not license an untraceable sibling."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    good = _variant(channel="linkedin")
+    bad = {**_variant(channel="x"), "derived_from_claims": []}
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(_package([good, bad], ready=True))
+
+
+def test_blank_lineage_id_is_rejected():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([{**_variant(), "derived_from_claims": ["  "]}])
+        )
+
+
+def test_ready_to_generate_requires_passing_verdict():
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    with pytest.raises(ValidationError):
+        ImagePromptSet.model_validate({
+            "schema": "image_prompt.v1", "project_id": "p",
+            "prompts": [{"purpose": "hero", "prompt_text": "a desk"}],
+            "copy_verification": {"verdict": "fail", "hits": ["guaranteed-savings: x"]},
+            "ready_to_generate": True,
+        })
+
+
+def test_ready_to_generate_rejected_without_any_verdict():
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    with pytest.raises(ValidationError):
+        ImagePromptSet.model_validate({
+            "schema": "image_prompt.v1", "project_id": "p",
+            "prompts": [{"purpose": "hero", "prompt_text": "a desk"}],
+            "ready_to_generate": True,
+        })
+
+
+def test_ready_to_generate_accepted_when_passing():
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    ps = ImagePromptSet.model_validate({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{"purpose": "hero", "prompt_text": "a desk"}],
+        "copy_verification": {"verdict": "pass", "hits": []},
+        "ready_to_generate": True,
+    })
+    assert ps.ready_to_generate is True
+
+
+def test_failing_set_may_persist_when_not_ready():
+    """A failing verdict is a legitimate intermediate state."""
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    ps = ImagePromptSet.model_validate({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{"purpose": "hero", "prompt_text": "guaranteed savings poster"}],
+        "copy_verification": {"verdict": "fail", "hits": ["guaranteed-savings: x"]},
+    })
+    assert ps.ready_to_generate is False
+
+
+@pytest.mark.parametrize("invisible", ["​", "­‌", "⁠", "   "])
+def test_invisible_only_variant_body_rejected(invisible):
+    """Zero-width and format-only text renders as nothing; it is not copy."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([{**_variant(), "body_markdown": invisible}])
+        )
+
+
+@pytest.mark.parametrize("invisible", ["​", "­", "⁠"])
+def test_invisible_only_prompt_text_rejected(invisible):
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    with pytest.raises(ValidationError):
+        ImagePromptSet.model_validate({
+            "schema": "image_prompt.v1", "project_id": "p",
+            "prompts": [{"purpose": "hero", "prompt_text": invisible}],
+        })
+
+
+def test_visible_text_with_incidental_zero_width_accepted():
+    """The other side: real copy is not rejected for containing one."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    pkg = RepurposingPackage.model_validate(
+        _package([{**_variant(), "body_markdown": "real​copy here"}])
+    )
+    assert "copy" in pkg.variants[0].body_markdown
+
+
+@pytest.mark.parametrize("mark_only", ["️", "́", "︎"])
+def test_combining_mark_only_text_rejected(mark_only):
+    """A lone variation selector/combining mark renders nothing."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([{**_variant(), "body_markdown": mark_only}])
+        )
+
+
+def test_emoji_with_variation_selector_accepted():
+    """The other side: real content carrying a mark is still content."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    pkg = RepurposingPackage.model_validate(
+        _package([{**_variant(), "body_markdown": "spotless results ❤️"}])
+    )
+    assert "spotless" in pkg.variants[0].body_markdown
+
+
+def test_canonically_equivalent_channels_are_duplicates():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    nfc, nfd = "café", "café"
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([_variant(channel=nfc), _variant(channel=nfd)])
+        )
