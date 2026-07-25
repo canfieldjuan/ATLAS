@@ -995,20 +995,22 @@ case.
 **Counting the trigger under squash-amend.** Builder branches are amended into a
 single commit (§1c), so "3 consecutive pushes" is not observable from the commit
 graph -- a branch showing one commit may have absorbed a dozen review cycles.
-Count **bot review rounds** instead. Every review comment carries the id of the
-submission it belongs to, so group by it to get the per-round finding count and
-the files each round touched -- the two values this breaker actually compares:
+Count **bot review rounds** instead. Each review comment carries the id of the
+submission it belongs to (`pull_request_review_id`), so rounds are recoverable
+from the review and review-comment endpoints even when the commit graph shows
+one commit. Read three values per round: the count of top-level bot findings,
+which files/decisions they land on, and whether those repeat from the prior
+round. A bare round count does not trip this breaker; a flat-or-rising
+**per-round finding count on a repeating decision** does.
 
-    gh api repos/canfieldjuan/ATLAS/pulls/<n>/comments --paginate \
-      --jq 'group_by(.pull_request_review_id)[]
-            | {round: .[0].pull_request_review_id,
-               findings: length,
-               files: (map(.path) | unique)}'
-
-Read it as one row per round. A bare round count is not enough: the trigger is
-whether the *finding count per round* is flat or rising, and the repeated `files`
-entries are what identify the same file/decision the findings keep landing on --
-that is the seam 3k.2 asks you to name.
+This section deliberately specifies **what to compare, not a command to run**.
+An operational one-liner in this document would be untested code in prose -- it
+cannot satisfy 3h (auditors ship with fixture tests) or 3i (checkers prove their
+failure detection), and each imprecision in it (page-boundary grouping, filtering
+replies and human comments, establishing that two findings are actually the same
+class) becomes its own review round with nothing to close it. If this comparison
+is worth mechanizing, it ships as a script under `scripts/` with those fixture
+tests, and this section points at it.
 
 This is a **different source** from `live-reconciliation`, which must not be
 substituted for it: that check queries `reviewThreads` and discards resolved and
@@ -1134,8 +1136,14 @@ grew `ScopedGmailTokenStore`, a 15-method cross-process durability protocol
 (`flock` lease, double fsync, `fstat`-verified no-follow descriptors,
 FIFO/socket/symlink rejection, monotonic generation ancestry with cycle
 detection, repeated-cancellation draining at three call sites) -- while
-`atlas_brain/storage/repositories/business_context.py` already offered
-`get`/`upsert` on the row that state belongs in. Because none of it is a guard,
+the project already runs Postgres with a repository layer, where this state is a
+row and the ordering it hand-rolls is a transaction. (That alternative needs new
+schema: `atlas_brain/storage/repositories/business_context.py` writes a fixed
+business-profile column list with no token or binding field, and its `get` and
+`upsert` are separate pool operations, not one compare-and-swap. "Add a column
+and a transaction" is still a far smaller and better-tested surface than a
+bespoke cross-process lease -- but it is a build, not a drop-in.) Because none of
+this is a guard,
 3k.1/3k.3 never applied; it reached 12 bot rounds, and its *Intentional* section
 now records schedule patches as design intent ("the FIFO nonblocking regression
 starts its deadline only after the spawned reader has completed
