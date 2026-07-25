@@ -995,11 +995,22 @@ case.
 **Counting the trigger under squash-amend.** Builder branches are amended into a
 single commit (§1c), so "3 consecutive pushes" is not observable from the commit
 graph -- a branch showing one commit may have absorbed a dozen review cycles.
-Count **bot review rounds** instead (distinct automated-review submissions on the
-PR), which is the same signal `live-reconciliation` already reads. Three
-consecutive rounds whose new same-class finding count is flat or rising trip this
-breaker regardless of how many commits the branch shows. One commit and twelve
-bot rounds is the case this rule exists for, not an exemption from it.
+Count **bot review rounds** instead: distinct automated-review submissions, which
+carry their own ids and timestamps on the reviews endpoint.
+
+    gh api repos/canfieldjuan/ATLAS/pulls/<n>/reviews --paginate \
+      --jq '[.[]|select(.user.login=="chatgpt-codex-connector[bot]")]|length'
+
+This is a **different source** from `live-reconciliation`, which must not be
+substituted for it: that check queries `reviewThreads` and discards resolved and
+outdated ones (`scripts/check_ai_reconciliation_live.py`), so it reports what is
+unresolved right now and carries no submission ids, timestamps, or round
+membership. It cannot supply a round count. Read rounds from the reviews endpoint
+above.
+
+Three consecutive rounds whose new same-class finding count is flat or rising
+trip this breaker regardless of how many commits the branch shows. One commit and
+twelve bot rounds is the case this rule exists for, not an exemption from it.
 
 When this trips, the next push may NOT add another example-scoped patch (another
 token, regex, vocabulary row, or oracle fixture). It must carry a **Decision-Seam
@@ -1097,6 +1108,14 @@ special case; the PR body accretes those special cases as intent.
    subsystem inside a PR whose stated purpose is something else (a privacy
    boundary, a feature, a migration). Split it: the feature ships against the
    closed-surface component; the subsystem ships alone if it is genuinely needed.
+
+Reviewer enforcement lives in the open-execution row of the path-trigger table in
+`docs/REVIEWER_RULES.md` (R8 + R2). Like the guard row it is deliberately
+prose-only -- no path glob identifies a durability protocol, since the same
+module paths carry ordinary code -- so `scripts/audit_review_rules_triggered.py`
+surfaces it as an explicit advisory finding per 3g rather than deriving it. A
+plan whose slice is open-execution work and whose Review Contract omits R8 fails
+that surfacing, and the three requirements above are what the reviewer checks.
 
 **Why:** #2184 (scoped mailbox binding) is the case. Its stated purpose was an
 authorization boundary -- bind each CRM business context to one mailbox. It also

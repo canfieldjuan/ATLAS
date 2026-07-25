@@ -247,6 +247,7 @@ these for the paths it touches:
 | `scripts/audit_*.py`, `scripts/check_*.py`, evaluators / gate predicates | R2 (failure-branch fixtures per `AGENTS.md` 3h/3i), R10 |
 | `extracted_*/` synced files | R1, R10 (manifest sync discipline) |
 | Guard, validator, cap, classifier, gate, sanitizer, denylist, parser admission rule, or safety checker changes | R2, R14 (boundary-probe before LGTM) |
+| Concurrency, durability, lock/lease, cache-coherence, rotation or retry state-machine, or crash-safe replacement changes | R8, R2 (`AGENTS.md` 3k.4: the plan names the closed-surface component it rejected and why, the bounded interleavings the design is correct under, and keeps one execution surface per slice) |
 | Review comments that name a defect class ("all X", "class of Y", "same failure mode") | R13 (held-out/propertied proof that the class, not only the example, is fixed) |
 | All reviewer verdicts | R14 (checked-out PR-head and codebase-backed verification) |
 
