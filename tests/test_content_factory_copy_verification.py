@@ -618,3 +618,83 @@ def test_terminator_plus_newline_is_one_boundary():
     assert any(
         "sentence 2" in w for w in warnings if w.startswith("unqualified-answer-claim")
     )
+
+
+# --- round-8 review fixes ---
+
+
+def test_fronted_qualifier_excuses_following_claim():
+    """Regression for the round-7 tightening: the ordinary fronted form
+    stays silent."""
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("When evidence exists, we draft answers.")
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_fronted_qualifier_does_not_reach_later_clauses():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "When evidence exists, support triages tickets, but we draft an "
+        "answer regardless."
+    )
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_owned_by_metadata_is_not_owner_coverage():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Each is probably owned by severity."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_owned_by_team_still_suppresses():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Each is owned by the support team."
+    )
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_soft_wrapped_line_stays_in_sentence():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("This is a long\nwrapped answer for customers.")
+    assert any(
+        "sentence 1" in w for w in warnings if w.startswith("unqualified-answer-claim")
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "We do not draft answers.",
+        "No answers are generated.",
+        "Refunds are never owned by Billing.",
+    ],
+)
+def test_negated_claims_are_denials_not_warnings(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(text)
+    assert not any(
+        w.startswith(("unqualified-answer-claim:", "unqualified-ownership-claim:"))
+        for w in warnings
+    ), text
+
+
+def test_positive_claims_still_warn_after_polarity_check():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    assert any(
+        w.startswith("unqualified-answer-claim:")
+        for w in advisory_warnings("We draft answers.")
+    )
+    assert any(
+        w.startswith("unqualified-ownership-claim:")
+        for w in advisory_warnings("Billing owns refunds.")
+    )

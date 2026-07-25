@@ -86,6 +86,19 @@ Slice phase: vertical slice
   R5 (no gating change, old artifacts validate), R10 (advisory logic
   lives beside the gate it complements), R14.
 
+### Review round 8 (Codex)
+
+Four findings, all fixed (one was a real regression from round 7's
+tightening): fronted qualifiers carry forward exactly one clause when
+their own clause is claim-free ("When evidence exists, we draft answers."
+is silent again; the carry cannot reach later clauses, so the round-6
+attack still warns); `owned by` requires an owner-like target like the
+other routing alternatives ("owned by severity" is not coverage); a bare
+newline is a sentence boundary only at a blank line or a capital-starting
+line (Markdown soft wraps stay in their sentence); and advisory matches
+have a polarity check -- explicit denials ("We do not draft answers",
+"Refunds are never owned by Billing") are not unqualified assertions.
+
 ### Review round 7 (Codex)
 
 Four findings, all fixed: clause granularity tightened -- dashes, slashes,
@@ -236,7 +249,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 194 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 203 passed (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered
