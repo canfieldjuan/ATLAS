@@ -18,6 +18,7 @@ import sys
 import uuid
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping, Sequence
+from urllib.parse import urlsplit
 
 from sync_eom_portal_customers import (
     DEFAULT_BASE_URL,
@@ -34,6 +35,33 @@ RATE_TYPES = {
     "Per Month": "monthly",
 }
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _portal_origin(value: str) -> str:
+    try:
+        parsed = urlsplit(str(value).strip())
+        port = parsed.port
+    except ValueError:
+        raise argparse.ArgumentTypeError("portal origin is invalid") from None
+    host = parsed.hostname
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise argparse.ArgumentTypeError(
+            "portal origin must be an HTTP(S) origin without credentials or a path"
+        )
+    if parsed.scheme == "http" and host not in {"localhost", "127.0.0.1", "::1"}:
+        raise argparse.ArgumentTypeError("non-loopback portal origins must use HTTPS")
+    host = f"[{host}]" if ":" in host else host.lower()
+    default_port = 443 if parsed.scheme == "https" else 80
+    port_suffix = f":{port}" if port is not None and port != default_port else ""
+    return f"{parsed.scheme}://{host}{port_suffix}"
 
 
 async def load_service(
@@ -160,6 +188,12 @@ def build_plan(
     token = site.get("updateToken")
     if not isinstance(token, str) or HASH_PATTERN.fullmatch(token) is None:
         raise SystemExit("Portal Site has no valid update token")
+    customer_token = customer.get("updateToken")
+    if (
+        not isinstance(customer_token, str)
+        or HASH_PATTERN.fullmatch(customer_token) is None
+    ):
+        raise SystemExit("Portal Customer has no valid update token")
 
     return {
         "action": "noop" if current == desired else "update",
@@ -172,6 +206,7 @@ def build_plan(
         "portal": {
             "baseUrl": base_url,
             "customerId": portal_customer_id,
+            "expectedCustomerUpdateToken": customer_token,
             "expectedUpdateToken": token,
             "siteId": site_id,
         },
@@ -193,6 +228,7 @@ def apply_plan(client: Any, token: str, plan: Mapping[str, Any]) -> None:
         f"{portal['baseUrl']}/api/admin/locations/{portal['siteId']}",
         headers={"Authorization": f"Bearer {token}"},
         json={
+            "expectedCustomerUpdateToken": portal["expectedCustomerUpdateToken"],
             "expectedUpdateToken": portal["expectedUpdateToken"],
             "rate": desired["rate"],
             "rateType": desired["rateType"],
@@ -283,13 +319,29 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--plan-hash")
     parser.add_argument(
         "--base-url",
-        default=settings_default("eom_portal_base_url") or DEFAULT_BASE_URL,
+        type=_portal_origin,
+        help="Portal origin; must match the configured credential origin",
     )
     return parser
 
 
-def main(argv: Sequence[str] | None = None, **run_kwargs: Any) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    credential_origin: str | None = None,
+    **run_kwargs: Any,
+) -> int:
     parser = _parser()
+    configured = (
+        credential_origin
+        or settings_default("eom_portal_base_url")
+        or DEFAULT_BASE_URL
+    )
+    try:
+        configured = _portal_origin(configured)
+    except argparse.ArgumentTypeError as exc:
+        parser.error(f"configured portal credential origin: {exc}")
+    parser.set_defaults(base_url=configured)
     args = parser.parse_args(argv)
     if args.site_id <= 0:
         parser.error("--site-id must be greater than zero")
@@ -300,9 +352,8 @@ def main(argv: Sequence[str] | None = None, **run_kwargs: Any) -> int:
         parser.error("--apply requires the exact lowercase --plan-hash from preview")
     if not args.apply and args.plan_hash is not None:
         parser.error("--plan-hash is only valid with --apply")
-    args.base_url = args.base_url.rstrip("/")
-    if not args.base_url:
-        parser.error("--base-url must not be empty")
+    if args.base_url != configured:
+        parser.error("--base-url must match the configured portal credential origin")
     return asyncio.run(run(args, **run_kwargs))
 
 

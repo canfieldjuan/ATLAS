@@ -20,6 +20,7 @@ import reconcile_eom_portal_site as reconcile  # noqa: E402
 SERVICE_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 CONTACT_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 TOKEN = "a" * 64
+CUSTOMER_TOKEN = "b" * 64
 ENV = {"ATLAS_TOOLS_EOM_PORTAL_TOKEN": "secret-token"}
 BASE_URL = "https://portal.test"
 
@@ -51,6 +52,7 @@ def _customers(**site_over):
             "id": 7,
             "active": True,
             "atlasContactId": str(CONTACT_ID),
+            "updateToken": CUSTOMER_TOKEN,
             "sites": [site],
         }
     ]
@@ -71,6 +73,7 @@ class Client:
         self.patch_status = patch_status
         self.payload = payload
         self.on_get = on_get
+        self.gets = []
         self.patches = []
 
     def __enter__(self):
@@ -81,6 +84,7 @@ class Client:
 
     def get(self, url, headers):
         assert headers == {"Authorization": "Bearer secret-token"}
+        self.gets.append((url, headers))
         if self.on_get:
             self.on_get()
         return Response(200, {"success": True, "customers": self.customers})
@@ -134,6 +138,7 @@ def _run(service, client, *extra, pool=None):
         pool=pool or Pool(service),
         client_factory=lambda: client,
         environ=ENV,
+        credential_origin=BASE_URL,
     )
 
 
@@ -196,6 +201,7 @@ def test_only_exact_supported_rate_labels_map(label, expected):
         ("inactive_site", "not found uniquely"),
         ("inactive_customer", "not found uniquely"),
         ("bad_token", "valid update token"),
+        ("bad_customer_token", "Customer has no valid update token"),
         ("unsupported_label", "Unsupported Atlas rate label"),
     ],
 )
@@ -216,6 +222,8 @@ def test_identity_and_mapping_boundaries_fail_closed(case, message):
         customers[0].pop("active")
     elif case == "bad_token":
         customers[0]["sites"][0]["updateToken"] = "stale"
+    elif case == "bad_customer_token":
+        customers[0]["updateToken"] = "stale"
     else:
         service["rate_label"] = "Monthly"
 
@@ -257,6 +265,7 @@ def test_apply_sends_only_guarded_site_economics(capsys):
             "https://portal.test/api/admin/locations/31",
             {"Authorization": "Bearer secret-token"},
             {
+                "expectedCustomerUpdateToken": CUSTOMER_TOKEN,
                 "expectedUpdateToken": TOKEN,
                 "rate": 247.5,
                 "rateType": "per_visit",
@@ -329,6 +338,30 @@ def test_plan_hash_is_bound_to_portal_origin():
     assert reconcile.plan_hash(_plan()) != reconcile.plan_hash(
         _plan(base_url="https://other-portal.test")
     )
+    changed_customer = _customers()
+    changed_customer[0]["updateToken"] = "c" * 64
+    assert reconcile.plan_hash(_plan()) != reconcile.plan_hash(
+        _plan(customers=changed_customer)
+    )
+
+
+@pytest.mark.parametrize(
+    "selected_origin",
+    ["https://evil.test", "http://evil.test/path"],
+)
+def test_origin_mismatch_is_rejected_before_credentials_or_io(selected_origin):
+    pool, client = Pool(_service()), Client(_customers())
+    with pytest.raises(SystemExit) as exc:
+        reconcile.main(
+            _main_args("--base-url", selected_origin),
+            pool=pool,
+            client_factory=lambda: client,
+            environ=ENV,
+            credential_origin=BASE_URL,
+        )
+    assert exc.value.code == 2
+    assert pool.initialized == 0
+    assert client.gets == client.patches == []
 
 
 def test_apply_without_hash_is_rejected_before_external_io():
@@ -339,6 +372,7 @@ def test_apply_without_hash_is_rejected_before_external_io():
             pool=pool,
             client_factory=lambda: client,
             environ=ENV,
+            credential_origin=BASE_URL,
         )
     assert exc.value.code == 2
     assert pool.initialized == 0 and client.patches == []
