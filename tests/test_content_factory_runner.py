@@ -309,7 +309,10 @@ def _seed_draft(root, job_id, source_ids, revision=1, project="p", approved=True
         "claims": [{"text": f"claim {sid}", "source_id": sid} for sid in source_ids],
     }, root=root)
     if approved:
+        # Mirror what run_stage does: bind the approval to the draft bytes.
+        fingerprint = runner._draft_fingerprint(job_id, root)
         write_artifact(job_id, "audit", {
+            "source_draft_fingerprint": fingerprint,
             "schema": "editorial_audit.v2",
             "project_id": project,
             # Must approve THIS revision -- a stale audit authorizes nothing.
@@ -859,3 +862,96 @@ def test_oracle_structural_forms_fail_without_intent(number, tmp_path, monkeypat
 def test_oracle_email_any_script_fails(addr, tmp_path, monkeypatch):
     cv = _prompt_verdict(f"a card reading {addr}", tmp_path, monkeypatch, "job-or4")
     assert cv["verdict"] == "fail", (addr, cv)
+
+
+# --- review round 7 on #2192 ---
+
+
+_CASINGS = ["1-800-flowers", "1-800-FLOWERS", "1-800-Flowers", "1-800-gOt-JuNk"]
+
+
+@pytest.mark.parametrize("number", _CASINGS)
+@pytest.mark.parametrize("intent", ["Call", "Dial", "Text"])
+def test_vanity_recognition_is_case_independent(number, intent, tmp_path, monkeypatch):
+    """Vanity spelling is case-insensitive; attachment (hyphen vs space) is
+    what separates the number from the next word."""
+    cv = _prompt_verdict(f"{intent} {number} today", tmp_path, monkeypatch, "job-case")
+    assert cv["verdict"] == "fail", (intent, number, cv)
+
+
+@pytest.mark.parametrize("trailing", ["today", "now", "for details", "to book"])
+def test_trailing_lowercase_word_not_absorbed(trailing, tmp_path, monkeypatch):
+    """The other side: a space-joined word must not extend the token past
+    the E.164 bound and thereby hide a real number."""
+    cv = _prompt_verdict(f"Ring 07700 900123 {trailing}", tmp_path, monkeypatch, "job-trail")
+    assert cv["verdict"] == "fail", (trailing, cv)
+
+
+def test_same_revision_draft_replacement_invalidates_approval(tmp_path, monkeypatch):
+    """A rerun of the draft stage keeps revision 1 but changes the body, so
+    the old approval must not carry to text nobody reviewed."""
+    from atlas_brain.services.content_factory_store import write_artifact
+
+    _seed_draft(tmp_path, "job-swap", ["e1"])          # draft + matching audit
+    write_artifact("job-swap", "draft", {              # rerun, same revision
+        "schema": "draft.v1", "project_id": "p", "revision": 1,
+        "body_markdown": "completely different body",
+        "claims": [{"text": "claim e2", "source_id": "e2"}],
+    }, root=tmp_path)
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e2"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="does not match the draft currently"):
+        runner.run_stage("job-swap", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_image_prompt_readiness_also_content_bound(tmp_path, monkeypatch):
+    from atlas_brain.services.content_factory_store import write_artifact
+
+    _seed_draft(tmp_path, "job-swap2", ["e1"])
+    write_artifact("job-swap2", "draft", {
+        "schema": "draft.v1", "project_id": "p", "revision": 1,
+        "body_markdown": "replaced body", "claims": [{"text": "c", "source_id": "e1"}],
+    }, root=tmp_path)
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{"purpose": "hero", "prompt_text": "a tidy desk"}],
+        "ready_to_generate": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="does not match the draft currently"):
+        runner.run_stage("job-swap2", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_audit_stage_stamps_the_fingerprint(tmp_path, monkeypatch):
+    """The binding is runner-set, not worker-supplied."""
+    _seed_draft(tmp_path, "job-stamp", ["e1"], approved=False)
+    reply = json.dumps({
+        "schema": "editorial_audit.v2", "project_id": "p",
+        "edited_body_markdown": "Clean edited copy.",
+        "recommendation": "revise",
+        "source_draft_fingerprint": "worker-supplied-lie",
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-stamp", "audit", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["source_draft_fingerprint"] == runner._draft_fingerprint("job-stamp", tmp_path)
+    assert stored["source_draft_fingerprint"] != "worker-supplied-lie"
+
+
+def test_unchanged_draft_keeps_approval_valid(tmp_path, monkeypatch):
+    """The other side: an untouched draft still ships."""
+    _seed_draft(tmp_path, "job-stable", ["e1"])
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e1"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-stable", "repurposing", "m", "req", api_key="k", root=tmp_path)
+    assert json.loads(Path(rec["path"]).read_text())["ready_to_publish"] is True

@@ -10,6 +10,7 @@ addressed by model id.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import urllib.error
@@ -186,11 +187,13 @@ _E164_RE = re.compile(r"(?:\+|\b00)[\d\s().\-]{7,20}\d")
 _NANP_RE = re.compile(r"\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b")
 # A token someone could dial: starts with a digit, 7+ alphanumerics once
 # separators are stripped (covers 1-800-GOT-JUNK and 07700 900123 alike).
-# Continuation groups must be digits or an uppercase run (vanity numbers
-# are conventionally capitalised), so a token cannot swallow the ordinary
-# lowercase word that follows it ("07700 900123 today").
+# Continuation groups are digits (any separator) or LETTERS ONLY when
+# hyphen/dot-joined. Vanity spelling is case-insensitive ("1-800-flowers"
+# is the same number as "1-800-FLOWERS"), but a space-joined lowercase word
+# is the next word rather than part of the number ("07700 900123 today").
+# Attachment, not casing, is what distinguishes them.
 _DIAL_TOKEN_RE = re.compile(
-    r"\b[+]?\d[\dA-Z]*(?:[\s.\-](?:\d+|[A-Z]{2,})){0,5}"
+    r"\b[+]?\d[\dA-Za-z]*(?:(?:[\s](?=\d)|[.\-])[\dA-Za-z]+){0,5}"
 )
 
 
@@ -352,6 +355,30 @@ def _draft_claim_ids(draft: "dict[str, Any]") -> "set[str]":
     return ids
 
 
+def _draft_fingerprint(job_id: str, root: "Path | str") -> "str | None":
+    """SHA-256 of the draft artifact's bytes as persisted by the store.
+
+    The store writes a canonical form, so this is stable for identical
+    content and changes the moment the draft body or claims change --
+    including a same-revision rerun, which a revision number cannot detect.
+    """
+    path = job_dir(job_id, root=root) / "draft.json"
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _stamp_draft_fingerprint(
+    artifact: dict[str, Any], job_id: str, root: "Path | str"
+) -> None:
+    """Bind an audit to the draft content it actually reviewed. Runner-set,
+    never worker-supplied -- the same discipline as the verdict."""
+    if artifact.get("schema") not in _EDITOR_SCHEMAS:
+        return
+    artifact["source_draft_fingerprint"] = _draft_fingerprint(job_id, root)
+
+
 def _enforce_lineage(artifact: dict[str, Any], job_id: str, root: "Path | str") -> None:
     """Readiness flags require a verified tie to the job's approved draft.
 
@@ -407,6 +434,17 @@ def _enforce_lineage(artifact: dict[str, Any], job_id: str, root: "Path | str") 
         raise ArtifactStoreError(
             f"audit approved draft revision {audit.get('draft_revision', 1)} "
             f"but the draft on disk is revision {draft.get('revision', 1)}"
+        )
+    # Content identity, not just the revision label: a same-revision rerun
+    # replaces the body while the number stays 1, and the old approval must
+    # not carry over to text nobody reviewed (round 7).
+    approved_fingerprint = audit.get("source_draft_fingerprint")
+    current_fingerprint = _draft_fingerprint(job_id, root)
+    if not approved_fingerprint or approved_fingerprint != current_fingerprint:
+        raise ArtifactStoreError(
+            "the approving audit does not match the draft currently on disk "
+            "(content changed since approval, or the audit predates "
+            "content binding); re-run the audit stage before shipping"
         )
 
     # Cross-project derivation: a matching revision and overlapping ids are
@@ -465,6 +503,7 @@ def run_stage(
             f"stage {stage!r}: worker {model!r} returned no JSON artifact"
         )
     _enforce_copy_verification(artifact)
+    _stamp_draft_fingerprint(artifact, job_id, root)
     _enforce_repurposing(artifact)
     _enforce_image_prompts(artifact)
     _enforce_lineage(artifact, job_id, root)

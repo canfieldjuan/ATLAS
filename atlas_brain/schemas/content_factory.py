@@ -321,6 +321,12 @@ class EditorialAuditV2(BaseModel):
     # warnings from the copy-verification module. Deliberately NOT referenced
     # by any validator -- warnings never gate the recommendation.
     advisory_warnings: list[str] = Field(default_factory=list)
+    # Content identity of the draft this audit approved, stamped by the
+    # runner (never by the worker). A revision number is producer-supplied
+    # and reusable -- rerunning the draft stage can replace the body while
+    # keeping revision 1 -- so approval binds to the bytes that were
+    # actually reviewed (#2192 round 7).
+    source_draft_fingerprint: Optional[str] = None
     recommendation: Recommendation = "revise"
     prompt_version: Optional[str] = None
 

@@ -241,6 +241,23 @@ templates (33 cases) must pass; structural forms must fail without any
 intent word; and 4 email forms across scripts must fail. The hand-listed
 phone tests from rounds 4-5 were removed as superseded.
 
+### Review round 7 (Codex)
+
+Two findings, both fixed:
+
+1. **P1 — vanity recognition was casing-dependent.** `1-800-flowers`
+   passed because continuation groups accepted uppercase only. The real
+   distinction is ATTACHMENT, not casing: hyphen/dot-joined letters belong
+   to the number (any case), a space-joined lowercase word is the next
+   word. Oracle extended across casing modifiers, plus the other side
+   (trailing words must not extend the token past the E.164 bound).
+2. **P1 — approval was bound to a mutable revision label.** Rerunning the
+   draft stage replaces the body while keeping revision 1, and the old
+   audit still counted as approval. Approval now binds to draft CONTENT:
+   the runner stamps `source_draft_fingerprint` (SHA-256 of the persisted
+   draft bytes) onto the audit and verifies it at readiness. Worker-supplied
+   values are overwritten, same discipline as the verdict.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -293,8 +310,8 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 475 passed (166 new; the growth is the round-6 generative
-    #    oracle: 66 must-fail x 33 must-pass contact cases)
+    # -> 495 passed (186 new; incl. the round-6 generative oracle and
+    #    the round-7 casing/content-binding probes)
 
 - `python -m py_compile` clean (SyntaxWarning as error) on touched modules.
 - NOT run: live worker pass (no wrappers wired yet, by design).
@@ -303,11 +320,11 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 209 |
+| `atlas_brain/schemas/content_factory.py` | 215 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 20 |
-| `atlas_brain/services/content_factory_runner.py` | 296 |
+| `atlas_brain/services/content_factory_runner.py` | 335 |
 | `atlas_brain/services/content_factory_store.py` | 4 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 313 |
-| `tests/test_content_factory_runner.py` | 569 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 330 |
+| `tests/test_content_factory_runner.py` | 665 |
 | `tests/test_content_factory_schemas.py` | 269 |
-| **Total** | **1680** |
+| **Total** | **1838** |
