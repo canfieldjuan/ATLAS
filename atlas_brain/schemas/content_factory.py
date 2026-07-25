@@ -47,9 +47,17 @@ docs/schemas/ (generated, not hand-written).
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 
 # The canonical "schema" key is the SOLE admission rule for the version tag,
@@ -93,6 +101,39 @@ _ADVISORY_GRAMMAR_RE = re.compile(
     r"^(?:unqualified-answer-claim|unqualified-ownership-claim): "
     r"sentence [1-9]\d{0,9}$"
 )
+
+
+def _has_visible_content(text: str) -> bool:
+    """True when ``text`` contains at least one VISIBLE character.
+
+    ``str.strip()`` only removes ASCII/Unicode whitespace, so a
+    producer-supplied zero-width space, soft hyphen, or bidi control passes
+    a non-blank check while rendering as nothing. Phase 6 artifacts are
+    shippable copy and renderer instructions, so "looks empty" must be
+    treated as empty (#2192 round 4). Categories C* (control/format/
+    surrogate/private-use/unassigned) and Z* (separators) are invisible.
+    """
+    return any(
+        not unicodedata.category(char).startswith(("C", "Z")) for char in text
+    )
+
+
+VisibleStr = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+    AfterValidator(
+        lambda value: value
+        if _has_visible_content(value)
+        else _raise_invisible()
+    ),
+]
+
+
+def _raise_invisible():
+    raise ValueError(
+        "value must contain visible characters (invisible/format-only text "
+        "is not content)"
+    )
 
 
 def _validate_advisory_warnings(warnings: "list[str]") -> None:
@@ -353,7 +394,7 @@ class ChannelVariant(BaseModel):
     # Non-blank: a variant with no channel cannot be routed, and one with no
     # body is not a variant.
     channel: NonEmptyStr
-    body_markdown: NonEmptyStr
+    body_markdown: VisibleStr
     # Claim lineage back to the source draft's claims/evidence ids. REQUIRED
     # and non-empty: a variant with no lineage is an orphan -- it asserts
     # something the approved draft never established, which is exactly the
@@ -417,7 +458,7 @@ class ImagePrompt(BaseModel):
     model_config = _BASE_CONFIG
 
     purpose: NonEmptyStr
-    prompt_text: NonEmptyStr
+    prompt_text: VisibleStr
     negative_prompt: str = ""
     aspect_ratio: str = "1:1"
 

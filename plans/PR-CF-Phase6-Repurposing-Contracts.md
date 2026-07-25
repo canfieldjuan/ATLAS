@@ -13,6 +13,24 @@ deterministic gates. Image GENERATION (ComfyUI) is deliberately not here --
 the epic keeps prompt designer and generator split, and generation is
 human-triggered and VRAM-guarded.
 
+**Diff-budget overage (~1,190 LOC vs the 400 soft cap) — why this slice is
+indivisible.** The two contracts, their stage admission, and their
+deterministic gates are one enforceable behaviour, and splitting them
+produces a strictly worse intermediate state:
+
+* contracts without their gates would let a worker self-declare shippable
+  or renderable copy -- the exact failure the editorial gate exists to
+  prevent, shipped as a landed artifact surface;
+* gates without the readiness contracts would have nothing to refuse,
+  since the flags they guard would not exist;
+* stage admission without either would let unvalidated artifacts land in
+  the git-backed job folder under a Phase 6 stage name.
+
+Roughly 60% of the LOC is tests (four review rounds of adversarial
+regressions, kept because each pins a defect that actually shipped in an
+earlier revision of this branch). The behaviour itself is two contracts,
+one enforcement hook, and one lineage check.
+
 ### Problem-derived contract
 
 - Root cause: the pipeline stops at an approved audit. Nothing turns an
@@ -140,6 +158,29 @@ Three findings, all fixed:
    pydantic normalized it to False. The artifact is now validated first and
    the check branches on the normalized model value.
 
+### Review round 4 (Codex)
+
+Five findings, all fixed:
+
+1. **P1 — readiness did not require an APPROVED draft.** Reading the draft
+   proved it existed, not that anything cleared it. Readiness now requires
+   the job's audit artifact to recommend `promote`, so unaudited or
+   revise-state copy cannot ship or render.
+2. **P1 — cross-project derivation.** A ready artifact could claim a draft
+   from another project whenever revision and claim ids overlapped. The
+   artifact's `project_id` must now match the draft's.
+3. **P1 — the phone class was still open.** `0044 20 7946 0958` passed
+   because only US and leading-plus forms were recognised. Replaced with a
+   class-level rule: any run of 7+ digits under tolerant separators is
+   contact-shaped. Ordinary short numbers in descriptions still pass.
+4. **P1 — invisible-only text satisfied the non-blank invariant.** A
+   zero-width space passed `NonEmptyStr` and earned a passing verdict.
+   Added `VisibleStr` (rejects text whose characters are all Unicode C*/Z*
+   categories) on the two fields that become shippable/renderable.
+5. **MAJOR — the diff-budget justification was missing from the plan.**
+   Added to "Why this slice exists" above, per the repository rule that it
+   live in the plan rather than only in the commit message.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -192,7 +233,7 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 351 passed (42 new: 18 contract invariants, 24 run_stage gates)
+    # -> 370 passed (61 new: 24 contract invariants, 37 run_stage gates)
 
 - `python -m py_compile` clean (SyntaxWarning as error) on touched modules.
 - NOT run: live worker pass (no wrappers wired yet, by design).
@@ -201,11 +242,11 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 159 |
+| `atlas_brain/schemas/content_factory.py` | 202 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 20 |
-| `atlas_brain/services/content_factory_runner.py` | 193 |
+| `atlas_brain/services/content_factory_runner.py` | 224 |
 | `atlas_brain/services/content_factory_store.py` | 4 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 209 |
-| `tests/test_content_factory_runner.py` | 396 |
-| `tests/test_content_factory_schemas.py` | 206 |
-| **Total** | **1187** |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 252 |
+| `tests/test_content_factory_runner.py` | 495 |
+| `tests/test_content_factory_schemas.py` | 238 |
+| **Total** | **1435** |

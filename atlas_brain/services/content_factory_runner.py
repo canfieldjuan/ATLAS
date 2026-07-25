@@ -111,6 +111,10 @@ def call_worker(
     return content or ""
 
 
+# A phone number is 7+ digits however it is written. Prompt text is short
+# descriptive copy, so a long digit run is contact data rather than prose.
+_CONTACT_DIGIT_RUN_RE = re.compile(r"\d(?:[^\w\n]{0,3}\d){6,}")
+
 _REPURPOSING_SCHEMA = "repurposing.v1"
 _IMAGE_PROMPT_SCHEMA = "image_prompt.v1"
 
@@ -200,7 +204,11 @@ def _enforce_image_prompts(artifact: dict[str, Any]) -> None:
             hits.append(f"prompt {index}: {hit}")
         if _EMAIL_RE.search(text):
             hits.append(f"prompt {index}: email: <redacted>")
-        if _PHONE_RE.search(text) or _INTL_PHONE_RE.search(text):
+        if _CONTACT_DIGIT_RUN_RE.search(text):
+            # Class-level, not prefix-level: any run of 7+ digits under
+            # tolerant separators is contact-shaped, so "+44...", "0044...",
+            # "(555) 123-4567" and any future dialling convention are all
+            # covered without enumerating prefixes (round 4).
             hits.append(f"prompt {index}: phone: <redacted>")
 
     artifact["copy_verification"] = {
@@ -262,9 +270,11 @@ def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
     artifact["advisory_warnings"] = advisory_warnings(edited)
 
 
-def _read_draft(job_id: str, root: "Path | str") -> "dict[str, Any] | None":
-    """The job's persisted draft artifact, or None when it cannot be read."""
-    path = job_dir(job_id, root=root) / "draft.json"
+def _read_job_artifact(
+    job_id: str, root: "Path | str", name: str
+) -> "dict[str, Any] | None":
+    """A persisted artifact from the job folder, or None when unreadable."""
+    path = job_dir(job_id, root=root) / name
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
@@ -310,12 +320,33 @@ def _enforce_lineage(artifact: dict[str, Any], job_id: str, root: "Path | str") 
     if not ready:
         return
 
-    draft = _read_draft(job_id, root)
+    draft = _read_job_artifact(job_id, root, "draft.json")
     if draft is None:
         raise ArtifactStoreError(
             "readiness requires a readable draft artifact in the job folder "
             "to verify claim lineage and source revision"
         )
+
+    # The plan's premise is that Phase 6 derives from an APPROVED draft.
+    # Existence proves the draft ran, not that a human/gate cleared it, so
+    # require the job's audit to have promoted it (round 4).
+    audit = _read_job_artifact(job_id, root, "audit.json")
+    if audit is None or audit.get("recommendation") != "promote":
+        raise ArtifactStoreError(
+            "readiness requires an audit artifact recommending 'promote'; "
+            "unaudited or revise-state copy cannot ship or render"
+        )
+
+    # Cross-project derivation: a matching revision and overlapping ids are
+    # not evidence when the draft belongs to a different project (round 4).
+    artifact_project = getattr(model, "project_id", None)
+    draft_project = draft.get("project_id")
+    if artifact_project != draft_project:
+        raise ArtifactStoreError(
+            f"project mismatch: artifact project_id {artifact_project!r} does "
+            f"not match the draft's {draft_project!r}"
+        )
+
     declared = getattr(model, "source_draft_revision", None)
     actual = draft.get("revision", 1)
     if declared is not None and declared != actual:

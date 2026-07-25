@@ -296,17 +296,26 @@ def test_run_stage_rejects_contradictory_v2_version(tmp_path, monkeypatch):
 # --- Phase 6: repurposing + image-prompt gates at the real entrypoint ---
 
 
-def _seed_draft(root, job_id, source_ids, revision=1):
-    """Write a minimal valid draft.json so lineage checks have a source."""
+def _seed_draft(root, job_id, source_ids, revision=1, project="p", approved=True):
+    """Establish the approved source state Phase 6 readiness requires: a
+    draft with claim lineage plus an audit that promoted it."""
     from atlas_brain.services.content_factory_store import write_artifact
 
     write_artifact(job_id, "draft", {
         "schema": "draft.v1",
-        "project_id": "p",
+        "project_id": project,
         "revision": revision,
         "body_markdown": "seed",
         "claims": [{"text": f"claim {sid}", "source_id": sid} for sid in source_ids],
     }, root=root)
+    if approved:
+        write_artifact(job_id, "audit", {
+            "schema": "editorial_audit.v2",
+            "project_id": project,
+            "edited_body_markdown": "seed",
+            "copy_verification": {"verdict": "pass", "hits": []},
+            "recommendation": "promote",
+        }, root=root)
 
 
 def test_run_stage_overwrites_variant_verdicts_and_blocks_bad_ship(tmp_path, monkeypatch):
@@ -686,3 +695,93 @@ def test_body_copy_keeps_prose_negation_semantics():
     from atlas_brain.services.content_factory_copy_verification import verify_copy
 
     assert verify_copy("We do not promise guaranteed savings.").verdict == "pass"
+
+
+# --- review round 4 on #2192 ---
+
+
+def test_unaudited_draft_cannot_ship(tmp_path, monkeypatch):
+    """Existence of a draft proves it ran, not that anything approved it."""
+    _seed_draft(tmp_path, "job-noaudit", ["e1"], approved=False)
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e1"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="recommending 'promote'"):
+        runner.run_stage("job-noaudit", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_revise_audit_cannot_ship(tmp_path, monkeypatch):
+    from atlas_brain.services.content_factory_store import write_artifact
+
+    _seed_draft(tmp_path, "job-revise", ["e1"], approved=False)
+    write_artifact("job-revise", "audit", {
+        "schema": "editorial_audit.v2", "project_id": "p",
+        "edited_body_markdown": "seed",
+        "copy_verification": {"verdict": "fail", "hits": ["guaranteed-savings: x"]},
+        "recommendation": "revise",
+    }, root=tmp_path)
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e1"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="recommending 'promote'"):
+        runner.run_stage("job-revise", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_cross_project_derivation_blocked(tmp_path, monkeypatch):
+    """Matching revision + overlapping ids are not evidence across projects."""
+    _seed_draft(tmp_path, "job-xproj", ["e1"], project="source")
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "other",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e1"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="project mismatch"):
+        runner.run_stage("job-xproj", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+
+@pytest.mark.parametrize("phone", [
+    "Call 0044 20 7946 0958",
+    "Call us at +442079460958",
+    "reach us: (555) 123-4567",
+    "dial 555.123.4567 today",
+    "ring 07700 900123 now",
+])
+def test_prompt_phone_class_is_closed(phone, tmp_path, monkeypatch):
+    """Class-level: any 7+ digit run under tolerant separators, no matter
+    the dialling convention."""
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{"purpose": "hero", "prompt_text": phone}],
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-ph", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["copy_verification"]["verdict"] == "fail", (phone, stored["copy_verification"])
+    assert "phone: <redacted>" in " ".join(stored["copy_verification"]["hits"])
+
+
+@pytest.mark.parametrize("ok_text", [
+    "a tidy desk in soft morning light",
+    "a wall clock showing 9:45",
+    "a room with 3 windows and 2 chairs",
+])
+def test_ordinary_prompt_numbers_still_pass(ok_text, tmp_path, monkeypatch):
+    """The other side: short numbers in normal descriptions are not PII."""
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{"purpose": "hero", "prompt_text": ok_text}],
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-ok", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["copy_verification"]["verdict"] == "pass", (ok_text, stored["copy_verification"])

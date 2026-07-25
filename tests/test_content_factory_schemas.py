@@ -525,3 +525,35 @@ def test_failing_set_may_persist_when_not_ready():
         "copy_verification": {"verdict": "fail", "hits": ["guaranteed-savings: x"]},
     })
     assert ps.ready_to_generate is False
+
+
+@pytest.mark.parametrize("invisible", ["​", "­‌", "⁠", "   "])
+def test_invisible_only_variant_body_rejected(invisible):
+    """Zero-width and format-only text renders as nothing; it is not copy."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([{**_variant(), "body_markdown": invisible}])
+        )
+
+
+@pytest.mark.parametrize("invisible", ["​", "­", "⁠"])
+def test_invisible_only_prompt_text_rejected(invisible):
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    with pytest.raises(ValidationError):
+        ImagePromptSet.model_validate({
+            "schema": "image_prompt.v1", "project_id": "p",
+            "prompts": [{"purpose": "hero", "prompt_text": invisible}],
+        })
+
+
+def test_visible_text_with_incidental_zero_width_accepted():
+    """The other side: real copy is not rejected for containing one."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    pkg = RepurposingPackage.model_validate(
+        _package([{**_variant(), "body_markdown": "real​copy here"}])
+    )
+    assert "copy" in pkg.variants[0].body_markdown
