@@ -13,10 +13,14 @@ Each job folder is its own git repo, so every stage write is an auditable commit
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import subprocess
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +44,7 @@ STAGE_SCHEMAS = {
     "draft": ("draft.v1",),
     # v1 stays admissible: pre-#2136 artifacts and any direct writer keep
     # working; runner-persisted audits are normalized to v2.
-    "audit": ("editorial_audit.v1", "editorial_audit.v2"),
+    "audit": ("editorial_audit.v1", "editorial_audit.v2", "editorial_audit.v3"),
     "manifest": ("manifest.v1",),
     # Phase 6: channel variants and image prompts derived from an approved
     # draft. Both are gated by the runner exactly like the audit.
@@ -65,6 +69,50 @@ def _safe_segment(value: str, kind: str) -> str:
 def job_dir(job_id: str, *, root: Path | str = DEFAULT_ROOT) -> Path:
     """Return the (guarded) folder that holds a job's artifacts."""
     return Path(root) / "jobs" / _safe_segment(job_id, "job_id")
+
+
+_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def job_lock(job_id: str, *, root: Path | str = DEFAULT_ROOT) -> Iterator[None]:
+    """Exclusive per-job lock covering a read-validate-write sequence.
+
+    Readiness enforcement READS draft.json and audit.json, decides, and only
+    then persists. Without mutual exclusion another stage run can replace the
+    draft inside that window, so a Phase 6 artifact lands as ready beside copy
+    its approving audit never covered: the fingerprint was checked against
+    content that no longer exists at write time (#2192 round 8). Validating
+    before writing is not enough when the thing validated against can move.
+
+    Re-entrant within a thread, so ``run_stage`` holds it across enforcement
+    while ``write_artifact`` takes it again without deadlocking; ``flock``
+    extends the exclusion across processes. The lock file lives OUTSIDE the
+    job folder so it never lands in the job's git history.
+    """
+    safe = _safe_segment(job_id, "job_id")
+    depth = getattr(_LOCK_STATE, "depth", None)
+    if depth is None:
+        depth = _LOCK_STATE.depth = {}
+    if depth.get(safe):
+        depth[safe] += 1
+        try:
+            yield
+        finally:
+            depth[safe] -= 1
+        return
+
+    locks = Path(root) / ".locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    handle = open(locks / f"{safe}.lock", "a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        depth[safe] = 1
+        yield
+    finally:
+        depth[safe] = 0
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
 
 
 def _git(job: Path, *args: str) -> subprocess.CompletedProcess:
@@ -101,6 +149,23 @@ def _ensure_repo(job: Path) -> None:
 
 
 def write_artifact(
+    job_id: str,
+    stage: str,
+    artifact: dict[str, Any],
+    *,
+    root: Path | str = DEFAULT_ROOT,
+) -> dict[str, Any]:
+    """Persist a stage artifact under the job's exclusive lock.
+
+    See ``_write_artifact_locked`` for the validation and commit behavior. The
+    lock is re-entrant, so a caller that already holds it (``run_stage``, which
+    must cover its read-validate-write window) is not blocked by this one.
+    """
+    with job_lock(job_id, root=root):
+        return _write_artifact_locked(job_id, stage, artifact, root=root)
+
+
+def _write_artifact_locked(
     job_id: str,
     stage: str,
     artifact: dict[str, Any],

@@ -258,6 +258,54 @@ Two findings, both fixed:
    draft bytes) onto the audit and verifies it at readiness. Worker-supplied
    values are overwritten, same discipline as the verdict.
 
+### Review round 8 (Codex)
+
+Three findings, all fixed. All three are defects this PR introduced, not
+inherited: the read-validate-write sequence and the fingerprint field both
+arrived in round 7, and the prompt classifier is Phase 6's own.
+
+1. **P1 — the fingerprint check was not atomic with the write.** Round 7
+   verified the draft fingerprint and then persisted; a concurrent draft
+   rerun inside that window landed a `ready_to_publish` artifact beside copy
+   the audit never covered. Validating before writing proves nothing when the
+   thing validated against can move. `job_lock` (re-entrant per thread,
+   `flock` across processes, lock file outside the job's git folder) now
+   spans stamping, readiness and the commit.
+2. **P1 — the fingerprint field silently rebroke the published v2 contract.**
+   `editorial_audit.v2` shipped in #2181 and forbids extras, so adding a key
+   to it made every newly written audit UNREADABLE to a v2 consumer or a
+   rolled-back reader — the exact breakage v1's freeze note exists to
+   prevent. Introduced `editorial_audit.v3` (subclassing v2 so the promote
+   gate and warning grammar cannot drift), re-froze v2, and generalized the
+   runner's normalizer to upgrade v1/v2 -> v3 while still refusing to launder
+   self-contradictory worker metadata.
+3. **P2 — dial intent was searched globally.** `a person calling across a
+   room, RGB palette 255 255 255` was rejected as contact PII.
+
+   Codex proposed scoping intent to a bounded candidate context. That does
+   not work, and the counter-example is worth recording: in `a call center
+   scene, 1920 1080 resolution` the gap from "call" to "1920" is two words —
+   exactly the gap in `call me, 5551234567`. No window separates them.
+
+   Replaced with a SHAPE-FIRST tier split. Unambiguous shapes (E.164, NANP
+   3-3-4, [3,4] local, trunk prefix, vanity, and syntactically valid NANP
+   runs) fail with no intent required. `unbroken` runs need a dial verb
+   within 3 tokens, which may cross a comma. `grouped` shapes ([3,3,3] RGB,
+   [4,4] resolution, [4,2,2] dates) need one within 2 tokens with no boundary
+   crossed — which is what keeps compound nouns ("call center", "phone
+   booth", "call sheet") out without enumerating any of them.
+
+**Documented residual (deliberate, not missed):** an unbroken digit run that
+is not a valid NANP number is shape-identical to a serial, and an earlier
+round established that `serial 12345678 engraved on a plate` must render. So
+that form fails only once a dial verb governs it. Shape alone cannot decide
+between the two; NANP's own constraint (neither area nor exchange code may
+start with 0 or 1) recovers the part that can be decided.
+
+**Scope note:** this round added a locking primitive and a contract version
+to what began as a contracts slice. Both are the hardened fix for defects
+this PR introduced, so they belong here rather than in a follow-up.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -310,8 +358,18 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 495 passed (186 new; incl. the round-6 generative oracle and
-    #    the round-7 casing/content-binding probes)
+    # -> 523 passed (214 new; incl. the round-6 generative oracle, the
+    #    round-7 casing/content-binding probes, and the round-8
+    #    descriptive-numbers x dial-words class-closure oracle)
+    #
+    # Mutation check on the round-8 lock test: removing `with job_lock(...)`
+    # from run_stage makes test_run_stage_holds_job_lock_across_validation_
+    # and_write FAIL, so the assertion is load-bearing rather than vacuous.
+    #
+    # Repo-wide: 20155 passed / 169 failed / 8 collection errors. Every
+    # failure and error reproduces identically on a stashed (clean) tree --
+    # they are pre-existing local dependency issues in invoicing / mcp /
+    # scheduler / reasoning, and none are in a file this diff touches.
 
 - `python -m py_compile` clean (SyntaxWarning as error) on touched modules.
 - NOT run: live worker pass (no wrappers wired yet, by design).
@@ -320,11 +378,11 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 215 |
+| `atlas_brain/schemas/content_factory.py` | 246 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 20 |
-| `atlas_brain/services/content_factory_runner.py` | 335 |
-| `atlas_brain/services/content_factory_store.py` | 4 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 330 |
-| `tests/test_content_factory_runner.py` | 665 |
+| `atlas_brain/services/content_factory_runner.py` | 496 |
+| `atlas_brain/services/content_factory_store.py` | 71 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 388 |
+| `tests/test_content_factory_runner.py` | 834 |
 | `tests/test_content_factory_schemas.py` | 269 |
-| **Total** | **1838** |
+| **Total** | **2324** |

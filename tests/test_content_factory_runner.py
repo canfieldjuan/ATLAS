@@ -264,8 +264,8 @@ def test_run_stage_persists_deterministic_warnings_and_normalizes_v1(tmp_path, m
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     rec = runner.run_stage("job-adv", "audit", "cf-editor-verifier", "req", api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
-    assert rec["schema"] == "editorial_audit.v2"
-    assert stored["schema"] == "editorial_audit.v2"
+    assert rec["schema"] == "editorial_audit.v3"
+    assert stored["schema"] == "editorial_audit.v3"
     assert any(
         w.startswith("unqualified-answer-claim:")
         for w in stored["advisory_warnings"]
@@ -313,7 +313,8 @@ def _seed_draft(root, job_id, source_ids, revision=1, project="p", approved=True
         fingerprint = runner._draft_fingerprint(job_id, root)
         write_artifact(job_id, "audit", {
             "source_draft_fingerprint": fingerprint,
-            "schema": "editorial_audit.v2",
+            "schema": "editorial_audit.v3",
+            "schema_version": 3,
             "project_id": project,
             # Must approve THIS revision -- a stale audit authorizes nothing.
             "draft_revision": revision,
@@ -955,3 +956,167 @@ def test_unchanged_draft_keeps_approval_valid(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     rec = runner.run_stage("job-stable", "repurposing", "m", "req", api_key="k", root=tmp_path)
     assert json.loads(Path(rec["path"]).read_text())["ready_to_publish"] is True
+
+
+# --- round 8: shape-first PII classification, v3 contract, job lock -------
+
+_DIAL_WORDS = ["call", "calling", "phone", "telephone", "text", "contact", "reach", "dial"]
+_DESCRIPTIVE_NUMERALS = ["255 255 255", "1920 1080", "2026-07-25", "100 200 300", "1920x1080"]
+
+
+@pytest.mark.parametrize("word", _DIAL_WORDS)
+@pytest.mark.parametrize("numeral", _DESCRIPTIVE_NUMERALS)
+def test_oracle_descriptive_numbers_survive_unrelated_dial_words(word, numeral):
+    """Class-closure (#2192 round 8): a descriptive number must still render
+    when an UNRELATED dial word appears in the same prompt. The old rule
+    searched for intent globally, so "a person calling across a room, RGB
+    palette 255 255 255" was rejected as contact PII."""
+    prompt = f"a {word} booth in the background, {numeral} colour grade, wide shot"
+    assert runner._prompt_contact_hits(prompt) == []
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "a call center scene, 1920 1080 resolution poster",
+        "a person calling across a room, RGB palette 255 255 255",
+        "phone booth photographed at 100 200 300 RGB",
+        "wide shot. call sheet on the table. 1920 1080 export",
+        "a telephone on a desk, shot at 24 70 mm",
+    ],
+)
+def test_compound_noun_scenes_render(prompt):
+    """The intent words here are noun modifiers, not dial verbs. Separating
+    them is why grouped shapes need same-segment government within 2 tokens
+    rather than a wider window."""
+    assert runner._prompt_contact_hits(prompt) == []
+
+
+@pytest.mark.parametrize(
+    "numeral",
+    ["+44 20 7946 0958", "555 234 5678", "555.1234", "1-800-FLOWERS",
+     "1-800-flowers", "07700 900123", "5552345678"],
+)
+@pytest.mark.parametrize(
+    "scene", ["a poster of {}", "signage reading {}", "{} on a storefront window"]
+)
+def test_dialable_shapes_fail_with_no_intent_word(numeral, scene):
+    """Unambiguous dial shapes carry their own evidence: no dial verb needed,
+    in any scene and any casing."""
+    assert runner._prompt_contact_hits(scene.format(numeral)) != []
+
+
+def test_unbroken_run_is_a_serial_until_intent_appears():
+    """Documented residual: an unbroken digit run that is NOT a valid NANP
+    number is shape-identical to a serial, so it renders on its own and only
+    fails once a dial verb governs it."""
+    assert runner._prompt_contact_hits("a plate engraved serial 12345678") == []
+    assert runner._prompt_contact_hits("a phone on a desk. serial 12345678 engraved") == []
+    assert runner._prompt_contact_hits("text me 12345678 today") != []
+
+
+def test_v2_audit_stays_frozen_and_readable():
+    """#2192 round 8: v2 shipped in #2181, so it must keep validating
+    byte-for-byte and must NOT learn the fingerprint field -- extra='forbid'
+    means a field added there makes new audits unreadable to a v2 consumer."""
+    from atlas_brain.schemas.content_factory import EditorialAuditV2, EditorialAuditV3
+
+    v2_payload = {
+        "schema": "editorial_audit.v2",
+        "project_id": "p",
+        "edited_body_markdown": "Clean copy.",
+        "recommendation": "revise",
+    }
+    EditorialAuditV2.model_validate(v2_payload)  # still readable
+
+    with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
+        EditorialAuditV2.model_validate({**v2_payload, "source_draft_fingerprint": "abc"})
+
+    v3 = EditorialAuditV3.model_validate(
+        {**v2_payload, "schema": "editorial_audit.v3", "schema_version": 3,
+         "source_draft_fingerprint": "abc"}
+    )
+    assert v3.source_draft_fingerprint == "abc"
+
+
+def test_run_stage_normalizes_v2_audit_to_v3(tmp_path, monkeypatch):
+    """A v2-tagged worker reply upgrades cleanly, because its metadata is
+    self-consistent. The anti-laundering rule still holds for contradictory
+    metadata (see test_run_stage_rejects_contradictory_v2_version)."""
+    reply = json.dumps({
+        "schema": "editorial_audit.v2",
+        "schema_version": 2,
+        "project_id": "p",
+        "edited_body_markdown": "Clean copy.",
+        "recommendation": "revise",
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-v23", "audit", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["schema"] == "editorial_audit.v3"
+    assert stored["schema_version"] == 3
+
+
+def _job_lock_is_free(job_id, root):
+    """Probe the lock from a SECOND file description: flock conflicts between
+    separate open() calls even inside one process, so a non-blocking attempt
+    reports truthfully whether the runner holds it."""
+    import fcntl
+
+    path = Path(root) / ".locks" / f"{job_id}.lock"
+    if not path.exists():
+        return True
+    with open(path, "a+") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return True
+
+
+def test_run_stage_holds_job_lock_across_validation_and_write(tmp_path, monkeypatch):
+    """#2192 round 8 (TOCTOU): validating the draft fingerprint proves nothing
+    if the draft can be replaced before the artifact commits. The lock must be
+    HELD while readiness is being decided, and released afterwards."""
+    _seed_draft(tmp_path, "job-lock", ["e1"])
+    observed = []
+    real_enforce = runner._enforce_lineage
+
+    def probing_enforce(artifact, job_id, root):
+        observed.append(_job_lock_is_free(job_id, root))
+        return real_enforce(artifact, job_id, root)
+
+    monkeypatch.setattr(runner, "_enforce_lineage", probing_enforce)
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p", "source_draft_revision": 1,
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e1"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    runner.run_stage("job-lock", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+    assert observed == [False], "readiness was decided outside the job lock"
+    assert _job_lock_is_free("job-lock", tmp_path), "lock leaked after run_stage"
+
+
+def test_job_lock_is_reentrant_within_a_thread(tmp_path):
+    """run_stage holds the lock and then calls write_artifact, which takes it
+    again -- that must not deadlock."""
+    from atlas_brain.services.content_factory_store import job_lock
+
+    with job_lock("job-re", root=tmp_path):
+        with job_lock("job-re", root=tmp_path):
+            assert not _job_lock_is_free("job-re", tmp_path)
+    assert _job_lock_is_free("job-re", tmp_path)
+
+
+def test_job_lock_excludes_a_second_process(tmp_path):
+    """The exclusion is real, not just an in-process flag."""
+    from atlas_brain.services.content_factory_store import job_lock
+
+    assert _job_lock_is_free("job-x", tmp_path)
+    with job_lock("job-x", root=tmp_path):
+        assert not _job_lock_is_free("job-x", tmp_path)
+    assert _job_lock_is_free("job-x", tmp_path)

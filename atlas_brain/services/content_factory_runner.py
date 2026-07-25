@@ -31,6 +31,7 @@ from atlas_brain.services.content_factory_store import (
     DEFAULT_ROOT,
     ArtifactStoreError,
     job_dir,
+    job_lock,
     write_artifact,
 )
 
@@ -38,9 +39,17 @@ DEFAULT_OWUI_URL = "http://127.0.0.1:8080"
 
 # The editor stage's artifact schemas. The promote decision is gated (via
 # #2116's EditorialAudit contract) on copy_verification.verdict == "pass".
-# Workers may still emit v1; the runner normalizes to v2 (which carries the
-# advisory checklist) before persisting.
-_EDITOR_SCHEMAS = ("editorial_audit.v1", "editorial_audit.v2")
+# Workers may still emit v1 or v2; the runner normalizes to the current version
+# (v3, which carries the advisory checklist AND the draft fingerprint) before
+# persisting. Older versions stay frozen and readable -- see the contracts.
+_EDITOR_SCHEMA_VERSIONS = {
+    "editorial_audit.v1": 1,
+    "editorial_audit.v2": 2,
+    "editorial_audit.v3": 3,
+}
+_EDITOR_SCHEMAS = tuple(_EDITOR_SCHEMA_VERSIONS)
+_CURRENT_EDITOR_SCHEMA = "editorial_audit.v3"
+_CURRENT_EDITOR_VERSION = _EDITOR_SCHEMA_VERSIONS[_CURRENT_EDITOR_SCHEMA]
 
 # A leading ```/```json fence and a trailing fence, so a fenced reply still
 # yields its JSON body.
@@ -157,20 +166,32 @@ def _enforce_repurposing(artifact: dict[str, Any]) -> None:
 # EVIDENCE-GATED, not pattern-enumerated. Rounds 3-6 each broke because the
 # rule asked "do these digits look like a phone number?" -- a question with
 # no closed answer, since dates, RGB triples, dimensions and dialable
-# numbers share a digit grammar. The decision now asks for POSITIVE
-# EVIDENCE of contact intent, of which there are exactly two kinds:
+# numbers share a digit grammar. The decision asks for POSITIVE EVIDENCE.
 #
-#   1. structural  -- an unambiguous dialable form (E.164 "+"/"00" prefix,
-#                     or the NANP 3-3-4 shape). Nothing describes artwork
-#                     this way.
-#   2. lexical     -- a dial-intent verb ("call", "text", "reach"...) near
-#                     a dial-shaped token, which is what makes
-#                     "Call 1-800-GOT-JUNK" contact data even though its
-#                     digits alone are not.
+# Round 8 replaced "dial verb anywhere + any 7-15 digit token anywhere" with
+# a SHAPE-FIRST tier split, because the old rule flagged "a person calling
+# across a room, RGB palette 255 255 255".
 #
-# Absent both, digits are just description and the prompt passes. That is
-# what makes "RGB palette 255 255 255" and "calendar showing 2026-07-25"
-# safe without enumerating them.
+# Scoping intent to a window -- the obvious repair -- does not work, and the
+# counter-example matters enough to record: in "a call center scene, 1920
+# 1080 resolution" the gap from "call" to "1920" is TWO WORDS, exactly the
+# gap in "call me, 5551234567". No window separates them. Shape does:
+#
+#   unambiguous -- fails with NO intent required: E.164, NANP 3-3-4, [3,4]
+#                  local, a national trunk prefix, or vanity spelling.
+#                  Nothing describes artwork in these shapes.
+#   unbroken    -- one 7-15 digit run. Phone-plausible, but serials and
+#                  seeds are written identically, so it needs a dial verb
+#                  within 3 tokens (which may cross a comma, because
+#                  "call me, 5551234567" really is written that way).
+#   grouped     -- a shape descriptive numbers also use ([3,3,3] RGB,
+#                  [4,4] resolution, [4,2,2] dates). Weakest evidence, so
+#                  it needs the tightest government: a dial verb within 2
+#                  tokens and no boundary crossed.
+#
+# Absent both, digits are just description and the prompt passes -- without
+# enumerating "RGB", "resolution" or any other descriptive vocabulary,
+# which is the string-closure trap AGENTS.md 3k.1 forbids.
 
 _ANY_EMAIL_RE = re.compile(
     r"[^\s@,;:()<>\[\]]+@[^\s@,;:()<>\[\]]+\.[^\s@,;:()<>\[\]]{2,}"
@@ -197,9 +218,117 @@ _DIAL_TOKEN_RE = re.compile(
 )
 
 
-def _looks_dialable(token: str) -> bool:
-    compact = re.sub(r"[^0-9A-Za-z]", "", token)
-    return 7 <= len(compact) <= 15 and any(ch.isdigit() for ch in compact)
+# Groupings only a dialable number uses. [3,4] is the local form (555-1234),
+# [3,3,4] NANP, [1,3,3,4] NANP with the country code written out.
+_UNAMBIGUOUS_GROUPINGS = frozenset({(3, 4), (3, 3, 4), (1, 3, 3, 4)})
+# Strong punctuation ends a descriptive phrase. A period BETWEEN DIGITS is a
+# number separator, not a boundary -- treating it as one shreds "555.1234".
+_BOUNDARY_RE = re.compile(r"(?:(?<!\d)\.(?!\d))+|[,;:!?()\[\]{}|/\n\r–—]+")
+# How close a dial verb must sit to corroborate an ambiguous token, measured in
+# tokens where a punctuation run counts as one. The two windows are NOT taste:
+# they track how much evidence the shape itself carries.
+#
+#   unbroken (3, may cross a boundary) -- "call me, 5551234567" is contact data
+#       and calls-to-action really are written across a comma. But the run is
+#       also how serials are written, so "a phone on a desk. serial 12345678"
+#       (distance 4) stays a scene.
+#   grouped  (2, same segment only) -- the weakest shape, so it needs the
+#       tightest government. "call me at 12 34 56 78" (2) is contact data;
+#       "phone booth photographed at 100 200 300" (3) and "a call center
+#       scene, 1920 1080" (crosses a boundary) are scenes. This is what keeps
+#       compound nouns -- "call center", "phone booth", "call sheet" -- out
+#       without enumerating any of them.
+_UNBROKEN_WINDOW = 3
+_GROUPED_WINDOW = 2
+
+
+def _is_nanp_digits(digits: str) -> bool:
+    """A syntactically valid North American number.
+
+    The NANP forbids 0 and 1 as the leading digit of BOTH the area code and
+    the exchange code. That is a spec constraint, not a vocabulary, and it is
+    what separates a dialable unbroken 10-digit run from a 10-digit serial or
+    seed -- which is the one case shape alone cannot otherwise decide.
+    """
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) != 10 or not digits.isdigit():
+        return False
+    return digits[0] in "23456789" and digits[3] in "23456789"
+
+
+def _dial_shape(token: str) -> str:
+    """Classify a candidate token: 'unambiguous', 'ambiguous', or 'none'.
+
+    The digit-GROUP PROFILE is the discriminator, not the compact length.
+    "5551234567" is one unbroken 10-digit run -- nothing describes artwork
+    that way -- while "255 255 255" is [3,3,3] and "1920 1080" is [4,4].
+    """
+    parts = [p for p in re.split(r"[\s.\-]+", token.lstrip("+")) if p]
+    if not parts:
+        return "none"
+    # A MIXED alphanumeric group is not a number: "1920x1080" is a canvas
+    # size. Vanity spelling puts its letters in their own hyphen/dot-joined
+    # group ("1-800-FLOWERS"), which is what makes it dialable.
+    if any(not (p.isdigit() or p.isalpha()) for p in parts):
+        return "none"
+    compact = "".join(parts)
+    if not 7 <= len(compact) <= 15:
+        return "none"
+    if any(p.isalpha() for p in parts):
+        return "unambiguous" if any(p.isdigit() for p in parts) else "none"
+    groups = tuple(len(p) for p in parts)
+    if compact.startswith("0") and 9 <= len(compact) <= 15 and len(groups) > 1:
+        return "unambiguous"  # national trunk prefix: 07700 900123
+    if groups in _UNAMBIGUOUS_GROUPINGS:
+        return "unambiguous"
+    if len(groups) == 1 and _is_nanp_digits(compact):
+        # An unbroken run that is a SYNTACTICALLY VALID North American number
+        # needs no corroboration: serials do not obey the NANP's constraints
+        # by accident often enough to matter, and "5552345678 on a poster" is
+        # about to be painted into artwork.
+        return "unambiguous"
+    if len(groups) == 1:
+        # One unbroken 7-15 digit run. Phone-plausible, but serials, seeds and
+        # order numbers are written the same way ("serial 12345678 engraved on
+        # a plate" must render), so this needs corroboration -- with the wider
+        # window, since it is the stronger of the two ambiguous shapes.
+        return "unbroken"
+    return "grouped"
+
+
+def _gap_profile(gap: str) -> "tuple[int, bool]":
+    """(token distance, crossed a strong boundary) for the text between a dial
+    verb and a candidate token. A punctuation run counts as one token, so
+    distance and boundary-crossing are read off the same measurement."""
+    tokens = _BOUNDARY_RE.sub(" \x00 ", gap).split()
+    return len(tokens), "\x00" in tokens
+
+
+def _phone_evidence(text: str) -> bool:
+    """Positive evidence that ``text`` carries a dialable number."""
+    if _E164_RE.search(text) or _NANP_RE.search(text):
+        return True
+    intents = [(m.start(), m.end()) for m in _DIAL_INTENT_RE.finditer(text)]
+    for match in _DIAL_TOKEN_RE.finditer(text):
+        shape = _dial_shape(match.group(0))
+        if shape == "unambiguous":
+            return True
+        if shape == "none":
+            continue
+        unbroken = shape == "unbroken"
+        limit = _UNBROKEN_WINDOW if unbroken else _GROUPED_WINDOW
+        for start, end in intents:
+            if end <= match.start():
+                gap = text[end : match.start()]
+            elif match.end() <= start:
+                gap = text[match.end() : start]
+            else:
+                return True
+            distance, crossed = _gap_profile(gap)
+            if distance <= limit and (unbroken or not crossed):
+                return True
+    return False
 
 
 def _prompt_contact_hits(text: str) -> list[str]:
@@ -210,16 +339,8 @@ def _prompt_contact_hits(text: str) -> list[str]:
     hits: list[str] = []
     if _ANY_EMAIL_RE.search(text):
         hits.append("email: <redacted>")
-
-    if _E164_RE.search(text) or _NANP_RE.search(text):
+    if _phone_evidence(text):
         hits.append("phone: <redacted>")
-        return hits
-
-    if _DIAL_INTENT_RE.search(text):
-        for match in _DIAL_TOKEN_RE.finditer(text):
-            if _looks_dialable(match.group(0)):
-                hits.append("phone: <redacted>")
-                break
     return hits
 
 
@@ -306,16 +427,22 @@ def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
     """
     if artifact.get("schema") not in _EDITOR_SCHEMAS:
         return
-    # Normalize to v2: the runner-persisted audit always carries the advisory
-    # checklist field; v1 stays frozen for pre-existing artifacts and direct
-    # writers (rollback-safe -- see the contracts module). Only an original
-    # v1 reply gets its version synthesized -- a v2-tagged reply keeps its
-    # own schema_version so the Literal[2] validator rejects contradictory
-    # worker metadata instead of the runner laundering it.
-    if artifact.get("schema") == "editorial_audit.v1":
-        artifact["schema_version"] = 2
-    artifact["schema"] = "editorial_audit.v2"
-    artifact.setdefault("schema_version", 2)
+    # Normalize to the newest audit version: the runner-persisted audit always
+    # carries the advisory checklist AND the draft fingerprint. Older versions
+    # stay frozen for pre-existing artifacts and direct writers (rollback-safe
+    # -- see the contracts module).
+    #
+    # The anti-laundering rule generalizes across the chain: synthesize
+    # schema_version ONLY when the worker's metadata is self-consistent (its
+    # schema_version matches the version its own tag declares, or is absent).
+    # A reply tagged v2 while claiming schema_version 7 keeps the 7 so the
+    # Literal[3] validator rejects it, instead of the runner quietly repairing
+    # contradictory worker metadata into a valid artifact.
+    declared = _EDITOR_SCHEMA_VERSIONS.get(artifact.get("schema"))
+    supplied = artifact.get("schema_version")
+    if supplied is None or supplied == declared:
+        artifact["schema_version"] = _CURRENT_EDITOR_VERSION
+    artifact["schema"] = _CURRENT_EDITOR_SCHEMA
     edited = str(artifact.get("edited_body_markdown") or "")
     if not edited.strip():
         artifact["copy_verification"] = {
@@ -503,8 +630,14 @@ def run_stage(
             f"stage {stage!r}: worker {model!r} returned no JSON artifact"
         )
     _enforce_copy_verification(artifact)
-    _stamp_draft_fingerprint(artifact, job_id, root)
     _enforce_repurposing(artifact)
     _enforce_image_prompts(artifact)
-    _enforce_lineage(artifact, job_id, root)
-    return write_artifact(job_id, stage, artifact, root=root)
+    # Everything that READS the job folder and everything that WRITES it must
+    # sit inside one lock. Stamping reads draft.json, the readiness gate reads
+    # it again to verify the fingerprint, and the commit lands after both --
+    # a concurrent draft rerun anywhere in that window would otherwise ship a
+    # "ready" artifact against copy no audit covered (#2192 round 8).
+    with job_lock(job_id, root=root):
+        _stamp_draft_fingerprint(artifact, job_id, root)
+        _enforce_lineage(artifact, job_id, root)
+        return write_artifact(job_id, stage, artifact, root=root)

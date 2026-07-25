@@ -305,7 +305,15 @@ class EditorialAudit(BaseModel):
 
 
 class EditorialAuditV2(BaseModel):
-    """audit.json (v2) -- v1 plus the non-blocking advisory checklist."""
+    """audit.json (v2, FROZEN) -- v1 plus the non-blocking advisory checklist.
+
+    Frozen for the same reason as v1: v2 shipped in #2181, so artifacts
+    already on disk and any rolled-back reader must keep validating
+    byte-for-byte. ``extra="forbid"`` makes that symmetric -- a field added
+    here would make every newly written audit UNREADABLE to a v2 consumer,
+    not merely unknown to it. ``source_draft_fingerprint`` therefore lives
+    on ``EditorialAuditV3`` (#2192 round 8). Do not add fields here.
+    """
 
     model_config = _BASE_CONFIG
 
@@ -321,12 +329,6 @@ class EditorialAuditV2(BaseModel):
     # warnings from the copy-verification module. Deliberately NOT referenced
     # by any validator -- warnings never gate the recommendation.
     advisory_warnings: list[str] = Field(default_factory=list)
-    # Content identity of the draft this audit approved, stamped by the
-    # runner (never by the worker). A revision number is producer-supplied
-    # and reusable -- rerunning the draft stage can replace the body while
-    # keeping revision 1 -- so approval binds to the bytes that were
-    # actually reviewed (#2192 round 7).
-    source_draft_fingerprint: Optional[str] = None
     recommendation: Recommendation = "revise"
     prompt_version: Optional[str] = None
 
@@ -346,6 +348,32 @@ class EditorialAuditV2(BaseModel):
                     "recommendation 'promote' requires copy_verification.verdict == 'pass'"
                 )
         return self
+
+
+class EditorialAuditV3(EditorialAuditV2):
+    """audit.json (v3) -- v2 plus the runner-stamped draft content identity.
+
+    v2 cannot express WHICH draft an approval covers. ``draft_revision`` is a
+    producer-supplied label, and a same-revision rerun replaces the body
+    while the number stays 1, so a stale approval carried over to copy
+    nobody reviewed (#2192 round 7). v3 binds approval to content instead.
+
+    A NEW VERSION rather than a v2 field: v2 shipped in #2181 and forbids
+    extras, so adding the key there would make every newly written audit
+    unreadable to a v2 consumer or a rolled-back reader -- the exact
+    breakage v1's freeze note exists to prevent (#2192 round 8).
+
+    Inherits v2's validators by subclassing so the promote-gate and the
+    advisory-warning grammar cannot drift between the two versions.
+    """
+
+    artifact_schema: Literal["editorial_audit.v3"] = Field(alias="schema")
+    schema_version: Literal[3] = 3
+    # Stamped by the runner, never by the worker -- the same self-report
+    # discipline as copy_verification. Optional so a direct writer can still
+    # persist a v3 audit, but the runner's readiness gate REJECTS an
+    # unstamped audit rather than treating absence as approval.
+    source_draft_fingerprint: Optional[str] = None
 
 
 class StageEntry(BaseModel):
@@ -520,6 +548,7 @@ ARTIFACT_MODELS: dict[str, type[BaseModel]] = {
     "draft.v1": DraftArtifact,
     "editorial_audit.v1": EditorialAudit,
     "editorial_audit.v2": EditorialAuditV2,
+    "editorial_audit.v3": EditorialAuditV3,
     "manifest.v1": ArtifactManifest,
     "repurposing.v1": RepurposingPackage,
     "image_prompt.v1": ImagePromptSet,
