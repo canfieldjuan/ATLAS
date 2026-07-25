@@ -24,7 +24,7 @@ the same PR.
 - Calendar extraction, identity resolution, write semantics, terminal output,
   credentials, configuration, and customer data must not change.
 
-## Scope
+## Scope (this PR)
 
 Ownership lane: eom/operational-evidence
 Slice phase: Production hardening
@@ -67,6 +67,15 @@ Max files: 5
    record the affected contact UUID.
 6. Existing focused Calendar behavior remains green.
 
+
+### Files touched
+
+- `docs/EOM_RECONCILIATION_RECEIPTS.md`
+- `plans/PR-EOM-Execution-Receipts.md`
+- `scripts/eom_execution_receipt.py`
+- `scripts/import_eom_customers_live.py`
+- `tests/test_eom_execution_receipts.py`
+
 ## Intentional
 
 - Dry runs may omit receipts for local development.
@@ -84,8 +93,25 @@ Max files: 5
 
 Parked hardening: none.
 
+## Estimated diff size
+
+| File | LOC |
+|---|---:|
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 33 |
+| `plans/PR-EOM-Execution-Receipts.md` | 117 |
+| `scripts/eom_execution_receipt.py` | 380 |
+| `scripts/import_eom_customers_live.py` | 153 |
+| `tests/test_eom_execution_receipts.py` | 744 |
+| **Total** | **1427** |
+
 ## Verification
 
-- Pending after implementation: receipt and Calendar-focused pytest suites.
-- Pending after implementation: Ruff, byte compilation, scripts maturity
-  ratchet, guard-class closure advisory, and `git diff --check`.
+- `python -m pytest tests/test_eom_execution_receipts.py
+  tests/test_eom_live_calendar_import.py
+  tests/test_sync_eom_portal_customers.py -q` — 142 passed.
+- Process-boundary selection (`process_preflight or bootstrap`) — 4 passed.
+- Ruff and Python byte compilation on the receipt helper, Calendar entrypoint,
+  and receipt tests — passed.
+- Exact scripts maturity ratchet — passed with no baseline change.
+- Guard class-closure advisory — passed.
+- `git diff --check` — passed.

@@ -36,14 +36,15 @@ if __name__ == "__main__":
         if entry not in {"", _script_import_root, _repo_import_root}
     ]
 
-import argparse
-import asyncio
-import os
-import re
-import subprocess
-import types
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+import argparse  # noqa: E402
+import asyncio  # noqa: E402
+import os  # noqa: E402
+import re  # noqa: E402
+import subprocess  # noqa: E402
+import types  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from pathlib import Path  # noqa: E402
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
