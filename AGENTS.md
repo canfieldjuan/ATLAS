@@ -1092,8 +1092,11 @@ special case; the PR body accretes those special cases as intent.
    an insufficient isolation level still loses updates, and a lock service does
    not define your crash or cancellation behavior. So every open-execution plan
    states what can interleave, what can be cancelled, where a crash can land,
-   and -- for a selected component -- which of its guarantees close which part of
-   that seam (isolation level, lock semantics, durability on crash). The
+   and -- wherever the surface can retry or redeliver (retry state machine,
+   webhook, queued job) -- what a duplicate or out-of-order attempt does, which
+   is R8's invariant and is not implied by the other three. For a selected
+   component, state which of its guarantees close which part of that seam
+   (isolation level, lock semantics, durability on crash). The
    invariants must hold for **every** interleaving the model admits; anything not
    covered is stated as an explicit assumption, never just omitted. "Correct
    under a bounded set of interleavings" is the enumerative answer in formal
