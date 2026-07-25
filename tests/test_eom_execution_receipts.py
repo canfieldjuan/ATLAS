@@ -367,14 +367,29 @@ def _calendar_process_fixture(tmp_path, ignored_path):
 
 
 def _run_receipted_calendar(
-    repo, scripts, receipt_dir, *, isolated=True, env=None
+    repo,
+    scripts,
+    receipt_dir,
+    *,
+    isolated=True,
+    env=None,
+    entrypoint="scripts/import_eom_customers_live.py",
 ):
+    launcher_source = receipt_module.subprocess.run(
+        ["git", "show", "HEAD:scripts/eom_execution_receipt.py"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
     command = [sys.executable]
     if isolated:
         command.append("-I")
     command.extend(
         [
-            str(scripts / "import_eom_customers_live.py"),
+            "-",
+            "--launch-reviewed",
+            entrypoint,
             "--dry-run",
             "--receipt-dir",
             str(receipt_dir),
@@ -386,6 +401,7 @@ def _run_receipted_calendar(
         check=False,
         capture_output=True,
         text=True,
+        input=launcher_source,
         env=env,
     )
 
@@ -399,8 +415,50 @@ def test_process_receipt_requires_isolated_python_startup(tmp_path):
         repo, scripts, receipt_dir, isolated=False
     )
 
-    assert result.returncode == 2
+    assert result.returncode == 1
     assert "requires isolated Python startup" in result.stderr
+    assert list(receipt_dir.iterdir()) == []
+
+
+def test_direct_receipted_entrypoint_requires_reviewed_launcher(tmp_path):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+
+    result = receipt_module.subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(scripts / "import_eom_customers_live.py"),
+            "--dry-run",
+            "--receipt-dir",
+            str(receipt_dir),
+        ],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "requires the reviewed HEAD launcher" in result.stderr
+    assert list(receipt_dir.iterdir()) == []
+
+
+def test_reviewed_launcher_rejects_unallowlisted_entrypoint(tmp_path):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+
+    result = _run_receipted_calendar(
+        repo,
+        scripts,
+        receipt_dir,
+        entrypoint="scripts/unreviewed_operator.py",
+    )
+
+    assert result.returncode == 1
+    assert "unsupported reviewed EOM entrypoint" in result.stderr
     assert list(receipt_dir.iterdir()) == []
 
 
@@ -429,6 +487,31 @@ def test_isolated_process_blocks_sitecustomize_before_preflight(tmp_path):
     assert list(receipt_dir.iterdir()) == []
 
 
+def test_reviewed_launcher_rejects_self_restoring_entrypoint(tmp_path):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+    marker = tmp_path / "entrypoint-executed"
+    entrypoint = scripts / "import_eom_customers_live.py"
+    entrypoint.write_text(
+        "from pathlib import Path\n"
+        "import subprocess\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "subprocess.run(\n"
+        "    ['git', 'checkout', '--', 'scripts/import_eom_customers_live.py'],\n"
+        "    check=True,\n"
+        ")\n"
+    )
+
+    result = _run_receipted_calendar(repo, scripts, receipt_dir)
+
+    assert result.returncode != 0
+    assert "requires a clean worktree" in result.stderr
+    assert not marker.exists()
+    assert "entrypoint-executed" in entrypoint.read_text()
+    assert list(receipt_dir.iterdir()) == []
+
+
 def test_process_preflight_blocks_self_removing_shadow_before_import(tmp_path):
     repo, scripts, receipt_dir = _calendar_process_fixture(
         tmp_path, "scripts/json.py"
@@ -448,6 +531,27 @@ def test_process_preflight_blocks_self_removing_shadow_before_import(tmp_path):
     assert "rejects ignored Python import shadows" in result.stderr
     assert not marker.exists()
     assert shadow.exists()
+    assert list(receipt_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "module_name", ("shadow_module.py", "cached_shadow.pyc")
+)
+def test_process_preflight_rejects_ignored_module_file_symlink(
+    tmp_path, module_name
+):
+    ignored_path = f"scripts/{module_name}"
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ignored_path
+    )
+    target = tmp_path / f"{module_name}.target"
+    target.write_text("VALUE = 'unreviewed'\n")
+    (scripts / module_name).symlink_to(target)
+
+    result = _run_receipted_calendar(repo, scripts, receipt_dir)
+
+    assert result.returncode != 0
+    assert "rejects ignored Python import shadows" in result.stderr
     assert list(receipt_dir.iterdir()) == []
 
 
@@ -578,19 +682,29 @@ def test_receipt_rejects_ignored_bytecode_for_tracked_source(tmp_path):
         )
 
 
-def test_entrypoint_bootstraps_source_trust_before_local_imports():
+def test_reviewed_launcher_authenticates_entrypoint_before_execution():
+    launcher_source = (
+        SCRIPTS / "eom_execution_receipt.py"
+    ).read_text()
     calendar_source = (
         SCRIPTS / "import_eom_customers_live.py"
     ).read_text()
 
-    calendar_disable = calendar_source.index("sys.dont_write_bytecode = True")
-    assert calendar_disable < calendar_source.index(
-        "import import_calendar_contacts as ics"
+    source_preflight = launcher_source.index(
+        "git_sha = establish_source_trust(repo_root)"
     )
-    source_preflight = calendar_source.index(
-        "_receipt_module, _validated_git_sha = _trusted_receipt_module"
+    reviewed_source_read = launcher_source.index(
+        '["git", "show", f"{git_sha}:{relative_entrypoint}"]'
     )
-    assert source_preflight < calendar_source.index(
+    entrypoint_execution = launcher_source.index(
+        'exec(compile(source, str(source_path), "exec"), namespace)'
+    )
+    assert source_preflight < reviewed_source_read < entrypoint_execution
+
+    bootstrap_admission = calendar_source.index(
+        '_receipt_module = sys.modules.get("eom_execution_receipt")'
+    )
+    assert bootstrap_admission < calendar_source.index(
         "import import_calendar_contacts as ics"
     )
 
@@ -648,18 +762,10 @@ def test_clean_real_entrypoint_does_not_create_or_reject_own_bytecode(tmp_path):
             "PYTHONPATH": str(repo),
         }
     )
-    receipt_module.subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            str(scripts / "import_eom_customers_live.py"),
-            "--dry-run",
-            "--receipt-dir",
-            str(calendar_receipts),
-        ],
-        env=env,
-        **subprocess_options,
+    result = _run_receipted_calendar(
+        repo, scripts, calendar_receipts, env=env
     )
+    assert result.returncode == 0, result.stderr
     assert list(repo.rglob("*.pyc")) == []
     assert len(list(calendar_receipts.glob("*.exit-0.json"))) == 1
 
@@ -732,9 +838,6 @@ def test_initial_evidence_failure_stops_before_first_mutation(
 def test_mid_contact_evidence_failure_stops_before_next_contact(
     tmp_path, monkeypatch
 ):
-    from atlas_brain.services import crm_provider
-    from atlas_brain.storage import database
-
     receipt = _receipt(tmp_path)
     real_persist = receipt._persist_in_progress
     persist_calls = 0
@@ -756,8 +859,6 @@ def test_mid_contact_evidence_failure_stops_before_next_contact(
     monkeypatch.setattr(
         receipt, "_persist_in_progress", fail_after_initial_counts
     )
-    monkeypatch.setattr(crm_provider, "get_crm_provider", object)
-    monkeypatch.setattr(database, "get_db_pool", object)
     monkeypatch.setattr(calendar_import, "import_one", record_one)
 
     with pytest.raises(RuntimeError, match="durably record"):
@@ -766,6 +867,7 @@ def test_mid_contact_evidence_failure_stops_before_next_contact(
                 [_record(phone="2175550101"), _record(phone="2175550102")],
                 dry_run=False,
                 receipt=receipt,
+                _dependencies=(object(), object()),
             )
         )
 

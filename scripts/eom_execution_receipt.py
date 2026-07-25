@@ -8,6 +8,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -27,6 +28,7 @@ OUTCOME_KEYS = {
     "update-planned",
     "import-planned",
 }
+_REVIEWED_ENTRYPOINTS = {"scripts/import_eom_customers_live.py"}
 _PYTHON_IMPORT_SUFFIXES = tuple(
     sorted(
         {
@@ -73,8 +75,7 @@ def _ignored_path_can_supply_code(
     path = PurePosixPath(relative_path)
     if path.is_absolute() or ".." in path.parts:
         return True
-    if (repo_root / path).is_symlink():
-        return _module_path_is_importable(path.parts)
+    is_symlink = (repo_root / path).is_symlink()
 
     artifact_stem = None
     for suffix in _PYTHON_IMPORT_SUFFIXES:
@@ -82,7 +83,7 @@ def _ignored_path_can_supply_code(
             artifact_stem = path.name[: -len(suffix)]
             break
     if artifact_stem is None:
-        return False
+        return is_symlink and _module_path_is_importable(path.parts)
 
     module_parts = (*path.parts[:-1], artifact_stem)
     if not module_parts or any(not part for part in module_parts):
@@ -446,3 +447,47 @@ def run_receipted(
     if receipt is not None:
         receipt.finalize(exit_code)
     return exit_code
+
+
+def _launch_reviewed_entrypoint(argv: list[str]) -> None:
+    """Validate the checkout, then execute an allowlisted entrypoint from HEAD."""
+    if not sys.flags.isolated:
+        raise SystemExit(
+            "reviewed EOM execution requires isolated Python startup"
+        )
+    if len(argv) < 2 or argv[0] != "--launch-reviewed":
+        raise SystemExit(
+            "usage: python -I - --launch-reviewed "
+            "scripts/import_eom_customers_live.py [arguments]"
+        )
+    relative_entrypoint = argv[1]
+    if relative_entrypoint not in _REVIEWED_ENTRYPOINTS:
+        raise SystemExit("unsupported reviewed EOM entrypoint")
+
+    repo_root = Path.cwd().resolve()
+    git_sha = establish_source_trust(repo_root)
+    source_path = repo_root / relative_entrypoint
+    source = subprocess.run(
+        ["git", "show", f"{git_sha}:{relative_entrypoint}"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    ).stdout
+
+    bootstrap_module = sys.modules[__name__]
+    bootstrap_module._BOOTSTRAP_ENTRYPOINT = relative_entrypoint
+    bootstrap_module._BOOTSTRAP_GIT_SHA = git_sha
+    bootstrap_module._BOOTSTRAP_REPO_ROOT = str(repo_root)
+    sys.modules["eom_execution_receipt"] = bootstrap_module
+    sys.argv = [str(source_path), *argv[2:]]
+    namespace = {
+        "__name__": "__main__",
+        "__file__": str(source_path),
+        "__package__": None,
+        "__cached__": None,
+    }
+    exec(compile(source, str(source_path), "exec"), namespace)
+
+
+if __name__ == "__main__":
+    _launch_reviewed_entrypoint(sys.argv[1:])

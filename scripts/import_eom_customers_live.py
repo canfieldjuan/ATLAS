@@ -20,7 +20,9 @@ is cwd-relative; the deploy runbook covers the runtime worktree symlink).
 
 Usage:
   python scripts/import_eom_customers_live.py --dry-run
-  python -I scripts/import_eom_customers_live.py --receipt-dir /private/state
+  git show HEAD:scripts/eom_execution_receipt.py | python -I - \
+    --launch-reviewed scripts/import_eom_customers_live.py \
+    --receipt-dir /private/state
   python scripts/import_eom_customers_live.py --calendar residential --months-back 12
 """
 
@@ -40,8 +42,6 @@ import argparse  # noqa: E402
 import asyncio  # noqa: E402
 import os  # noqa: E402
 import re  # noqa: E402
-import subprocess  # noqa: E402
-import types  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -65,24 +65,6 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _trusted_receipt_module(repo_root: Path):
-    """Load the receipt boundary from HEAD, then validate before local imports."""
-    helper_path = repo_root / "scripts" / "eom_execution_receipt.py"
-    source = subprocess.run(
-        ["git", "show", "HEAD:scripts/eom_execution_receipt.py"],
-        cwd=repo_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    module = types.ModuleType("eom_execution_receipt")
-    module.__file__ = str(helper_path)
-    exec(compile(source, str(helper_path), "exec"), module.__dict__)
-    git_sha = module.establish_source_trust(repo_root)
-    sys.modules[module.__name__] = module
-    return module, git_sha
-
-
 _direct_args = None
 _validated_git_sha = None
 _receipt_module = None
@@ -97,9 +79,18 @@ if __name__ == "__main__":
                 "receipted execution requires isolated Python startup; "
                 "run with: python -I"
             )
-        _receipt_module, _validated_git_sha = _trusted_receipt_module(
-            Path(__file__).resolve().parent.parent
-        )
+        _receipt_module = sys.modules.get("eom_execution_receipt")
+        _repo_root = Path(__file__).resolve().parent.parent
+        if (
+            getattr(_receipt_module, "_BOOTSTRAP_ENTRYPOINT", None)
+            != "scripts/import_eom_customers_live.py"
+            or getattr(_receipt_module, "_BOOTSTRAP_REPO_ROOT", None)
+            != str(_repo_root)
+        ):
+            _direct_parser.error(
+                "receipted execution requires the reviewed HEAD launcher"
+            )
+        _validated_git_sha = _receipt_module._BOOTSTRAP_GIT_SHA
 
 sys.path.insert(0, str(Path(__file__).parent))          # sibling script import
 sys.path.insert(0, str(Path(__file__).parent.parent))   # atlas_brain import
@@ -759,7 +750,9 @@ def exit_code_for(counts: dict) -> int:
     return 1 if counts.get("errors") else 0
 
 
-async def run_import(records, dry_run: bool, receipt=None) -> dict:
+async def run_import(
+    records, dry_run: bool, receipt=None, _dependencies=None
+) -> dict:
     counts = {
         "created": 0,
         "updated": 0,
@@ -774,11 +767,14 @@ async def run_import(records, dry_run: bool, receipt=None) -> dict:
     crm = None
     pool = None
     if not dry_run:
-        from atlas_brain.services.crm_provider import get_crm_provider
-        from atlas_brain.storage.database import get_db_pool
+        if _dependencies is None:
+            from atlas_brain.services.crm_provider import get_crm_provider
+            from atlas_brain.storage.database import get_db_pool
 
-        crm = get_crm_provider()
-        pool = get_db_pool()
+            crm = get_crm_provider()
+            pool = get_db_pool()
+        else:
+            crm, pool = _dependencies
 
     for rec in sorted(records, key=lambda r: r.name.lower()):
         if receipt is not None:
