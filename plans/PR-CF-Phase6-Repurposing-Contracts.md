@@ -76,6 +76,26 @@ Slice phase: vertical slice
   R3 (gate cannot be self-reported), R5 (no existing-stage behavior
   change), R10 (one advisory grammar shared by three artifacts), R14.
 
+### Review round 1 (Codex)
+
+Three findings, all fixed:
+
+1. **P1 — orphan variants were representable.** `derived_from_claims` had a
+   list default, so an omitted/empty lineage passed and a clean body could
+   be marked `ready_to_publish`. Now `min_length=1` (required, non-empty),
+   with negative coverage for omitted, empty, mixed, and blank-id lineage.
+2. **MAJOR — the image gate failed on its second side.** `negative_prompt`
+   was folded into the verified text, so naming a banned phrase in the
+   EXCLUSION list -- the correct designer response to this module's own
+   threat model -- tripped the gate. The verdict now covers `prompt_text`
+   only; the negative prompt cannot cause rendering, so it cannot cause a
+   failure. Both sides probed.
+3. **MAJOR — the prompt set recorded a verdict nothing gated on.** Added
+   `ready_to_generate`, the generation analogue of the package's
+   `ready_to_publish`: it cannot be true while the deterministic verdict
+   fails. A failing set still persists when not marked ready (legitimate
+   intermediate state).
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -127,7 +147,7 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 326 passed (17 new: 10 contract invariants, 7 run_stage gates)
+    # -> 337 passed (28 new: 18 contract invariants, 10 run_stage gates)
 
 - `python -m py_compile` clean (SyntaxWarning as error) on touched modules.
 - NOT run: live worker pass (no wrappers wired yet, by design).
@@ -136,10 +156,10 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 147 |
-| `atlas_brain/services/content_factory_runner.py` | 65 |
+| `atlas_brain/schemas/content_factory.py` | 159 |
+| `atlas_brain/services/content_factory_runner.py` | 70 |
 | `atlas_brain/services/content_factory_store.py` | 4 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 144 |
-| `tests/test_content_factory_runner.py` | 148 |
-| `tests/test_content_factory_schemas.py` | 118 |
-| **Total** | **626** |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 165 |
+| `tests/test_content_factory_runner.py` | 198 |
+| `tests/test_content_factory_schemas.py` | 206 |
+| **Total** | **802** |

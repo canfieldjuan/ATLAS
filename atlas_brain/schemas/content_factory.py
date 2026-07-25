@@ -354,11 +354,12 @@ class ChannelVariant(BaseModel):
     # body is not a variant.
     channel: NonEmptyStr
     body_markdown: NonEmptyStr
-    # Claim lineage back to the source draft's claims/evidence ids. A variant
-    # with no lineage is an orphan -- it asserts something the approved draft
-    # never established, which is exactly the "repurposer invents claims"
-    # failure this field exists to make visible.
-    derived_from_claims: list[NonEmptyStr] = Field(default_factory=list)
+    # Claim lineage back to the source draft's claims/evidence ids. REQUIRED
+    # and non-empty: a variant with no lineage is an orphan -- it asserts
+    # something the approved draft never established, which is exactly the
+    # "repurposer invents claims" failure this field exists to prevent. A
+    # default would make that orphan representable (review round 1).
+    derived_from_claims: list[NonEmptyStr] = Field(min_length=1)
     copy_verification: Optional[CopyVerification] = None
     advisory_warnings: list[str] = Field(default_factory=list)
 
@@ -438,12 +439,23 @@ class ImagePromptSet(BaseModel):
     prompts: list[ImagePrompt] = Field(default_factory=list)
     copy_verification: Optional[CopyVerification] = None
     advisory_warnings: list[str] = Field(default_factory=list)
+    # The generation gate, mirroring RepurposingPackage.ready_to_publish: a
+    # set may not be marked renderable while its deterministic verdict
+    # fails. Recording a verdict nobody gates on is verification, not a gate
+    # (review round 1).
+    ready_to_generate: bool = False
     prompt_version: Optional[str] = None
 
     @model_validator(mode="after")
     def _prompt_set_invariants(self) -> "ImagePromptSet":
         if not self.prompts:
             raise ValueError("image prompt set requires at least one prompt")
+        if self.ready_to_generate:
+            verdict = self.copy_verification
+            if verdict is None or verdict.verdict != "pass":
+                raise ValueError(
+                    "ready_to_generate requires copy_verification.verdict == 'pass'"
+                )
         _validate_advisory_warnings(self.advisory_warnings)
         return self
 

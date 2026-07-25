@@ -438,3 +438,53 @@ def test_stage_schema_mismatch_still_enforced_for_phase6(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError):
         runner.run_stage("job-mix", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_negative_prompt_naming_banned_terms_still_passes(tmp_path, monkeypatch):
+    """Guard's second side: a negative prompt is an EXCLUSION list, so naming
+    a banned phrase there is the correct designer response to the threat --
+    it must not trip the gate."""
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{
+            "purpose": "hero",
+            "prompt_text": "a tidy office desk in soft morning light",
+            "negative_prompt": "blurry, watermark, text, guaranteed savings, phone number",
+        }],
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-neg", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["copy_verification"]["verdict"] == "pass"
+    assert stored["prompts"][0]["negative_prompt"].startswith("blurry")
+
+
+def test_positive_prompt_with_banned_claim_still_fails(tmp_path, monkeypatch):
+    """The other side of the same guard stays closed."""
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{
+            "purpose": "hero",
+            "prompt_text": "poster reading guaranteed savings",
+            "negative_prompt": "blurry",
+        }],
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-pos", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["copy_verification"]["verdict"] == "fail"
+
+
+def test_worker_cannot_self_declare_ready_to_generate(tmp_path, monkeypatch):
+    """The runner recomputes the verdict, so a failing prompt set cannot be
+    persisted as renderable no matter what the worker claims."""
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{"purpose": "hero", "prompt_text": "poster reading guaranteed savings"}],
+        "copy_verification": {"verdict": "pass", "hits": []},
+        "ready_to_generate": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ValidationError):
+        runner.run_stage("job-selfgen", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    assert not job_dir("job-selfgen", root=tmp_path).exists()

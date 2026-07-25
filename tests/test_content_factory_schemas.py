@@ -437,3 +437,91 @@ def test_phase6_schemas_dispatch():
 
     assert model_for({"schema": "repurposing.v1"}) is RepurposingPackage
     assert model_for({"schema": "image_prompt.v1"}) is ImagePromptSet
+
+
+# --- review round 1 on #2192 ---
+
+
+def test_variant_without_lineage_is_rejected():
+    """Orphan variants must be unrepresentable, not merely discouraged."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    v = _variant()
+    del v["derived_from_claims"]
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(_package([v]))
+
+
+def test_variant_with_empty_lineage_is_rejected():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([{**_variant(), "derived_from_claims": []}])
+        )
+
+
+def test_mixed_lineage_package_is_rejected():
+    """One traceable variant does not license an untraceable sibling."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    good = _variant(channel="linkedin")
+    bad = {**_variant(channel="x"), "derived_from_claims": []}
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(_package([good, bad], ready=True))
+
+
+def test_blank_lineage_id_is_rejected():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([{**_variant(), "derived_from_claims": ["  "]}])
+        )
+
+
+def test_ready_to_generate_requires_passing_verdict():
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    with pytest.raises(ValidationError):
+        ImagePromptSet.model_validate({
+            "schema": "image_prompt.v1", "project_id": "p",
+            "prompts": [{"purpose": "hero", "prompt_text": "a desk"}],
+            "copy_verification": {"verdict": "fail", "hits": ["guaranteed-savings: x"]},
+            "ready_to_generate": True,
+        })
+
+
+def test_ready_to_generate_rejected_without_any_verdict():
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    with pytest.raises(ValidationError):
+        ImagePromptSet.model_validate({
+            "schema": "image_prompt.v1", "project_id": "p",
+            "prompts": [{"purpose": "hero", "prompt_text": "a desk"}],
+            "ready_to_generate": True,
+        })
+
+
+def test_ready_to_generate_accepted_when_passing():
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    ps = ImagePromptSet.model_validate({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{"purpose": "hero", "prompt_text": "a desk"}],
+        "copy_verification": {"verdict": "pass", "hits": []},
+        "ready_to_generate": True,
+    })
+    assert ps.ready_to_generate is True
+
+
+def test_failing_set_may_persist_when_not_ready():
+    """A failing verdict is a legitimate intermediate state."""
+    from atlas_brain.schemas.content_factory import ImagePromptSet
+
+    ps = ImagePromptSet.model_validate({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{"purpose": "hero", "prompt_text": "guaranteed savings poster"}],
+        "copy_verification": {"verdict": "fail", "hits": ["guaranteed-savings: x"]},
+    })
+    assert ps.ready_to_generate is False

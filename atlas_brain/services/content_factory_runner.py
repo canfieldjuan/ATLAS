@@ -142,10 +142,16 @@ def _enforce_repurposing(artifact: dict[str, Any]) -> None:
 
 
 def _enforce_image_prompts(artifact: dict[str, Any]) -> None:
-    """Gate the PROMPT TEXT itself: a diffusion model will render a banned
-    claim or a contact string into the artwork, where no downstream text
-    check would ever see it. Verified over every prompt's text and negative
-    prompt together."""
+    """Gate the POSITIVE prompt text: a diffusion model renders it into the
+    artwork, where no downstream text check would ever see it.
+
+    ``negative_prompt`` is deliberately EXCLUDED from the verdict. A negative
+    prompt is an exclusion list -- naming a banned phrase there is the
+    designer telling the renderer NOT to draw it, which is the correct
+    response to this module's own threat model. Folding it into the scan
+    made the safest possible prompt set the one that failed (review round 1:
+    the guard failed on its second side).
+    """
     if artifact.get("schema") != _IMAGE_PROMPT_SCHEMA:
         return
     prompts = artifact.get("prompts")
@@ -155,7 +161,6 @@ def _enforce_image_prompts(artifact: dict[str, Any]) -> None:
     for prompt in prompts:
         if isinstance(prompt, dict):
             parts.append(str(prompt.get("prompt_text") or ""))
-            parts.append(str(prompt.get("negative_prompt") or ""))
     combined = "\n".join(part for part in parts if part)
     verdict, warnings = _deterministic_verdict(
         combined, empty_reason="prompt text is empty; nothing was verified"
