@@ -91,6 +91,36 @@ Slice phase: vertical slice
   each with both-direction probes; the module contract remains
   best-effort-backstop with the human approval as the real gate), R14.
 
+### Review round 12 (Codex) -- the hardening rewrite
+
+Operator direction: no brittle heuristics in production. The advisory
+layer was REWRITTEN as a small deterministic linguistic engine replacing
+all positional regex windows: token stream -> sentence spans -> clause
+spans with boundary KINDS (word openers vs punctuation); a negation
+SCOPE model (determiner negation spans <=2 tokens, verbal negation spans
+to clause end, emphatic not-only/just is affirmative, denial tested by
+RANGE intersection so in-match negation counts); qualifier GOVERNMENT by
+adjunct direction (own clause; postmodifier across word boundaries only;
+fronted sentence-initial clause governs the next -- never both
+directions); routing coverage BOUND to the report proposition (same
+sentence, or a later sentence with an anaphoric token referring back);
+label-style absence ("Owner lane: TBD") negates routing.
+
+Two theorems replace pattern-completeness arguments: (1) gate hits mask
+EVERY digit character after the readable markers -- no separator grammar
+exists to enumerate; (2) advisory warnings carry a fixed code and
+sentence number ONLY -- producer text (names, numbers) is
+unrepresentable, and the v2 schema enforces the same grammar at
+persistence for every writer.
+
+All six round-12 findings close inside this structure (digit theorem;
+denial-with-modifiers via scope; owner-lane labels; modifier-tolerant +
+polarity-aware report-shape; report-bound routing; name-free locators).
+The 12-round Codex counterexample corpus (60+ regressions) passes
+unchanged, plus grammar-derived generative invariants: generated denial
+templates never warn, generated bare-claim templates always warn, and
+every producible output validates the schema grammar.
+
 ### Review round 11 (Codex)
 
 Three findings, all fixed mechanically: the gate's digit-run mask treats
@@ -301,7 +331,7 @@ Parked hardening: none new.
 
 ## Verification
 
-- Content-factory suites: 220 passed (12 new advisory tests, 2 new runner
+- Content-factory suites: 231 passed (266 with adjacent suites) (12 new advisory tests, 2 new runner
   tests). Adjacent `tests/test_leads_intake.py` green (187 combined).
 - `python -m py_compile` on the three touched modules.
 - NOT run: live OWUI worker pass (advisory output shape is fully covered
@@ -317,7 +347,8 @@ Parked hardening: none new.
 | `atlas_brain/services/content_factory_store.py` | 12 |
 | `plans/PR-CF-Advisory-Warning-Layer.md` | 300 |
 | `tests/*` (three files) | 310 |
-| **Total** | **~1140 gross across six Codex rounds (over the 400 soft
-cap; override rationale in "Why this slice exists" -- the growth is
-review-round hardening of one indivisible behavior, itemized in the PR
-body's AI-reconciliation ledger)** |
+| **Total** | **~2000 gross across twelve Codex rounds and the
+operator-directed engine rewrite (over the 400 soft cap; override
+rationale in "Why this slice exists" -- the growth is review-round
+hardening plus the round-12 linguistic-engine rewrite of one indivisible
+behavior, itemized in the PR body's AI-reconciliation ledger)** |

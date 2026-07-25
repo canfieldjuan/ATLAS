@@ -261,9 +261,7 @@ def test_advisory_warnings_carry_no_free_text():
     )
     joined = " ".join(warnings)
     assert "bob@example" not in joined
-    assert any(
-        w.startswith("unqualified-answer-claim: sentence 1 (") for w in warnings
-    )
+    assert "unqualified-answer-claim: sentence 1" in warnings
 
 
 def test_advisory_warnings_do_not_block_promotion():
@@ -495,7 +493,7 @@ def test_schema_accepts_deterministic_warning_grammar():
             "schema": "editorial_audit.v2",
             "project_id": "p",
             "advisory_warnings": [
-                "unqualified-answer-claim: sentence 3 ('answer')",
+                "unqualified-answer-claim: sentence 3",
                 ADVISORY_OWNER_ROUTING_WARNING,
                 ADVISORY_CTA_REMINDER,
             ],
@@ -850,3 +848,147 @@ def test_genuine_denials_still_recognized_after_binding():
             w.startswith(("unqualified-answer-claim:", "unqualified-ownership-claim:"))
             for w in advisory_warnings(text)
         ), text
+
+
+# --- round-12 review fixes + engine invariants ---
+
+
+def test_gate_hits_never_contain_digits_theorem():
+    """THEOREM: no digit character survives into persisted hit evidence,
+    regardless of separator style (word chars, underscores, newlines...)."""
+    for evil in (
+        "Guaranteed 020__7946__0958 savings.",
+        "Guaranteed 020--\n7946--\n0958 savings.",
+        "Guaranteed 020a7946a0958 savings today.",
+    ):
+        result = verify_copy(evil)
+        joined = " ".join(result.hits)
+        assert not any(ch.isdigit() for ch in joined), (evil, joined)
+
+
+def test_denial_with_modifiers_recognized():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("We do not draft any customer-facing answers.")
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_owner_lane_label_absence_warns():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    for text in (
+        "The report ranks issues. Owner lane: TBD.",
+        "The report ranks issues. Owner lane — unassigned.",
+    ):
+        warnings = advisory_warnings(text)
+        assert any(w.startswith("owner-routing-coverage:") for w in warnings), text
+
+
+def test_report_shape_with_modifier_detected():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("The report clearly ranks issues by severity.")
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_negated_report_shape_is_silent():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("This is not a report that ranks issues.")
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_unrelated_ownership_does_not_cover_report():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues by severity. Billing probably owns invoice collection."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_anaphoric_routing_still_covers_report():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Each is assigned to the billing team."
+    )
+    assert not any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_locators_cannot_carry_names():
+    """Round-12 BLOCKER: warnings are code + sentence number only — a name
+    inside a matched relation is unrepresentable."""
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("Support lead Alice owns refunds.")
+    joined = " ".join(warnings)
+    assert "Alice" not in joined
+    assert any(w == "unqualified-ownership-claim: sentence 1" for w in warnings)
+
+
+# --- generative invariants (grammar-derived probes) ---
+
+_CLAIM_TEMPLATES = [
+    "We draft {noun} for every ticket.",
+    "Our team provides {noun} daily.",
+    "{noun} are delivered to customers.",
+]
+_DENIAL_TEMPLATES = [
+    "We do not draft {noun}.",
+    "We never provide {noun}.",
+    "No {noun} are generated.",
+    "We cannot draft {noun}.",
+]
+_NOUNS = ["answers", "resolutions", "drafted answers"]
+
+
+def test_invariant_generated_denials_never_warn():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    for template in _DENIAL_TEMPLATES:
+        for noun in _NOUNS:
+            text = template.format(noun=noun)
+            assert not any(
+                w.startswith("unqualified-answer-claim:")
+                for w in advisory_warnings(text)
+            ), text
+
+
+def test_invariant_generated_bare_claims_always_warn():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    for template in _CLAIM_TEMPLATES:
+        for noun in _NOUNS:
+            text = template.format(noun=noun)
+            assert any(
+                w.startswith("unqualified-answer-claim:")
+                for w in advisory_warnings(text)
+            ), text
+
+
+def test_invariant_all_outputs_satisfy_schema_grammar():
+    """Every warning the producer can emit — across claim, denial, PII,
+    routing, and pathological inputs — validates at the schema choke point."""
+    from atlas_brain.schemas.content_factory import EditorialAuditV2
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    corpus = [t.format(noun=n) for t in _CLAIM_TEMPLATES + _DENIAL_TEMPLATES for n in _NOUNS]
+    corpus += [
+        "Support lead Alice owns refunds at bob@example.com or 020__7946__0958.",
+        "The report ranks issues. Owner lane: TBD.",
+        "Billing\nreally owns refunds.",
+        "Intro.\n\nWe draft answers. Really?! Version 2.1 provides an answer.",
+    ]
+    for text in corpus:
+        generated = advisory_warnings(text)
+        audit = EditorialAuditV2.model_validate(
+            {
+                "schema": "editorial_audit.v2",
+                "project_id": "p",
+                "advisory_warnings": generated,
+            }
+        )
+        assert audit.advisory_warnings == generated
+        joined = " ".join(generated)
+        assert "@" not in joined and "Alice" not in joined

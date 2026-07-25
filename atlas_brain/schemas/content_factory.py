@@ -87,7 +87,7 @@ _ADVISORY_STATIC_WARNINGS = frozenset(
 )
 _ADVISORY_GRAMMAR_RE = re.compile(
     r"^(?:unqualified-answer-claim|unqualified-ownership-claim): "
-    r"sentence [1-9]\d{0,5} \('[A-Za-z][A-Za-z /-]{0,58}'\)$"
+    r"sentence [1-9]\d{0,5}$"
 )
 
 
