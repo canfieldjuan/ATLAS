@@ -247,7 +247,7 @@ these for the paths it touches:
 | `scripts/audit_*.py`, `scripts/check_*.py`, evaluators / gate predicates | R2 (failure-branch fixtures per `AGENTS.md` 3h/3i), R10 |
 | `extracted_*/` synced files | R1, R10 (manifest sync discipline) |
 | Guard, validator, cap, classifier, gate, sanitizer, denylist, parser admission rule, or safety checker changes | R2, R14 (boundary-probe before LGTM) |
-| Concurrency, durability, lock/lease, cache-coherence, rotation or retry state-machine, or crash-safe replacement changes | R8, R2 (`AGENTS.md` 3k.4: the plan names the **selected** component and keeps one execution surface per slice; **only if it hand-rolls** rather than using a closed-surface component, it also names the component it rejected, why, and the execution model it assumes, with the invariants holding for every interleaving that model admits and anything uncovered stated as an explicit assumption) |
+| Concurrency, durability, lock/lease, cache-coherence, rotation or retry state-machine, or crash-safe replacement changes | R8, R2 (`AGENTS.md` 3k.4: every such plan names the selected component and which of its guarantees close which part of the seam, states the execution model with the invariants holding for every interleaving it admits and anything uncovered as an explicit assumption, and keeps one execution surface per slice; **only if it hand-rolls** it also names the component it rejected and why) |
 | Review comments that name a defect class ("all X", "class of Y", "same failure mode") | R13 (held-out/propertied proof that the class, not only the example, is fixed) |
 | All reviewer verdicts | R14 (checked-out PR-head and codebase-backed verification) |
 

@@ -1086,18 +1086,26 @@ special case; the PR body accretes those special cases as intent.
    written for this slice. Durable, concurrent, per-tenant state is a row, not a
    file. This is 3k.3's "pick the structural solution over the enumerative one"
    applied to execution.
-2. **Plan-stage gate if you hand-roll anyway.** Naming the closed-surface
-   component you rejected is required, not optional: state the component, why it
-   does not fit, and the **execution model** the design assumes -- what can
-   interleave, what can be cancelled, where a crash can land. The invariants must
-   then hold for **every** interleaving that model admits; anything not covered
-   is stated as an explicit assumption, never just omitted. "Correct under a
-   bounded set of interleavings" is the enumerative answer in formal dress -- the
-   schedule left out of the set is the one that corrupts state. A plan that
-   instead lists schedules to handle -- "drain cancellation here", "fsync there",
-   "reject FIFOs" -- is the same enumeration without even the model, and is
-   rejected at the plan stage before it is written.
-3. **One execution surface per slice.** Do not land a concurrency/durability
+2. **State the execution model, whichever option you took.** Selecting a
+   closed-surface component narrows the seam; it does not remove it. A component
+   supplies primitives, not your application invariant: a read-modify-write under
+   an insufficient isolation level still loses updates, and a lock service does
+   not define your crash or cancellation behavior. So every open-execution plan
+   states what can interleave, what can be cancelled, where a crash can land,
+   and -- for a selected component -- which of its guarantees close which part of
+   that seam (isolation level, lock semantics, durability on crash). The
+   invariants must hold for **every** interleaving the model admits; anything not
+   covered is stated as an explicit assumption, never just omitted. "Correct
+   under a bounded set of interleavings" is the enumerative answer in formal
+   dress -- the schedule left out of the set is the one that corrupts state. A
+   plan that instead lists schedules to handle -- "drain cancellation here",
+   "fsync there", "reject FIFOs" -- is the same enumeration without even the
+   model, and is rejected at the plan stage before it is written.
+3. **Name what you rejected -- only if you hand-rolled.** A slice that took the
+   closed-surface component has no rejected component to name and must not be
+   asked to invent one. A slice that hand-rolled states which component it
+   rejected and why it does not fit, on top of the model required by 2.
+4. **One execution surface per slice.** Do not land a concurrency/durability
    subsystem inside a PR whose stated purpose is something else (a privacy
    boundary, a feature, a migration). Split it: the feature ships against the
    closed-surface component; the subsystem ships alone if it is genuinely needed.
@@ -1108,9 +1116,8 @@ prose-only -- no path glob identifies a durability protocol, since the same
 module paths carry ordinary code -- so `scripts/audit_review_rules_triggered.py`
 surfaces it as an explicit advisory finding per 3g rather than deriving it. A
 plan whose slice is open-execution work and whose Review Contract omits R8 fails
-that surfacing. What the reviewer then checks is 1 and 3 for every such slice,
-and 2 **only** where the slice hand-rolled: a plan that took the closed-surface
-component has no rejected component to name, and must not be asked to invent one.
+that surfacing. The reviewer checks 1, 2, and 4 for every such slice, and 3 only
+where the slice hand-rolled.
 
 **Why:** #2184 (scoped mailbox binding) is the case. Its stated purpose was an
 authorization boundary -- bind each CRM business context to one mailbox. It also
