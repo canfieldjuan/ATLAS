@@ -995,33 +995,10 @@ case.
 **Counting the trigger under squash-amend.** Builder branches are amended into a
 single commit (§1c), so "3 consecutive pushes" is not observable from the commit
 graph -- a branch showing one commit may have absorbed a dozen review cycles.
-Count **bot review rounds** instead. Each review comment carries the id of the
-submission it belongs to (`pull_request_review_id`), so rounds are recoverable
-from the review and review-comment endpoints even when the commit graph shows
-one commit. Read three values per round: the count of top-level bot findings,
-which files/decisions they land on, and whether those repeat from the prior
-round. A bare round count does not trip this breaker; a flat-or-rising
-**per-round finding count on a repeating decision** does.
-
-This section deliberately specifies **what to compare, not a command to run**.
-An operational one-liner in this document would be untested code in prose -- it
-cannot satisfy 3h (auditors ship with fixture tests) or 3i (checkers prove their
-failure detection), and each imprecision in it (page-boundary grouping, filtering
-replies and human comments, establishing that two findings are actually the same
-class) becomes its own review round with nothing to close it. If this comparison
-is worth mechanizing, it ships as a script under `scripts/` with those fixture
-tests, and this section points at it.
-
-This is a **different source** from `live-reconciliation`, which must not be
-substituted for it: that check queries `reviewThreads` and discards resolved and
-outdated ones (`scripts/check_ai_reconciliation_live.py`), so it reports what is
-unresolved right now and carries no submission ids, timestamps, or round
-membership. It cannot supply a round count. Read rounds from the reviews endpoint
-above.
-
-Three consecutive rounds whose new same-class finding count is flat or rising
-trip this breaker regardless of how many commits the branch shows. One commit and
-twelve bot rounds is the case this rule exists for, not an exemption from it.
+Read the trigger as **3 consecutive review iterations** (a push and the review
+round it draws), not 3 commits. How to count those iterations mechanically is
+deliberately not specified here: it belongs in a `scripts/` checker with the
+fixture tests 3h/3i require, not as untested procedure in prose (see #2198).
 
 When this trips, the next push may NOT add another example-scoped patch (another
 token, regex, vocabulary row, or oracle fixture). It must carry a **Decision-Seam
@@ -1111,10 +1088,15 @@ special case; the PR body accretes those special cases as intent.
    applied to execution.
 2. **Plan-stage gate if you hand-roll anyway.** Naming the closed-surface
    component you rejected is required, not optional: state the component, why it
-   does not fit, and the bounded set of interleavings the design is correct
-   under. A plan that instead lists schedules to handle -- "drain cancellation
-   here", "fsync there", "reject FIFOs" -- is the enumerative method and is
-   rejected at the plan stage, before the enumeration is written.
+   does not fit, and the **execution model** the design assumes -- what can
+   interleave, what can be cancelled, where a crash can land. The invariants must
+   then hold for **every** interleaving that model admits; anything not covered
+   is stated as an explicit assumption, never just omitted. "Correct under a
+   bounded set of interleavings" is the enumerative answer in formal dress -- the
+   schedule left out of the set is the one that corrupts state. A plan that
+   instead lists schedules to handle -- "drain cancellation here", "fsync there",
+   "reject FIFOs" -- is the same enumeration without even the model, and is
+   rejected at the plan stage before it is written.
 3. **One execution surface per slice.** Do not land a concurrency/durability
    subsystem inside a PR whose stated purpose is something else (a privacy
    boundary, a feature, a migration). Split it: the feature ships against the
