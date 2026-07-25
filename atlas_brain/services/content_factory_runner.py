@@ -13,8 +13,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -203,8 +205,11 @@ _DIAL_INTENT_RE = re.compile(
     r"sms|ring|hotline|helpline|whatsapp|contact|reach)\b",
     re.I,
 )
+_DIAL_PUNCTUATION = r".\-/"
+_DIAL_SEPARATOR_RE = re.compile(rf"[\s{_DIAL_PUNCTUATION}]+")
+_NUMERIC_DIAL_SEPARATOR = rf"(?:\s+(?=\d)|[{_DIAL_PUNCTUATION}])"
 # E.164 / international: explicit + or 00 prefix then 7-15 digits.
-_E164_RE = re.compile(r"(?:\+|\b00)[\d\s().\-]{7,20}\d")
+_E164_RE = re.compile(r"(?:\+|\b00)[\d\s().\-/]{7,20}\d")
 # North American 3-3-4, the one local shape that is unambiguous.
 _NANP_RE = re.compile(r"\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b")
 # A token someone could dial: starts with a digit, 7+ alphanumerics once
@@ -215,32 +220,20 @@ _NANP_RE = re.compile(r"\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b")
 # is the next word rather than part of the number ("07700 900123 today").
 # Attachment, not casing, is what distinguishes them.
 _DIAL_TOKEN_RE = re.compile(
-    r"(?<!\w)[+]?\d[\dA-Za-z]*(?:(?:\s+(?=\d)|[.\-])[\dA-Za-z]+){0,5}"
+    rf"(?<!\w)[+]?\d[\dA-Za-z]*(?:{_NUMERIC_DIAL_SEPARATOR}[\dA-Za-z]+){{0,5}}"
 )
 
 
 # Groupings only a dialable number uses. [3,4] is the local form (555-1234),
 # [3,3,4] NANP, [1,3,3,4] NANP with the country code written out.
 _UNAMBIGUOUS_GROUPINGS = frozenset({(3, 4), (3, 3, 4), (1, 3, 3, 4)})
-# Strong punctuation ends a descriptive phrase. A period BETWEEN DIGITS is a
-# number separator, not a boundary -- treating it as one shreds "555.1234".
-_BOUNDARY_RE = re.compile(r"(?:(?<!\d)\.(?!\d))+|[,;:!?()\[\]{}|/\n\r–—]+")
-# How close a dial verb must sit to corroborate an ambiguous token, measured in
-# tokens where a punctuation run counts as one. The two windows are NOT taste:
-# they track how much evidence the shape itself carries.
-#
-#   unbroken (3, may cross a boundary) -- "call me, 5551234567" is contact data
-#       and calls-to-action really are written across a comma. But the run is
-#       also how serials are written, so "a phone on a desk. serial 12345678"
-#       (distance 4) stays a scene.
-#   grouped  (2, same segment only) -- the weakest shape, so it needs the
-#       tightest government. "call me at 12 34 56 78" (2) is contact data;
-#       "phone booth photographed at 100 200 300" (3) and "a call center
-#       scene, 1920 1080" (crosses a boundary) are scenes. This is what keeps
-#       compound nouns -- "call center", "phone booth", "call sheet" -- out
-#       without enumerating any of them.
-_UNBROKEN_WINDOW = 3
-_GROUPED_WINDOW = 2
+# Ambiguous number/phoneword shapes need a finite syntactic bridge from the
+# dial marker. Arbitrary nearby words are not evidence: the open semantic
+# category behind "text for room 212 art deco" cannot be closed by proximity.
+# These are function words in direct-address/dial syntax, not content nouns.
+_DIAL_BRIDGE_WORDS = frozenset({"at", "me", "on", "us", "via"})
+_DIAL_BRIDGE_WORD_RE = re.compile(r"[A-Za-z]+")
+_DIAL_BRIDGE_PUNCT_RE = re.compile(r"^[ \t,;:()\-]*$")
 
 
 def _is_nanp_digits(digits: str) -> bool:
@@ -307,7 +300,7 @@ def _dial_shape(token: str) -> str:
     that way -- while "255 255 255" is [3,3,3] and "1920 1080" is [4,4].
     """
     stripped = token.lstrip("+")
-    parts = [p for p in re.split(r"[\s.\-]+", stripped) if p]
+    parts = [p for p in _DIAL_SEPARATOR_RE.split(stripped) if p]
     if not parts:
         return "none"
     # A MIXED alphanumeric group is not a number: "1920x1080" is a canvas
@@ -347,7 +340,9 @@ def _dial_shape(token: str) -> str:
     return "grouped"
 
 
-_TRAILING_ALPHA_RE = re.compile(r"\s+[A-Za-z]+(?:[.\-][A-Za-z]+)*")
+_TRAILING_ALPHA_RE = re.compile(
+    rf"\s+[A-Za-z]+(?:[{_DIAL_PUNCTUATION}][A-Za-z]+)*"
+)
 _MAX_DIAL_SYMBOLS = 17  # 00 access prefix plus E.164's 15-digit maximum
 
 
@@ -369,7 +364,7 @@ def _token_candidates(text: str, match: "re.Match[str]") -> "list[str]":
         if extension is None:
             break
         candidate = text[match.start() : extension.end()]
-        compact = re.sub(r"[\s.\-]+", "", candidate.lstrip("+"))
+        compact = _DIAL_SEPARATOR_RE.sub("", candidate.lstrip("+"))
         if len(compact) > _MAX_DIAL_SYMBOLS:
             break
         candidates.append(candidate)
@@ -377,24 +372,29 @@ def _token_candidates(text: str, match: "re.Match[str]") -> "list[str]":
     return candidates
 
 
-def _gap_profile(gap: str) -> "tuple[int, bool]":
-    """(token distance, crossed a strong boundary) for the text between a dial
-    verb and a candidate token. A punctuation run counts as one token, so
-    distance and boundary-crossing are read off the same measurement."""
-    tokens = _BOUNDARY_RE.sub(" \x00 ", gap).split()
-    return len(tokens), "\x00" in tokens
+def _is_structural_dial_bridge(gap: str) -> bool:
+    """Whether ``gap`` is finite direct-address/dial syntax.
+
+    The open set of renderer/content words defaults to false. Only punctuation
+    plus the closed function-word grammar can connect a dial marker to an
+    otherwise ambiguous number or detached phoneword.
+    """
+    words = _DIAL_BRIDGE_WORD_RE.findall(gap)
+    if len(words) > 3 or any(
+        word.casefold() not in _DIAL_BRIDGE_WORDS for word in words
+    ):
+        return False
+    punctuation = _DIAL_BRIDGE_WORD_RE.sub("", gap)
+    return _DIAL_BRIDGE_PUNCT_RE.fullmatch(punctuation) is not None
 
 
-def _has_near_intent(
+def _has_structural_dial_intent(
     text: str,
     start: int,
     end: int,
     intents: "list[tuple[int, int]]",
-    *,
-    limit: int,
-    allow_boundary: bool,
 ) -> bool:
-    """Whether a dial verb governs the candidate span under a bounded window."""
+    """Whether a dial marker structurally governs the candidate span."""
     for intent_start, intent_end in intents:
         if intent_end <= start:
             gap = text[intent_end:start]
@@ -402,14 +402,16 @@ def _has_near_intent(
             gap = text[end:intent_start]
         else:
             return True
-        distance, crossed = _gap_profile(gap)
-        if distance <= limit and (allow_boundary or not crossed):
+        if _is_structural_dial_bridge(gap):
             return True
     return False
 
 
 def _phone_evidence(text: str) -> bool:
     """Positive evidence that ``text`` carries a dialable number."""
+    # Admission-only normalization: compatibility-equivalent digits, letters,
+    # and separators receive one verdict without rewriting the stored prompt.
+    text = unicodedata.normalize("NFKC", text)
     if _E164_RE.search(text) or _NANP_RE.search(text):
         return True
     intents = [(m.start(), m.end()) for m in _DIAL_INTENT_RE.finditer(text)]
@@ -417,7 +419,8 @@ def _phone_evidence(text: str) -> bool:
         # Attached vanity spelling is structural evidence. A SPACE-joined
         # suffix is not: "212 art deco" can keypad-map to a valid NANP number
         # while remaining ordinary renderer prose. Detached candidates must
-        # therefore also sit under bounded dial intent. This same rule admits
+        # therefore also sit under the finite structural dial bridge. This
+        # same rule admits
         # explicit international phonewords such as "+44 800 FLOWERS" without
         # pretending they are NANP numbers.
         candidates = _token_candidates(text, match)
@@ -428,27 +431,21 @@ def _phone_evidence(text: str) -> bool:
             if _dial_shape(candidate) == "none":
                 continue
             candidate_end = match.start() + len(candidate)
-            if _has_near_intent(
+            if _has_structural_dial_intent(
                 text,
                 match.start(),
                 candidate_end,
                 intents,
-                limit=_UNBROKEN_WINDOW,
-                allow_boundary=True,
             ):
                 return True
         shape = base_shape
         if shape == "none":
             continue
-        unbroken = shape == "unbroken"
-        limit = _UNBROKEN_WINDOW if unbroken else _GROUPED_WINDOW
-        if _has_near_intent(
+        if _has_structural_dial_intent(
             text,
             match.start(),
             match.end(),
             intents,
-            limit=limit,
-            allow_boundary=unbroken,
         ):
             return True
     return False
@@ -639,6 +636,37 @@ def _stamp_draft_fingerprint(
 _SOURCE_BOUND_SCHEMAS = frozenset(
     (*_EDITOR_SCHEMAS, _REPURPOSING_SCHEMA, _IMAGE_PROMPT_SCHEMA)
 )
+_SOURCE_BOUND_STAGES = frozenset(
+    {"audit", "audit-v2", "repurposing", "image_prompt"}
+)
+SourcePromptBuilder = Callable[[dict[str, Any] | None], str]
+
+
+def _build_source_prompt(
+    job_id: str,
+    root: "Path | str",
+    builder: SourcePromptBuilder,
+) -> "tuple[str, str | None]":
+    """Build a prompt and fingerprint from one committed draft byte snapshot."""
+    raw = read_committed_artifact_bytes(job_id, "draft", root=root)
+    draft: dict[str, Any] | None = None
+    if raw is not None:
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise ArtifactStoreError(
+                "source-bound stage requires a valid committed draft artifact"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ArtifactStoreError(
+                "source-bound stage requires a committed draft JSON object"
+            )
+        draft = parsed
+    user_content = builder(draft)
+    if not isinstance(user_content, str):
+        raise TypeError("source prompt builder must return str")
+    fingerprint = hashlib.sha256(raw).hexdigest() if raw is not None else None
+    return user_content, fingerprint
 
 
 def _require_dispatch_source_unchanged(
@@ -767,7 +795,7 @@ def run_stage(
     job_id: str,
     stage: str,
     model: str,
-    user_content: str,
+    user_content: str | SourcePromptBuilder,
     *,
     api_key: str,
     base_url: str = DEFAULT_OWUI_URL,
@@ -781,11 +809,26 @@ def run_stage(
     ValueError / pydantic ValidationError (from the store) if the artifact fails
     its contract -- so a malformed or self-promoting stage output is never persisted.
     """
-    # Snapshot the committed source BEFORE dispatch. A worker response is about
-    # this source, not whichever same-revision draft happens to exist when the
-    # network call returns.
-    dispatch_fingerprint = _draft_fingerprint(job_id, root)
-    reply = call_worker(model, user_content, api_key=api_key, base_url=base_url)
+    # Source-bound stages receive a builder, not already-built text. The prompt
+    # and fingerprint therefore come from the SAME committed bytes even if a
+    # writer replaced the draft before this function began.
+    prompt_is_source_bound = callable(user_content)
+    if stage in _SOURCE_BOUND_STAGES and not prompt_is_source_bound:
+        raise ArtifactStoreError(
+            "source-bound stage requires a prompt builder over the committed draft"
+        )
+    if prompt_is_source_bound:
+        dispatched_content, dispatch_fingerprint = _build_source_prompt(
+            job_id, root, user_content
+        )
+    else:
+        if not isinstance(user_content, str):
+            raise TypeError("user_content must be str or a source prompt builder")
+        dispatched_content = user_content
+        dispatch_fingerprint = _draft_fingerprint(job_id, root)
+    reply = call_worker(
+        model, dispatched_content, api_key=api_key, base_url=base_url
+    )
     artifact = extract_json(reply)
     if artifact is None:
         raise WorkerError(
@@ -794,6 +837,10 @@ def run_stage(
     _enforce_copy_verification(artifact)
     _enforce_repurposing(artifact)
     _enforce_image_prompts(artifact)
+    if artifact.get("schema") in _SOURCE_BOUND_SCHEMAS and not prompt_is_source_bound:
+        raise ArtifactStoreError(
+            "source-derived artifact requires a prompt built from its committed draft"
+        )
     # Everything that re-checks the source, reads readiness state, or writes the
     # job sits inside one lock. The pre-dispatch snapshot is compared first;
     # lineage/readiness is then decided against that same committed state and

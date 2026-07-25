@@ -13,6 +13,12 @@ separators bypass email gating. Current-head review then found that two class
 boundaries were still incomplete: the routing key removed ignorables only
 after they could affect normalization, and the dial-token grammar treated a
 whitespace separator as exactly one code point rather than a run.
+The next current-head review exposed three deeper incomplete boundaries: phone
+classification ran before compatibility normalization and encoded separators
+in multiple narrow regexes; detached spelling still treated proximity to an
+open intent vocabulary as mechanical dial evidence; and `run_stage` accepted
+caller-built prompt text independently from the committed draft bytes it
+fingerprinted.
 
 This production-hardening follow-up carries the already verified correction
 onto the merged mainline. It preserves the Phase 6 product shape and closes the
@@ -29,15 +35,24 @@ reported classes at their shared classifier and execution seams.
   canonical composition. The dial-token grammar modeled a whitespace
   separator as one character rather than the entire separator run. The runner
   fingerprinted after the worker returned, so its fingerprint attested to
-  persistence-time state rather than dispatch-time source. Email matching
-  recognized only the ASCII spelling of an IDNA label separator.
+  persistence-time state rather than dispatch-time source; moving that read
+  before dispatch still did not prove the already-built prompt came from those
+  bytes. The detached-phoneword decision used an open semantic category
+  (nearby intent words) without a closed structural bridge, and phone parsing
+  happened before NFKC with separator rules repeated across recognizers. Email
+  matching recognized only the ASCII spelling of an IDNA label separator.
 - Correct fix must touch/change: the Phase 6 runner's single contact-admission
   decision, its committed-source dispatch/persistence boundary, the channel
   routing key, and both-direction tests at the real `run_stage` entrypoint.
   Default-ignorables must be removed before normalization, and numeric
   whitespace must be consumed as one separator run while compact dial symbols
-  remain E.164-bounded. Canonical store reads must remain committed-object
-  reads so a source snapshot cannot be replaced by worktree residue.
+  remain E.164-bounded. Phone admission must classify an NFKC-normalized view
+  with one bounded separator grammar and must replace open keyword proximity
+  with a finite structural bridge whose ambiguous default is admissible.
+  `run_stage` must construct source-bound prompt text from the exact committed
+  bytes whose fingerprint it records, then retain the post-worker under-lock
+  comparison. Canonical store reads must remain committed-object reads so a
+  source snapshot cannot be replaced by worktree residue.
 - Must not change: Phase 6 artifact schema tags/field shapes, editorial
   decision semantics, negative-prompt exclusion semantics, body-copy verifier
   policy, image generation, worker wrappers, or any EOM/CRM lane.
@@ -82,6 +97,15 @@ Max files: 7
   8. One or more whitespace code points between international numeric groups
      preserve the same phoneword verdict without widening the compact E.164
      symbol bound or promoting detached prose without dial intent.
+  9. NFKC-equivalent phoneword spellings and every admitted dial separator,
+     including slash, receive the same verdict as their ASCII/space form.
+  10. Detached spelling fails only when a dial marker is connected to it by
+      the finite structural bridge; descriptive intervening words default to
+      admissible in an evidence-keyed generated oracle.
+  11. For every source-bound stage, `run_stage` builds the dispatched prompt
+      from the same committed draft bytes it fingerprints. A draft replacement
+      before entry changes the prompt source, while a replacement after prompt
+      construction remains rejected under the job lock.
 - Reachability proof: `run_stage(job_id, stage, model, user_content, ...)` calls
   the worker, applies prompt enforcement, compares committed source identity
   under `job_lock`, validates, and writes. Tests replace the committed draft
@@ -102,17 +126,20 @@ Max files: 7
   NANP membership excluded explicit international phonewords. These are the
   two error directions of one classifier seam.
 - **Structural direction:** ambiguous detached prose defaults to admissible.
-  Detached spelling requires nearby dial intent. International spelling also
-  requires an explicit `+`/`00` prefix and a 7-15 digit E.164 mapping. Tests
-  cross generators on both sides rather than enumerate reported strings.
+  Detached spelling requires a dial marker connected through a finite bridge
+  containing only direct-address/preposition structure, not arbitrary nearby
+  words. International spelling also requires an explicit `+`/`00` prefix and
+  a 7-15 digit E.164 mapping. Tests cross evidence signals on both sides rather
+  than enumerate reported strings.
 
 ### Execution model
 
 - **Closed components:** committed Git objects are canonical source state;
   existing POSIX `flock` is the per-job mutual-exclusion primitive.
 - **Invariant:** the committed draft fingerprint observed immediately before
-  worker dispatch must equal the fingerprint re-read under the job lock before
-  a source-derived response may persist.
+  worker dispatch must be computed from the same bytes used to build the worker
+  prompt and must equal the fingerprint re-read under the job lock before a
+  source-derived response may persist.
 - **Failure boundary:** worker transport remains outside the lock. A
   cooperative writer may replace the draft during transport, but the stale
   response is rejected. Ordinary store failures restore worktree/index hygiene;
@@ -138,17 +165,21 @@ Max files: 7
 
 The runner preserves a leading `+`, keypad-maps mixed tokens, and classifies
 explicit international phonewords as ambiguous structural candidates governed
-by the existing bounded intent window. Numeric groups consume a whitespace run
-as one separator; `_dial_shape` still removes separators before enforcing the
-7-15 digit E.164 bound. Space-joined candidate extensions use that same intent
-requirement; attached domestic vanity syntax remains unambiguous. Email
-matching translates the three IDNA domain-stop equivalents only for admission.
+by a finite structural dial bridge. Phone admission first creates an
+NFKC-normalized view, then one separator grammar governs tokenization,
+partitioning, and compact-length checks, including whitespace, dot, hyphen, and
+slash. `_dial_shape` still removes separators before enforcing the 7-15 digit
+E.164 bound. Space-joined candidate extensions use the structural bridge;
+attached domestic vanity syntax remains unambiguous. Email matching translates
+the three IDNA domain-stop equivalents only for admission.
 
 The schema defines the Unicode default-ignorable ranges once, excludes them
 from visible-only content, and removes them before the NFKC/casefold routing
 key so an ignored code point cannot alter composition.
 
-`run_stage` reads the committed draft fingerprint before `call_worker`. After
+For source-bound work, `run_stage` receives a prompt builder rather than
+already-built text. It reads committed draft bytes once, parses those bytes for
+the builder, hashes the same bytes, and dispatches the resulting prompt. After
 the response is enforced, it takes `job_lock`, rejects any source-derived
 schema whose current committed fingerprint differs, stamps audits with the
 dispatch fingerprint, runs readiness/lineage, and commits. Store reads use
@@ -165,6 +196,12 @@ than correctness.
 - Whitespace run length is not dial evidence. The existing numeric-group cap,
   compact symbol bound, explicit international prefix, and intent gate remain
   the bounded evidence.
+- Compatibility normalization and separator parity apply only to the
+  admission-only phone view; raw prompt/artifact text is not rewritten.
+- Arbitrary proximity to an intent-like word is not dial evidence. Ambiguous
+  detached spelling without the finite bridge remains admissible.
+- Source-bound stage callers now provide a prompt builder. This intentionally
+  changes the unshipped runner API before the deferred OWUI wrappers are wired.
 - The default-ignorable routing normalization is broader than the two reported
   code points by design; one invisible Unicode property is one defect class.
 - The originating Phase 6 plan remains modified in this follow-up so its
@@ -173,7 +210,7 @@ than correctness.
 
 ## Deferred
 
-- None for the five round-10 findings or the two current-head class-boundary
+- None for the five round-10 findings or five current-head class-boundary
   findings.
 - Existing Phase 6 deferrals remain: ComfyUI generation, OWUI wrappers, and
   Phase 7 manifest entries.
@@ -182,10 +219,12 @@ Parked hardening: none.
 
 ## Verification
 
-- Focused content-factory/intake suite: 805 passed.
-- Current-head review regressions: 25 routing-key cases and 111 phoneword
-  cases passed, including generated canonical-composition and whitespace-run
-  classes.
+- Focused content-factory/intake suite: 928 passed.
+- Latest current-head regression subset: 126 passed, covering
+  compatibility/separator parity, evidence-keyed dial bridges, prebuilt-prompt
+  rejection, pre-entry source replacement, and during-worker replacement.
+- Prior current-head review regressions remain covered by generated
+  canonical-composition and whitespace-run classes.
 - Ruff, `python -m py_compile`, and `git diff --check`: passed on the exact
   follow-up tree.
 - Schema maturity ratchet: no new brittleness.
@@ -198,10 +237,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 60 |
-| `atlas_brain/services/content_factory_runner.py` | 233 |
+| `atlas_brain/services/content_factory_runner.py` | 340 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 222 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 207 |
-| `tests/test_content_factory_runner.py` | 305 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 243 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 246 |
+| `tests/test_content_factory_runner.py` | 508 |
 | `tests/test_content_factory_schemas.py` | 68 |
-| **Total** | **1197** |
+| **Total** | **1567** |

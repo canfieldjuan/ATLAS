@@ -507,6 +507,26 @@ fixed at the generating operation rather than at the reported strings.
    intent gate remain unchanged; generated proofs vary prefixes, whitespace
    classes, and run widths, with detached prose proving the passing side.
 
+### Review round 12 (Codex, follow-up PR #2201)
+
+Three findings, all verified against the published follow-up and fixed at the
+shared parsing, evidence, and source-construction boundaries.
+
+1. **P1 — compatibility/separator spelling changed the phone verdict.** Phone
+   admission now classifies an NFKC-normalized view and shares one dial
+   separator grammar across tokenization, splitting, and compaction. Generated
+   proofs cross compatibility forms and separator choices, including slash,
+   against the same semantic oracle.
+2. **P1 — proximity to an open intent vocabulary was not structural evidence.**
+   Detached phonewords now require a finite bridge between the dial marker and
+   candidate. The oracle crosses direct/functional bridge evidence against
+   descriptive intervening words; ambiguous prose defaults to admissible.
+3. **P1 — the pre-dispatch fingerprint did not bind caller-built prompt text.**
+   Source-bound stages now take a prompt builder. `run_stage` reads committed
+   draft bytes once, builds the prompt from their parsed document, and hashes
+   those same bytes before dispatch. The existing under-lock re-read still
+   rejects a replacement during the worker call.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -562,11 +582,12 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 805 passed (incl. the round-6 contact oracle, round-7
+    # -> 928 passed (incl. the round-6 contact oracle, round-7
     #    content-binding probes, round-8 descriptive-number boundary, and
     #    rounds 9-10 separator-partition, international/detached-prose,
     #    IDNA, dispatch-binding, and committed-residue proofs, plus round-11
-    #    canonical-composition and whitespace-run class proofs)
+    #    canonical-composition/whitespace-run proofs and round-12 normalized
+    #    parser, structural-bridge, and prompt-construction proofs)
     #
     # Mutation check on the round-8 lock test: removing `with job_lock(...)`
     # from run_stage makes test_run_stage_holds_job_lock_across_validation_
@@ -583,10 +604,10 @@ Parked hardening: none new.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 60 |
-| `atlas_brain/services/content_factory_runner.py` | 233 |
+| `atlas_brain/services/content_factory_runner.py` | 340 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 222 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 207 |
-| `tests/test_content_factory_runner.py` | 305 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 243 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 246 |
+| `tests/test_content_factory_runner.py` | 508 |
 | `tests/test_content_factory_schemas.py` | 68 |
-| **Total** | **1197** |
+| **Total** | **1567** |
