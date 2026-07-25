@@ -598,6 +598,60 @@ class GmailEmailProvider:
             return {}
 
 
+class ScopedGmailEmailProvider:
+    """Read-only Gmail provider backed by one exact-context credential source."""
+
+    _METADATA_CONCURRENCY = 5
+
+    def __init__(self, client: Any) -> None:
+        self._gmail_client = client
+
+    async def list_messages(
+        self,
+        query: str = "is:unread",
+        max_results: int = 20,
+        **_kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        """Hydrate candidate IDs with uncollapsed sender evidence."""
+        try:
+            candidates = await self._gmail_client.list_messages(
+                query=query,
+                max_results=max_results,
+            )
+            semaphore = asyncio.Semaphore(self._METADATA_CONCURRENCY)
+
+            async def _hydrate(
+                candidate: dict[str, Any],
+            ) -> dict[str, Any] | None:
+                if not isinstance(candidate, dict):
+                    return None
+                message_id = candidate.get("id")
+                if not isinstance(message_id, str) or not message_id:
+                    return None
+                try:
+                    async with semaphore:
+                        return await self._gmail_client.get_message_envelope(
+                            message_id
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Scoped Gmail metadata read failed for message %s: %s",
+                        message_id,
+                        exc,
+                    )
+                    return None
+
+            hydrated = await asyncio.gather(
+                *(_hydrate(candidate) for candidate in candidates)
+            )
+            return [message for message in hydrated if message is not None]
+        finally:
+            await self._gmail_client.close()
+
+    async def send(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise NotImplementedError("Scoped Gmail inbox provider is read-only")
+
+
 # ---------------------------------------------------------------------------
 # ResendEmailProvider  (send-only fallback)
 # ---------------------------------------------------------------------------
@@ -785,9 +839,9 @@ class UnmappedInboxContextError(LookupError):
     """Raised before mailbox I/O when a CRM context has no inbox binding."""
 
 
-def get_scoped_inbox_provider(
+async def get_scoped_inbox_provider(
     business_context_id: str,
-) -> IMAPEmailProvider:
+) -> IMAPEmailProvider | ScopedGmailEmailProvider:
     """Return the single inbox reader explicitly bound to a CRM context.
 
     Scoped readers never use ``CompositeEmailProvider`` because its IMAP error
@@ -807,4 +861,17 @@ def get_scoped_inbox_provider(
             f"No inbox mailbox is bound to business context {context!r}"
         )
 
-    return IMAPEmailProvider(binding)
+    if binding.provider == "imap":
+        return IMAPEmailProvider(binding)
+
+    from ..autonomous.tasks.gmail_digest import GmailClient
+    from ..storage.repositories.scoped_mailbox_credential import (
+        ScopedGmailCredentialSource,
+    )
+
+    source = ScopedGmailCredentialSource(context)
+    if not await source.is_available():
+        raise UnmappedInboxContextError(
+            f"No active Gmail credential is bound to business context {context!r}"
+        )
+    return ScopedGmailEmailProvider(GmailClient(source))

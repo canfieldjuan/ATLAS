@@ -7,23 +7,30 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_eom_lead_pipeline_checks.yml"
+      - "atlas_brain/autonomous/tasks/gmail_digest.py"
+      - "atlas_brain/config.py"
       - "atlas_brain/api/contacts.py"
       - "atlas_brain/api/leads.py"
       - "atlas_brain/mcp/crm_server.py"
       - "atlas_brain/services/customer_context.py"
       - "atlas_brain/services/crm_provider.py"
+      - "atlas_brain/services/email_provider.py"
       - "atlas_brain/storage/models.py"
       - "atlas_brain/storage/repositories/email.py"
       - "atlas_brain/storage/repositories/call_transcript.py"
+      - "atlas_brain/storage/repositories/scoped_mailbox_credential.py"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
       - "atlas_brain/storage/migrations/347_customer_service_tickets.sql"
       - "atlas_brain/storage/migrations/348_appointment_operating_fields.sql"
       - "atlas_brain/storage/migrations/349_sent_emails_business_context.sql"
+      - "atlas_brain/storage/migrations/350_scoped_mailbox_credentials.sql"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
       - "tests/test_eom_lead_pipeline_integration.py"
+      - "tests/test_eom_mailbox_context_binding.py"
       - "tests/test_eom_recurring_appointments_integration.py"
+      - "tests/test_eom_scoped_gmail_credentials.py"
       - "tests/test_eom_sent_email_tenant_scope.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
@@ -32,23 +39,30 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_eom_lead_pipeline_checks.yml"
+      - "atlas_brain/autonomous/tasks/gmail_digest.py"
+      - "atlas_brain/config.py"
       - "atlas_brain/api/contacts.py"
       - "atlas_brain/api/leads.py"
       - "atlas_brain/mcp/crm_server.py"
       - "atlas_brain/services/customer_context.py"
       - "atlas_brain/services/crm_provider.py"
+      - "atlas_brain/services/email_provider.py"
       - "atlas_brain/storage/models.py"
       - "atlas_brain/storage/repositories/email.py"
       - "atlas_brain/storage/repositories/call_transcript.py"
+      - "atlas_brain/storage/repositories/scoped_mailbox_credential.py"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
       - "atlas_brain/storage/migrations/347_customer_service_tickets.sql"
       - "atlas_brain/storage/migrations/348_appointment_operating_fields.sql"
       - "atlas_brain/storage/migrations/349_sent_emails_business_context.sql"
+      - "atlas_brain/storage/migrations/350_scoped_mailbox_credentials.sql"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
       - "tests/test_eom_lead_pipeline_integration.py"
+      - "tests/test_eom_mailbox_context_binding.py"
       - "tests/test_eom_recurring_appointments_integration.py"
+      - "tests/test_eom_scoped_gmail_credentials.py"
       - "tests/test_eom_sent_email_tenant_scope.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
@@ -95,7 +109,9 @@ jobs:
             tests/test_eom_complaints_integration.py \
             tests/test_eom_contacts_api_tenant_scope.py \
             tests/test_eom_lead_pipeline_integration.py \
+            tests/test_eom_mailbox_context_binding.py \
             tests/test_eom_recurring_appointments_integration.py \
+            tests/test_eom_scoped_gmail_credentials.py \
             tests/test_eom_sent_email_tenant_scope.py \
             tests/test_leads_intake.py \
             tests/test_migrations_runner.py \

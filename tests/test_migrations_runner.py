@@ -201,3 +201,26 @@ def test_sent_email_tenant_migration_is_additive_replay_safe_and_unclassified():
     assert "SET DEFAULT" not in upper
     assert "SET NOT NULL" not in upper
     assert "DROP " not in upper
+
+
+def test_scoped_mailbox_credential_migration_is_additive_and_constrained():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "350_scoped_mailbox_credentials.sql"
+    ).read_text()
+    upper = migration.upper()
+    normalized = " ".join(migration.split())
+
+    assert "CREATE TABLE IF NOT EXISTS scoped_mailbox_credentials" in migration
+    assert "PRIMARY KEY (business_context_id, provider)" in migration
+    assert "encrypted_credentials BYTEA NOT NULL" in normalized
+    assert "encryption_kid" in migration
+    assert "generation BIGINT NOT NULL DEFAULT 1" in normalized
+    assert "CHECK (btrim(business_context_id) <> '')" in migration
+    assert "CHECK (provider = 'gmail')" in migration
+    assert "CHECK (generation > 0)" in migration
+    assert "WHERE revoked_at IS NULL" in migration
+    assert "DROP " not in upper

@@ -380,8 +380,12 @@ ATLAS_EMAIL_IMAP_SSL=true
 ATLAS_EMAIL_IMAP_MAILBOX=INBOX
 
 # Scoped CRM inbox reads require an explicit JSON binding per business context.
-# This slice supports explicit IMAP credentials only.
+# IMAP credentials live in the binding; Gmail bindings are secret-free and use
+# the encrypted scoped_mailbox_credentials row for that exact context.
 ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS='{"effingham_maids":{"provider":"imap","imap_host":"imap.gmail.com","imap_username":"office@example.com","imap_password":"app-password"}}'
+# Gmail alternative (requires a KEK and a repository-provisioned credential row):
+# ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS='{"effingham_maids":{"provider":"gmail"}}'
+# ATLAS_SAAS_BYOK_ENCRYPTION_KEK=<kid:fernet-key>
 ```
 
 ## NocoDB CRM Setup
@@ -436,9 +440,14 @@ Tools: `search_contacts`, `get_contact`, `create_contact`, `update_contact`,
 Scoped get_customer_context inbox history is fail-closed. Configure
 ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS as a JSON object keyed by the exact CRM
 business_context_id; an unmapped context omits inbox_emails without opening
-the global IMAP/Gmail account. This slice accepts provider "imap" with the
-imap_* fields shown above. Scoped Gmail OAuth requires a separate
-database-backed credential-state slice.
+the global IMAP/Gmail account. Provider "imap" uses the imap_* fields shown
+above. Provider "gmail" accepts no inline secret fields: provision its client
+ID, client secret, and refresh token through
+`ScopedMailboxCredentialRepository.bind_gmail` in a protected operator
+runtime. Atlas encrypts that exact-context row with
+`ATLAS_SAAS_BYOK_ENCRYPTION_KEK`, serializes refresh-token rotation in
+PostgreSQL, and treats a missing, undecryptable, or revoked row as omitted.
+The global Gmail/Calendar token file remains separate and unchanged.
 
 ### Email MCP Server (9 tools)
 ```bash

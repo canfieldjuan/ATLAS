@@ -166,7 +166,7 @@ class CustomerContextService:
             )
 
             try:
-                inbox_provider = get_scoped_inbox_provider(
+                inbox_provider = await get_scoped_inbox_provider(
                     business_context_id
                 )
             except UnmappedInboxContextError:
@@ -175,12 +175,12 @@ class CustomerContextService:
                     business_context_id,
                 )
                 inbox_email_source_omitted = True
-            except Exception as exc:
+            except Exception:
                 logger.warning(
-                    "CustomerContext inbox provider setup failed for %s: %s",
+                    "CustomerContext inbox provider setup failed for %s",
                     business_context_id,
-                    exc,
                 )
+                inbox_email_source_omitted = True
             else:
                 inbox_email_query_address = self._normalize_ascii_mailbox(
                     contact.get("email")

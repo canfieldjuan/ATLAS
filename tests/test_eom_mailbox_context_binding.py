@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from atlas_brain.config import EmailConfig, InboxMailboxBinding
+from atlas_brain import config as config_mod
 from atlas_brain.services import customer_context as context_mod
 from atlas_brain.services import email_provider as email_provider_mod
 
@@ -30,10 +30,10 @@ def _binding(**overrides):
         "imap_mailbox": "INBOX",
     }
     values.update(overrides)
-    return InboxMailboxBinding(**values)
+    return config_mod.InboxMailboxBinding(**values)
 
 
-def test_config_preserves_exact_context_keys_and_rejects_scoped_gmail(
+def test_config_preserves_exact_context_keys_and_accepts_secret_free_gmail(
     monkeypatch,
 ):
     exact = f" {TENANT} "
@@ -49,19 +49,27 @@ def test_config_preserves_exact_context_keys_and_rejects_scoped_gmail(
         ),
     )
 
-    config = EmailConfig()
+    config = config_mod.EmailConfig()
 
     assert set(config.inbox_context_bindings) == {TENANT, exact}
     assert (
         config.inbox_context_bindings[exact].imap_username
         == "spaced@eom.example"
     )
+    monkeypatch.delenv("ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS")
+
     typed = _binding()
-    assert EmailConfig(
+    assert config_mod.EmailConfig(
         inbox_context_bindings={TENANT: typed}
     ).inbox_context_bindings[TENANT] == typed
-    with pytest.raises(ValidationError, match="provider must be imap"):
-        InboxMailboxBinding(
+    gmail = config_mod.InboxMailboxBinding(provider="gmail")
+    assert gmail.provider == "gmail"
+    assert gmail.imap_password.get_secret_value() == ""
+    assert config_mod.EmailConfig(
+        inbox_context_bindings={TENANT: gmail}
+    ).inbox_context_bindings[TENANT] == gmail
+    with pytest.raises(ValidationError, match="unsupported fields"):
+        config_mod.InboxMailboxBinding(
             provider="gmail",
             gmail_client_id="client",
             gmail_client_secret="secret",
@@ -106,7 +114,7 @@ def test_config_preserves_exact_context_keys_and_rejects_scoped_gmail(
 )
 def test_invalid_binding_grammar_redacts_nested_values(bindings):
     with pytest.raises(ValidationError) as captured:
-        EmailConfig(inbox_context_bindings=bindings)
+        config_mod.EmailConfig(inbox_context_bindings=bindings)
 
     rendered = str(captured.value)
     structured = json.dumps(captured.value.errors(), default=str)
@@ -122,7 +130,7 @@ def test_invalid_binding_grammar_redacts_nested_values(bindings):
 def test_binding_preflight_preserves_port_coercion(port):
     binding = _binding().model_dump()
     binding["imap_port"] = port
-    config = EmailConfig(
+    config = config_mod.EmailConfig(
         inbox_context_bindings={TENANT: binding}
     )
 
@@ -144,14 +152,15 @@ def test_binding_preflight_preserves_port_coercion(port):
 def test_binding_preflight_preserves_ssl_coercion(use_ssl, expected):
     binding = _binding().model_dump()
     binding["imap_ssl"] = use_ssl
-    config = EmailConfig(
+    config = config_mod.EmailConfig(
         inbox_context_bindings={TENANT: binding}
     )
 
     assert config.inbox_context_bindings[TENANT].imap_ssl is expected
 
 
-def test_scoped_provider_rebinds_without_authorization_cache(monkeypatch):
+@pytest.mark.asyncio
+async def test_scoped_provider_rebinds_without_authorization_cache(monkeypatch):
     import atlas_brain.config as config_mod
 
     monkeypatch.setattr(
@@ -159,20 +168,20 @@ def test_scoped_provider_rebinds_without_authorization_cache(monkeypatch):
         "inbox_context_bindings",
         {TENANT: _binding(imap_username="mailbox-a@example.com")},
     )
-    first = email_provider_mod.get_scoped_inbox_provider(TENANT)
+    first = await email_provider_mod.get_scoped_inbox_provider(TENANT)
 
     monkeypatch.setattr(
         config_mod.settings.email,
         "inbox_context_bindings",
         {TENANT: _binding(imap_username="mailbox-b@example.com")},
     )
-    second = email_provider_mod.get_scoped_inbox_provider(TENANT)
+    second = await email_provider_mod.get_scoped_inbox_provider(TENANT)
 
     assert first is not second
     assert first._username == "mailbox-a@example.com"
     assert second._username == "mailbox-b@example.com"
     with pytest.raises(email_provider_mod.UnmappedInboxContextError):
-        email_provider_mod.get_scoped_inbox_provider(OTHER_TENANT)
+        await email_provider_mod.get_scoped_inbox_provider(OTHER_TENANT)
 
 
 @pytest.mark.parametrize(
@@ -253,7 +262,7 @@ async def test_unscoped_inbox_preserves_legacy_provider_contract(monkeypatch):
     monkeypatch.setattr(email_provider_mod, "_email_provider", provider)
 
     result = await context_mod.CustomerContextService()._get_inbox_emails(
-        {"email": "josé@example.com"},
+        {"email": "jos\u00e9@example.com"},
         -7,
     )
 

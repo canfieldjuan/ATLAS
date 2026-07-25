@@ -816,11 +816,11 @@ class AlertsConfig(BaseSettings):
 
 
 class InboxMailboxBinding(BaseModel):
-    """One CRM business context's authorized IMAP inbox."""
+    """One CRM business context's authorized inbox provider."""
 
     model_config = {"extra": "forbid", "hide_input_in_errors": True}
 
-    provider: Literal["imap"]
+    provider: Literal["imap", "gmail"]
     imap_host: str = ""
     imap_port: int = Field(default=993, ge=1, le=65535)
     imap_username: str = ""
@@ -849,6 +849,10 @@ class InboxMailboxBinding(BaseModel):
             "__invalid_imap_missing__",
         }
         if set(data) == {"provider"} and provider in sentinels:
+            return data
+        if provider == "gmail":
+            if set(data) != {"provider"}:
+                return {"provider": "__invalid_binding_fields__"}
             return data
         if provider != "imap":
             return {"provider": "__invalid_provider__"}
@@ -894,7 +898,7 @@ class InboxMailboxBinding(BaseModel):
             "__invalid_binding_fields__": "Inbox binding has unsupported fields",
             "__invalid_secret_type__": "Inbox credentials must be strings",
             "__invalid_binding_mapping__": "Inbox bindings must be mappings",
-            "__invalid_provider__": "Inbox mailbox provider must be imap",
+            "__invalid_provider__": "Inbox mailbox provider must be imap or gmail",
             "__invalid_field_type__": "Inbox binding field types are invalid",
             "__invalid_field_value__": "Inbox binding field values are invalid",
         }
@@ -947,7 +951,7 @@ class EmailConfig(BaseSettings):
     inbox_context_bindings: dict[str, InboxMailboxBinding] = Field(
         default_factory=dict,
         description=(
-            "Explicit CRM business_context_id to inbox credential bindings. "
+            "Explicit CRM business_context_id to inbox provider bindings. "
             "Scoped CRM reads refuse contexts absent from this map."
         ),
     )
@@ -977,7 +981,13 @@ class EmailConfig(BaseSettings):
                     "__invalid_context_blank__",
                     "__invalid_context_blank__",
                 )
-            if isinstance(binding, BaseModel):
+            if isinstance(binding, InboxMailboxBinding):
+                binding = (
+                    {"provider": "gmail"}
+                    if binding.provider == "gmail"
+                    else binding.model_dump()
+                )
+            elif isinstance(binding, BaseModel):
                 binding = binding.model_dump()
             if not isinstance(binding, dict):
                 return invalid(
