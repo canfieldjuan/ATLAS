@@ -126,21 +126,32 @@ Parked hardening: none.
 
 - `python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py -q` — 142 passed.
-- Process-boundary selection (`process_preflight or bootstrap`) — 4 passed.
+  tests/test_sync_eom_portal_customers.py -q` — 146 passed.
+- Current-head boundary selection (`isolated or sitecustomize or skip_worktree
+  or evidence_failure`) — 6 passed.
 - Ruff and Python byte compilation on the receipt helper, Calendar entrypoint,
   and receipt tests — passed.
 - Exact scripts maturity ratchet — passed with no baseline change.
 - Guard class-closure advisory — passed.
 - `git diff --check` — passed.
 
+### Review reconciliation
+
+- A receipted direct CLI invocation now refuses non-isolated startup, and the
+  documented process uses `python -I`.
+- Tracked Python content and executable modes are read through no-follow file
+  descriptors and compared with the `HEAD` tree's Git blob identities.
+- Receipt persistence health is asserted before CRM construction, before every
+  record, and after each completed record; an in-flight contact may finish, but
+  no later contact starts after evidence storage fails.
+
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 33 |
-| `plans/PR-EOM-Execution-Receipts.md` | 133 |
-| `scripts/eom_execution_receipt.py` | 380 |
-| `scripts/import_eom_customers_live.py` | 153 |
-| `tests/test_eom_execution_receipts.py` | 744 |
-| **Total** | **1443** |
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 35 |
+| `plans/PR-EOM-Execution-Receipts.md` | 157 |
+| `scripts/eom_execution_receipt.py` | 448 |
+| `scripts/import_eom_customers_live.py` | 164 |
+| `tests/test_eom_execution_receipts.py` | 903 |
+| **Total** | **1707** |
