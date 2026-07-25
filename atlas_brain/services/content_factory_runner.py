@@ -18,10 +18,14 @@ from pathlib import Path
 from typing import Any
 
 from atlas_brain.services.content_factory_copy_verification import (
+    _EMAIL_RE,
     _INTL_PHONE_RE,
+    _PHONE_RE,
     advisory_warnings,
+    literal_claim_hits,
     verify_copy,
 )
+from atlas_brain.schemas.content_factory import model_for
 from atlas_brain.services.content_factory_store import (
     DEFAULT_ROOT,
     ArtifactStoreError,
@@ -190,9 +194,13 @@ def _enforce_image_prompts(artifact: dict[str, Any]) -> None:
     for index, text in enumerate(texts, start=1):
         if not text.strip():
             continue
-        for hit in verify_copy(text).hits:
+        # Literal matching: prose negation does not un-draw words a renderer
+        # is told to put on a poster (round 3).
+        for hit in literal_claim_hits(text):
             hits.append(f"prompt {index}: {hit}")
-        if _INTL_PHONE_RE.search(text):
+        if _EMAIL_RE.search(text):
+            hits.append(f"prompt {index}: email: <redacted>")
+        if _PHONE_RE.search(text) or _INTL_PHONE_RE.search(text):
             hits.append(f"prompt {index}: phone: <redacted>")
 
     artifact["copy_verification"] = {
@@ -254,16 +262,20 @@ def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
     artifact["advisory_warnings"] = advisory_warnings(edited)
 
 
-def _draft_claim_ids(job_id: str, root: "Path | str") -> "set[str] | None":
-    """Claim source ids the job's approved draft established, or None when
-    the draft cannot be read (missing/unparseable)."""
+def _read_draft(job_id: str, root: "Path | str") -> "dict[str, Any] | None":
+    """The job's persisted draft artifact, or None when it cannot be read."""
     path = job_dir(job_id, root=root) / "draft.json"
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
+    return data if isinstance(data, dict) else None
+
+
+def _draft_claim_ids(draft: "dict[str, Any]") -> "set[str]":
+    """Claim source ids the approved draft established."""
     ids: set[str] = set()
-    for claim in data.get("claims") or []:
+    for claim in draft.get("claims") or []:
         if isinstance(claim, dict):
             source_id = str(claim.get("source_id") or "").strip()
             if source_id:
@@ -272,30 +284,51 @@ def _draft_claim_ids(job_id: str, root: "Path | str") -> "set[str] | None":
 
 
 def _enforce_lineage(artifact: dict[str, Any], job_id: str, root: "Path | str") -> None:
-    """A package may not be declared shippable while any variant cites a
-    claim the job's draft never established.
+    """Readiness flags require a verified tie to the job's approved draft.
 
-    Non-blank lineage is not the same as REAL lineage: a fabricated id is
-    still an orphan. Checked only when ``ready_to_publish`` is asserted --
-    an unready package is a legitimate intermediate state -- and fails
-    closed when the draft cannot be read, since traceability then cannot be
-    demonstrated (round 2).
+    Checked for both Phase 6 artifacts once they claim readiness:
+      * every cited claim id exists in that draft (a fabricated id is still
+        an orphan), and
+      * the declared ``source_draft_revision`` matches the draft actually on
+        disk -- otherwise a package can ship copy derived from superseded
+        text whenever the claim ids happen to overlap (round 3).
+
+    The artifact is validated FIRST so this branches on the same normalized
+    values the contract will accept: a weak worker's ``"false"`` string
+    coerces to False here exactly as it does in the model, instead of the
+    runner reading raw truthiness and disagreeing with admission (round 3).
+    Unready artifacts skip the check -- that is the legitimate intermediate
+    state -- and a missing/unreadable draft fails closed.
     """
-    if artifact.get("schema") != _REPURPOSING_SCHEMA:
+    schema = artifact.get("schema")
+    if schema not in (_REPURPOSING_SCHEMA, _IMAGE_PROMPT_SCHEMA):
         return
-    if not artifact.get("ready_to_publish"):
+    model = model_for(artifact).model_validate(artifact)
+    ready = getattr(model, "ready_to_publish", False) or getattr(
+        model, "ready_to_generate", False
+    )
+    if not ready:
         return
-    known = _draft_claim_ids(job_id, root)
-    if known is None:
+
+    draft = _read_draft(job_id, root)
+    if draft is None:
         raise ArtifactStoreError(
-            "ready_to_publish requires a readable draft.json in the job "
-            "folder to verify variant claim lineage"
+            "readiness requires a readable draft artifact in the job folder "
+            "to verify claim lineage and source revision"
         )
+    declared = getattr(model, "source_draft_revision", None)
+    actual = draft.get("revision", 1)
+    if declared is not None and declared != actual:
+        raise ArtifactStoreError(
+            f"source_draft_revision {declared} does not match the draft on "
+            f"disk (revision {actual}); the artifact derives from superseded copy"
+        )
+
+    known = _draft_claim_ids(draft)
     cited: set[str] = set()
-    for variant in artifact.get("variants") or []:
-        if isinstance(variant, dict):
-            for claim_id in variant.get("derived_from_claims") or []:
-                cited.add(str(claim_id).strip())
+    for variant in getattr(model, "variants", []) or []:
+        for claim_id in variant.derived_from_claims:
+            cited.add(claim_id.strip())
     unknown = sorted(cited - known)
     if unknown:
         raise ArtifactStoreError(

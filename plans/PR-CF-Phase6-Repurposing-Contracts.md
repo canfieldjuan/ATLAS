@@ -121,9 +121,29 @@ Four findings, all fixed:
 4. **MAJOR — stale plan text.** The Scope section still described
    combined positive+negative gating; corrected above.
 
+### Review round 3 (Codex)
+
+Three findings, all fixed:
+
+1. **P1 — the declared source revision was never checked.** A package could
+   claim revision 1 against a revision-2 draft and ship whenever claim ids
+   overlapped. `_enforce_lineage` now compares `source_draft_revision` with
+   the draft on disk, for BOTH Phase 6 artifacts, before honouring either
+   readiness flag.
+2. **P1 — prose negation let banned words into renderer instructions.**
+   "poster reading do not guarantee savings" passed, because the body-copy
+   verifier treats that as a denial -- but the renderer still paints the
+   words. Prompts now use `literal_claim_hits` (no negation suppression);
+   body copy keeps prose semantics, so the #2181 contract is untouched.
+3. **MAJOR — runner and schema disagreed on readiness.** The runner read raw
+   dict truthiness, so a worker's `"false"` string looked ready while
+   pydantic normalized it to False. The artifact is now validated first and
+   the check branches on the normalized model value.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
+- `atlas_brain/services/content_factory_copy_verification.py`
 - `atlas_brain/services/content_factory_runner.py`
 - `atlas_brain/services/content_factory_store.py`
 - `plans/PR-CF-Phase6-Repurposing-Contracts.md`
@@ -172,7 +192,7 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 344 passed (35 new: 18 contract invariants, 17 run_stage gates)
+    # -> 351 passed (42 new: 18 contract invariants, 24 run_stage gates)
 
 - `python -m py_compile` clean (SyntaxWarning as error) on touched modules.
 - NOT run: live worker pass (no wrappers wired yet, by design).
@@ -182,9 +202,10 @@ Parked hardening: none new.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 159 |
-| `atlas_brain/services/content_factory_runner.py` | 160 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 20 |
+| `atlas_brain/services/content_factory_runner.py` | 193 |
 | `atlas_brain/services/content_factory_store.py` | 4 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 190 |
-| `tests/test_content_factory_runner.py` | 310 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 209 |
+| `tests/test_content_factory_runner.py` | 396 |
 | `tests/test_content_factory_schemas.py` | 206 |
-| **Total** | **1029** |
+| **Total** | **1187** |

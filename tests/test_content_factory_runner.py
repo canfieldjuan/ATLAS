@@ -296,13 +296,14 @@ def test_run_stage_rejects_contradictory_v2_version(tmp_path, monkeypatch):
 # --- Phase 6: repurposing + image-prompt gates at the real entrypoint ---
 
 
-def _seed_draft(root, job_id, source_ids):
+def _seed_draft(root, job_id, source_ids, revision=1):
     """Write a minimal valid draft.json so lineage checks have a source."""
     from atlas_brain.services.content_factory_store import write_artifact
 
     write_artifact(job_id, "draft", {
         "schema": "draft.v1",
         "project_id": "p",
+        "revision": revision,
         "body_markdown": "seed",
         "claims": [{"text": f"claim {sid}", "source_id": sid} for sid in source_ids],
     }, root=root)
@@ -557,7 +558,7 @@ def test_missing_draft_fails_closed_on_ship(tmp_path, monkeypatch):
         "ready_to_publish": True,
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    with pytest.raises(ArtifactStoreError, match="readable draft.json"):
+    with pytest.raises(ArtifactStoreError, match="readable draft artifact"):
         runner.run_stage("job-nodraft", "repurposing", "m", "req", api_key="k", root=tmp_path)
 
 
@@ -600,3 +601,88 @@ def test_hits_identify_the_offending_prompt(tmp_path, monkeypatch):
     rec = runner.run_stage("job-which", "image_prompt", "m", "req", api_key="k", root=tmp_path)
     hits = json.loads(Path(rec["path"]).read_text())["copy_verification"]["hits"]
     assert all(h.startswith("prompt 2:") for h in hits), hits
+
+
+# --- review round 3 on #2192 ---
+
+
+def test_stale_source_revision_blocks_shipping(tmp_path, monkeypatch):
+    """Overlapping claim ids must not let a package built on superseded
+    copy ship."""
+    _seed_draft(tmp_path, "job-rev", ["e1"], revision=2)
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "source_draft_revision": 1,
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e1"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="superseded copy"):
+        runner.run_stage("job-rev", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_matching_source_revision_ships(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job-rev2", ["e1"], revision=2)
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "source_draft_revision": 2,
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e1"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-rev2", "repurposing", "m", "req", api_key="k", root=tmp_path)
+    assert json.loads(Path(rec["path"]).read_text())["ready_to_publish"] is True
+
+
+def test_image_prompt_readiness_also_checks_revision(tmp_path, monkeypatch):
+    """ImagePromptSet gets the same tie to the approved draft."""
+    _seed_draft(tmp_path, "job-imgrev", ["e1"], revision=3)
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "source_draft_revision": 1,
+        "prompts": [{"purpose": "hero", "prompt_text": "a tidy desk"}],
+        "ready_to_generate": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="superseded copy"):
+        runner.run_stage("job-imgrev", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_string_false_readiness_persists_as_intermediate(tmp_path, monkeypatch):
+    """A weak worker's "false" normalizes to False, so no draft is required
+    and the intermediate package persists (runner and schema agree)."""
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["not-yet-real"]}],
+        "ready_to_publish": "false",
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-strfalse", "repurposing", "m", "req", api_key="k", root=tmp_path)
+    assert json.loads(Path(rec["path"]).read_text())["ready_to_publish"] is False
+
+
+@pytest.mark.parametrize("text", [
+    "poster reading do not guarantee savings",
+    "a sign that says we never guarantee savings",
+])
+def test_negated_banned_phrase_in_prompt_still_fails(text, tmp_path, monkeypatch):
+    """Prose negation does not un-draw words a renderer is told to paint."""
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{"purpose": "hero", "prompt_text": text}],
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-neg2", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["copy_verification"]["verdict"] == "fail", stored["copy_verification"]
+
+
+def test_body_copy_keeps_prose_negation_semantics():
+    """The literal matcher is prompt-only; body copy still reads denials as
+    denials (the #2181 contract is untouched)."""
+    from atlas_brain.services.content_factory_copy_verification import verify_copy
+
+    assert verify_copy("We do not promise guaranteed savings.").verdict == "pass"
