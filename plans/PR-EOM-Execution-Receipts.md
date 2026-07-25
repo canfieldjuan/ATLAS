@@ -86,10 +86,10 @@ Max files: 5
     mutation or, for an in-flight contact, before the next.
   - [ ] Existing focused Calendar behavior remains green.
 - Reachability proof: from the repository root, pipe
-  `git show HEAD:scripts/eom_execution_receipt.py` into
-  `python -I - --launch-reviewed scripts/import_eom_customers_live.py
-  --receipt-dir ...`; a valid run publishes the observable mode-0600
-  `.exit-N.json` receipt, while hostile process fixtures exit nonzero without
+  git show HEAD:scripts/eom_execution_receipt.py into
+  python -I - --launch-reviewed scripts/import_eom_customers_live.py
+  --receipt-dir ...; a valid run publishes the observable mode-0600
+  .exit-N.json receipt, while hostile process fixtures exit nonzero without
   executing their marker payloads or creating a receipt.
 - Affected surfaces: the EOM Calendar operator CLI, its source-authentication
   bootstrap, ignored-import classifier, receipt persistence/finalization, the
@@ -174,7 +174,7 @@ Parked hardening: none.
 - Tracked Python content and executable modes are read through no-follow file
   descriptors and compared with the `HEAD` tree's Git blob identities.
 - Ignored module-file symlinks are normalized through the same import-suffix
-  classifier as regular module artifacts; `.py` and `.pyc` held-out cases both
+  classifier as regular module artifacts; .py and .pyc held-out cases both
   fail closed.
 - Receipt persistence health is asserted before CRM construction, before every
   record, and after each completed record; an in-flight contact may finish, but
