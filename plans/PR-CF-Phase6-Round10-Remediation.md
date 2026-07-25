@@ -137,7 +137,8 @@ from visible-only content, and removes them from the NFKC/casefold routing key.
 the response is enforced, it takes `job_lock`, rejects any source-derived
 schema whose current committed fingerprint differs, stamps audits with the
 dispatch fingerprint, runs readiness/lineage, and commits. Store reads use
-`git show HEAD:<stage>.json`; cleanup is hygiene rather than correctness.
+Git's committed-object lookup for the stage JSON; cleanup is hygiene rather
+than correctness.
 
 ## Intentional
 
@@ -163,12 +164,12 @@ Parked hardening: none.
 ## Verification
 
 - Focused content-factory/intake suite: 714 passed.
-- Ruff, `python -m py_compile`, and `git diff --check`: passed before branch
-  transfer; rerun on the exact follow-up head before push.
+- Ruff, `python -m py_compile`, and `git diff --check`: passed on the exact
+  follow-up tree.
 - Schema maturity ratchet: no new brittleness.
 - Store explicit-file maturity lane: 0 flagged.
 - Guard class-closure, plan shape/files/diff-size/rules, plan/code consistency,
-  and plan sync: rerun on the exact follow-up head before push.
+  and plan sync: passed against the merged `origin/main`.
 
 ## Estimated diff size
 
@@ -178,7 +179,7 @@ Parked hardening: none.
 | `atlas_brain/services/content_factory_runner.py` | 233 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
 | `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 202 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 184 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 185 |
 | `tests/test_content_factory_runner.py` | 286 |
 | `tests/test_content_factory_schemas.py` | 40 |
-| **Total** | **1090** |
+| **Total** | **1091** |
