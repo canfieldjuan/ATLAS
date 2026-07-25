@@ -74,7 +74,7 @@ Slice phase: vertical slice
    send selects the Resend transport from info@ (and would fail if force_resend
    were dropped -> Gmail), and a default send still selects Gmail. That test
    mocks first-party transports, so `tests/maturity_sweep/baseline_atlas_brain_tools.json`
-   is bumped for `email.py` (INTERNAL_MOCK 0->4, hermetic EmailTool config/client patches) and `gmail.py` (0->1, transport) -- the sanctioned
+   is bumped for `email.py` and `gmail.py` (INTERNAL_MOCK 0->1 each) -- the real EmailTool is used with a fresh instance holding a fake HTTP transport, and the Gmail transport is faked -- the sanctioned
    ratchet mechanism for the reviewer-endorsed external-transport mocks.
 
 ### Review Contract
@@ -92,7 +92,7 @@ Slice phase: vertical slice
      and does not touch the Resend transport (default path for all other callers
      unchanged; test-asserted).
   4. The integration test mocks first-party transports; the tools-lane maturity
-     baseline is bumped (email.py INTERNAL_MOCK 0->4, gmail.py 0->1) via the sanctioned
+     baseline is bumped (email.py/gmail.py INTERNAL_MOCK 0->1 each) via the sanctioned
      `--update-baseline` mechanism, surgically (only those two entries change).
   5. Existing acknowledgement guardrails hold: no `$`, no "quote"/"same-day",
      `(217) 207-3097` present, `within 24 hours` present, request-line echo,

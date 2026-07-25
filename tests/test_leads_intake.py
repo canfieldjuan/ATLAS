@@ -867,23 +867,25 @@ async def test_forced_resend_routes_through_real_stack(monkeypatch):
     ResendEmailProvider stopped stamping force_resend or EmailTool ignored it
     (production would then route the acknowledgement back through Gmail). A
     default send must still select Gmail (unchanged for every other caller)."""
-    import httpx
-
     from atlas_brain.services import google_oauth
     from atlas_brain.services.email_provider import CompositeEmailProvider
     from atlas_brain.tools import email as email_mod
     from atlas_brain.tools import gmail as gmail_mod
+    from atlas_brain.tools.email import EmailTool
 
-    # External Resend transport (third-party httpx).
+    # External Resend transport: give a FRESH EmailTool a fake HTTP client so the
+    # Resend send never touches the network -- hermetic under any run order (the
+    # shared singleton can be left holding a real httpx client + real key by an
+    # earlier test, which is why patching httpx/_client on it is not enough).
+    # ResendEmailProvider.send re-imports email_tool from the module, so swapping
+    # the module attribute makes it use our controlled instance.
     _FakeHTTPClient.posted = []
-    monkeypatch.setattr(httpx, "AsyncClient", _FakeHTTPClient)
-    monkeypatch.setattr(email_mod.email_tool, "_client", None)  # rebuild w/ fake httpx
-    # Configure the EmailTool instance directly (not settings.email): another
-    # test in the full suite may have rebound settings.email, so patch the exact
-    # config object the tool reads to stay hermetic under any run order.
-    monkeypatch.setattr(email_mod.email_tool._config, "enabled", True)
-    monkeypatch.setattr(email_mod.email_tool._config, "api_key", "re_test_key")
-    monkeypatch.setattr(email_mod.email_tool._config, "gmail_send_enabled", True)
+    fresh_tool = EmailTool()
+    monkeypatch.setattr(fresh_tool, "_client", _FakeHTTPClient())
+    monkeypatch.setattr(fresh_tool._config, "enabled", True)
+    monkeypatch.setattr(fresh_tool._config, "api_key", "re_test_key")
+    monkeypatch.setattr(fresh_tool._config, "gmail_send_enabled", True)
+    monkeypatch.setattr(email_mod, "email_tool", fresh_tool)
 
     # External Gmail transport: credentials present + a transport spy, so a
     # dropped force_resend would visibly select Gmail here.
