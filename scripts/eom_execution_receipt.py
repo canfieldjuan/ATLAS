@@ -48,6 +48,27 @@ def _git_sha(repo_root: Path) -> str:
     return value
 
 
+def _clean_git_sha(repo_root: Path) -> str:
+    status = subprocess.run(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=no",
+            "--ignore-submodules=none",
+        ],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if status.stdout:
+        raise RuntimeError(
+            "receipted execution requires a clean tracked worktree"
+        )
+    return _git_sha(repo_root)
+
+
 def _script_sha256(script_path: Path) -> str:
     return hashlib.sha256(script_path.read_bytes()).hexdigest()
 
@@ -72,7 +93,9 @@ def _exit_code_for_exception(exc: BaseException) -> int:
     if isinstance(exc, SystemExit):
         if exc.code is None:
             return 0
-        return exc.code if type(exc.code) is int else 1
+        if isinstance(exc.code, int):
+            return int(exc.code) & 0xFF
+        return 1
     return 1
 
 
@@ -126,7 +149,7 @@ class EomExecutionReceipt:
             "mode": mode,
             "started_at_utc": started,
             "ended_at_utc": None,
-            "git_sha": git_sha or _git_sha(script.parent.parent),
+            "git_sha": git_sha or _clean_git_sha(script.parent.parent),
             "script_sha256": _script_sha256(script),
             "exit_code": None,
             "outcome_counts": {},

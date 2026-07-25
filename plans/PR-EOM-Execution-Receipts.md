@@ -142,7 +142,7 @@ Parked hardening: none.
 
 - Command: python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py -q - 123 passed.
+  tests/test_sync_eom_portal_customers.py -q - 129 passed.
 - Command: python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py tests/test_eom_execution_receipts.py -
   passed.
@@ -165,15 +165,20 @@ Parked hardening: none.
 - Provider race merges now record the affected UUID before any follow-up no-op.
 - Construction now rejects filesystems without hard-link support before either
   runtime, and explicitly sets artifact mode 0600 independent of the umask.
+- `SystemExit` integer-like values now match the effective POSIX process status,
+  including booleans, negative values, and values above 255.
+- Receipted execution now rejects staged or unstaged tracked-file changes before
+  entering either operator runtime, so the recorded `HEAD` cannot conceal
+  modified dependencies.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 29 |
-| `plans/PR-EOM-Execution-Receipts.md` | 179 |
-| `scripts/eom_execution_receipt.py` | 245 |
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 33 |
+| `plans/PR-EOM-Execution-Receipts.md` | 184 |
+| `scripts/eom_execution_receipt.py` | 268 |
 | `scripts/import_eom_customers_live.py` | 71 |
 | `scripts/sync_eom_portal_customers.py` | 96 |
-| `tests/test_eom_execution_receipts.py` | 446 |
-| **Total** | **1066** |
+| `tests/test_eom_execution_receipts.py` | 496 |
+| **Total** | **1148** |

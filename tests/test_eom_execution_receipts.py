@@ -20,6 +20,7 @@ sys.path.insert(0, str(REPO / "tests"))
 
 import import_eom_customers_live as calendar_import  # noqa: E402
 import sync_eom_portal_customers as portal_sync  # noqa: E402
+import eom_execution_receipt as receipt_module  # noqa: E402
 from test_eom_live_calendar_import import (  # noqa: E402
     StubCRM,
     StubPool,
@@ -138,7 +139,12 @@ def test_final_collision_never_overwrites_and_preserves_in_progress(tmp_path):
     ("failure", "expected_exit"),
     [
         (SystemExit(), 0),
+        (SystemExit(False), 0),
+        (SystemExit(True), 1),
         (SystemExit(7), 7),
+        (SystemExit(-1), 255),
+        (SystemExit(256), 0),
+        (SystemExit(513), 1),
         (RuntimeError("failed"), 1),
         (KeyboardInterrupt(), 130),
     ],
@@ -209,6 +215,48 @@ def test_initial_in_progress_entry_is_directory_fsynced(tmp_path, monkeypatch):
     receipt.finalize(0)
 
 
+def test_receipt_rejects_dirty_tracked_worktree(tmp_path):
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    scripts.mkdir(parents=True)
+    script = scripts / "operator.py"
+    dependency = repo / "dependency.py"
+    script.write_text("from dependency import VALUE\n")
+    dependency.write_text("VALUE = 1\n")
+    subprocess_options = {
+        "cwd": repo,
+        "check": True,
+        "capture_output": True,
+        "text": True,
+    }
+    receipt_module.subprocess.run(["git", "init", "-q"], **subprocess_options)
+    receipt_module.subprocess.run(["git", "add", "."], **subprocess_options)
+    receipt_module.subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Receipt Test",
+            "-c",
+            "user.email=receipt-test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        **subprocess_options,
+    )
+    dependency.write_text("VALUE = 2\n")
+
+    with pytest.raises(
+        RuntimeError, match="requires a clean tracked worktree"
+    ):
+        EomExecutionReceipt(
+            receipt_dir=tmp_path / "receipts",
+            tool="import_eom_customers_live",
+            mode="write",
+            script_path=script,
+        )
+
+
 @pytest.mark.parametrize(
     ("module", "argv"),
     [
@@ -270,6 +318,8 @@ def test_dry_runs_may_omit_receipt(module, argv, monkeypatch):
 def test_real_cli_creates_in_progress_before_runtime_and_finalizes(
     module, argv, tool, mode, monkeypatch, tmp_path
 ):
+    monkeypatch.setattr(receipt_module, "_clean_git_sha", lambda _root: GIT_SHA)
+
     async def fake_run(_args, receipt=None):
         assert receipt is not None
         assert receipt.in_progress_path.exists()
