@@ -312,6 +312,8 @@ def _seed_draft(root, job_id, source_ids, revision=1, project="p", approved=True
         write_artifact(job_id, "audit", {
             "schema": "editorial_audit.v2",
             "project_id": project,
+            # Must approve THIS revision -- a stale audit authorizes nothing.
+            "draft_revision": revision,
             "edited_body_markdown": "seed",
             "copy_verification": {"verdict": "pass", "hits": []},
             "recommendation": "promote",
@@ -785,3 +787,84 @@ def test_ordinary_prompt_numbers_still_pass(ok_text, tmp_path, monkeypatch):
     rec = runner.run_stage("job-ok", "image_prompt", "m", "req", api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["copy_verification"]["verdict"] == "pass", (ok_text, stored["copy_verification"])
+
+
+# --- review round 5 on #2192 ---
+
+
+def test_stale_audit_cannot_approve_newer_draft(tmp_path, monkeypatch):
+    """A revision-1 approval does not authorize revision-2 copy."""
+    from atlas_brain.services.content_factory_store import write_artifact
+
+    _seed_draft(tmp_path, "job-staleaudit", ["e1"], revision=2, approved=False)
+    write_artifact("job-staleaudit", "audit", {
+        "schema": "editorial_audit.v2", "project_id": "p",
+        "draft_revision": 1,
+        "edited_body_markdown": "seed",
+        "copy_verification": {"verdict": "pass", "hits": []},
+        "recommendation": "promote",
+    }, root=tmp_path)
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p", "source_draft_revision": 2,
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e1"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="audit approved draft revision"):
+        runner.run_stage("job-staleaudit", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_foreign_project_audit_cannot_approve(tmp_path, monkeypatch):
+    from atlas_brain.services.content_factory_store import write_artifact
+
+    _seed_draft(tmp_path, "job-xaudit", ["e1"], approved=False)
+    write_artifact("job-xaudit", "audit", {
+        "schema": "editorial_audit.v2", "project_id": "elsewhere",
+        "edited_body_markdown": "seed",
+        "copy_verification": {"verdict": "pass", "hits": []},
+        "recommendation": "promote",
+    }, root=tmp_path)
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e1"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="audit project"):
+        runner.run_stage("job-xaudit", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+
+@pytest.mark.parametrize("bad", [
+    "Call 1-800-FLOWERS",
+    "Call 0044 20 7946 0958",
+    "reach us: (555) 123-4567",
+    "ring 07700 900123 now",
+    "email josé@example.com",
+    "write to user@例え.テスト",
+])
+def test_prompt_contact_data_fails_both_scripts(bad, tmp_path, monkeypatch):
+    reply = json.dumps({"schema": "image_prompt.v1", "project_id": "p",
+                        "prompts": [{"purpose": "hero", "prompt_text": bad}]})
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-c5", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    cv = json.loads(Path(rec["path"]).read_text())["copy_verification"]
+    assert cv["verdict"] == "fail", (bad, cv)
+
+
+@pytest.mark.parametrize("ok", [
+    "calendar showing 2026-07-25",
+    "a wall clock showing 9:45",
+    "invoice dated 07/25/2026",
+    "a room with 3 windows and 2 chairs",
+    "address plaque reading 12 Elm",
+])
+def test_ordinary_numeric_description_passes(ok, tmp_path, monkeypatch):
+    """The other direction: dated/counted artwork is not contact data."""
+    reply = json.dumps({"schema": "image_prompt.v1", "project_id": "p",
+                        "prompts": [{"purpose": "hero", "prompt_text": ok}]})
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-o5", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    cv = json.loads(Path(rec["path"]).read_text())["copy_verification"]
+    assert cv["verdict"] == "pass", (ok, cv)

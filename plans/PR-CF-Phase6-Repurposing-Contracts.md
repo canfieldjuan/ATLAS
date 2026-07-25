@@ -181,6 +181,36 @@ Five findings, all fixed:
    Added to "Why this slice exists" above, per the repository rule that it
    live in the plan rather than only in the commit message.
 
+### Review round 5 (Codex)
+
+Five findings, all fixed:
+
+1. **P1 — the approving audit was not checked against the draft it
+   approves.** A revision-1 audit authorized revision-2 copy (this repo's
+   own test fixture created exactly that mismatch). The audit's
+   `project_id` and `draft_revision` must now match the draft.
+2. **P1 — a lone combining mark passed the visible-content rule.** U+FE0F
+   is category Mn, so `VisibleStr` accepted it. M* now joins C*/Z* as
+   non-standalone; real copy carrying a mark (emoji + VS16) still passes.
+3. **P1 — the prompt phone check was wrong in BOTH directions.**
+   `1-800-FLOWERS` passed (letters, so digit counting never saw it) while
+   `calendar showing 2026-07-25` failed (a date is not a phone number).
+   Replaced digit-counting with candidate -> reject known non-contact
+   shapes (ISO/US dates, clock times) -> require dialable evidence (7-15
+   digits, E.164 bound) plus an explicit vanity-number rule.
+4. **P1 — internationalized email escaped the ASCII pattern.**
+   `josé@example.com` and `user@例え.テスト` passed. The prompt path now
+   uses a script-independent address shape.
+5. **MAJOR — canonically equivalent channels were not duplicates.** NFC
+   and NFD "cafe" both validated in one package; channels are NFKC-
+   normalized before casefolding.
+
+**Convergence note.** Phone detection has now been reworked in rounds 3, 4
+and 5, and visible-text in rounds 4 and 5 -- the same non-convergent
+pattern as #2181's advisory engine. The classifiers are now written as
+two-directional decisions with both error sides pinned by parametrized
+probes, which is the shape that finally held there.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -233,7 +263,7 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 370 passed (61 new: 24 contract invariants, 37 run_stage gates)
+    # -> 388 passed (79 new: 30 contract invariants, 49 run_stage gates)
 
 - `python -m py_compile` clean (SyntaxWarning as error) on touched modules.
 - NOT run: live worker pass (no wrappers wired yet, by design).
@@ -242,11 +272,11 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 202 |
+| `atlas_brain/schemas/content_factory.py` | 209 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 20 |
-| `atlas_brain/services/content_factory_runner.py` | 224 |
+| `atlas_brain/services/content_factory_runner.py` | 271 |
 | `atlas_brain/services/content_factory_store.py` | 4 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 252 |
-| `tests/test_content_factory_runner.py` | 495 |
-| `tests/test_content_factory_schemas.py` | 238 |
-| **Total** | **1435** |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 282 |
+| `tests/test_content_factory_runner.py` | 578 |
+| `tests/test_content_factory_schemas.py` | 269 |
+| **Total** | **1633** |

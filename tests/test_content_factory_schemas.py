@@ -557,3 +557,34 @@ def test_visible_text_with_incidental_zero_width_accepted():
         _package([{**_variant(), "body_markdown": "real​copy here"}])
     )
     assert "copy" in pkg.variants[0].body_markdown
+
+
+@pytest.mark.parametrize("mark_only", ["️", "́", "︎"])
+def test_combining_mark_only_text_rejected(mark_only):
+    """A lone variation selector/combining mark renders nothing."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([{**_variant(), "body_markdown": mark_only}])
+        )
+
+
+def test_emoji_with_variation_selector_accepted():
+    """The other side: real content carrying a mark is still content."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    pkg = RepurposingPackage.model_validate(
+        _package([{**_variant(), "body_markdown": "spotless results ❤️"}])
+    )
+    assert "spotless" in pkg.variants[0].body_markdown
+
+
+def test_canonically_equivalent_channels_are_duplicates():
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    nfc, nfd = "café", "café"
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([_variant(channel=nfc), _variant(channel=nfd)])
+        )

@@ -111,10 +111,11 @@ def _has_visible_content(text: str) -> bool:
     a non-blank check while rendering as nothing. Phase 6 artifacts are
     shippable copy and renderer instructions, so "looks empty" must be
     treated as empty (#2192 round 4). Categories C* (control/format/
-    surrogate/private-use/unassigned) and Z* (separators) are invisible.
+    surrogate/private-use/unassigned), Z* (separators) and M* (combining
+    marks, e.g. a lone U+FE0F) cannot stand alone as content.
     """
     return any(
-        not unicodedata.category(char).startswith(("C", "Z")) for char in text
+        not unicodedata.category(char).startswith(("C", "Z", "M")) for char in text
     )
 
 
@@ -436,7 +437,13 @@ class RepurposingPackage(BaseModel):
             raise ValueError("repurposing package requires at least one variant")
         # One channel per variant: two variants on the same channel means an
         # ambiguous "which one ships?" downstream.
-        channels = [variant.channel.casefold() for variant in self.variants]
+        # NFKC first: canonically equivalent spellings (NFC vs NFD) are the
+        # same channel to a reader, so casefold alone leaves the very
+        # ambiguity this check exists to prevent (round 5).
+        channels = [
+            unicodedata.normalize("NFKC", variant.channel.strip()).casefold()
+            for variant in self.variants
+        ]
         if len(channels) != len(set(channels)):
             raise ValueError("duplicate channel in repurposing variants")
         if self.ready_to_publish:
