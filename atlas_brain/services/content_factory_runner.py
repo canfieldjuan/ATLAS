@@ -18,10 +18,16 @@ from pathlib import Path
 from typing import Any
 
 from atlas_brain.services.content_factory_copy_verification import (
+    _INTL_PHONE_RE,
     advisory_warnings,
     verify_copy,
 )
-from atlas_brain.services.content_factory_store import DEFAULT_ROOT, write_artifact
+from atlas_brain.services.content_factory_store import (
+    DEFAULT_ROOT,
+    ArtifactStoreError,
+    job_dir,
+    write_artifact,
+)
 
 DEFAULT_OWUI_URL = "http://127.0.0.1:8080"
 
@@ -142,31 +148,62 @@ def _enforce_repurposing(artifact: dict[str, Any]) -> None:
 
 
 def _enforce_image_prompts(artifact: dict[str, Any]) -> None:
-    """Gate the POSITIVE prompt text: a diffusion model renders it into the
-    artwork, where no downstream text check would ever see it.
+    """Gate the POSITIVE prompt text, one prompt at a time.
 
     ``negative_prompt`` is deliberately EXCLUDED from the verdict. A negative
     prompt is an exclusion list -- naming a banned phrase there is the
     designer telling the renderer NOT to draw it, which is the correct
     response to this module's own threat model. Folding it into the scan
-    made the safest possible prompt set the one that failed (review round 1:
-    the guard failed on its second side).
+    made the safest possible prompt set the one that failed (round 1: the
+    guard failed on its second side).
+
+    Each prompt is verified INDEPENDENTLY and the results aggregated, so
+    joining items can never synthesize a claim that no single rendered
+    prompt contains ("...guaranteed" + "savings..." across two prompts).
+
+    PII is stricter here than in body copy: a prompt is an instruction to a
+    renderer, and any contact string in it is about to be drawn into an
+    image where no text check can reach it. So international phone forms
+    fail here even though `verify_copy` leaves the shared body-copy verdict
+    semantics unchanged (that scope was frozen deliberately in #2181).
     """
     if artifact.get("schema") != _IMAGE_PROMPT_SCHEMA:
         return
     prompts = artifact.get("prompts")
     if not isinstance(prompts, list):
         return
-    parts: list[str] = []
-    for prompt in prompts:
-        if isinstance(prompt, dict):
-            parts.append(str(prompt.get("prompt_text") or ""))
-    combined = "\n".join(part for part in parts if part)
-    verdict, warnings = _deterministic_verdict(
-        combined, empty_reason="prompt text is empty; nothing was verified"
-    )
-    artifact["copy_verification"] = verdict
-    artifact["advisory_warnings"] = warnings
+
+    texts = [
+        str(prompt.get("prompt_text") or "")
+        for prompt in prompts
+        if isinstance(prompt, dict)
+    ]
+    if not any(text.strip() for text in texts):
+        artifact["copy_verification"] = {
+            "verdict": "fail",
+            "hits": ["unverified-copy: prompt text is empty; nothing was verified"],
+        }
+        artifact["advisory_warnings"] = []
+        return
+
+    hits: list[str] = []
+    for index, text in enumerate(texts, start=1):
+        if not text.strip():
+            continue
+        for hit in verify_copy(text).hits:
+            hits.append(f"prompt {index}: {hit}")
+        if _INTL_PHONE_RE.search(text):
+            hits.append(f"prompt {index}: phone: <redacted>")
+
+    artifact["copy_verification"] = {
+        "verdict": "fail" if hits else "pass",
+        "hits": hits,
+    }
+    # The advisory layer is tuned for marketing PROSE (answer/ownership
+    # claims, report shape). Its sentence locators are not meaningful across
+    # a set of independent prompts, so prompt sets carry no advisory
+    # warnings rather than ambiguous ones.
+    artifact["advisory_warnings"] = []
 
 
 def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
@@ -217,6 +254,56 @@ def _enforce_copy_verification(artifact: dict[str, Any]) -> None:
     artifact["advisory_warnings"] = advisory_warnings(edited)
 
 
+def _draft_claim_ids(job_id: str, root: "Path | str") -> "set[str] | None":
+    """Claim source ids the job's approved draft established, or None when
+    the draft cannot be read (missing/unparseable)."""
+    path = job_dir(job_id, root=root) / "draft.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    ids: set[str] = set()
+    for claim in data.get("claims") or []:
+        if isinstance(claim, dict):
+            source_id = str(claim.get("source_id") or "").strip()
+            if source_id:
+                ids.add(source_id)
+    return ids
+
+
+def _enforce_lineage(artifact: dict[str, Any], job_id: str, root: "Path | str") -> None:
+    """A package may not be declared shippable while any variant cites a
+    claim the job's draft never established.
+
+    Non-blank lineage is not the same as REAL lineage: a fabricated id is
+    still an orphan. Checked only when ``ready_to_publish`` is asserted --
+    an unready package is a legitimate intermediate state -- and fails
+    closed when the draft cannot be read, since traceability then cannot be
+    demonstrated (round 2).
+    """
+    if artifact.get("schema") != _REPURPOSING_SCHEMA:
+        return
+    if not artifact.get("ready_to_publish"):
+        return
+    known = _draft_claim_ids(job_id, root)
+    if known is None:
+        raise ArtifactStoreError(
+            "ready_to_publish requires a readable draft.json in the job "
+            "folder to verify variant claim lineage"
+        )
+    cited: set[str] = set()
+    for variant in artifact.get("variants") or []:
+        if isinstance(variant, dict):
+            for claim_id in variant.get("derived_from_claims") or []:
+                cited.add(str(claim_id).strip())
+    unknown = sorted(cited - known)
+    if unknown:
+        raise ArtifactStoreError(
+            "variant lineage cites claims absent from the draft: "
+            + ", ".join(unknown)
+        )
+
+
 def run_stage(
     job_id: str,
     stage: str,
@@ -244,4 +331,5 @@ def run_stage(
     _enforce_copy_verification(artifact)
     _enforce_repurposing(artifact)
     _enforce_image_prompts(artifact)
+    _enforce_lineage(artifact, job_id, root)
     return write_artifact(job_id, stage, artifact, root=root)

@@ -46,7 +46,11 @@ Slice phase: vertical slice
    `image_prompt` stages admit their matching schemas.
 3. `atlas_brain/services/content_factory_runner.py`: `_enforce_repurposing`
    recomputes each variant's verdict + checklist from its OWN body;
-   `_enforce_image_prompts` gates the combined prompt/negative-prompt text.
+   `_enforce_image_prompts` gates the POSITIVE prompt text only, verifying
+   each prompt independently (`negative_prompt` is an exclusion list and is
+   deliberately excluded; joining items would synthesize cross-prompt
+   claims). Prompt PII is stricter than body copy: international phone
+   forms fail here.
    Blank bodies/prompts fail closed via a shared `_deterministic_verdict`.
 4. Proof: contract invariants both directions + real-entrypoint tests
    through `run_stage`.
@@ -95,6 +99,27 @@ Three findings, all fixed:
    `ready_to_publish`: it cannot be true while the deterministic verdict
    fails. A failing set still persists when not marked ready (legitimate
    intermediate state).
+
+### Review round 2 (Codex)
+
+Four findings, all fixed:
+
+1. **P1 — lineage was non-blank, not REAL.** `derived_from_claims`
+   accepted a fabricated id. `_enforce_lineage` now validates every cited
+   id against the claim source ids in the job's draft artifact before a package may
+   be `ready_to_publish`, and fails closed when the draft cannot be read.
+   An unready package still skips the check (intermediate state).
+2. **P1 — international phone PII passed the prompt gate.** `verify_copy`
+   only fails on the US pattern (that scope was frozen deliberately in
+   #2181). Prompt text now gets a stricter check -- an instruction about
+   to be drawn into an image -- so `+44...` forms fail here without
+   changing shared body-copy semantics.
+3. **MAJOR — cross-item claim synthesis.** Prompts were joined before
+   scanning, so "...guaranteed" + "savings..." across two prompts
+   fabricated a hit. Each prompt is now verified independently and hits
+   are prefixed with the offending prompt index.
+4. **MAJOR — stale plan text.** The Scope section still described
+   combined positive+negative gating; corrected above.
 
 ### Files touched
 
@@ -147,7 +172,7 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 337 passed (28 new: 18 contract invariants, 10 run_stage gates)
+    # -> 344 passed (35 new: 18 contract invariants, 17 run_stage gates)
 
 - `python -m py_compile` clean (SyntaxWarning as error) on touched modules.
 - NOT run: live worker pass (no wrappers wired yet, by design).
@@ -157,9 +182,9 @@ Parked hardening: none new.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 159 |
-| `atlas_brain/services/content_factory_runner.py` | 70 |
+| `atlas_brain/services/content_factory_runner.py` | 160 |
 | `atlas_brain/services/content_factory_store.py` | 4 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 165 |
-| `tests/test_content_factory_runner.py` | 198 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 190 |
+| `tests/test_content_factory_runner.py` | 310 |
 | `tests/test_content_factory_schemas.py` | 206 |
-| **Total** | **802** |
+| **Total** | **1029** |

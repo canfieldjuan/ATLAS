@@ -296,6 +296,18 @@ def test_run_stage_rejects_contradictory_v2_version(tmp_path, monkeypatch):
 # --- Phase 6: repurposing + image-prompt gates at the real entrypoint ---
 
 
+def _seed_draft(root, job_id, source_ids):
+    """Write a minimal valid draft.json so lineage checks have a source."""
+    from atlas_brain.services.content_factory_store import write_artifact
+
+    write_artifact(job_id, "draft", {
+        "schema": "draft.v1",
+        "project_id": "p",
+        "body_markdown": "seed",
+        "claims": [{"text": f"claim {sid}", "source_id": sid} for sid in source_ids],
+    }, root=root)
+
+
 def test_run_stage_overwrites_variant_verdicts_and_blocks_bad_ship(tmp_path, monkeypatch):
     """A worker cannot ship an overclaiming variant: the runner recomputes
     each variant's verdict from its own body, so a self-asserted
@@ -316,9 +328,12 @@ def test_run_stage_overwrites_variant_verdicts_and_blocks_bad_ship(tmp_path, mon
         }
     )
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    # Seed a draft whose lineage covers the variant, so this test isolates
+    # the CONTRACT behaviour (self-promotion) rather than tripping the
+    # separate lineage check first.
+    _seed_draft(tmp_path, "job-rp", ["e1"])
     with pytest.raises(ValidationError):
         runner.run_stage("job-rp", "repurposing", "m", "req", api_key="k", root=tmp_path)
-    assert not job_dir("job-rp", root=tmp_path).exists()
 
 
 def test_run_stage_persists_clean_variants_with_computed_verdicts(tmp_path, monkeypatch):
@@ -405,7 +420,7 @@ def test_run_stage_image_prompt_pii_is_caught(tmp_path, monkeypatch):
     # theorem); the prompt text itself is the artifact's payload and stays
     # so a human can see what to fix -- same as a draft body.
     assert "bob@example.com" not in json.dumps(stored["copy_verification"])
-    assert stored["copy_verification"]["hits"] == ["email: <redacted>"]
+    assert stored["copy_verification"]["hits"] == ["prompt 1: email: <redacted>"]
 
 
 def test_run_stage_clean_image_prompt_passes(tmp_path, monkeypatch):
@@ -488,3 +503,100 @@ def test_worker_cannot_self_declare_ready_to_generate(tmp_path, monkeypatch):
     with pytest.raises(ValidationError):
         runner.run_stage("job-selfgen", "image_prompt", "m", "req", api_key="k", root=tmp_path)
     assert not job_dir("job-selfgen", root=tmp_path).exists()
+
+
+# --- review round 2 on #2192 ---
+
+
+def test_fabricated_lineage_blocks_shipping(tmp_path, monkeypatch):
+    """Non-blank lineage is not REAL lineage: an id the draft never
+    established is still an orphan."""
+    _seed_draft(tmp_path, "job-lin", ["e1"])
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["completely-fabricated-id"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="absent from the draft"):
+        runner.run_stage("job-lin", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_real_lineage_ships(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job-lin2", ["e1", "e2"])
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e2"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-lin2", "repurposing", "m", "req", api_key="k", root=tmp_path)
+    assert json.loads(Path(rec["path"]).read_text())["ready_to_publish"] is True
+
+
+def test_unready_package_skips_lineage_check(tmp_path, monkeypatch):
+    """An unready package is a legitimate intermediate state."""
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["not-yet-real"]}],
+        "ready_to_publish": False,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-lin3", "repurposing", "m", "req", api_key="k", root=tmp_path)
+    assert Path(rec["path"]).exists()
+
+
+def test_missing_draft_fails_closed_on_ship(tmp_path, monkeypatch):
+    reply = json.dumps({
+        "schema": "repurposing.v1", "project_id": "p",
+        "variants": [{"channel": "x", "body_markdown": "Clean copy.",
+                      "derived_from_claims": ["e1"]}],
+        "ready_to_publish": True,
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    with pytest.raises(ArtifactStoreError, match="readable draft.json"):
+        runner.run_stage("job-nodraft", "repurposing", "m", "req", api_key="k", root=tmp_path)
+
+
+def test_international_phone_in_prompt_fails(tmp_path, monkeypatch):
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [{"purpose": "hero", "prompt_text": "Call us at +442079460958"}],
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-intl", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["copy_verification"]["verdict"] == "fail"
+    assert "442079460958" not in json.dumps(stored["copy_verification"])
+
+
+def test_prompts_verified_independently_no_cross_synthesis(tmp_path, monkeypatch):
+    """Joining items must not synthesize a claim no single prompt makes."""
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [
+            {"purpose": "a", "prompt_text": "a warm kitchen, results guaranteed"},
+            {"purpose": "b", "prompt_text": "savings account paperwork on a desk"},
+        ],
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-split", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    stored = json.loads(Path(rec["path"]).read_text())
+    assert stored["copy_verification"]["verdict"] == "pass", stored["copy_verification"]
+
+
+def test_hits_identify_the_offending_prompt(tmp_path, monkeypatch):
+    reply = json.dumps({
+        "schema": "image_prompt.v1", "project_id": "p",
+        "prompts": [
+            {"purpose": "a", "prompt_text": "a clean desk"},
+            {"purpose": "b", "prompt_text": "poster reading guaranteed savings"},
+        ],
+    })
+    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
+    rec = runner.run_stage("job-which", "image_prompt", "m", "req", api_key="k", root=tmp_path)
+    hits = json.loads(Path(rec["path"]).read_text())["copy_verification"]["hits"]
+    assert all(h.startswith("prompt 2:") for h in hits), hits
