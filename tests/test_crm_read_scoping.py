@@ -22,9 +22,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-REPO = Path(__file__).resolve().parent.parent
-
 import pytest
+
+REPO = Path(__file__).resolve().parent.parent
 
 _asyncpg_mock = MagicMock()
 _asyncpg_exceptions = MagicMock()
@@ -789,7 +789,7 @@ async def test_create_contact_non_merging_mode_returns_same_tenant_without_write
 
 
 @pytest.mark.asyncio
-async def test_create_contact_non_merging_mode_skips_null_fallback_on_miss(monkeypatch):
+async def test_create_contact_non_merging_mode_skips_null_fallback_on_miss():
     from atlas_brain.services.crm_provider import DatabaseCRMProvider
     import atlas_brain.storage.database as database_mod
 
@@ -805,17 +805,21 @@ async def test_create_contact_non_merging_mode_skips_null_fallback_on_miss(monke
 
     pool = MagicMock()
     pool.fetchrow = AsyncMock(return_value={"id": "new-eom"})
-    monkeypatch.setattr(database_mod, "get_db_pool", lambda: pool)
-    p = _Provider()
-    result = await p.create_contact(
-        {
-            "phone": "2175550000",
-            "email": "new@example.com",
-            "full_name": "New",
-            "business_context_id": EOM,
-        },
-        merge_existing=False,
-    )
+    previous_pool = database_mod._db_pool
+    database_mod._db_pool = pool
+    try:
+        p = _Provider()
+        result = await p.create_contact(
+            {
+                "phone": "2175550000",
+                "email": "new@example.com",
+                "full_name": "New",
+                "business_context_id": EOM,
+            },
+            merge_existing=False,
+        )
+    finally:
+        database_mod._db_pool = previous_pool
     assert result["id"] == "new-eom"
     assert result["_was_created"] is True
     assert p.searches == [{

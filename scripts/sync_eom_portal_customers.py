@@ -300,15 +300,9 @@ async def reconcile_portal_contact(
     """
     contact_id = str(existing["id"])
     payload = dict(data)
-    payload["tags"] = portal_final_tags(existing, data)
     payload.pop("source", None)
     payload.pop("business_context_id", None)
-    updates = live._diff_updates(existing, payload)
-    prior_pid = parse_meta(existing).get("portal_customer_id")
-    already_linked = str(prior_pid) == str(portal_id)
-    already_tenant = existing.get("business_context_id") == EOM_CONTEXT_ID
-    if not updates and already_linked and already_tenant:
-        return contact_id, "unchanged"
+    payload.pop("tags", None)
 
     args = [contact_id, portal_id, EOM_CONTEXT_ID]
     sets = [
@@ -318,16 +312,14 @@ async def reconcile_portal_contact(
             "|| jsonb_build_object('portal_customer_id', $2::int)"
         ),
     ]
-    # Compute managed tags from the row as it exists at mutation time. A
-    # stale preflight snapshot must never erase a foreign tag added between
-    # resolution and this statement.
-    updates.pop("tags", None)
+    # Compute managed tags from the locked live row. A stale preflight snapshot
+    # must never erase a foreign tag added between resolution and this statement.
     args.append(data["tags"])
     desired_tags_param = len(args)
     args.append(sorted(MANAGED_TAGS))
     managed_tags_param = len(args)
-    sets.append(
-        "tags = ARRAY("
+    desired_tags_sql = (
+        "ARRAY("
         "SELECT DISTINCT tag FROM unnest("
         "COALESCE(contacts.tags, '{}'::text[]) "
         f"|| ${desired_tags_param}::text[]) AS tag "
@@ -335,9 +327,20 @@ async def reconcile_portal_contact(
         f"OR tag = ANY(${desired_tags_param}::text[]) "
         "ORDER BY tag)"
     )
-    for column, value in updates.items():
+    sets.append(
+        f"tags = {desired_tags_sql}"
+    )
+    change_conditions = [
+        "contacts.business_context_id IS DISTINCT FROM $3",
+        "contacts.metadata->>'portal_customer_id' IS DISTINCT FROM $2::text",
+        f"contacts.tags IS DISTINCT FROM {desired_tags_sql}",
+    ]
+    for column, value in payload.items():
         args.append(value.lower() if column == "email" and value else value)
         sets.append(f"{column} = ${len(args)}")
+        change_conditions.append(
+            f"contacts.{column} IS DISTINCT FROM ${len(args)}"
+        )
 
     identity_clause = ""
     source_clause = ""
@@ -370,16 +373,28 @@ async def reconcile_portal_contact(
     )
     row = await pool.fetchrow(
         f"""
-        UPDATE contacts
-           SET {", ".join(sets)}, updated_at = NOW()
-         WHERE id = $1
-           AND status != 'archived'
-           AND {tenant_clause}
-           AND (metadata->>'portal_customer_id' IS NULL
-                OR metadata->>'portal_customer_id' = $2::text)
-           {source_clause}
-           {identity_clause}
-        RETURNING id
+        WITH live AS MATERIALIZED (
+            SELECT id
+            FROM contacts
+            WHERE id = $1
+              AND status != 'archived'
+              AND {tenant_clause}
+              AND (metadata->>'portal_customer_id' IS NULL
+                   OR metadata->>'portal_customer_id' = $2::text)
+              {source_clause}
+              {identity_clause}
+            FOR UPDATE
+        ),
+        updated AS (
+            UPDATE contacts
+               SET {", ".join(sets)}, updated_at = NOW()
+              FROM live
+             WHERE contacts.id = live.id
+               AND ({" OR ".join(change_conditions)})
+            RETURNING contacts.id
+        )
+        SELECT live.id, EXISTS (SELECT 1 FROM updated) AS changed
+        FROM live
         """,
         *args,
     )
@@ -389,7 +404,7 @@ async def reconcile_portal_contact(
             "state, or portal link before atomic reconciliation; nothing written"
         )
         return contact_id, "rejected"
-    return contact_id, "updated"
+    return contact_id, "updated" if row["changed"] else "unchanged"
 
 
 async def portal_id_current(pool, contact_id: str):

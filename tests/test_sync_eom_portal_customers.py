@@ -18,8 +18,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "tests"))
 
 from test_eom_live_calendar_import import StubCRM, StubPool  # noqa: E402
-from sync_eom_portal_customers import (
-    on_calendar,  # noqa: E402
+from sync_eom_portal_customers import (  # noqa: E402
     DEMOTABLE_SOURCES,
     MANAGED_TAGS,
     customer_to_contact_data,
@@ -28,6 +27,7 @@ from sync_eom_portal_customers import (
     portal_login,
     segment_tags,
     sync_one,
+    on_calendar,
 )
 
 
@@ -60,11 +60,19 @@ class SyncPool(StubPool):
     """Adds portal-sync surfaces to the slice-A stub: routed jsonb stamps
     and a fetch() list for demotion candidates."""
 
-    def __init__(self, *a, demotion_rows=None, stamp_fail=False, **kw):
+    def __init__(
+        self,
+        *a,
+        demotion_rows=None,
+        stamp_fail=False,
+        atomic_changed=True,
+        **kw,
+    ):
         super().__init__(*a, **kw)
         self.stamps = []
         self.atomic_writes = []
         self.stamp_fail = stamp_fail
+        self.atomic_changed = atomic_changed
         self.demotion_rows = demotion_rows or []
 
     async def fetchrow(self, sql, *args):
@@ -75,7 +83,7 @@ class SyncPool(StubPool):
                 return None
             import re as _re
             payload = {}
-            set_clause = sql.rsplit("WHERE id = $1", 1)[0]
+            set_clause = sql.split("UPDATE contacts", 1)[1].split("FROM live", 1)[0]
             for column, param in _re.findall(
                 r"(\w+) = \$(\d+)", set_clause
             ):
@@ -88,9 +96,9 @@ class SyncPool(StubPool):
             )
             if tags_param:
                 payload["tags"] = args[int(tags_param.group(1)) - 1]
-            if payload:
+            if payload and self.atomic_changed:
                 self.updates.append((args[0], payload))
-            return {"id": args[0]}
+            return {"id": args[0], "changed": self.atomic_changed}
         if "portal_customer_id' AS pid" in sql:
             if not self.row_exists:
                 return None
@@ -344,7 +352,7 @@ def test_atomic_reconciliation_preserves_live_foreign_tags_and_source():
     ))
     assert outcome == "updated"
     sql, args = pool.atomic_writes[0]
-    set_clause = sql.split("WHERE id = $1")[0]
+    set_clause = sql.split("UPDATE contacts", 1)[1].split("FROM live", 1)[0]
     assert "COALESCE(contacts.tags" in set_clause
     assert "source =" not in set_clause
     assert ["commercial", "portal"] in args
@@ -523,7 +531,8 @@ def test_apply_entrypoint_aborts_roster_collision_before_sync(monkeypatch):
         lambda *_args: customers,
     )
     monkeypatch.setattr(crm_provider_mod, "get_crm_provider", StubCRM)
-    monkeypatch.setattr(database_mod, "get_db_pool", lambda: pool)
+    previous_pool = database_mod._db_pool
+    database_mod._db_pool = pool
 
     sync_calls = []
 
@@ -532,10 +541,13 @@ def test_apply_entrypoint_aborts_roster_collision_before_sync(monkeypatch):
         raise AssertionError("collision preflight must abort before sync")
 
     monkeypatch.setattr(sync_mod, "sync_one", forbidden_sync)
-    result = asyncio.run(sync_mod.run(SimpleNamespace(
-        apply=True,
-        base_url="https://example.invalid",
-    )))
+    try:
+        result = asyncio.run(sync_mod.run(SimpleNamespace(
+            apply=True,
+            base_url="https://example.invalid",
+        )))
+    finally:
+        database_mod._db_pool = previous_pool
     assert result == 1
     assert sync_calls == []
     assert pool.updates == [] and pool.atomic_writes == []
@@ -599,7 +611,6 @@ def test_already_stamped_fallback_is_guarded():
 
 
 def test_empty_roster_fails_closed():
-    import pytest
     from sync_eom_portal_customers import fetch_portal_customers
     class C:
         def get(self, *a, **k):
@@ -650,10 +661,34 @@ def test_already_stamped_id_is_not_an_error_or_rewrite():
         "business_context_id": "effingham_maids",
         "metadata": {"portal_customer_id": 7},
     })
-    pool = SyncPool(stamp_fail=True)
+    pool = SyncPool(atomic_changed=False)
     outcome, cid = asyncio.run(sync_one(_customer(), crm, pool, apply=True))
-    assert outcome != "errors"
-    assert pool.atomic_writes == []
+    assert outcome == "unchanged"
+    assert len(pool.atomic_writes) == 1
+    assert pool.updates == []
+
+
+def test_clean_preflight_snapshot_still_reconciles_against_locked_live_row():
+    data = customer_to_contact_data(_customer())
+    existing = {
+        "id": "live-drift",
+        **{key: value for key, value in data.items() if key != "source"},
+        "source": "calendar_import",
+        "business_context_id": "effingham_maids",
+        "metadata": {"portal_customer_id": 7},
+    }
+    pool = SyncPool()
+
+    outcome, cid = asyncio.run(
+        sync_one(_customer(), StubCRM(scoped_hit=existing), pool, apply=True)
+    )
+
+    assert (outcome, cid) == ("updated", "live-drift")
+    sql, args = pool.atomic_writes[0]
+    assert "WITH live AS MATERIALIZED" in sql
+    assert "FOR UPDATE" in sql
+    assert "contacts.full_name IS DISTINCT FROM" in sql
+    assert data["full_name"] in args
 
 
 # ---------------------------------------------------------------------------

@@ -85,10 +85,12 @@ its first production apply.
 same-tenant email matches, returns them without claim/merge, and otherwise
 inserts the complete supplied payload. The portal sync passes that mode after
 its stronger phone/email/address resolver. Existing or race-resolved contacts
-flow to one dynamic SQL update whose `WHERE` clause proves the contact is
+flow to one CTE statement that locks the live row, proves the contact is
 unarchived, belongs to EOM or is claimable, still matches the resolution
-identity, and is unlinked or linked to this portal customer. The same statement
-claims tenant, replaces portal-managed fields/tags, and merges the portal ID.
+identity, and is unlinked or linked to this portal customer, then conditionally
+updates only when that locked row differs from the desired state. The same
+statement claims tenant, replaces portal-managed fields/tags, merges the portal
+ID, and reports whether it changed anything.
 
 Before apply, a read-only preflight resolves every roster row, rejects duplicate
 normalized portal channels and duplicate contact IDs, and caches the results
@@ -123,11 +125,11 @@ Parked hardening: none.
 
 - `python -m pytest tests/test_sync_eom_portal_customers.py
   tests/test_crm_read_scoping.py tests/test_eom_live_calendar_import.py -q`
-  — 173 passed; one third-party `pynvml` deprecation warning.
-- Ruff passed for `atlas_brain/services/crm_provider.py` and
-  `scripts/sync_eom_portal_customers.py`.
-- Python byte-compilation passed for `scripts/sync_eom_portal_customers.py`
-  and `atlas_brain/services/crm_provider.py`.
+  — 174 passed; one third-party `pynvml` deprecation warning.
+- Ruff and Python byte-compilation passed for the three review-touched source
+  and test files.
+- The exact `atlas_brain/storage` maturity command used by CI passed with no
+  baseline change.
 - Local PostgreSQL 16 transaction probe — the production tag expression
   removed `past_customer`, added `commercial`/`portal`, preserved concurrent
   foreign tag `vip` and source `calendar_import`, then rolled back.
@@ -137,6 +139,17 @@ Parked hardening: none.
 - `git diff --check` — passed.
 - Pending at push: managed `scripts/push_pr.sh` local PR review.
 
+### Review reconciliation
+
+- The first published head could return `unchanged` from its cached preflight
+  row without consulting the mutation-time row. The corrected statement now
+  locks the live candidate and derives both the write and changed/no-op result
+  from that row, closing the stale-snapshot gap.
+- Two focused entrypoint/provider tests previously mocked
+  `atlas_brain.storage.database.get_db_pool`, increasing a protected maturity
+  score. They now install and restore the database module's pool seam directly;
+  the protected-lane ratchet is back at baseline.
+
 ## Estimated diff size
 
 | File | LOC |
@@ -144,9 +157,9 @@ Parked hardening: none.
 | `REVIEW_MISSES.md` | 1 |
 | `atlas_brain/services/crm_provider.py` | 29 |
 | `docs/SESSION_BOOTSTRAP.md` | 1 |
-| `plans/PR-EOM-Atomic-Portal-Reconciliation.md` | 152 |
-| `scripts/sync_eom_portal_customers.py` | 291 |
-| `tests/test_crm_read_scoping.py` | 124 |
+| `plans/PR-EOM-Atomic-Portal-Reconciliation.md` | 165 |
+| `scripts/sync_eom_portal_customers.py` | 324 |
+| `tests/test_crm_read_scoping.py` | 132 |
 | `tests/test_eom_live_calendar_import.py` | 2 |
-| `tests/test_sync_eom_portal_customers.py` | 272 |
-| **Total** | **872** |
+| `tests/test_sync_eom_portal_customers.py` | 319 |
+| **Total** | **973** |
