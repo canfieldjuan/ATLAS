@@ -9,14 +9,20 @@ entrypoint. Portal-sync receipt wiring is a separate follow-up because
 production activation is already operator-gated; it does not need to land in
 the same PR.
 
+Diff-budget override: the shared lifecycle, isolated startup/source
+attestation, mutation-health boundary, and real process proofs are one
+indivisible Calendar receipt contract. Splitting any of them would allow a
+production write to claim evidence without proving the code or retaining the
+result.
+
 ### Problem-derived contract
 
 - A live Calendar write must fail before its runtime unless a private receipt
   directory is supplied.
 - A receipted run must establish source trust before any repository-local code
-  can execute. The trusted preflight must reject tracked/untracked divergence,
-  ignored import artifacts, ignored package symlinks, and cached bytecode for
-  tracked source.
+  can execute. It must start Python in isolated mode, directly compare tracked
+  Python bytes/modes with `HEAD`, and reject untracked divergence, ignored
+  import artifacts, ignored package symlinks, and cached bytecode.
 - The receipt must be created before the runtime, use mode 0600, bind the exact
   Git SHA and executed script SHA-256, persist only allowlisted counts and
   changed contact UUIDs, and finalize every normal or exceptional exit without
@@ -43,15 +49,15 @@ Max files: 5
   attest the source.
 - Root cause: the CLI exposed repository import roots and imported local modules
   before receipt construction invoked the clean-source check. A later filename
-  classifier could therefore be erased or bypassed before it ran.
-- Structural repair: for a receipted invocation, remove repository roots from
-  `sys.path`, parse and enforce write policy with the standard library, load the
-  receipt module from `HEAD` through Git, and run its source preflight before
-  restoring either local import root. The same preflight rejects importable
-  ignored symlinks by filesystem entry type, not by enumerating package names.
-- Proof: process tests execute an unpatched CLI with a self-removing ignored
-  standard-library shadow and with ignored symlinks to regular and namespace
-  packages. Each must fail before the shadow or package can execute.
+  classifier could therefore be erased or bypassed before it ran; ordinary Git
+  status also trusts index flags that can hide tracked divergence.
+- Structural repair: a receipted invocation is admitted only under Python `-I`,
+  then loads the receipt module from `HEAD`, compares every tracked Python
+  worktree blob and executable mode directly with the `HEAD` tree, and runs the
+  remaining ignored/cache checks before restoring local import roots.
+- Proof: process tests execute with hostile `PYTHONPATH` startup hooks,
+  self-removing ignored shadows, ignored package symlinks, and a modified
+  `skip-worktree` dependency. None can execute before rejection.
 
 ### Review Contract
 
@@ -59,12 +65,14 @@ Max files: 5
    async runtime; unreceipted dry-run remains available for development.
 2. Receipted dry-run/write establishes source trust before local imports and
    creates a durable in-progress artifact before the async runtime.
+   Non-isolated receipted CLI startup is rejected.
 3. Receipt payloads contain only fixed lifecycle/source fields, allowlisted
    non-negative counts, and valid sorted contact UUIDs.
 4. Normal, `SystemExit`, interrupt, and exceptional exits finalize truthfully;
    collisions and failed publication retain recovery evidence.
 5. Calendar create, update, claim, interaction-only, and race-merge writes
-   record the affected contact UUID.
+   record the affected contact UUID. A receipt persistence failure stops before
+   the first mutation or, if a contact is already in flight, before the next.
 6. Existing focused Calendar behavior remains green.
 
 
@@ -80,21 +88,26 @@ Max files: 5
 
 On a direct invocation, the Calendar CLI first removes its script directory,
 repository root, and empty-path entry from `sys.path`. It can then use only
-standard-library code to parse receipt policy. A receipted run reads the shared
-helper from the `HEAD` Git object, executes its clean-source preflight, and
-restores local import roots only after that check succeeds. Receipt construction
-reuses the returned Git SHA, hashes the executed Calendar script, and creates
-the durable in-progress artifact before entering the async runtime.
+standard-library code to parse receipt policy. A receipted run additionally
+requires Python isolated mode, reads the shared helper from the `HEAD` Git
+object, compares tracked Python blobs/modes directly with that tree, executes
+the remaining clean-source checks, and restores local import roots only after
+they succeed. Receipt construction reuses the returned Git SHA, hashes the
+executed Calendar script, and creates the durable in-progress artifact before
+entering the async runtime.
 
 The helper has no generic metadata sink: callers can record only allowlisted
 non-negative counts and UUID contact IDs. Each evidence update atomically
 replaces and syncs the in-progress artifact. Finalization writes a complete
 staged payload, hard-links it to an exclusive exit-specific name, syncs the
-directory, and only then removes recovery artifacts.
+directory, and only then removes recovery artifacts. Persistence failures remain
+deferred through an already-started contact, but an explicit health check blocks
+the first mutation and every subsequent contact boundary.
 
 ## Intentional
 
-- Dry runs may omit receipts for local development.
+- Dry runs may omit receipts for local development; every receipted operator
+  command uses `python -I`.
 - Receipts are private operator evidence, not a public API or database audit
   table.
 - Final publication uses an exclusive hard link so a collision cannot overwrite

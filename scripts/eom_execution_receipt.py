@@ -90,6 +90,69 @@ def _ignored_path_can_supply_code(
     return _module_path_is_importable(module_parts)
 
 
+def _verify_tracked_python_matches_head(repo_root: Path) -> None:
+    """Compare tracked Python bytes and executable modes directly with HEAD."""
+    tree = subprocess.run(
+        ["git", "ls-tree", "-r", "-z", "--full-tree", "HEAD"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    entries: list[tuple[str, str, str]] = []
+    for record in tree.stdout.split("\0"):
+        if not record:
+            continue
+        metadata, relative_path = record.split("\t", 1)
+        if not relative_path.endswith(".py"):
+            continue
+        mode, object_type, object_id = metadata.split()
+        if (
+            object_type != "blob"
+            or mode not in {"100644", "100755"}
+            or "\n" in relative_path
+        ):
+            raise RuntimeError(
+                "receipted execution requires regular tracked Python source"
+            )
+        entries.append((mode, object_id, relative_path))
+
+    for expected_mode, expected_hash, relative_path in entries:
+        source = repo_root / relative_path
+        try:
+            descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError as exc:
+            raise RuntimeError(
+                "receipted execution requires tracked Python source to match HEAD"
+            ) from exc
+        try:
+            source_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(source_stat.st_mode):
+                raise RuntimeError(
+                    "receipted execution requires tracked Python source to match HEAD"
+                )
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                source_bytes = handle.read()
+        except OSError as exc:
+            raise RuntimeError(
+                "receipted execution requires tracked Python source to match HEAD"
+            ) from exc
+        finally:
+            os.close(descriptor)
+        header = f"blob {len(source_bytes)}\0".encode("ascii")
+        actual_hash = hashlib.sha1(
+            header + source_bytes, usedforsecurity=False
+        ).hexdigest()
+        actual_mode = "100755" if source_stat.st_mode & 0o111 else "100644"
+        if (
+            actual_mode != expected_mode
+            or actual_hash != expected_hash
+        ):
+            raise RuntimeError(
+                "receipted execution requires tracked Python source to match HEAD"
+            )
+
+
 def establish_source_trust(repo_root: Path) -> str:
     """Validate checkout inputs before any repository-local import executes."""
     status = subprocess.run(
@@ -107,6 +170,7 @@ def establish_source_trust(repo_root: Path) -> str:
     )
     if status.stdout:
         raise RuntimeError("receipted execution requires a clean worktree")
+    _verify_tracked_python_matches_head(repo_root)
     ignored = subprocess.run(
         ["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
         cwd=repo_root,
@@ -316,16 +380,20 @@ class EomExecutionReceipt:
         except Exception as exc:
             self._persistence_error = exc
 
+    def assert_healthy(self) -> None:
+        """Fail before another mutation when evidence persistence has failed."""
+        if self._persistence_error is not None:
+            raise RuntimeError(
+                "could not durably record reconciliation evidence"
+            ) from self._persistence_error
+
     def final_path_for(self, exit_code: int) -> Path:
         return self.receipt_dir / f"{self._final_stem}.exit-{exit_code}.json"
 
     def finalize(self, exit_code: int) -> Path:
         if self._finalized:
             raise RuntimeError("receipt is already finalized")
-        if self._persistence_error is not None:
-            raise RuntimeError(
-                "could not durably record reconciliation evidence"
-            ) from self._persistence_error
+        self.assert_healthy()
         if type(exit_code) is not int or exit_code < 0:
             raise ValueError("exit code must be a non-negative integer")
 

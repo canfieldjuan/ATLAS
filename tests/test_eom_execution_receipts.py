@@ -110,6 +110,9 @@ def test_calendar_dry_run_receipt_counts_planned_records():
         def set_outcome_counts(self, counts):
             self.counts = dict(counts)
 
+        def assert_healthy(self):
+            return None
+
     recorder = Recorder()
     counts = asyncio.run(
         calendar_import.run_import([_record(), _record()], True, receipt=recorder)
@@ -363,20 +366,67 @@ def _calendar_process_fixture(tmp_path, ignored_path):
     return repo, scripts, receipt_dir
 
 
-def _run_receipted_calendar(repo, scripts, receipt_dir):
-    return receipt_module.subprocess.run(
+def _run_receipted_calendar(
+    repo, scripts, receipt_dir, *, isolated=True, env=None
+):
+    command = [sys.executable]
+    if isolated:
+        command.append("-I")
+    command.extend(
         [
-            sys.executable,
             str(scripts / "import_eom_customers_live.py"),
             "--dry-run",
             "--receipt-dir",
             str(receipt_dir),
-        ],
+        ]
+    )
+    return receipt_module.subprocess.run(
+        command,
         cwd=repo,
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
+
+
+def test_process_receipt_requires_isolated_python_startup(tmp_path):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+
+    result = _run_receipted_calendar(
+        repo, scripts, receipt_dir, isolated=False
+    )
+
+    assert result.returncode == 2
+    assert "requires isolated Python startup" in result.stderr
+    assert list(receipt_dir.iterdir()) == []
+
+
+def test_isolated_process_blocks_sitecustomize_before_preflight(tmp_path):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, "sitecustomize.py"
+    )
+    marker = tmp_path / "sitecustomize-executed"
+    shadow = repo / "sitecustomize.py"
+    shadow.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "Path(__file__).unlink()\n"
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo)
+
+    result = _run_receipted_calendar(
+        repo, scripts, receipt_dir, env=env
+    )
+
+    assert result.returncode != 0
+    assert "rejects ignored Python import shadows" in result.stderr
+    assert not marker.exists()
+    assert shadow.exists()
+    assert list(receipt_dir.iterdir()) == []
 
 
 def test_process_preflight_blocks_self_removing_shadow_before_import(tmp_path):
@@ -420,6 +470,45 @@ def test_process_preflight_rejects_ignored_package_symlink(
 
     assert result.returncode != 0
     assert "rejects ignored Python import shadows" in result.stderr
+    assert list(receipt_dir.iterdir()) == []
+
+
+def test_process_preflight_compares_skip_worktree_source_to_head(tmp_path):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+    dependency = scripts / "import_calendar_contacts.py"
+    marker = tmp_path / "tracked-shadow-executed"
+    receipt_module.subprocess.run(
+        [
+            "git",
+            "update-index",
+            "--skip-worktree",
+            "scripts/import_calendar_contacts.py",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    dependency.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+    )
+    status = receipt_module.subprocess.run(
+        ["git", "status", "--porcelain=v1"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout == ""
+
+    result = _run_receipted_calendar(repo, scripts, receipt_dir)
+
+    assert result.returncode != 0
+    assert "tracked Python source to match HEAD" in result.stderr
+    assert not marker.exists()
     assert list(receipt_dir.iterdir()) == []
 
 
@@ -562,6 +651,7 @@ def test_clean_real_entrypoint_does_not_create_or_reject_own_bytecode(tmp_path):
     receipt_module.subprocess.run(
         [
             sys.executable,
+            "-I",
             str(scripts / "import_eom_customers_live.py"),
             "--dry-run",
             "--receipt-dir",
@@ -611,6 +701,75 @@ def test_evidence_failure_is_deferred_until_finalize(tmp_path, monkeypatch):
     assert calls == ["persist", "reconciliation-completed"]
     with pytest.raises(RuntimeError, match="durably record"):
         receipt.finalize(0)
+
+
+def test_initial_evidence_failure_stops_before_first_mutation(
+    tmp_path, monkeypatch
+):
+    receipt = _receipt(tmp_path)
+    started = []
+
+    def fail_persist():
+        raise OSError("storage failed")
+
+    async def forbidden_import(*_args, **_kwargs):
+        started.append("mutation")
+        return "created"
+
+    monkeypatch.setattr(receipt, "_persist_in_progress", fail_persist)
+    monkeypatch.setattr(calendar_import, "import_one", forbidden_import)
+
+    with pytest.raises(RuntimeError, match="durably record"):
+        asyncio.run(
+            calendar_import.run_import(
+                [_record()], dry_run=False, receipt=receipt
+            )
+        )
+
+    assert started == []
+
+
+def test_mid_contact_evidence_failure_stops_before_next_contact(
+    tmp_path, monkeypatch
+):
+    from atlas_brain.services import crm_provider
+    from atlas_brain.storage import database
+
+    receipt = _receipt(tmp_path)
+    real_persist = receipt._persist_in_progress
+    persist_calls = 0
+    started = []
+
+    def fail_after_initial_counts():
+        nonlocal persist_calls
+        persist_calls += 1
+        if persist_calls == 1:
+            real_persist()
+            return
+        raise OSError("storage failed")
+
+    async def record_one(rec, _crm, _pool, receipt=None):
+        started.append(rec)
+        receipt.record_changed_contact_id(CONTACT_A)
+        return "created"
+
+    monkeypatch.setattr(
+        receipt, "_persist_in_progress", fail_after_initial_counts
+    )
+    monkeypatch.setattr(crm_provider, "get_crm_provider", object)
+    monkeypatch.setattr(database, "get_db_pool", object)
+    monkeypatch.setattr(calendar_import, "import_one", record_one)
+
+    with pytest.raises(RuntimeError, match="durably record"):
+        asyncio.run(
+            calendar_import.run_import(
+                [_record(phone="2175550101"), _record(phone="2175550102")],
+                dry_run=False,
+                receipt=receipt,
+            )
+        )
+
+    assert len(started) == 1
 
 
 def test_write_mode_requires_receipt_before_async_runtime(monkeypatch):

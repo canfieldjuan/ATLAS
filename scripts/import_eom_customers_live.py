@@ -20,7 +20,7 @@ is cwd-relative; the deploy runbook covers the runtime worktree symlink).
 
 Usage:
   python scripts/import_eom_customers_live.py --dry-run
-  python scripts/import_eom_customers_live.py
+  python -I scripts/import_eom_customers_live.py --receipt-dir /private/state
   python scripts/import_eom_customers_live.py --calendar residential --months-back 12
 """
 
@@ -92,6 +92,11 @@ if __name__ == "__main__":
     if not _direct_args.dry_run and not _direct_args.receipt_dir:
         _direct_parser.error("live writes require --receipt-dir")
     if _direct_args.receipt_dir:
+        if not sys.flags.isolated:
+            _direct_parser.error(
+                "receipted execution requires isolated Python startup; "
+                "run with: python -I"
+            )
         _receipt_module, _validated_git_sha = _trusted_receipt_module(
             Path(__file__).resolve().parent.parent
         )
@@ -765,6 +770,7 @@ async def run_import(records, dry_run: bool, receipt=None) -> dict:
     }
     if receipt is not None:
         receipt.set_outcome_counts(counts)
+        receipt.assert_healthy()
     crm = None
     pool = None
     if not dry_run:
@@ -775,6 +781,8 @@ async def run_import(records, dry_run: bool, receipt=None) -> dict:
         pool = get_db_pool()
 
     for rec in sorted(records, key=lambda r: r.name.lower()):
+        if receipt is not None:
+            receipt.assert_healthy()
         marker = "[CANCELLED]" if rec.cancelled else ""
         print(
             f"  {marker or '           '} {rec.name:<45} {(rec.phone or 'no phone'):<18} "
@@ -790,6 +798,7 @@ async def run_import(records, dry_run: bool, receipt=None) -> dict:
             counts["errors"] += 1
         if receipt is not None:
             receipt.set_outcome_counts(counts)
+            receipt.assert_healthy()
     return counts
 
 
