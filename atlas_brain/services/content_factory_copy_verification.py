@@ -185,7 +185,7 @@ def verify_copy(text: str) -> CopyVerification:
 # Advisory engine: token stream, sentence/clause structure, scope model
 # ---------------------------------------------------------------------------
 
-_WORD_RE = re.compile(r"[A-Za-z][\w'-]*|\d[\w.-]*")
+_WORD_RE = re.compile(r"[A-Za-z][\w'\u2019-]*|\d[\w.-]*")
 
 # Sentence terminators: runs of .!? followed by whitespace + a capital/quote,
 # or end of text; a blank line is a structural break. Single newlines (soft
@@ -289,7 +289,15 @@ _CTA_REMINDER = ADVISORY_CTA_REMINDER
 
 _ABBREVIATIONS = frozenset(
     {"dr", "mr", "mrs", "ms", "prof", "inc", "ltd", "co", "corp", "dept",
-     "vs", "etc", "jr", "sr", "st", "fig", "approx", "dept", "est"}
+     "vs", "etc", "jr", "sr", "st", "fig", "approx", "est"}
+)
+# Capitalized words that overwhelmingly START sentences: an abbreviation
+# period followed by one of these is a real terminator ("Acme Inc. We
+# draft ..."), while "Dr. Billing" (a name) stays internal.
+_SENTENCE_STARTERS = frozenset(
+    {"we", "the", "our", "this", "these", "those", "it", "they", "a", "an",
+     "i", "he", "she", "you", "all", "each", "no", "if", "when", "after",
+     "before", "there", "here"}
 )
 _FOCUS_MODIFIERS = frozenset({"only", "even", "just", "especially", "particularly"})
 _LAST_WORD_RE = re.compile(r"([A-Za-z][\w'-]*)\s*$")
@@ -311,7 +319,14 @@ def _sentence_structure(text: str) -> "tuple[list[int], list[tuple[int, int]]]":
             if before is not None:
                 word = before.group(1).lower()
                 if word in _ABBREVIATIONS or len(word) == 1:
-                    continue
+                    follower = re.match(
+                        r"\s*([A-Za-z][\w'\u2019-]*)", text[match.end() :]
+                    )
+                    if (
+                        follower is None
+                        or follower.group(1).lower() not in _SENTENCE_STARTERS
+                    ):
+                        continue
         spans.append((start, match.start()))
         start = match.end()
     spans.append((start, len(text)))
@@ -402,7 +417,7 @@ def _negation_scopes(text: str, span: "tuple[int, int]") -> "list[tuple[int, int
             else:
                 end_token = tokens[min(position + 2, len(tokens) - 1)]
                 scopes.append((token.start(), end_token.end()))
-        elif lower in _VERBAL_NEGATION or lower.endswith("n't"):
+        elif lower in _VERBAL_NEGATION or lower.endswith(("n't", "n\u2019t")):
             if (
                 lower == "not"
                 and position + 1 < len(tokens)
@@ -486,6 +501,14 @@ def _unqualified_claims(
     # in the clause after the opener.
     qualifier_clauses: set[int] = set()
     for qualifier in qualifier_re.finditer(text):
+        # A qualifier with a NEGATED complement is no qualification at all:
+        # "if the tickets contain no proof" must not excuse the claim
+        # (the standing honest-gap form "no proven answer" matches as a
+        # whole phrase and is unaffected).
+        if re.match(
+            r"\s+(?:no|not|never|nothing|none)\b", text[qualifier.end() :]
+        ):
+            continue
         index, _span = _span_for(clause_bounds, max(qualifier.end() - 1, 0))
         qualifier_clauses.add(index)
 
@@ -642,6 +665,7 @@ def _routing_covers_report(
     back to the report's items. An unrelated ownership statement about a
     different object elsewhere in the draft does not count (round 12)."""
     subject_cache: dict[int, bool] = {}
+    tokens_cache: dict[int, list] = {}
     shape_clauses: set[int] = set()
     for product in _PRODUCT_TERM_RE.finditer(text):
         shape_clauses.add(_span_for(clause_bounds, product.start())[0])
@@ -663,15 +687,29 @@ def _routing_covers_report(
             # each issue to ..."), or an anaphoric/report-item subject.
             if index in shape_clauses:
                 return True
-            before = _clause_tokens(text, (span[0], match.start()))
-            match_first = match.group(0).split()[0].lower() if match.group(0).split() else ""
+            if index not in tokens_cache:
+                tokens_cache[index] = _clause_tokens(text, span)
+            before = [
+                token
+                for token in tokens_cache[index]
+                if token.start() < match.start()
+            ]
+            match_words = match.group(0).split()
+            match_first = match_words[0].lower() if match_words else ""
             if not before and match_first in _VERB_INITIAL_ROUTING:
                 # Coordinated verb phrase sharing the report's subject:
-                # "... and routes each issue to the owning team." A clause
-                # whose match STARTS with its own subject ("Billing probably
-                # owns ...") is not coordination and must bind on its
-                # subject instead.
-                return True
+                # "... and routes each issue to the owning team." The
+                # routed object must itself be a report item -- "routes
+                # each invoice to Billing" concerns invoices, not the
+                # ranked issues, and does not cover the report.
+                each_object = re.search(
+                    r"\beach\s+([\w'\u2019-]+)", match.group(0), re.I
+                )
+                if (
+                    each_object is None
+                    or each_object.group(1).lower() in _REPORT_ITEM_NOUNS
+                ):
+                    return True
             subject_tokens = before or _clause_tokens(
                 text, (match.start(), span[1])
             )

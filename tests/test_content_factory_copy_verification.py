@@ -1227,3 +1227,67 @@ def test_coordinator_heavy_draft_stays_fast():
     started = time.monotonic()
     advisory_warnings(draft)
     assert time.monotonic() - started < 2.0
+
+
+# --- round-17 review fixes ---
+
+
+def test_coordinated_routing_of_non_report_items_does_not_cover():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues and routes each invoice to Billing."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+def test_terminal_abbreviation_period_splits_sentence():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("We partner with Acme Inc. We draft answers.")
+    assert any(
+        w == "unqualified-answer-claim: sentence 2" for w in warnings
+    ), warnings
+
+
+def test_internal_abbreviation_still_protected():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("Dr. Billing drafts answers for customers.")
+    assert any(w == "unqualified-answer-claim: sentence 1" for w in warnings)
+
+
+def test_smart_apostrophe_contraction_is_denial():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("We wouldn’t draft answers.")
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_negated_qualifier_complement_does_not_excuse():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("If the tickets contain no proof, we draft answers.")
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_affirmative_qualifier_still_excuses():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("If the tickets contain proof, we draft answers.")
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_same_sentence_routing_scan_is_linear():
+    import time
+
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    draft = (
+        "The report ranks issues, "
+        + "Billing owns invoices, " * 2000
+        + "daily."
+    )
+    started = time.monotonic()
+    advisory_warnings(draft)
+    assert time.monotonic() - started < 2.0

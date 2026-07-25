@@ -91,6 +91,21 @@ Slice phase: vertical slice
   each with both-direction probes; the module contract remains
   best-effort-backstop with the human approval as the real gate), R14.
 
+### Review round 17 (Codex) -- final pre-merge round (operator decision)
+
+Five findings, all fixed: coordinated routing must route REPORT ITEMS
+("routes each invoice to Billing" does not cover the ranked issues);
+terminal abbreviation periods split when followed by a sentence-starter
+("Acme Inc. We draft answers." locates at sentence 2, "Dr. Billing"
+stays internal); typographic apostrophes tokenize so "wouldn't" with a
+smart quote is a denial; a qualifier with a negated complement ("if the
+tickets contain no proof") excuses nothing while the honest-gap form
+stays intact; and same-sentence routing scans cache clause tokens
+(linear, timing probe). Operator decision (2026-07-25): merge on this
+round's green with all findings fixed -- the 17-round trajectory
+oscillates at 3-6 findings/round with no convergence to zero, further
+findings land as follow-up slices against main.
+
 ### Review round 16 (Codex)
 
 Three findings, all fixed: a bare "owner lane" topic mention no longer
@@ -393,11 +408,11 @@ Parked hardening: none new.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 88 |
-| `atlas_brain/services/content_factory_copy_verification.py` | 708 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 746 |
 | `atlas_brain/services/content_factory_runner.py` | 28 |
 | `atlas_brain/services/content_factory_store.py` | 17 |
-| `plans/PR-CF-Advisory-Warning-Layer.md` | 403 |
-| `tests/test_content_factory_copy_verification.py` | 1045 |
+| `plans/PR-CF-Advisory-Warning-Layer.md` | 418 |
+| `tests/test_content_factory_copy_verification.py` | 1109 |
 | `tests/test_content_factory_runner.py` | 62 |
 | `tests/test_content_factory_schemas.py` | 73 |
-| **Total** | **2424** |
+| **Total** | **2541** |
