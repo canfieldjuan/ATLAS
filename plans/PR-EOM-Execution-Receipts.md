@@ -53,7 +53,7 @@ Max files: 5
   standard-library shadow and with ignored symlinks to regular and namespace
   packages. Each must fail before the shadow or package can execute.
 
-### Acceptance criteria
+### Review Contract
 
 1. Calendar live-write rejects missing `--receipt-dir` before local imports or
    async runtime; unreceipted dry-run remains available for development.
@@ -76,6 +76,22 @@ Max files: 5
 - `scripts/import_eom_customers_live.py`
 - `tests/test_eom_execution_receipts.py`
 
+## Mechanism
+
+On a direct invocation, the Calendar CLI first removes its script directory,
+repository root, and empty-path entry from `sys.path`. It can then use only
+standard-library code to parse receipt policy. A receipted run reads the shared
+helper from the `HEAD` Git object, executes its clean-source preflight, and
+restores local import roots only after that check succeeds. Receipt construction
+reuses the returned Git SHA, hashes the executed Calendar script, and creates
+the durable in-progress artifact before entering the async runtime.
+
+The helper has no generic metadata sink: callers can record only allowlisted
+non-negative counts and UUID contact IDs. Each evidence update atomically
+replaces and syncs the in-progress artifact. Finalization writes a complete
+staged payload, hard-links it to an exclusive exit-specific name, syncs the
+directory, and only then removes recovery artifacts.
+
 ## Intentional
 
 - Dry runs may omit receipts for local development.
@@ -93,17 +109,6 @@ Max files: 5
 
 Parked hardening: none.
 
-## Estimated diff size
-
-| File | LOC |
-|---|---:|
-| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 33 |
-| `plans/PR-EOM-Execution-Receipts.md` | 117 |
-| `scripts/eom_execution_receipt.py` | 380 |
-| `scripts/import_eom_customers_live.py` | 153 |
-| `tests/test_eom_execution_receipts.py` | 744 |
-| **Total** | **1427** |
-
 ## Verification
 
 - `python -m pytest tests/test_eom_execution_receipts.py
@@ -115,3 +120,14 @@ Parked hardening: none.
 - Exact scripts maturity ratchet — passed with no baseline change.
 - Guard class-closure advisory — passed.
 - `git diff --check` — passed.
+
+## Estimated diff size
+
+| File | LOC |
+|---|---:|
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 33 |
+| `plans/PR-EOM-Execution-Receipts.md` | 133 |
+| `scripts/eom_execution_receipt.py` | 380 |
+| `scripts/import_eom_customers_live.py` | 153 |
+| `tests/test_eom_execution_receipts.py` | 744 |
+| **Total** | **1443** |
