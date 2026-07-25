@@ -181,8 +181,8 @@ Parked hardening: none.
 |---|---:|
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 34 |
 | `plans/PR-EOM-Execution-Receipts.md` | 188 |
-| `scripts/eom_execution_receipt.py` | 282 |
+| `scripts/eom_execution_receipt.py` | 280 |
 | `scripts/import_eom_customers_live.py` | 71 |
 | `scripts/sync_eom_portal_customers.py` | 96 |
 | `tests/test_eom_execution_receipts.py` | 569 |
-| **Total** | **1240** |
+| **Total** | **1238** |
