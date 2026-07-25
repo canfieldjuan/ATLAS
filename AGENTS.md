@@ -995,11 +995,20 @@ case.
 **Counting the trigger under squash-amend.** Builder branches are amended into a
 single commit (§1c), so "3 consecutive pushes" is not observable from the commit
 graph -- a branch showing one commit may have absorbed a dozen review cycles.
-Count **bot review rounds** instead: distinct automated-review submissions, which
-carry their own ids and timestamps on the reviews endpoint.
+Count **bot review rounds** instead. Every review comment carries the id of the
+submission it belongs to, so group by it to get the per-round finding count and
+the files each round touched -- the two values this breaker actually compares:
 
-    gh api repos/canfieldjuan/ATLAS/pulls/<n>/reviews --paginate \
-      --jq '[.[]|select(.user.login=="chatgpt-codex-connector[bot]")]|length'
+    gh api repos/canfieldjuan/ATLAS/pulls/<n>/comments --paginate \
+      --jq 'group_by(.pull_request_review_id)[]
+            | {round: .[0].pull_request_review_id,
+               findings: length,
+               files: (map(.path) | unique)}'
+
+Read it as one row per round. A bare round count is not enough: the trigger is
+whether the *finding count per round* is flat or rising, and the repeated `files`
+entries are what identify the same file/decision the findings keep landing on --
+that is the seam 3k.2 asks you to name.
 
 This is a **different source** from `live-reconciliation`, which must not be
 substituted for it: that check queries `reviewThreads` and discards resolved and
@@ -1115,7 +1124,9 @@ prose-only -- no path glob identifies a durability protocol, since the same
 module paths carry ordinary code -- so `scripts/audit_review_rules_triggered.py`
 surfaces it as an explicit advisory finding per 3g rather than deriving it. A
 plan whose slice is open-execution work and whose Review Contract omits R8 fails
-that surfacing, and the three requirements above are what the reviewer checks.
+that surfacing. What the reviewer then checks is 1 and 3 for every such slice,
+and 2 **only** where the slice hand-rolled: a plan that took the closed-surface
+component has no rejected component to name, and must not be asked to invent one.
 
 **Why:** #2184 (scoped mailbox binding) is the case. Its stated purpose was an
 authorization boundary -- bind each CRM business context to one mailbox. It also
