@@ -869,7 +869,6 @@ async def test_forced_resend_routes_through_real_stack(monkeypatch):
     default send must still select Gmail (unchanged for every other caller)."""
     import httpx
 
-    from atlas_brain.config import settings
     from atlas_brain.services import google_oauth
     from atlas_brain.services.email_provider import CompositeEmailProvider
     from atlas_brain.tools import email as email_mod
@@ -879,8 +878,12 @@ async def test_forced_resend_routes_through_real_stack(monkeypatch):
     _FakeHTTPClient.posted = []
     monkeypatch.setattr(httpx, "AsyncClient", _FakeHTTPClient)
     monkeypatch.setattr(email_mod.email_tool, "_client", None)  # rebuild w/ fake httpx
-    monkeypatch.setattr(settings.email, "api_key", "re_test_key")
-    monkeypatch.setattr(settings.email, "gmail_send_enabled", True)
+    # Configure the EmailTool instance directly (not settings.email): another
+    # test in the full suite may have rebound settings.email, so patch the exact
+    # config object the tool reads to stay hermetic under any run order.
+    monkeypatch.setattr(email_mod.email_tool._config, "enabled", True)
+    monkeypatch.setattr(email_mod.email_tool._config, "api_key", "re_test_key")
+    monkeypatch.setattr(email_mod.email_tool._config, "gmail_send_enabled", True)
 
     # External Gmail transport: credentials present + a transport spy, so a
     # dropped force_resend would visibly select Gmail here.

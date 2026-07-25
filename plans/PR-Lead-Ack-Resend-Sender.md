@@ -74,7 +74,7 @@ Slice phase: vertical slice
    send selects the Resend transport from info@ (and would fail if force_resend
    were dropped -> Gmail), and a default send still selects Gmail. That test
    mocks first-party transports, so `tests/maturity_sweep/baseline_atlas_brain_tools.json`
-   is bumped for `email.py`/`gmail.py` (INTERNAL_MOCK 0->1 each) -- the sanctioned
+   is bumped for `email.py` (INTERNAL_MOCK 0->4, hermetic EmailTool config/client patches) and `gmail.py` (0->1, transport) -- the sanctioned
    ratchet mechanism for the reviewer-endorsed external-transport mocks.
 
 ### Review Contract
@@ -92,7 +92,7 @@ Slice phase: vertical slice
      and does not touch the Resend transport (default path for all other callers
      unchanged; test-asserted).
   4. The integration test mocks first-party transports; the tools-lane maturity
-     baseline is bumped (email.py/gmail.py INTERNAL_MOCK 0->1) via the sanctioned
+     baseline is bumped (email.py INTERNAL_MOCK 0->4, gmail.py 0->1) via the sanctioned
      `--update-baseline` mechanism, surgically (only those two entries change).
   5. Existing acknowledgement guardrails hold: no `$`, no "quote"/"same-day",
      `(217) 207-3097` present, `within 24 hours` present, request-line echo,
@@ -111,8 +111,8 @@ Slice phase: vertical slice
   verified + key ready, confirmed 2026-07-24) -- without it the send fails
   best-effort and the CRM capture still lands (existing behavior).
 - Reviewer rules triggered: R1 (matches operator request), R2 (test evidence:
-  extended wiring test + 2 new composite-routing tests; email_tool gate by
-  inspection per real-adapter rule), R5 (backward compatibility: default provider
+  extended wiring test + real Composite->ResendEmailProvider->EmailTool
+  integration test, hermetic under any run order), R5 (backward compatibility: default provider
   selection unchanged for all non-leads callers), R6 (error handling: send stays
   best-effort; email failure never fails the lead), R11 (config:
   `ATLAS_EMAIL_API_KEY` deploy env), R14 (verify against codebase).
