@@ -115,6 +115,27 @@ def job_lock(job_id: str, *, root: Path | str = DEFAULT_ROOT) -> Iterator[None]:
         handle.close()
 
 
+def _restore_artifact(job: Path, path: Path, previous: "bytes | None") -> None:
+    """Undo a failed stage write: put back the previous bytes (or remove the
+    file if the stage had none) and unstage it, so a raised write_artifact
+    leaves no residue for the readiness gate to read as source state.
+
+    Best-effort by design -- this runs while an exception is propagating, and
+    a cleanup failure must not replace the original error.
+    """
+    try:
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(previous)
+        subprocess.run(
+            ["git", "-C", str(job), "reset", "-q", "--", path.name],
+            capture_output=True,
+        )
+    except OSError:
+        pass
+
+
 def _git(job: Path, *args: str) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
@@ -221,21 +242,34 @@ def _write_artifact_locked(
     job.mkdir(parents=True, exist_ok=True)
     _ensure_repo(job)
     path = job / f"{stage}.json"
-    path.write_text(json.dumps(canonical, indent=2, ensure_ascii=False) + "\n")
 
-    # Scope the staged-change check and the commit to THIS file, so an unrelated
-    # pre-staged file in the job repo cannot ride into this stage's commit and an
-    # identical rewrite still makes no empty commit.
-    _git(job, "add", "--", path.name)
-    unchanged = (
-        subprocess.run(
-            ["git", "-C", str(job), "diff", "--cached", "--quiet", "--", path.name]
-        ).returncode
-        == 0
-    )
-    if not unchanged:
-        _git(job, "commit", "-q", "-m", f"{stage}: {tag}", "--", path.name)
-    sha = _git(job, "rev-parse", "HEAD").stdout.strip()
+    # Persistence is ALL-OR-NOTHING. A failed commit used to leave the new file
+    # written and staged in the working tree even though write_artifact raised
+    # and no commit recorded the stage -- and the readiness gate reads the
+    # working tree, so that residue was then trusted as approved source state
+    # (#2192 round 9). On any failure the previous content is restored, or the
+    # file removed if the stage had none, before the error propagates.
+    had_previous = path.exists()
+    previous = path.read_bytes() if had_previous else None
+    try:
+        path.write_text(json.dumps(canonical, indent=2, ensure_ascii=False) + "\n")
+
+        # Scope the staged-change check and the commit to THIS file, so an
+        # unrelated pre-staged file in the job repo cannot ride into this
+        # stage's commit and an identical rewrite still makes no empty commit.
+        _git(job, "add", "--", path.name)
+        unchanged = (
+            subprocess.run(
+                ["git", "-C", str(job), "diff", "--cached", "--quiet", "--", path.name]
+            ).returncode
+            == 0
+        )
+        if not unchanged:
+            _git(job, "commit", "-q", "-m", f"{stage}: {tag}", "--", path.name)
+        sha = _git(job, "rev-parse", "HEAD").stdout.strip()
+    except Exception:
+        _restore_artifact(job, path, previous)
+        raise
 
     return {
         "job_id": job_id,

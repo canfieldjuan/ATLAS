@@ -257,6 +257,39 @@ def _is_nanp_digits(digits: str) -> bool:
     return digits[0] in "23456789" and digits[3] in "23456789"
 
 
+_KEYPAD = str.maketrans(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "22233344455566677778889999" "22233344455566677778889999",
+)
+
+
+def _is_vanity_number(parts: "list[str]") -> bool:
+    """Is this mixed digit/letter token a dialable vanity number?
+
+    Letters in a vanity number are DIGIT SUBSTITUTES, so the test is whether
+    the keypad-mapped token is a real number -- not merely whether letters and
+    digits co-occur. That earlier rule rejected renderer specifications:
+    "16-bit-color", "1920-1080-pixel" and "8-bit-style" all have letters
+    attached to digits (#2192 round 9).
+
+    Two conditions, both from the numbering plan rather than a word list:
+
+      * the leading digit group is an AREA CODE -- exactly 3 digits, or a "1"
+        country prefix followed by 3. "16-bit-color" leads with 2 digits and
+        "1920-1080-pixel" with 4, so neither can be a dialable prefix.
+      * the keypad-mapped digits form a syntactically valid NANP number.
+    """
+    if not any(p.isdigit() for p in parts):
+        return False
+    digit_groups = [p for p in parts if p.isdigit()]
+    lead = digit_groups[0]
+    if lead == "1" and len(digit_groups) > 1:
+        lead = digit_groups[1]
+    if len(lead) != 3:
+        return False
+    return _is_nanp_digits("".join(parts).translate(_KEYPAD))
+
+
 def _dial_shape(token: str) -> str:
     """Classify a candidate token: 'unambiguous', 'ambiguous', or 'none'.
 
@@ -276,7 +309,7 @@ def _dial_shape(token: str) -> str:
     if not 7 <= len(compact) <= 15:
         return "none"
     if any(p.isalpha() for p in parts):
-        return "unambiguous" if any(p.isdigit() for p in parts) else "none"
+        return "unambiguous" if _is_vanity_number(parts) else "none"
     groups = tuple(len(p) for p in parts)
     if compact.startswith("0") and 9 <= len(compact) <= 15 and len(groups) > 1:
         return "unambiguous"  # national trunk prefix: 07700 900123
@@ -297,6 +330,25 @@ def _dial_shape(token: str) -> str:
     return "grouped"
 
 
+_TRAILING_ALPHA_RE = re.compile(r"\s+[A-Za-z]+")
+
+
+def _token_candidates(text: str, match: "re.Match[str]") -> "list[str]":
+    """The matched token, plus the same token extended by up to three
+    following space-joined alpha words -- the spelled part of a vanity number
+    ("1 800 GOT JUNK"), which the separator grammar cannot absorb without also
+    swallowing ordinary trailing words ("07700 900123 today")."""
+    candidates = [match.group(0)]
+    end = match.end()
+    for _ in range(3):
+        extension = _TRAILING_ALPHA_RE.match(text, end)
+        if extension is None:
+            break
+        end = extension.end()
+        candidates.append(text[match.start() : end])
+    return candidates
+
+
 def _gap_profile(gap: str) -> "tuple[int, bool]":
     """(token distance, crossed a strong boundary) for the text between a dial
     verb and a candidate token. A punctuation run counts as one token, so
@@ -311,9 +363,18 @@ def _phone_evidence(text: str) -> bool:
         return True
     intents = [(m.start(), m.end()) for m in _DIAL_INTENT_RE.finditer(text)]
     for match in _DIAL_TOKEN_RE.finditer(text):
-        shape = _dial_shape(match.group(0))
-        if shape == "unambiguous":
+        # Both directions of the grammar. The token regex stops before a
+        # SPACE-joined letter group, so "Call 1 800 FLOWERS today" yielded only
+        # "1 800" and passed. Extending the candidate by up to three following
+        # alpha words recovers it, and cannot over-reach because the vanity
+        # test still demands an area-code prefix and a valid NANP mapping --
+        # "255 255 255 blue" and "1920 1080 pixel" both fail that (round 9).
+        if any(
+            _dial_shape(candidate) == "unambiguous"
+            for candidate in _token_candidates(text, match)
+        ):
             return True
+        shape = _dial_shape(match.group(0))
         if shape == "none":
             continue
         unbroken = shape == "unbroken"

@@ -103,6 +103,22 @@ _ADVISORY_GRAMMAR_RE = re.compile(
 )
 
 
+def _routing_key(channel: str) -> str:
+    """Comparison key for a routing label.
+
+    NFKC first (canonically equivalent spellings are one channel to a reader),
+    then DROP format and control characters -- zero-width joiners, bidi marks
+    and the like occupy no visible width, so a label carrying them is
+    indistinguishable from one that does not and must not read as a second,
+    separate channel (#2192 round 9).
+    """
+    normalized = unicodedata.normalize("NFKC", channel)
+    stripped = "".join(
+        ch for ch in normalized if not unicodedata.category(ch) in ("Cf", "Cc")
+    )
+    return stripped.strip().casefold()
+
+
 def _has_visible_content(text: str) -> bool:
     """True when ``text`` contains at least one VISIBLE character.
 
@@ -426,9 +442,12 @@ class ChannelVariant(BaseModel):
 
     model_config = _BASE_CONFIG
 
-    # Non-blank: a variant with no channel cannot be routed, and one with no
-    # body is not a variant.
-    channel: NonEmptyStr
+    # A channel must be VISIBLE, not merely non-blank: a label made only of
+    # U+200B/U+200C/U+FE0F satisfies "non-empty" while being unroutable, and
+    # several distinct invisible labels also slip past the duplicate check as
+    # different strings. Same class as the body/prompt fix, applied to the
+    # routing identifier (#2192 round 9).
+    channel: VisibleStr
     body_markdown: VisibleStr
     # Claim lineage back to the source draft's claims/evidence ids. REQUIRED
     # and non-empty: a variant with no lineage is an orphan -- it asserts
@@ -474,10 +493,11 @@ class RepurposingPackage(BaseModel):
         # NFKC first: canonically equivalent spellings (NFC vs NFD) are the
         # same channel to a reader, so casefold alone leaves the very
         # ambiguity this check exists to prevent (round 5).
-        channels = [
-            unicodedata.normalize("NFKC", variant.channel.strip()).casefold()
-            for variant in self.variants
-        ]
+        # Zero-width and control characters are dropped before comparing: they
+        # carry no visible width, so "email" and "email​" are the SAME
+        # channel to a reader and to anything routing on the label, and
+        # keeping them made a visually identical duplicate pass (round 9).
+        channels = [_routing_key(variant.channel) for variant in self.variants]
         if len(channels) != len(set(channels)):
             raise ValueError("duplicate channel in repurposing variants")
         if self.ready_to_publish:

@@ -8,6 +8,7 @@ exercised for real against a temp filesystem.
 from __future__ import annotations
 
 import json
+import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -1120,3 +1121,125 @@ def test_job_lock_excludes_a_second_process(tmp_path):
     with job_lock("job-x", root=tmp_path):
         assert not _job_lock_is_free("job-x", tmp_path)
     assert _job_lock_is_free("job-x", tmp_path)
+
+
+# --- round 9: vanity grammar both directions, commit atomicity, channels ---
+
+_SPEC_DIGITS = ["8", "16", "24", "32", "64", "1920", "1080", "4096"]
+_SPEC_WORDS = ["bit", "color", "pixel", "style", "float", "depth", "res"]
+
+
+@pytest.mark.parametrize("lead", _SPEC_DIGITS)
+@pytest.mark.parametrize("word", _SPEC_WORDS)
+def test_oracle_hyphenated_renderer_specs_render(lead, word):
+    """Grammar-derived (#2192 round 9): letters ATTACHED to digits do not make
+    a vanity number. A renderer spec's leading group is not an area code, and
+    its keypad mapping is not a valid NANP number, so the whole class renders
+    -- "16-bit-color" and "1920-1080-pixel" were rejected before."""
+    assert runner._prompt_contact_hits(f"a {lead}-{word}-{word} render, studio light") == []
+
+
+@pytest.mark.parametrize("intent", ["Call", "call", "Text", "dial", "contact"])
+@pytest.mark.parametrize(
+    "spelled", ["1 800 FLOWERS", "1 800 GOT JUNK", "800 FLOWERS", "1-800-FLOWERS",
+                "1-800-flowers", "1-800-GOT-JUNK"]
+)
+def test_oracle_space_joined_vanity_numbers_fail(intent, spelled):
+    """The other direction of the same grammar: the token regex stops before a
+    space-joined letter group, so "Call 1 800 FLOWERS today" passed."""
+    assert runner._prompt_contact_hits(f"{intent} {spelled} today") != []
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    ["255 255 255 blue tint", "1920 1080 pixel export", "100 200 300 RGB values",
+     "a poster of serial 12345678 engraved on a plate"],
+)
+def test_trailing_word_extension_does_not_over_reach(prompt):
+    """Extending a candidate by trailing words must not manufacture a hit:
+    the vanity test still demands an area-code prefix and a valid mapping."""
+    assert runner._prompt_contact_hits(prompt) == []
+
+
+def test_failed_commit_leaves_no_artifact_residue(tmp_path, monkeypatch):
+    """#2192 round 9: a failed store commit used to leave the new file written
+    and staged even though write_artifact raised, and the readiness gate reads
+    the working tree -- so the residue was trusted as approved source state."""
+    from atlas_brain.services import content_factory_store as store
+
+    _seed_draft(tmp_path, "job-resid", ["e1"])
+    draft_path = Path(tmp_path) / "jobs" / "job-resid" / "draft.json"
+    before = draft_path.read_bytes()
+
+    real_git = store._git
+
+    def failing_git(job, *args):
+        if args and args[0] == "commit":
+            raise store.ArtifactStoreError("simulated commit failure")
+        return real_git(job, *args)
+
+    monkeypatch.setattr(store, "_git", failing_git)
+    with pytest.raises(store.ArtifactStoreError):
+        store.write_artifact("job-resid", "draft", {
+            "schema": "draft.v1", "project_id": "p", "revision": 2,
+            "body_markdown": "REPLACED body nobody approved",
+            "claims": [{"text": "claim e1", "source_id": "e1"}],
+        }, root=tmp_path)
+
+    assert draft_path.read_bytes() == before, "failed write left residue on disk"
+    monkeypatch.undo()
+    staged = subprocess.run(
+        ["git", "-C", str(draft_path.parent), "diff", "--cached", "--name-only"],
+        capture_output=True, text=True,
+    ).stdout
+    assert "draft.json" not in staged, "failed write left draft.json staged"
+
+
+def test_failed_first_write_removes_the_file(tmp_path, monkeypatch):
+    """A stage that had no previous artifact must not leave a partial one."""
+    from atlas_brain.services import content_factory_store as store
+
+    real_git = store._git
+
+    def failing_git(job, *args):
+        if args and args[0] == "commit":
+            raise store.ArtifactStoreError("simulated commit failure")
+        return real_git(job, *args)
+
+    monkeypatch.setattr(store, "_git", failing_git)
+    with pytest.raises(store.ArtifactStoreError):
+        store.write_artifact("job-first", "draft", {
+            "schema": "draft.v1", "project_id": "p", "revision": 1,
+            "body_markdown": "body", "claims": [{"text": "c", "source_id": "e1"}],
+        }, root=tmp_path)
+    assert not (Path(tmp_path) / "jobs" / "job-first" / "draft.json").exists()
+
+
+@pytest.mark.parametrize("invisible", ["​", "‌", "️", "​‌"])
+def test_invisible_channel_identifiers_rejected(invisible):
+    """#2192 round 9: `channel` was NonEmptyStr, so an unroutable label made
+    only of zero-width characters validated and persisted."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate({
+            "schema": "repurposing.v1", "project_id": "p",
+            "variants": [{"channel": invisible, "body_markdown": "Clean copy.",
+                          "derived_from_claims": ["e1"]}],
+        })
+
+
+def test_visually_identical_channels_are_duplicates():
+    """Distinct invisible spellings of one label are the SAME channel: they
+    carry no visible width, so keeping them apart re-admits the ambiguity the
+    duplicate check exists to prevent."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError, match="duplicate channel"):
+        RepurposingPackage.model_validate({
+            "schema": "repurposing.v1", "project_id": "p",
+            "variants": [
+                {"channel": "email", "body_markdown": "A.", "derived_from_claims": ["e1"]},
+                {"channel": "email​", "body_markdown": "B.", "derived_from_claims": ["e1"]},
+            ],
+        })

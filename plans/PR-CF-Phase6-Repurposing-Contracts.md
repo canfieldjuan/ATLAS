@@ -42,9 +42,30 @@ one enforcement hook, and one lineage check.
   self-declared shippability, empty packages); admit both at the store's
   stage map; and run the SAME deterministic overwrite the editorial audit
   uses so a worker cannot self-approve either one.
-- Must not change: existing contracts/stages, the editorial gate's
-  behavior, the advisory grammar (extracted to a shared validator, same
-  rules), or anything about image generation (separate slice).
+- Must not change: the editorial gate's DECISION behavior, the advisory
+  grammar (extracted to a shared validator, same rules), or anything about
+  image generation (separate slice). Published contract SHAPES stay frozen
+  and readable -- `editorial_audit.v1` and `.v2` both keep validating
+  byte-for-byte.
+- Must ALSO change (admitted in review, round 8 -- the original "must not
+  change existing contracts/stages" was too narrow to hold, because
+  readiness cannot be enforced without touching both):
+  - **Audit version.** Binding approval to draft CONTENT requires a field
+    on the audit. v2 is published and forbids extras, so the field cannot
+    go there without making new audits unreadable to a v2 consumer or a
+    rolled-back reader. Adds `editorial_audit.v3` (subclassing v2 so the
+    promote gate and warning grammar cannot drift), re-freezes v2, and
+    upgrades v1/v2 -> v3 in the runner's normalizer. Acceptance: a v2
+    payload still validates; a v2 payload carrying the new field is
+    REJECTED (proving the freeze); self-contradictory worker metadata is
+    still refused rather than repaired.
+  - **Store concurrency + write atomicity.** Readiness reads the job
+    folder and then writes it, so both must sit in one critical section,
+    and a failed commit must leave no residue for the next read to trust.
+    Adds a re-entrant per-job `flock` and all-or-nothing artifact writes.
+    Acceptance: readiness is decided with the lock HELD (mutation-checked)
+    and released after; a failed commit restores the previous bytes and
+    leaves nothing staged.
 
 ## Scope (this PR)
 
@@ -87,11 +108,19 @@ Slice phase: vertical slice
      not-ready package MAY carry a failing variant (legitimate
      intermediate state).
   5. Stage/schema mismatch still enforced for the new stages.
+  6. Compatibility (round 8): `editorial_audit.v2` still validates
+     unchanged and REJECTS the new fingerprint field; v1/v2 worker replies
+     normalize to v3; contradictory `schema_version` still fails.
+  7. Concurrency + atomicity (rounds 8-9): readiness is decided under the
+     per-job lock and the lock is released afterwards; a failed commit
+     leaves neither modified content on disk nor a staged path.
 - Reachability proof: `run_stage(job, "repurposing"|"image_prompt", ...)`,
   the same entrypoint the four existing stages use; artifacts land in the
   git-backed job folder.
-- Affected surfaces: contracts, store stage map, runner enforcement. No
-  change to existing stages or to image generation.
+- Affected surfaces: contracts, store stage map, store write path and
+  locking, runner enforcement and audit normalization. The audit stage's
+  persisted VERSION changes (v3); its decision behavior does not. No change
+  to image generation.
 - Risk areas: none live -- no worker wrappers are wired to these stages
   yet (next slice), so this cannot alter current pipeline behavior.
 - Reviewer rules triggered: R1 (#2109 Phase 6), R2 (both-direction tests),
@@ -306,6 +335,47 @@ start with 0 or 1) recovers the part that can be decided.
 to what began as a contracts slice. Both are the hardened fix for defects
 this PR introduced, so they belong here rather than in a follow-up.
 
+### Review round 9 (Codex)
+
+Four findings, all verified against the code before acting and all fixed.
+
+1. **P1 — the vanity rule was too loose one way and too tight the other.**
+   Treating ANY attached letter group as vanity rejected renderer specs:
+   `16-bit-color`, `1920-1080-pixel`, `8-bit-style` and `32-bit-float` all
+   failed (the last two were not in the report; found by probing the class).
+   Meanwhile the separator grammar stops before a SPACE-joined letter group,
+   so `Call 1 800 FLOWERS today` passed with `ready_to_generate=true`.
+
+   Root fix, from the numbering plan rather than a word list: letters in a
+   vanity number are DIGIT SUBSTITUTES, so the token must (a) lead with an
+   area code -- exactly 3 digits, or "1" plus 3 -- and (b) map through the
+   phone keypad to a syntactically valid NANP number. A spec's leading group
+   is 2 or 4 digits, so the whole class renders. The other direction is
+   closed by extending each candidate with up to three following alpha words,
+   which cannot over-reach because the same two conditions still apply.
+
+2. **P1 — a failed commit left artifact residue the readiness gate trusted.**
+   `write_artifact` wrote and staged the file before committing, so a commit
+   failure left the job's modified draft artifact in the working tree with no commit
+   recording it -- and the readiness gate reads the working tree. Writes are
+   now all-or-nothing: on any failure the previous bytes are restored (or the
+   file removed if the stage had none) and the path unstaged.
+
+3. **P2 — the governing contract did not cover round 8's changes.** The
+   Problem-derived and Review Contracts still said "must not change existing
+   contracts/stages" while the diff upgraded audits to v3 and added store
+   locking. Both sections now carry those changes with their own acceptance
+   criteria, rather than leaving them justified only by narrative.
+
+4. **P2 — `channel` was non-blank but not VISIBLE.** A label made only of
+   U+200B/U+200C/U+FE0F validated and persisted unroutable, and distinct
+   invisible spellings evaded the duplicate check. `channel` is now
+   `VisibleStr`, and duplicate detection compares on a routing key that drops
+   format/control characters, so `email` and `email<ZWSP>` collide.
+
+Both P1 fixes are mutation-checked: reverting either makes the new tests
+fail, so they are load-bearing rather than vacuous.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -358,7 +428,7 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 523 passed (214 new; incl. the round-6 generative oracle, the
+    # -> 620 passed (311 new; incl. the round-6 generative oracle, the
     #    round-7 casing/content-binding probes, and the round-8
     #    descriptive-numbers x dial-words class-closure oracle)
     #
@@ -378,11 +448,11 @@ Parked hardening: none new.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 246 |
+| `atlas_brain/schemas/content_factory.py` | 266 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 20 |
-| `atlas_brain/services/content_factory_runner.py` | 496 |
-| `atlas_brain/services/content_factory_store.py` | 71 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 388 |
-| `tests/test_content_factory_runner.py` | 834 |
+| `atlas_brain/services/content_factory_runner.py` | 557 |
+| `atlas_brain/services/content_factory_store.py` | 133 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 417 |
+| `tests/test_content_factory_runner.py` | 957 |
 | `tests/test_content_factory_schemas.py` | 269 |
-| **Total** | **2324** |
+| **Total** | **2619** |
