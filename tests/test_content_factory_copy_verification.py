@@ -1183,3 +1183,47 @@ def test_focus_modifier_fronted_qualifier_governs(text):
     assert not any(
         w.startswith("unqualified-answer-claim:") for w in warnings
     ), (text, warnings)
+
+
+# --- round-16 review fixes ---
+
+
+def test_owner_lane_topic_mention_is_not_routing():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(
+        "The report ranks issues. Each owner lane is reviewed monthly."
+    )
+    assert any(w.startswith("owner-routing-coverage:") for w in warnings)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Without evidence we draft answers.",
+        "Without delay we draft answers.",
+    ],
+)
+def test_without_complement_keeps_claim(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings(text)
+    assert any(w.startswith("unqualified-answer-claim:") for w in warnings), text
+
+
+def test_without_gerund_denies_action():
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    warnings = advisory_warnings("We close tickets without drafting answers.")
+    assert not any(w.startswith("unqualified-answer-claim:") for w in warnings)
+
+
+def test_coordinator_heavy_draft_stays_fast():
+    import time
+
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    draft = ("We review tickets and issues and reports and answers daily. " * 600)
+    started = time.monotonic()
+    advisory_warnings(draft)
+    assert time.monotonic() - started < 2.0

@@ -91,6 +91,17 @@ Slice phase: vertical slice
   each with both-direction probes; the module contract remains
   best-effort-backstop with the human approval as the real gate), R14.
 
+### Review round 16 (Codex)
+
+Three findings, all fixed: a bare "owner lane" topic mention no longer
+counts as routing (every alternative now carries an assignment relation
+or owner target -- "Each owner lane is reviewed monthly" warns);
+"without" scopes its bounded complement ("Without evidence we draft
+answers" keeps the claim) while the gerund form still denies the action
+("without drafting answers"); and the coordinator/abbreviation prefix
+lookups use bounded 40-character windows instead of full-text copies
+(linear on coordinator-heavy drafts, with a timing probe).
+
 ### Review round 15 (Codex)
 
 Four findings, all fixed: sentence terminators protect abbreviations and
@@ -382,11 +393,11 @@ Parked hardening: none new.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 88 |
-| `atlas_brain/services/content_factory_copy_verification.py` | 689 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 708 |
 | `atlas_brain/services/content_factory_runner.py` | 28 |
 | `atlas_brain/services/content_factory_store.py` | 17 |
-| `plans/PR-CF-Advisory-Warning-Layer.md` | 392 |
-| `tests/test_content_factory_copy_verification.py` | 1001 |
+| `plans/PR-CF-Advisory-Warning-Layer.md` | 403 |
+| `tests/test_content_factory_copy_verification.py` | 1045 |
 | `tests/test_content_factory_runner.py` | 62 |
 | `tests/test_content_factory_schemas.py` | 73 |
-| **Total** | **2350** |
+| **Total** | **2424** |

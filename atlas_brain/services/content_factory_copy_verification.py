@@ -207,7 +207,7 @@ _CLAUSE_BOUNDARY_RE = re.compile(
 #   verbal negation scopes to its clause end ("do not draft ...").
 _DET_NEGATION = frozenset({"no", "none", "nothing", "neither"})
 _VERBAL_NEGATION = frozenset(
-    {"not", "never", "cannot", "nobody", "without", "don", "doesn", "didn",
+    {"not", "never", "cannot", "nobody", "don", "doesn", "didn",
      "won", "isn", "aren"}
 )
 
@@ -238,7 +238,7 @@ _OWNER_TARGETS = (
     "managers|lead|leads|nobody"
 )
 _OWNER_ROUTING_RE = re.compile(
-    r"\b(?:owner\s+lane|"
+    r"\b(?:"
     r"owned\s+by\s+(?:the\s+|an?\s+)?(?:owning\s+)?(?:" + _OWNER_TARGETS + r")\b|"
     r"assigned\s+to\s+(?:the\s+|an?\s+)?(?:owning\s+)?(?:" + _OWNER_TARGETS + r")\b|"
     r"route[sd]?\s+(?:each\s+\w+\s+)?to\s+(?:the\s+|an?\s+)?(?:owning\s+)?(?:" + _OWNER_TARGETS + r")\b|"
@@ -305,7 +305,9 @@ def _sentence_structure(text: str) -> "tuple[list[int], list[tuple[int, int]]]":
     for match in _SENTENCE_BOUNDARY_RE.finditer(text):
         marks = set(match.group(0).strip()) - set("\n \t")
         if marks and marks <= {"."}:
-            before = _LAST_WORD_RE.search(text[: match.start()])
+            before = _LAST_WORD_RE.search(
+                text[max(0, match.start() - 40) : match.start()]
+            )
             if before is not None:
                 word = before.group(1).lower()
                 if word in _ABBREVIATIONS or len(word) == 1:
@@ -331,7 +333,9 @@ def _clause_structure(
     for match in _CLAUSE_BOUNDARY_RE.finditer(text):
         word = match.group(0).strip().lower()
         if word in ("and", "or"):
-            before = _LAST_WORD_RE.search(text[: match.start()])
+            before = _LAST_WORD_RE.search(
+                text[max(0, match.start() - 40) : match.start()]
+            )
             after = re.match(r"\s*([\w'-]+)", text[match.end() :])
             if (
                 before is not None
@@ -375,6 +379,21 @@ def _negation_scopes(text: str, span: "tuple[int, int]") -> "list[tuple[int, int
     scopes: list[tuple[int, int]] = []
     for position, token in enumerate(tokens):
         lower = token.group(0).lower()
+        if lower == "without":
+            # "without" negates its bounded complement ("without evidence we
+            # draft answers" keeps the claim); the gerund form denies the
+            # action itself ("without drafting answers") to clause end.
+            following = (
+                tokens[position + 1].group(0).lower()
+                if position + 1 < len(tokens)
+                else ""
+            )
+            if following.endswith("ing"):
+                scopes.append((token.start(), span[1]))
+            else:
+                end_token = tokens[min(position + 2, len(tokens) - 1)]
+                scopes.append((token.start(), end_token.end()))
+            continue
         if lower in _DET_NEGATION:
             if position == 0:
                 # Subject-position determiner ("No support agent drafts
