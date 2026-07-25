@@ -25,6 +25,10 @@ from test_eom_live_calendar_import import (  # noqa: E402
     StubPool,
     _record,
 )
+from test_sync_eom_portal_customers import (  # noqa: E402
+    SyncPool,
+    _customer,
+)
 from eom_execution_receipt import (  # noqa: E402
     EomExecutionReceipt,
     run_receipted,
@@ -164,6 +168,32 @@ def test_preexisting_receipt_directory_must_not_be_writable_by_others(tmp_path):
         _receipt(shared)
 
 
+def test_receipt_directory_must_support_hard_links(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        os,
+        "link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("hard links are unsupported")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="must support hard links"):
+        _receipt(tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_receipt_mode_is_independent_of_restrictive_umask(tmp_path):
+    previous_umask = os.umask(0o777)
+    try:
+        receipt = _receipt(tmp_path)
+        assert stat.S_IMODE(receipt.in_progress_path.stat().st_mode) == 0o600
+        final_path = receipt.finalize(0)
+    finally:
+        os.umask(previous_umask)
+
+    assert stat.S_IMODE(final_path.stat().st_mode) == 0o600
+
+
 def test_initial_in_progress_entry_is_directory_fsynced(tmp_path, monkeypatch):
     fsynced_types = []
     real_fsync = os.fsync
@@ -175,7 +205,7 @@ def test_initial_in_progress_entry_is_directory_fsynced(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "fsync", recording_fsync)
     receipt = _receipt(tmp_path)
 
-    assert fsynced_types == [stat.S_IFREG, stat.S_IFDIR]
+    assert fsynced_types[-2:] == [stat.S_IFREG, stat.S_IFDIR]
     receipt.finalize(0)
 
 
@@ -343,4 +373,74 @@ def test_calendar_interaction_only_write_records_changed_contact_id():
     )
 
     assert outcome == "unchanged"
+    assert recorder.contact_ids == [CONTACT_A]
+
+
+def test_calendar_race_merge_records_contact_even_when_followup_is_unchanged(
+    monkeypatch,
+):
+    class RaceCRM(StubCRM):
+        async def create_contact(self, data):
+            self.created.append(data)
+            return {
+                "id": CONTACT_A,
+                "_was_created": False,
+                **calendar_import.record_to_contact_data(_record()),
+            }
+
+    async def unchanged(_pool, existing, _data):
+        return str(existing["id"]), "unchanged"
+
+    monkeypatch.setattr(calendar_import, "_update_matched", unchanged)
+    recorder = _Recorder()
+    outcome = asyncio.run(
+        calendar_import.import_one(
+            _record(),
+            RaceCRM(),
+            StubPool(rows=[None, None]),
+            receipt=recorder,
+        )
+    )
+
+    assert outcome == "unchanged"
+    assert recorder.contact_ids == [CONTACT_A]
+
+
+def test_portal_race_merge_records_contact_even_when_followup_is_unchanged(
+    monkeypatch,
+):
+    class RaceCRM(StubCRM):
+        async def create_contact(self, data):
+            self.created.append(data)
+            return {
+                "id": CONTACT_A,
+                "_was_created": False,
+                **portal_sync.customer_to_contact_data(_customer()),
+                "metadata": {"portal_customer_id": 7},
+            }
+
+    async def unchanged(_pool, existing, _data):
+        return str(existing["id"]), "unchanged"
+
+    async def already_stamped(_pool, _contact_id):
+        return True, "7"
+
+    async def no_stamp(_pool, _contact_id, _portal_id):
+        return None
+
+    monkeypatch.setattr(portal_sync, "_update_matched_portal", unchanged)
+    monkeypatch.setattr(portal_sync, "stamp_portal_id", no_stamp)
+    monkeypatch.setattr(portal_sync, "portal_id_current", already_stamped)
+    recorder = _Recorder()
+    outcome, contact_id = asyncio.run(
+        portal_sync.sync_one(
+            _customer(),
+            RaceCRM(),
+            SyncPool(rows=[None, None, None, None]),
+            apply=True,
+            receipt=recorder,
+        )
+    )
+
+    assert (outcome, contact_id) == ("unchanged", CONTACT_A)
     assert recorder.contact_ids == [CONTACT_A]

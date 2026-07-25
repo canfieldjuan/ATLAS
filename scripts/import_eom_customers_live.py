@@ -624,6 +624,11 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
         else:
             # Race-merged: reconcile exactly like any matched contact
             # (Codex round 7, R1/R8).
+            contact_id = str(result.get("id", ""))
+            if contact_id and receipt is not None:
+                # create_contact's default existing-match path always calls
+                # update_contact for this non-empty payload before returning.
+                receipt.record_changed_contact_id(contact_id)
             contact_id, outcome = await _update_matched(pool, result, data)
             if outcome == "updated" and receipt is not None:
                 receipt.record_changed_contact_id(contact_id)

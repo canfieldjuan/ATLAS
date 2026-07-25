@@ -104,6 +104,8 @@ HEAD, hashes the executed script, creates a UUID-named in-progress file with
 recorder exposes only count, demotion-total, and UUID methods; it has no generic
 metadata sink. Existing receipt directories must be real, owned by the current
 effective user, and not group/world writable.
+Before either runtime can start, a short create/link/remove probe verifies that
+the selected filesystem supports the exclusive hard-link publication mechanism.
 
 The CLI wrapper maps normal and exceptional exits to an exit code and finalizes
 in a `try`/`except` boundary. Finalization rewrites the owned in-progress
@@ -113,7 +115,8 @@ link fail instead of overwriting. The directory is synced after initial
 in-progress publication and final renaming/linking so both namespace
 transitions are durable. Calendar import and portal sync add UUIDs at the
 existing successful mutation points, including interaction-only Calendar
-writes; portal demotion adds the returned ID, and the portal run publishes
+writes and provider race merges even when the follow-up reconciliation is a
+no-op; portal demotion adds the returned ID, and the portal run publishes
 kept/demotion totals without customer text.
 
 ## Intentional
@@ -139,7 +142,7 @@ Parked hardening: none.
 
 - Command: python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py -q - 119 passed.
+  tests/test_sync_eom_portal_customers.py -q - 123 passed.
 - Command: python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py tests/test_eom_execution_receipts.py -
   passed.
@@ -159,15 +162,18 @@ Parked hardening: none.
   are rejected before artifact creation.
 - Initial in-progress publication now syncs its directory entry before the
   operator mutation can begin.
+- Provider race merges now record the affected UUID before any follow-up no-op.
+- Construction now rejects filesystems without hard-link support before either
+  runtime, and explicitly sets artifact mode 0600 independent of the umask.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 29 |
-| `plans/PR-EOM-Execution-Receipts.md` | 173 |
-| `scripts/eom_execution_receipt.py` | 226 |
-| `scripts/import_eom_customers_live.py` | 66 |
-| `scripts/sync_eom_portal_customers.py` | 92 |
-| `tests/test_eom_execution_receipts.py` | 346 |
-| **Total** | **932** |
+| `plans/PR-EOM-Execution-Receipts.md` | 179 |
+| `scripts/eom_execution_receipt.py` | 245 |
+| `scripts/import_eom_customers_live.py` | 71 |
+| `scripts/sync_eom_portal_customers.py` | 96 |
+| `tests/test_eom_execution_receipts.py` | 446 |
+| **Total** | **1066** |

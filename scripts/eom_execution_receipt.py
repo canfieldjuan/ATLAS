@@ -115,6 +115,7 @@ class EomExecutionReceipt:
         stem = f"{safe_started}_{tool}_{run_id}"
 
         self.receipt_dir = directory
+        self._verify_hard_link_support()
         self.in_progress_path = directory / f"{stem}.in-progress.json"
         self._final_stem = stem
         self._finalized = False
@@ -151,6 +152,7 @@ class EomExecutionReceipt:
         except OSError as exc:
             raise RuntimeError(f"could not create receipt artifact: {path.name}") from exc
         try:
+            os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "wb", closefd=False) as handle:
                 handle.write(cls._serialized(payload))
                 handle.flush()
@@ -167,6 +169,23 @@ class EomExecutionReceipt:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
+
+    def _verify_hard_link_support(self) -> None:
+        probe_id = uuid.uuid4()
+        source = self.receipt_dir / f".eom-receipt-link-probe-{probe_id}.source"
+        target = self.receipt_dir / f".eom-receipt-link-probe-{probe_id}.target"
+        try:
+            self._write_exclusive(source, {"probe": True})
+            try:
+                os.link(source, target)
+            except OSError as exc:
+                raise ValueError(
+                    "receipt directory filesystem must support hard links"
+                ) from exc
+        finally:
+            target.unlink(missing_ok=True)
+            source.unlink(missing_ok=True)
+            self._fsync_directory()
 
     def set_outcome_counts(self, counts: Mapping[str, int]) -> None:
         self._payload["outcome_counts"] = _validated_counts(

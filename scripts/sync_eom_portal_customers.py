@@ -402,6 +402,10 @@ async def sync_one(customer: dict, crm, pool, apply: bool, receipt=None) -> tupl
                           "provenance stamp; left unstamped")
                     return "errors", contact_id
         else:
+            if contact_id and receipt is not None:
+                # create_contact's default existing-match path always calls
+                # update_contact for this non-empty payload before returning.
+                receipt.record_changed_contact_id(contact_id)
             contact_id, outcome = await _update_matched_portal(pool, result, data)
             if outcome == "updated" and receipt is not None:
                 receipt.record_changed_contact_id(contact_id)
