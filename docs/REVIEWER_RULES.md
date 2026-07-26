@@ -25,6 +25,23 @@ A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 **Blockers must cite `file:line`.** A bare "LGTM" with no rule matrix and no
 independent verification is worse than no comment.
 
+**BLOCKER requires a concrete failure path**: the specific input, sequence, or
+state that produces the harm, stated in the finding. "This could break" is not
+one. Without a failure path the finding is MAJOR at most -- downgrade it, do not
+drop it, and the level can be raised later once the path is shown.
+
+**The escape valve from "do not manufacture NITs" is not filing the finding, not
+promoting it.** That instruction bars padding a review with polish; it is not a
+reason to enter a marginal finding at BLOCKER so it clears the bar. If a finding
+is real but minor, MAJOR and NIT exist for it; if it is not worth reporting,
+report nothing and mark the rule dispositioned.
+
+**Why:** across #2195 and #2184 all **68** filed findings are P1/P2 and none is
+lower. Real severity is not distributed that way, and a ladder where everything
+is a blocker carries no information -- the reviewer cannot lead with blockers
+(above) when every finding is one, and the builder cannot tell an exploitable
+gap from an ordering nit.
+
 R14 is universal: it applies to every review verdict, even when no changed path
 specifically triggers it. A reviewer who has not inspected the checked-out PR
 head and relevant codebase evidence cannot issue LGTM.
@@ -51,6 +68,16 @@ reviewer reviews against it. No contract, nothing to check against.
 
 The contract is optional for one-off scratch, mandatory for non-trivial PRs
 (same threshold as the plan doc itself, per `AGENTS.md`).
+
+**A criterion the reviewer cannot disposition is a defect in the contract, and
+the reviewer says so.** Review completion (below) checks each criterion met /
+not met / could-not-determine; a criterion that names an open category rather
+than a structural property -- "no TOCTOU", "all exit paths finalize truthfully",
+"handles every malformed input" -- can never be marked met, so it reopens the
+review indefinitely and defeats the stopping rule. The authoring requirement
+lives in `AGENTS.md` 1a. On review, flag it as **R1** against the plan and ask
+for the property restatement; do not silently work around it by hunting the
+category, which is the behavior that produced 13 rounds on #2195.
 
 ---
 
@@ -354,3 +381,22 @@ recur: a new `scripts/audit_*.py`, a new rule ID here, a new path trigger above,
 a line in the recurring-lapse checklist, or a Review Contract template change.
 **No escaped defect is fixed only once.** This is the reviewer-side mirror of
 the builder's `HARDENING.md` + recurring-lapse flywheel.
+
+**The ratchet releases too.** As written this section only ever adds, and the
+reviewer's mandate grows with it -- every added rule is another category to hunt
+on every future PR, forever, which is a cost paid by every subsequent review.
+So each addition is reviewed for removal on the same terms it was added:
+
+- A rule, path trigger, or checklist line that **has not fired** in the last
+  ~50 merged PRs is either redundant with something else here or is addressing a
+  failure mode that has stopped happening. Remove it, or state why it stays.
+- One whose firings are **consistently waived** is mis-scoped, not load-bearing.
+  Re-scope it to what actually blocks, or remove it.
+- Removals are recorded the same way additions are, with the reasoning, so a
+  removal is a decision and not an erosion.
+
+Nothing here weakens the "no escaped defect is fixed only once" rule -- an
+escaped defect still converts into mechanism. This governs what happens to that
+mechanism afterwards, so the pack stays the size a reviewer can actually apply.
+A checklist nobody can finish is the failure mode Review completion exists to
+prevent, and an unbounded ratchet recreates it one rule at a time.
