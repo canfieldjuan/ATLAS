@@ -424,9 +424,48 @@ def _has_structural_dial_intent(
             gap = text[intent_end:start]
         else:
             continue
-        if _is_structural_dial_bridge(gap):
-            return True
+        if not _is_structural_dial_bridge(gap):
+            continue
+        if not _marker_acts_as_dial_verb(text, intent_start, intent_end):
+            continue
+        return True
     return False
+
+
+# Markers that are ALSO ordinary renderer nouns. For these the finite bridge
+# vocabulary is not enough on its own: `text` is a dial verb in "text me at
+# <number>" and a typography noun in "center text on 1920 1080 canvas", and
+# both put an admitted bridge word ("me at" / "on") between marker and number.
+_OVERLOADED_DIAL_MARKERS = frozenset({"contact", "text"})
+# Words that may precede an imperative CTA without making its head a noun.
+# Closed discourse class, not content: "please call me at ..." is still a CTA.
+_PRE_MARKER_DISCOURSE = frozenset({"please", "now", "then", "hey", "ok", "okay", "so"})
+_CLAUSE_HEAD_SPLIT_RE = re.compile(r"[.!?;:,()\[\]{}|/\r\n]")
+
+
+def _marker_acts_as_dial_verb(text: str, start: int, end: int) -> bool:
+    """Whether the dial marker at ``[start:end)`` is functioning as a VERB.
+
+    Unambiguous markers ("call", "dial", "sms", ...) always are -- nothing else
+    uses those words next to a number. The overloaded ones are decided by
+    POSITION rather than by a list of renderer verbs, which would be an open
+    class: an imperative CTA heads its clause ("Text to +44 800 FLOWERS"),
+    while a typography instruction makes the same word the object of an
+    earlier verb ("center text on 1920 1080 canvas", "place text at 1920 1080
+    coordinates"). Only a closed discourse class may precede the head.
+
+    Residual, accepted: "you can text me at <ambiguous number>" is not read as
+    a CTA. Unambiguous dial syntax never reaches this bridge, so what is given
+    up is an ambiguous-shaped number after a non-initial overloaded marker --
+    a phrasing a renderer instruction does not use.
+    """
+    if text[start:end].casefold() not in _OVERLOADED_DIAL_MARKERS:
+        return True
+    clause_start = 0
+    for match in _CLAUSE_HEAD_SPLIT_RE.finditer(text, 0, start):
+        clause_start = match.end()
+    preceding = _DIAL_BRIDGE_WORD_RE.findall(text[clause_start:start])
+    return all(word.casefold() in _PRE_MARKER_DISCOURSE for word in preceding)
 
 
 def _phone_evidence(text: str) -> bool:

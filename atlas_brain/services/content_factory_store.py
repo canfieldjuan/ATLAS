@@ -45,6 +45,12 @@ STAGE_SCHEMAS = {
     # v1 stays admissible: pre-#2136 artifacts and any direct writer keep
     # working; runner-persisted audits are normalized to v2.
     "audit": ("editorial_audit.v1", "editorial_audit.v2", "editorial_audit.v3"),
+    # The runner's second source-bound audit stage. Without an entry here the
+    # store treated it as a CUSTOM stage, which may carry any artifact -- so a
+    # worker returning content_brief.v1 was committed as audit-v2.json, and
+    # because that schema is outside _SOURCE_BOUND_SCHEMAS the dispatch-source
+    # comparison was skipped too (#2201). Same admissible set as "audit".
+    "audit-v2": ("editorial_audit.v1", "editorial_audit.v2", "editorial_audit.v3"),
     "manifest": ("manifest.v1",),
     # Phase 6: channel variants and image prompts derived from an approved
     # draft. Both are gated by the runner exactly like the audit.

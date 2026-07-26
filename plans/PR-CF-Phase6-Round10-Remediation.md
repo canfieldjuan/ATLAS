@@ -34,6 +34,28 @@ This production-hardening follow-up carries the already verified correction
 onto the merged mainline. It preserves the Phase 6 product shape and closes the
 reported classes at their shared classifier and execution seams.
 
+**Diff-budget overage (~2,200 LOC vs the 400 soft cap) -- why this slice is
+indivisible.** Every finding lands on ONE of two shared choke points: the
+contact classifier and the committed-source execution boundary. They cannot be
+split into separate slices without publishing a broken intermediate state:
+
+* the classifier findings are alternative bypasses of the SAME decision. Fixing
+  the default-ignorable class while leaving the bridge open (or the reverse)
+  ships a gate that is still bypassable by a one-character or one-word edit --
+  a gate that is 90% closed is not 90% of a gate.
+* the execution-boundary findings share one invariant: a stage acts on the
+  committed bytes it fingerprinted. Snapshot-vs-compare, prompt construction,
+  callback removal and stage admission are the same rule enforced at four
+  points; landing a subset leaves a path that still dispatches on unverified
+  source.
+* roughly 60% of the LOC is tests. The class-closure discipline these findings
+  are filed under requires generated cross-products, not examples, so the
+  proofs are necessarily larger than the mechanisms. Splitting a mechanism from
+  its proof would land the safety decision without the evidence that closes it.
+
+Diff-budget override: shared choke-point fixes are indivisible from their
+generated both-direction and reachability proofs.
+
 ### Problem-derived contract
 
 - Root cause: the contact decision treated keypad-mappable spelling as enough
@@ -148,6 +170,11 @@ Max files: 8
       for room 212 art deco, contact sheet layout` remain admissible.
   17. Every source-bound stage requires a valid committed draft before worker
       dispatch; no stage may send `Committed draft JSON:\nnull`.
+  21. An overloaded dial marker governs an ambiguous candidate only when it
+      HEADS its clause: `Text to +44 800 FLOWERS` fails, while `center text on
+      1920 1080 canvas` and `place text at 1920 1080 coordinates` render.
+  22. The `audit-v2` stage admits only editorial-audit schemas; a mislabeled
+      worker artifact cannot be committed under it.
   20. EVERY Unicode Default_Ignorable_Code_Point -- sampled from the shared
       range table itself, not a hand-written list -- fails at every contact
       seam in the prompt gate and `verify_copy`, and none leaves an address
@@ -316,6 +343,36 @@ to it is covered automatically and a future local copy fails the shared-
 predicate assertion first. Mutation-checked: restoring the Cf/Cc-only rule
 fails 134 tests.
 
+### Review round 14 (Codex) -- dial-verb evidence, stage admission, plan record
+
+Three findings, all confirmed.
+
+1. **P1 renderer coordinates inside the dial bridge.** `center text on 1920
+   1080 canvas` and `place text at 1920 1080 coordinates` produced a phone hit,
+   because `text` is an admitted marker and `on`/`at` are admitted bridges.
+   Pre-existing rather than introduced by the round-12 `to` addition -- `on`
+   was already in the set at `f5485fcad`.
+
+   Fixed by POSITION, not by a list of renderer verbs (an open class): an
+   imperative CTA heads its clause, while a typography instruction makes the
+   same word the object of an earlier verb. Only overloaded markers
+   (`text`, `contact`) are subject to the test, so unambiguous markers keep
+   full bridge behaviour and `please call me at 12 34 56 78` still fails.
+   Residual recorded in the code: `you can text me at <ambiguous number>` is
+   not read as a CTA -- unambiguous dial syntax never reaches this bridge, so
+   what is given up is a phrasing renderer instructions do not use.
+
+2. **P2 unregistered `audit-v2` stage.** The runner names it as a source-bound
+   stage but the store had no entry, so it was treated as a CUSTOM stage that
+   may carry ANY artifact: a worker returning `content_brief.v1` committed
+   successfully under that stage, and since its schema is outside
+   `_SOURCE_BOUND_SCHEMAS` the dispatch-source comparison was skipped as well.
+   Mapped to the same admissible set as `audit`.
+
+3. **P1 plan record.** The over-budget rationale lived in the commit message,
+   but the repository contract requires it in the plan's `Why this slice
+   exists`. Added there with the actual indivisibility argument.
+
 ## Intentional
 
 - Detached phonewords without preceding structural dial intent pass, even if
@@ -374,10 +431,10 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 72 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 56 |
-| `atlas_brain/services/content_factory_runner.py` | 382 |
-| `atlas_brain/services/content_factory_store.py` | 102 |
+| `atlas_brain/services/content_factory_runner.py` | 421 |
+| `atlas_brain/services/content_factory_store.py` | 108 |
 | `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 284 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 383 |
-| `tests/test_content_factory_runner.py` | 876 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 440 |
+| `tests/test_content_factory_runner.py` | 951 |
 | `tests/test_content_factory_schemas.py` | 68 |
-| **Total** | **2223** |
+| **Total** | **2400** |

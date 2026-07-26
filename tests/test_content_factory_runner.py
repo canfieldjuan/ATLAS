@@ -1899,3 +1899,78 @@ def test_scan_view_and_routing_key_share_one_predicate():
     for ignorable in _DEFAULT_IGNORABLE_SAMPLES:
         assert is_default_ignorable(ignorable)
         assert scan_view("a" + ignorable + "b") == "ab"
+
+
+# --- #2201 round 14: dial-verb evidence + stage admission ----------------
+
+_RENDERER_VERBS = ["center", "place", "align", "overlay", "position", "set"]
+_RENDERER_BRIDGES = ["on", "at"]
+_RENDERER_DIMENSIONS = ["1920 1080", "255 255 255", "100 200 300", "12 34 56 78"]
+
+
+@pytest.mark.parametrize("verb", _RENDERER_VERBS)
+@pytest.mark.parametrize("bridge", _RENDERER_BRIDGES)
+@pytest.mark.parametrize("dimension", _RENDERER_DIMENSIONS)
+def test_overloaded_marker_as_object_is_renderer_prose(verb, bridge, dimension):
+    """#2201 round 14: `text` is a dial verb in "text me at <number>" and a
+    typography noun in "center text on 1920 1080 canvas" -- both put an
+    admitted bridge word between marker and number, so the finite bridge
+    vocabulary alone cannot separate them. Position does: an imperative CTA
+    heads its clause; here the marker is the object of an earlier verb."""
+    assert runner._prompt_contact_hits(f"{verb} text {bridge} {dimension} canvas") == []
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Text to +44 800 FLOWERS",
+        "Text me at +44 800 FLOWERS",
+        "Contact us on +44 800 FLOWERS",
+        "text me 12 34 56 78",
+        # Unambiguous markers are NOT position-restricted, so an ordinary CTA
+        # with a discourse lead-in still fails.
+        "please call me at 12 34 56 78",
+        "now dial me at 12 34 56 78",
+    ],
+)
+def test_clause_heading_marker_still_governs(prompt):
+    assert runner._prompt_contact_hits(prompt) != []
+
+
+def test_audit_v2_stage_rejects_a_mislabeled_artifact(tmp_path):
+    """#2201 round 14: the runner names `audit-v2` as a source-bound stage but
+    the store had no entry, so it was a CUSTOM stage admitting ANY artifact --
+    a content_brief committed successfully as audit-v2.json, and that schema
+    is outside _SOURCE_BOUND_SCHEMAS so the source comparison was skipped."""
+    from atlas_brain.services.content_factory_store import (
+        STAGE_SCHEMAS,
+        ArtifactStoreError,
+        write_artifact,
+    )
+
+    assert "audit-v2" in STAGE_SCHEMAS
+    with pytest.raises(ArtifactStoreError, match="stage/schema mismatch"):
+        write_artifact(
+            "job-av2",
+            "audit-v2",
+            {"schema": "content_brief.v1", "project_id": "p", "request_raw": "x"},
+            root=tmp_path,
+        )
+
+
+def test_audit_v2_stage_accepts_an_editorial_audit(tmp_path):
+    """The other side: the stage must still admit what it is for."""
+    from atlas_brain.services.content_factory_store import write_artifact
+
+    record = write_artifact(
+        "job-av2ok",
+        "audit-v2",
+        {
+            "schema": "editorial_audit.v2",
+            "project_id": "p",
+            "edited_body_markdown": "Clean copy.",
+            "recommendation": "revise",
+        },
+        root=tmp_path,
+    )
+    assert record["schema"] == "editorial_audit.v2"
