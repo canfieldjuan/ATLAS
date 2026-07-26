@@ -18,7 +18,7 @@ import json
 import logging
 import hashlib
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
 logger = logging.getLogger("atlas.services.crm_provider")
@@ -210,6 +210,7 @@ class DatabaseCRMProvider:
         if existing is not None and not merge_existing:
             result = dict(existing)
             result["_was_created"] = False
+            result["_was_updated"] = False
             return result
 
         if existing is not None:
@@ -224,12 +225,15 @@ class DatabaseCRMProvider:
                 for k, v in data.items()
                 if k in _MERGEABLE and v
             }
+            was_updated = False
             if updates:
                 merged = await self.update_contact(existing["id"], updates)
+                was_updated = merged is not None
                 result = merged or existing
             else:
                 result = existing
             result["_was_created"] = False
+            result["_was_updated"] = was_updated
             return result
 
         # --- no existing contact -- insert ---
@@ -279,6 +283,7 @@ class DatabaseCRMProvider:
         )
         result = dict(row) if row else {}
         result["_was_created"] = True
+        result["_was_updated"] = False
         return result
 
     async def find_or_create_contact(
@@ -744,6 +749,7 @@ class DatabaseCRMProvider:
         occurred_at: Optional[str] = None,
         intent: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        after_insert: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         from ..storage.database import get_db_pool
 
@@ -795,6 +801,8 @@ class DatabaseCRMProvider:
         result["inserted"] = inserted
 
         if inserted:
+            if after_insert is not None:
+                after_insert()
             # Emit event for reasoning agent only for new interactions.
             from ..reasoning.producers import emit_if_enabled
             await emit_if_enabled(

@@ -20,8 +20,9 @@ is cwd-relative; the deploy runbook covers the runtime worktree symlink).
 
 Usage:
   python scripts/import_eom_customers_live.py --dry-run
-  git show HEAD:scripts/eom_execution_receipt.py | python -I - \
-    --launch-reviewed scripts/import_eom_customers_live.py \
+  git show "$ATLAS_EOM_REVIEWED_SHA:scripts/eom_execution_receipt.py" | \
+    python -I - --launch-reviewed --reviewed-git-sha "$ATLAS_EOM_REVIEWED_SHA" \
+    scripts/import_eom_customers_live.py \
     --receipt-dir /private/state
   python scripts/import_eom_customers_live.py --dry-run \
     --calendar residential --months-back 12
@@ -49,7 +50,8 @@ from pathlib import Path  # noqa: E402
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Import EOM customers from the live booking calendars"
+        description="Import EOM customers from the live booking calendars",
+        allow_abbrev=False,
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview only -- no DB writes")
     parser.add_argument(
@@ -66,24 +68,27 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _receipt_dir_from_argv(argv) -> str | None:
-    for index, argument in enumerate(argv):
-        if argument == "--receipt-dir":
-            if index + 1 < len(argv):
-                return argv[index + 1]
-            return None
-        if argument.startswith("--receipt-dir="):
-            value = argument.partition("=")[2]
-            return value or None
-    return None
+def _receipt_policy_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("-h", "--help", action="store_true", dest="help_requested")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--receipt-dir", action="append")
+    return parser
 
 
-def _argv_requests_dry_run(argv) -> bool:
-    return "--dry-run" in argv
-
-
-def _argv_requests_help(argv) -> bool:
-    return "-h" in argv or "--help" in argv
+def _parse_receipt_policy(argv, parser: argparse.ArgumentParser):
+    policy, unknown = _receipt_policy_parser().parse_known_args(list(argv or []))
+    protected_options = ("--dry-run", "--receipt-dir")
+    for argument in unknown:
+        option = argument.partition("=")[0]
+        if option.startswith("--") and any(
+            full.startswith(option) and option != full
+            for full in protected_options
+        ):
+            parser.error(f"unrecognized arguments: {argument}")
+    if policy.receipt_dir and len(policy.receipt_dir) > 1:
+        parser.error("--receipt-dir may be supplied only once")
+    return policy
 
 
 _direct_argv = None
@@ -92,10 +97,13 @@ _receipt_module = None
 if __name__ == "__main__":
     _direct_argv = sys.argv[1:]
     _direct_parser = _parser()
-    _direct_receipt_dir = _receipt_dir_from_argv(_direct_argv)
-    if _argv_requests_help(_direct_argv):
+    _direct_policy = _parse_receipt_policy(_direct_argv, _direct_parser)
+    _direct_receipt_dir = (
+        _direct_policy.receipt_dir[0] if _direct_policy.receipt_dir else None
+    )
+    if _direct_policy.help_requested:
         _direct_parser.parse_args(_direct_argv)
-    if not _argv_requests_dry_run(_direct_argv) and not _direct_receipt_dir:
+    if not _direct_policy.dry_run and not _direct_receipt_dir:
         _direct_parser.error("live writes require --receipt-dir")
     if _direct_receipt_dir:
         if not sys.flags.isolated:
@@ -112,7 +120,7 @@ if __name__ == "__main__":
             != str(_repo_root)
         ):
             _direct_parser.error(
-                "receipted execution requires the reviewed HEAD launcher"
+                "receipted execution requires the reviewed SHA launcher"
             )
         _validated_git_sha = _receipt_module._BOOTSTRAP_GIT_SHA
 
@@ -711,9 +719,11 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
             # Race-merged: reconcile exactly like any matched contact
             # (Codex round 7, R1/R8).
             contact_id = str(result.get("id", ""))
-            if contact_id and receipt is not None:
-                # create_contact's default existing-match path always calls
-                # update_contact for this non-empty payload before returning.
+            if (
+                contact_id
+                and result.get("_was_updated") is True
+                and receipt is not None
+            ):
                 receipt.record_changed_contact_id(contact_id)
             contact_id, outcome = await _update_matched(pool, result, data)
             if outcome == "updated" and receipt is not None:
@@ -736,6 +746,14 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
         # source_ref inside metadata is a dedupe anchor (migration 256): the
         # same address never accumulates duplicate import interactions across
         # re-runs.
+        interaction_receipt_recorded = False
+
+        def record_interaction_inserted() -> None:
+            nonlocal interaction_receipt_recorded
+            if receipt is not None:
+                receipt.record_changed_contact_id(contact_id)
+                interaction_receipt_recorded = True
+
         interaction = await crm.log_interaction(
             contact_id=contact_id,
             interaction_type="appointment",
@@ -762,8 +780,13 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
                        or rec.last_event_date).isoformat()
                 )
             },
+            after_insert=record_interaction_inserted if receipt is not None else None,
         )
-        if interaction.get("inserted") is True and receipt is not None:
+        if (
+            interaction.get("inserted") is True
+            and receipt is not None
+            and not interaction_receipt_recorded
+        ):
             receipt.record_changed_contact_id(contact_id)
     return outcome
 
@@ -892,17 +915,16 @@ def main(argv=None) -> int:
     effective_argv = (
         _direct_argv if argv is None and _direct_argv is not None else argv
     )
-    receipt_dir = _receipt_dir_from_argv(effective_argv or [])
+    receipt_policy = _parse_receipt_policy(effective_argv or [], parser)
+    receipt_dir = (
+        receipt_policy.receipt_dir[0] if receipt_policy.receipt_dir else None
+    )
     receipt = None
     if receipt_dir:
         receipt = EomExecutionReceipt(
             receipt_dir=receipt_dir,
             tool="import_eom_customers_live",
-            mode=(
-                "dry-run"
-                if _argv_requests_dry_run(effective_argv or [])
-                else "write"
-            ),
+            mode=("dry-run" if receipt_policy.dry_run else "write"),
             script_path=Path(__file__),
             git_sha=_validated_git_sha,
         )

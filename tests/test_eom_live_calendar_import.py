@@ -211,6 +211,7 @@ class StubCRM:
         return {
             "id": "new-id",
             "_was_created": self.was_created,
+            "_was_updated": False,
             "status": data["status"] if self.was_created else self.existing_status,
         }
 
@@ -404,7 +405,7 @@ def test_guarded_update_carries_tenant_predicate_and_no_stamp():
     crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "inactive"})
     pool = StubPool()
     asyncio.run(import_one(rec, crm, pool))
-    sql, payload = None, None
+    sql = None
     for q_sql, _ in pool.queries:
         if q_sql.strip().startswith("UPDATE contacts") and "SET business_context_id" not in q_sql:
             sql = q_sql
@@ -419,7 +420,7 @@ def test_archive_race_before_logging_skips_timeline():
     crm = StubCRM()
     pool = StubPool(rows=[{"id": "arch", "tags": [], "source": "web", "status": "active"}],
                     archived_ids={"arch"})
-    outcome = asyncio.run(import_one(rec, crm, pool))
+    asyncio.run(import_one(rec, crm, pool))
     assert crm.interactions == []
 
 

@@ -20,18 +20,22 @@ result.
 - A live Calendar write must fail before its runtime unless a private receipt
   directory is supplied.
 - A receipted run must establish source trust before any mutable
-  repository-local entrypoint or dependency can execute. It must pipe a
-  launcher selected by `HEAD` into isolated Python, reject Git replacement refs,
-  resolve one full Git SHA with replacement-object processing disabled,
-  materialize every tracked Python module from that validated Git object into a
-  private read-only snapshot, execute the real entrypoint and imports from that
-  snapshot, directly compare tracked Python bytes/modes with the same resolved
-  revision, and reject untracked divergence, ignored import artifacts, ignored
-  package/module-file symlinks, and cached bytecode.
+  repository-local entrypoint or dependency can execute. It must resolve the
+  reviewed commit once, load the launcher from that object, pass the same SHA
+  into isolated Python, reject checkout/launcher SHA mismatch, harden Git
+  attestation subprocesses against repository-selection/config injection and
+  executable fsmonitor hooks, reject Git replacement refs, materialize every
+  tracked Python module from that validated Git object into a private read-only
+  snapshot, execute the real entrypoint and imports from that snapshot, directly
+  compare tracked Python bytes/modes with the same resolved revision, and reject
+  untracked divergence, ignored import artifacts, ignored package/module-file
+  symlinks, and cached bytecode.
 - The receipt must be created before the runtime, use mode 0600, bind the exact
   Git SHA and executed script SHA-256, persist only allowlisted counts and
-  changed contact UUIDs, and finalize every normal or exceptional exit without
-  overwriting a collision. Snapshot cleanup failures must not overwrite the
+  changed contact UUIDs, keep later writes bound to the validated receipt
+  directory identity, and finalize every normal or exceptional exit without
+  overwriting a collision. Failed final publication must durably sync rollback
+  of the new final link. Snapshot cleanup failures must not overwrite the
   already-committed process result.
 - Calendar extraction, identity resolution, write semantics, terminal output,
   credentials, configuration, and customer data must not change.
@@ -40,13 +44,14 @@ result.
 
 Ownership lane: eom/operational-evidence
 Slice phase: Production hardening
-Max files: 5
+Max files: 7
 
 1. Keep one shared execution-receipt lifecycle.
 2. Bootstrap its source-trust preflight from the reviewed Git object, then load
    the Calendar entrypoint and repository-local dependencies from a private
    read-only snapshot of that exact Git SHA.
-3. Wire Calendar dry-run/write evidence and mutation UUID recording end to end.
+3. Wire Calendar dry-run/write evidence and mutation UUID recording from the
+   actual CRM mutation boundaries end to end.
 4. Document the private operator directory and add lifecycle plus real-process
    boundary proofs.
 
@@ -59,13 +64,14 @@ Max files: 5
   classifier could therefore be erased or bypassed before it ran; ordinary Git
   status also trusts index flags that can hide tracked divergence.
 - Structural repair: a receipted invocation pipes the allowlisted launcher
-  selected by `HEAD` into Python `-I`. The launcher rejects replacement refs,
-  resolves one full SHA with replacement-object processing disabled, compares
-  every tracked Python worktree blob and executable mode directly with that
-  resolved tree, runs the remaining ignored/cache checks, materializes all
-  tracked Python blobs from that exact Git SHA into a private read-only
-  snapshot, and executes the Calendar entrypoint plus later repository imports
-  from the snapshot.
+  selected from one reviewed SHA into Python `-I`. The launcher requires the
+  checkout to resolve to that same SHA, rejects replacement refs, runs every Git
+  subprocess with repository-selection/config env stripped and executable
+  fsmonitor disabled, compares every tracked Python worktree blob and
+  executable mode directly with that resolved tree, runs the remaining
+  ignored/cache checks, materializes all tracked Python blobs from that exact
+  Git SHA into a private read-only snapshot, and executes the Calendar
+  entrypoint plus later repository imports from the snapshot.
 - Proof: process tests execute with hostile `PYTHONPATH` startup hooks,
   a self-restoring mutable entrypoint, self-removing ignored shadows, ignored
   package/module-file symlinks, replacement refs, a modified `skip-worktree`
@@ -83,7 +89,8 @@ Max files: 5
   no lock, lease, retry protocol, shared state machine, or cross-process
   coordination component.
 - Admitted execution: the launcher rejects replacement refs, resolves one SHA
-  before tracked-source validation, disables replacement-object processing for
+  before tracked-source validation, disables replacement-object processing,
+  repository-selection/config env, and executable fsmonitor for
   attestation/materialization Git subprocesses, batch-reads every tracked Python
   blob by object ID, closes each snapshot file, removes write permission from
   every snapshot file and directory, then executes the entrypoint with only the
@@ -92,13 +99,23 @@ Max files: 5
   returns, no subsequent worktree Python edit can change entrypoint or
   dependency bytes used by that run. The receipt SHA and script hash therefore
   describe the code that can mutate CRM state.
+- Invariant for receipt persistence: after construction, every evidence update,
+  final publication, and directory sync revalidates the original receipt
+  directory device/inode before pathname mutation, so a recreated path cannot
+  receive partial evidence for a run that validated a different directory.
+- Invariant for mutation evidence: race-merged contacts are recorded only when
+  the provider reports a confirmed existing-row update or the importer performs
+  a guarded update itself; interaction inserts call the receipt recorder after
+  the DB insert and before cancellable downstream event emission.
 - Cancellation/crash boundary: normal exceptions and interpreter cancellation
   attempt snapshot removal in `finally`; cleanup failure is reported on stderr
   but cannot change a committed receipt outcome. No CRM runtime starts before
   snapshot completion. An uncatchable process or host termination may leave an
   owner-private, read-only copy of public repository source in the system temp
   directory. If termination lands after receipt construction, the existing
-  in-progress recovery artifact remains truthful and unfinalized.
+  in-progress recovery artifact remains truthful and unfinalized. If final-link
+  publication fails after creating the exclusive link, the rollback removes the
+  new final link and syncs the directory before reporting the failure.
 - Explicit assumptions: the local Git object database, Git executable, Python
   interpreter/standard library, OS same-user isolation, and installed
   third-party packages are trusted. A hostile same-UID process that tampers
@@ -114,9 +131,11 @@ Max files: 5
 - Acceptance criteria:
   - [ ] Calendar live-write rejects missing `--receipt-dir` before local
     imports or async runtime; unreceipted dry-run remains available.
-  - [ ] Receipted dry-run/write starts from the `HEAD`-loaded isolated
-    launcher, rejects replacement refs, authenticates the checkout against one
-    resolved Git SHA, and executes the allowlisted Calendar entrypoint plus
+  - [ ] Receipted dry-run/write starts from the reviewed launcher object, passes
+    the reviewed SHA into isolated Python, rejects checkout/launcher SHA
+    mismatch, rejects replacement refs, disables executable fsmonitor/config/env
+    injection for attestation Git subprocesses, authenticates the checkout
+    against that SHA, and executes the allowlisted Calendar entrypoint plus
     later repository imports from a private read-only snapshot of that validated
     Git SHA.
   - [ ] Source trust rejects tracked/untracked divergence, index-hidden tracked
@@ -127,25 +146,30 @@ Max files: 5
     and valid sorted contact UUIDs.
   - [ ] Normal, invalid-argument, `SystemExit`, interrupt, and exceptional exits
     finalize truthfully; collisions and failed publication retain recovery
-    evidence; snapshot cleanup failures cannot override committed outcomes.
+    evidence; failed-publication rollback is directory-synced; snapshot cleanup
+    failures cannot override committed outcomes.
   - [ ] Calendar create, update, claim, interaction-only, and race-merge writes
-    record the affected contact UUID. Evidence failure stops before the first
-    mutation or, for an in-flight contact, before the next.
+    record the affected contact UUID only from confirmed mutation boundaries.
+    Evidence failure stops before the first mutation or, for an in-flight
+    contact, before the next.
   - [ ] Existing focused Calendar behavior remains green.
 - Reachability proof: from the repository root, pipe
-  git show HEAD:scripts/eom_execution_receipt.py into
-  python -I - --launch-reviewed scripts/import_eom_customers_live.py
-  --receipt-dir ...; a valid run publishes the observable mode-0600
-  .exit-N.json receipt. A write-mode process fixture performs an observable
-  mutation and finalizes that receipt; hostile fixtures exit nonzero without
-  executing marker payloads, invalid receipted arguments publish exit-2 receipts,
-  and a concurrent worktree rewrite does not execute the replacement dependency.
+  git show "$ATLAS_EOM_REVIEWED_SHA:scripts/eom_execution_receipt.py" into
+  python -I - --launch-reviewed --reviewed-git-sha
+  "$ATLAS_EOM_REVIEWED_SHA" scripts/import_eom_customers_live.py
+  --receipt-dir ...; a valid run publishes the observable mode-0600 .exit-N.json
+  receipt. A write-mode process fixture performs an observable mutation and
+  finalizes that receipt; hostile fixtures exit nonzero without executing marker
+  payloads, invalid receipted arguments publish exit-2 receipts, and a
+  concurrent worktree rewrite does not execute the replacement dependency.
 - Affected surfaces: the EOM Calendar operator CLI, its source-authentication
   bootstrap, ignored-import classifier, receipt persistence/finalization, the
-  private receipt artifact, operator runbook, and focused process/unit tests.
-- Risk areas: false source attestation, preflight-to-import TOCTOU, arbitrary
-  local code execution before trust, ignored import shadowing, customer
-  mutation without durable evidence, atomic receipt publication, invocation
+  CRM provider's mutation reporting seam, the private receipt artifact, operator
+  runbook, and focused process/unit tests.
+- Risk areas: launcher/check-out SHA mismatch, Git repository/config injection,
+  executable fsmonitor preflight hooks, arbitrary local code execution before
+  trust, ignored import shadowing, customer mutation without durable evidence,
+  receipt-directory path replacement, atomic receipt publication, invocation
   compatibility, and CI maturity classification.
 - Reviewer rules triggered: R1, R2, R3, R5, R6, R8, R10, R12, R13, R14.
 
@@ -154,38 +178,48 @@ Max files: 5
 
 - `docs/EOM_RECONCILIATION_RECEIPTS.md`
 - `plans/PR-EOM-Execution-Receipts.md`
+- `atlas_brain/services/crm_provider.py`
 - `scripts/eom_execution_receipt.py`
 - `scripts/import_eom_customers_live.py`
 - `tests/test_eom_execution_receipts.py`
+- `tests/test_eom_live_calendar_import.py`
 
 ## Mechanism
 
 A non-isolated direct invocation first removes its script directory, repository
-root, and empty-path entry from `sys.path` before scanning only the
-help/dry-run/receipt policy needed to reject live writes before local imports.
-A receipted operator command instead pipes the shared launcher selected by
-`HEAD` into isolated Python. The launcher rejects replacement refs, resolves
-one full SHA, compares tracked Python blobs/modes directly with that resolved
-tree, executes the remaining clean-source checks, then batch-loads every
-tracked Python blob into a private mode-0500/0400 snapshot with replacement
-objects disabled for each Git subprocess. The allowlisted Calendar entrypoint
-and all later repository imports resolve from that snapshot, while cwd-relative
-operator data remains outside it. Receipt construction reuses the returned Git
-SHA, hashes the snapshot Calendar script, and creates the durable in-progress
-artifact before full argument parsing or async runtime entry.
+root, and empty-path entry from `sys.path` before using an abbrev-disabled
+argparse policy parser to reject live writes before local imports. A receipted
+operator command instead resolves one reviewed SHA, pipes the shared launcher
+selected from that SHA into isolated Python, and passes that same SHA to the
+launcher. The launcher rejects replacement refs, rejects checkout/launcher SHA
+mismatch, compares tracked Python blobs/modes directly with that resolved tree,
+executes the remaining clean-source checks, then batch-loads every tracked
+Python blob into a private mode-0500/0400 snapshot with replacement objects,
+repository-selection/config env, and executable fsmonitor disabled for each Git
+subprocess. The allowlisted Calendar entrypoint and all later repository imports
+resolve from that snapshot, while cwd-relative operator data remains outside it.
+Receipt construction reuses the returned Git SHA, hashes the snapshot Calendar
+script, and creates the durable in-progress artifact before full argument
+parsing or async runtime entry.
 
 The helper has no generic metadata sink: callers can record only allowlisted
 non-negative counts and UUID contact IDs. Each evidence update atomically
 replaces and syncs the in-progress artifact. Finalization writes a complete
 staged payload, hard-links it to an exclusive exit-specific name, syncs the
-directory, and only then removes recovery artifacts. Persistence failures remain
-deferred through an already-started contact, but an explicit health check blocks
-the first mutation and every subsequent contact boundary.
+directory, and only then removes recovery artifacts. If publication sync fails
+after the final link exists, rollback removes that link and syncs the directory
+before reraising. Persistence failures remain deferred through an already-started
+contact, but an explicit health check blocks the first mutation and every
+subsequent contact boundary. Race-merged contacts use the provider's
+`_was_updated` signal before recording provider-side updates, and interaction
+inserts record after the DB insert callback before downstream event emission can
+be cancelled.
 
 ## Intentional
 
 - Dry runs may omit receipts for local development; every receipted operator
-  command pipes the `HEAD` launcher into `python -I -`.
+  command pipes the launcher selected by one reviewed SHA into `python -I -`
+  with `--reviewed-git-sha`.
 - Direct execution of the mutable worktree entrypoint with `--receipt-dir` is
   rejected because isolated imports alone do not authenticate that script.
 - Receipts are private operator evidence, not a public API or database audit
@@ -204,47 +238,55 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_eom_execution_receipts.py
-  tests/test_eom_live_calendar_import.py
-  tests/test_sync_eom_portal_customers.py -q` — 160 passed, 1 unrelated
-  `torch.cuda`/`pynvml` deprecation warning.
-- Current-head boundary selection (`isolated or sitecustomize or skip_worktree
-  or evidence_failure or reviewed_launcher or module_file_symlink or
-  invalid_arguments or replacement_refs or cleanup_failure`) — 19 passed, 35
-  deselected.
-- Ruff and Python byte compilation on the receipt helper, Calendar entrypoint,
-  and receipt tests — passed.
-- Exact scripts maturity ratchet — passed with no baseline change.
-- Exact failed `atlas-brain-b2c-core-risk` maturity matrix group (reasoning,
-  security, and storage) — passed with no baseline change.
-- Real-repository snapshot benchmark — 2,306 tracked Python files materialized
-  in 0.250 seconds on the committed tree.
-- Guard class-closure advisory — passed.
+- python -m pytest tests/test_eom_execution_receipts.py
+  tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py
+  tests/test_crm_read_scoping.py
+  tests/test_mcp_servers.py::TestDatabaseCRMProvider -q — 241 passed.
+- python -m ruff check scripts/eom_execution_receipt.py
+  scripts/import_eom_customers_live.py atlas_brain/services/crm_provider.py
+  tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py
+  — passed.
+- python -m py_compile scripts/eom_execution_receipt.py
+  scripts/import_eom_customers_live.py atlas_brain/services/crm_provider.py
+  tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py
+  — passed.
+- python scripts/audit_plan_code_consistency.py
+  plans/PR-EOM-Execution-Receipts.md — passed.
+- python scripts/audit_plan_doc_diff_size.py
+  plans/PR-EOM-Execution-Receipts.md origin/main — passed (0.0% drift).
 - `git diff --check` — passed.
 
 ### Review reconciliation
 
-- The documented receipted CLI pipes the launcher selected by `HEAD` into
-  `python -I -`; it rejects replacement refs, resolves one Git SHA with
-  replacement-object processing disabled, authenticates the checkout against
-  that pinned revision, and loads the entrypoint plus all later repository
-  Python imports from a private read-only snapshot of the validated Git SHA.
+- The documented receipted CLI resolves one reviewed SHA, pipes the launcher
+  selected from that object into `python -I -`, passes the same SHA to the
+  launcher, rejects checkout/launcher mismatch, strips Git repository-selection
+  and config-injection env, disables executable fsmonitor hooks, rejects
+  replacement refs, authenticates the checkout against that pinned revision, and
+  loads the entrypoint plus all later repository Python imports from a private
+  read-only snapshot of the validated Git SHA.
 - Tracked Python content and executable modes are read through no-follow file
   descriptors and compared with the pinned reviewed tree's Git blob identities.
 - Ignored module-file symlinks are normalized through the same import-suffix
   classifier as regular module artifacts; .py and .pyc held-out cases both
   fail closed.
 - Receipt persistence health is asserted before CRM construction, before every
-  record, and after each completed record; an in-flight contact may finish, but
-  no later contact starts after evidence storage fails.
+  record, and after each completed record; evidence writes and publication
+  revalidate the original receipt directory inode; an in-flight contact may
+  finish, but no later contact starts after evidence storage fails.
 - The mid-contact health regression uses an explicit dependency seam instead
   of mocking the first-party database singleton, preserving the maturity
   baseline.
 - Process-level write proofs now cover missing-receipt rejection before local
-  imports, one observable CRM mutation with a finalized exit-0 receipt, and a
+  imports, one observable CRM mutation with a finalized exit-0 receipt,
+  checkout/launcher SHA mismatch, configured fsmonitor suppression, protected
+  option abbreviation rejection, duplicate receipt-dir rejection, and a
   concurrent post-preflight CRM dependency rewrite that never executes.
-- Receipted invalid arguments now publish exit-2 receipts; cleanup failures are
-  reported without overriding an already-finalized exit-0 receipt.
+- Receipted invalid arguments now publish exit-2 receipts; failed publication
+  removes and syncs the new final link; cleanup failures are reported without
+  overriding an already-finalized exit-0 receipt.
+- Mutation recording now treats provider race merges and interaction inserts as
+  explicit mutation-boundary signals rather than inferred intent.
 - The targeted residential/window usage example is explicitly an unreceipted
   dry run; production targeting continues to use the documented reviewed
   launcher pipeline.
@@ -253,9 +295,11 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 50 |
-| `plans/PR-EOM-Execution-Receipts.md` | 261 |
-| `scripts/eom_execution_receipt.py` | 612 |
-| `scripts/import_eom_customers_live.py` | 920 |
-| `tests/test_eom_execution_receipts.py` | 1443 |
-| **Total** | **3286** |
+| `docs/EOM_RECONCILIATION_RECEIPTS.md` | 73 |
+| `plans/PR-EOM-Execution-Receipts.md` | 305 |
+| `scripts/eom_execution_receipt.py` | 702 |
+| `scripts/import_eom_customers_live.py` | 228 |
+| `atlas_brain/services/crm_provider.py` | 10 |
+| `tests/test_eom_execution_receipts.py` | 1723 |
+| `tests/test_eom_live_calendar_import.py` | 5 |
+| **Total** | **3046** |

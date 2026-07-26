@@ -33,6 +33,29 @@ OUTCOME_KEYS = {
 }
 _REVIEWED_ENTRYPOINTS = {"scripts/import_eom_customers_live.py"}
 _GIT_NO_REPLACE_ENV = "GIT_NO_REPLACE_OBJECTS"
+_GIT_SANITIZED_ENV_NAMES = {
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_CONFIG_COUNT",
+}
+_GIT_SANITIZED_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+_GIT_CONFIG_OVERRIDES = (
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+)
 _PYTHON_IMPORT_SUFFIXES = tuple(
     sorted(
         {
@@ -51,23 +74,48 @@ def _utc_now() -> str:
 
 
 def _git_env() -> dict[str, str]:
-    """Return an environment that ignores Git replacement objects."""
-    return {**os.environ, _GIT_NO_REPLACE_ENV: "1"}
+    """Return a Git environment pinned to this cwd and non-executable config."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _GIT_SANITIZED_ENV_NAMES
+        and not key.startswith(_GIT_SANITIZED_ENV_PREFIXES)
+    }
+    env.update(
+        {
+            _GIT_NO_REPLACE_ENV: "1",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_COUNT": "0",
+        }
+    )
+    return env
+
+
+def _git_command(*arguments: str) -> list[str]:
+    return ["git", *_GIT_CONFIG_OVERRIDES, *arguments]
+
+
+def _validate_git_sha(value: str, label: str) -> str:
+    normalized = value.strip().lower()
+    if (
+        len(normalized) != 40
+        or any(char not in "0123456789abcdef" for char in normalized)
+    ):
+        raise RuntimeError(f"{label} did not resolve to a full SHA")
+    return normalized
 
 
 def _git_sha(repo_root: Path) -> str:
     result = subprocess.run(
-        ["git", "rev-parse", "--verify", "HEAD"],
+        _git_command("rev-parse", "--verify", "HEAD^{commit}"),
         cwd=repo_root,
         env=_git_env(),
         check=True,
         capture_output=True,
         text=True,
     )
-    value = result.stdout.strip().lower()
-    if len(value) != 40 or any(char not in "0123456789abcdef" for char in value):
-        raise RuntimeError("git HEAD did not resolve to a full SHA")
-    return value
+    return _validate_git_sha(result.stdout, "git HEAD")
 
 
 def _module_path_is_importable(parts: tuple[str, ...]) -> bool:
@@ -106,7 +154,7 @@ def _tracked_python_entries(
 ) -> list[tuple[str, str, str]]:
     """Return validated mode, blob, and path tuples for tracked Python."""
     tree = subprocess.run(
-        ["git", "ls-tree", "-r", "-z", "--full-tree", revision],
+        _git_command("ls-tree", "-r", "-z", "--full-tree", revision),
         cwd=repo_root,
         env=_git_env(),
         check=True,
@@ -180,7 +228,7 @@ def _materialize_reviewed_python(
     """Write the validated revision's Python tree into a private snapshot."""
     entries = _tracked_python_entries(repo_root, git_sha)
     batch = subprocess.run(
-        ["git", "cat-file", "--batch"],
+        _git_command("cat-file", "--batch"),
         cwd=repo_root,
         env=_git_env(),
         check=True,
@@ -245,7 +293,7 @@ def _remove_reviewed_python(snapshot_root: Path) -> None:
 
 def _reject_git_replacement_refs(repo_root: Path) -> None:
     result = subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname)", "refs/replace"],
+        _git_command("for-each-ref", "--format=%(refname)", "refs/replace"),
         cwd=repo_root,
         env=_git_env(),
         check=True,
@@ -266,18 +314,26 @@ def _cleanup_reviewed_python(snapshot_root: Path) -> None:
         )
 
 
-def establish_source_trust(repo_root: Path) -> str:
+def establish_source_trust(
+    repo_root: Path, *, expected_git_sha: str | None = None
+) -> str:
     """Validate checkout inputs before any repository-local import executes."""
     _reject_git_replacement_refs(repo_root)
     git_sha = _git_sha(repo_root)
+    if expected_git_sha is not None:
+        expected = _validate_git_sha(expected_git_sha, "reviewed Git SHA")
+        if git_sha != expected:
+            raise RuntimeError(
+                "receipted execution requires the launcher and checkout "
+                "to resolve the same Git SHA"
+            )
     status = subprocess.run(
-        [
-            "git",
+        _git_command(
             "status",
             "--porcelain=v1",
             "--untracked-files=all",
             "--ignore-submodules=none",
-        ],
+        ),
         cwd=repo_root,
         env=_git_env(),
         check=True,
@@ -288,7 +344,9 @@ def establish_source_trust(repo_root: Path) -> str:
         raise RuntimeError("receipted execution requires a clean worktree")
     _verify_tracked_python_matches_revision(repo_root, git_sha)
     ignored = subprocess.run(
-        ["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
+        _git_command(
+            "ls-files", "-z", "--others", "--ignored", "--exclude-standard"
+        ),
         cwd=repo_root,
         env=_git_env(),
         check=True,
@@ -301,7 +359,7 @@ def establish_source_trust(repo_root: Path) -> str:
                 "receipted execution rejects ignored Python import shadows"
             )
     tracked_python = subprocess.run(
-        ["git", "ls-files", "-z", "--", "*.py"],
+        _git_command("ls-files", "-z", "--", "*.py"),
         cwd=repo_root,
         env=_git_env(),
         check=True,
@@ -393,6 +451,8 @@ class EomExecutionReceipt:
         stem = f"{safe_started}_{tool}_{run_id}"
 
         self.receipt_dir = directory
+        self._receipt_dir_device = directory_stat.st_dev
+        self._receipt_dir_inode = directory_stat.st_ino
         self._verify_hard_link_support()
         self.in_progress_path = directory / f"{stem}.in-progress.json"
         self._final_stem = stem
@@ -412,6 +472,7 @@ class EomExecutionReceipt:
             "changed_contact_ids": [],
         }
         self._changed_contact_ids: set[str] = set()
+        self._assert_receipt_directory_current()
         self._write_exclusive(self.in_progress_path, self._payload)
         self._fsync_directory()
 
@@ -438,7 +499,23 @@ class EomExecutionReceipt:
         finally:
             os.close(descriptor)
 
+    def _assert_receipt_directory_current(self) -> None:
+        try:
+            current = self.receipt_dir.lstat()
+        except OSError as exc:
+            raise RuntimeError(
+                "receipt directory changed after validation"
+            ) from exc
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or stat.S_ISLNK(current.st_mode)
+            or current.st_dev != self._receipt_dir_device
+            or current.st_ino != self._receipt_dir_inode
+        ):
+            raise RuntimeError("receipt directory changed after validation")
+
     def _fsync_directory(self) -> None:
+        self._assert_receipt_directory_current()
         try:
             directory_fd = os.open(self.receipt_dir, os.O_RDONLY)
         except OSError as exc:
@@ -449,6 +526,7 @@ class EomExecutionReceipt:
             os.close(directory_fd)
 
     def _verify_hard_link_support(self) -> None:
+        self._assert_receipt_directory_current()
         probe_id = uuid.uuid4()
         source = self.receipt_dir / f".eom-receipt-link-probe-{probe_id}.source"
         target = self.receipt_dir / f".eom-receipt-link-probe-{probe_id}.target"
@@ -466,6 +544,7 @@ class EomExecutionReceipt:
             self._fsync_directory()
 
     def _persist_in_progress(self) -> None:
+        self._assert_receipt_directory_current()
         staged_path = self.in_progress_path.with_name(
             f"{self.in_progress_path.name}.{uuid.uuid4()}.tmp"
         )
@@ -512,6 +591,7 @@ class EomExecutionReceipt:
         if self._finalized:
             raise RuntimeError("receipt is already finalized")
         self.assert_healthy()
+        self._assert_receipt_directory_current()
         if type(exit_code) is not int or exit_code < 0:
             raise ValueError("exit code must be a non-negative integer")
 
@@ -535,6 +615,8 @@ class EomExecutionReceipt:
             if linked:
                 final_path.unlink(missing_ok=True)
             staged_path.unlink(missing_ok=True)
+            if linked:
+                self._fsync_directory()
             raise
 
         self._payload = final_payload
@@ -572,17 +654,25 @@ def _launch_reviewed_entrypoint(argv: list[str]) -> None:
         raise SystemExit(
             "reviewed EOM execution requires isolated Python startup"
         )
-    if len(argv) < 2 or argv[0] != "--launch-reviewed":
+    if (
+        len(argv) < 4
+        or argv[0] != "--launch-reviewed"
+        or argv[1] != "--reviewed-git-sha"
+    ):
         raise SystemExit(
             "usage: python -I - --launch-reviewed "
+            "--reviewed-git-sha SHA "
             "scripts/import_eom_customers_live.py [arguments]"
         )
-    relative_entrypoint = argv[1]
+    reviewed_git_sha = _validate_git_sha(argv[2], "reviewed Git SHA")
+    relative_entrypoint = argv[3]
     if relative_entrypoint not in _REVIEWED_ENTRYPOINTS:
         raise SystemExit("unsupported reviewed EOM entrypoint")
 
     repo_root = Path.cwd().resolve()
-    git_sha = establish_source_trust(repo_root)
+    git_sha = establish_source_trust(
+        repo_root, expected_git_sha=reviewed_git_sha
+    )
     snapshot_root = Path(
         tempfile.mkdtemp(prefix="atlas-eom-reviewed-python-")
     )
@@ -596,7 +686,7 @@ def _launch_reviewed_entrypoint(argv: list[str]) -> None:
         bootstrap_module._BOOTSTRAP_GIT_SHA = git_sha
         bootstrap_module._BOOTSTRAP_REPO_ROOT = str(snapshot_root)
         sys.modules["eom_execution_receipt"] = bootstrap_module
-        sys.argv = [str(source_path), *argv[2:]]
+        sys.argv = [str(source_path), *argv[4:]]
         namespace = {
             "__name__": "__main__",
             "__file__": str(source_path),

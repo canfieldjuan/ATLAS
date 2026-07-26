@@ -191,6 +191,26 @@ def test_receipt_directory_must_support_hard_links(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_receipt_directory_swap_cannot_receive_later_writes(tmp_path):
+    receipt_dir = tmp_path / "receipts"
+    receipt_dir.mkdir()
+    receipt_dir.chmod(0o700)
+    receipt = _receipt(receipt_dir)
+
+    original_directory = tmp_path / "receipts-original"
+    receipt_dir.rename(original_directory)
+    receipt_dir.mkdir()
+    receipt_dir.chmod(0o700)
+
+    receipt.record_changed_contact_id(CONTACT_A)
+
+    assert list(receipt_dir.iterdir()) == []
+    assert (original_directory / receipt.in_progress_path.name).exists()
+    with pytest.raises(RuntimeError, match="durably record") as raised:
+        receipt.assert_healthy()
+    assert "receipt directory changed" in str(raised.value.__cause__)
+
+
 def test_receipt_mode_is_independent_of_restrictive_umask(tmp_path):
     previous_umask = os.umask(0o777)
     try:
@@ -383,8 +403,15 @@ def _run_receipted_calendar(
     include_receipt=True,
     extra_args=(),
 ):
+    reviewed_sha = receipt_module.subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     launcher_source = receipt_module.subprocess.run(
-        ["git", "show", "HEAD:scripts/eom_execution_receipt.py"],
+        ["git", "show", f"{reviewed_sha}:scripts/eom_execution_receipt.py"],
         cwd=repo,
         check=True,
         capture_output=True,
@@ -397,6 +424,8 @@ def _run_receipted_calendar(
         [
             "-",
             "--launch-reviewed",
+            "--reviewed-git-sha",
+            reviewed_sha,
             entrypoint,
         ]
     )
@@ -452,13 +481,18 @@ def test_git_attestation_subprocesses_disable_replacement_objects(
 ):
     completed_process = receipt_module.subprocess.CompletedProcess
     observed_git_commands = []
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "wrong-git-dir"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "wrong-worktree"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(tmp_path / "fsmonitor-hook"))
 
     def fake_run(command, **kwargs):
         if command[0] == "git":
             observed_git_commands.append(
-                (tuple(command), kwargs.get("env", {}).get("GIT_NO_REPLACE_OBJECTS"))
+                (tuple(command), kwargs.get("env", {}))
             )
-        if command[:3] == ["git", "rev-parse", "--verify"]:
+        if "rev-parse" in command and "--verify" in command:
             stdout = GIT_SHA + "\n"
         elif kwargs.get("text") is False:
             stdout = b""
@@ -474,10 +508,26 @@ def test_git_attestation_subprocesses_disable_replacement_objects(
     receipt_module._materialize_reviewed_python(tmp_path, GIT_SHA, snapshot)
 
     assert observed_git_commands
-    assert all(disabled == "1" for _command, disabled in observed_git_commands)
+    assert all(
+        env.get("GIT_NO_REPLACE_OBJECTS") == "1"
+        for _command, env in observed_git_commands
+    )
+    assert all(
+        "core.fsmonitor=false" in command
+        for command, _env in observed_git_commands
+    )
+    assert all(
+        "GIT_DIR" not in env
+        and "GIT_WORK_TREE" not in env
+        and "GIT_CONFIG_KEY_0" not in env
+        and "GIT_CONFIG_VALUE_0" not in env
+        and env["GIT_CONFIG_GLOBAL"] == os.devnull
+        and env["GIT_CONFIG_COUNT"] == "0"
+        for _command, env in observed_git_commands
+    )
     assert any(
-        command[:2] == ("git", "cat-file")
-        for command, _disabled in observed_git_commands
+        "cat-file" in command
+        for command, _env in observed_git_commands
     )
 
 
@@ -630,7 +680,7 @@ def test_direct_receipted_entrypoint_requires_reviewed_launcher(tmp_path):
     )
 
     assert result.returncode == 2
-    assert "requires the reviewed HEAD launcher" in result.stderr
+    assert "requires the reviewed SHA launcher" in result.stderr
     assert list(receipt_dir.iterdir()) == []
 
 
@@ -648,6 +698,74 @@ def test_reviewed_launcher_rejects_unallowlisted_entrypoint(tmp_path):
 
     assert result.returncode == 1
     assert "unsupported reviewed EOM entrypoint" in result.stderr
+    assert list(receipt_dir.iterdir()) == []
+
+
+def test_reviewed_launcher_rejects_sha_that_no_longer_matches_checkout(tmp_path):
+    repo, _scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+    old_sha = receipt_module.subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    launcher_source = receipt_module.subprocess.run(
+        ["git", "show", f"{old_sha}:scripts/eom_execution_receipt.py"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    (repo / "README.md").write_text("new reviewed head\n")
+    receipt_module.subprocess.run(
+        ["git", "add", "README.md"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    receipt_module.subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Receipt Test",
+            "-c",
+            "user.email=receipt-test@example.invalid",
+            "commit",
+            "-qm",
+            "move head",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = receipt_module.subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-",
+            "--launch-reviewed",
+            "--reviewed-git-sha",
+            old_sha,
+            "scripts/import_eom_customers_live.py",
+            "--dry-run",
+            "--receipt-dir",
+            str(receipt_dir),
+        ],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+        input=launcher_source,
+    )
+
+    assert result.returncode != 0
+    assert "resolve the same Git SHA" in result.stderr
     assert list(receipt_dir.iterdir()) == []
 
 
@@ -698,6 +816,56 @@ def test_receipted_invalid_arguments_finalize_exit_2_before_runtime(
     final_path, payload = _load_only_final(receipt_dir)
     assert final_path.name.endswith(".exit-2.json")
     assert payload["exit_code"] == 2
+
+
+def test_receipt_policy_rejects_abbreviated_protected_options_before_import(
+    tmp_path
+):
+    marker = tmp_path / "local-import-executed"
+    extra_files = {
+        "scripts/import_calendar_contacts.py": (
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).write_text('executed')\n"
+        )
+    }
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral", extra_files=extra_files
+    )
+
+    result = _run_receipted_calendar(
+        repo,
+        scripts,
+        receipt_dir,
+        dry_run=False,
+        include_receipt=False,
+        extra_args=("--dry-r", "--receipt-d", str(receipt_dir)),
+    )
+
+    assert result.returncode == 2
+    assert "unrecognized arguments: --dry-r" in result.stderr
+    assert not marker.exists()
+    assert list(receipt_dir.iterdir()) == []
+
+
+def test_receipt_policy_rejects_duplicate_receipt_dir_before_receipt(tmp_path):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+    second_receipt_dir = tmp_path / "other-receipts"
+    second_receipt_dir.mkdir()
+    second_receipt_dir.chmod(0o700)
+
+    result = _run_receipted_calendar(
+        repo,
+        scripts,
+        receipt_dir,
+        extra_args=("--receipt-dir", str(second_receipt_dir)),
+    )
+
+    assert result.returncode == 2
+    assert "--receipt-dir may be supplied only once" in result.stderr
+    assert list(receipt_dir.iterdir()) == []
+    assert list(second_receipt_dir.iterdir()) == []
 
 
 def test_reviewed_launcher_write_mutates_and_finalizes_receipt(tmp_path):
@@ -782,8 +950,15 @@ def test_reviewed_launcher_write_ignores_concurrent_worktree_rewrite(
     repo, scripts, receipt_dir = _calendar_process_fixture(
         tmp_path, ".cache/neutral", extra_files=extra_files
     )
+    reviewed_sha = receipt_module.subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     launcher_source = receipt_module.subprocess.run(
-        ["git", "show", "HEAD:scripts/eom_execution_receipt.py"],
+        ["git", "show", f"{reviewed_sha}:scripts/eom_execution_receipt.py"],
         cwd=repo,
         check=True,
         capture_output=True,
@@ -800,6 +975,8 @@ def test_reviewed_launcher_write_ignores_concurrent_worktree_rewrite(
         "-I",
         "-",
         "--launch-reviewed",
+        "--reviewed-git-sha",
+        reviewed_sha,
         "scripts/import_eom_customers_live.py",
         "--receipt-dir",
         str(receipt_dir),
@@ -1121,7 +1298,7 @@ def test_reviewed_launcher_authenticates_entrypoint_before_execution():
     ).read_text()
 
     source_preflight = launcher_source.index(
-        "git_sha = establish_source_trust(repo_root)"
+        "git_sha = establish_source_trust("
     )
     snapshot_materialization = launcher_source.index(
         "_materialize_reviewed_python(repo_root, git_sha, snapshot_root)"
@@ -1208,17 +1385,60 @@ def test_clean_real_entrypoint_does_not_create_or_reject_own_bytecode(tmp_path):
     assert len(list(calendar_receipts.glob("*.exit-0.json"))) == 1
 
 
+def test_reviewed_launcher_disables_configured_fsmonitor_during_preflight(
+    tmp_path
+):
+    extra_files, _mutation_marker, _ready, _release = (
+        _write_process_fixture_files(tmp_path)
+    )
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral", extra_files=extra_files
+    )
+    fsmonitor_marker = tmp_path / "fsmonitor-executed"
+    hook = tmp_path / "fsmonitor-hook.sh"
+    hook.write_text(
+        "#!/bin/sh\n"
+        f"printf executed > {str(fsmonitor_marker)!r}\n"
+        "exit 0\n"
+    )
+    hook.chmod(0o700)
+    receipt_module.subprocess.run(
+        ["git", "config", "core.fsmonitor", str(hook)],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    env = {
+        **os.environ,
+        "EOM_CALENDAR_COMMERCIAL": "commercial-fixture",
+        "EOM_CALENDAR_RESIDENTIAL": "residential-fixture",
+        "EOM_CALENDAR_ONE_TIME": "one-time-fixture",
+    }
+
+    result = _run_receipted_calendar(
+        repo, scripts, receipt_dir, env=env
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not fsmonitor_marker.exists()
+
+
 def test_failed_publication_sync_removes_new_final_link(tmp_path, monkeypatch):
     receipt = _receipt(tmp_path)
     final_path = receipt.final_path_for(0)
+    sync_final_link_states = []
 
     def fail_directory_sync():
-        raise OSError("storage sync failed")
+        sync_final_link_states.append(final_path.exists())
+        if len(sync_final_link_states) == 1:
+            raise OSError("storage sync failed")
 
     monkeypatch.setattr(receipt, "_fsync_directory", fail_directory_sync)
     with pytest.raises(OSError, match="storage sync failed"):
         receipt.finalize(0)
 
+    assert sync_final_link_states == [True, False]
     assert not final_path.exists()
     recovery_payload = json.loads(receipt.in_progress_path.read_text())
     assert recovery_payload["ended_at_utc"] is None
@@ -1413,6 +1633,7 @@ def test_calendar_interaction_only_write_records_changed_contact_id():
     assert outcome == "unchanged"
     assert recorder.contact_ids == [CONTACT_A]
 
+
 def test_calendar_race_merge_records_contact_even_when_followup_is_unchanged(
     monkeypatch,
 ):
@@ -1422,6 +1643,7 @@ def test_calendar_race_merge_records_contact_even_when_followup_is_unchanged(
             return {
                 "id": CONTACT_A,
                 "_was_created": False,
+                "_was_updated": True,
                 **calendar_import.record_to_contact_data(_record()),
             }
 
@@ -1440,4 +1662,62 @@ def test_calendar_race_merge_records_contact_even_when_followup_is_unchanged(
     )
 
     assert outcome == "unchanged"
+    assert recorder.contact_ids == [CONTACT_A]
+
+
+def test_calendar_race_merge_does_not_record_unconfirmed_provider_update(
+    monkeypatch,
+):
+    class RaceCRM(StubCRM):
+        async def create_contact(self, data):
+            self.created.append(data)
+            return {
+                "id": CONTACT_A,
+                "_was_created": False,
+                "_was_updated": False,
+                **calendar_import.record_to_contact_data(_record()),
+            }
+
+    async def skipped(_pool, existing, _data):
+        return str(existing["id"]), "skipped"
+
+    monkeypatch.setattr(calendar_import, "_update_matched", skipped)
+    recorder = _Recorder()
+    outcome = asyncio.run(
+        calendar_import.import_one(
+            _record(),
+            RaceCRM(),
+            StubPool(rows=[None, None]),
+            receipt=recorder,
+        )
+    )
+
+    assert outcome == "skipped"
+    assert recorder.contact_ids == []
+
+
+def test_calendar_interaction_insert_is_recorded_before_cancellable_emit():
+    rec = _record(phone="(217) 555-9999")
+    existing = {
+        "id": CONTACT_A,
+        **calendar_import.record_to_contact_data(rec),
+    }
+
+    class CancelAfterInsertCRM(StubCRM):
+        async def log_interaction(self, **kwargs):
+            self.interactions.append(kwargs)
+            kwargs["after_insert"]()
+            raise KeyboardInterrupt()
+
+    recorder = _Recorder()
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(
+            calendar_import.import_one(
+                rec,
+                CancelAfterInsertCRM(scoped_hit=existing),
+                StubPool(),
+                receipt=recorder,
+            )
+        )
+
     assert recorder.contact_ids == [CONTACT_A]
