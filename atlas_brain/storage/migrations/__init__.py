@@ -33,9 +33,14 @@ def _find_duplicate_migration_prefixes(migration_files: list[Path]) -> dict[int,
     return duplicates
 
 
-async def _ensure_migrations_table(pool) -> None:
-    """Create the migrations tracking table if it doesn't exist."""
-    await pool.execute("""
+async def _ensure_migrations_table(executor) -> None:
+    """Create the migrations tracking table if it doesn't exist.
+
+    ``executor`` is a pool OR a single acquired connection; both expose
+    execute/fetch/fetchval. run_migrations passes a connection so the whole
+    run needs exactly one, which is what makes a min=max=1 pool safe.
+    """
+    await executor.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
@@ -44,16 +49,19 @@ async def _ensure_migrations_table(pool) -> None:
     """)
 
 
-async def _get_applied_migrations(pool) -> set[str]:
+async def _get_applied_migrations(executor) -> set[str]:
     """Get set of already applied migration names (e.g. '025_temporal_patterns')."""
-    rows = await pool.fetch("SELECT name FROM schema_migrations")
+    rows = await executor.fetch("SELECT name FROM schema_migrations")
     return {row["name"] for row in rows}
 
 
-async def _record_migration(pool, filename: str) -> None:
-    """Record that a migration has been applied."""
+async def _record_migration(executor, filename: str) -> None:
+    """Record that a migration has been applied.
+
+    ``executor`` is a pool or a single acquired connection (see
+    _ensure_migrations_table)."""
     version, name = _parse_migration_identity(filename)
-    existing_version = await pool.fetchval(
+    existing_version = await executor.fetchval(
         "SELECT version FROM schema_migrations WHERE name = $1",
         name,
     )
@@ -61,12 +69,12 @@ async def _record_migration(pool, filename: str) -> None:
         return
 
     record_version = version
-    conflicting_name = await pool.fetchval(
+    conflicting_name = await executor.fetchval(
         "SELECT name FROM schema_migrations WHERE version = $1",
         version,
     )
     if conflicting_name and conflicting_name != name:
-        record_version = await pool.fetchval(
+        record_version = await executor.fetchval(
             """
             SELECT CASE
                 WHEN COALESCE(MIN(version), 0) < 0 THEN MIN(version) - 1
@@ -84,7 +92,7 @@ async def _record_migration(pool, filename: str) -> None:
             record_version,
         )
 
-    await pool.execute(
+    await executor.execute(
         "INSERT INTO schema_migrations (version, name) VALUES ($1, $2)",
         record_version,
         name,
@@ -105,57 +113,70 @@ async def run_migrations(pool, *, migrations_dir: Path | None = None) -> None:
     Only runs migrations that haven't been applied yet.
     Tracks applied migrations in schema_migrations table.
 
-    The whole run happens under a Postgres advisory transaction lock, so
-    concurrent entrants (another replica or another standalone MCP server
-    starting at the same time) queue at the lock, then re-snapshot and find
-    nothing pending. Migration SQL itself still executes on ordinary pool
-    connections, outside the lock holder's transaction, preserving existing
-    semantics for statements that cannot run transactionally.
+    Concurrency: the whole run holds a SESSION-level advisory lock on one
+    acquired connection, so simultaneous entrants (another replica, or the
+    standalone MCP servers starting alongside the main app) queue at the lock
+    and then re-snapshot, finding nothing pending.
+
+    Two properties depend on doing it this way rather than with a transaction:
+
+    * **Exactly one connection.** Every statement -- the lock, the bookkeeping,
+      the migration SQL -- runs on the same acquired connection. A transaction
+      that then reached back to the pool would deadlock a deployment configured
+      with ``min_pool_size == max_pool_size == 1``.
+    * **No open transaction.** Several migrations use ``CREATE INDEX
+      CONCURRENTLY``, which Postgres refuses inside a transaction block. A
+      session-level lock leaves the connection in autocommit, so they still run.
 
     Args:
         pool: The database pool to run migrations against
         migrations_dir: override for tests; defaults to the packaged dir
     """
     directory = migrations_dir if migrations_dir is not None else MIGRATIONS_DIR
-    async with pool.transaction() as conn:
+    conn = await pool.acquire()
+    try:
         await conn.execute(
-            "SELECT pg_advisory_xact_lock($1)", _MIGRATIONS_ADVISORY_LOCK_KEY
+            "SELECT pg_advisory_lock($1)", _MIGRATIONS_ADVISORY_LOCK_KEY
         )
+        try:
+            await _ensure_migrations_table(conn)
 
-        # Ensure tracking table exists
-        await _ensure_migrations_table(pool)
+            # Snapshot under the lock, so a queued entrant re-reads AFTER the
+            # winner recorded its work.
+            applied = await _get_applied_migrations(conn)
 
-        # Get already applied migrations -- snapshot under the lock, so a
-        # queued entrant re-reads AFTER the winner recorded its work.
-        applied = await _get_applied_migrations(pool)
+            migration_files = sorted(directory.glob("*.sql"))
 
-        # Get list of SQL migration files
-        migration_files = sorted(directory.glob("*.sql"))
+            if not migration_files:
+                logger.info("No migration files found")
+                return
 
-        if not migration_files:
-            logger.info("No migration files found")
-            return
+            pending = [f for f in migration_files if f.stem not in applied]
 
-        pending = [f for f in migration_files if f.stem not in applied]
+            if not pending:
+                logger.debug("All %d migrations already applied", len(migration_files))
+                return
 
-        if not pending:
-            logger.debug("All %d migrations already applied", len(migration_files))
-            return
+            logger.info("Running %d pending migrations (of %d total)", len(pending), len(migration_files))
 
-        logger.info("Running %d pending migrations (of %d total)", len(pending), len(migration_files))
+            for migration_file in pending:
+                logger.info("Running migration: %s", migration_file.name)
 
-        for migration_file in pending:
-            logger.info("Running migration: %s", migration_file.name)
+                sql = migration_file.read_text()
 
-            sql = migration_file.read_text()
-
-            try:
-                await pool.execute(sql)
-                await _record_migration(pool, migration_file.name)
-                logger.info("Migration %s completed successfully", migration_file.name)
-            except Exception as e:
-                logger.error("Migration %s failed: %s", migration_file.name, e)
-                raise
+                try:
+                    await conn.execute(sql)
+                    await _record_migration(conn, migration_file.name)
+                    logger.info("Migration %s completed successfully", migration_file.name)
+                except Exception as e:
+                    logger.error("Migration %s failed: %s", migration_file.name, e)
+                    raise
+        finally:
+            await conn.execute(
+                "SELECT pg_advisory_unlock($1)", _MIGRATIONS_ADVISORY_LOCK_KEY
+            )
+    finally:
+        await pool.release(conn)
 
 
 async def check_schema_exists(pool) -> bool:

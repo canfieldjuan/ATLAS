@@ -238,6 +238,8 @@ class _SerializingPool(FakeMigrationPool):
         super().__init__()
         self.honor_lock = honor_lock
         self.applied_sql = []
+        self.acquired = 0
+        self.max_acquired = 0
         self._gate = None
 
     def _lock(self):
@@ -266,35 +268,41 @@ class _SerializingPool(FakeMigrationPool):
             return await super().execute(query, *args)
         self.applied_sql.append(normalized)
 
-    def transaction(self):
-        from contextlib import asynccontextmanager
+    async def acquire(self):
+        self.acquired += 1
+        self.max_acquired = max(self.max_acquired, self.acquired)
+        return _Conn(self)
 
-        pool = self
-
-        @asynccontextmanager
-        async def _txn():
-            conn = _Conn(pool)
-            try:
-                yield conn
-            finally:
-                if conn.held:
-                    pool._lock().release()
-
-        return _txn()
+    async def release(self, conn):
+        self.acquired -= 1
 
 
 class _Conn:
+    """Single acquired connection: the lock, bookkeeping and migration SQL all
+    run here, which is what proves a one-connection pool cannot deadlock."""
+
     def __init__(self, pool):
         self.pool = pool
         self.held = False
 
     async def execute(self, query, *args):
-        if "pg_advisory_xact_lock" in query:
+        if "pg_advisory_lock" in query:
             if self.pool.honor_lock:
                 await self.pool._lock().acquire()
                 self.held = True
             return
-        raise AssertionError(f"unexpected conn.execute: {query}")
+        if "pg_advisory_unlock" in query:
+            if self.pool.honor_lock and self.held:
+                self.pool._lock().release()
+                self.held = False
+            return
+        return await self.pool.execute(query, *args)
+
+    async def fetch(self, query, *args):
+        return await self.pool.fetch(query, *args)
+
+    async def fetchval(self, query, *args):
+        return await self.pool.fetchval(query, *args)
 
 
 @pytest.mark.asyncio
@@ -337,3 +345,124 @@ async def test_without_the_advisory_lock_both_runners_apply(tmp_path):
     assert len(pool.applied_sql) == 2, (
         "no-op lock must reproduce the double-apply race the real lock prevents"
     )
+
+
+class _SingleConnectionPool:
+    """A pool configured min=max=1: the second concurrent acquire() waits
+    forever, which is precisely what a transaction that then reaches back to
+    the pool would do."""
+
+    def __init__(self, tmp_path):
+        self.tmp_path = tmp_path
+        self.applied_sql = []
+        self.in_use = False
+        self.autocommit_sql = []
+
+    async def acquire(self):
+        if self.in_use:
+            # A real asyncpg pool would block here until timeout; failing loudly
+            # keeps the deadlock from hanging the suite.
+            raise AssertionError(
+                "second connection requested while the migration run holds the "
+                "only one -- this is the min=max=1 deadlock"
+            )
+        self.in_use = True
+        return _SingleConn(self)
+
+    async def release(self, conn):
+        self.in_use = False
+
+    # Any helper still calling the POOL mid-run re-enters acquire() and trips
+    # the assertion above.
+    async def execute(self, query, *args):
+        conn = await self.acquire()
+        try:
+            return await conn.execute(query, *args)
+        finally:
+            await self.release(conn)
+
+    async def fetch(self, query, *args):
+        conn = await self.acquire()
+        try:
+            return await conn.fetch(query, *args)
+        finally:
+            await self.release(conn)
+
+    async def fetchval(self, query, *args):
+        conn = await self.acquire()
+        try:
+            return await conn.fetchval(query, *args)
+        finally:
+            await self.release(conn)
+
+
+class _SingleConn:
+    def __init__(self, pool):
+        self.pool = pool
+
+    async def execute(self, query, *args):
+        if "pg_advisory" in query:
+            return
+        self.pool.applied_sql.append(query)
+
+    async def fetch(self, query, *args):
+        return []
+
+    async def fetchval(self, query, *args):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_migrations_run_on_a_single_connection_pool(tmp_path):
+    """F3: the whole run -- advisory lock, bookkeeping and migration SQL --
+    must occupy exactly ONE connection, or a deployment with
+    min_pool_size == max_pool_size == 1 deadlocks at startup."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "001_first.sql").write_text("CREATE TABLE a (id int);")
+    (tmp_path / "002_second.sql").write_text("CREATE TABLE b (id int);")
+
+    pool = _SingleConnectionPool(tmp_path)
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert any("CREATE TABLE a" in sql for sql in pool.applied_sql)
+    assert any("CREATE TABLE b" in sql for sql in pool.applied_sql)
+    assert pool.in_use is False, "the connection must be released"
+
+
+@pytest.mark.asyncio
+async def test_migration_sql_does_not_run_inside_a_transaction(tmp_path):
+    """F3 second side: five packaged migrations use CREATE INDEX
+    CONCURRENTLY, which Postgres refuses inside a transaction block. The run
+    must therefore hold a SESSION-level lock, not a transaction-scoped one."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "001_concurrent.sql").write_text(
+        "CREATE INDEX CONCURRENTLY idx_x ON t (c);"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+    started = []
+
+    class _TxnBanningConn(_SingleConn):
+        async def execute(self, query, *args):
+            if query.strip().upper().startswith(("BEGIN", "START TRANSACTION")):
+                started.append(query)
+            if "pg_advisory_xact_lock" in query:
+                raise AssertionError(
+                    "a transaction-scoped advisory lock implies an open "
+                    "transaction; CREATE INDEX CONCURRENTLY cannot run there"
+                )
+            return await super().execute(query, *args)
+
+    pool.acquire = lambda: _acquire_banning(pool, _TxnBanningConn)
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert not started, f"migration run opened a transaction: {started}"
+    assert any("CONCURRENTLY" in sql for sql in pool.applied_sql)
+
+
+async def _acquire_banning(pool, conn_cls):
+    if pool.in_use:
+        raise AssertionError("second connection requested during the run")
+    pool.in_use = True
+    return conn_cls(pool)

@@ -613,6 +613,12 @@ class ScopedGmailEmailProvider:
         **_kwargs: Any,
     ) -> list[dict[str, Any]]:
         """Hydrate candidate IDs with uncollapsed sender evidence."""
+        # Imported here, like the other repository imports in this module, to
+        # keep services -> storage a call-time edge.
+        from ..storage.repositories.scoped_mailbox_credential import (
+            ScopedMailboxCredentialUnavailable,
+        )
+
         try:
             candidates = await self._gmail_client.list_messages(
                 query=query,
@@ -633,6 +639,13 @@ class ScopedGmailEmailProvider:
                         return await self._gmail_client.get_message_envelope(
                             message_id
                         )
+                except ScopedMailboxCredentialUnavailable:
+                    # Revocation landing mid-hydration is not a per-message
+                    # failure: every remaining read will fail the same way, and
+                    # swallowing it returns a SHORT inbox that the caller cannot
+                    # tell apart from a genuinely short one. Propagate so the
+                    # scoped read marks the source omitted.
+                    raise
                 except Exception as exc:
                     logger.warning(
                         "Scoped Gmail metadata read failed for message %s: %s",

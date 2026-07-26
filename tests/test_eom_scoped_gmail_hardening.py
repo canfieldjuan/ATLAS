@@ -15,7 +15,10 @@ import pytest
 import atlas_brain.services.customer_context as context_mod
 import atlas_brain.services.crm_provider as crm_provider_mod
 import atlas_brain.services.email_provider as email_provider_mod
+import contextlib
+
 import atlas_brain.storage.repositories.scoped_mailbox_credential as repo_mod
+from atlas_brain.storage.config import db_settings
 
 TEST_KEK = "test:DEj0-fNH6mOs5JYXn3Uv6ejEfP4PQ6XIqWla36eIR_U="
 
@@ -272,12 +275,14 @@ async def test_concurrent_refreshes_hold_at_most_one_connection(row_lock_repo):
 
 
 @pytest.mark.asyncio
-async def test_ungated_waiters_hold_connections_while_blocked(row_lock_repo):
+async def test_cross_context_refresh_draw_is_bounded_by_the_pool_budget(
+    row_lock_repo,
+):
     """3i probe, no internals patched: workers on DISTINCT contexts take
-    distinct gates, so the gate cannot serialize them -- every one enters a
-    transaction and blocks on the contended row while holding its connection.
-    This is the exact pre-fix profile for one context, proving the bounded
-    test above is measuring the gate rather than the fixture."""
+    DISTINCT per-context gates, so that gate cannot bound them -- each one
+    would otherwise enter a transaction and hold its connection through the
+    token exchange, taking the whole default pool. The global slot caps the
+    portfolio-wide draw and leaves the rest of the pool for unrelated work."""
     repo, pool = row_lock_repo
     release = asyncio.Event()
     entered = asyncio.Event()
@@ -293,9 +298,48 @@ async def test_ungated_waiters_hold_connections_while_blocked(row_lock_repo):
     await asyncio.wait_for(entered.wait(), timeout=5)
     for _ in range(20):
         await asyncio.sleep(0)
+    budget = repo_mod._refresh_budget()
+    assert pool.max_open == budget, (
+        f"concurrent refreshes across distinct contexts must hold at most "
+        f"{budget} connections; saw {pool.max_open}"
+    )
+    assert budget < db_settings.max_pool_size, (
+        "the budget must leave pool headroom for non-refresh work"
+    )
+    pool.holder_done.set()
+    release.set()
+    await asyncio.wait_for(asyncio.gather(*workers), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_without_the_global_slot_distinct_contexts_take_the_whole_pool(
+    row_lock_repo, monkeypatch
+):
+    """Proven-failure companion (3i): remove ONLY the global slot and the same
+    ten distinct contexts each hold a connection through the token exchange.
+    This is what the assertion above is measuring -- not the fixture."""
+    repo, pool = row_lock_repo
+    monkeypatch.setattr(
+        repo_mod,
+        "_refresh_slot",
+        lambda: contextlib.nullcontext(),
+    )
+    release = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def _worker(context):
+        async with repo.locked_gmail(context):
+            entered.set()
+            await release.wait()
+
+    workers = [
+        asyncio.create_task(_worker(f"context-{i}")) for i in range(10)
+    ]
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    for _ in range(20):
+        await asyncio.sleep(0)
     assert pool.max_open == 10, (
-        "ungated waiters must each hold a connection blocked on the row "
-        "lock -- the defect the per-context gate exists to prevent"
+        "ungated waiters must each hold a connection blocked on the row lock"
     )
     pool.holder_done.set()
     release.set()
@@ -338,3 +382,54 @@ async def test_revoke_shares_the_refresh_gate(row_lock_repo):
     for task in revokes:
         task.cancel()
     await asyncio.gather(*revokes, return_exceptions=True)
+
+
+class _HydrationClient:
+    """Gmail client whose envelope reads fail on a chosen exception class."""
+
+    def __init__(self, exc):
+        self._exc = exc
+        self.closed = False
+
+    async def list_messages(self, query, max_results):
+        return [{"id": "m1"}, {"id": "m2"}]
+
+    async def get_message_envelope(self, message_id):
+        if message_id == "m2":
+            raise self._exc
+        return {"id": message_id, "from": "a@example.com"}
+
+    async def close(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_revocation_during_hydration_is_not_swallowed():
+    """F2: revocation landing AFTER the credential read but DURING metadata
+    hydration must reach the caller. Dropping it returns a short inbox that
+    reads exactly like a genuinely short one."""
+    from atlas_brain.services.email_provider import ScopedGmailEmailProvider
+    from atlas_brain.storage.repositories.scoped_mailbox_credential import (
+        ScopedMailboxCredentialUnavailable,
+    )
+
+    client = _HydrationClient(
+        ScopedMailboxCredentialUnavailable("scoped_gmail_credentials_unavailable")
+    )
+    provider = ScopedGmailEmailProvider(client)
+
+    with pytest.raises(ScopedMailboxCredentialUnavailable):
+        await provider.list_messages()
+    assert client.closed, "the client must still be closed on the raising path"
+
+
+@pytest.mark.asyncio
+async def test_ordinary_hydration_failure_still_drops_only_that_message():
+    """Both directions: the re-raise must be scoped to revocation. A transient
+    per-message read failure keeps its drop-one-message behaviour."""
+    from atlas_brain.services.email_provider import ScopedGmailEmailProvider
+
+    provider = _HydrationClient(RuntimeError("transient metadata read failure"))
+    messages = await ScopedGmailEmailProvider(provider).list_messages()
+
+    assert [m["id"] for m in messages] == ["m1"]

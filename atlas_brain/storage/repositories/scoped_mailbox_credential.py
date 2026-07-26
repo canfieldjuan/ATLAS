@@ -10,6 +10,7 @@ import logging
 from typing import AsyncContextManager, AsyncIterator
 
 from ...auth.encryption import decrypt_secret, encrypt_secret
+from ..config import db_settings
 from ..database import get_db_pool
 
 logger = logging.getLogger("atlas.storage.scoped_mailbox_credentials")
@@ -32,6 +33,29 @@ def _refresh_gate(context: str) -> asyncio.Lock:
     if gate is None:
         gate = _REFRESH_GATES[key] = asyncio.Lock()
     return gate
+
+
+# The per-context gate bounds concurrency WITHIN one context; it does nothing
+# ACROSS contexts. Ten distinct contexts refreshing at once each hold their own
+# connection through Google's token exchange, which is the whole default pool --
+# so unrelated work (invoicing, CRM reads) starves for the length of an external
+# HTTP call. This semaphore caps how many connection-holding refresh sections run
+# at once, portfolio-wide, leaving the rest of the pool for everything else.
+# Waiters queue here WITHOUT a connection, same as the per-context gate.
+_REFRESH_SLOTS: dict[int, asyncio.Semaphore] = {}
+
+
+def _refresh_budget() -> int:
+    """Connections refreshes may occupy at once; the rest stay available."""
+    return max(1, db_settings.max_pool_size // 2)
+
+
+def _refresh_slot() -> asyncio.Semaphore:
+    key = id(asyncio.get_running_loop())
+    slot = _REFRESH_SLOTS.get(key)
+    if slot is None:
+        slot = _REFRESH_SLOTS[key] = asyncio.Semaphore(_refresh_budget())
+    return slot
 
 GMAIL_PROVIDER = "gmail"
 
@@ -121,7 +145,7 @@ class ScopedMailboxCredentialRepository:
         # arriving while a refresh holds the row would otherwise occupy a pool
         # connection blocked on the row lock -- the profile the gate exists to
         # prevent. Cross-context mutations are unaffected.
-        async with _refresh_gate(context):
+        async with _refresh_gate(context), _refresh_slot():
             ciphertext, kid = _encrypt_bundle(
                 client_id=client_id,
                 client_secret=client_secret,
@@ -171,7 +195,7 @@ class ScopedMailboxCredentialRepository:
 
     async def revoke_gmail(self, business_context_id: str) -> int | None:
         context = _exact_context(business_context_id)
-        async with _refresh_gate(context):
+        async with _refresh_gate(context), _refresh_slot():
             row = await self._db().fetchrow(
                 """
                 UPDATE scoped_mailbox_credentials
@@ -195,7 +219,7 @@ class ScopedMailboxCredentialRepository:
     ) -> AsyncIterator[LockedScopedGmailCredentials]:
         """Serialize token refresh for one exact context across processes."""
         context = _exact_context(business_context_id)
-        async with _refresh_gate(context):
+        async with _refresh_gate(context), _refresh_slot():
             async with self._db().transaction() as conn:
                 row = await conn.fetchrow(
                     """
