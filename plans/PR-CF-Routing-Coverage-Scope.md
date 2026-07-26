@@ -13,6 +13,31 @@ The two remaining findings were separated from the persistence work in #2219
 because they are a different mechanism (linguistic scope, no PII consequence).
 This slice is that follow-up, and #2189 closes with it.
 
+**Diff-budget overage (455 added lines vs the 400 soft cap) -- why this slice
+is indivisible.** The mechanism is 131 lines; the rest is the required review
+artifact and the proofs review itself demanded:
+
+| | added |
+|---|---:|
+| production code | 131 |
+| the plan document | 172 |
+| both-direction proofs | 152 |
+
+It crossed the cap during review, not at authoring: rounds 1 and 2 replaced two
+mechanisms outright (the polarity range became a kind test; the fixed-token
+subject window became head classification) and each replacement brought its own
+cross-product plus the held-out cases that caught it -- emphatic `not only`,
+PP-modified subjects, and a linear-time guard.
+
+The two findings cannot be split apart: both live in `_routing_covers_report`'s
+decision, they share the clause/negation caches the performance fix introduced,
+and landing one alone leaves the checklist silent on the other's input class --
+a false negative in the direction that hides a missing owner.
+
+Diff-budget override: the polarity and subject-head fixes share one decision and
+one cache, and each was replaced wholesale during review; separating either from
+its generated proof would land a checker whose known failure mode is silence.
+
 ### Problem-derived contract
 
 - Root cause (finding 2): product-term polarity is evaluated over
@@ -167,6 +192,6 @@ polarity range back to the clause end, and quantifiers binding unconditionally:
 | File | LOC |
 |---|---:|
 | `atlas_brain/services/content_factory_copy_verification.py` | 154 |
-| `plans/PR-CF-Routing-Coverage-Scope.md` | 172 |
+| `plans/PR-CF-Routing-Coverage-Scope.md` | 197 |
 | `tests/test_content_factory_copy_verification.py` | 152 |
-| **Total** | **478** |
+| **Total** | **503** |
