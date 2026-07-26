@@ -1,14 +1,14 @@
 """Tests for the seam-convergence advisory breaker (AGENTS 3k.2).
 
-Exercises the pure core (bot_review_rounds / window_is_flat_or_rising /
-leading_path / find_trip / body_declares_seam_analysis / evaluate) with
-synthetic GraphQL node shapes -- both directions per AGENTS 3i: a flat or rising
-same-seam run trips, while a converging run, a strictly declining run, a single
-noisy round, scattered findings, a window whose last round moved to a different
-file, and a body that only mentions the phrase all stay clean.
+Exercises the pure core (bot_review_rounds / leading_path / find_trip /
+recorded_seam_analysis / evaluate) with synthetic GraphQL node shapes -- both
+directions per AGENTS 3i. The trip decision carries no tunable threshold, so the
+tests pin facts rather than numbers: a run whose seam count does not decrease
+across three consecutive led rounds trips, while a declining run, an empty round,
+a tie, scattered findings, and a seam that stops leading all stay silent.
 
-The regression block at the end pins the five review findings from PR #2199, and
-the last test replays the real ATLAS #2181 round shape.
+The regression block pins every review finding from PR #2199 -- both rounds --
+and the replay test uses the seam-only counts observed on ATLAS #2181.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def review(hour: int, paths: list[str], login: str = "chatgpt-codex-connector[bo
 def rounds_from(counts: list[int], path: str = "svc/classifier.py") -> list:
     """One bot review per entry, each raising `counts[i]` findings on one path."""
     return mod.bot_review_rounds(
-        [review(i, [path] * n) for i, n in enumerate(counts) if n], ("codex",)
+        [review(i, [path] * n) for i, n in enumerate(counts)], ("codex",)
     )
 
 
@@ -62,9 +62,10 @@ def test_rounds_honour_bot_override() -> None:
     assert mod.bot_review_rounds([review(1, ["a.py"], login="some-other-bot")], ("some-other",))
 
 
-def test_review_without_inline_comments_is_not_a_round() -> None:
-    """An approval or summary-only submission is not a round of findings."""
-    assert mod.bot_review_rounds([review(1, [])], ("codex",)) == []
+def test_empty_bot_review_is_kept_as_a_round() -> None:
+    """A bot review raising nothing is convergence evidence, not a gap."""
+    rounds = mod.bot_review_rounds([review(1, [])], ("codex",))
+    assert len(rounds) == 1 and rounds[0].count == 0
 
 
 def test_review_without_timestamp_is_skipped() -> None:
@@ -91,12 +92,11 @@ def test_rising_run_trips() -> None:
     assert mod.find_trip(rounds_from([3, 5, 7])) is not None
 
 
-def test_noisy_flat_run_trips() -> None:
-    """ATLAS #2181's first window: 5, 9, 4 is noise around a flat trend."""
-    assert mod.find_trip(rounds_from([5, 9, 4])) is not None
+def test_equal_counts_trip() -> None:
+    assert mod.find_trip(rounds_from([5, 5, 5])) is not None
 
 
-def test_strictly_declining_run_does_not_trip() -> None:
+def test_declining_run_does_not_trip() -> None:
     assert mod.find_trip(rounds_from([8, 6, 4])) is None
 
 
@@ -110,6 +110,11 @@ def test_two_rounds_do_not_trip() -> None:
 
 def test_single_noisy_round_does_not_trip() -> None:
     assert mod.find_trip(rounds_from([40, 3, 1])) is None
+
+
+def test_empty_round_breaks_the_streak() -> None:
+    """A clean bot review between two noisy ones is convergence."""
+    assert mod.find_trip(rounds_from([5, 0, 5])) is None
 
 
 def test_scattered_findings_do_not_trip() -> None:
@@ -140,53 +145,58 @@ def test_leading_path_returns_none_when_empty() -> None:
     assert mod.leading_path([]) is None
 
 
-# --- Decision-Seam Analysis marker -------------------------------------------
-
-_REAL_SECTION = (
-    "## Decision-Seam Analysis\n"
-    "The seam is the single admit verdict for a transcript line. It is an open\n"
-    "category that no pattern list closes, so we evidence-gate it and fix the\n"
-    "decision structurally with a warn-by-default direction.\n"
-)
+# --- Decision-Seam Analysis marker (machine token, not prose) ----------------
 
 
-def test_real_seam_section_suppresses_the_trip() -> None:
-    tripped, _seam, messages = mod.evaluate(rounds_from([5, 4, 5]), _REAL_SECTION)
-    assert tripped is False
-    assert any("SATISFIED" in m for m in messages)
+def test_marker_accepts_each_disposition() -> None:
+    for word in ("fix", "waive", "rescope"):
+        assert mod.recorded_seam_analysis(f"decision-seam-analysis: {word}") == word
 
 
-def test_bare_mention_does_not_suppress() -> None:
-    assert mod.body_declares_seam_analysis("No Decision-Seam Analysis has been completed") is False
+def test_marker_is_case_insensitive() -> None:
+    assert mod.recorded_seam_analysis("Decision-Seam-Analysis: FIX") == "fix"
 
 
-def test_promise_of_a_future_analysis_does_not_suppress() -> None:
-    assert mod.body_declares_seam_analysis("Deferred: add a Decision-Seam Analysis later") is False
+def test_marker_absent_returns_none() -> None:
+    assert mod.recorded_seam_analysis("no marker here") is None
 
 
-def test_empty_seam_section_does_not_suppress() -> None:
-    assert mod.body_declares_seam_analysis("## Decision-Seam Analysis\n\nTBD\n") is False
-
-
-def test_seam_section_without_a_disposition_does_not_suppress() -> None:
+def test_prose_alone_does_not_satisfy_the_marker() -> None:
+    """The old prose parser accepted this; a machine token cannot be argued with."""
     body = (
         "## Decision-Seam Analysis\n"
-        "The seam is the admit verdict, and it is over-broad because the category\n"
-        "of inputs it must recognise cannot be enumerated by any list of patterns.\n"
+        "The seam is the admit verdict and it is under-broad, but we are not\n"
+        "going to do anything about it in this slice.\n"
     )
-    assert mod.body_declares_seam_analysis(body) is False
+    assert mod.recorded_seam_analysis(body) is None
 
 
-def test_seam_section_ends_at_the_next_heading() -> None:
-    body = "## Decision-Seam Analysis\n\n## Verification\nfixed the seam decision here, at length, with detail\n"
-    assert mod.body_declares_seam_analysis(body) is False
+def test_marker_requires_a_known_disposition() -> None:
+    assert mod.recorded_seam_analysis("decision-seam-analysis: maybe") is None
+
+
+def test_marker_is_read_from_any_supplied_text() -> None:
+    """3k.2 asks for the analysis in the plan OR the PR body."""
+    plan = "## Deferred\n\ndecision-seam-analysis: waive\n"
+    assert mod.recorded_seam_analysis("pr body with no marker", plan) == "waive"
+
+
+def test_marker_must_be_line_anchored() -> None:
+    """Prose that mentions the token mid-sentence is not a recorded decision."""
+    assert mod.recorded_seam_analysis("we should add decision-seam-analysis: fix later") is None
+
+
+def test_recorded_marker_suppresses_the_trip() -> None:
+    tripped, _seam, messages = mod.evaluate(rounds_from([5, 5, 5]), "decision-seam-analysis: fix")
+    assert tripped is False
+    assert any("SATISFIED" in m for m in messages)
 
 
 # --- evaluate ----------------------------------------------------------------
 
 
 def test_evaluate_reports_trip_without_seam_analysis() -> None:
-    tripped, seam, messages = mod.evaluate(rounds_from([5, 4, 5]), "some body")
+    tripped, seam, messages = mod.evaluate(rounds_from([5, 5, 5]), "some body")
     assert tripped is True
     assert seam == "svc/classifier.py"
     assert any("3k.2 tripped" in m for m in messages)
@@ -266,7 +276,7 @@ def test_regression_multi_commit_push_still_trips() -> None:
 def test_regression_negated_marker_does_not_fail_open() -> None:
     """Finding 2: substring matching suppressed on 'No Decision-Seam Analysis'."""
     tripped, _seam, _messages = mod.evaluate(
-        rounds_from([5, 4, 5]), "No Decision-Seam Analysis has been completed"
+        rounds_from([5, 5, 5]), "No Decision-Seam Analysis has been completed"
     )
     assert tripped is True
 
@@ -283,29 +293,47 @@ def test_regression_seam_must_lead_the_last_round() -> None:
 
 def test_regression_endpoint_ratio_no_longer_trips_a_decline() -> None:
     """Finding 5a: [8,6,4] is declining, not flat or rising."""
-    assert mod.window_is_flat_or_rising([8, 6, 4]) is False
+    assert mod.find_trip(rounds_from([8, 6, 4])) is None
 
 
 def test_regression_one_noisy_round_cannot_disguise_a_collapse() -> None:
-    """Finding 5b: [4,100,2] passed the endpoint test; the mean rejects it."""
-    assert mod.window_is_flat_or_rising([4, 100, 2]) is False
+    """Finding 5b: [4,100,2] passed the old endpoint ratio; 2 < 4 now rejects it."""
+    assert mod.find_trip(rounds_from([4, 100, 2])) is None
+
+
+def test_regression_trend_is_measured_on_the_seam_not_the_total() -> None:
+    """Round 2: totals hid a declining seam behind unrelated findings."""
+    nodes = [
+        review(0, ["seam.py"] * 5),
+        review(1, ["seam.py"] * 4 + ["other.py"] * 3),
+        review(2, ["seam.py"] * 2 + ["other.py"] * 6),
+    ]
+    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex",))) is None
+
+
+def test_regression_empty_round_is_not_spliced_out() -> None:
+    """Round 2: skipping a clean review made non-adjacent rounds look adjacent."""
+    nodes = [review(0, ["s.py"] * 5), review(1, []), review(2, ["s.py"] * 5), review(3, ["s.py"] * 5)]
+    rounds = mod.bot_review_rounds(nodes, ("codex",))
+    assert [r.count for r in rounds] == [5, 0, 5, 5]
+    assert mod.find_trip(rounds) is None
 
 
 # --- real-world replay: ATLAS #2181 ------------------------------------------
 
 
-def test_atlas_2181_shape_trips_at_round_three() -> None:
-    """The observed per-round finding counts on ATLAS #2181, one seam throughout.
+def test_atlas_2181_replay_trips_well_before_the_end() -> None:
+    """Seam-only counts observed on ATLAS #2181, one file leading throughout.
 
-    18 bot review rounds, dead flat. The detector must fire at round 3 -- with
-    15 rounds still to come -- not somewhere near the end.
+    The threshold-free rule fires at round 6 of 18 -- later than the tuned
+    version did, which is the deliberate bias toward silence, and still with 12
+    rounds of that loop still to come.
     """
-    observed = [5, 9, 4, 3, 1, 5, 6, 4, 4, 5, 6, 3, 6, 5, 5, 4, 3, 5]
+    seam_counts = [5, 6, 2, 3, 1, 4, 5, 4, 4, 4, 5, 3, 6, 5, 4, 3, 3, 5]
     seam = "atlas_brain/services/content_factory_copy_verification.py"
-    rounds = rounds_from(observed, path=seam)
-    assert sum(r.count for r in rounds) == 83
+    rounds = rounds_from(seam_counts, path=seam)
     trip = mod.find_trip(rounds)
     assert trip is not None
-    trip_index, trip_seam, _window = trip
-    assert trip_index == 3
+    trip_index, trip_seam, _counts = trip
+    assert trip_index == 6
     assert trip_seam == seam

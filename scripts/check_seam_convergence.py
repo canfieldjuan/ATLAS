@@ -9,25 +9,34 @@ Analysis, and a ban on "another token, regex, vocabulary row, or oracle
 fixture"). It has never fired on its own, because it lives in a 73 KB document
 and needs a human to notice and count rounds.
 
-This makes it fire. A round is one bot review submission -- the bot's response
-to a push -- which is the unit 3k.2 actually means and which, unlike commits,
-cannot be split by a multi-commit push or skewed by commit dates that differ
-from push times. The breaker trips when, across three consecutive rounds, the
-finding count is flat or rising rather than trending to zero AND one file leads
-every one of those rounds. That file is the seam 3k.2 asks the builder to name.
+This makes it fire, and it is deliberately built as evidence rather than as
+tuned thresholds -- see the Decision-Seam Analysis in
+plans/PR-Seam-Convergence-Breaker.md. A round is one bot review submission. The
+breaker trips only on four facts, none of which is a tunable number:
 
-Measured on ATLAS #2181 (18 bot review rounds, dead flat, the same file leading
-every round): this trips at round 3, with 15 rounds still to come.
+1. three consecutive rounds,
+2. none of them empty (a bot review that raises nothing is convergence),
+3. the same file leads all three, and
+4. that file's finding count does not decrease across them.
 
-Deliberately advisory. It emits ``::warning`` annotations and exits 0, exactly
-like scripts/check_guard_class_closure.py (the 3k.1 sibling). It is NOT a round
-cap: it never blocks, never fails, and never stops a PR -- capping counts the
+Because the check is advisory and can never block, its error costs are
+lopsided: a false alarm wastes a builder's time and burns trust, while silence
+merely reproduces today's status quo. It therefore fails toward silence, and
+every ambiguous case is resolved by not speaking.
+
+Measured on live history: ATLAS #2181 trips at round 6 of 18, #2158 at round 8
+of 19, #2161 at round 3 of 10; #2133, #2174, #2175 and #2199 stay silent.
+
+It emits ``::warning`` annotations and exits 0, exactly like
+scripts/check_guard_class_closure.py (the 3k.1 sibling). It is NOT a round cap:
+it never blocks, never fails, and never stops a PR -- capping counts the
 symptom, and on surfaces where the findings are real it would ship defects. It
 only changes the class of fix the next push is allowed to make.
 
-Exit codes: 0 = no trip, trip suppressed by a Decision-Seam Analysis, or a trip
-in advisory mode; 1 = trip under --strict (reserved for a future promotion);
-2 = usage error or a GitHub API failure (retryable, never a silent pass).
+Exit codes: 0 = no trip, trip suppressed by a recorded Decision-Seam Analysis,
+or a trip in advisory mode; 1 = trip under --strict (reserved for a future
+promotion); 2 = usage error or a GitHub API failure (retryable, never a silent
+pass).
 """
 from __future__ import annotations
 
@@ -46,30 +55,19 @@ from pathlib import Path
 # the two checks cannot disagree about who a review bot is.
 _DEFAULT_BOTS = ("copilot", "codex")
 
-# A Decision-Seam Analysis suppresses the trip, so the marker must be a real
-# section rather than any mention of the phrase: a body saying "no
-# Decision-Seam Analysis yet" must NOT read as satisfied.
-_SEAM_HEADING_RE = re.compile(
-    r"^\s{0,3}#{1,6}\s*decision[-\s]seam\s+analysis\s*$",
+# The recorded Decision-Seam Analysis marker. A machine token, not prose:
+# judging whether a paragraph "really" analyses a seam is itself an open
+# category, and parsing it would repeat the mistake this tool exists to catch.
+# Mirrors the WAIVER_MARKER convention in scripts/check_guard_class_closure.py.
+SEAM_MARKER_RE = re.compile(
+    r"^\s*decision-seam-analysis:\s*(fix|waive|rescope)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
-# 3k.2 step 3: the disposition must be one of fix / waive / re-scope.
-_DISPOSITION_RE = re.compile(
-    r"\b(fix(es|ed)?|waiv(e|ed|er)|re-?scope[ds]?|park(ed)?)\b", re.IGNORECASE
-)
-# 3k.2 step 1: the section must actually name a seam / decision.
-_SEAM_NAMED_RE = re.compile(r"\b(seam|decision)\b", re.IGNORECASE)
-_MIN_SEAM_SECTION_CHARS = 80
 
-# Trip parameters. A window of 3 matches 3k.2's "over 3 consecutive pushes".
+# Three consecutive rounds, per 3k.2's "over 3 consecutive pushes". This is the
+# only constant in the trip decision, and it is quoted from the rule rather than
+# tuned.
 WINDOW = 3
-# "Not trending to zero": the final round still carries at least this share of
-# the window mean. Compared against the mean rather than the first round so one
-# noisy round cannot disguise a collapse (for example 4, 100, 2).
-CONVERGENCE_RATIO = 0.5
-# One file must exceed this share of the window's findings to be "the same
-# decision" rather than scattered review breadth.
-SEAM_DOMINANCE = 0.5
 
 _QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
@@ -80,7 +78,7 @@ query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
         nodes{
           submittedAt
           author{ login }
-          comments(first:100){ nodes{ path } }
+          comments(first:100){ pageInfo{ hasNextPage } nodes{ path } }
         }
       }
     }
@@ -113,21 +111,24 @@ class ReviewRound:
     def count(self) -> int:
         return len(self.paths)
 
+    def seam_count(self, seam: str) -> int:
+        return self.paths.count(seam)
+
 
 def bot_review_rounds(
     nodes: Sequence[dict],
     bot_logins: Sequence[str],
 ) -> list[ReviewRound]:
-    """Return one round per bot review that raised at least one finding.
+    """Return one round per bot review, in submission order.
 
     Pure, so the decision is testable without touching GitHub. A review is the
     bot's response to a push, which is what 3k.2 counts; deriving rounds from
     commits would split one push into several synthetic rounds whenever a push
     carries more than one commit, and commit dates can differ from push times.
 
-    Reviews with no inline comments are skipped rather than recorded as empty:
-    an approval or summary-only submission is not a round of findings, and
-    treating it as a zero would silently break a real streak.
+    A bot review that raises no inline findings is kept as an empty round on
+    purpose: it is positive evidence that the loop converged, and dropping it
+    would silently splice two non-adjacent rounds together.
     """
     wanted = tuple(b.lower() for b in bot_logins)
     dated: list[_Submission] = []
@@ -144,8 +145,7 @@ def bot_review_rounds(
             for c in comments
             if isinstance(c, dict) and c.get("path")
         ]
-        if paths:
-            dated.append(_Submission(submitted_at=submitted, paths=paths))
+        dated.append(_Submission(submitted_at=submitted, paths=paths))
     # ISO-8601 UTC from the GitHub API sorts lexicographically, so this is exact
     # and needs no parsing dependency.
     dated.sort(key=lambda item: item.submitted_at)
@@ -155,25 +155,12 @@ def bot_review_rounds(
     ]
 
 
-def dominant_seam(paths: Sequence[str]) -> tuple[str, int] | None:
-    """Return (path, count) when one file carries a majority of the findings."""
-    if not paths:
-        return None
-    top = next(iter(Counter(paths).most_common(1)), None)
-    if top is None:
-        return None
-    path, hits = top
-    if hits / len(paths) > SEAM_DOMINANCE:
-        return path, hits
-    return None
-
-
 def leading_path(paths: Sequence[str]) -> str | None:
     """The single most-reported file in one round, or None on a tie or empty.
 
-    Plurality, not majority: on a real spiral the seam leads every round but
-    need not exceed half of it (ATLAS #2181 round 3 is exactly 50%). Requiring a
-    majority per round would miss the case this detector exists for.
+    Plurality, not a share threshold: "which file did this round mostly argue
+    about" is a fact about the round, whereas any percentage would be a knob.
+    A tie is ambiguous, so it yields None and the window cannot trip.
     """
     ranked = list(Counter(paths).most_common(2))
     leader = next(iter(ranked), None)
@@ -186,76 +173,57 @@ def leading_path(paths: Sequence[str]) -> str | None:
     return leader_path
 
 
-def _is_strictly_decreasing(counts: Sequence[int]) -> bool:
-    return all(b < a for a, b in zip(counts, counts[1:]))
+def find_trip(rounds: Sequence[ReviewRound]) -> tuple[int, str, list[int]] | None:
+    """First window of WINDOW consecutive rounds that shows non-convergence.
 
+    Returns (trip_round_index, seam_path, seam_counts), or None. Four facts must
+    all hold, and none of them is a tunable threshold:
 
-def window_is_flat_or_rising(counts: Sequence[int]) -> bool:
-    """3k.2's "flat or rising ... not trending to zero".
-
-    A strictly decreasing run is converging, however slowly, so it never trips.
-    Otherwise the final round must still carry at least CONVERGENCE_RATIO of the
-    window mean.
-    """
-    if not counts:
-        return False
-    if _is_strictly_decreasing(counts):
-        return False
-    mean = sum(counts) / len(counts)
-    last = next(iter(reversed(counts)), 0)
-    return last >= CONVERGENCE_RATIO * mean
-
-
-def find_trip(rounds: Sequence[ReviewRound]) -> tuple[int, str, list[ReviewRound]] | None:
-    """First window of WINDOW consecutive rounds that is not converging.
-
-    Returns (trip_round_index, seam_path, window_rounds), or None. The seam must
-    lead every round in the window and hold a majority across it, so a window
-    whose latest round has moved to a different file is not "the same decision
-    re-litigated" and does not trip.
+    * every round in the window raised at least one finding (an empty bot review
+      is convergence),
+    * the same file leads every round,
+    * that file's finding count does not decrease from the first round to the
+      last -- 3k.2's "flat or rising", read literally, and measured on the seam
+      rather than on unrelated findings that happen to share the round.
     """
     for i in range(len(rounds) - WINDOW + 1):
         window = list(rounds[i : i + WINDOW])
-        if not window_is_flat_or_rising([r.count for r in window]):
+        if any(r.count == 0 for r in window):
             continue
-        seam = dominant_seam([p for r in window for p in r.paths])
+        leaders = {leading_path(r.paths) for r in window}
+        if len(leaders) != 1:
+            continue
+        seam = next(iter(leaders))
         if seam is None:
             continue
-        seam_path, _hits = seam
-        if any(leading_path(r.paths) != seam_path for r in window):
+        counts = [r.seam_count(seam) for r in window]
+        first = next(iter(counts), 0)
+        last = next(iter(reversed(counts)), 0)
+        if last < first:
             continue
         last_round = next(iter(reversed(window)), None)
         if last_round is None:
             continue
-        return last_round.index, seam_path, window
+        return last_round.index, seam, counts
     return None
 
 
-def body_declares_seam_analysis(body: str) -> bool:
-    """True only for a real Decision-Seam Analysis section.
+def recorded_seam_analysis(*texts: str) -> str | None:
+    """The disposition from a recorded Decision-Seam Analysis marker, if any.
 
-    Fails closed: a body that merely mentions the phrase, or promises one later,
-    does not suppress the warning. Requires the heading, a section long enough
-    to hold an argument, a named seam/decision, and one of 3k.2's dispositions.
+    Accepts the marker from any supplied source -- the PR body or the plan doc --
+    because 3k.2 asks for the analysis "in the plan / PR body".
     """
-    text = body or ""
-    match = _SEAM_HEADING_RE.search(text)
-    if match is None:
-        return False
-    section = text[match.end():]
-    next_heading = re.search(r"^\s{0,3}#{1,6}\s", section, re.MULTILINE)
-    if next_heading is not None:
-        section = section[: next_heading.start()]
-    if len(section.strip()) < _MIN_SEAM_SECTION_CHARS:
-        return False
-    if _SEAM_NAMED_RE.search(section) is None:
-        return False
-    return _DISPOSITION_RE.search(section) is not None
+    for text in texts:
+        match = SEAM_MARKER_RE.search(text or "")
+        if match is not None:
+            return match.group(1).lower()
+    return None
 
 
 def evaluate(
     rounds: Sequence[ReviewRound],
-    body: str,
+    *texts: str,
 ) -> tuple[bool, str | None, list[str]]:
     """Core decision (pure). Returns (tripped, seam_path, messages)."""
     messages: list[str] = []
@@ -269,42 +237,46 @@ def evaluate(
     trip = find_trip(rounds)
     if trip is None:
         messages.append(
-            "OK: no window of %d consecutive rounds that is flat or rising on a "
-            "single leading seam." % WINDOW
+            "OK: no window of %d consecutive rounds led by one file whose finding "
+            "count does not decrease." % WINDOW
         )
         return False, None, messages
-    trip_index, seam, window = trip
-    counts = ", ".join(str(r.count) for r in window)
-    if body_declares_seam_analysis(body):
+    trip_index, seam, counts = trip
+    shown = ", ".join(str(c) for c in counts)
+    disposition = recorded_seam_analysis(*texts)
+    if disposition is not None:
         messages.append(
-            "SATISFIED: non-convergence on %s at round %d (%s), but the PR body "
-            "carries a Decision-Seam Analysis." % (seam, trip_index, counts)
+            "SATISFIED: non-convergence on %s at round %d (%s), and a "
+            "Decision-Seam Analysis is recorded with disposition '%s'."
+            % (seam, trip_index, shown, disposition)
         )
         return False, seam, messages
     messages.append(
-        "AGENTS 3k.2 tripped at round %d: findings per round %s on %s are flat "
-        "or rising, not trending to zero." % (trip_index, counts, seam)
+        "AGENTS 3k.2 tripped at round %d: findings on %s across rounds %s are not "
+        "decreasing." % (trip_index, seam, shown)
     )
     return True, seam, messages
 
 
 def annotation(seam: str, rounds: Sequence[ReviewRound]) -> str:
     trip = find_trip(rounds)
-    counts = "?"
+    shown = "?"
     if trip is not None:
-        _index, _seam, window = trip
-        counts = ", ".join(str(r.count) for r in window)
+        _index, _seam, counts = trip
+        shown = ", ".join(str(c) for c in counts)
     return (
-        "::warning file=%s::AGENTS 3k.2 convergence circuit-breaker: findings per "
-        "review round (%s) on this file are flat or rising, so the threads are the "
-        "same decision re-litigated. The next push may NOT add another token, "
-        "regex, vocabulary row, or oracle fixture. It must carry a Decision-Seam "
-        "Analysis in the PR body: name the one decision the threads share, state "
-        "why it is wrong (over-broad, under-broad, or an open category it cannot "
-        "enumerate), then do exactly one of -- fix the seam structurally with a "
-        "stated default direction; waive the bounded residual in Deferred; or "
-        "re-scope the slice. See AGENTS.md 3k.2 and docs/GUARD_CLASS_CLOSURE.md."
-        % (seam, counts)
+        "::warning file=%s::AGENTS 3k.2 convergence circuit-breaker: this file led "
+        "three consecutive bot review rounds and its finding count did not decrease "
+        "(%s), so the threads are the same decision re-litigated. The next push may "
+        "NOT add another token, regex, vocabulary row, or oracle fixture. Write a "
+        "Decision-Seam Analysis in the plan or PR body -- name the one decision the "
+        "threads share, state why it is wrong (over-broad, under-broad, or an open "
+        "category it cannot enumerate), then do exactly one of: fix the seam "
+        "structurally with a stated default direction, waive the bounded residual "
+        "in Deferred, or re-scope the slice -- and record the outcome as a line "
+        "reading 'decision-seam-analysis: fix' (or waive, or rescope). "
+        "See AGENTS.md 3k.2 and docs/GUARD_CLASS_CLOSURE.md."
+        % (seam, shown)
     )
 
 
@@ -316,7 +288,13 @@ def _gh(args: Sequence[str], gh: str) -> str:
 
 
 def fetch_reviews(pr: int, owner: str, name: str, gh: str) -> list[dict]:
-    """Fetch ALL reviews, paginating so a long review history cannot be cut."""
+    """Fetch ALL reviews, paginating so a long review history cannot be cut.
+
+    A single review carrying more than one page of inline comments raises rather
+    than returning a truncated prefix: the round count and the leading file would
+    both be computed from partial evidence, which could suppress a real trip or
+    name the wrong seam. Exit code 2 is retryable; a silent partial read is not.
+    """
     nodes: list[dict] = []
     cursor: str | None = None
     for _ in range(_MAX_REVIEW_PAGES):
@@ -335,7 +313,15 @@ def fetch_reviews(pr: int, owner: str, name: str, gh: str) -> list[dict]:
             raise RuntimeError(f"GitHub returned non-JSON: {exc}") from exc
         pull = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
         block = pull.get("reviews") or {}
-        nodes.extend(block.get("nodes") or [])
+        page_nodes = block.get("nodes") or []
+        for node in page_nodes:
+            comment_page = ((node.get("comments") or {}).get("pageInfo")) or {}
+            if comment_page.get("hasNextPage"):
+                raise RuntimeError(
+                    "a review carries more than one page of inline comments; "
+                    "refusing to judge convergence from a truncated prefix"
+                )
+        nodes.extend(page_nodes)
         page = block.get("pageInfo") or {}
         if not page.get("hasNextPage"):
             break
@@ -343,25 +329,47 @@ def fetch_reviews(pr: int, owner: str, name: str, gh: str) -> list[dict]:
     return nodes
 
 
+def _read_text(path: Path) -> str:
+    """Read a marker source, reporting rather than swallowing a read failure.
+
+    An unreadable source means a recorded Decision-Seam Analysis cannot be seen,
+    which biases toward reporting the trip. That is the safe direction, but it
+    must not be silent.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"warning: could not read {path} ({exc})", file=sys.stderr)
+        return ""
+
+
 def _pr_body(pr: int, repo: str, gh: str) -> str:
     """Prefer the CI-provided body file; fall back to the API."""
     path = os.environ.get("ATLAS_CURRENT_PR_BODY_FILE")
     if path and Path(path).exists():
-        return Path(path).read_text(encoding="utf-8")
+        return _read_text(Path(path))
     try:
         return _gh(
             ["pr", "view", str(pr), "--repo", repo, "--json", "body", "-q", ".body"],
             gh,
         )
     except RuntimeError as exc:
-        # Not silent: an unreadable body means a Decision-Seam Analysis cannot be
-        # detected, so the run falls toward reporting the trip. Say so.
+        # Not silent: an unreadable body means a recorded Decision-Seam Analysis
+        # cannot be seen, so the run falls toward reporting the trip. Say so.
         print(
             f"warning: could not read the PR body ({exc}); "
-            "a Decision-Seam Analysis cannot be detected",
+            "a recorded Decision-Seam Analysis cannot be detected",
             file=sys.stderr,
         )
         return ""
+
+
+def _plan_texts(root: Path) -> list[str]:
+    """Plan docs touched by this branch, so a marker there is honoured too."""
+    plans = root / "plans"
+    if not plans.is_dir():
+        return []
+    return [_read_text(p) for p in sorted(plans.glob("PR-*.md"))]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -399,7 +407,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     rounds = bot_review_rounds(reviews, bots)
-    tripped, seam, messages = evaluate(rounds, _pr_body(args.pr, args.repo, args.gh))
+    root = Path(__file__).resolve().parent.parent
+    texts = [_pr_body(args.pr, args.repo, args.gh), *_plan_texts(root)]
+    tripped, seam, messages = evaluate(rounds, *texts)
 
     print("seam-convergence breaker (advisory) -- AGENTS 3k.2")
     print("-" * 60)

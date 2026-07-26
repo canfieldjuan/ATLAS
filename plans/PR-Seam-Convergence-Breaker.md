@@ -103,7 +103,8 @@ dominance, and by never blocking); GraphQL pagination on very large PRs (capped 
 lexicographically ordered, so string comparison is exact and avoids a parsing
 dependency).
 
-- Reviewer rules triggered: R1, R2, R10, R13. R10 and R2 come from the evaluator /
+- Reviewer rules triggered: R1, R2, R10, R12, R13. R12 covers the new GitHub Actions
+  workflow and CI job this slice introduces. R10 and R2 come from the evaluator /
   gate-predicate shape of the detector; R13 from its classifier shape (the boundary
   must be probed from both sides); R1 from the repo-wide CI surface.
 
@@ -112,28 +113,74 @@ dependency).
 `bot_review_rounds` turns each bot review submission into one round carrying the
 paths it raised findings on. **A review, not a commit, is the unit**: a review is
 the bot's response to a push, whereas one push can contain several commits, which
-would split a single round into synthetic empty ones and break a real streak.
-Reviews with no inline comments are skipped rather than recorded as zero, since an
-approval is not a round of findings.
+would split a single round into synthetic empty ones. A bot review that raises
+nothing is kept as an empty round rather than dropped -- it is evidence the loop
+converged, and dropping it would splice two non-adjacent rounds together.
 
-`window_is_flat_or_rising` implements 3k.2's "flat or rising ... not trending to
-zero" as two conditions: a strictly decreasing run never trips, however slowly it
-declines; and the final round must still carry at least half the window mean, so a
-single noisy round cannot disguise a collapse.
+`find_trip` slides a 3-round window and trips only on facts, never on a tuned
+number: every round in the window raised at least one finding, the same file leads
+all three (`leading_path`, plurality, None on a tie), and that file's own finding
+count does not decrease from the first round to the last. The count is measured on
+the seam, so unrelated findings that happen to share a round cannot hold a
+declining seam up.
 
-`find_trip` slides a 3-round window and additionally requires the seam to **lead
-every round** in the window and hold a majority across it. Leading is plurality,
-not majority, because on a real spiral the seam leads each round without
-necessarily exceeding half of it. A window whose latest round has moved to a
-different file is not the same decision re-litigated and does not trip.
+`recorded_seam_analysis` looks for a line-anchored machine token,
+`decision-seam-analysis: fix|waive|rescope`, in the PR body or any plan doc. It
+deliberately does not parse prose: deciding whether a paragraph "really" analyses a
+seam is itself an open category.
 
-`body_declares_seam_analysis` fails closed. It requires a real
-`Decision-Seam Analysis` heading, a section long enough to hold an argument, a
-named seam or decision, and one of 3k.2's three dispositions, so a body that only
-mentions the phrase (or promises one later) does not suppress the warning.
+`fetch_reviews` paginates reviews and **raises** if any single review carries more
+than one page of inline comments, rather than judging convergence from a truncated
+prefix. Exit code 2 is retryable; a silent partial read is not.
 
 On a trip the detector prints a `::warning file=<seam>::` annotation naming the
 seam and restating 3k.2's required next action, then returns 0.
+
+## Decision-Seam Analysis
+
+Applied to this PR's own review loop, at round 2, before the breaker could fire on
+it. Round 1 raised 5 findings and round 2 raised 6, five of the six on
+`scripts/check_seam_convergence.py`. The detector run against this PR reported two
+rounds and stayed silent -- it needs three -- so this is voluntary, one round early.
+
+**The seam.** The detector's admit decision, "is this review window
+non-convergent?", was implemented as a conjunction of tuned numbers: a convergence
+ratio against the window mean, a per-round leading share, a window-wide dominance
+majority, and a prose parser deciding whether a paragraph counted as an analysis.
+
+**Why that decision is wrong.** It is an open category answered by enumeration.
+For any threshold there is an adjacent case that argues for a different value, so
+review can surface correct objections indefinitely -- which is exactly what rounds 1
+and 2 did, each legitimately. `AGENTS.md` 3k.3 says to evidence-gate an open
+recognizer rather than enumerate it. Building an open-category classifier to detect
+open-category classifiers is the same mistake one level up.
+
+**Disposition: fix the seam structurally.** The trip decision now rests on four
+facts and no tunable number:
+
+1. three consecutive rounds (quoted from 3k.2, not tuned),
+2. none of them empty -- a bot review that raises nothing is convergence evidence,
+3. the same file leads all three (plurality, a fact about each round), and
+4. that file's finding count does not decrease across them.
+
+The convergence ratio, the mean comparison, the dominance majority and the prose
+parser are all deleted. The recorded analysis is now a machine token
+(`decision-seam-analysis: fix|waive|rescope`), a closed category, read from the plan
+or the PR body -- because judging prose was itself the open-category trap.
+
+**Stated default direction.** The check is advisory and can never block, so its
+error costs are lopsided: a false alarm wastes a builder's time and burns trust in
+the check, while silence merely reproduces today's status quo, which is no detector
+at all. The cheap error is silence. Every ambiguous case -- a tie for the leading
+file, an empty round, a declining seam -- resolves to not speaking.
+
+**Cost of the change, stated rather than hidden.** It fires later. On ATLAS #2181 it
+trips at round 6 instead of round 3, on #2158 at round 8, on #2161 at round 3. That
+is 12, 11 and 7 rounds of warning respectively, against loops that ran 18, 19 and 10
+rounds. Trading three rounds of earliness for the removal of every knob is the
+intended direction, not a regression.
+
+decision-seam-analysis: fix
 
 ## Intentional
 
@@ -173,6 +220,11 @@ seam and restating 3k.2's required next action, then returns 0.
 - **Port to the EOM repositories.** Codex reviews `eom-timetracker` and the website
   too, but neither carries 3k.2; the rule has to land in their `AUDIT_PROTOCOL.md`
   first.
+- **Waived residual, recorded rather than fixed:** the breaker can be defeated by a
+  builder who alternates the file they patch, or who draws a clean bot round between
+  spirals. Both are silence-side errors and therefore acceptable under the stated
+  default direction; closing them would reintroduce the tuned-threshold surface this
+  slice just removed.
 - Parked hardening: none.
 
 ## Verification
@@ -180,21 +232,21 @@ seam and restating 3k.2's required next action, then returns 0.
 Commands run locally, with results:
 
 1. Detector unit tests -- `python -m pytest tests/test_check_seam_convergence.py -q
-   --noconftest` -- **39 passed**, including a regression test for each of the five
-   review findings on this PR and explicit `pytest.raises` coverage of every error
-   path the module contracts to raise on.
-2. Live replay, must trip -- the detector run against PR 2181 reported: tripped at
-   round 3, findings per round 5, 9, 4, seam
-   `atlas_brain/services/content_factory_copy_verification.py`, exit 0.
-3. Live replay, must stay silent -- PRs 2174, 2175 and 2133 each reported "OK: no
-   window of 3 consecutive rounds...", exit 0. 2133 is the largest diff sampled
-   (+5,641), proving the detector does not key on size.
-4. Second-side probe on the other known spirals -- PR 2158 tripped at round 6 on the
-   live EOM customer-import script (4, 5, 3); PR 2161 tripped at round 3 on the EOM
-   portal customer-sync script (4, 11, 3).
+   --noconftest` -- **44 passed**, including a regression for every finding from both
+   review rounds and `pytest.raises` coverage of each error path.
+2. Live replay, must trip -- PR 2181 trips at round 6 of 18 on
+   `atlas_brain/services/content_factory_copy_verification.py` (seam counts 3, 1, 4);
+   PR 2158 at round 8 of 19; PR 2161 at round 3 of 10. All exit 0.
+3. Live replay, must stay silent -- PRs 2174, 2175 and 2133 each report "OK: no window
+   of 3 consecutive rounds...". 2133 is the largest diff sampled (+5,641), proving the
+   detector does not key on size.
+4. Self-check -- run against this PR at two review rounds it reports OK, which is
+   correct: three are required. The Decision-Seam Analysis above was written
+   voluntarily, one round before the breaker could fire.
 5. Workflow security posture audit -- passed, with no warning attributed to the new
    workflow.
-6. Plan doc audit, plan/code consistency, and reviewer rules triggered -- all pass.
+6. Plan doc audit, plan/code consistency, and reviewer rules triggered -- all pass;
+   the full local gauntlet reports 18 checks green.
 7. Repository ASCII check for Python files -- passed.
 8. Maturity sweep on the scripts lane -- the detector scores 6, matching the 3k.1
    sibling and below the lane's min-score of 8, so no baseline entry is added.
@@ -204,10 +256,10 @@ Commands run locally, with results:
 | File | LOC |
 |---|---:|
 | `.github/workflows/seam_convergence.yml` | 88 |
-| `plans/PR-Seam-Convergence-Breaker.md` | 216 |
-| `scripts/check_seam_convergence.py` | 416 |
-| `tests/test_check_seam_convergence.py` | 312 |
-| **Total** | **1032** |
+| `plans/PR-Seam-Convergence-Breaker.md` | 268 |
+| `scripts/check_seam_convergence.py` | 426 |
+| `tests/test_check_seam_convergence.py` | 340 |
+| **Total** | **1122** |
 
 Over the 400 LOC soft cap and carrying a diff-budget override in the PR body: the
 detector is ~350 lines and the remainder is the both-direction test suite the R13
