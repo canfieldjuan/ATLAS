@@ -68,8 +68,19 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags origin "${BASE_REF}"
-          python scripts/select_impacted_tests.py \
-            --base "origin/${BASE_REF}" > /tmp/selected.txt
+          # The workflow definition comes from the merged ref, but the tree is
+          # the PR head. Any branch cut before the selector landed has no
+          # scripts/select_impacted_tests.py, and calling it there fails the
+          # gate on every such PR -- unrelated work broken purely because main
+          # advanced. Absent selector is just another input we cannot map:
+          # escalate to FULL, which is what the selector itself would do.
+          if [ ! -f scripts/select_impacted_tests.py ]; then
+            echo "selector absent from this PR head (branch predates it); running FULL"
+            echo FULL > /tmp/selected.txt
+          else
+            python scripts/select_impacted_tests.py \
+              --base "origin/${BASE_REF}" > /tmp/selected.txt
+          fi
           echo "--- selection ---"
           cat /tmp/selected.txt
 
