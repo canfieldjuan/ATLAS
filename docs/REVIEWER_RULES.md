@@ -407,7 +407,13 @@ subsequent review.
 **When retirement is considered:** on each addition. Adding a durable mechanism
 is the trigger to examine one existing candidate for removal, so the ratchet
 self-balances and there is no separate cadence, owner, or audit to maintain.
-**Record which candidate you examined** in `REVIEW_MISSES.md` with the outcome,
+**Record which candidate you examined** in `REVIEW_MISSES.md` with the outcome.
+The ledger's columns record the original miss, not the retirement pass, so this
+needs its own row shape -- add a **Retirement reviews** table beside the ledger
+with `Date | Mechanism | Last fired | Outcome (kept / removed) | Replacement
+coverage`. Without a durable `Date` and `Mechanism` per pass, the
+least-recently-examined ordering below cannot be computed from repository state
+and the rotation degrades to whatever the current reviewer remembers.
 and take the least-recently-examined mechanism -- when every mechanism has been
 examined once the rotation simply starts again, so a retained one is re-checked
 against fresh evidence rather than becoming permanently ineligible. Keying
