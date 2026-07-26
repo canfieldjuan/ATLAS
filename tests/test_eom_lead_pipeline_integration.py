@@ -281,10 +281,105 @@ class _TransactionPool:
         async with self._pool.acquire() as connection:
             return await connection.fetchrow(*args)
 
+    async def fetch(self, *args):
+        async with self._pool.acquire() as connection:
+            return await connection.fetch(*args)
+
     @asynccontextmanager
     async def acquire(self):
         async with self._pool.acquire() as connection:
             yield connection
+
+
+@pytest.mark.asyncio
+async def test_atomic_eom_identityless_relays_are_idempotent_and_emit_after_commit(
+    monkeypatch,
+):
+    database_url = os.environ.get(DATABASE_URL_ENV)
+    if not database_url:
+        pytest.skip(f"{DATABASE_URL_ENV} is not configured")
+
+    schema = f"atlas_eom_relay_{uuid.uuid4().hex}"
+    setup = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await setup.execute(f'CREATE SCHEMA "{schema}"')
+        await setup.execute(f'SET search_path TO "{schema}", public')
+        await setup.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
+        for name in (
+            "035_contacts.sql",
+            "346_contact_lead_pipeline.sql",
+            "351_eom_lead_lifecycle_events.sql",
+        ):
+            await setup.execute((MIGRATIONS / name).read_text())
+
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=2,
+            server_settings={"search_path": f'"{schema}", public'},
+        )
+        import atlas_brain.reasoning.producers as producers
+        import atlas_brain.storage.database as db_mod
+
+        monkeypatch.setattr(db_mod, "get_db_pool", lambda: _TransactionPool(pool))
+        emitted: list[dict[str, object]] = []
+
+        async def record_event(event_type, source, payload, **kwargs):
+            assert event_type == "crm.contact_created"
+            assert source == "crm_provider"
+            assert kwargs["entity_type"] == "contact"
+            assert await setup.fetchval(
+                "SELECT COUNT(*) FROM contacts WHERE id = $1",
+                uuid.UUID(str(payload["contact_id"])),
+            ) == 1
+            emitted.append(dict(payload))
+
+        monkeypatch.setattr(producers, "emit_if_enabled", record_event)
+        provider = DatabaseCRMProvider()
+
+        async def resolve(relay_id: str):
+            return await resolve_or_create_eom_inbound_lead(
+                provider,
+                full_name="Relay-only lead",
+                phone=None,
+                email=None,
+                address=None,
+                source=" web ",
+                source_ref=f" web3forms:{relay_id} ",
+            )
+
+        relay_ids = [f"relay-message-{index}" for index in range(1, 6)]
+        for relay_id in relay_ids:
+            created, replayed = await asyncio.gather(
+                resolve(relay_id), resolve(relay_id)
+            )
+            assert created["id"] == replayed["id"]
+            assert {created["_was_created"], replayed["_was_created"]} == {False, True}
+
+        assert len(emitted) == len(relay_ids)
+        async with pool.acquire() as check:
+            assert await check.fetchval("SELECT COUNT(*) FROM contacts") == len(relay_ids)
+            assert await check.fetchval(
+                "SELECT COUNT(*) FROM eom_lead_lifecycle_events WHERE event_type = 'lead_created'"
+            ) == len(relay_ids)
+
+        async def fail_event(*_args, **_kwargs):
+            raise RuntimeError("reasoning delivery unavailable")
+
+        monkeypatch.setattr(producers, "emit_if_enabled", fail_event)
+        committed = await resolve("relay-event-failure")
+        assert committed["_was_created"] is True
+        async with pool.acquire() as check:
+            assert await check.fetchval(
+                "SELECT COUNT(*) FROM contacts WHERE source = 'web' AND source_ref = $1",
+                "web3forms:relay-event-failure",
+            ) == 1
+    finally:
+        if pool is not None:
+            await pool.close()
+        await setup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await setup.close()
 
 
 @pytest.mark.asyncio
@@ -436,6 +531,19 @@ async def test_atomic_eom_inbound_resolution_is_active_phone_first_and_blocks_cl
         )
         assert phone_match["id"] == legacy_phone_id
         assert phone_match["_was_created"] is False
+
+        same_type_merge = await provider.create_contact(
+            {
+                "full_name": "Shared Email, Backfilled",
+                "email": "shared@example.com",
+                "business_context_id": "effingham_maids",
+                "contact_type": "lead",
+                "source": "email_backfill",
+            }
+        )
+        assert same_type_merge["id"] == eom_email_id
+        assert same_type_merge["contact_type"] == "lead"
+        assert same_type_merge["source"] == "email_backfill"
 
         archived_match = await resolve_or_create_eom_inbound_lead(
             provider,

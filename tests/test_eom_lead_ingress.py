@@ -75,6 +75,24 @@ async def test_unmatched_eom_inbound_is_created_only_as_new_lead():
 
 
 @pytest.mark.asyncio
+async def test_identityless_eom_inbound_requires_a_stable_relay_event_identity():
+    crm = _crm()
+
+    with pytest.raises(ValueError, match="stable relay event identity"):
+        await resolve_or_create_eom_inbound_lead(
+            crm,
+            full_name="Name only",
+            phone=None,
+            email=None,
+            address=None,
+            source="web",
+            source_ref=None,
+        )
+
+    crm.find_or_create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("contact_type", ["lead", "customer"])
 async def test_matching_eom_contact_is_returned_unchanged(contact_type):
     existing = {
@@ -237,6 +255,31 @@ async def test_web3forms_relay_uses_eom_lead_resolver(monkeypatch):
     assert kwargs["preserve_existing"] is True
     assert kwargs["source_ref"] == "web3forms:web3forms-message-1"
     assert kwargs["tags"] == ["web3forms"]
+
+
+@pytest.mark.asyncio
+async def test_web3forms_name_only_without_message_id_does_not_create_unanchored_lead(
+    monkeypatch,
+):
+    from atlas_brain.autonomous.tasks import gmail_digest
+    import atlas_brain.services.crm_provider as crm_provider
+
+    crm = _crm()
+    monkeypatch.setattr(crm_provider, "get_crm_provider", lambda: crm)
+
+    await gmail_digest._process_lead_emails(
+        [
+            {
+                "id": "",
+                "category": "lead",
+                "reply_to": "",
+                "body_text": "Name: Unanchored relay",
+                "subject": "Estimate request",
+            }
+        ]
+    )
+
+    crm.find_or_create_contact.assert_not_awaited()
 
 
 @pytest.mark.asyncio

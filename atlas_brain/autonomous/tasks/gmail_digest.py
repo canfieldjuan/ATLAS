@@ -350,9 +350,16 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
             submitter_email = reply_to_email or fields.get("email", "")
             submitter_name = fields.get("name", "")
             submitter_phone = fields.get("phone")
+            relay_message_id = str(e.get("id") or "").strip()
 
             if not submitter_email and not submitter_name:
                 logger.debug("Lead email %s: no submitter info found, skipping CRM", e.get("id"))
+                continue
+            if not submitter_email and not submitter_phone and not relay_message_id:
+                logger.debug(
+                    "Lead email %s: name-only relay has no stable message identity, skipping CRM",
+                    e.get("id"),
+                )
                 continue
 
             # Stash lead info for ntfy enrichment
@@ -370,7 +377,7 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
                 phone=submitter_phone,
                 address=None,
                 source="web",
-                source_ref=f"web3forms:{e.get('id', '')}",
+                source_ref=(f"web3forms:{relay_message_id}" if relay_message_id else None),
                 tags=["web3forms"],
             )
             if not contact.get("id"):

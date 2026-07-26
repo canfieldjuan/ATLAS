@@ -38,10 +38,24 @@ async def resolve_or_create_eom_inbound_lead(
     and insert without turning extracted caller data into a CRM overwrite.
     """
 
+    normalized_email = str(email or "").strip().lower()
+    phone_digits = _normalised_phone(phone)
+    normalized_source = str(source or "").strip()
+    normalized_source_ref = str(source_ref or "").strip()
+    if (
+        len(phone_digits) < _MIN_MATCH_PHONE_DIGITS
+        and not normalized_email
+        and not (normalized_source and normalized_source_ref)
+    ):
+        raise ValueError(
+            "EOM inbound lead requires phone, email, or a stable relay event identity"
+        )
+
     # DatabaseCRMProvider supplies the authoritative transaction + advisory
     # lock implementation.  The class lookup (rather than ``getattr`` on the
     # instance) deliberately leaves lightweight protocol fakes on this safe,
-    # read-only fallback path.
+    # read-only fallback path.  Input admission and relay normalization happen
+    # above the split so every caller has the same identity contract.
     atomic_resolver = getattr(
         type(crm), "resolve_or_create_eom_inbound_lead_atomic", None
     )
@@ -50,15 +64,12 @@ async def resolve_or_create_eom_inbound_lead(
             crm,
             full_name=full_name,
             phone=phone,
-            email=email,
+            email=normalized_email or None,
             address=address,
-            source=source,
-            source_ref=source_ref,
+            source=normalized_source or source,
+            source_ref=normalized_source_ref or None,
             tags=tags,
         )
-
-    normalized_email = str(email or "").strip().lower()
-    phone_digits = _normalised_phone(phone)
 
     async def _resolve_readonly(**channel: Any) -> Optional[dict[str, Any]]:
         scoped = await crm.search_contacts(
@@ -89,8 +100,8 @@ async def resolve_or_create_eom_inbound_lead(
         "business_context_id": EOM_BUSINESS_CONTEXT_ID,
         "contact_type": "lead",
         "lead_stage": "new",
-        "source": source,
-        "source_ref": source_ref,
+        "source": normalized_source or source,
+        "source_ref": normalized_source_ref or None,
         "preserve_existing": True,
     }
     if tags:

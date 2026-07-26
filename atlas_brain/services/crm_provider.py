@@ -195,11 +195,22 @@ class DatabaseCRMProvider:
         phone_digits = re.sub(r"\D", "", str(phone or ""))
         if len(phone_digits) < 10:
             phone_digits = ""
+        normalized_source = str(source or "").strip()
+        normalized_source_ref = str(source_ref or "").strip()
+        identityless_relay = not phone_digits and not normalized_email
+        if identityless_relay and not (normalized_source and normalized_source_ref):
+            raise ValueError(
+                "EOM inbound lead requires phone, email, or a stable relay event identity"
+            )
         lock_keys = []
         if phone_digits:
             lock_keys.append(f"eom-inbound:phone:{phone_digits[-10:]}")
         if normalized_email:
             lock_keys.append(f"eom-inbound:email:{normalized_email}")
+        if identityless_relay:
+            lock_keys.append(
+                f"eom-inbound:relay:{normalized_source}:{normalized_source_ref}"
+            )
 
         pool = get_db_pool()
         async with _transaction_connection(pool) as conn:
@@ -225,6 +236,29 @@ class DatabaseCRMProvider:
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     lock_key,
                 )
+
+            if identityless_relay:
+                # A relay message ID is an idempotency anchor, not a mutable
+                # contact identity.  It must return the original row even if
+                # that row was later archived, otherwise replaying one message
+                # could manufacture a second lead.
+                existing = await conn.fetchrow(
+                    """
+                    SELECT * FROM contacts
+                    WHERE business_context_id = $1
+                      AND source = $2
+                      AND source_ref = $3
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """,
+                    EOM_BUSINESS_CONTEXT_ID,
+                    normalized_source,
+                    normalized_source_ref,
+                )
+                if existing is not None:
+                    result = dict(existing)
+                    result["_was_created"] = False
+                    return result
 
             async def _find(context: Optional[str], *, channel: str, value: str):
                 if context is None:
@@ -310,13 +344,38 @@ class DatabaseCRMProvider:
                 address or None,
                 EOM_BUSINESS_CONTEXT_ID,
                 tags or [],
-                source,
-                source_ref,
+                normalized_source or source,
+                normalized_source_ref or None,
                 now,
             )
             result = dict(row) if row else {}
             result["_was_created"] = True
-            return result
+
+        # The prior find-or-create path emits contact-created reasoning events.
+        # This happens only after the transaction commits, and its secondary
+        # delivery must not turn a committed inbound lead into a failed intake.
+        try:
+            from ..reasoning.producers import emit_if_enabled
+
+            await emit_if_enabled(
+                "crm.contact_created",
+                "crm_provider",
+                {
+                    "contact_id": result.get("id", ""),
+                    "full_name": full_name,
+                    "email": email,
+                    "phone": phone,
+                },
+                entity_type="contact",
+                entity_id=result.get("id"),
+            )
+        except Exception:
+            logger.warning(
+                "EOM inbound contact-created event failed after contact %s committed",
+                result.get("id", ""),
+                exc_info=True,
+            )
+        return result
 
     async def create_contact(
         self,
@@ -665,12 +724,18 @@ class DatabaseCRMProvider:
 
             existing = await pool.fetchrow(
                 """
-                SELECT business_context_id FROM contacts WHERE id = $1
+                SELECT business_context_id, contact_type, lead_stage
+                FROM contacts
+                WHERE id = $1
                 """,
                 contact_id,
             )
+            lifecycle_transition = existing and any(
+                field in updates and updates[field] != existing[field]
+                for field in ("contact_type", "lead_stage")
+            )
             if (
-                existing
+                lifecycle_transition
                 and (
                     existing["business_context_id"] in (None, EOM_BUSINESS_CONTEXT_ID)
                     or updates.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID
