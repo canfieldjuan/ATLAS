@@ -44,15 +44,76 @@ from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger("atlas.mcp.crm")
 
+# The one migration this server needs applied to serve scoped Gmail bindings.
+SCOPED_MAILBOX_MIGRATIONS = ("350_scoped_mailbox_credentials",)
+
+
+@asynccontextmanager
+async def _database_lifespan(
+    *,
+    init_database_fn,
+    get_db_pool_fn,
+    run_migrations_fn,
+    close_database_fn,
+):
+    """Initialize the DB pool and apply this server's prerequisite migration.
+
+    Parameterized like the invoicing MCP's lifespan so tests drive it with
+    edge fakes instead of monkeypatching storage internals.
+
+    Only ``350_scoped_mailbox_credentials`` is applied, not the whole chain.
+    Two reasons, and the first is a hard blocker:
+
+    * **The full chain is not fresh-applicable.** Migrations from 076 on
+      reference an out-of-band ``product_metadata`` table that no migration
+      creates, so a fresh database dies partway through. The main app survives
+      that because it logs and continues (``main.py``); a standalone server
+      that ran the chain unguarded would abort its entire lifespan on an
+      unrelated pending migration. Migration 350 is self-contained and
+      idempotent, so applying exactly it is safe on any database state.
+    * This server is a documented standalone deployment and scoped Gmail
+      bindings depend on that one table.
+
+    A failure here degrades the Gmail binding to its documented fail-closed
+    state (the row is absent, so scoped inbox reads are omitted). It must not
+    take contacts, tickets and appointments down with it.
+    """
+    try:
+        await init_database_fn()
+        pool = get_db_pool_fn()
+        if pool.is_initialized:
+            try:
+                await run_migrations_fn(pool, only=SCOPED_MAILBOX_MIGRATIONS)
+                logger.info("CRM MCP: DB pool initialized and migrated")
+            except Exception as exc:
+                logger.warning(
+                    "CRM MCP: prerequisite migration failed (%s); scoped Gmail "
+                    "bindings will be unavailable until it is applied. Other "
+                    "CRM tools are unaffected.",
+                    type(exc).__name__,
+                )
+        else:
+            logger.warning(
+                "CRM MCP: DB pool not initialized (persistence disabled?); "
+                "migrations skipped -- scoped Gmail bindings will be unavailable"
+            )
+        yield
+    finally:
+        await close_database_fn()
+
 
 @asynccontextmanager
 async def _lifespan(server):
-    """Initialize DB pool on startup, close on shutdown."""
-    from ..storage.database import init_database, close_database
-    await init_database()
-    logger.info("CRM MCP: DB pool initialized")
-    yield
-    await close_database()
+    from ..storage.database import init_database, close_database, get_db_pool
+    from ..storage.migrations import run_migrations
+
+    async with _database_lifespan(
+        init_database_fn=init_database,
+        get_db_pool_fn=get_db_pool,
+        run_migrations_fn=run_migrations,
+        close_database_fn=close_database,
+    ):
+        yield
 
 
 mcp = FastMCP(
