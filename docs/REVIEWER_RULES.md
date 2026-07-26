@@ -408,9 +408,14 @@ subsequent review.
 is the trigger to examine one existing candidate for removal, so the ratchet
 self-balances and there is no separate cadence, owner, or audit to maintain.
 **Record which candidate you examined** in `REVIEW_MISSES.md` with the outcome,
-and take the next one that has not been examined since its last firing -- an
-unrecorded pick lets every addition re-examine the same load-bearing mechanism,
-re-state why it stays, and retire nothing while the pack keeps growing. All
+and take the least-recently-examined mechanism -- when every mechanism has been
+examined once the rotation simply starts again, so a retained one is re-checked
+against fresh evidence rather than becoming permanently ineligible. Keying
+eligibility off "has not fired since it was examined" would exempt exactly the
+quiet mechanisms this section is about, and after one full pass only newly added
+ones would ever be inspected. An unrecorded pick has the opposite failure: every
+addition re-examines the same load-bearing mechanism, re-states why it stays,
+and retires nothing while the pack keeps growing. All
 **five** mechanism kinds this section creates are in scope -- `scripts/audit_*`
 checks, rule IDs, path triggers, recurring-lapse lines, and Review Contract
 template additions -- not only the ones that are cheapest to delete.
