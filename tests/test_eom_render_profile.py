@@ -28,7 +28,20 @@ import json
 import sys
 
 module = importlib.import_module("atlas_brain.main_eom")
-paths = sorted(route.path for route in module.app.routes)
+paths = []
+for route in module.app.routes:
+    route_path = getattr(route, "path", None)
+    if isinstance(route_path, str):
+        paths.append(route_path)
+    original_router = getattr(route, "original_router", None)
+    include_context = getattr(route, "include_context", None)
+    route_prefix = getattr(include_context, "prefix", "")
+    if original_router is not None:
+        for child_route in original_router.routes:
+            child_path = getattr(child_route, "path", None)
+            if isinstance(child_path, str):
+                paths.append(f"{route_prefix}{child_path}")
+paths = sorted(set(paths))
 print(json.dumps({
     "loaded": {
         "atlas_brain.api": "atlas_brain.api" in sys.modules,
@@ -211,7 +224,64 @@ def test_eom_receivables_startup_rejects_raw_or_missing_token_digest():
             receivables_api_enabled=True,
             receivables_service_token="eomrx_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq",
             receivables_service_token_sha256=token_digest,
+            receivables_service_token_provenance_key="",
+            receivables_service_token_provenance="",
         )
+        with pytest.raises(RuntimeError, match=message):
+            auth.validate_receivables_api_config(config)
+
+
+def test_eom_receivables_startup_rejects_digest_without_generated_provenance():
+    from atlas_brain.eom_api import auth
+
+    generated = auth.generate_receivables_service_token()
+    for config, message in (
+        (
+            SimpleNamespace(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256=generated.sha256,
+                receivables_service_token_provenance_key="",
+                receivables_service_token_provenance=generated.provenance,
+            ),
+            "PROVENANCE_KEY",
+        ),
+        (
+            SimpleNamespace(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256=generated.sha256,
+                receivables_service_token_provenance_key=generated.provenance_key,
+                receivables_service_token_provenance="",
+            ),
+            "PROVENANCE",
+        ),
+        (
+            SimpleNamespace(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256=generated.sha256,
+                receivables_service_token_provenance_key="not-generated",
+                receivables_service_token_provenance=generated.provenance,
+            ),
+            "provenance key",
+        ),
+        (
+            SimpleNamespace(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256=generated.sha256,
+                receivables_service_token_provenance_key=generated.provenance_key,
+                receivables_service_token_provenance="0" * 64,
+            ),
+            "provenance",
+        ),
+        (
+            SimpleNamespace(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256=auth._token_sha256("password123"),
+                receivables_service_token_provenance_key=generated.provenance_key,
+                receivables_service_token_provenance=generated.provenance,
+            ),
+            "not bound",
+        ),
+    ):
         with pytest.raises(RuntimeError, match=message):
             auth.validate_receivables_api_config(config)
 
@@ -238,6 +308,8 @@ def test_eom_receivables_startup_accepts_generated_service_token():
     config = SimpleNamespace(
         receivables_api_enabled=True,
         receivables_service_token_sha256=generated.sha256,
+        receivables_service_token_provenance_key=generated.provenance_key,
+        receivables_service_token_provenance=generated.provenance,
     )
 
     auth.validate_receivables_api_config(config)
@@ -269,6 +341,8 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
     config = SimpleNamespace(
         receivables_api_enabled=True,
         receivables_service_token_sha256=generated.sha256,
+        receivables_service_token_provenance_key=generated.provenance_key,
+        receivables_service_token_provenance=generated.provenance,
     )
     valid_token = generated.token
     app.dependency_overrides[auth.get_receivables_api_config] = lambda: config
@@ -378,6 +452,16 @@ def test_eom_profile_reaches_receivables_ready_through_real_app(monkeypatch):
         invoicing_settings,
         "receivables_service_token_sha256",
         generated.sha256,
+    )
+    monkeypatch.setattr(
+        invoicing_settings,
+        "receivables_service_token_provenance_key",
+        generated.provenance_key,
+    )
+    monkeypatch.setattr(
+        invoicing_settings,
+        "receivables_service_token_provenance",
+        generated.provenance,
     )
     monkeypatch.setattr(
         receivables,

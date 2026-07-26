@@ -56,6 +56,20 @@ class EOMInvoicingConfig(BaseSettings):
             "receivables service API"
         ),
     )
+    receivables_service_token_provenance_key: str = Field(
+        default="",
+        description=(
+            "Generated key used to verify the EOM receivables service-token "
+            "provenance proof"
+        ),
+    )
+    receivables_service_token_provenance: str = Field(
+        default="",
+        description=(
+            "Generated proof binding the configured bearer-token digest to the "
+            "EOM token generator output"
+        ),
+    )
 
 
 eom_settings = EOMRuntimeConfig()
