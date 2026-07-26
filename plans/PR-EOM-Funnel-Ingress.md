@@ -366,11 +366,12 @@ ledger while the new resolver is serving: it intentionally fails closed.
 ## Verification
 
 - Current-head repair: Python compile check and the exact EOM lead-pipeline
-  workflow test-file list passed against a fresh PostgreSQL 16 database:
-  **151 passed**. This includes the schema-isolated sent-email route proof,
-  trusted relay replay, lifecycle-ledger `TRUNCATE` proof, stable interaction
-  anchors, EOM transport-phone fallback, and default-EOM pre-claim stage
-  rejection.
+  workflow test-file list passed against a fresh PostgreSQL 16 database after
+  rebasing the scoped-Gmail credential lane: **224 passed**. This includes the
+  schema-isolated sent-email route proof, trusted relay replay,
+  lifecycle-ledger `TRUNCATE` proof, stable interaction anchors, EOM
+  transport-phone fallback, default-EOM pre-claim stage rejection, and the
+  upstream scoped-Gmail regression cases now enrolled beside this lane.
 - Passed the unit ratchet with the checked-out and origin/main baselines.
 - Passed maturity sweeps for atlas_brain/mcp, atlas_brain/tools, and
   atlas_brain/storage against their corresponding baselines; the three accepted
@@ -393,7 +394,7 @@ ledger while the new resolver is serving: it intentionally fails closed.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 17 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 15 |
 | `atlas_brain/api/comms/webhooks.py` | 28 |
 | `atlas_brain/api/leads.py` | 117 |
 | `atlas_brain/autonomous/tasks/gmail_digest.py` | 27 |
@@ -404,7 +405,7 @@ ledger while the new resolver is serving: it intentionally fails closed.
 | `atlas_brain/services/eom_lead_ingress.py` | 137 |
 | `atlas_brain/storage/migrations/351_eom_lead_lifecycle_events.sql` | 98 |
 | `atlas_brain/tools/scheduling.py` | 28 |
-| `plans/PR-EOM-Funnel-Ingress.md` | 417 |
+| `plans/PR-EOM-Funnel-Ingress.md` | 418 |
 | `tests/maturity_sweep/baseline_atlas_brain_mcp.json` | 6 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 4 |
 | `tests/maturity_sweep/baseline_atlas_brain_tools.json` | 4 |
@@ -414,4 +415,4 @@ ledger while the new resolver is serving: it intentionally fails closed.
 | `tests/test_eom_sent_email_tenant_scope.py` | 1 |
 | `tests/test_leads_intake.py` | 56 |
 | `tests/test_tenant_stamping.py` | 31 |
-| **Total** | **2407** |
+| **Total** | **2406** |
