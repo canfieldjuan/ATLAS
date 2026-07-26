@@ -1,0 +1,28 @@
+# Blueprint candidate for the slim Atlas EOM API.
+#
+# This file is deliberately not named render.yaml yet. The EOM time tracker is
+# already managed on Render; this candidate should be connected manually as a
+# new private service after the branch is reviewed.
+services:
+  - type: pserv
+    name: atlas-eom-api
+    runtime: python
+    buildCommand: pip install -r requirements.eom.txt
+    startCommand: uvicorn atlas_brain.main_eom:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ATLAS_DB_ENABLED
+        value: "false"
+      - key: ATLAS_DB_HOST
+        sync: false
+      - key: ATLAS_DB_PORT
+        sync: false
+      - key: ATLAS_DB_DATABASE
+        sync: false
+      - key: ATLAS_DB_USER
+        sync: false
+      - key: ATLAS_DB_PASSWORD
+        sync: false
+      - key: ATLAS_INVOICING_RECEIVABLES_API_ENABLED
+        value: "false"
+      - key: ATLAS_EOM_RUN_MIGRATIONS
+        value: "false"

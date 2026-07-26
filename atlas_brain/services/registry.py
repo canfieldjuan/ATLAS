@@ -6,7 +6,8 @@ model implementations at runtime.
 """
 
 import logging
-from threading import Lock
+from importlib import import_module
+from threading import Condition, Lock
 from typing import Any, Callable, Generic, Optional, Type, TypeVar
 
 from .protocols import LLMService, ModelInfo
@@ -26,14 +27,43 @@ class ServiceRegistry(Generic[T]):
     - Lazy instantiation via factories
     """
 
-    def __init__(self, service_type: str):
+    def __init__(
+        self,
+        service_type: str,
+        registration_loader: Callable[[], None] | None = None,
+    ):
         self._service_type = service_type
         self._implementations: dict[str, Type[T]] = {}
         self._factories: dict[str, Callable[..., T]] = {}
         self._active: Optional[T] = None
         self._active_name: Optional[str] = None
         self._slots: dict[str, T] = {}
+        self._registration_loader = registration_loader
+        self._registration_state = "pending"
+        self._registration_condition = Condition()
         self._lock = Lock()
+
+    def _ensure_registered(self) -> None:
+        """Run deferred implementation registration once."""
+        if self._registration_loader is None:
+            return
+        with self._registration_condition:
+            while self._registration_state == "loading":
+                self._registration_condition.wait()
+            if self._registration_state == "complete":
+                return
+            self._registration_state = "loading"
+        try:
+            self._registration_loader()
+        except Exception:
+            with self._registration_condition:
+                self._registration_state = "pending"
+                self._registration_condition.notify_all()
+            raise
+        else:
+            with self._registration_condition:
+                self._registration_state = "complete"
+                self._registration_condition.notify_all()
 
     def register(self, name: str, implementation: Type[T]) -> None:
         """Register an implementation class by name."""
@@ -47,6 +77,7 @@ class ServiceRegistry(Generic[T]):
 
     def list_available(self) -> list[str]:
         """Return names of all registered implementations."""
+        self._ensure_registered()
         return list(set(self._implementations.keys()) | set(self._factories.keys()))
 
     def get_active(self) -> Optional[T]:
@@ -79,6 +110,7 @@ class ServiceRegistry(Generic[T]):
         Raises:
             ValueError: If the implementation name is not registered
         """
+        self._ensure_registered()
         if name not in self._implementations and name not in self._factories:
             available = self.list_available()
             raise ValueError(
@@ -148,6 +180,7 @@ class ServiceRegistry(Generic[T]):
         Returns:
             The loaded service instance held in the slot.
         """
+        self._ensure_registered()
         if impl_name not in self._implementations and impl_name not in self._factories:
             available = self.list_available()
             raise ValueError(
@@ -199,8 +232,17 @@ class ServiceRegistry(Generic[T]):
             self._slots.clear()
 
 
+def _load_llm_implementations() -> None:
+    """Import LLM implementation modules so decorators populate the registry."""
+
+    import_module(".llm", __package__)
+
+
 # Global registry for LLM services
-llm_registry: ServiceRegistry[LLMService] = ServiceRegistry("LLM")
+llm_registry: ServiceRegistry[LLMService] = ServiceRegistry(
+    "LLM",
+    registration_loader=_load_llm_implementations,
+)
 
 
 def register_llm(name: str) -> Callable[[Type[LLMService]], Type[LLMService]]:
