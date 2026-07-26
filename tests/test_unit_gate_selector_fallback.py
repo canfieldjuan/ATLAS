@@ -54,8 +54,12 @@ def _run_select(tmp_path: Path, *, selector_present: bool) -> tuple[int, str]:
     work = tmp_path / "work"
     (work / "scripts").mkdir(parents=True)
     if selector_present:
-        shutil.copy(REPO / "scripts/select_impacted_tests.py",
-                    work / "scripts/select_impacted_tests.py")
+        # A sentinel selector, not the real one: with git stubbed the real
+        # selector escalates to FULL by its own empty-diff rule, so its output
+        # is indistinguishable from the guard escalating. The sentinel proves
+        # the else-branch actually INVOKED the script.
+        (work / "scripts/select_impacted_tests.py").write_text(
+            "print('SENTINEL_SELECTOR_RAN')\n", encoding="utf-8")
 
     selection = tmp_path / "selected.txt"
     script = script.replace("/tmp/selected.txt", str(selection))
@@ -84,13 +88,17 @@ def test_absent_selector_never_yields_an_empty_selection(tmp_path):
 
 
 def test_present_selector_is_still_invoked(tmp_path):
-    """Over-correction guard: the fallback must not swallow the normal path."""
+    """Over-correction guard: the fallback must not swallow the normal path.
+
+    Asserting only "non-empty" cannot distinguish the selector running from the
+    guard escalating -- both produce output. The sentinel selector emits a token
+    the guard never could, so this fails if the fallback swallows the normal
+    path and silently sends every PR to the expensive FULL suite.
+    """
     rc, selection = _run_select(tmp_path, selector_present=True)
     assert rc == 0
-    # git is stubbed, so the selector sees an empty diff and escalates to FULL
-    # by its own empty-diff rule -- what matters is that it RAN and produced a
-    # selection rather than the guard short-circuiting it.
-    assert selection.strip() != ""
+    assert selection.strip() == "SENTINEL_SELECTOR_RAN"
+    assert selection.strip() != "FULL"
 
 
 def test_workflow_guards_the_selector_invocation():
@@ -98,3 +106,66 @@ def test_workflow_guards_the_selector_invocation():
     script = _select_step_script()
     assert "! -f scripts/select_impacted_tests.py" in script
     assert "echo FULL" in script
+
+
+# --- the merge-base growth-guard resolution, against a REAL git repo --------
+
+
+def _baseline_step_script() -> str:
+    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    for step in doc["jobs"]["unit-gate"]["steps"]:
+        if step.get("name", "").startswith("Resolve base-branch baseline"):
+            return step["run"]
+    raise AssertionError("Resolve base-branch baseline step not found")
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True,
+                   capture_output=True, text=True)
+
+
+def test_growth_guard_resolves_the_merge_base_baseline(tmp_path):
+    """A branch cut before main shrank the baseline must not read as growth.
+
+    Everything else here stubs git; this one builds a real repository, because
+    the defect being prevented lives entirely in git history resolution and a
+    stub cannot express "main moved after the branch forked".
+    """
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _git(origin, "config", "user.email", "t@t"); _git(origin, "config", "user.name", "t")
+    baseline = origin / "tests"
+    baseline.mkdir()
+    (baseline / "unit_gate_baseline.txt").write_text("a::t1\nb::t2\nc::t3\n")
+    _git(origin, "add", "-A"); _git(origin, "commit", "-q", "-m", "seed")
+
+    # branch forks here, with the 3-entry baseline
+    _git(origin, "checkout", "-q", "-b", "feature")
+    (origin / "note.txt").write_text("branch work\n")
+    _git(origin, "add", "-A"); _git(origin, "commit", "-q", "-m", "branch work")
+
+    # main then SHRINKS the baseline
+    _git(origin, "checkout", "-q", "main")
+    (baseline / "unit_gate_baseline.txt").write_text("a::t1\n")
+    _git(origin, "add", "-A"); _git(origin, "commit", "-q", "-m", "shrink baseline")
+
+    # a checkout of the branch, with origin/main present, as CI has it
+    work = tmp_path / "work"
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)],
+                   check=True, capture_output=True, text=True)
+    _git(work, "checkout", "-q", "feature")
+
+    out = tmp_path / "base_baseline.txt"
+    script = _baseline_step_script().replace("/tmp/base_baseline.txt", str(out))
+    proc = subprocess.run(["bash", "-c", script], cwd=work, capture_output=True,
+                          text=True, env={**os.environ, "BASE_REF": "main"})
+    assert proc.returncode == 0, proc.stderr
+
+    resolved = out.read_text().split()
+    # The merge base still has all three. Resolving against current main would
+    # yield one, and the branch's own 3-entry baseline would then look like
+    # +2 growth -- failing a PR that added nothing.
+    assert resolved == ["a::t1", "b::t2", "c::t3"], (
+        f"growth guard resolved the wrong baseline: {resolved}"
+    )

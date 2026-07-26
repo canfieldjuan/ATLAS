@@ -22,8 +22,17 @@ them did anything wrong; main advanced under them.
   map, and escalate to FULL -- the same failure direction the selector already
   takes for every other unmappable input. It must not require unrelated
   sessions to rebase, which would mean editing other lanes (3a.1 forbids it).
-- Must not change: selection behavior when the selector IS present, the ratchet,
-  the baseline, or the growth guard.
+- Must not change: selection behavior when the selector IS present, the ratchet
+  semantics, or the committed baseline.
+- **Does change, deliberately:** which baseline the growth guard resolves. It
+  compared against the base branch's current baseline; it now compares against
+  the **merge base**. Same root cause as the ENOENT -- a branch cut before main
+  moved gets failed for something main did. If main shrinks the baseline after a
+  branch forks, the branch's larger baseline reads as growth and
+  `added_baseline_entries()` fails a PR that added nothing, and the
+  selector-absent heads this slice unblocks are the branches most likely to hit
+  it. The ratchet's *meaning* is unchanged -- "did THIS PR grow the baseline" --
+  the merge base is simply the correct reference for that question.
 
 ## Scope (this PR)
 
@@ -49,8 +58,14 @@ Max files: 3
      cannot fail on a missing flag.
   4. `tests/test_unit_gate_selector_fallback.py` executes the Select step's own
      `run:` body in a temp tree and asserts `FULL` when the selector is absent
-     -- settled by running `tests/test_unit_gate_selector_fallback.py`, and by
-     reverting the guard, which fails 3 of its 4 tests.
+     -- settled by running that file, and by reverting the guard, which fails 3
+     of its tests.
+  5. With the selector present the else-branch invokes it rather than escalating:
+     the fixture installs a sentinel selector emitting a token the guard cannot
+     produce, so "non-empty output" cannot pass for "the selector ran".
+  6. The growth guard resolves the merge-base baseline, proven against a **real**
+     git repository where main shrinks the baseline after the branch forks --
+     reverting the resolution fails that test.
 - Reachability proof: the `unit-gate` workflow on any affected PR; the observable
   output is the `--- selection ---` echo and a non-zero-length gate run.
 - Affected surfaces: CI only.
@@ -85,9 +100,16 @@ Parked hardening: none.
 
 ## Verification
 
-Run `tests/test_unit_gate_selector_fallback.py` under pytest: 4 passed. With the
-guard reverted to its pre-#2212 form, 3 of the 4 fail -- the 3i proof that the
-tests detect the regression rather than merely coexisting with the fix.
+Run `tests/test_unit_gate_selector_fallback.py` under pytest: 5 passed. Three 3i
+probes, each reverting one behavior and confirming the matching test fails:
+
+- guard reverted to the pre-#2212 form -> 3 fail
+- guard made unconditional (swallowing the normal path) -> 2 fail
+- merge-base resolution reverted to the base ref -> the end-to-end test fails
+
+The merge-base test builds a real git repository rather than stubbing git,
+because the defect it prevents lives entirely in history resolution and a stub
+cannot express "main moved after the branch forked".
 
     python -c "import yaml; yaml.safe_load(open('.github/workflows/unit_gate.yml'))"
 
@@ -99,6 +121,6 @@ tests detect the regression rather than merely coexisting with the fix.
 | File | LOC |
 |---|---:|
 | `.github/workflows/unit_gate.yml` | 33 |
-| `plans/PR-Unit-Gate-Selector-Absent-Fallback.md` | 104 |
-| `tests/test_unit_gate_selector_fallback.py` | 100 |
-| **Total** | **237** |
+| `plans/PR-Unit-Gate-Selector-Absent-Fallback.md` | 126 |
+| `tests/test_unit_gate_selector_fallback.py` | 171 |
+| **Total** | **330** |
