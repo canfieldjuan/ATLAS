@@ -291,7 +291,13 @@ A review is **complete** when its matrix is dispositioned, and the review states
 that matrix:
 
 1. **Each acceptance criterion** in the Review Contract: met / not met /
-   could-not-determine, with `file:line`.
+   could-not-determine, with checkable evidence -- `file:line` for a
+   code/content claim, or a named non-file artifact (command + output, CI
+   run/job, generated artifact, PR metadata) where the criterion is not about
+   source. Same evidence forms the binding reviewer workflow already accepts
+   (`AGENTS.md` 4a step 4); demanding `file:line` for a CI-status or
+   command-output criterion would either stall the matrix or buy a green tick
+   with an irrelevant citation.
 2. **Every rule, R1-R14**: pass / fail / not-verified / n-a-with-reason. The
    path-trigger table sets how deeply each is probed, **not which appear**. A
    behavior change under a path the table does not list still owes an R2
@@ -307,9 +313,8 @@ holding that standard reports forever.
 or `could-not-determine` entries is a complete review -- the reviewer may stop
 -- but it is **not** an LGTM. LGTM requires every rule to be `pass` or a
 reasoned `n-a` (see the ladder above); an unresolved entry is an open question,
-so the verdict is *needs verification*, and `scripts/set_claude_review_status.py`
-must not be given `success` for it. Conflating the two would let a review that
-verified almost nothing produce a green merge gate, which is the opposite of
+so the verdict is *needs verification*. Conflating the two would let a review
+that verified almost nothing produce a green merge gate, which is the opposite of
 what a stopping rule is for.
 
 **Discharge is per head SHA.** A rule marked *pass* is discharged for **that
@@ -325,6 +330,21 @@ why the earlier discharge was wrong: the condition that was never actually met,
 not one more instance of a decision already reported. A discharge repeatedly
 overturned on unchanged code is evidence the rule was never dischargeable as
 scoped, which is a finding in itself.
+
+**Recording the gate: an unresolved entry is a BLOCKER-level finding.** The
+`claude-review` status has three states and "complete but not approved" is not a
+fourth one -- it maps onto the existing `failure`. A `not-verified` rule or a
+`could-not-determine` criterion is filed as a BLOCKER (`Rxx (BLOCKER) - not
+verified: <what, and why not>`), so `scripts/set_claude_review_status.py` takes
+`failure` and `success` is unreachable while anything is unresolved. `pending`
+keeps its meaning -- a review still in progress -- and is not a parking space
+for a finished review with open questions.
+
+This is deliberately fail-closed. Unverified evidence is exactly what a merge
+gate exists to stop, so the burden is on resolving the entry or waiving it as a
+reasoned `n-a`, never on the gate to guess. The reviewer is still *done*: the
+matrix bounds the search, the verdict reports what it found, and neither forces
+the other.
 
 **Report the class, not the instance.** R13 obliges the *builder* to fix the
 class rather than the cited example. The same duty binds the *reviewer*: when

@@ -7,9 +7,11 @@ work:
 2. **Reviewer session** — audits each PR independently and posts a
    verdict (BLOCKER / MAJOR / NIT / LGTM). After the verdict, record it as the
    machine-readable `claude-review` gate for the reviewed head SHA with
-   `scripts/set_claude_review_status.py` (LGTM/no-blocker -> `success`, an open
-   BLOCKER -> `failure`); see `docs/REVIEWER_MERGE_GATE.md` for the two-gate
-   merge condition and its trust boundary.
+   `scripts/set_claude_review_status.py` (LGTM -> `success`; an open BLOCKER
+   -> `failure`; a complete matrix still carrying a `not-verified` rule or a
+   `could-not-determine` criterion is filed as a BLOCKER and so also
+   -> `failure`, fail-closed); see `docs/REVIEWER_MERGE_GATE.md` for the
+   two-gate merge condition and its trust boundary.
 
 This file is the contract both sessions work from. The auditor
 (prompt at `AUDITOR_PROMPT.md`) handles cross-cutting integration /
