@@ -199,6 +199,15 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - Default-session/default-context probe: TODO/N/A.
 - Side-effect ordering: TODO/N/A.
 
+### Decision recording
+
+Required when citing an operator decision that re-scopes an umbrella issue;
+otherwise write "N/A - no re-scoping operator decision cited."
+
+- Recorded decision URL: TODO/N/A.
+- Umbrella issue: TODO/N/A.
+- Scope effect: TODO/N/A.
+
 ### Files touched
 
 - TODO: run \`python scripts/sync_pr_plan.py $plan_rel\` after implementation.

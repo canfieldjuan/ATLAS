@@ -106,6 +106,10 @@ def test_new_pr_plan_creates_agents_plan_skeleton(tmp_path: Path) -> None:
     assert "- Copied from enforcing workflow: TODO/N/A." in text
     assert "- No enforcing workflow applies: TODO/N/A." in text
     assert "- Closest local command: TODO/N/A." in text
+    assert "### Decision recording" in text
+    assert "- Recorded decision URL: TODO/N/A." in text
+    assert "- Umbrella issue: TODO/N/A." in text
+    assert "- Scope effect: TODO/N/A." in text
     assert "### Files touched" in text
     assert "| **Total** | **0** |" in text
 

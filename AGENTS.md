@@ -1272,6 +1272,18 @@ If no workflow enforces the touched surface, say so in Verification and name the
 closest local command that was run. A focused test can be listed as extra
 evidence, never as the replacement for the enforced set.
 
+### 3k.8. Decision-recording
+
+Decision-recording: an operator decision that re-scopes an umbrella issue is
+recorded as a comment on that umbrella at decision time; plan docs may cite only
+recorded decisions (URL required).
+
+If a plan relies on an operator decision to widen, narrow, reinterpret, defer,
+or otherwise re-scope an umbrella issue, the plan cites the GitHub URL of the
+umbrella comment that recorded that decision. If the decision is only in chat,
+memory, a local handoff, or recall, record it on the umbrella before treating it
+as scope authority. Plans that do not rely on such a decision write N/A.
+
 ### 3l. PR fix mode (constrain the fix loop)
 
 A **fix loop** -- iterating on red CI or review comments on an already-open PR
