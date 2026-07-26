@@ -47,3 +47,9 @@ Like `HARDENING.md`, this is a working queue. A row is "open" until its gate
 lands; once the gate is merged, mark the row resolved (or move resolved rows to
 a dated section). This file must inherit the same retirement discipline tracked
 in issue #1319 so it does not become write-only sediment.
+
+## Retirement reviews
+
+| Date | Mechanism | Last fired | Outcome (kept / removed) | Replacement coverage |
+|---|---|---|---|---|
+| 2026-07-26 | `docs/SESSION_BOOTSTRAP.md` producer/consumer field-parity enumeration for identity guards | 2026-07-24 EOM Calendar demotion veto miss | kept | No replacement: this remains the only durable reminder to trace canonical producer fields into consumer identity guards before review approval. |

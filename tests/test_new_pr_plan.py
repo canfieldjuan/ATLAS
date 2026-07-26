@@ -96,6 +96,12 @@ def test_new_pr_plan_creates_agents_plan_skeleton(tmp_path: Path) -> None:
     assert "- Replaced-path behaviors: TODO/N/A." in text
     assert "- Guard-relevant fields: TODO/N/A." in text
     assert "- Caller x input shape: TODO/N/A." in text
+    assert "### Deployed-config probing" in text
+    assert "- Deployed/default config values: TODO/N/A." in text
+    assert "- Explicit value probe: TODO/N/A." in text
+    assert "- Absent value probe: TODO/N/A." in text
+    assert "- Default-session/default-context probe: TODO/N/A." in text
+    assert "- Side-effect ordering: TODO/N/A." in text
     assert "### Files touched" in text
     assert "| **Total** | **0** |" in text
 

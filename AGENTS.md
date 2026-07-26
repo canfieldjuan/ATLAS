@@ -1245,6 +1245,21 @@ boundary surface and dispositions, then close the recognizer with the
 evidence-gated/defaulted mechanism 3k.3 requires rather than trying to enumerate
 the whole open category.
 
+### 3k.6. Deployed-config probing
+
+Deployed-config probing: guard PRs must state deployed/default config values and
+probe explicit, absent, and default-session shapes; no side effect before all
+admissions pass.
+
+This applies to guard, validator, resolver, and admission-boundary PRs, and to
+any diff that adds or changes an environment/config fallback. The plan names the
+runtime value the deployed system actually uses when that value is knowable from
+repo-owned deployment config; otherwise it says could-not-determine and names
+the source that would settle it. Verification includes the explicit value path,
+the absent-value path, and the default-session/default-context path. Any state
+claim, write, enqueue, mutation, or external side effect must sit after the
+admission decision that can still reject the request.
+
 ### 3l. PR fix mode (constrain the fix loop)
 
 A **fix loop** -- iterating on red CI or review comments on an already-open PR

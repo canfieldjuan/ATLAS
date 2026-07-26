@@ -188,6 +188,17 @@ boundary; otherwise write "N/A - no boundary change."
 - Guard-relevant fields: TODO/N/A.
 - Caller x input shape: TODO/N/A.
 
+### Deployed-config probing
+
+Required for guard, validator, resolver, admission-boundary, or env/config
+fallback changes; otherwise write "N/A - no guard/config boundary change."
+
+- Deployed/default config values: TODO/N/A.
+- Explicit value probe: TODO/N/A.
+- Absent value probe: TODO/N/A.
+- Default-session/default-context probe: TODO/N/A.
+- Side-effect ordering: TODO/N/A.
+
 ### Files touched
 
 - TODO: run \`python scripts/sync_pr_plan.py $plan_rel\` after implementation.
