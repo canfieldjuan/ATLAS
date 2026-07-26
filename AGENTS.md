@@ -248,7 +248,7 @@ levels:
 | Level | Meaning | Builder action |
 |---|---|---|
 | **BLOCKER** | Correctness, security, contract break, or CI red. Must fix before merge. | Fix or push back with rationale. |
-| **MAJOR** | Architectural / scope / pattern concern. Strong recommendation but not auto-block. | Fix in this PR if the fix is small; otherwise discuss before deferring.; or a proven defect whose blast radius does not warrant blocking. |
+| **MAJOR** | Architectural / scope / pattern concern, **or a proven defect whose blast radius does not warrant blocking**. Strong recommendation but not auto-block. | Fix in this PR if the fix is small; otherwise discuss before deferring. |
 | **NIT** | Style, naming, comment polish. Skip-worthy. | Apply if 1-line; skip otherwise. The reviewer should mark NITs as skip-worthy explicitly. |
 | **LGTM** | All gates green, R14 verified, no remaining concerns. | Merge. |
 
