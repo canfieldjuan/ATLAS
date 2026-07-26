@@ -1832,3 +1832,70 @@ def test_recipient_bridge_cross_product_fails(intent, bridge):
 )
 def test_recipient_bridge_does_not_admit_renderer_prose(prompt):
     assert runner._prompt_contact_hits(prompt) == []
+
+
+# --- #2201 round 13: one shared default-ignorable predicate ---------------
+
+
+def _all_default_ignorable_samples():
+    """Sampled from the SHARED range table, not a hand-written list.
+
+    Deriving the corpus from the predicate is what makes this class-closed:
+    a codepoint added to the table is covered automatically, and a partial
+    second definition (the U+034F miss) cannot pass unnoticed.
+    """
+    from atlas_brain.schemas.content_factory import _DEFAULT_IGNORABLE_RANGES
+
+    samples = []
+    for low, high in _DEFAULT_IGNORABLE_RANGES:
+        for codepoint in {low, (low + high) // 2, high}:
+            samples.append(chr(codepoint))
+    return samples
+
+
+_DEFAULT_IGNORABLE_SAMPLES = _all_default_ignorable_samples()
+_CONTACT_SEAMS = [
+    "Call +44{z}800 FLOWERS",
+    "Call +{z}44 800 FLOWERS",
+    "call 1-800-FLOW{z}ERS now",
+    "reach 555-123{z}-4567",
+    "call me at 555{z}1234567",
+]
+
+
+@pytest.mark.parametrize("ignorable", _DEFAULT_IGNORABLE_SAMPLES)
+@pytest.mark.parametrize("seam", _CONTACT_SEAMS)
+def test_every_default_ignorable_fails_the_prompt_gate(ignorable, seam):
+    """#2201 round 13: `scan_view` tested Cf/Cc plus a partial hand-built set,
+    so U+034F (category Mn) still defeated the gate after the zero-width class
+    was closed. Any rule phrased as "Cf plus some ranges" leaves the bypass
+    open by construction -- the shared predicate is the only correct test."""
+    assert runner._prompt_contact_hits(seam.format(z=ignorable)) != []
+
+
+@pytest.mark.parametrize("ignorable", _DEFAULT_IGNORABLE_SAMPLES)
+def test_every_default_ignorable_fails_the_body_copy_gate(ignorable):
+    from atlas_brain.services.content_factory_copy_verification import verify_copy
+
+    assert verify_copy("Call 555-123" + ignorable + "-4567 today").verdict == "fail"
+
+
+@pytest.mark.parametrize("ignorable", _DEFAULT_IGNORABLE_SAMPLES)
+def test_no_default_ignorable_leaks_an_address_through_redaction(ignorable):
+    """U+034F left the address FULLY intact in persisted claim evidence --
+    the digit theorem does not help, because an address has no digits."""
+    from atlas_brain.services.content_factory_copy_verification import _redact_pii
+
+    redacted = _redact_pii("reach alice@example" + ignorable + ".com now")
+    assert "alice@example" not in redacted
+
+
+def test_scan_view_and_routing_key_share_one_predicate():
+    """Two definitions is the defect. Assert the scan actually uses the
+    shared predicate, so a future local copy fails here first."""
+    from atlas_brain.schemas.content_factory import is_default_ignorable
+    from atlas_brain.services.content_factory_copy_verification import scan_view
+
+    for ignorable in _DEFAULT_IGNORABLE_SAMPLES:
+        assert is_default_ignorable(ignorable)
+        assert scan_view("a" + ignorable + "b") == "ab"

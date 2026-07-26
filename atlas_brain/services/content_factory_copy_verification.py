@@ -65,6 +65,7 @@ from atlas_brain.schemas.content_factory import (
     ADVISORY_CTA_REMINDER,
     ADVISORY_OWNER_ROUTING_WARNING,
     CopyVerification,
+    is_default_ignorable,
 )
 
 # ---------------------------------------------------------------------------
@@ -108,19 +109,6 @@ _RULES: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
-# Default-ignorable / zero-width code points that a producer can sprinkle
-# between digits without changing what a human or a renderer sees. Unicode
-# calls these Default_Ignorable_Code_Point; the property is not exposed by
-# `unicodedata`, so the equivalent is category Cf plus the ranges below.
-# Cc is included EXCEPT the whitespace controls, which are real separators.
-_DEFAULT_IGNORABLE_EXTRA = frozenset(
-    list(range(0xFE00, 0xFE10))  # variation selectors
-    + list(range(0xE0100, 0xE01F0))  # variation selectors supplement
-    + list(range(0x180B, 0x180F))  # Mongolian free variation selectors
-    + list(range(0x1BCA0, 0x1BCA4))  # shorthand format controls
-    + list(range(0xE0000, 0xE0080))  # tag characters
-    + [0x3164, 0xFFA0]  # Hangul fillers
-)
 _SCAN_KEEP_CONTROLS = frozenset("\t\n\r\v\f")
 
 
@@ -134,6 +122,12 @@ def scan_view(text: str) -> str:
     of copy, so it is removed before scanning rather than enumerated as new
     patterns (#2201).
 
+    Admission uses the SHARED `is_default_ignorable` predicate, not a local
+    category test. A hand-built set here missed U+034F, which is category Mn
+    -- so any rule phrased as "Cf plus some ranges" leaves the bypass open by
+    construction. One definition, used by routing keys, this scan, and
+    evidence redaction alike.
+
     This does NOT change which real forms count as PII -- the frozen
     body-copy verdict semantics are untouched -- it only denies the evasion.
     Whitespace controls are kept: they separate tokens, and dropping them
@@ -143,9 +137,9 @@ def scan_view(text: str) -> str:
         ch
         for ch in text
         if not (
-            unicodedata.category(ch) == "Cf"
+            is_default_ignorable(ch)
+            or unicodedata.category(ch) == "Cf"
             or (unicodedata.category(ch) == "Cc" and ch not in _SCAN_KEEP_CONTROLS)
-            or ord(ch) in _DEFAULT_IGNORABLE_EXTRA
         )
     )
 

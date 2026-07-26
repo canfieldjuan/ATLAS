@@ -148,6 +148,11 @@ Max files: 8
       for room 212 art deco, contact sheet layout` remain admissible.
   17. Every source-bound stage requires a valid committed draft before worker
       dispatch; no stage may send `Committed draft JSON:\nnull`.
+  20. EVERY Unicode Default_Ignorable_Code_Point -- sampled from the shared
+      range table itself, not a hand-written list -- fails at every contact
+      seam in the prompt gate and `verify_copy`, and none leaves an address
+      readable in redacted evidence. Routing keys and the contact scan use ONE
+      predicate.
   19. A dial marker connected to its number by the dative `to` -- `Text to
       +44 800 FLOWERS`, `SMS to ...`, `WhatsApp to ...` -- fails, matching the
       same marker and number without the connector. Possessive determiners
@@ -289,6 +294,28 @@ instruction as a dial instruction. The class is function words that mark a
 RECIPIENT, not every function word. Covered by a 7 intents x 5 bridge-forms
 cross-product plus the prose-side probes.
 
+### Review round 13 (Codex) -- one shared default-ignorable predicate
+
+One finding, confirmed, and the residual leak was worse than the phone case.
+Round 11's `scan_view` tested category Cf/Cc plus a hand-built range set, which
+misses U+034F COMBINING GRAPHEME JOINER -- category **Mn**. So after the
+zero-width class was closed, `Call +44<CGJ>800 FLOWERS` and
+`555-123<CGJ>-4567` still passed, and `_redact_pii` left
+`alice@example<CGJ>.com` FULLY intact in persisted claim evidence: the digit
+theorem cannot help, because an address has no digits to mask.
+
+The root cause is not the missing codepoint, it is the SECOND DEFINITION. The
+schema module already had the complete Default_Ignorable range table for
+routing keys; any rule elsewhere phrased as "Cf plus some ranges" leaves the
+bypass open by construction. `is_default_ignorable` is now exported as the one
+definition, used by routing keys, the contact scan, and evidence redaction
+alike.
+
+The corpus is derived FROM that table rather than listed, so a codepoint added
+to it is covered automatically and a future local copy fails the shared-
+predicate assertion first. Mutation-checked: restoring the Cf/Cc-only rule
+fails 134 tests.
+
 ## Intentional
 
 - Detached phonewords without preceding structural dial intent pass, even if
@@ -345,12 +372,12 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 60 |
-| `atlas_brain/services/content_factory_copy_verification.py` | 62 |
+| `atlas_brain/schemas/content_factory.py` | 72 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 56 |
 | `atlas_brain/services/content_factory_runner.py` | 382 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
 | `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 284 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 356 |
-| `tests/test_content_factory_runner.py` | 809 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 383 |
+| `tests/test_content_factory_runner.py` | 876 |
 | `tests/test_content_factory_schemas.py` | 68 |
-| **Total** | **2123** |
+| **Total** | **2223** |

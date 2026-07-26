@@ -124,9 +124,21 @@ _DEFAULT_IGNORABLE_RANGES = (
 )
 
 
-def _is_default_ignorable(char: str) -> bool:
+def is_default_ignorable(char: str) -> bool:
+    """True for a Unicode Default_Ignorable_Code_Point.
+
+    THE single definition for every admission view in the content factory --
+    routing keys, the contact-PII scan, and evidence redaction. A partial
+    second copy is how U+034F (category Mn, so a Cf/Cc test misses it) stayed
+    a live bypass after the zero-width class was closed (#2201). Exported, not
+    private, so no caller has a reason to rebuild it.
+    """
     codepoint = ord(char)
     return any(start <= codepoint <= end for start, end in _DEFAULT_IGNORABLE_RANGES)
+
+
+# Back-compat alias for existing private callers in this module.
+_is_default_ignorable = is_default_ignorable
 
 
 def _routing_key(channel: str) -> str:
