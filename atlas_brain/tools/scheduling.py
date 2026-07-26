@@ -438,6 +438,7 @@ class BookAppointmentTool:
                             address=address,
                             source="booking",
                             source_ref=db_id,
+                            relay_event_id=f"appointment:{db_id}",
                         )
                     else:
                         contact = await crm.find_or_create_contact(

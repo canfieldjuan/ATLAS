@@ -131,6 +131,27 @@ async def test_intake_to_pipeline_roundtrip_preserves_managed_state(monkeypatch)
                 await provider.update_contact(
                     str(contact["id"]), {"contact_type": "customer"}
                 )
+            with pytest.raises(ValueError, match="ownership changes"):
+                await provider.update_contact(
+                    str(contact["id"]),
+                    {"business_context_id": "churnsignals"},
+                )
+            assert await conn.fetchval(
+                "SELECT business_context_id FROM contacts WHERE id = $1",
+                contact["id"],
+            ) == "effingham_maids"
+            with pytest.raises(ValueError, match="funnel transition service"):
+                await provider.update_contact(
+                    str(contact["id"]), {"lead_stage": "qualified"}
+                )
+            same_context = await provider.update_contact(
+                str(contact["id"]),
+                {
+                    "business_context_id": "effingham_maids",
+                    "notes": "same context remains permitted",
+                },
+            )
+            assert same_context["business_context_id"] == "effingham_maids"
             eom_customer_id = uuid.uuid4()
             await conn.execute(
                 """
@@ -160,6 +181,20 @@ async def test_intake_to_pipeline_roundtrip_preserves_managed_state(monkeypatch)
                         "contact_type": "lead",
                     },
                 )
+            non_eom_reassignment = await provider.update_contact(
+                str(legacy_contact_id),
+                {"business_context_id": "churnsignals"},
+            )
+            assert non_eom_reassignment["business_context_id"] == "churnsignals"
+            with pytest.raises(ValueError, match="ownership changes"):
+                await provider.update_contact(
+                    str(legacy_contact_id),
+                    {"business_context_id": "effingham_maids"},
+                )
+            assert await conn.fetchval(
+                "SELECT business_context_id FROM contacts WHERE id = $1",
+                legacy_contact_id,
+            ) == "churnsignals"
             repeated = await client.post("/api/v1/leads/intake", json=payload)
             assert repeated.status_code == 200
             changed_attribution = await client.post(

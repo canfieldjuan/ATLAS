@@ -37,7 +37,13 @@ to create, match, or mutate contacts under a different lifecycle rule.
   a partial extracted phone over a usable transport caller number, so a valid
   inbound lead can now be rejected. The MCP update guard also checks only an
   explicitly supplied tenant, so a default-EOM lead-stage request can claim a
-  NULL-context legacy row before its lifecycle transition is rejected.
+  NULL-context legacy row before its lifecycle transition is rejected. The
+  lower generic CRM provider also allows a caller to reassign an EOM row's
+  `business_context_id` without entering its lifecycle guard, so sequential
+  generic updates can attempt to leave EOM before changing lifecycle state.
+  Finally, an EOM appointment has a durable database ID but does not pass that
+  ID as the resolver's trusted event identity; a local-only phone and no email
+  therefore leaves the calendar booking confirmed but drops its CRM lead.
 - Correct fix must touch/change: centralize EOM inbound identity resolution so
   unmatched non-spam web/relay/calls/SMS/legacy estimate bookings become
   `lead/new` and any matching contact is read-only; resolve only active contacts
@@ -61,7 +67,12 @@ to create, match, or mutate contacts under a different lifecycle rule.
   adapters must use a full extracted phone when present, otherwise a full
   authoritative transport number, before EOM admission. A default effective
   EOM context must reject an MCP lead-stage mutation before the legacy
-  claim-on-write step.
+  claim-on-write step. Generic provider updates must reject an actual ownership
+  transition into or out of EOM before their SQL write, leaving the dedicated
+  claim operation as the only way to acquire EOM ownership. Once an EOM
+  appointment is durably recorded, its namespaced appointment ID must anchor an
+  otherwise identityless resolver call without treating a partial phone as a
+  matching identity.
 - Must not change: existing customer identity, non-EOM CRM behavior, the
   current public intake response/CORS/email acknowledgement semantics, Google
   Calendar booking behavior, Customer/Site onboarding, jobs, payments,
@@ -72,7 +83,9 @@ to create, match, or mutate contacts under a different lifecycle rule.
   interaction type/intent mapping, non-EOM call/SMS phone selection, and
   ordinary daily interaction dedupe without a stable inbound event remain
   unchanged. Default-scoped non-stage MCP edits retain their existing
-  claim-on-write behavior.
+  claim-on-write behavior. Non-EOM ownership reassignment, EOM same-context
+  updates, appointment/calendar creation, direct-form identity admission, and
+  non-blocking CRM-link failure behavior remain unchanged.
 
 ## Scope (this PR)
 
@@ -109,6 +122,10 @@ Max files: 21
    shared lead admission.
 10. Reject a default-EOM MCP lead-stage request before any NULL-context legacy
     claim, while preserving claim-on-write for non-stage edits.
+11. Close the generic ownership-bypass and internal-booking identity seams:
+    reject actual provider ownership transitions into or out of EOM before
+    writing, and use a persisted EOM appointment's namespaced ID as a trusted
+    replay identity only when full phone/email identity is absent.
 
 ### Review Contract
 
@@ -150,6 +167,13 @@ Max files: 21
       lead-stage update returns the funnel-transition error without calling
       `claim_contact` or `update_contact`; a non-stage default-scoped edit
       remains claimable.
+  13. A generic EOM ownership reassignment fails before the update, so the
+      following attempted lifecycle write remains protected; non-EOM ownership
+      reassignment and EOM same-context enrichment remain permitted.
+  14. A persisted EOM appointment with only a partial phone and no email uses
+      its namespaced appointment ID as the resolver replay anchor, creates or
+      returns a `lead/new` contact, and still confirms the booking if the CRM
+      link fails.
 - Reachability proof: FastAPI `POST /api/v1/leads/intake` is exercised via
   TestClient and the injectable intake core; call/SMS use their real
   `_link_to_crm` paths with only CRM/transport boundaries faked.
@@ -210,8 +234,10 @@ The public request accepts bounded attribution fields and writes a non-empty
 snapshot only to the intake interaction metadata. The interaction identity
 includes that snapshot, so a later submission with a different click or UTM
 value is retained. It does not change contact identity or the response envelope.
-Generic lifecycle edits reject EOM rows and claimable-legacy rows, so the later
-constrained transition service is the only stage/type writer.
+Generic lifecycle edits reject EOM rows and claimable-legacy rows, and generic
+ownership writes reject actual transitions into or out of EOM. The later
+constrained transition service is therefore the only stage/type writer, while
+the existing dedicated claim path remains the only ownership-acquisition path.
 
 The trusted Web3Forms relay alone passes a separate replay-event key; a generic
 `source_ref` is metadata and may be constant, so it cannot attest a distinct
@@ -263,14 +289,26 @@ non-EOM caller behavior.
   NULL-context legacy lead now returns the transition-service error before
   `_claim_if_legacy`; an ordinary non-stage edit still reaches that existing
   claim-on-write path.
+- `atlas_brain/services/crm_provider.py` fetches the existing ownership for a
+  generic context update as well as lifecycle updates, and rejects an actual
+  transition whose source or target is EOM before generating the SQL `UPDATE`.
+  It leaves same-context EOM enrichment and non-EOM reassignment on their
+  existing update paths.
+- `atlas_brain/tools/scheduling.py` passes `appointment:<persisted-id>` as the
+  separate trusted replay anchor only after the EOM appointment row exists.
+  The shared resolver consequently creates a `lead/new` booking contact from a
+  local-only phone without using that fragment as a matching identity; the
+  existing catch still confirms a booking when CRM linking fails.
 - The focused ingress, public-route, and real-PostgreSQL tests prove direct
   partial-phone rejection, trusted concurrent relay replay, committed/nonfatal
   postcommit emission, legacy/case-sensitive dedupe behavior, `TRUNCATE`
   rejection, interaction event anchors, partial-extraction transport fallback,
-  and default-EOM pre-claim stage rejection with preserved non-stage claiming.
+  default-EOM pre-claim stage rejection with preserved non-stage claiming,
+  generic ownership-bypass rejection, and persisted-appointment replay
+  anchoring.
 
 Contract reconciliation: every changed production path traces to Scope items
-4 through 10 and Review Contract criteria 8 through 12; every new contract
+4 through 11 and Review Contract criteria 8 through 14; every new contract
 requirement has a focused regression proof. No Customer/Site, jobs, calendar,
 payment, first-clean, non-EOM CRM, or public success-envelope behavior is
 touched. No untraced change or unmet contract item remains in this repair.
@@ -313,6 +351,8 @@ This inventory is derived from `DatabaseCRMProvider.create_contact` and
 | Validate that lead pipeline fields require a lead contact type. | Preserved: atomic creates are always `lead/new`; generic writes still validate pipeline requests. |
 | Permit a merge whose requested contact type equals the stored type. | Preserved: the EOM lifecycle guard blocks actual type/stage transitions, not a same-value enrichment request. |
 | Claim a NULL-context legacy row from a default-scoped MCP update. | Preserved for ordinary edits. Intentionally interrupted for an effective-default EOM `lead_stage` transition so an invalid lifecycle write cannot acquire tenant ownership before rejection. |
+| Reassign a contact's generic `business_context_id`. | Preserved for transitions that neither enter nor leave EOM and for EOM same-context enrichment. Intentionally blocked for actual EOM ownership changes; `claim_contact`, not generic update sequencing, remains the acquisition path. |
+| Link a persisted estimate appointment to CRM after calendar booking. | Preserved as non-blocking. When no full phone/email identity exists, the durable appointment ID is now the trusted replay anchor; the partial phone is not a matching identity. |
 | Carry `tags` as supplied and leave metadata outside the generic merge list. | Preserved for new atomic leads; matching EOM rows remain unmodified, while generic merge semantics remain unchanged. |
 
 ## Intentional
@@ -328,6 +368,12 @@ This inventory is derived from `DatabaseCRMProvider.create_contact` and
 - Until Slice 3's constrained transition service ships, no surface can change
   an EOM contact's `lead_stage` or `contact_type`, including marking it lost.
   `lead_owner` and `next_follow_up_at` remain writable for daily triage.
+- Generic updates also cannot move a contact into or out of EOM. The existing
+  dedicated claim path owns only the claimable-legacy-to-EOM acquisition case;
+  broader reassignment needs a later explicit ownership workflow.
+- A local-only phone on an internally persisted EOM estimate booking creates a
+  lead anchored to that appointment. It is evidence, not a cross-contact
+  matching identity.
 - Lifecycle evidence intentionally blocks hard deletion of a contact that owns
   it. Runtime deletion is soft archive; a statutory purge needs a future,
   explicit retention/deletion policy rather than an accidental cascade.
@@ -384,6 +430,10 @@ ledger while the new resolver is serving: it intentionally fails closed.
 - Passed the exact maturity ratchets for `atlas_brain/autonomous` and
   `atlas_brain/comms`; the stable event anchors and EOM-only phone fallback add
   no new brittleness above their baselines.
+- Current review repair: the exact rebased EOM workflow list passed **224
+  tests** after the ownership and appointment-anchor changes. The
+  `atlas_brain/tools` and `atlas_brain/storage` maturity ratchets also passed
+  with no baseline increase.
 - Passed the exact `atlas_brain/reasoning`, `atlas_brain/security`, and
   `atlas_brain/storage` maturity ratchets after folding non-EOM preservation
   assertions into existing adapter tests; the storage baseline remains at 168
@@ -401,18 +451,18 @@ ledger while the new resolver is serving: it intentionally fails closed.
 | `atlas_brain/comms/call_intelligence.py` | 47 |
 | `atlas_brain/comms/sms_intelligence.py` | 47 |
 | `atlas_brain/mcp/crm_server.py` | 18 |
-| `atlas_brain/services/crm_provider.py` | 346 |
+| `atlas_brain/services/crm_provider.py` | 360 |
 | `atlas_brain/services/eom_lead_ingress.py` | 137 |
 | `atlas_brain/storage/migrations/351_eom_lead_lifecycle_events.sql` | 98 |
-| `atlas_brain/tools/scheduling.py` | 28 |
-| `plans/PR-EOM-Funnel-Ingress.md` | 418 |
+| `atlas_brain/tools/scheduling.py` | 29 |
+| `plans/PR-EOM-Funnel-Ingress.md` | 468 |
 | `tests/maturity_sweep/baseline_atlas_brain_mcp.json` | 6 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 4 |
 | `tests/maturity_sweep/baseline_atlas_brain_tools.json` | 4 |
 | `tests/test_crm_read_scoping.py` | 41 |
-| `tests/test_eom_lead_ingress.py` | 442 |
-| `tests/test_eom_lead_pipeline_integration.py` | 495 |
+| `tests/test_eom_lead_ingress.py` | 453 |
+| `tests/test_eom_lead_pipeline_integration.py` | 524 |
 | `tests/test_eom_sent_email_tenant_scope.py` | 1 |
 | `tests/test_leads_intake.py` | 56 |
 | `tests/test_tenant_stamping.py` | 31 |
-| **Total** | **2406** |
+| **Total** | **2511** |

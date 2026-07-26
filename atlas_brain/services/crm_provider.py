@@ -724,6 +724,7 @@ class DatabaseCRMProvider:
         }
         updates = {k: v for k, v in data.items() if k in allowed}
         lifecycle_requested = bool({"contact_type", "lead_stage"} & updates.keys())
+        ownership_requested = "business_context_id" in updates
         pipeline_requested = any(
             key in updates
             for key in ("lead_stage", "lead_owner", "next_follow_up_at")
@@ -748,7 +749,7 @@ class DatabaseCRMProvider:
         if not updates:
             return await self.get_contact(contact_id)
 
-        if lifecycle_requested:
+        if lifecycle_requested or ownership_requested:
             from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
             existing = await pool.fetchrow(
@@ -763,6 +764,19 @@ class DatabaseCRMProvider:
                 field in updates and updates[field] != existing[field]
                 for field in ("contact_type", "lead_stage")
             )
+            eom_ownership_transition = (
+                existing
+                and ownership_requested
+                and updates["business_context_id"] != existing["business_context_id"]
+                and (
+                    existing["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
+                    or updates["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
+                )
+            )
+            if eom_ownership_transition:
+                raise ValueError(
+                    "EOM contact ownership changes require the funnel transition service"
+                )
             if (
                 lifecycle_transition
                 and (

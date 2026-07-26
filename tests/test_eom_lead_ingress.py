@@ -350,7 +350,7 @@ async def test_web3forms_name_only_without_message_id_does_not_create_unanchored
 
 
 @pytest.mark.asyncio
-async def test_legacy_scheduling_link_uses_eom_lead_resolver(monkeypatch):
+async def test_legacy_scheduling_preserves_partial_phone_leads(monkeypatch):
     from atlas_brain.tools import scheduling
     import atlas_brain.services.crm_provider as crm_provider
     import atlas_brain.storage.database as database
@@ -388,7 +388,7 @@ async def test_legacy_scheduling_link_uses_eom_lead_resolver(monkeypatch):
 
     result = await scheduling.BookAppointmentTool().execute({
         "customer_name": "Legacy Estimate",
-        "customer_phone": "217-555-0199",
+        "customer_phone": "555-0199",
         "date": "August 1",
         "time": "10:00 AM",
     })
@@ -398,8 +398,19 @@ async def test_legacy_scheduling_link_uses_eom_lead_resolver(monkeypatch):
     assert kwargs["contact_type"] == "lead"
     assert kwargs["lead_stage"] == "new"
     assert kwargs["source"] == "booking"
+    assert kwargs["phone"] is None
+    assert kwargs["source_ref"] == f"appointment:{appointment_id}"
     assert kwargs["preserve_existing"] is True
     pool.execute.assert_awaited_once()
+
+    crm.find_or_create_contact.side_effect = ValueError("CRM unavailable")
+    link_failure = await scheduling.BookAppointmentTool().execute({
+        "customer_name": "Legacy Estimate",
+        "customer_phone": "555-0199",
+        "date": "August 1",
+        "time": "10:00 AM",
+    })
+    assert link_failure.success is True
 
 
 @pytest.mark.asyncio
