@@ -7,11 +7,12 @@ work:
 2. **Reviewer session** — audits each PR independently and posts a
    verdict (BLOCKER / MAJOR / NIT / LGTM). After the verdict, record it as the
    machine-readable `claude-review` gate for the reviewed head SHA with
-   `scripts/set_claude_review_status.py` (LGTM -> `success`; an open BLOCKER
-   -> `failure`; a complete matrix still carrying a `not-verified` rule or a
-   `could-not-determine` criterion is filed as a BLOCKER and so also
-   -> `failure`, fail-closed); see `docs/REVIEWER_MERGE_GATE.md` for the
-   two-gate merge condition and its trust boundary.
+   `scripts/set_claude_review_status.py` (no open BLOCKER -> `success`, i.e. an
+   LGTM or only non-blocking MAJOR/NIT notes; an open BLOCKER -> `failure`).
+   Unresolved matrix entries are themselves filed as BLOCKERs, so a review with
+   open questions lands on `failure` without changing this mapping; see
+   `docs/REVIEWER_MERGE_GATE.md` for the two-gate merge condition and its trust
+   boundary.
 
 This file is the contract both sessions work from. The auditor
 (prompt at `AUDITOR_PROMPT.md`) handles cross-cutting integration /
@@ -49,7 +50,8 @@ R1–R14) and the PR's Review Contract. Review the same way the Reviewer session
   (R11), deployment safety & CI (R12). Fix the class, not the example (R13).
 - **Know when you are done** (Review completion, in the pack): a review is complete
   when its matrix is dispositioned -- each acceptance criterion met / not met /
-  could-not-determine, each triggered rule pass / fail / not-verified, and what you
+  could-not-determine, EVERY rule R1-R14 pass / fail / not-verified / n-a-with-reason
+  (the path table sets probe depth, not which rules appear), and what you
   did not verify listed with the reason. State that matrix. Completeness is never
   "no further case can be found"; on an open surface that point does not exist.
 - **Report the class, not the instance.** R13 obliges the builder to fix the class
@@ -57,8 +59,8 @@ R1–R14) and the PR's Review Contract. Review the same way the Reviewer session
   underlying decision are **one** finding naming that decision, with the instances
   as illustrations. If a finding of yours would open "fresh evidence beyond the
   earlier X finding", it belongs merged into X, not filed separately.
-- Lead with blockers. `LGTM` (all triggered rules pass, no open BLOCKER/MAJOR) is a
-  valid, complete result; do not manufacture NITs.
+- Lead with blockers. `LGTM` (every rule R1-R14 Pass or reasoned N-A, no open
+  BLOCKER/MAJOR) is a valid, complete result; do not manufacture NITs.
 
 ---
 

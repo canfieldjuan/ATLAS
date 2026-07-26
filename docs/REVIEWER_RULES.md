@@ -22,7 +22,7 @@ This pack sits **under** the existing verdict ladder, it does not replace it:
 | **BLOCKER** | A rule below is failed in a way that breaks correctness, security, a contract, or CI. Must fix before merge. |
 | **MAJOR** | A rule is at risk: architectural / scope / pattern concern. Fix if small; else discuss. |
 | **NIT** | Style / naming / polish. Apply only if 1-line; reviewer marks skip-worthy. |
-| **LGTM** | All triggered rules pass, R14 is satisfied, and all AI findings are fixed-or-waived. |
+| **LGTM** | Every rule R1-R14 is Pass or a reasoned N-A (no Not-Verified outstanding), R14 is satisfied, and all AI findings are fixed-or-waived. |
 
 A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 **Blockers must cite `file:line`.** A bare "LGTM" with no rule matrix and no
@@ -336,9 +336,13 @@ scoped, which is a finding in itself.
 fourth one -- it maps onto the existing `failure`. A `not-verified` rule or a
 `could-not-determine` criterion is filed as a BLOCKER (`Rxx (BLOCKER) - not
 verified: <what, and why not>`), so `scripts/set_claude_review_status.py` takes
-`failure` and `success` is unreachable while anything is unresolved. `pending`
-keeps its meaning -- a review still in progress -- and is not a parking space
-for a finished review with open questions.
+`failure` and `success` is unreachable while anything is unresolved. This does
+**not** narrow `success` to LGTM: it keeps its established meaning of "no open
+BLOCKER", so a complete review carrying only non-blocking MAJOR/NIT notes is
+still `success`, exactly as `docs/REVIEWER_MERGE_GATE.md` and
+`scripts/set_claude_review_status.py` already define it. `pending` keeps its
+meaning -- a review still in progress -- and is not a parking space for a
+finished review with open questions.
 
 This is deliberately fail-closed. Unverified evidence is exactly what a merge
 gate exists to stop, so the burden is on resolving the entry or waiving it as a
