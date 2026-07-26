@@ -14,8 +14,9 @@ the deployed/default admission shape still mutates or admits incorrectly. This
 detector is open-input work over free-form diffs, so the closure mechanism is a
 bounded recognizer: code suffix filtering is the choke point, ambiguous
 boundary/config-looking changes warn by default, and tests cover repo-native
-Python, TypeScript, shell, removed-line, hunk-context, and substring-collision
-forms as bounded evidence rather than an exhaustive language parser. This slice
+    Python, TypeScript, shell, YAML, removed-line, hunk-context,
+    substring-collision, per-config-key coverage, and unresolved-evidence forms as
+    bounded evidence rather than an exhaustive language parser. This slice
 is over the 400 LOC target because the single rule is required to ship as law,
 template, tripwire, scaffold regression, retirement review, and both-direction
 detector tests together; splitting would leave either an unenforced rule or a
@@ -64,7 +65,7 @@ Slice phase: Workflow/process
   detector tests, and scaffold regression.
 - Risk areas: false positives, silent false negatives, overstating deployed
   values that code cannot prove, accidental required/blocking gate.
-- Reviewer rules triggered: R1, R2, R10, R11, R12.
+- Reviewer rules triggered: R1, R2, R10, R11, R12, R14.
 
 ### Boundary-change enumeration
 
@@ -102,16 +103,17 @@ a product guard/config boundary.
 `AGENTS.md` gains a short imperative §3k.6 rule. `new_pr_plan.sh` adds the
 matching subsection so builders see the probe checklist while writing the plan.
 `check_deployed_config_probing.py` scans changed Python, JavaScript,
-TypeScript, and shell files for env/config fallbacks and boundary-shaped
+TypeScript, shell, YAML, workflow, and Dockerfile surfaces for env/config fallbacks and boundary-shaped
 guard/resolver/admission signals, including removed fallback lines and hunk
-context, then warns unless a changed plan contains non-placeholder
+context, then warns unless a changed plan contains evidence-bearing
 deployed/default, explicit, absent, default-session/default-context, and
-side-effect-ordering dispositions. The workflow runs the detector as
-advisory-only. The recognizer deliberately favors warning on bounded
-boundary/config signals instead of claiming a complete parser for every
-language. `tests/test_new_pr_plan.py` proves the generated scaffold carries the
-deployed-config fields. `REVIEW_MISSES.md` records the required retirement-review
-pass for this durable mechanism addition.
+side-effect-ordering dispositions that cover every detected config key by exact
+reference in each applicable deployed-config row. The
+workflow runs the detector as advisory-only. The recognizer deliberately favors
+warning on bounded boundary/config signals instead of claiming a complete parser
+for every language. `tests/test_new_pr_plan.py` proves the generated scaffold
+carries the deployed-config fields. `REVIEW_MISSES.md` records the required
+retirement-review pass for this durable mechanism addition.
 
 ## Intentional
 
@@ -131,8 +133,7 @@ Parked hardening: none.
 
 ## Verification
 
-- python -m pytest tests/test_check_deployed_config_probing.py -q --noconftest - 14 passed.
-- python -m pytest tests/test_new_pr_plan.py -q --noconftest - 16 passed.
+- python -m pytest tests/test_check_deployed_config_probing.py tests/test_new_pr_plan.py -q --noconftest - 41 passed.
 - python scripts/check_deployed_config_probing.py --base claude/pr-boundary-change-enumeration - OK.
 - python scripts/audit_plan_doc.py plans/PR-Deployed-Config-Probing.md - OK.
 - python scripts/audit_plan_doc_files_touched.py plans/PR-Deployed-Config-Probing.md claude/pr-boundary-change-enumeration - OK.
@@ -144,10 +145,10 @@ Parked hardening: none.
 |---|---:|
 | `AGENTS.md` | +15 |
 | `scripts/new_pr_plan.sh` | +11 |
-| `scripts/check_deployed_config_probing.py` | +201 |
-| `tests/test_check_deployed_config_probing.py` | +130 |
+| `scripts/check_deployed_config_probing.py` | +279 |
+| `tests/test_check_deployed_config_probing.py` | +235 |
 | `tests/test_new_pr_plan.py` | +6 |
 | `.github/workflows/deployed_config_probing.yml` | +46 |
 | `REVIEW_MISSES.md` | +6 |
-| `plans/PR-Deployed-Config-Probing.md` | +132 |
-| **Total** | **~568** |
+| `plans/PR-Deployed-Config-Probing.md` | +154 |
+| **Total** | **~752** |
