@@ -29,12 +29,28 @@ A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 independent verification is worse than no comment.
 
 **BLOCKER requires a concrete failure path**: the specific input, sequence, or
-state that produces the harm, stated in the finding. "This could break" is not
-one. Without a failure path the finding is MAJOR at most -- downgrade it, do not
-drop it, and the level can be raised later once the path is shown. This does not
-touch the unresolved-entry rule in Review completion: a Not-Verified rule is a
-BLOCKER because the evidence is missing, which is a different thing from a
-speculative defect.
+state that produces the harm, established by the reviewer. "This could break" is
+not one. Without a failure path the finding is MAJOR at most -- downgrade it, do
+not drop it, and the level can be raised later once the path is shown.
+
+Three carve-outs, because a missing-evidence finding is not a speculative one:
+
+- **Absent mandatory proof is itself the failure.** Where this pack already
+  makes missing evidence blocking -- the guard boundary-probe on security,
+  billing, data-deletion, customer-visible-output or CI/release surfaces, and a
+  Not-Verified entry under Review completion -- the absence IS the blocker and
+  no exploit path is owed. A guard with only happy-path tests blocks on those
+  surfaces whether or not anyone has found the bypass yet.
+- **Established, not necessarily published.** For an exploitable
+  authentication, payment, data-access, credential, or report-access flaw,
+  `SECURITY.md` routes details privately and forbids putting them in a public
+  thread. The public finding states the rule, the surface, and the impact, and
+  points at the private report; the failure path is recorded there. Routing it
+  privately does not downgrade it.
+- **A failure path is necessary, not sufficient.** Severity is blast radius. A
+  proven but immaterial correctness defect is MAJOR or NIT on the strength of
+  its impact -- proving a path does not oblige BLOCKER, and the ladder's
+  "breaks correctness" line reads as material breakage, not any defect.
 
 **The escape valve from "do not manufacture NITs" is not filing the finding, not
 promoting it.** That instruction bars padding a review with polish; it is not a
