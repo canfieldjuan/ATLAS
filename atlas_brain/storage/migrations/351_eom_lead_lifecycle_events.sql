@@ -46,6 +46,13 @@ CREATE TRIGGER trg_prevent_eom_lead_lifecycle_event_mutation
     FOR EACH ROW
     EXECUTE FUNCTION prevent_eom_lead_lifecycle_event_mutation();
 
+DROP TRIGGER IF EXISTS trg_prevent_eom_lead_lifecycle_event_truncate
+    ON eom_lead_lifecycle_events;
+CREATE TRIGGER trg_prevent_eom_lead_lifecycle_event_truncate
+    BEFORE TRUNCATE ON eom_lead_lifecycle_events
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION prevent_eom_lead_lifecycle_event_mutation();
+
 CREATE OR REPLACE FUNCTION record_eom_lead_created()
 RETURNS TRIGGER
 LANGUAGE plpgsql

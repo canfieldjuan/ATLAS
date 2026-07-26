@@ -110,10 +110,12 @@ def _interaction_attribution_identity(metadata: dict[str, Any]) -> str:
     normalized = sorted(
         (
             _normalize_interaction_text(key),
-            _normalize_interaction_text(value),
+            str(value) if value is not None else "",
         )
         for key, value in attribution.items()
-        if _normalize_interaction_text(key) and _normalize_interaction_text(value)
+        if _normalize_interaction_text(key)
+        and value is not None
+        and str(value).strip()
     )
     return json.dumps(normalized, separators=(",", ":"))
 
@@ -134,7 +136,9 @@ def _interaction_dedupe_key(
     anchor = _interaction_anchor(metadata_dict)
     attribution_identity = _interaction_attribution_identity(metadata_dict)
     if anchor:
-        basis = f"anchor|{normalized_type}|{anchor}|attribution|{attribution_identity}"
+        basis = f"anchor|{normalized_type}|{anchor}"
+        if attribution_identity:
+            basis = f"{basis}|attribution|{attribution_identity}"
         return hashlib.md5(basis.encode("utf-8")).hexdigest()
     normalized_summary = _normalize_interaction_text(summary)
     if not normalized_summary:
@@ -147,9 +151,10 @@ def _interaction_dedupe_key(
             bucket,
             normalized_intent,
             normalized_summary[:_INTERACTION_DEDUPE_SUMMARY_MAX_CHARS],
-            attribution_identity,
         ]
     )
+    if attribution_identity:
+        basis = f"{basis}|attribution|{attribution_identity}"
     return hashlib.md5(basis.encode("utf-8")).hexdigest()
 
 
@@ -168,6 +173,30 @@ class DatabaseCRMProvider:
         except Exception:
             return False
 
+    async def _emit_contact_created(
+        self,
+        result: dict[str, Any],
+        *,
+        full_name: str,
+        email: Optional[str],
+        phone: Optional[str],
+    ) -> None:
+        """Emit the existing reasoning event after a committed contact insert."""
+        from ..reasoning.producers import emit_if_enabled
+
+        await emit_if_enabled(
+            "crm.contact_created",
+            "crm_provider",
+            {
+                "contact_id": result.get("id", ""),
+                "full_name": full_name,
+                "email": email,
+                "phone": phone,
+            },
+            entity_type="contact",
+            entity_id=result.get("id"),
+        )
+
     async def resolve_or_create_eom_inbound_lead_atomic(
         self,
         *,
@@ -177,6 +206,7 @@ class DatabaseCRMProvider:
         address: Optional[str],
         source: str,
         source_ref: Optional[str],
+        relay_event_id: Optional[str] = None,
         tags: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """Resolve EOM inbound identity under transaction-scoped advisory locks.
@@ -197,8 +227,11 @@ class DatabaseCRMProvider:
             phone_digits = ""
         normalized_source = str(source or "").strip()
         normalized_source_ref = str(source_ref or "").strip()
+        normalized_relay_event_id = str(relay_event_id or "").strip()
         identityless_relay = not phone_digits and not normalized_email
-        if identityless_relay and not (normalized_source and normalized_source_ref):
+        if identityless_relay and not (
+            normalized_source and normalized_relay_event_id
+        ):
             raise ValueError(
                 "EOM inbound lead requires phone, email, or a stable relay event identity"
             )
@@ -209,7 +242,7 @@ class DatabaseCRMProvider:
             lock_keys.append(f"eom-inbound:email:{normalized_email}")
         if identityless_relay:
             lock_keys.append(
-                f"eom-inbound:relay:{normalized_source}:{normalized_source_ref}"
+                f"eom-inbound:relay:{normalized_source}:{normalized_relay_event_id}"
             )
 
         pool = get_db_pool()
@@ -253,7 +286,7 @@ class DatabaseCRMProvider:
                     """,
                     EOM_BUSINESS_CONTEXT_ID,
                     normalized_source,
-                    normalized_source_ref,
+                    normalized_relay_event_id,
                 )
                 if existing is not None:
                     result = dict(existing)
@@ -345,7 +378,11 @@ class DatabaseCRMProvider:
                 EOM_BUSINESS_CONTEXT_ID,
                 tags or [],
                 normalized_source or source,
-                normalized_source_ref or None,
+                (
+                    normalized_relay_event_id
+                    if identityless_relay
+                    else normalized_source_ref or None
+                ),
                 now,
             )
             result = dict(row) if row else {}
@@ -355,19 +392,11 @@ class DatabaseCRMProvider:
         # This happens only after the transaction commits, and its secondary
         # delivery must not turn a committed inbound lead into a failed intake.
         try:
-            from ..reasoning.producers import emit_if_enabled
-
-            await emit_if_enabled(
-                "crm.contact_created",
-                "crm_provider",
-                {
-                    "contact_id": result.get("id", ""),
-                    "full_name": full_name,
-                    "email": email,
-                    "phone": phone,
-                },
-                entity_type="contact",
-                entity_id=result.get("id"),
+            await self._emit_contact_created(
+                result,
+                full_name=full_name,
+                email=email,
+                phone=phone,
             )
         except Exception:
             logger.warning(

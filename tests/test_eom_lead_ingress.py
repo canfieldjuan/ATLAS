@@ -86,10 +86,28 @@ async def test_identityless_eom_inbound_requires_a_stable_relay_event_identity()
             email=None,
             address=None,
             source="web",
-            source_ref=None,
+            source_ref="website_estimate_form",
         )
 
     crm.find_or_create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_identityless_eom_inbound_uses_only_the_explicit_relay_event_key():
+    crm = _crm()
+
+    await resolve_or_create_eom_inbound_lead(
+        crm,
+        full_name="Relay only",
+        phone=None,
+        email=None,
+        address=None,
+        source="web",
+        source_ref="untrusted-caller-metadata",
+        relay_event_id="web3forms:message-1",
+    )
+
+    assert crm.find_or_create_contact.await_args.kwargs["source_ref"] == "web3forms:message-1"
 
 
 @pytest.mark.asyncio
@@ -367,6 +385,8 @@ def test_lifecycle_migration_records_create_once_in_contact_insert_transaction()
     assert "REFERENCES contacts(id) ON DELETE RESTRICT" in migration
     assert "BEFORE UPDATE OR DELETE ON eom_lead_lifecycle_events" in migration
     assert "CREATE TRIGGER trg_prevent_eom_lead_lifecycle_event_mutation" in migration
+    assert "BEFORE TRUNCATE ON eom_lead_lifecycle_events" in migration
+    assert "CREATE TRIGGER trg_prevent_eom_lead_lifecycle_event_truncate" in migration
     assert "CREATE OR REPLACE FUNCTION record_eom_lead_created()" in migration
     assert "AFTER INSERT ON contacts" in migration
     assert "CREATE TRIGGER trg_record_eom_lead_created" in migration

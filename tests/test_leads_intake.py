@@ -272,6 +272,22 @@ async def test_missing_email_and_phone_rejected():
 
 
 @pytest.mark.asyncio
+async def test_partial_phone_without_email_rejected_before_crm_or_email_side_effects():
+    crm, provider = _crm(), _email_provider()
+
+    with pytest.raises(LeadValidationError, match="at least 10 digits"):
+        await _process_lead_intake(
+            _payload(email="", phone="5550100"),
+            crm=crm,
+            email_provider=provider,
+        )
+
+    crm.find_or_create_contact.assert_not_awaited()
+    crm.log_interaction.assert_not_awaited()
+    provider.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_malformed_email_rejected():
     crm, provider = _crm(), _email_provider()
     with pytest.raises(LeadValidationError):

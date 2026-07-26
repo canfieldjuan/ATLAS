@@ -28,6 +28,7 @@ async def resolve_or_create_eom_inbound_lead(
     address: Optional[str],
     source: str,
     source_ref: Optional[str],
+    relay_event_id: Optional[str] = None,
     tags: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Return a matching EOM contact unchanged or create one as ``lead/new``.
@@ -42,11 +43,11 @@ async def resolve_or_create_eom_inbound_lead(
     phone_digits = _normalised_phone(phone)
     normalized_source = str(source or "").strip()
     normalized_source_ref = str(source_ref or "").strip()
-    if (
-        len(phone_digits) < _MIN_MATCH_PHONE_DIGITS
-        and not normalized_email
-        and not (normalized_source and normalized_source_ref)
-    ):
+    normalized_relay_event_id = str(relay_event_id or "").strip()
+    identityless = (
+        len(phone_digits) < _MIN_MATCH_PHONE_DIGITS and not normalized_email
+    )
+    if identityless and not (normalized_source and normalized_relay_event_id):
         raise ValueError(
             "EOM inbound lead requires phone, email, or a stable relay event identity"
         )
@@ -67,7 +68,12 @@ async def resolve_or_create_eom_inbound_lead(
             email=normalized_email or None,
             address=address,
             source=normalized_source or source,
-            source_ref=normalized_source_ref or None,
+            source_ref=(
+                normalized_relay_event_id
+                if identityless
+                else normalized_source_ref or None
+            ),
+            relay_event_id=normalized_relay_event_id or None,
             tags=tags,
         )
 
@@ -101,7 +107,11 @@ async def resolve_or_create_eom_inbound_lead(
         "contact_type": "lead",
         "lead_stage": "new",
         "source": normalized_source or source,
-        "source_ref": normalized_source_ref or None,
+        "source_ref": (
+            normalized_relay_event_id
+            if identityless
+            else normalized_source_ref or None
+        ),
         "preserve_existing": True,
     }
     if tags:

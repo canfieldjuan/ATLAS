@@ -232,6 +232,10 @@ async def _process_lead_intake(
             "Provide an email address or a phone number with at least "
             f"{_MIN_PHONE_DIGITS} digits"
         )
+    if not email and len(phone_digits) < 10:
+        raise LeadValidationError(
+            "Provide an email address or a phone number with at least 10 digits"
+        )
     if email and not _EMAIL_RE.match(email):
         raise LeadValidationError("Invalid email address")
 

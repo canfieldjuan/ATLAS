@@ -378,6 +378,9 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
                 address=None,
                 source="web",
                 source_ref=(f"web3forms:{relay_message_id}" if relay_message_id else None),
+                relay_event_id=(
+                    f"web3forms:{relay_message_id}" if relay_message_id else None
+                ),
                 tags=["web3forms"],
             )
             if not contact.get("id"):

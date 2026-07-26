@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import uuid
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +18,10 @@ from fastapi import FastAPI
 asyncpg = pytest.importorskip("asyncpg")
 
 from atlas_brain.api import leads as leads_mod  # noqa: E402
-from atlas_brain.services.crm_provider import DatabaseCRMProvider  # noqa: E402
+from atlas_brain.services.crm_provider import (  # noqa: E402
+    DatabaseCRMProvider,
+    _interaction_dedupe_key,
+)
 from atlas_brain.services.eom_lead_ingress import (  # noqa: E402
     resolve_or_create_eom_inbound_lead,
 )
@@ -109,6 +113,8 @@ async def test_intake_to_pipeline_roundtrip_preserves_managed_state(monkeypatch)
                     "DELETE FROM eom_lead_lifecycle_events WHERE contact_id = $1",
                     contact["id"],
                 )
+            with pytest.raises(asyncpg.RaiseError, match="append-only"):
+                await conn.execute("TRUNCATE eom_lead_lifecycle_events")
 
             follow_up = datetime(2026, 7, 25, 15, tzinfo=timezone.utc)
             with pytest.raises(ValueError, match="funnel transition service"):
@@ -291,95 +297,38 @@ class _TransactionPool:
             yield connection
 
 
-@pytest.mark.asyncio
-async def test_atomic_eom_identityless_relays_are_idempotent_and_emit_after_commit(
-    monkeypatch,
-):
-    database_url = os.environ.get(DATABASE_URL_ENV)
-    if not database_url:
-        pytest.skip(f"{DATABASE_URL_ENV} is not configured")
-
-    schema = f"atlas_eom_relay_{uuid.uuid4().hex}"
-    setup = await asyncpg.connect(database_url)
-    pool = None
-    try:
-        await setup.execute(f'CREATE SCHEMA "{schema}"')
-        await setup.execute(f'SET search_path TO "{schema}", public')
-        await setup.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
-        for name in (
-            "035_contacts.sql",
-            "346_contact_lead_pipeline.sql",
-            "351_eom_lead_lifecycle_events.sql",
-        ):
-            await setup.execute((MIGRATIONS / name).read_text())
-
-        pool = await asyncpg.create_pool(
-            database_url,
-            min_size=2,
-            max_size=2,
-            server_settings={"search_path": f'"{schema}", public'},
-        )
-        import atlas_brain.reasoning.producers as producers
-        import atlas_brain.storage.database as db_mod
-
-        monkeypatch.setattr(db_mod, "get_db_pool", lambda: _TransactionPool(pool))
-        emitted: list[dict[str, object]] = []
-
-        async def record_event(event_type, source, payload, **kwargs):
-            assert event_type == "crm.contact_created"
-            assert source == "crm_provider"
-            assert kwargs["entity_type"] == "contact"
-            assert await setup.fetchval(
-                "SELECT COUNT(*) FROM contacts WHERE id = $1",
-                uuid.UUID(str(payload["contact_id"])),
-            ) == 1
-            emitted.append(dict(payload))
-
-        monkeypatch.setattr(producers, "emit_if_enabled", record_event)
-        provider = DatabaseCRMProvider()
-
-        async def resolve(relay_id: str):
-            return await resolve_or_create_eom_inbound_lead(
-                provider,
-                full_name="Relay-only lead",
-                phone=None,
-                email=None,
-                address=None,
-                source=" web ",
-                source_ref=f" web3forms:{relay_id} ",
-            )
-
-        relay_ids = [f"relay-message-{index}" for index in range(1, 6)]
-        for relay_id in relay_ids:
-            created, replayed = await asyncio.gather(
-                resolve(relay_id), resolve(relay_id)
-            )
-            assert created["id"] == replayed["id"]
-            assert {created["_was_created"], replayed["_was_created"]} == {False, True}
-
-        assert len(emitted) == len(relay_ids)
-        async with pool.acquire() as check:
-            assert await check.fetchval("SELECT COUNT(*) FROM contacts") == len(relay_ids)
-            assert await check.fetchval(
-                "SELECT COUNT(*) FROM eom_lead_lifecycle_events WHERE event_type = 'lead_created'"
-            ) == len(relay_ids)
-
-        async def fail_event(*_args, **_kwargs):
-            raise RuntimeError("reasoning delivery unavailable")
-
-        monkeypatch.setattr(producers, "emit_if_enabled", fail_event)
-        committed = await resolve("relay-event-failure")
-        assert committed["_was_created"] is True
-        async with pool.acquire() as check:
-            assert await check.fetchval(
-                "SELECT COUNT(*) FROM contacts WHERE source = 'web' AND source_ref = $1",
-                "web3forms:relay-event-failure",
-            ) == 1
-    finally:
-        if pool is not None:
-            await pool.close()
-        await setup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
-        await setup.close()
+def test_interaction_dedupe_preserves_legacy_keys_and_opaque_attribution_case():
+    occurred_at = datetime(2026, 7, 26, 15, tzinfo=timezone.utc)
+    legacy_daily = "daily|web_form|2026-07-26|estimate_request|callback"
+    assert _interaction_dedupe_key(
+        interaction_type="web_form",
+        summary="callback",
+        intent="estimate_request",
+        occurred_at=occurred_at,
+        metadata={},
+    ) == hashlib.md5(legacy_daily.encode("utf-8")).hexdigest()
+    legacy_anchor = "anchor|web_form|message_id:abc-123"
+    assert _interaction_dedupe_key(
+        interaction_type="web_form",
+        summary="ignored for anchors",
+        occurred_at=occurred_at,
+        metadata={"message_id": "ABC-123"},
+    ) == hashlib.md5(legacy_anchor.encode("utf-8")).hexdigest()
+    mixed_case = _interaction_dedupe_key(
+        interaction_type="web_form",
+        summary="callback",
+        intent="estimate_request",
+        occurred_at=occurred_at,
+        metadata={"attribution": {"gclid": "AbC"}},
+    )
+    lower_case = _interaction_dedupe_key(
+        interaction_type="web_form",
+        summary="callback",
+        intent="estimate_request",
+        occurred_at=occurred_at,
+        metadata={"attribution": {"gclid": "abc"}},
+    )
+    assert mixed_case != lower_case
 
 
 @pytest.mark.asyncio
@@ -411,7 +360,21 @@ async def test_atomic_eom_inbound_identity_creates_one_contact_and_one_ledger_ev
         import atlas_brain.storage.database as db_mod
 
         monkeypatch.setattr(db_mod, "get_db_pool", lambda: _TransactionPool(pool))
-        provider = DatabaseCRMProvider()
+        emitted: list[dict[str, object]] = []
+
+        class EventRecordingProvider(DatabaseCRMProvider):
+            fail_event_delivery = False
+
+            async def _emit_contact_created(self, result, **kwargs):
+                if self.fail_event_delivery:
+                    raise RuntimeError("reasoning delivery unavailable")
+                assert await setup.fetchval(
+                    "SELECT COUNT(*) FROM contacts WHERE id = $1",
+                    uuid.UUID(str(result["id"])),
+                ) == 1
+                emitted.append({"contact_id": result["id"], **kwargs})
+
+        provider = EventRecordingProvider()
 
         async def resolve(source_ref: str):
             return await resolve_or_create_eom_inbound_lead(
@@ -430,6 +393,42 @@ async def test_atomic_eom_inbound_identity_creates_one_contact_and_one_ledger_ev
             assert await check.fetchval("SELECT COUNT(*) FROM contacts") == 1
             assert await check.fetchval(
                 "SELECT COUNT(*) FROM eom_lead_lifecycle_events WHERE event_type = 'lead_created'"
+            ) == 1
+
+        async def resolve_relay(relay_id: str):
+            return await resolve_or_create_eom_inbound_lead(
+                provider,
+                full_name="Relay-only lead",
+                phone=None,
+                email=None,
+                address=None,
+                source=" web ",
+                source_ref=f"untrusted:{relay_id}",
+                relay_event_id=f" web3forms:{relay_id} ",
+            )
+
+        relay_ids = [f"relay-message-{index}" for index in range(1, 6)]
+        for relay_id in relay_ids:
+            created, replayed = await asyncio.gather(
+                resolve_relay(relay_id), resolve_relay(relay_id)
+            )
+            assert created["id"] == replayed["id"]
+            assert {created["_was_created"], replayed["_was_created"]} == {False, True}
+
+        assert len(emitted) == len(relay_ids) + 1
+        async with pool.acquire() as check:
+            assert await check.fetchval("SELECT COUNT(*) FROM contacts") == len(relay_ids) + 1
+            assert await check.fetchval(
+                "SELECT COUNT(*) FROM eom_lead_lifecycle_events WHERE event_type = 'lead_created'"
+            ) == len(relay_ids) + 1
+
+        provider.fail_event_delivery = True
+        committed = await resolve_relay("relay-event-failure")
+        assert committed["_was_created"] is True
+        async with pool.acquire() as check:
+            assert await check.fetchval(
+                "SELECT COUNT(*) FROM contacts WHERE source = 'web' AND source_ref = $1",
+                "web3forms:relay-event-failure",
             ) == 1
     finally:
         if pool is not None:
