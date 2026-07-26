@@ -676,3 +676,101 @@ def test_kid_at_the_column_limit_is_accepted(monkeypatch):
         client_id="cid", client_secret="csec", refresh_token="rtok"
     )
     assert kid == exact_kid
+
+
+class _DrainTrackingClient:
+    """Gmail client that fails one envelope read and records whether any
+    hydration was still running when close() landed."""
+
+    def __init__(self, exc, candidate_count=12):
+        self._exc = exc
+        self._candidates = [{"id": f"m{i}"} for i in range(candidate_count)]
+        self.closed = False
+        self.in_flight = 0
+        self.touched_after_close = []
+
+    async def list_messages(self, query, max_results):
+        return list(self._candidates)
+
+    async def get_message_envelope(self, message_id):
+        if self.closed:
+            self.touched_after_close.append(message_id)
+        self.in_flight += 1
+        try:
+            if message_id == "m0":
+                raise self._exc
+            # Yield repeatedly so slower siblings are demonstrably still
+            # mid-flight when the first one raises.
+            for _ in range(5):
+                await asyncio.sleep(0)
+            if self.closed:
+                self.touched_after_close.append(message_id)
+            return {"id": message_id, "from": "a@example.com"}
+        finally:
+            self.in_flight -= 1
+
+    async def close(self):
+        assert self.in_flight == 0, (
+            f"close() ran with {self.in_flight} hydration(s) still active -- "
+            "a survivor can rebuild the client and leak it"
+        )
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_hydration_siblings_are_drained_before_the_client_closes():
+    """R8: gather() propagates the first exception without waiting for its
+    siblings, so the finally closed the shared client underneath up to 49 live
+    hydrations. A survivor that refreshes rebuilds an AsyncClient after close()
+    nulled it and leaves the replacement unclosed."""
+    from atlas_brain.services.email_provider import ScopedGmailEmailProvider
+
+    client = _DrainTrackingClient(
+        repo_mod.ScopedMailboxCredentialUnavailable("revoked")
+    )
+    provider = ScopedGmailEmailProvider(client)
+
+    with pytest.raises(repo_mod.ScopedMailboxCredentialUnavailable):
+        await provider.list_messages()
+
+    assert client.closed, "the client must still be closed"
+    assert client.in_flight == 0
+    assert client.touched_after_close == [], (
+        f"hydrations touched the client after close: {client.touched_after_close}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_is_refused_when_the_pool_cannot_spare_a_connection(
+    row_lock_repo, caplog
+):
+    """R7/R8: max(1, 1 // 2) == 1, so a min=max=1 deployment computed a budget
+    of one and a refresh still took the whole pool across Google's token call.
+    Refuse instead, which degrades scoped reads to the documented fail-closed
+    state rather than stalling every unrelated query."""
+    _, pool = row_lock_repo
+    # Derived budget only -- an explicit budget is a stated reservation.
+    repo = repo_mod.ScopedMailboxCredentialRepository(pool=pool, pool_capacity=1)
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(repo_mod.ScopedMailboxCredentialUnavailable) as exc:
+            async with repo.locked_gmail(TENANT):
+                pass
+
+    assert "pool_headroom" in str(exc.value)
+    assert pool.max_open == 0, "it must refuse WITHOUT taking a connection"
+    assert any("max_pool_size=1" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_two_connection_pool_still_permits_refresh(row_lock_repo):
+    """Boundary second side: exactly the minimum must work, or the guard has
+    moved the supported floor instead of matching it."""
+    _, pool = row_lock_repo
+    repo = repo_mod.ScopedMailboxCredentialRepository(
+        pool=pool, pool_capacity=repo_mod._MIN_POOL_FOR_SCOPED_REFRESH
+    )
+
+    async with repo.locked_gmail(TENANT) as locked:
+        assert locked.credentials.refresh_token == "rtok"
+    pool.holder_done.set()

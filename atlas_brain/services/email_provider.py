@@ -654,10 +654,45 @@ class ScopedGmailEmailProvider:
                     )
                     return None
 
-            hydrated = await asyncio.gather(
-                *(_hydrate(candidate) for candidate in candidates)
-            )
-            return [message for message in hydrated if message is not None]
+            if not candidates:
+                return []
+
+            # Plain gather() propagates the FIRST exception without waiting for
+            # its siblings, and the finally below then closes the shared client
+            # while up to 49 hydrations are still in flight. A survivor that
+            # refreshes would rebuild an AsyncClient after close() set it to
+            # None and leave the replacement unclosed. So: stop at the first
+            # failure, cancel the rest, and DRAIN before returning -- nothing
+            # may still be touching the client when it is closed.
+            tasks = [
+                asyncio.ensure_future(_hydrate(candidate))
+                for candidate in candidates
+            ]
+            try:
+                await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            messages: list[dict[str, Any]] = []
+            failure: BaseException | None = None
+            for task in tasks:
+                if task.cancelled():
+                    continue
+                error = task.exception()
+                if error is not None:
+                    # Only revocation escapes _hydrate; ordinary read failures
+                    # are already absorbed into a dropped message above.
+                    failure = failure or error
+                    continue
+                result = task.result()
+                if result is not None:
+                    messages.append(result)
+            if failure is not None:
+                raise failure
+            return messages
         finally:
             await self._gmail_client.close()
 

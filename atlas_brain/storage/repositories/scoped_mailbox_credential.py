@@ -48,6 +48,13 @@ def _refresh_gate(context: str) -> asyncio.Lock:
 _REFRESH_SLOTS: dict[tuple[int, int], asyncio.Semaphore] = {}
 
 
+# A refresh holds its connection across Google's token endpoint. With fewer
+# than this many connections configured there is no headroom to reserve: the
+# refresh would occupy the whole pool for the length of an external HTTP call
+# and stall every unrelated CRM/database query behind it.
+_MIN_POOL_FOR_SCOPED_REFRESH = 2
+
+
 def _refresh_budget() -> int:
     """Connections refreshes may occupy at once; the rest stay available."""
     return max(1, db_settings.max_pool_size // 2)
@@ -132,7 +139,12 @@ class LockedScopedGmailCredentials:
 class ScopedMailboxCredentialRepository:
     """Narrow repository; no list API or broad secret projection exists."""
 
-    def __init__(self, pool=None, refresh_budget: int | None = None) -> None:
+    def __init__(
+        self,
+        pool=None,
+        refresh_budget: int | None = None,
+        pool_capacity: int | None = None,
+    ) -> None:
         # Edge seam: tests hand in a pool double; production resolves the
         # process pool lazily so import order stays unconstrained.
         self._pool = pool
@@ -141,12 +153,43 @@ class ScopedMailboxCredentialRepository:
         # process-global (keyed by budget), so every instance deriving the same
         # budget shares one -- an instance cannot mint itself extra headroom.
         self._refresh_budget = refresh_budget
+        # Third seam, same shape as the other two: production reads the
+        # configured pool size, callers may state it outright.
+        self._pool_capacity = pool_capacity
 
     def _db(self):
         return self._pool if self._pool is not None else get_db_pool()
 
+    def _capacity(self) -> int:
+        if self._pool_capacity is not None:
+            return self._pool_capacity
+        return db_settings.max_pool_size
+
     def _slot(self):
-        return _refresh_slot(self._refresh_budget)
+        if self._refresh_budget is not None:
+            return _refresh_slot(self._refresh_budget)
+        return _refresh_slot(max(1, self._capacity() // 2))
+
+    def _require_refresh_headroom(self) -> None:
+        """Refuse a refresh that would take the entire pool.
+
+        Only the DERIVED budget is guarded. An explicitly constructed budget is
+        a caller stating the reservation outright, which is the test seam.
+        """
+        if self._refresh_budget is not None:
+            return
+        capacity = self._capacity()
+        if capacity < _MIN_POOL_FOR_SCOPED_REFRESH:
+            logger.warning(
+                "Scoped Gmail refresh disabled: max_pool_size=%s leaves no "
+                "connection to reserve (needs at least %s). Scoped inbox reads "
+                "are omitted until the pool is widened.",
+                capacity,
+                _MIN_POOL_FOR_SCOPED_REFRESH,
+            )
+            raise ScopedMailboxCredentialUnavailable(
+                "scoped_gmail_refresh_requires_pool_headroom"
+            )
 
     async def bind_gmail(
         self,
@@ -235,6 +278,7 @@ class ScopedMailboxCredentialRepository:
     ) -> AsyncIterator[LockedScopedGmailCredentials]:
         """Serialize token refresh for one exact context across processes."""
         context = _exact_context(business_context_id)
+        self._require_refresh_headroom()
         async with _refresh_gate(context), self._slot():
             async with self._db().transaction() as conn:
                 row = await conn.fetchrow(
