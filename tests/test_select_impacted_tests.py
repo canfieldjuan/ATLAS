@@ -89,6 +89,17 @@ def test_relative_import_is_followed(tmp_path):
     assert sel.select(["atlas_brain/pkg/leaf.py"], repo) == ["tests/test_rel.py"]
 
 
+def test_package_initializer_edge_is_recorded(tmp_path):
+    """Importing pkg.leaf executes pkg/__init__.py too; changing it must select."""
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        "atlas_brain/pkg/__init__.py": "INIT = 1\n",
+        "atlas_brain/pkg/leaf.py": "X = 1\n",
+        "tests/test_pkg.py": "import atlas_brain.pkg.leaf\n",
+    })
+    assert sel.select(["atlas_brain/pkg/__init__.py"], repo) == ["tests/test_pkg.py"]
+
+
 def test_changed_test_file_selects_itself(tmp_path):
     repo = _mkrepo(tmp_path, {
         "atlas_brain/__init__.py": "",
@@ -145,12 +156,92 @@ def test_empty_diff_escalates_to_full(tmp_path):
     assert sel.select([], repo) == sel.FULL
 
 
+def test_deleted_changed_path_escalates_to_full(tmp_path):
+    """A deleted module's old import edges are absent from PR-head parsing."""
+    repo = _mkrepo(tmp_path, {"atlas_brain/__init__.py": ""})
+    assert sel.select(["atlas_brain/removed.py"], repo) == sel.FULL
+
+
+def test_unknown_python_root_escalates_to_full(tmp_path):
+    """New/omitted first-party roots must not be interpreted as test-free."""
+    repo = _mkrepo(tmp_path, {
+        "atlas_reddit/__init__.py": "",
+        "atlas_reddit/config.py": "TOKEN = 'x'\n",
+        "tests/test_atlas_reddit_config.py": "from atlas_reddit.config import TOKEN\n",
+    })
+    assert sel.select(["atlas_reddit/config.py"], repo) == sel.FULL
+
+
+def test_runtime_asset_change_escalates_to_full(tmp_path):
+    """YAML/JSON/etc. may be loaded at runtime without a Python import edge."""
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        "atlas_brain/skills/brand/brand_voice.yml": "tone: warm\n",
+        "tests/test_brand_voice_validator.py": (
+            "from pathlib import Path\n"
+            "def test_asset():\n"
+            "    assert Path('atlas_brain/skills/brand/brand_voice.yml')\n"
+        ),
+    })
+    assert sel.select(["atlas_brain/skills/brand/brand_voice.yml"], repo) == sel.FULL
+
+
+def test_workflow_change_escalates_to_full(tmp_path):
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        ".github/workflows/other_gate.yml": "name: other\n",
+    })
+    assert sel.select([".github/workflows/other_gate.yml"], repo) == sel.FULL
+
+
+def test_script_change_escalates_for_path_based_loading(tmp_path):
+    """Tests often load scripts via importlib/runpy/subprocess path strings."""
+    repo = _mkrepo(tmp_path, {
+        "scripts/audit_claims.py": "VALUE = 1\n",
+        "tests/test_audit_claims.py": (
+            "import importlib.util\n"
+            "spec = importlib.util.spec_from_file_location("
+            "'audit_claims', 'scripts/audit_claims.py')\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+        ),
+    })
+    assert sel.select(["scripts/audit_claims.py"], repo) == sel.FULL
+
+
+def test_conftest_dependency_escalates_to_full(tmp_path):
+    """Once conftest is reached, fixture consumers are not in the import graph."""
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        "atlas_brain/fixture_source.py": "VALUE = 1\n",
+        "tests/conftest.py": (
+            "import pytest\n"
+            "from atlas_brain.fixture_source import VALUE\n"
+            "@pytest.fixture\n"
+            "def shared_value():\n"
+            "    return VALUE\n"
+        ),
+        "tests/test_fixture_user.py": (
+            "def test_uses_fixture(shared_value):\n"
+            "    assert shared_value == 1\n"
+        ),
+    })
+    assert sel.select(["atlas_brain/fixture_source.py"], repo) == sel.FULL
+
+
 def test_docs_only_change_selects_nothing(tmp_path):
-    """The one case where empty is correct: mapped, and reachable from no test."""
+    """The one case where empty is correct: mapped, and reachable from no test.
+
+    The docs must EXIST in the head. A changed path absent from the head is a
+    deletion and escalates to FULL, so a fixture that omits the files would
+    pass for the wrong reason and hide a real docs-only regression.
+    """
     repo = _mkrepo(tmp_path, {
         "atlas_brain/__init__.py": "",
         "atlas_brain/svc.py": "X = 1\n",
         "tests/test_svc.py": "from atlas_brain.svc import X\n",
+        "docs/GUIDE.md": "# guide\n",
+        "plans/PR-Thing.md": "# plan\n",
     })
     assert sel.select(["docs/GUIDE.md", "plans/PR-Thing.md"], repo) == []
 
@@ -205,3 +296,43 @@ def test_stale_entry_inside_scope_is_still_caught():
 
 def test_node_file_handles_parametrized_ids_with_colons():
     assert gate.node_file("tests/test_a.py::test_k[a::b]") == "tests/test_a.py"
+
+
+def test_growth_only_runs_growth_guard_without_pytest_report(tmp_path, capsys):
+    baseline = tmp_path / "unit_gate_baseline.txt"
+    base_baseline = tmp_path / "base_unit_gate_baseline.txt"
+    baseline.write_text("tests/test_a.py::known\n", encoding="utf-8")
+    base_baseline.write_text("tests/test_a.py::known\n", encoding="utf-8")
+
+    assert gate.main([
+        "--baseline", str(baseline),
+        "--base-baseline", str(base_baseline),
+        "--growth-only",
+    ]) == 0
+    assert "growth guard passed" in capsys.readouterr().out
+
+
+def test_growth_only_still_rejects_baseline_growth(tmp_path):
+    baseline = tmp_path / "unit_gate_baseline.txt"
+    base_baseline = tmp_path / "base_unit_gate_baseline.txt"
+    baseline.write_text(
+        "tests/test_a.py::known\n"
+        "tests/test_a.py::newly_added\n",
+        encoding="utf-8",
+    )
+    base_baseline.write_text("tests/test_a.py::known\n", encoding="utf-8")
+
+    assert gate.main([
+        "--baseline", str(baseline),
+        "--base-baseline", str(base_baseline),
+        "--growth-only",
+    ]) == 3
+
+
+def test_scoped_run_allows_marker_filtered_no_tests_collected():
+    gate.ensure_pytest_ran(5, allow_no_tests=True)
+
+
+def test_unscoped_no_tests_collected_still_fails_infrastructure():
+    with pytest.raises(RuntimeError):
+        gate.ensure_pytest_ran(5)

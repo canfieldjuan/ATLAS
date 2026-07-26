@@ -144,14 +144,9 @@ exercised by the first PR that does not touch the gate.
 
 | File | LOC |
 |---|---:|
-| `scripts/select_impacted_tests.py` | 235 |
-| `tests/test_select_impacted_tests.py` | 205 |
-| `scripts/check_unit_gate.py` | 55 |
-| `.github/workflows/unit_gate.yml` | 33 |
-| `plans/PR-Unit-Gate-Impacted-Selection.md` | 150 |
-| **Total** | **~678** |
-
-Over the 400-LOC budget: the selector, its baseline restriction, and its fixture
-tests are one behavior. Landing the selector without the baseline restriction
-would fail every scoped run, and landing either without the tests would ship an
-under-selection risk with no failure detection (3i).
+| `.github/workflows/unit_gate.yml` | 40 |
+| `plans/PR-Unit-Gate-Impacted-Selection.md` | 157 |
+| `scripts/check_unit_gate.py` | 105 |
+| `scripts/select_impacted_tests.py` | 307 |
+| `tests/test_select_impacted_tests.py` | 338 |
+| **Total** | **947** |

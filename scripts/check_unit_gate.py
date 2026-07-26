@@ -27,6 +27,10 @@ Usage:
   # maintenance: overwrite the baseline with the current failing set:
   python scripts/check_unit_gate.py --baseline B --update-baseline
 
+  # no tests are reachable; still enforce the baseline-growth ratchet:
+  python scripts/check_unit_gate.py --baseline B --base-baseline base.txt \
+      --growth-only
+
 Exit codes: 0 = no regression; 1 = regression (failing node not in baseline);
 2 = infrastructure/usage/IO error; 3 = baseline grew (ratchet violation).
 """
@@ -53,6 +57,7 @@ _SUMMARY_RE = re.compile(r"^(?:FAILED|ERROR)\s+(?P<node>[^\s\[]+(?:\[[^\]]*\])?)
 # (expected -- the baseline exists). 2 interrupted / 3 internal / 4 usage /
 # 5 no-tests-collected all mean the suite did not run cleanly.
 _OK_PYTEST_EXIT = frozenset((0, 1))
+_NO_TESTS_COLLECTED = 5
 
 DEFAULT_PYTEST_ARGS = ["tests/", "-m", "not integration and not e2e",
                        "--continue-on-collection-errors", "-rfE", "--tb=no",
@@ -111,12 +116,20 @@ def restrict_baseline(baseline: set[str], selected_files: set[str]) -> set[str]:
     return {node for node in baseline if node_file(node) in selected_files}
 
 
-def ensure_pytest_ran(returncode: int) -> None:
+def ensure_pytest_ran(returncode: int, *, allow_no_tests: bool = False) -> None:
     """Raise when pytest did not finish as a normal pass/fail run.
 
     Without this, an infrastructure/usage error (e.g. a plugin crash, a bad
     arg, or no tests collected) produces no FAILED/ERROR summary lines, parses
-    to an empty failing set, and the gate would go GREEN having run nothing."""
+    to an empty failing set, and the gate would go GREEN having run nothing.
+
+    A scoped run is different: marker filtering can legitimately remove every
+    selected test (for example an e2e-only selected file under the unit marker
+    expression). In that case pytest returns 5, but the selector still produced
+    a real file scope and the ratchet comparison is restricted to that scope.
+    """
+    if allow_no_tests and returncode == _NO_TESTS_COLLECTED:
+        return
     if returncode not in _OK_PYTEST_EXIT:
         raise RuntimeError(
             f"pytest exited {returncode}, not a normal pass/fail run "
@@ -161,7 +174,7 @@ def _fail_growth(added: list[str]) -> int:
     return 3
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Repo-wide unit gate (ratchet baseline).")
     ap.add_argument("--baseline", required=True, type=Path)
     ap.add_argument("--base-baseline", type=Path,
@@ -171,6 +184,10 @@ def main() -> int:
                     help="Gate a pre-captured pytest summary instead of running pytest.")
     ap.add_argument("--update-baseline", action="store_true",
                     help="Overwrite the baseline with the current failing set and exit 0.")
+    ap.add_argument("--growth-only", action="store_true",
+                    help="Only enforce the baseline-growth guard. Use this when "
+                         "selection found no reachable unit tests; do not pass a "
+                         "pytest report or selected-file scope.")
     ap.add_argument("--selected-files", type=Path,
                     help="File listing the test paths this run executed (scoped "
                          "run). The baseline is restricted to entries in those "
@@ -178,11 +195,21 @@ def main() -> int:
                          "otherwise read as newly-passing.")
     ap.add_argument("--pytest-args", nargs=argparse.REMAINDER,
                     help="Override the default pytest args (everything after this flag).")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if args.selected_files is not None and args.update_baseline:
         print("--selected-files cannot be combined with --update-baseline: a "
               "scoped run must never rewrite the repo-wide baseline",
+              file=sys.stderr)
+        return 2
+    if args.growth_only and (
+        args.report_file is not None
+        or args.selected_files is not None
+        or args.update_baseline
+        or args.pytest_args
+    ):
+        print("--growth-only cannot be combined with pytest reports, scoped "
+              "selection, pytest args, or --update-baseline",
               file=sys.stderr)
         return 2
 
@@ -199,6 +226,25 @@ def main() -> int:
             if added:
                 return _fail_growth(added)
 
+    if args.growth_only:
+        print("unit gate: growth guard passed; no reachable unit tests selected")
+        return 0
+
+    selected: set[str] | None = None
+    if args.selected_files is not None:
+        if not args.selected_files.exists():
+            print(f"selected files not found: {args.selected_files}", file=sys.stderr)
+            return 2
+        selected = {
+            line.strip()
+            for line in args.selected_files.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        if not selected:
+            print("--selected-files is empty; use --growth-only for the "
+                  "zero-test path", file=sys.stderr)
+            return 2
+
     if args.report_file is not None:
         if not args.report_file.exists():
             print(f"report file not found: {args.report_file}", file=sys.stderr)
@@ -207,7 +253,7 @@ def main() -> int:
     else:
         output, returncode = run_pytest(args.pytest_args or DEFAULT_PYTEST_ARGS)
         try:
-            ensure_pytest_ran(returncode)
+            ensure_pytest_ran(returncode, allow_no_tests=selected is not None)
         except RuntimeError as exc:
             print(f"unit gate: {exc}", file=sys.stderr)
             return 2
@@ -221,12 +267,7 @@ def main() -> int:
 
     baseline = load_baseline(args.baseline)
     scope_note = ""
-    if args.selected_files is not None:
-        selected = {
-            line.strip()
-            for line in args.selected_files.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        }
+    if selected is not None:
         full_size = len(baseline)
         baseline = restrict_baseline(baseline, selected)
         # Any failing node from a file we did not select means pytest ran

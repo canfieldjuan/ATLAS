@@ -13,10 +13,11 @@ Soundness rests on three properties, in order of how much they matter:
    selects `test_a`. A one-hop "which test names this module" grep silently
    drops exactly the indirect dependencies a refactor breaks.
 2. **Unresolvable input means FULL, never empty.** A file this script cannot
-   map (a global config, an unparseable module, anything outside the known
-   first-party roots) escalates to the full suite. The failure direction is
-   "run too much", never "run too little" -- a selector that silently returns
-   nothing is worse than no selector, because it reports green.
+   prove scoped (a global config, an unparseable module, a deleted path, an
+   unknown Python root, a runtime asset, or a script that tests may load by
+   path) escalates to the full suite. The failure direction is "run too much",
+   never "run too little" -- a selector that silently returns nothing is worse
+   than no selector, because it reports green.
 3. **Empty is only for provably test-free changes.** An empty selection means
    every changed file was mapped and none of them is reachable from any test
    (documentation, plans). It is not the fallback for "I could not tell".
@@ -58,6 +59,7 @@ GLOBAL_FILES = {
 GLOBAL_PREFIXES = ("requirements",)
 
 FULL = "FULL"
+TEST_FREE_SUFFIXES = {".md"}
 
 
 def changed_files_from_git(base: str) -> list[str]:
@@ -91,6 +93,16 @@ def module_name_for(path: Path) -> str | None:
     if parts[-1] == "__init__":
         parts = parts[:-1]
     return ".".join(parts) if parts else None
+
+
+def is_provably_test_free_path(path: Path) -> bool:
+    """True for paths that can safely produce an empty unit-test selection."""
+    return path.suffix in TEST_FREE_SUFFIXES
+
+
+def is_conftest_module(name: str) -> bool:
+    """True for any ``tests/.../conftest.py`` module name."""
+    return name == "tests.conftest" or name.endswith(".conftest")
 
 
 def _imports_of(path: Path, rel: Path) -> set[str]:
@@ -156,19 +168,20 @@ def build_reverse_graph(repo: Path) -> tuple[dict[str, set[str]], set[str]]:
         for target in imported:
             # Attribute imports (pkg.mod.symbol) resolve to the longest prefix
             # that is a real module, so importing a symbol still records the
-            # edge to the module that defines it.
+            # edge to the module that defines it. Package initializers are also
+            # executable dependencies, so keep ancestor package edges too:
+            # importing atlas_brain.pkg.leaf runs atlas_brain/pkg/__init__.py.
             parts = target.split(".")
             for i in range(len(parts), 0, -1):
                 candidate = ".".join(parts[:i])
                 if candidate in modules:
                     reverse[candidate].add(name)
-                    break
     return reverse, unparseable
 
 
 def impacted_tests(
     changed: Iterable[str], reverse: dict[str, set[str]], repo: Path
-) -> set[str]:
+) -> set[str] | str:
     """Test files transitively reachable from the changed modules."""
     seen: set[str] = set()
     queue: deque[str] = deque()
@@ -182,6 +195,13 @@ def impacted_tests(
     tests: set[str] = set()
     while queue:
         current = queue.popleft()
+        if is_conftest_module(current):
+            print(
+                f"select_impacted_tests: {current} is reachable; "
+                "fixture consumers are collection-scoped, escalating to FULL",
+                file=sys.stderr,
+            )
+            return FULL
         if current.startswith("tests."):
             rel = Path(*current.split(".")).with_suffix(".py")
             if (repo / rel).exists():
@@ -202,6 +222,39 @@ def select(changed: list[str], repo: Path) -> list[str] | str:
     if any(is_global_change(p) for p in changed):
         return FULL
 
+    for path in changed:
+        p = Path(path)
+        if p.suffix != ".py" and is_provably_test_free_path(p):
+            continue
+        abs_path = repo / p
+        if not abs_path.exists():
+            print(
+                f"select_impacted_tests: {path} is absent in the PR head; "
+                "deleted/renamed dependencies require FULL",
+                file=sys.stderr,
+            )
+            return FULL
+        if p.suffix != ".py":
+            print(
+                f"select_impacted_tests: {path} is a non-Python runtime/config "
+                "surface; escalating to FULL",
+                file=sys.stderr,
+            )
+            return FULL
+        if p.parts and p.parts[0] == "scripts":
+            print(
+                f"select_impacted_tests: {path} may be loaded by filesystem "
+                "path; escalating to FULL",
+                file=sys.stderr,
+            )
+            return FULL
+        if module_name_for(p) is None:
+            print(
+                f"select_impacted_tests: cannot map {path}; escalating to FULL",
+                file=sys.stderr,
+            )
+            return FULL
+
     reverse, unparseable = build_reverse_graph(repo)
     if unparseable:
         print(
@@ -211,19 +264,10 @@ def select(changed: list[str], repo: Path) -> list[str] | str:
         )
         return FULL
 
-    # A changed .py under a first-party root that yields no module name means
-    # the roots and the tree disagree -- unknown edges again.
-    for path in changed:
-        p = Path(path)
-        if p.suffix == ".py" and p.parts and p.parts[0] in FIRST_PARTY_ROOTS:
-            if module_name_for(p) is None:
-                print(
-                    f"select_impacted_tests: cannot map {path}; escalating to FULL",
-                    file=sys.stderr,
-                )
-                return FULL
-
-    return sorted(impacted_tests(changed, reverse, repo))
+    result = impacted_tests(changed, reverse, repo)
+    if result == FULL:
+        return FULL
+    return sorted(result)
 
 
 def main(argv: list[str] | None = None) -> int:

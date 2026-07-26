@@ -89,7 +89,7 @@ jobs:
             python scripts/check_unit_gate.py \
               --baseline tests/unit_gate_baseline.txt \
               --base-baseline /tmp/base_baseline.txt \
-              --report-file /dev/null
+              --growth-only
           else
             echo "running $(wc -l < /tmp/selected.txt) impacted test file(s)"
             python scripts/check_unit_gate.py \
