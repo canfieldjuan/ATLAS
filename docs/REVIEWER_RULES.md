@@ -1,10 +1,19 @@
 # Reviewer Rules Pack v1
 
-> The reviewer's job is **not** to "review the code." It is to **prove whether
-> the PR satisfies its Review Contract and violates none of the rules below.**
+> The reviewer's job is **not** to "review the code." It is to **disposition the
+> review matrix: every acceptance criterion in the PR's Review Contract, and
+> every rule below.** Every rule is in the matrix -- the path-trigger table sets
+> how DEEPLY a rule is probed, never whether it appears -- so a rule reaches a
+> verdict of pass / fail / not-verified / n-a, and `n-a` carries a reason.
 > Every review finding cites a rule ID (R1-R14). This pack is the checklist the
-> reviewer runs; the recurring-lapse list in `docs/SESSION_BOOTSTRAP.md` is the
-> same checklist front-loaded into the builder so the repeats stop.
+> reviewer runs; the
+> recurring-lapse list in `docs/SESSION_BOOTSTRAP.md` is the same checklist
+> front-loaded into the builder so the repeats stop.
+>
+> The standard is *the matrix is dispositioned*, not *the code violates no rule*.
+> "Violates none of the rules" is a universal negative -- undischargeable on any
+> non-trivial diff, so it defines no point at which a review is done. See
+> **Review completion** below, which is what makes a review finishable.
 
 This pack sits **under** the existing verdict ladder, it does not replace it:
 
@@ -13,7 +22,7 @@ This pack sits **under** the existing verdict ladder, it does not replace it:
 | **BLOCKER** | A rule below is failed in a way that breaks correctness, security, a contract, or CI. Must fix before merge. |
 | **MAJOR** | A rule is at risk: architectural / scope / pattern concern. Fix if small; else discuss. |
 | **NIT** | Style / naming / polish. Apply only if 1-line; reviewer marks skip-worthy. |
-| **LGTM** | All triggered rules pass, R14 is satisfied, and all AI findings are fixed-or-waived. |
+| **LGTM** | Every rule R1-R14 is Pass or a reasoned N-A (no Not-Verified outstanding), R14 is satisfied, and all AI findings are fixed-or-waived. |
 
 A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 **Blockers must cite `file:line`.** A bare "LGTM" with no rule matrix and no
@@ -273,6 +282,96 @@ example. Before LGTM on an R13-triggering finding, verify one of:
 - a property/parametrized test generates diverse same-class cases;
 - unseen fixtures cover varied cases not listed in the original finding; or
 - the reviewer reran a held-out probe and the verdict records it.
+
+---
+
+## Review completion (the stopping rule)
+
+A review is **complete** when its matrix is dispositioned, and the review states
+that matrix:
+
+1. **Each acceptance criterion** in the Review Contract: met / not met /
+   could-not-determine, with checkable evidence -- `file:line` for a
+   code/content claim, or a named non-file artifact (command + output, CI
+   run/job, generated artifact, PR metadata) where the criterion is not about
+   source. Same evidence forms the binding reviewer workflow already accepts
+   (`AGENTS.md` 4a step 4); demanding `file:line` for a CI-status or
+   command-output criterion would either stall the matrix or buy a green tick
+   with an irrelevant citation.
+2. **Every rule, R1-R14**: pass / fail / not-verified / n-a-with-reason. The
+   path-trigger table sets how deeply each is probed, **not which appear**. A
+   behavior change under a path the table does not list still owes an R2
+   verdict; deriving matrix membership from the table would let exactly that
+   PR reach LGTM without anyone asking whether the new behavior has tests.
+3. **What was not verified**, listed with the reason.
+
+That is the whole standard for *stopping*. Completeness is never "no further
+case can be found" -- on an open surface no such point exists, so a reviewer
+holding that standard reports forever.
+
+**Complete is not the same as approved.** A matrix with honest `not-verified`
+or `could-not-determine` entries is a complete review -- the reviewer may stop
+-- but it is **not** an LGTM. LGTM requires every rule to be `pass` or a
+reasoned `n-a` (see the ladder above); an unresolved entry is an open question,
+so the verdict is *needs verification*. Conflating the two would let a review
+that verified almost nothing produce a green merge gate, which is the opposite of
+what a stopping rule is for.
+
+**Discharge is per head SHA.** A rule marked *pass* is discharged for **that
+head only**. A new head is new code: every rule re-opens on it freely, with no
+argument owed, because a defect the builder just introduced was not missed
+earlier -- it did not exist earlier. Requiring the reviewer to disown a
+previously-correct pass before reporting it would suppress exactly the
+regressions a re-review is for.
+
+The argument requirement applies only to re-opening a rule **on the same head**
+-- the reviewer revisiting their own verdict on unchanged code. There, state
+why the earlier discharge was wrong: the condition that was never actually met,
+not one more instance of a decision already reported. A discharge repeatedly
+overturned on unchanged code is evidence the rule was never dischargeable as
+scoped, which is a finding in itself.
+
+**Recording the gate: an unresolved entry is a BLOCKER-level finding.** The
+`claude-review` status has three states and "complete but not approved" is not a
+fourth one -- it maps onto the existing `failure`. A `not-verified` rule or a
+`could-not-determine` criterion is filed as a BLOCKER (`Rxx (BLOCKER) - not
+verified: <what, and why not>`), so `scripts/set_claude_review_status.py` takes
+`failure` and `success` is unreachable while anything is unresolved. This does
+**not** narrow `success` to LGTM: it keeps its established meaning of "no open
+BLOCKER", so a complete review carrying only non-blocking MAJOR/NIT notes is
+still `success`, exactly as `docs/REVIEWER_MERGE_GATE.md` and
+`scripts/set_claude_review_status.py` already define it. `pending` keeps its
+meaning -- a review still in progress -- and is not a parking space for a
+finished review with open questions.
+
+This is deliberately fail-closed. Unverified evidence is exactly what a merge
+gate exists to stop, so the burden is on resolving the entry or waiving it as a
+reasoned `n-a`, never on the gate to guess. The reviewer is still *done*: the
+matrix bounds the search, the verdict reports what it found, and neither forces
+the other.
+
+**Report the class, not the instance.** R13 obliges the *builder* to fix the
+class rather than the cited example. The same duty binds the *reviewer*: when
+two or more findings share one underlying decision, file **one** finding that
+names the decision, carrying the instances as illustrations. A finding whose own
+text opens "fresh evidence beyond the earlier `<X>` finding" is by its own words
+another instance of a decision already reported -- merge it into that finding
+instead of filing it separately. Where the decision keeps producing instances,
+the `AGENTS.md` 3k.2 breaker applies to the reviewer too: file the seam once and
+say so, rather than the next adjacent case.
+
+Nothing here licenses withholding a real defect. It changes how defects are
+*reported* -- once, at the level the fix has to happen anyway -- not whether.
+
+**Why:** measured on two PRs. #2195 drew 35 findings over 13 rounds; **18 of the
+35 (51%) explicitly declared themselves adjacent to an earlier finding**, and 27
+collapse into three decisions (source attestation 12, receipt lifecycle 12,
+preflight ordering 3). #2184 drew 33 over 14 rounds, collapsing into four
+decisions plus four distinct findings. Reported class-first, the same defects
+surface in roughly three rounds instead of thirteen, with none lost. Round 6 of
+#2195 is the cost of the alternative: it reverses round 5 ("reject ignored
+bytecode" became "stop rejecting bytecode created by the CLI itself"), which is
+what instance-by-instance boundary-shifting produces.
 
 ---
 
