@@ -6,6 +6,11 @@ shown to flip the result in the paired probe test.
 """
 from __future__ import annotations
 
+import json
+import os
+import threading
+import uuid
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -16,7 +21,10 @@ import atlas_brain.services.customer_context as context_mod
 import atlas_brain.services.crm_provider as crm_provider_mod
 import atlas_brain.services.email_provider as email_provider_mod
 import atlas_brain.storage.repositories.scoped_mailbox_credential as repo_mod
+from atlas_brain.storage.migrations import MIGRATIONS_DIR
 from atlas_brain.storage.config import db_settings
+
+DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 
 TEST_KEK = "test:DEj0-fNH6mOs5JYXn3Uv6ejEfP4PQ6XIqWla36eIR_U="
 
@@ -465,3 +473,206 @@ async def test_crm_lifespan_survives_a_failing_prerequisite_migration(caplog):
     assert not any("product_metadata" in m for m in messages), (
         "log the exception class, not a message that may carry schema detail"
     )
+
+
+class _RealPoolAdapter:
+    """Gives a real asyncpg pool the DatabasePool surface the repository uses.
+
+    Everything underneath is genuine: real connections, real transactions, real
+    row locks. Only the method names are bridged.
+    """
+
+    def __init__(self, pool):
+        self._pool = pool
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                yield conn
+
+    async def fetchrow(self, *args):
+        return await self._pool.fetchrow(*args)
+
+    async def fetch(self, *args):
+        return await self._pool.fetch(*args)
+
+    async def fetchval(self, *args):
+        return await self._pool.fetchval(*args)
+
+    async def execute(self, *args):
+        return await self._pool.execute(*args)
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_row_lock_serializes_independent_sessions(monkeypatch):
+    """R2/R8: the Review Contract claims PostgreSQL serializes refresh-token
+    rotation. Every single-loop test of that claim is masked by the in-process
+    `_refresh_gate` added for the pool-exhaustion finding -- it serializes the
+    actors before either reaches `FOR UPDATE`, so the row lock could be deleted
+    and those tests would stay green.
+
+    This one puts the second actor on its own event loop in its own thread.
+    `_refresh_gate` keys by running loop, so the two actors take DIFFERENT
+    gates, hold DIFFERENT pooled connections, and the row lock is the only
+    thing left that can order them.
+    """
+    import asyncpg
+
+    import atlas_brain.config as config_mod
+    from atlas_brain.auth import encryption
+    from atlas_brain.storage.repositories import scoped_mailbox_credential as smc
+
+    monkeypatch.setattr(
+        config_mod.settings.saas_auth, "byok_encryption_kek", TEST_KEK
+    )
+
+    database_url = os.environ.get(DATABASE_URL_ENV)
+    if not database_url:
+        pytest.skip(f"{DATABASE_URL_ENV} is not configured")
+
+    context = "eom_rowlock_probe"
+    schema = f"atlas_rowlock_{uuid.uuid4().hex}"
+    admin = await asyncpg.connect(database_url)
+    pool_a = None
+    try:
+        await admin.execute(f'CREATE SCHEMA "{schema}"')
+        await admin.execute(f'SET search_path TO "{schema}", public')
+        await admin.execute(
+            (MIGRATIONS_DIR / "350_scoped_mailbox_credentials.sql").read_text()
+        )
+
+        ss = {"search_path": f"{schema},public"}
+        pool_a = await asyncpg.create_pool(
+            database_url, min_size=1, max_size=2, server_settings=ss
+        )
+
+        repo_a = smc.ScopedMailboxCredentialRepository(
+            pool=_RealPoolAdapter(pool_a)
+        )
+        await repo_a.bind_gmail(
+            business_context_id=context,
+            client_id="client-1",
+            client_secret="secret-1",
+            refresh_token="token-initial",
+        )
+
+        first_holder_in = threading.Event()
+        second_may_start = threading.Event()
+        observed: list[str] = []
+
+        async def _second_actor():
+            # Its own loop -> its own _refresh_gate namespace. The pool must be
+            # created HERE too: an asyncpg pool is bound to the loop that made
+            # it, and that binding is what makes this a genuinely independent
+            # backend session rather than a borrowed one.
+            pool = await asyncpg.create_pool(
+                database_url, min_size=1, max_size=2, server_settings=ss
+            )
+            try:
+                repo_b = smc.ScopedMailboxCredentialRepository(
+                    pool=_RealPoolAdapter(pool)
+                )
+                async with repo_b.locked_gmail(context) as locked:
+                    observed.append(locked.credentials.refresh_token)
+                    await locked.persist_refresh_token("token-from-b")
+            finally:
+                await pool.close()
+
+        errors: list[BaseException] = []
+
+        def _run_second():
+            second_may_start.wait(timeout=10)
+            try:
+                asyncio.run(_second_actor())
+            except BaseException as exc:  # surfaced below, never swallowed
+                errors.append(exc)
+
+        thread = threading.Thread(target=_run_second, daemon=True)
+        thread.start()
+
+        async with repo_a.locked_gmail(context) as locked:
+            assert locked.credentials.refresh_token == "token-initial"
+            first_holder_in.set()
+            # Release the second actor while THIS transaction still holds the
+            # row. It must block on FOR UPDATE rather than read the stale row.
+            second_may_start.set()
+            await asyncio.sleep(1.0)
+            await locked.persist_refresh_token("token-from-a")
+
+        await asyncio.get_running_loop().run_in_executor(None, thread.join, 20)
+        assert not thread.is_alive(), "the second session never completed"
+        assert not errors, f"second session raised: {errors[0]!r}"
+
+        assert observed == ["token-from-a"], (
+            "the second independent session must observe the token the first "
+            f"one committed, not the pre-rotation row; saw {observed}"
+        )
+
+        row = await admin.fetchrow(
+            "SELECT encryption_kid, encrypted_credentials, generation "
+            "FROM scoped_mailbox_credentials WHERE business_context_id = $1",
+            context,
+        )
+        payload = json.loads(
+            encryption.decrypt_secret(
+                bytes(row["encrypted_credentials"]), str(row["encryption_kid"])
+            )
+        )
+        assert payload["refresh_token"] == "token-from-b", (
+            "the last committed rotation must win"
+        )
+        assert row["generation"] == 3, (
+            f"one bind plus two serialized rotations; saw {row['generation']}"
+        )
+    finally:
+        if pool_a is not None:
+            await pool_a.close()
+        await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await admin.close()
+
+
+def test_overlong_kek_identifier_fails_with_an_actionable_error(monkeypatch):
+    """R4/R11: parse_kek_string applies no length bound, but encryption_kid is
+    VARCHAR(64). An over-long kid would otherwise reach PostgreSQL and fail
+    with StringDataRightTruncationError -- on a bind, or on the rotation write
+    during a refresh, taking scoped Gmail down right after a valid KEK
+    rotation. Fail early, naming the limit and the variable to change."""
+    import atlas_brain.config as config_mod
+
+    long_kid = "k" * (repo_mod._MAX_ENCRYPTION_KID_LENGTH + 1)
+    _, key = TEST_KEK.split(":", 1)
+    monkeypatch.setattr(
+        config_mod.settings.saas_auth,
+        "byok_encryption_kek",
+        f"{long_kid}:{key}",
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        repo_mod._encrypt_bundle(
+            client_id="cid", client_secret="csec", refresh_token="rtok"
+        )
+
+    message = str(excinfo.value)
+    assert str(repo_mod._MAX_ENCRYPTION_KID_LENGTH) in message
+    assert "ATLAS_SAAS_BYOK_ENCRYPTION_KEK" in message
+    assert key not in message, "the error must not echo the key material"
+
+
+def test_kid_at_the_column_limit_is_accepted(monkeypatch):
+    """Boundary second side: exactly 64 characters must still work, or the
+    guard has moved the usable limit rather than matched the column."""
+    import atlas_brain.config as config_mod
+
+    exact_kid = "k" * repo_mod._MAX_ENCRYPTION_KID_LENGTH
+    _, key = TEST_KEK.split(":", 1)
+    monkeypatch.setattr(
+        config_mod.settings.saas_auth,
+        "byok_encryption_kek",
+        f"{exact_kid}:{key}",
+    )
+
+    _, kid = repo_mod._encrypt_bundle(
+        client_id="cid", client_secret="csec", refresh_token="rtok"
+    )
+    assert kid == exact_kid

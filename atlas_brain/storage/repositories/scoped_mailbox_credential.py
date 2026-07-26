@@ -64,6 +64,9 @@ def _refresh_slot(budget: int | None = None) -> asyncio.Semaphore:
 
 GMAIL_PROVIDER = "gmail"
 
+# Must match the encryption_kid column width in migration 350.
+_MAX_ENCRYPTION_KID_LENGTH = 64
+
 
 class ScopedMailboxCredentialUnavailable(RuntimeError):
     """No active, decryptable credential exists for the exact context."""
@@ -308,7 +311,21 @@ def _encrypt_bundle(
         separators=(",", ":"),
         sort_keys=True,
     )
-    return encrypt_secret(payload)
+    ciphertext, kid = encrypt_secret(payload)
+    # encryption_kid is VARCHAR(64) in migration 350, and parse_kek_string
+    # applies no length bound. Without this check a valid-but-long kid reaches
+    # the database and fails with StringDataRightTruncationError -- at BIND
+    # time, or worse, on the rotation write during a refresh, which would make
+    # scoped Gmail unavailable straight after an otherwise valid KEK rotation.
+    # Fail here with something an operator can act on.
+    if len(kid) > _MAX_ENCRYPTION_KID_LENGTH:
+        raise ValueError(
+            f"BYOK key identifier is {len(kid)} characters; the "
+            f"scoped_mailbox_credentials.encryption_kid column stores at most "
+            f"{_MAX_ENCRYPTION_KID_LENGTH}. Shorten the kid in "
+            f"ATLAS_SAAS_BYOK_ENCRYPTION_KEK."
+        )
+    return ciphertext, kid
 
 
 def _decrypt_row(row, business_context_id: str) -> ScopedGmailCredentials | None:

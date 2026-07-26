@@ -386,6 +386,14 @@ ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS='{"effingham_maids":{"provider":"imap","imap_
 # Gmail alternative (requires a KEK and a repository-provisioned credential row):
 # ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS='{"effingham_maids":{"provider":"gmail"}}'
 # ATLAS_SAAS_BYOK_ENCRYPTION_KEK=<kid:fernet-key>
+# DEPLOYMENT ORDER (the gmail binding is NOT backward compatible):
+#   deploy  -> deploy this code FIRST, then set provider="gmail" in the binding.
+#   rollback-> REMOVE the gmail binding from the environment BEFORE rolling back.
+# Older builds declare the binding provider as Literal["imap"] and construct
+# Settings() at import time, so a gmail binding left in place makes the previous
+# binary fail configuration validation and refuse to start. An imap binding is
+# accepted by both, so it needs no ordering.
+#
 # The scoped_mailbox_credentials table (migration 350) is applied at startup:
 # the main app runs the migration chain, and the standalone CRM MCP server
 # (python -m atlas_brain.mcp.crm_server) applies exactly this one migration as
