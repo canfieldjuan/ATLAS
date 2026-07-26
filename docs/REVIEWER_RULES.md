@@ -398,3 +398,64 @@ recur: a new `scripts/audit_*.py`, a new rule ID here, a new path trigger above,
 a line in the recurring-lapse checklist, or a Review Contract template change.
 **No escaped defect is fixed only once.** This is the reviewer-side mirror of
 the builder's `HARDENING.md` + recurring-lapse flywheel.
+
+**The ratchet releases too.** As written this section only ever adds, and the
+reviewer's mandate grows with it -- every added rule is another category to
+disposition on every future PR, forever, which is a cost paid by every
+subsequent review.
+
+**When retirement is considered:** on each addition. Adding a durable mechanism
+is the trigger to examine one existing candidate for removal, so the ratchet
+self-balances and there is no separate cadence, owner, or audit to maintain.
+**Record which candidate you examined** in `REVIEW_MISSES.md` with the outcome.
+The ledger's columns record the original miss, not the retirement pass, so this
+needs its own row shape -- add a **Retirement reviews** table beside the ledger
+with `Date | Mechanism | Last fired | Outcome (kept / removed) | Replacement
+coverage`. **The replacement is itself recorded as a tracked mechanism** in that table: a
+required-check test, its CI enrollment, or a structural or type invariant
+becomes the sole protection for that defect the moment the old gate goes, so it
+inherits the same retirement lifecycle instead of sitting outside the five kinds
+and rotting unreviewed. Retiring a gate onto untracked coverage only moves the
+unreviewed mechanism. Without a durable `Date` and `Mechanism` per pass, the
+least-recently-examined ordering below cannot be computed from repository state
+and the rotation degrades to whatever the current reviewer remembers.
+and take the least-recently-examined mechanism -- when every mechanism has been
+examined once the rotation simply starts again, so a retained one is re-checked
+against fresh evidence rather than becoming permanently ineligible. Keying
+eligibility off "has not fired since it was examined" would exempt exactly the
+quiet mechanisms this section is about, and after one full pass only newly added
+ones would ever be inspected. An unrecorded pick has the opposite failure: every
+addition re-examines the same load-bearing mechanism, re-states why it stays,
+and retires nothing while the pack keeps growing. All
+**five** mechanism kinds this section creates are in scope -- `scripts/audit_*`
+checks, rule IDs, path triggers, recurring-lapse lines, and Review Contract
+template additions -- not only the ones that are cheapest to delete.
+
+Retirement terms:
+
+- **Silence is not evidence of absence.** A mechanism that has not fired may be
+  the reason the failure stopped. So not-firing is a prompt to examine, never a
+  licence to delete: a mechanism that is the sole protection for a defect logged
+  in `REVIEW_MISSES.md` may be removed **only** by naming what now covers that
+  defect, and the replacement has to be able to **stop the escape** -- a broader
+  rule in this pack, a type or structural change that makes the defect
+  unrepresentable, or a test that runs in a **required** check. A test that no
+  required check executes cannot prevent anything, so it is not a replacement.
+  No enforcing replacement named, no removal; state why it stays.
+- **Consistently waived** is the stronger signal, because it means the mechanism
+  fires and reviewers keep judging it wrong. Re-scope it to what actually
+  blocks, or remove it.
+- **Removals are atomic across mirrors.** A rule ID, checklist line, or template
+  entry is referenced from more than one place -- `AGENTS.md` review guidelines,
+  the §2a verification template, the 4d audit checklist, and the completion
+  matrix all enumerate rules. A removal updates every mirror in the same change,
+  or it leaves the matrix demanding a verdict on a rule that no longer exists.
+- **Removals are recorded** in `REVIEW_MISSES.md` beside the defect that
+  prompted the addition, with the replacement coverage named, so a removal is a
+  decision with a paper trail and not an erosion.
+
+Nothing here weakens the "no escaped defect is fixed only once" rule -- an
+escaped defect still converts into mechanism. This governs what happens to that
+mechanism afterwards, so the pack stays the size a reviewer can actually apply.
+A checklist nobody can finish is the failure mode Review completion exists to
+prevent, and an unbounded ratchet recreates it one rule at a time.
