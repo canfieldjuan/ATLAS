@@ -1113,6 +1113,20 @@ def test_job_lock_is_reentrant_within_a_thread(tmp_path):
     assert _job_lock_is_free("job-re", tmp_path)
 
 
+def test_job_lock_treats_same_job_id_in_different_roots_as_distinct(tmp_path):
+    """Re-entrancy must not bypass the OS lock for another store root."""
+    from atlas_brain.services.content_factory_store import job_lock
+
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    with job_lock("shared-id", root=first_root):
+        assert not _job_lock_is_free("shared-id", first_root)
+        with job_lock("shared-id", root=second_root):
+            assert not _job_lock_is_free("shared-id", second_root)
+        assert _job_lock_is_free("shared-id", second_root)
+        assert not _job_lock_is_free("shared-id", first_root)
+
+
 def test_job_lock_excludes_a_second_process(tmp_path):
     """The exclusion is real, not just an in-process flag."""
     from atlas_brain.services.content_factory_store import job_lock

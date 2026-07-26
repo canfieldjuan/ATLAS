@@ -91,15 +91,19 @@ def job_lock(job_id: str, *, root: Path | str = DEFAULT_ROOT) -> Iterator[None]:
     job folder so it never lands in the job's git history.
     """
     safe = _safe_segment(job_id, "job_id")
+    # A job is identified by BOTH its store root and job id. Keying only by
+    # ``safe`` makes a nested lock for ``root_b/job-1`` look re-entrant while
+    # ``root_a/job-1`` is held, bypassing root_b's flock entirely.
+    lock_key = (str(Path(root).resolve()), safe)
     depth = getattr(_LOCK_STATE, "depth", None)
     if depth is None:
         depth = _LOCK_STATE.depth = {}
-    if depth.get(safe):
-        depth[safe] += 1
+    if depth.get(lock_key):
+        depth[lock_key] += 1
         try:
             yield
         finally:
-            depth[safe] -= 1
+            depth[lock_key] -= 1
         return
 
     locks = Path(root) / ".locks"
@@ -107,10 +111,10 @@ def job_lock(job_id: str, *, root: Path | str = DEFAULT_ROOT) -> Iterator[None]:
     handle = open(locks / f"{safe}.lock", "a+")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        depth[safe] = 1
+        depth[lock_key] = 1
         yield
     finally:
-        depth[safe] = 0
+        depth[lock_key] = 0
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
 
