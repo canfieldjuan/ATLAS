@@ -7,19 +7,16 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from re import fullmatch
+from typing import Protocol
 
 from fastapi import Depends, Header, HTTPException
 
 from .config import EOMInvoicingConfig, invoicing_settings
 
 _GENERATED_TOKEN_PREFIX = "eomrx_v1_"
-_GENERATED_TOKEN_PROVENANCE_KEY_PREFIX = "eomrxk_v1_"
-_GENERATED_TOKEN_PROVENANCE_PREFIX = "eomrxp_v1_"
 _GENERATED_TOKEN_RANDOM_LENGTH = 43
 _TOKEN_RANDOM_PATTERN = r"[A-Za-z0-9_-]+"
 _TOKEN_SHA256_PATTERN = r"[0-9a-f]{64}"
-_TOKEN_PROVENANCE_PATTERN = rf"{_GENERATED_TOKEN_PROVENANCE_PREFIX}[0-9a-f]{{64}}"
-_PROVENANCE_CONTEXT = b"atlas-eom-receivables-token-v1"
 _PLACEHOLDER_TOKENS = {
     "<token>",
     "change-me",
@@ -33,12 +30,23 @@ _PLACEHOLDER_TOKENS = {
 
 @dataclass(frozen=True)
 class GeneratedReceivablesServiceToken:
-    """Generated service-token material for provisioning two systems."""
+    """Generated service-token material for future Slice C provisioning."""
 
     token: str
     sha256: str
-    provenance_key: str
-    provenance: str
+
+
+@dataclass(frozen=True)
+class TrustedReceivablesApiConfig:
+    """In-process config for transport tests before external provisioning exists."""
+
+    receivables_api_enabled: bool
+    receivables_service_token_sha256: str
+
+
+class ReceivablesApiAuthConfig(Protocol):
+    receivables_api_enabled: bool
+    receivables_service_token_sha256: str
 
 
 def _token_sha256(token: str) -> str:
@@ -69,35 +77,6 @@ def _validate_generated_token(token: str) -> None:
         )
 
 
-def _validate_generated_provenance_key(provenance_key: str) -> None:
-    if not provenance_key.startswith(_GENERATED_TOKEN_PROVENANCE_KEY_PREFIX):
-        raise RuntimeError(
-            "Receivables service token provenance key must be generated with "
-            "the eomrxk_v1_ prefix"
-        )
-    random_part = provenance_key.removeprefix(_GENERATED_TOKEN_PROVENANCE_KEY_PREFIX)
-    if len(random_part) < _GENERATED_TOKEN_RANDOM_LENGTH:
-        raise RuntimeError(
-            "Receivables service token provenance key random payload is too short"
-        )
-    if fullmatch(_TOKEN_RANDOM_PATTERN, random_part) is None:
-        raise RuntimeError(
-            "Receivables service token provenance key contains invalid characters"
-        )
-
-
-def _generated_token_provenance(token_digest: str, provenance_key: str) -> str:
-    _validate_generated_token_digest(token_digest)
-    _validate_generated_provenance_key(provenance_key)
-    message = _PROVENANCE_CONTEXT + b":" + token_digest.encode("ascii")
-    digest = hmac.new(
-        provenance_key.encode("ascii"),
-        message,
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{_GENERATED_TOKEN_PROVENANCE_PREFIX}{digest}"
-
-
 def receivables_service_token_sha256(token: str) -> str:
     """Return the digest accepted by the EOM API for a generated token."""
     _validate_generated_token(token)
@@ -108,22 +87,17 @@ def generate_receivables_service_token() -> GeneratedReceivablesServiceToken:
     """Generate EOM receivables service-token material for secret provisioning."""
     token = f"{_GENERATED_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
     token_digest = receivables_service_token_sha256(token)
-    provenance_key = (
-        f"{_GENERATED_TOKEN_PROVENANCE_KEY_PREFIX}{secrets.token_urlsafe(32)}"
-    )
     return GeneratedReceivablesServiceToken(
         token=token,
         sha256=token_digest,
-        provenance_key=provenance_key,
-        provenance=_generated_token_provenance(token_digest, provenance_key),
     )
 
 
 def _validate_generated_token_digest(token_digest: str) -> None:
     if not token_digest:
         raise RuntimeError(
-            "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256 is required when "
-            "ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true"
+            "Receivables service token digest is required for trusted "
+            "receivables API config"
         )
     if fullmatch(_TOKEN_SHA256_PATTERN, token_digest) is None:
         raise RuntimeError(
@@ -136,47 +110,31 @@ def _validate_generated_token_digest(token_digest: str) -> None:
         )
 
 
-def _validate_generated_token_provenance(
-    token_digest: str,
-    provenance_key: str,
-    provenance: str,
-) -> None:
-    if not provenance_key.strip():
-        raise RuntimeError(
-            "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_PROVENANCE_KEY is "
-            "required when ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true"
-        )
-    if not provenance.strip():
-        raise RuntimeError(
-            "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_PROVENANCE is required "
-            "when ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true"
-        )
-    if fullmatch(_TOKEN_PROVENANCE_PATTERN, provenance) is None:
-        raise RuntimeError(
-            "Receivables service token provenance must be generated with the "
-            "eomrxp_v1_ prefix"
-        )
-    expected = _generated_token_provenance(token_digest, provenance_key)
-    if not hmac.compare_digest(provenance, expected):
-        raise RuntimeError(
-            "Receivables service token digest is not bound to generated "
-            "provenance; regenerate the EOM receivables service-token material"
-        )
-
-
 def validate_receivables_api_config(
-    config: EOMInvoicingConfig | None = None,
+    config: ReceivablesApiAuthConfig | EOMInvoicingConfig | None = None,
 ) -> None:
-    """Fail startup when an enabled finance API has an unsafe token."""
+    """Fail startup unless enabled auth comes from a trusted in-process source."""
     resolved = config or invoicing_settings
     if not resolved.receivables_api_enabled:
         return
+    if not isinstance(resolved, TrustedReceivablesApiConfig):
+        raise RuntimeError(
+            "The EOM receivables API cannot be enabled from operator-supplied "
+            "configuration in this Render profile slice; keep "
+            "ATLAS_INVOICING_RECEIVABLES_API_ENABLED=false until the Slice C "
+            "provisioning trust anchor lands."
+        )
     token_digest = resolved.receivables_service_token_sha256.strip()
     _validate_generated_token_digest(token_digest)
-    _validate_generated_token_provenance(
-        token_digest,
-        resolved.receivables_service_token_provenance_key.strip(),
-        resolved.receivables_service_token_provenance.strip(),
+
+
+def trusted_receivables_api_config(
+    generated: GeneratedReceivablesServiceToken,
+) -> TrustedReceivablesApiConfig:
+    """Build trusted in-process auth config for tests before Slice C provisioning."""
+    return TrustedReceivablesApiConfig(
+        receivables_api_enabled=True,
+        receivables_service_token_sha256=generated.sha256,
     )
 
 
@@ -187,7 +145,7 @@ def get_receivables_api_config() -> EOMInvoicingConfig:
 
 async def require_receivables_api(
     authorization: str = Header(default="", alias="Authorization"),
-    config: EOMInvoicingConfig = Depends(get_receivables_api_config),
+    config: ReceivablesApiAuthConfig = Depends(get_receivables_api_config),
 ) -> None:
     """Require the configured bearer token; disabled is unavailable, not open."""
     if not config.receivables_api_enabled:

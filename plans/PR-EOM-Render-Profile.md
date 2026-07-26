@@ -56,8 +56,8 @@ Slice phase: vertical slice
    compatibility.
 4. Add `requirements.eom.txt` and `render.eom.yaml` as reviewable candidates,
    with DB and the receivables API disabled by default until follow-up slices
-   choose the Render Postgres mapping and provision generated token material
-   with digest provenance.
+   choose the Render Postgres mapping and add an independent provisioning trust
+   anchor for generated service credentials.
 5. Add focused tests proving the EOM app route surface and import boundary.
 
 ### Review Contract
@@ -89,24 +89,24 @@ Slice phase: vertical slice
     `{"status": "ok", "profile": "eom"}` while DB persistence and receivables
     auth are disabled.
   - `tests/test_eom_render_profile.py::test_eom_profile_reaches_receivables_ready_through_real_app`
-    proves the real `atlas_brain.main_eom:app` serves an authenticated
-    `/api/v1/receivables/ready` request and returns the observable receivables
-    service result.
-  - `tests/test_eom_render_profile.py::test_eom_receivables_startup_rejects_raw_or_missing_token_digest`
-    proves the new EOM auth boundary rejects enabled startup without the
-    generated-token SHA-256 digest, rejects malformed digests, and rejects
-    placeholder-derived digests instead of accepting a raw bearer token env
-    value.
-  - `tests/test_eom_render_profile.py::test_eom_receivables_startup_rejects_digest_without_generated_provenance`
-    proves an arbitrary syntactically valid digest, including the digest of
-    `password123`, cannot enable auth without the generated provenance key/proof
-    that binds the digest to the token generator output.
+    proves the real `atlas_brain.main_eom:app` route transport reaches the
+    observable receivables service result through an authenticated dependency
+    override while the production `invoicing_settings` object remains disabled.
+  - `tests/test_eom_render_profile.py::test_eom_receivables_startup_rejects_operator_enabled_config`
+    proves Slice A cannot enable the EOM receivables API from operator-supplied
+    runtime configuration, including the real `EOMInvoicingConfig` and a legacy
+    raw-token/digest-shaped config object.
+  - `tests/test_eom_render_profile.py::test_eom_receivables_trusted_config_rejects_bad_token_digests`
+    proves the internal trusted config object used for pre-Slice-C transport
+    tests still rejects missing, malformed, uppercase/non-hex, and
+    placeholder-derived digests.
   - `tests/test_eom_render_profile.py::test_eom_receivables_token_digest_helper_rejects_legacy_or_short_tokens`
     proves the provisioning helper will not hash legacy, 23/24-character, too
     short, or invalid-character token shapes.
   - `tests/test_eom_render_profile.py::test_eom_receivables_startup_accepts_generated_service_token`
-    proves the generated token helper emits token, digest, provenance key, and
-    provenance proof material accepted by the startup validator.
+    proves the generated token helper emits token plus digest material accepted
+    only through the trusted in-process config path used by tests before Slice C
+    provisions an external trust anchor.
   - `tests/test_eom_render_profile.py::test_all_eom_receivables_routes_require_service_auth`
     proves every route on the slim EOM receivables router carries the EOM
     service-auth dependency.
@@ -120,8 +120,9 @@ Slice phase: vertical slice
   - `render.eom.yaml` is deliberately not named render dot yaml, uses
     `atlas_brain.main_eom:app`, leaves secrets as `sync: false`, and keeps
     `ATLAS_DB_ENABLED=false` and
-    `ATLAS_INVOICING_RECEIVABLES_API_ENABLED=false` pending the database-mapping
-    and token-provisioning slices.
+    `ATLAS_INVOICING_RECEIVABLES_API_ENABLED=false` with no receivables token
+    material env vars pending the database-mapping and trust-anchor provisioning
+    slices.
   - `atlas_brain/main_eom.py` includes only the EOM receivables router under
     `/api/v1`, disables FastAPI docs/OpenAPI routes, and does not import
     `atlas_brain.main` or `atlas_brain.api`.
@@ -159,19 +160,21 @@ default docs/OpenAPI/ReDoc routes, merges `.env` and
 `.env.local` so `.env.local` wins for local defaults, lets `.env.local`
 interpolate earlier `.env` values, while real process environment variables keep
 final authority, configures logging from EOM-only settings, validates the
-receivables service-token digest/provenance on startup when the receivables API is enabled,
+receivables API startup config fail-closed when an operator tries to enable it
+before the provisioning trust anchor exists,
 initializes the shared database pool only when `ATLAS_DB_ENABLED=true`, keeps
 database cleanup active across startup/migration failures, and mounts only the
 EOM receivables router under `/api/v1`.
 
 The new `atlas_brain.eom_api` package owns the slim HTTP/auth surface. Its
 config module defines only the runtime fields needed by this profile, avoiding
-Atlas's full app settings singleton. Its auth module fails closed when
-receivables are enabled without a generated-token SHA-256 digest plus generated
-provenance key/proof, rejects placeholder-derived and unbound arbitrary digests,
-compares request token digests instead of storing the raw bearer token in the
-API environment, rejects non-ASCII bearer bytes as 401, and exposes a
-generated-token helper for operator secret creation.
+Atlas's full app settings singleton. Its auth module refuses any enabled
+operator-supplied config in Slice A, because a digest/proof/key all supplied by
+the same environment are not an independent trust anchor. For route transport
+tests before Slice C, the module exposes an internal trusted config object,
+compares request token digests instead of storing a raw bearer token in the API
+environment, rejects malformed/non-ASCII bearer values as auth failures, and
+keeps the generated-token helper available for the later provisioning slice.
 
 `atlas_brain.services.__init__` now loads protocol, registry, embedding, and
 reminder exports lazily. The registry itself defers implementation registration
@@ -187,7 +190,7 @@ uses a private-service shape and starts `uvicorn atlas_brain.main_eom:app`.
 Database persistence and the receivables API are disabled by default so a first
 boot cannot accidentally attempt local Postgres, run migrations, or expose an
 enabled finance API before Slice B selects the target Render database mapping
-and Slice C provisions the generated service-token digest/provenance.
+and Slice C adds a non-operator-forgeable provisioning trust anchor.
 
 ## Intentional
 
@@ -195,6 +198,9 @@ and Slice C provisions the generated service-token digest/provenance.
   branch cannot accidentally change live Render infrastructure by convention.
 - `ATLAS_DB_ENABLED` is false in the candidate until Slice B chooses
   `DATABASE_URL`/explicit Render env mapping and the target Postgres.
+- `ATLAS_INVOICING_RECEIVABLES_API_ENABLED` is false in the candidate, and this
+  slice deliberately removes receivables token env vars, because operator
+  config alone cannot prove a bearer token was generated securely.
 - The existing `atlas_brain.services.receivables` domain service remains the
   source of behavior. This PR duplicates only the FastAPI route transport so the
   EOM profile can avoid importing `atlas_brain.api`.
@@ -207,13 +213,12 @@ and Slice C provisions the generated service-token digest/provenance.
   mapping tests), pick the target Postgres, and only then enable DB persistence
   for the candidate service.
 - Slice C: verify private-service connectivity from the existing EOM time
-  tracker, generate the EOM bearer-token material, store only
-  `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256`,
-  `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_PROVENANCE_KEY`, and
-  `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_PROVENANCE` on the Atlas API
-  service, store the raw bearer token only on the EOM time tracker caller,
-  enable the receivables API, and run the receivables
-  ready/open-invoices/payment mutation contract against staging data.
+  tracker, define and implement the independent provisioning trust anchor for
+  generated EOM bearer-token material, decide which non-raw credential material
+  belongs on the Atlas API service, store the raw bearer token only on the EOM
+  time tracker caller, enable the receivables API only after that trust anchor
+  exists, and run the receivables ready/open-invoices/payment mutation contract
+  against staging data.
 - Slice D: extract lead/funnel API state without tying onboarding authority to
   Google Ads.
 - Slice E: add Stripe customer/payment-method setup after first-clean completion,
@@ -241,6 +246,19 @@ Parked hardening: none.
 - Compileall passed for `atlas_brain/main_eom.py`, `atlas_brain/eom_api`,
   `atlas_brain/services/__init__.py`, `atlas_brain/services/registry.py`, and
   `tests/test_eom_render_profile.py`.
+- Direct forged-config smoke rejected both a fake enabled config carrying
+  `sha256("password123")` and the real
+  `EOMInvoicingConfig(receivables_api_enabled=True)` with the Slice C
+  trust-anchor message.
+- CI-style storage maturity ratchet passed with no new brittleness above
+  baseline:
+  `python scripts/maturity_sweep.py atlas_brain/storage --tests-root tests
+  --baseline tests/maturity_sweep/baseline_atlas_brain_storage.json
+  --min-score 8 ...`.
+- `python scripts/audit_pr_body.py --repo-root . --base-ref origin/main
+  /tmp/pr-2217-body.current.md` -- passed.
+- `python scripts/audit_ai_reconciliation.py --current-pr-body-file
+  /tmp/pr-2217-body.current.md --require` -- passed.
 - Direct import probe:
   `python - <<'PY' ... importlib.import_module('atlas_brain.main_eom') ... PY`
   confirmed `atlas_brain.api`, `atlas_brain.config`,
@@ -252,14 +270,14 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/__init__.py` | 8 |
-| `atlas_brain/eom_api/auth.py` | 216 |
-| `atlas_brain/eom_api/config.py` | 77 |
+| `atlas_brain/eom_api/auth.py` | 174 |
+| `atlas_brain/eom_api/config.py` | 56 |
 | `atlas_brain/eom_api/receivables.py` | 341 |
 | `atlas_brain/main_eom.py` | 130 |
 | `atlas_brain/services/__init__.py` | 36 |
 | `atlas_brain/services/registry.py` | 48 |
-| `plans/PR-EOM-Render-Profile.md` | 265 |
-| `render.eom.yaml` | 34 |
+| `plans/PR-EOM-Render-Profile.md` | 283 |
+| `render.eom.yaml` | 28 |
 | `requirements.eom.txt` | 5 |
-| `tests/test_eom_render_profile.py` | 479 |
-| **Total** | **1639** |
+| `tests/test_eom_render_profile.py` | 422 |
+| **Total** | **1531** |
