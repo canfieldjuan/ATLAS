@@ -31,6 +31,7 @@ on:
       - "tests/test_eom_mailbox_context_binding.py"
       - "tests/test_eom_recurring_appointments_integration.py"
       - "tests/test_eom_scoped_gmail_credentials.py"
+      - "tests/test_eom_scoped_gmail_hardening.py"
       - "tests/test_eom_sent_email_tenant_scope.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
@@ -63,6 +64,7 @@ on:
       - "tests/test_eom_mailbox_context_binding.py"
       - "tests/test_eom_recurring_appointments_integration.py"
       - "tests/test_eom_scoped_gmail_credentials.py"
+      - "tests/test_eom_scoped_gmail_hardening.py"
       - "tests/test_eom_sent_email_tenant_scope.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
@@ -112,6 +114,7 @@ jobs:
             tests/test_eom_mailbox_context_binding.py \
             tests/test_eom_recurring_appointments_integration.py \
             tests/test_eom_scoped_gmail_credentials.py \
+            tests/test_eom_scoped_gmail_hardening.py \
             tests/test_eom_sent_email_tenant_scope.py \
             tests/test_leads_intake.py \
             tests/test_migrations_runner.py \

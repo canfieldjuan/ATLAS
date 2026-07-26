@@ -1,5 +1,11 @@
-import pytest
+import asyncio
+import os
+import uuid
 from pathlib import Path
+
+import pytest
+
+DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 
 
 class FakeMigrationPool:
@@ -466,3 +472,99 @@ async def _acquire_banning(pool, conn_cls):
         raise AssertionError("second connection requested during the run")
     pool.in_use = True
     return conn_cls(pool)
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_path):
+    """R2/R8: the fake-pool proofs above model asyncpg and advisory-lock
+    semantics; this one uses them. Two concurrent run_migrations() against a
+    real asyncpg pool sized min=max=1 must apply each migration exactly once
+    and must not deadlock -- the two properties the single-connection
+    session-lock design exists to provide. Skips when no database is wired,
+    same as the other real-PostgreSQL probes in this repo."""
+    import asyncpg
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    database_url = os.environ.get(DATABASE_URL_ENV)
+    if not database_url:
+        pytest.skip(f"{DATABASE_URL_ENV} is not configured")
+
+    schema = f"atlas_migration_lock_{uuid.uuid4().hex}"
+    admin = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await admin.execute(f'CREATE SCHEMA "{schema}"')
+
+        (tmp_path / "001_first.sql").write_text(
+            "CREATE TABLE migration_lock_probe_a (id integer primary key);"
+        )
+        (tmp_path / "002_second.sql").write_text(
+            "CREATE TABLE migration_lock_probe_b (id integer primary key);"
+        )
+        # Statement Postgres refuses inside a transaction block: it passes only
+        # because the run holds a SESSION-level lock on an autocommit
+        # connection, not a transaction-scoped one.
+        (tmp_path / "003_concurrent_index.sql").write_text(
+            "CREATE INDEX CONCURRENTLY migration_lock_probe_idx "
+            "ON migration_lock_probe_a (id);"
+        )
+
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=1,
+            max_size=1,
+            server_settings={"search_path": f"{schema},public"},
+        )
+
+        # Both runners share the one connection the pool owns. A design that
+        # reached back to the pool mid-run would block here forever.
+        await asyncio.wait_for(
+            asyncio.gather(
+                run_migrations(pool, migrations_dir=tmp_path),
+                run_migrations(pool, migrations_dir=tmp_path),
+            ),
+            timeout=60,
+        )
+
+        await admin.execute(f'SET search_path TO "{schema}", public')
+        applied = await admin.fetch(
+            "SELECT name FROM schema_migrations ORDER BY name"
+        )
+        assert [r["name"] for r in applied] == [
+            "001_first",
+            "002_second",
+            "003_concurrent_index",
+        ], "each migration must be recorded exactly once"
+
+        index_rows = await admin.fetch(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE schemaname = $1 AND indexname = $2",
+            schema,
+            "migration_lock_probe_idx",
+        )
+        assert index_rows, (
+            "CREATE INDEX CONCURRENTLY must have run -- if the runner opened a "
+            "transaction, Postgres would have rejected it"
+        )
+
+        # The SESSION lock outlives its transaction, so it must be released
+        # explicitly or the pooled connection carries it into unrelated work.
+        # Scoped to THIS pool's backend: the running app uses the same key, so
+        # a global count would be a coin flip.
+        backend_pid = await pool.fetchval("SELECT pg_backend_pid()")
+        held = await admin.fetchval(
+            "SELECT count(*) FROM pg_locks "
+            "WHERE locktype = 'advisory' AND objid = $1 AND pid = $2",
+            0x41544C41,
+            backend_pid,
+        )
+        assert held == 0, (
+            "the session advisory lock must be released back to the pooled "
+            "connection, not carried into the next borrower"
+        )
+    finally:
+        if pool is not None:
+            await pool.close()
+        await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await admin.close()

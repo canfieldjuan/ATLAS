@@ -193,6 +193,26 @@ Generation changes occur in the same atomic row mutation as the encrypted
 bundle or revoke marker, so every admitted interleaving preserves exact-context
 ownership, monotonic generation, and fail-closed active-row selection.
 
+**Stated restrictions on the provisioning surface.** Two restrictions bound
+this model rather than being enforced by it, because the only caller of
+`bind_gmail`/`revoke_gmail` today is an operator running a snippet in a
+protected runtime (CLAUDE.md), not a retrying or queued API:
+
+1. *One active credential per underlying Google identity.* The row lock
+   serializes by `(business_context_id, provider)`. Two contexts provisioned
+   with the SAME refresh token take different locks, so a rotation persisted
+   for context A leaves context B holding the superseded token; B then fails
+   closed until an operator rebinds it. Binding one Google credential to two
+   contexts is therefore out of contract. Enforcing it needs a deterministic
+   credential fingerprint plus a partial unique index over active rows, which
+   belongs with the provisioning API that can actually admit the mistake.
+2. *No mutation fencing by generation or idempotency identity.* `bind_gmail`
+   clears `revoked_at` unconditionally, so if bind/revoke were ever delivered
+   out of order or retried by a queue, arrival order would decide the
+   authorization outcome. No such caller exists in this slice; the monotonic
+   generation records order but does not gate on it. Fencing belongs with the
+   provisioning API for the same reason.
+
 In-process cancellation is drained only after the shielded child completes the
 lease, token exchange, optional encrypted rotation, and transaction exit.
 Recorded caller cancellation takes precedence even when that drained child
@@ -323,7 +343,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 16 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 19 |
 | `CLAUDE.md` | 20 |
 | `atlas_brain/autonomous/tasks/gmail_digest.py` | 199 |
 | `atlas_brain/config.py` | 20 |
@@ -334,10 +354,10 @@ Parked hardening: none.
 | `atlas_brain/storage/migrations/__init__.py` | 115 |
 | `atlas_brain/storage/repositories/scoped_mailbox_credential.py` | 356 |
 | `plans/INDEX.md` | 1 |
-| `plans/PR-EOM-Scoped-Gmail-DB-Credentials.md` | 343 |
+| `plans/PR-EOM-Scoped-Gmail-DB-Credentials.md` | 363 |
 | `plans/archive/PR-EOM-Mailbox-Context-Binding.md` | 0 |
 | `tests/test_eom_mailbox_context_binding.py` | 39 |
 | `tests/test_eom_scoped_gmail_credentials.py` | 723 |
 | `tests/test_eom_scoped_gmail_hardening.py` | 429 |
-| `tests/test_migrations_runner.py` | 265 |
-| **Total** | **2742** |
+| `tests/test_migrations_runner.py` | 369 |
+| **Total** | **2869** |
