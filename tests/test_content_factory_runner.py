@@ -148,7 +148,12 @@ def _stored(rec):
     return json.loads(Path(rec["path"]).read_text())
 
 
+def _stage_path(root, job_id, stage):
+    return job_dir(job_id, root=root) / f"{stage}.json"
+
+
 def test_editor_stage_injects_deterministic_pass(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job1", ["e1"], approved=False)
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: _editor_json(_CLEAN_BODY, "promote"))
     rec = runner.run_stage("job1", "audit", "cf-editor", None, api_key="k", root=tmp_path)
     stored = _stored(rec)
@@ -157,15 +162,17 @@ def test_editor_stage_injects_deterministic_pass(tmp_path, monkeypatch):
 
 
 def test_editor_worker_cannot_self_promote_overclaim(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job1", ["e1"], approved=False)
     # Worker claims a passing verdict + promote on copy that actually overclaims.
     reply = _editor_json(_BAD_BODY, "promote", copy_verification={"verdict": "pass", "hits": []})
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ValidationError):  # injected fail vs promote -> #2116 guard rejects
         runner.run_stage("job1", "audit", "m", None, api_key="k", root=tmp_path)
-    assert not job_dir("job1", root=tmp_path).exists()
+    assert not _stage_path(tmp_path, "job1", "audit").exists()
 
 
 def test_editor_overclaim_revise_persists_with_fail(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job1", ["e1"], approved=False)
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: _editor_json(_BAD_BODY, "revise"))
     rec = runner.run_stage("job1", "audit", "m", None, api_key="k", root=tmp_path)
     stored = _stored(rec)
@@ -174,6 +181,7 @@ def test_editor_overclaim_revise_persists_with_fail(tmp_path, monkeypatch):
 
 
 def test_editor_worker_claimed_verdict_is_overridden(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job1", ["e1"], approved=False)
     # Worker asserts pass on bad copy but only recommends revise; the deterministic
     # verdict must still overwrite the worker's claim.
     reply = _editor_json(_BAD_BODY, "revise", copy_verification={"verdict": "pass", "hits": []})
@@ -189,15 +197,17 @@ def test_non_editor_stage_gets_no_copy_verification(tmp_path, monkeypatch):
 
 
 def test_empty_edited_copy_cannot_promote(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job1", ["e1"], approved=False)
     # Fail closed: an empty edited body means nothing was verified, so a worker cannot
     # self-promote by omitting the edited copy.
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: _editor_json("", "promote"))
     with pytest.raises(ValidationError):
         runner.run_stage("job1", "audit", "m", None, api_key="k", root=tmp_path)
-    assert not job_dir("job1", root=tmp_path).exists()
+    assert not _stage_path(tmp_path, "job1", "audit").exists()
 
 
 def test_empty_edited_copy_revise_persists_with_fail(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job1", ["e1"], approved=False)
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: _editor_json("   ", "revise"))
     rec = runner.run_stage("job1", "audit", "m", None, api_key="k", root=tmp_path)
     stored = _stored(rec)
@@ -206,13 +216,14 @@ def test_empty_edited_copy_revise_persists_with_fail(tmp_path, monkeypatch):
 
 
 def test_custom_stage_audit_is_also_gated(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job1", ["e1"], approved=False)
     # A custom (non-"audit") stage emitting editorial_audit.v1 must not bypass the gate:
     # gating is by schema, so its self-promotion of overclaiming copy is still rejected.
     reply = _editor_json(_BAD_BODY, "promote", copy_verification={"verdict": "pass", "hits": []})
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ValidationError):
         runner.run_stage("job1", "audit-v2", "m", None, api_key="k", root=tmp_path)
-    assert not job_dir("job1", root=tmp_path).exists()
+    assert not _stage_path(tmp_path, "job1", "audit-v2").exists()
 
 
 def test_enforce_overwrites_worker_supplied_advisory_warnings():
@@ -254,6 +265,7 @@ def test_run_stage_persists_deterministic_warnings_and_normalizes_v1(tmp_path, m
     """Reachability proof at the real entrypoint (#2181 round 2): a worker
     reply tagged v1 with a fabricated empty checklist is normalized to v2 and
     persisted with the DETERMINISTIC advisory warnings."""
+    _seed_draft(tmp_path, "job-adv", ["e1"], approved=False)
     reply = json.dumps(
         {
             "schema": "editorial_audit.v1",
@@ -279,6 +291,7 @@ def test_run_stage_rejects_contradictory_v2_version(tmp_path, monkeypatch):
     """Round-18 regression: a worker reply already tagged v2 keeps its own
     schema_version, so contradictory metadata fails validation instead of
     being silently rewritten to 2."""
+    _seed_draft(tmp_path, "job-v2v", ["e1"], approved=False)
     reply = json.dumps(
         {
             "schema": "editorial_audit.v2",
@@ -291,7 +304,7 @@ def test_run_stage_rejects_contradictory_v2_version(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ValidationError):
         runner.run_stage("job-v2v", "audit", "m", None, api_key="k", root=tmp_path)
-    assert not job_dir("job-v2v", root=tmp_path).exists()
+    assert not _stage_path(tmp_path, "job-v2v", "audit").exists()
 
 
 # --- Phase 6: repurposing + image-prompt gates at the real entrypoint ---
@@ -354,6 +367,7 @@ def test_run_stage_overwrites_variant_verdicts_and_blocks_bad_ship(tmp_path, mon
 
 
 def test_run_stage_persists_clean_variants_with_computed_verdicts(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job-rp2", ["e1"], approved=False)
     reply = json.dumps(
         {
             "schema": "repurposing.v1",
@@ -376,6 +390,7 @@ def test_run_stage_persists_clean_variants_with_computed_verdicts(tmp_path, monk
 
 
 def test_run_stage_blank_variant_body_fails_closed(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job-rp3", ["e1"], approved=False)
     reply = json.dumps(
         {
             "schema": "repurposing.v1",
@@ -399,6 +414,7 @@ def test_run_stage_blank_variant_body_fails_closed(tmp_path, monkeypatch):
 def test_run_stage_gates_image_prompt_text(tmp_path, monkeypatch):
     """Banned copy inside a PROMPT would be rendered into the artwork, where
     no text check would see it -- the gate runs on the prompt itself."""
+    _seed_draft(tmp_path, "job-img", ["e1"], approved=False)
     reply = json.dumps(
         {
             "schema": "image_prompt.v1",
@@ -420,6 +436,7 @@ def test_run_stage_gates_image_prompt_text(tmp_path, monkeypatch):
 
 
 def test_run_stage_image_prompt_pii_is_caught(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job-img2", ["e1"], approved=False)
     reply = json.dumps(
         {
             "schema": "image_prompt.v1",
@@ -441,6 +458,7 @@ def test_run_stage_image_prompt_pii_is_caught(tmp_path, monkeypatch):
 
 
 def test_run_stage_clean_image_prompt_passes(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job-img3", ["e1"], approved=False)
     reply = json.dumps(
         {
             "schema": "image_prompt.v1",
@@ -458,6 +476,7 @@ def test_run_stage_clean_image_prompt_passes(tmp_path, monkeypatch):
 
 def test_stage_schema_mismatch_still_enforced_for_phase6(tmp_path, monkeypatch):
     """A repurposing artifact cannot land under the image_prompt stage."""
+    _seed_draft(tmp_path, "job-mix", ["e1"], approved=False)
     reply = json.dumps(
         {
             "schema": "repurposing.v1",
@@ -476,6 +495,7 @@ def test_negative_prompt_naming_banned_terms_still_passes(tmp_path, monkeypatch)
     """Guard's second side: a negative prompt is an EXCLUSION list, so naming
     a banned phrase there is the correct designer response to the threat --
     it must not trip the gate."""
+    _seed_draft(tmp_path, "job-neg", ["e1"], approved=False)
     reply = json.dumps({
         "schema": "image_prompt.v1", "project_id": "p",
         "prompts": [{
@@ -493,6 +513,7 @@ def test_negative_prompt_naming_banned_terms_still_passes(tmp_path, monkeypatch)
 
 def test_positive_prompt_with_banned_claim_still_fails(tmp_path, monkeypatch):
     """The other side of the same guard stays closed."""
+    _seed_draft(tmp_path, "job-pos", ["e1"], approved=False)
     reply = json.dumps({
         "schema": "image_prompt.v1", "project_id": "p",
         "prompts": [{
@@ -510,6 +531,7 @@ def test_positive_prompt_with_banned_claim_still_fails(tmp_path, monkeypatch):
 def test_worker_cannot_self_declare_ready_to_generate(tmp_path, monkeypatch):
     """The runner recomputes the verdict, so a failing prompt set cannot be
     persisted as renderable no matter what the worker claims."""
+    _seed_draft(tmp_path, "job-selfgen", ["e1"], approved=False)
     reply = json.dumps({
         "schema": "image_prompt.v1", "project_id": "p",
         "prompts": [{"purpose": "hero", "prompt_text": "poster reading guaranteed savings"}],
@@ -519,7 +541,7 @@ def test_worker_cannot_self_declare_ready_to_generate(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ValidationError):
         runner.run_stage("job-selfgen", "image_prompt", "m", None, api_key="k", root=tmp_path)
-    assert not job_dir("job-selfgen", root=tmp_path).exists()
+    assert not _stage_path(tmp_path, "job-selfgen", "image_prompt").exists()
 
 
 # --- review round 2 on #2192 ---
@@ -555,6 +577,7 @@ def test_real_lineage_ships(tmp_path, monkeypatch):
 
 def test_unready_package_skips_lineage_check(tmp_path, monkeypatch):
     """An unready package is a legitimate intermediate state."""
+    _seed_draft(tmp_path, "job-lin3", ["e1"], approved=False)
     reply = json.dumps({
         "schema": "repurposing.v1", "project_id": "p",
         "variants": [{"channel": "x", "body_markdown": "Clean copy.",
@@ -567,18 +590,26 @@ def test_unready_package_skips_lineage_check(tmp_path, monkeypatch):
 
 
 def test_missing_draft_fails_closed_on_ship(tmp_path, monkeypatch):
+    called = False
     reply = json.dumps({
         "schema": "repurposing.v1", "project_id": "p",
         "variants": [{"channel": "x", "body_markdown": "Clean copy.",
                       "derived_from_claims": ["e1"]}],
         "ready_to_publish": True,
     })
-    monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    with pytest.raises(ArtifactStoreError, match="readable draft artifact"):
+    def unexpected_worker(*args, **kwargs):
+        nonlocal called
+        called = True
+        return reply
+
+    monkeypatch.setattr(runner, "call_worker", unexpected_worker)
+    with pytest.raises(ArtifactStoreError, match="requires a committed draft"):
         runner.run_stage("job-nodraft", "repurposing", "m", None, api_key="k", root=tmp_path)
+    assert called is False
 
 
 def test_international_phone_in_prompt_fails(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job-intl", ["e1"], approved=False)
     reply = json.dumps({
         "schema": "image_prompt.v1", "project_id": "p",
         "prompts": [{"purpose": "hero", "prompt_text": "Call us at +442079460958"}],
@@ -592,6 +623,7 @@ def test_international_phone_in_prompt_fails(tmp_path, monkeypatch):
 
 def test_prompts_verified_independently_no_cross_synthesis(tmp_path, monkeypatch):
     """Joining items must not synthesize a claim no single prompt makes."""
+    _seed_draft(tmp_path, "job-split", ["e1"], approved=False)
     reply = json.dumps({
         "schema": "image_prompt.v1", "project_id": "p",
         "prompts": [
@@ -606,6 +638,7 @@ def test_prompts_verified_independently_no_cross_synthesis(tmp_path, monkeypatch
 
 
 def test_hits_identify_the_offending_prompt(tmp_path, monkeypatch):
+    _seed_draft(tmp_path, "job-which", ["e1"], approved=False)
     reply = json.dumps({
         "schema": "image_prompt.v1", "project_id": "p",
         "prompts": [
@@ -667,8 +700,9 @@ def test_image_prompt_readiness_also_checks_revision(tmp_path, monkeypatch):
 
 
 def test_string_false_readiness_persists_as_intermediate(tmp_path, monkeypatch):
-    """A weak worker's "false" normalizes to False, so no draft is required
-    and the intermediate package persists (runner and schema agree)."""
+    """A weak worker's "false" normalizes to False, so lineage approval is not
+    required and the intermediate package persists (runner and schema agree)."""
+    _seed_draft(tmp_path, "job-strfalse", ["e1"], approved=False)
     reply = json.dumps({
         "schema": "repurposing.v1", "project_id": "p",
         "variants": [{"channel": "x", "body_markdown": "Clean copy.",
@@ -686,6 +720,7 @@ def test_string_false_readiness_persists_as_intermediate(tmp_path, monkeypatch):
 ])
 def test_negated_banned_phrase_in_prompt_still_fails(text, tmp_path, monkeypatch):
     """Prose negation does not un-draw words a renderer is told to paint."""
+    _seed_draft(tmp_path, "job-neg2", ["e1"], approved=False)
     reply = json.dumps({
         "schema": "image_prompt.v1", "project_id": "p",
         "prompts": [{"purpose": "hero", "prompt_text": text}],
@@ -829,6 +864,7 @@ _SCENES = ["a poster of {}", "signage reading {}", "{} on a storefront window"]
 
 
 def _prompt_verdict(text, tmp_path, monkeypatch, job):
+    _seed_draft(tmp_path, job, ["e1"], approved=False)
     reply = json.dumps({"schema": "image_prompt.v1", "project_id": "p",
                         "prompts": [{"purpose": "hero", "prompt_text": text}]})
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
@@ -1051,6 +1087,32 @@ def test_source_bound_stage_rejects_callback_that_ignores_draft(
     assert called is False
 
 
+@pytest.mark.parametrize("stage", ["audit", "audit-v2", "repurposing", "image_prompt"])
+def test_source_bound_stage_requires_committed_draft_before_dispatch(
+    stage, tmp_path, monkeypatch
+):
+    """A missing committed draft is not a source snapshot and must not become
+    `Committed draft JSON:null`."""
+    called = False
+
+    def unexpected_worker(*args, **kwargs):
+        nonlocal called
+        called = True
+        return _editor_json("unreachable", "revise")
+
+    monkeypatch.setattr(runner, "call_worker", unexpected_worker)
+    with pytest.raises(ArtifactStoreError, match="requires a committed draft"):
+        runner.run_stage(
+            f"job-no-draft-{stage}",
+            stage,
+            "m",
+            None,
+            api_key="k",
+            root=tmp_path,
+        )
+    assert called is False
+
+
 def test_audit_rejects_draft_replaced_while_worker_runs(tmp_path, monkeypatch):
     """The audit fingerprint binds the pre-dispatch source, not the draft that
     happens to be current after the worker returns."""
@@ -1241,6 +1303,7 @@ def test_run_stage_normalizes_v2_audit_to_v3(tmp_path, monkeypatch):
     """A v2-tagged worker reply upgrades cleanly, because its metadata is
     self-consistent. The anti-laundering rule still holds for contradictory
     metadata (see test_run_stage_rejects_contradictory_v2_version)."""
+    _seed_draft(tmp_path, "job-v23", ["e1"], approved=False)
     reply = json.dumps({
         "schema": "editorial_audit.v2",
         "schema_version": 2,
@@ -1463,6 +1526,20 @@ def test_slash_separated_candidates_with_structural_dial_intent_fail(
     assert runner._prompt_contact_hits(prompt) != [], prompt
 
 
+@pytest.mark.parametrize(
+    "dial_candidate",
+    [
+        "+44 (800) FLOWERS",
+        "+44 (800) F-L-O-W-E-R-S",
+        "0044 (800) FLOWERS",
+    ],
+)
+def test_parenthesized_phonewords_share_numeric_group_verdict(dial_candidate):
+    """Parentheses are formatting inside the same bounded dial grammar."""
+    prompt = f"Call {dial_candidate} today"
+    assert runner._prompt_contact_hits(prompt) != [], prompt
+
+
 @pytest.mark.parametrize("line_break", ["\n", "\r", "\r\n"])
 def test_single_line_break_preserves_structural_dial_intent(line_break):
     """One logical CTA line break is formatting, not a dial-evidence boundary."""
@@ -1498,6 +1575,20 @@ def test_oracle_detached_phonewords_require_structural_bridge(
     """Evidence-keyed oracle: syntax, not intent-category proximity, decides."""
     prompt = f"{intent}{bridge}{candidate} sign"
     assert bool(runner._prompt_contact_hits(prompt)) is has_dial_evidence, prompt
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "room 212 art deco contact sheet",
+        "room 212 art deco text treatment",
+        "poster for room 212 art deco, contact sheet layout",
+        "room 800 flowers contact sheet",
+    ],
+)
+def test_trailing_renderer_nouns_do_not_bridge_detached_phonewords(prompt):
+    """Renderer terms after an ambiguous candidate are not reverse dial syntax."""
+    assert runner._prompt_contact_hits(prompt) == [], prompt
 
 
 @pytest.mark.parametrize(

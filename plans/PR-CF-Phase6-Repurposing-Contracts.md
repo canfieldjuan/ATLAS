@@ -95,7 +95,8 @@ Max files: 7
    deliberately excluded; joining items would synthesize cross-prompt
    claims). Prompt PII is stricter than body copy: international phonewords
    with bounded dial evidence and IDNA-equivalent email separators fail here,
-   while detached numeric/art-direction prose remains admissible.
+   while detached numeric/art-direction prose remains admissible, including
+   renderer nouns that trail an ambiguous candidate.
    Blank bodies/prompts fail closed via a shared `_deterministic_verdict`.
 4. Proof: contract invariants both directions + real-entrypoint tests
    through `run_stage`.
@@ -154,12 +155,12 @@ Max files: 7
   before space-separated suffixes. These are both-direction failures at one
   admission seam, not separate spellings to enumerate.
 - **Structural direction:** attached NANP vanity spelling is structural
-  evidence. Detached spelling requires nearby dial intent; an international
-  spelling additionally requires an explicit `+`/`00` prefix and must map
-  inside E.164's digit bound. No evidence defaults to ordinary renderer
-  description. The oracle crosses renderer specifications and ordinary
-  three-digit art directions on the admit side, and separator partitions plus
-  domestic/international prefixes on the reject side.
+  evidence. Detached spelling requires a preceding structural dial marker; an
+  international spelling additionally requires an explicit `+`/`00` prefix and
+  must map inside E.164's digit bound. No evidence defaults to ordinary renderer
+  description. The oracle crosses renderer specifications, ordinary three-digit
+  art directions, and trailing renderer nouns on the admit side, and separator
+  partitions plus domestic/international prefixes on the reject side.
 
 ### Execution model
 
@@ -546,6 +547,23 @@ the same classifier and source-construction seams.
    draft snapshot, then hashes the same source bytes and retains the under-lock
    comparison.
 
+### Review round 14 (Codex, follow-up PR #2201)
+
+Three findings, all verified against the published follow-up and corrected at
+the same classifier and source-construction seams.
+
+1. **P1 - trailing renderer nouns were reverse dial intent.** Ambiguous
+   detached candidates now require structural dial evidence before the
+   candidate; renderer nouns such as `contact sheet` and `text treatment` after
+   `212 art deco` remain admissible prose.
+2. **P1 - parenthesized phoneword groups missed the shared separator grammar.**
+   Parentheses are parsed by the bounded dial grammar, so `Call +44 (800)
+   FLOWERS` receives the same verdict as its unparenthesized and numeric
+   keypad-equivalent forms.
+3. **P1 - a missing committed draft became JSON null.** Source-bound stages now
+   require a valid committed draft before constructing the runner-owned prompt
+   or dispatching the worker.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -566,6 +584,8 @@ their redacted hits aggregate into the prompt-set verdict. Readiness consumes
 committed Git objects inside one per-job critical section, and source identity
 is snapshotted before worker dispatch then rechecked inside that section, so
 mutable residue or a mid-worker draft replacement cannot become approval input.
+Source-bound prompts require a committed draft object before dispatch; missing
+source is not a serializable stage input.
 
 ## Intentional
 
@@ -601,13 +621,15 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 945 passed (incl. the round-6 contact oracle, round-7
+    # -> 956 passed (incl. the round-6 contact oracle, round-7
     #    content-binding probes, round-8 descriptive-number boundary, and
     #    rounds 9-10 separator-partition, international/detached-prose,
     #    IDNA, dispatch-binding, and committed-residue proofs, plus round-11
     #    canonical-composition/whitespace-run proofs and round-12 normalized
-    #    parser and structural-bridge proofs, plus round-13 slash/line-break
-    #    boundaries and runner-owned prompt-construction proofs)
+    #    parser and structural-bridge proofs, round-13 slash/line-break
+    #    boundaries and runner-owned prompt-construction proofs, and round-14
+    #    parenthesized phonewords, trailing renderer nouns, and missing-source
+    #    pre-dispatch proofs)
     #
     # Mutation check on the round-8 lock test: removing `with job_lock(...)`
     # from run_stage makes test_run_stage_holds_job_lock_across_validation_
@@ -624,10 +646,10 @@ Parked hardening: none new.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 60 |
-| `atlas_brain/services/content_factory_runner.py` | 358 |
+| `atlas_brain/services/content_factory_runner.py` | 365 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 263 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 270 |
-| `tests/test_content_factory_runner.py` | 577 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 285 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 296 |
+| `tests/test_content_factory_runner.py` | 686 |
 | `tests/test_content_factory_schemas.py` | 68 |
-| **Total** | **1698** |
+| **Total** | **1862** |

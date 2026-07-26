@@ -24,6 +24,11 @@ slash-delimited numeric renderer specifications entered through the
 unconditional E.164 shortcut; the otherwise finite bridge excluded a single
 formatting line break; and a caller callback could ignore the supplied draft
 while inheriting its fingerprint.
+The latest current-head review found three further edge gaps at those same
+boundaries: trailing renderer nouns after an ambiguous candidate were treated as
+reverse dial intent, parenthesized phoneword groups were outside the shared
+separator grammar, and a missing committed draft serialized as JSON `null`
+instead of failing before worker dispatch.
 
 This production-hardening follow-up carries the already verified correction
 onto the merged mainline. It preserves the Phase 6 product shape and closes the
@@ -44,8 +49,13 @@ reported classes at their shared classifier and execution seams.
   before dispatch still did not prove the already-built prompt came from those
   bytes. The detached-phoneword decision used an open semantic category
   (nearby intent words) without a closed structural bridge, and phone parsing
-  happened before NFKC with separator rules repeated across recognizers. Email
-  matching recognized only the ASCII spelling of an IDNA label separator.
+  happened before NFKC with separator rules repeated across recognizers. The
+  first finite bridge still ran symmetrically, so renderer nouns such as
+  `contact sheet` and `text treatment` after the candidate became reverse dial
+  markers. The bounded separator grammar also omitted parenthesized numeric
+  groups, and source prompt construction treated a missing committed draft as a
+  serializable `None` snapshot. Email matching recognized only the ASCII
+  spelling of an IDNA label separator.
 - Correct fix must touch/change: the Phase 6 runner's single contact-admission
   decision, its committed-source dispatch/persistence boundary, the channel
   routing key, and both-direction tests at the real `run_stage` entrypoint.
@@ -59,7 +69,11 @@ reported classes at their shared classifier and execution seams.
   break remains formatting inside the finite bridge. `run_stage` must own a
   fixed stage prompt template and construct it from the exact committed bytes
   whose fingerprint it records; caller-controlled builders are not proof of
-  derivation. The post-worker under-lock comparison remains required.
+  derivation. Missing committed draft bytes must fail before any source-bound
+  worker dispatch. Parenthesized phoneword groups must share the same bounded
+  grammar as their numeric keypad equivalents, and trailing renderer nouns must
+  not govern ambiguous candidates as reverse dial markers. The post-worker
+  under-lock comparison remains required.
   Canonical store reads must remain committed-object reads so a source snapshot
   cannot be replaced by worktree residue.
 - Must not change: Phase 6 artifact schema tags/field shapes, editorial
@@ -73,9 +87,9 @@ Slice phase: production hardening
 Max files: 7
 
 1. Make mixed digit/letter contact admission evidence-gated in both directions:
-   attached NANP vanity stays structural; detached spelling requires nearby
-   dial intent; international phonewords require explicit `+`/`00` structure
-   and an E.164-bounded keypad mapping.
+   attached NANP vanity stays structural; detached spelling requires structural
+   dial intent before the ambiguous candidate; international phonewords require
+   explicit `+`/`00` structure and an E.164-bounded keypad mapping.
 2. Normalize IDNA-equivalent domain stops before the redacted email decision
    and normalize Unicode default-ignorables out of channel routing identities.
 3. Snapshot committed draft identity immediately before dispatch and compare
@@ -126,6 +140,14 @@ Max files: 7
       runner selects the stage instruction and serializes the committed draft
       snapshot itself; a callback that ignores its argument is rejected before
       worker dispatch.
+  15. Parenthesized numeric groups in a phoneword, e.g. `Call +44 (800) FLOWERS`,
+      receive the same failing verdict as the unparenthesized spelling and the
+      keypad-equivalent numeric spelling.
+  16. Ambiguous phonewords are not governed by trailing renderer nouns: `room 212
+      art deco contact sheet`, `room 212 art deco text treatment`, and `poster
+      for room 212 art deco, contact sheet layout` remain admissible.
+  17. Every source-bound stage requires a valid committed draft before worker
+      dispatch; no stage may send `Committed draft JSON:\nnull`.
 - Reachability proof: `run_stage(job_id, stage, model, user_content, ...)` calls
   the worker, applies prompt enforcement, compares committed source identity
   under `job_lock`, validates, and writes. Tests replace the committed draft
@@ -146,11 +168,11 @@ Max files: 7
   NANP membership excluded explicit international phonewords. These are the
   two error directions of one classifier seam.
 - **Structural direction:** ambiguous detached prose defaults to admissible.
-  Detached spelling requires a dial marker connected through a finite bridge
-  containing only direct-address/preposition structure, not arbitrary nearby
-  words. International spelling also requires an explicit `+`/`00` prefix and
-  a 7-15 digit E.164 mapping. Tests cross evidence signals on both sides rather
-  than enumerate reported strings.
+  Detached spelling requires a preceding dial marker connected through a finite
+  bridge containing only direct-address/preposition structure, not arbitrary
+  nearby words or trailing renderer nouns. International spelling also requires
+  an explicit `+`/`00` prefix and a 7-15 digit E.164 mapping. Tests cross
+  evidence signals on both sides rather than enumerate reported strings.
 
 ### Execution model
 
@@ -187,20 +209,22 @@ The runner preserves a leading `+`, keypad-maps mixed tokens, and classifies
 explicit international phonewords as ambiguous structural candidates governed
 by a finite structural dial bridge. Phone admission first creates an
 NFKC-normalized view, then one separator grammar governs tokenization,
-partitioning, and compact-length checks, including whitespace, dot, hyphen, and
-slash. `_dial_shape` still removes separators before enforcing the 7-15 digit
-E.164 bound. Space-joined candidate extensions use the structural bridge;
-attached domestic vanity syntax remains unambiguous. Email matching translates
-the three IDNA domain-stop equivalents only for admission.
+partitioning, and compact-length checks, including whitespace, dot, hyphen,
+slash, and parenthesized numeric groups. `_dial_shape` still removes separators
+before enforcing the 7-15 digit E.164 bound. Space-joined candidate extensions
+use the forward structural bridge; attached domestic vanity syntax remains
+unambiguous. Email matching translates the three IDNA domain-stop equivalents
+only for admission.
 
 The schema defines the Unicode default-ignorable ranges once, excludes them
 from visible-only content, and removes them before the NFKC/casefold routing
 key so an ignored code point cannot alter composition.
 
 For source-bound work, `run_stage` accepts no caller prompt payload. It selects
-a fixed instruction from the known stage contract, reads committed draft bytes
-once, parses and deterministically serializes that snapshot into the prompt,
-hashes the same bytes, and dispatches. After the response is enforced, it takes
+a fixed instruction from the known stage contract, requires committed draft
+bytes to exist, parses and deterministically serializes that snapshot into the
+prompt, hashes the same bytes, and dispatches. After the response is enforced,
+it takes
 `job_lock`, rejects any source-derived schema whose current committed
 fingerprint differs, stamps audits with the dispatch fingerprint, runs
 readiness/lineage, and commits. Store reads use Git's committed-object lookup
@@ -208,9 +232,9 @@ for the stage JSON; cleanup is hygiene rather than correctness.
 
 ## Intentional
 
-- Detached phonewords without dial intent pass, even if their letters happen to
-  keypad-map to a valid number; rejecting that open prose category would repeat
-  the reported false-positive class.
+- Detached phonewords without preceding structural dial intent pass, even if
+  their letters happen to keypad-map to a valid number; rejecting that open
+  prose category would repeat the reported false-positive class.
 - International phonewords require an explicit international prefix and intent.
   Arbitrary letter/digit prose is not promoted to contact data.
 - Whitespace run length is not dial evidence. The existing numeric-group cap,
@@ -219,7 +243,7 @@ for the stage JSON; cleanup is hygiene rather than correctness.
 - Compatibility normalization and separator parity apply only to the
   admission-only phone view; raw prompt/artifact text is not rewritten.
 - Arbitrary proximity to an intent-like word is not dial evidence. Ambiguous
-  detached spelling without the finite bridge remains admissible.
+  detached spelling without the forward finite bridge remains admissible.
 - Source-bound stage callers now pass no prompt payload; the runner owns the
   fixed instruction plus committed-draft serialization. This intentionally
   changes the unshipped API before the deferred OWUI wrappers are wired.
@@ -231,7 +255,7 @@ for the stage JSON; cleanup is hygiene rather than correctness.
 
 ## Deferred
 
-- None for the five round-10 findings or eight current-head class-boundary
+- None for the five round-10 findings or eleven current-head class-boundary
   findings.
 - Existing Phase 6 deferrals remain: ComfyUI generation, OWUI wrappers, and
   Phase 7 manifest entries.
@@ -240,13 +264,15 @@ Parked hardening: none.
 
 ## Verification
 
-- Focused content-factory/intake suite: 945 passed.
-- Latest round-13 regression subset: 22 passed, covering
-  slash-separated renderer/phone both-direction cases, bounded line-break
-  bridges, runner-owned source prompts, and callback rejection. The prior
-  126-case current-head subset remains covered for
-  compatibility/separator parity, evidence-keyed dial bridges, prebuilt-prompt
-  rejection, pre-entry source replacement, and during-worker replacement.
+- Focused content-factory/intake suite: 956 passed.
+- Latest round-14 regression subset: 88 passed, covering
+  parenthesized phoneword groups, trailing renderer nouns after ambiguous
+  candidates, missing committed-draft rejection before dispatch, slash-separated
+  renderer/phone both-direction cases, bounded line-break bridges,
+  runner-owned source prompts, and callback rejection. The prior current-head
+  subsets remain covered for compatibility/separator parity, evidence-keyed dial
+  bridges, prebuilt-prompt rejection, pre-entry source replacement, and
+  during-worker replacement.
 - Prior current-head review regressions remain covered by generated
   canonical-composition and whitespace-run classes.
 - Ruff, `python -m py_compile`, and `git diff --check`: passed on the exact
@@ -261,10 +287,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 60 |
-| `atlas_brain/services/content_factory_runner.py` | 358 |
+| `atlas_brain/services/content_factory_runner.py` | 365 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 263 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 270 |
-| `tests/test_content_factory_runner.py` | 577 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 285 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 296 |
+| `tests/test_content_factory_runner.py` | 686 |
 | `tests/test_content_factory_schemas.py` | 68 |
-| **Total** | **1698** |
+| **Total** | **1862** |

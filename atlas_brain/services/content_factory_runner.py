@@ -204,9 +204,11 @@ _DIAL_INTENT_RE = re.compile(
     r"sms|ring|hotline|helpline|whatsapp|contact|reach)\b",
     re.I,
 )
-_DIAL_PUNCTUATION = r".\-/"
+_DIAL_PUNCTUATION = r".\-/()"
+_DIAL_ALPHA_PUNCTUATION = r".\-/"
 _DIAL_SEPARATOR_RE = re.compile(rf"[\s{_DIAL_PUNCTUATION}]+")
-_NUMERIC_DIAL_SEPARATOR = rf"(?:\s+(?=\d)|[{_DIAL_PUNCTUATION}])"
+_NUMERIC_DIAL_SEPARATOR = rf"(?:\s+(?=[\d(])|[{_DIAL_PUNCTUATION}])"
+_DIAL_GROUP_CHARS = r"\dA-Za-z()"
 # E.164 / international: explicit + or 00 prefix then 7-15 digits.
 # Slash is deliberately excluded from this unconditional shortcut; slash-
 # delimited candidates go through the structural dial decision below so
@@ -222,7 +224,8 @@ _NANP_RE = re.compile(r"\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b")
 # is the next word rather than part of the number ("07700 900123 today").
 # Attachment, not casing, is what distinguishes them.
 _DIAL_TOKEN_RE = re.compile(
-    rf"(?<!\w)[+]?\d[\dA-Za-z]*(?:{_NUMERIC_DIAL_SEPARATOR}[\dA-Za-z]+){{0,5}}"
+    rf"(?<!\w)[+]?\d[{_DIAL_GROUP_CHARS}]*"
+    rf"(?:{_NUMERIC_DIAL_SEPARATOR}[{_DIAL_GROUP_CHARS}]+){{0,5}}"
 )
 
 
@@ -343,7 +346,7 @@ def _dial_shape(token: str) -> str:
 
 
 _TRAILING_ALPHA_RE = re.compile(
-    rf"\s+[A-Za-z]+(?:[{_DIAL_PUNCTUATION}][A-Za-z]+)*"
+    rf"\s+[A-Za-z]+(?:[{_DIAL_ALPHA_PUNCTUATION}][A-Za-z]+)*"
 )
 _MAX_DIAL_SYMBOLS = 17  # 00 access prefix plus E.164's 15-digit maximum
 
@@ -399,14 +402,17 @@ def _has_structural_dial_intent(
     end: int,
     intents: "list[tuple[int, int]]",
 ) -> bool:
-    """Whether a dial marker structurally governs the candidate span."""
+    """Whether a preceding dial marker structurally governs the candidate span.
+
+    Reverse direction is not evidence for ambiguous phonewords: renderer nouns
+    such as "contact sheet" and "text treatment" commonly trail artwork copy.
+    Unambiguous numeric syntax is admitted before this bridge is consulted.
+    """
     for intent_start, intent_end in intents:
         if intent_end <= start:
             gap = text[intent_end:start]
-        elif end <= intent_start:
-            gap = text[end:intent_start]
         else:
-            return True
+            continue
         if _is_structural_dial_bridge(gap):
             return True
     return False
@@ -659,22 +665,23 @@ def _build_source_prompt(
     job_id: str,
     root: "Path | str",
     stage: str,
-) -> "tuple[str, str | None]":
+) -> "tuple[str, str]":
     """Build the fixed stage prompt and fingerprint from one draft snapshot."""
     raw = read_committed_artifact_bytes(job_id, "draft", root=root)
-    draft: dict[str, Any] | None = None
-    if raw is not None:
-        try:
-            parsed = json.loads(raw)
-        except (TypeError, ValueError) as exc:
-            raise ArtifactStoreError(
-                "source-bound stage requires a valid committed draft artifact"
-            ) from exc
-        if not isinstance(parsed, dict):
-            raise ArtifactStoreError(
-                "source-bound stage requires a committed draft JSON object"
-            )
-        draft = parsed
+    if raw is None:
+        raise ArtifactStoreError(
+            "source-bound stage requires a committed draft artifact"
+        )
+    try:
+        draft = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise ArtifactStoreError(
+            "source-bound stage requires a valid committed draft artifact"
+        ) from exc
+    if not isinstance(draft, dict):
+        raise ArtifactStoreError(
+            "source-bound stage requires a committed draft JSON object"
+        )
     draft_json = json.dumps(
         draft,
         ensure_ascii=False,
@@ -685,7 +692,7 @@ def _build_source_prompt(
         f"{_SOURCE_STAGE_INSTRUCTIONS[stage]}\n\n"
         f"Committed draft JSON:\n{draft_json}"
     )
-    fingerprint = hashlib.sha256(raw).hexdigest() if raw is not None else None
+    fingerprint = hashlib.sha256(raw).hexdigest()
     return user_content, fingerprint
 
 
