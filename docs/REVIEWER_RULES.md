@@ -42,10 +42,11 @@ reviewer reviews against it. No contract, nothing to check against.
 
 ```
 ### Review Contract
-- Acceptance criteria:
-  - [ ] Behavior A works
-  - [ ] Edge case B handled
-  - [ ] Existing behavior C unchanged
+- Acceptance criteria (each a code claim, or a hazard plus the evidence that
+  settles it; a BARE risk category with no referent is the defect -- AGENTS.md 1a):
+  - [ ] <entrypoint> returns <observable result> for <input>
+  - [ ] <named boundary input> is rejected with <observable result>
+  - [ ] <existing behavior C> unchanged: <command / CI job that shows it>
 - Reachability proof: real entrypoint + observable output/state, or N/A with reason
 - Affected surfaces: API / DB / auth / frontend / jobs / config / observability / third-party
 - Risk areas: data-loss / security / backcompat / performance / concurrency / migration
@@ -54,6 +55,45 @@ reviewer reviews against it. No contract, nothing to check against.
 
 The contract is optional for one-off scratch, mandatory for non-trivial PRs
 (same threshold as the plan doc itself, per `AGENTS.md`).
+
+**For contracts authored or materially revised after this rule lands, a
+criterion that names a *bare* risk category is a defect in the contract, and the
+reviewer says so.** "No TOCTOU", "no race conditions", "handles every malformed
+input" name a hazard with no referent, so there is nothing to look at.
+
+Naming the evidence rescues it: *"No unmasked email addresses in the audit
+export -- settled by `tests/test_audit_export.py::test_masks_email_addresses`"*
+is valid and the reviewer dispositions it from that evidence. The defect is the
+missing referent, never the hazard framing. For concurrency or open-execution
+criteria, a sampled concurrent test is not settling evidence by itself; require
+the 3k.4 execution model and the property-level invariant that holds across
+every admitted interleaving. For open-input criteria, a sampled fixture list is
+not settling evidence by itself; require the 3k.3 evidence-gated mechanism:
+single choke-point decision, safe default for ambiguous/unrecognized/malformed
+input, and bounded recognizer evidence.
+
+Legacy contracts are different. This rule does not automatically
+re-disposition legacy criteria and does not forbid investigating them. For a
+contract authored before this lands, review against the contract as authored:
+inspect the diff and evidence it points to, disposition normally when that
+evidence settles it, and record `could-not-determine` only if the criterion
+still has no claim or evidence to settle after that review. The legacy phrasing
+is an advisory NIT, not a blocking R1 authoring finding, unless the contract is
+materially revised.
+
+Two things follow, and they are separate:
+
+- **New or materially revised contracts fail authoring review on a bare hazard.**
+  Ask for the code claim the hazard translates into, or the evidence that settles
+  it. Do not silently work around a newly authored bare hazard by hunting the
+  category.
+- **Legacy contracts keep their existing matrix behavior.** Do not mark a legacy
+  criterion `could-not-determine` solely because this authoring rule now exists;
+  use `could-not-determine` only when the actual legacy review still cannot find
+  a claim or evidence to settle.
+
+Risk areas are exempt: they name hazards by design and the matrix does not
+disposition them (`AGENTS.md` 1a).
 
 ---
 
