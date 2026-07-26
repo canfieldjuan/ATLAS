@@ -98,7 +98,7 @@ tests detect the regression rather than merely coexisting with the fix.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/unit_gate.yml` | 15 |
+| `.github/workflows/unit_gate.yml` | 33 |
 | `plans/PR-Unit-Gate-Selector-Absent-Fallback.md` | 104 |
 | `tests/test_unit_gate_selector_fallback.py` | 100 |
-| **Total** | **219** |
+| **Total** | **237** |

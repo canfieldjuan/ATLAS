@@ -57,10 +57,22 @@ jobs:
           BASE_REF: ${{ github.base_ref || 'main' }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          git fetch --no-tags origin "${BASE_REF}"
+          # Compare against the baseline at the MERGE BASE, not current main.
+          # If main has shrunk the baseline since this branch was cut, the
+          # branch's own (larger) baseline looks like GROWTH against current
+          # main and added_baseline_entries() fails a PR that added nothing.
+          # The merge base is the baseline this branch actually forked from,
+          # which is what the ratchet means by "did this PR grow it".
+          MB=$(git merge-base "origin/${BASE_REF}" HEAD 2>/dev/null || echo "")
           # empty file when the base has no baseline yet (this PR seeds it)
-          git show "origin/${BASE_REF}:tests/unit_gate_baseline.txt" \
-            > /tmp/base_baseline.txt 2>/dev/null || : > /tmp/base_baseline.txt
+          if [ -n "$MB" ]; then
+            git show "${MB}:tests/unit_gate_baseline.txt" \
+              > /tmp/base_baseline.txt 2>/dev/null || : > /tmp/base_baseline.txt
+          else
+            git show "origin/${BASE_REF}:tests/unit_gate_baseline.txt" \
+              > /tmp/base_baseline.txt 2>/dev/null || : > /tmp/base_baseline.txt
+          fi
 
       - name: Select impacted tests
         env:
