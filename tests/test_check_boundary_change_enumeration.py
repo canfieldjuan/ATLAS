@@ -27,6 +27,11 @@ TS_BOUNDARY_CHANGE = (
 PATH_ONLY_BOUNDARY_CHANGE = "+VALUE = 1\n"
 CONST_BOUNDARY_CHANGE = "+const resolveClaimGate = (input) => Boolean(input.accountId)\n"
 CLASS_BOUNDARY_CHANGE = "+class TenantResolver {\n+  resolve(input) { return input.tenantId }\n+}\n"
+SHELL_BOUNDARY_CHANGE = "+validate_scope() {\n+  test -n \"$ATLAS_SCOPE\"\n+}\n"
+TS_METHOD_BOUNDARY_CHANGE = "+  validateFileType(buffer, expectedType) {\n+    return true\n+  }\n"
+TS_NORMALIZER_CHANGE = "+function normalizeLandingPageRepairAttemptValue(value) {\n+  return Number(value)\n+}\n"
+REMOVED_BOUNDARY_CHANGE = "-def resolve_contact(row):\n-    return row.email\n"
+CLAIM_SERIALIZER_CHANGE = "+def _serialize_claim(row):\n+    return {'claim': row.claim}\n"
 PLAN_WITH_ENUMERATION = """
 ### Boundary-change enumeration
 
@@ -71,6 +76,26 @@ def test_class_boundary_signal_without_plan_enumeration_is_flagged() -> None:
     assert len(findings) == 1
 
 
+def test_shell_boundary_signal_without_plan_enumeration_is_flagged() -> None:
+    findings = mod.scan_diff({"scripts/validate_extracted_content_pipeline.sh": SHELL_BOUNDARY_CHANGE}, [])
+    assert len(findings) == 1
+
+
+def test_parameterized_typescript_method_without_plan_enumeration_is_flagged() -> None:
+    findings = mod.scan_diff({"lib/graphrag/parsers/index.ts": TS_METHOD_BOUNDARY_CHANGE}, [])
+    assert len(findings) == 1
+
+
+def test_normalizing_decision_seam_without_plan_enumeration_is_flagged() -> None:
+    findings = mod.scan_diff({"atlas-intel-ui/src/pages/ContentOpsNewRun.tsx": TS_NORMALIZER_CHANGE}, [])
+    assert len(findings) == 1
+
+
+def test_removed_boundary_declaration_without_plan_enumeration_is_flagged() -> None:
+    findings = mod.scan_diff({"scripts/sync_eom_portal_customers.py": REMOVED_BOUNDARY_CHANGE}, [])
+    assert len(findings) == 1
+
+
 def test_boundary_change_with_plan_enumeration_is_clean() -> None:
     findings = mod.scan_diff(
         {"atlas_brain/services/crm_provider.py": BOUNDARY_CHANGE},
@@ -81,6 +106,11 @@ def test_boundary_change_with_plan_enumeration_is_clean() -> None:
 
 def test_non_boundary_change_is_clean() -> None:
     findings = mod.scan_diff({"atlas_brain/api/health.py": "+def ping():\n+    return {'ok': True}\n"}, [])
+    assert findings == []
+
+
+def test_claim_serializer_lexical_lookalike_is_clean() -> None:
+    findings = mod.scan_diff({"atlas_brain/api/b2b_vendor_claims.py": CLAIM_SERIALIZER_CHANGE}, [])
     assert findings == []
 
 
@@ -111,6 +141,17 @@ def test_plan_requires_all_enumeration_markers() -> None:
     assert not mod.plan_has_boundary_enumeration(SCAFFOLD_PLACEHOLDER)
     assert not mod.plan_has_boundary_enumeration(narrative)
     assert mod.plan_has_boundary_enumeration(PLAN_WITH_ENUMERATION)
+
+
+def test_reasoned_not_applicable_dispositions_are_clean() -> None:
+    not_applicable = """
+### Boundary-change enumeration
+
+- Replaced-path behaviors: N/A - no boundary behavior is replaced.
+- Guard-relevant fields: not applicable - no guard verdict fields.
+- Caller x input shape: N/A - no caller can reach a boundary.
+"""
+    assert mod.plan_has_boundary_enumeration(not_applicable)
 
 
 def test_cli_entrypoint_warns_advisory_and_fails_strict(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
