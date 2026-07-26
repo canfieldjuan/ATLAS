@@ -349,9 +349,64 @@ _COPULAR_ABSENCE_RE = re.compile(
 
 # Anaphoric subjects that bind a later sentence back to the report
 # proposition ("Each is assigned to ...").
-_ANAPHORIC_SUBJECTS = frozenset(
-    {"each", "every", "all", "it", "they", "these", "those", "everything", "both"}
+# Subjects that are anaphoric ON THEIR OWN -- they take no noun, so their
+# reference is necessarily back to the report's items.
+_BARE_ANAPHORS = frozenset({"it", "they", "everything", "both"})
+# Quantifiers/determiners that MAY carry a noun. `every` alone used to satisfy
+# the anaphor test, so "Every invoice is assigned to Billing" covered a report
+# about issues (#2189). These bind only when used bare, or when the noun they
+# carry is itself a report item.
+_QUANTIFIER_SUBJECTS = frozenset({"each", "every", "all", "these", "those"})
+# What follows a BARE quantifier: a predicate, not a noun. Closed function-word
+# class (copulas, auxiliaries, modals).
+_PREDICATE_FOLLOWERS = frozenset(
+    {"is", "are", "was", "were", "be", "been", "being", "gets", "get", "got",
+     "goes", "go", "has", "have", "had", "will", "would", "can", "could",
+     "must", "should", "may", "might", "does", "do", "did"}
 )
+# Pro-forms carry no lexical content: "each ONE is routed" still refers back to
+# the report's items, so they continue the anaphor rather than renaming the
+# subject the way "each INVOICE" does.
+_SUBJECT_PRO_FORMS = frozenset({"one", "ones", "them", "those", "these"})
+# Determiners skipped when looking through a partitive "of" for the head noun:
+# "each of THE invoices" is about invoices, "each of them" about the referent.
+_PARTITIVE_DETERMINERS = frozenset({"the", "these", "those", "our", "its", "their"})
+_ANAPHORIC_SUBJECTS = _BARE_ANAPHORS | _QUANTIFIER_SUBJECTS
+
+
+def _subject_binds_to_report(words: "list[str]") -> bool:
+    """Whether a clause subject refers back to the report's items.
+
+    ``words`` is the clause's leading tokens, lowercased. ONE definition, used
+    by both the same-sentence and later-sentence paths -- they previously
+    carried the same test written twice, which is how the quantifier hole
+    survived in both (#2189).
+    """
+    first = words[0] if words else ""
+    second = words[1] if len(words) > 1 else ""
+    if first in _BARE_ANAPHORS:
+        return True
+    if first in _QUANTIFIER_SUBJECTS:
+        # Bare use ("Each IS assigned...") -- a predicate, not a noun.
+        if second in _PREDICATE_FOLLOWERS:
+            return True
+        # A pro-form continues the anaphor: "each ONE is routed".
+        if second in _SUBJECT_PRO_FORMS:
+            return True
+        # Partitive: look THROUGH "of" (and any determiner) to the head noun,
+        # or the quantifier hole just reappears one token out -- "each of the
+        # invoices" is about invoices exactly as "each invoice" is.
+        if second == "of":
+            for word in words[2:4]:
+                if word in _PARTITIVE_DETERMINERS:
+                    continue
+                return word in _REPORT_ITEM_NOUNS or word in _SUBJECT_PRO_FORMS
+            return False
+        # Any other noun renames the subject.
+        return second in _REPORT_ITEM_NOUNS
+    if first == "the":
+        return second in _REPORT_ITEM_NOUNS
+    return False
 _VERB_INITIAL_ROUTING = frozenset(
     {"routes", "routed", "route", "assigned", "owned", "needs", "who"}
 )
@@ -661,6 +716,37 @@ def _routing_relation_affirmative(
     return True
 
 
+# Adjunct prepositions: a PP opening with one of these is a MODIFIER of the
+# predicate, not part of it. Polarity for the product term is bound to the
+# predicate that governs it, so the range stops here -- otherwise an unrelated
+# bounded negation in a trailing adjunct denied the report surface ("The
+# Resolution Audit is provided WITHOUT DELAY" read as a denial, #2189).
+# Closed class by construction: prepositions, not content words.
+_ADJUNCT_PREPOSITIONS = frozenset(
+    {"without", "with", "before", "after", "during", "despite", "besides",
+     "at", "in", "on", "by", "for", "from", "until", "within", "under",
+     "over", "across", "through", "into", "onto", "per", "via"}
+)
+
+
+def _predicate_end(
+    text: str,
+    clause_bounds: "tuple[list[int], list[tuple[int, int]]]",
+    start: int,
+    clause_end: int,
+) -> int:
+    """End of the predicate governing the term at ``start``.
+
+    The clause end is too far: it sweeps in trailing adjuncts, so a bounded
+    negation inside one ("without delay") denied a proposition it does not
+    govern. The predicate ends where the first adjunct PP begins.
+    """
+    for token in _WORD_RE.finditer(text, start, clause_end):
+        if token.group(0).lower() in _ADJUNCT_PREPOSITIONS:
+            return token.start()
+    return clause_end
+
+
 def _report_shape_sentences(
     text: str,
     sentence_bounds: "tuple[list[int], list[tuple[int, int]]]",
@@ -676,7 +762,11 @@ def _report_shape_sentences(
         # Polarity spans the whole assertion: "The Resolution Audit is not
         # provided." denies the surface, so it is not report-shaped.
         if not _range_negated(
-            text, clause_bounds, match.start(), span[1], negation_cache
+            text,
+            clause_bounds,
+            match.start(),
+            _predicate_end(text, clause_bounds, match.start(), span[1]),
+            negation_cache,
         ):
             sentences.add(_sentence_of(sentence_bounds, match.start()))
     _starts, clause_spans = clause_bounds
@@ -770,37 +860,24 @@ def _routing_covers_report(
                 if not routed_non_item:
                     return True
             if has_before:
-                first = clause_tokens[0].group(0).lower()
-                second = (
-                    clause_tokens[1].group(0).lower()
-                    if len(clause_tokens) > 1
-                    else ""
-                )
+                subject_words = [t.group(0).lower() for t in clause_tokens[:4]]
             else:
-                first = match_first
-                second = match_words[1].lower() if len(match_words) > 1 else ""
-            if first in _ANAPHORIC_SUBJECTS or (
-                first in ("the", "these", "those")
-                and second in _REPORT_ITEM_NOUNS
-            ):
+                subject_words = [w.lower() for w in match_words[:4]]
+            if _subject_binds_to_report(subject_words):
                 return True
             continue
         if any(sentence > report for report in report_sentences):
             index, span = _span_for(clause_bounds, match.start())
             if index not in subject_cache:
                 tokens = _clause_tokens(text, span)
-                first = tokens[0].group(0).lower() if tokens else ""
-                second = tokens[1].group(0).lower() if len(tokens) > 1 else ""
+                subject_words = [t.group(0).lower() for t in tokens[:4]]
                 # Subject position only (round 13): the clause must be ABOUT
                 # the report's items -- an anaphoric subject ("Each is
                 # assigned...") or a determiner + report-item noun ("These
                 # issues are routed..."). An anaphoric token buried in an
                 # unrelated object ("owns invoices for each customer") does
                 # not bind.
-                subject_cache[index] = first in _ANAPHORIC_SUBJECTS or (
-                    first in ("the", "these", "those")
-                    and second in _REPORT_ITEM_NOUNS
-                )
+                subject_cache[index] = _subject_binds_to_report(subject_words)
             if subject_cache[index]:
                 return True
     return False

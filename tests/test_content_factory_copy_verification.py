@@ -1556,3 +1556,103 @@ def test_invisible_span_between_sentences_does_not_undercount():
         }
     )
     assert audit.advisory_warnings
+
+
+# --- #2189 findings 2 and 3: routing-coverage scope ----------------------
+
+_ROUTING = "owner-routing-coverage"
+
+
+def _routing_warns(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    return any(w.startswith(_ROUTING) for w in advisory_warnings(text))
+
+
+# F2: polarity binds to the predicate, not to every negation later in the clause.
+_TRAILING_ADJUNCTS = [
+    "without delay",
+    "without extra cost",
+    "with no delay",
+    "before the review",
+    "after the sync",
+    "for each release",
+]
+
+
+@pytest.mark.parametrize("adjunct", _TRAILING_ADJUNCTS)
+def test_trailing_adjunct_does_not_deny_the_report_surface(adjunct):
+    """#2189: the polarity range ran to the CLAUSE end, so a bounded negation
+    in an unrelated trailing adjunct denied the report surface -- `The
+    Resolution Audit is provided without delay.` affirmatively provides the
+    report with no routing, and must still warn."""
+    assert _routing_warns(f"The Resolution Audit is provided {adjunct}.")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The Resolution Audit is not provided.",
+        "The Resolution Audit is never provided.",
+        "The Resolution Audit cannot be provided.",
+    ],
+)
+def test_genuine_predicate_negation_still_denies_the_surface(text):
+    """The other direction: a negation that DOES govern the product term still
+    denies it, or the fix would just make everything warn."""
+    assert not _routing_warns(text)
+
+
+# F3: a quantified subject must carry a report item, not any noun.
+_QUANTIFIERS = ["Each", "Every", "All"]
+_NON_REPORT_NOUNS = ["invoice", "invoices", "customer", "customers", "vendor"]
+_REPORT_NOUNS = ["issue", "issues", "ticket", "tickets", "finding", "findings"]
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _NON_REPORT_NOUNS)
+def test_quantified_non_report_subject_does_not_cover(quantifier, noun):
+    """`every` alone satisfied the anaphor test, so a statement about invoices
+    covered a report about issues."""
+    assert _routing_warns(
+        f"The report ranks issues. {quantifier} {noun} is assigned to Billing."
+    )
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _REPORT_NOUNS)
+def test_quantified_report_item_subject_still_covers(quantifier, noun):
+    assert not _routing_warns(
+        f"The report ranks issues. {quantifier} {noun} is assigned to Billing."
+    )
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize(
+    "tail", ["is assigned to Billing", "of them is routed to Billing",
+             "one is routed to Billing"]
+)
+def test_bare_and_pro_form_subjects_still_cover(quantifier, tail):
+    """Genuinely bare anaphors and pro-forms keep binding: `Each is assigned`,
+    `Each of them is routed`, `Each one is routed`. A pro-form carries no
+    lexical content, so it continues the reference rather than renaming it."""
+    assert not _routing_warns(f"The report ranks issues. {quantifier} {tail}.")
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _NON_REPORT_NOUNS)
+def test_partitive_does_not_smuggle_a_non_report_subject(quantifier, noun):
+    """Closing the class rather than the example: admitting `of` wholesale
+    would reproduce the same hole one token further out, since `each of the
+    invoices` is about invoices exactly as `each invoice` is."""
+    assert _routing_warns(
+        f"The report ranks issues. {quantifier} of the {noun} is routed to Billing."
+    )
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _REPORT_NOUNS)
+def test_partitive_report_items_still_cover(quantifier, noun):
+    assert not _routing_warns(
+        f"The report ranks issues. {quantifier} of the {noun} is routed to Billing."
+    )
