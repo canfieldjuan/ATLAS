@@ -680,7 +680,6 @@ async def test_atomic_eom_inbound_resolution_is_active_phone_first_and_blocks_cl
     ],
 )
 async def test_atomic_eom_resolution_holds_selected_match_against_concurrent_archive(
-    monkeypatch,
     case,
     business_context_id,
     inbound_phone,
@@ -690,9 +689,12 @@ async def test_atomic_eom_resolution_holds_selected_match_against_concurrent_arc
     if not database_url:
         pytest.skip(f"{DATABASE_URL_ENV} is not configured")
 
+    import atlas_brain.storage.database as db_mod
+
     schema = f"atlas_eom_archive_lock_{uuid.uuid4().hex}"
     setup = await asyncpg.connect(database_url)
     pool = None
+    original_db_pool = db_mod._db_pool
     release = asyncio.Event()
     try:
         await setup.execute(f'CREATE SCHEMA "{schema}"')
@@ -712,13 +714,8 @@ async def test_atomic_eom_resolution_holds_selected_match_against_concurrent_arc
             server_settings={"search_path": f'"{schema}", public'},
         )
         selected = asyncio.Event()
-        import atlas_brain.storage.database as db_mod
 
-        monkeypatch.setattr(
-            db_mod,
-            "get_db_pool",
-            lambda: _SelectionGatePool(pool, selected, release),
-        )
+        db_mod._db_pool = _SelectionGatePool(pool, selected, release)
         provider = DatabaseCRMProvider()
         contact_id = uuid.uuid4()
         stored_email = (inbound_email or f"{case}@example.com").lower()
@@ -762,6 +759,7 @@ async def test_atomic_eom_resolution_holds_selected_match_against_concurrent_arc
         ) == "archived"
     finally:
         release.set()
+        db_mod._db_pool = original_db_pool
         if pool is not None:
             await pool.close()
         await setup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

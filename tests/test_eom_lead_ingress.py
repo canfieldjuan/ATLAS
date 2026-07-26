@@ -291,21 +291,28 @@ async def test_sms_link_uses_provider_identity_without_a_local_sms_row(monkeypat
         "lead_stage": "new",
         "_was_created": True,
     })
-    pool = MagicMock(is_initialized=True)
     repo = MagicMock()
     repo.link_contact = AsyncMock()
     monkeypatch.setattr(crm_provider, "get_crm_provider", lambda: crm)
-    monkeypatch.setattr(database, "get_db_pool", lambda: pool)
+    db_pool = database.get_db_pool()
+    original_pool = db_pool._pool
+    original_initialized = db_pool._initialized
+    db_pool._pool = MagicMock()
+    db_pool._initialized = True
 
-    contact_id, is_new = await sms_intelligence._link_to_crm(
-        repo,
-        None,
-        "217-555-0199",
-        EOM_BUSINESS_CONTEXT_ID,
-        {"customer_name": "Retry Texter", "intent": "booking"},
-        "Retry-safe estimate request",
-        provider_message_id="SM-persistence-failed-1",
-    )
+    try:
+        contact_id, is_new = await sms_intelligence._link_to_crm(
+            repo,
+            None,
+            "217-555-0199",
+            EOM_BUSINESS_CONTEXT_ID,
+            {"customer_name": "Retry Texter", "intent": "booking"},
+            "Retry-safe estimate request",
+            provider_message_id="SM-persistence-failed-1",
+        )
+    finally:
+        db_pool._pool = original_pool
+        db_pool._initialized = original_initialized
 
     assert (contact_id, is_new) == ("sms-provider-lead", True)
     assert crm.find_or_create_contact.await_args.kwargs["source_ref"] == (
