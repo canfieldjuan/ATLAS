@@ -1656,3 +1656,55 @@ def test_partitive_report_items_still_cover(quantifier, noun):
     assert not _routing_warns(
         f"The report ranks issues. {quantifier} of the {noun} is routed to Billing."
     )
+
+
+# --- #2189 round 2: emphatic polarity + grammatical subject head ---------
+
+
+@pytest.mark.parametrize(
+    "emphatic",
+    ["is not only provided but current",
+     "is not just provided but current",
+     "not only ranks issues but drafts answers"],
+)
+def test_emphatic_not_is_not_a_denial(emphatic):
+    """The scope model already treats `not only/just` as affirmative. A second
+    verbal-negation matcher disagreed with it and dropped the warning, which
+    is the two-definitions failure this module keeps paying for (#2189)."""
+    assert _routing_warns(f"The Resolution Audit {emphatic}.")
+
+
+@pytest.mark.parametrize("noun", ["ticket", "tickets", "issue", "findings"])
+@pytest.mark.parametrize("modifier", ["in the report", "for this month", "from Support"])
+def test_pp_modified_report_subject_still_covers(noun, modifier):
+    """The head is the noun the quantifier BINDS, before any post-modifier.
+    Taking the last pre-predicate token read `each ticket in the REPORT` as
+    being about reports and regressed valid routing."""
+    assert not _routing_warns(
+        f"The report ranks issues. Each {noun} {modifier} is assigned to Billing."
+    )
+
+
+@pytest.mark.parametrize("noun", ["invoice", "invoices", "customer"])
+@pytest.mark.parametrize("modifier", ["for a ticket", "in the issue log", "for each finding"])
+def test_pp_modifier_cannot_smuggle_a_report_item(noun, modifier):
+    """The other side: a report-item noun sitting inside a MODIFIER must not
+    rescue a non-report subject -- `each invoice for a TICKET` is about
+    invoices."""
+    assert _routing_warns(
+        f"The report ranks issues. Each {noun} {modifier} is assigned to Billing."
+    )
+
+
+def test_routing_scope_pass_stays_linear():
+    """Regression guard with a number, not a description: the polarity check
+    was quadratic mid-review (7.1s reported, 4.6s measured) on a clause with
+    many product terms."""
+    import time
+
+    body = "The Resolution Audit " * 3200
+    start = time.perf_counter()
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    advisory_warnings(body)
+    assert time.perf_counter() - start < 1.0

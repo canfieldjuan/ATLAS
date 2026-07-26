@@ -70,7 +70,14 @@ Max files: 3
      sentence without `not` warns.
   10. The pass stays linear: a 67 KB clause with 3,200 product terms runs in
       0.023s, against 0.022s on `main` (it was 4.6s mid-review).
-  11. The standing 18-round regression corpus stays green.
+  11. Emphatic `not only/just` is affirmative: `The Resolution Audit is not
+      only provided but current.` warns, because the scope model already
+      classifies it that way and the polarity check now asks IT rather than
+      matching `not` independently.
+  12. A PP-modified subject is classified by the noun the quantifier binds:
+      `Each ticket in the report is assigned` covers, `Each invoice for a
+      ticket is assigned` does not.
+  13. The standing 18-round regression corpus stays green.
 - Reachability proof: both fixes sit inside `advisory_warnings`, the same entry
   point the runner calls for every audit and channel variant.
 - Affected surfaces: routing-coverage scope only. No change to the verdict,
@@ -98,18 +105,23 @@ The range is gone. Polarity is decided by the negation's KIND, which the scope
 model already encodes: a scope covering the term itself denies it; a VERBAL
 negator anywhere in the clause attaches to the predicate and denies wherever
 the term sits; a bounded scope elsewhere is an adjunct's own complement and
-denies nothing. Verbal negators are detected directly rather than inferred from
-scope extent -- `without delay` at the end of a clause produces a bounded scope
-that happens to reach the clause end, and was misread as verbal on the way
-here. Both the scopes and the verbal check are cached per clause, so the pass
+denies nothing. Verbal negation is read from the scope model's OWN classification. Two earlier
+attempts got this wrong in opposite directions: inferring "verbal" from scope
+extent misread `without delay` at a clause end, and an independent regex over
+every `not` disagreed with the model's emphatic exception, so `is not only
+provided` read as a denial. The model already decides this; asking it is the
+only version that cannot drift. Both the scopes and the verbal check are cached per clause, so the pass
 is linear again (0.023s vs 0.022s on `main` for the same input).
 
 **Subject binding by the actual head.** One helper, used by both the
 same-sentence and later-sentence paths; they previously carried the same test
 written twice, which is how one hole existed in both.
 
-A noun-bearing quantifier is classified by its SUBJECT HEAD: the last token
-before the predicate. That handles determiners, modifiers and partitives
+A noun-bearing quantifier is classified by its grammatical SUBJECT HEAD: the
+noun it binds, before any post-modifier. Taking the last pre-predicate token
+instead read `each ticket in the REPORT` as being about reports (regressing
+valid routing) and `each invoice for a TICKET` as being about tickets
+(preserving the original false negative). That handles determiners, modifiers and partitives
 uniformly (`each of the open tickets` -> `tickets`) instead of special-casing
 `of` and inspecting a fixed four-token window -- which review showed both
 missed `both invoices` and rejected valid modified heads. `both` is noun-bearing
@@ -154,7 +166,7 @@ polarity range back to the clause end, and quantifiers binding unconditionally:
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/content_factory_copy_verification.py` | 131 |
-| `plans/PR-CF-Routing-Coverage-Scope.md` | 160 |
-| `tests/test_content_factory_copy_verification.py` | 100 |
-| **Total** | **391** |
+| `atlas_brain/services/content_factory_copy_verification.py` | 154 |
+| `plans/PR-CF-Routing-Coverage-Scope.md` | 172 |
+| `tests/test_content_factory_copy_verification.py` | 152 |
+| **Total** | **478** |

@@ -370,6 +370,10 @@ _PREDICATE_FOLLOWERS = frozenset(
 # the report's items, so they continue the anaphor rather than renaming the
 # subject the way "each INVOICE" does.
 _SUBJECT_PRO_FORMS = frozenset({"one", "ones", "them", "those", "these"})
+# A PP after the subject MODIFIES it; the head is what precedes the preposition.
+_SUBJECT_MODIFIER_PREPOSITIONS = frozenset(
+    {"in", "for", "on", "at", "from", "with", "about", "under", "within", "by"}
+)
 _ANAPHORIC_SUBJECTS = _BARE_ANAPHORS | _QUANTIFIER_SUBJECTS
 
 _VERB_INITIAL_ROUTING = frozenset(
@@ -401,9 +405,17 @@ def _subject_binds_to_report(words: "list[str]") -> bool:
     if first not in _QUANTIFIER_SUBJECTS:
         return first == "the" and len(words) > 1 and words[1] in _REPORT_ITEM_NOUNS
 
+    # The grammatical head is the noun the quantifier binds, BEFORE any
+    # post-modifier. Taking the last pre-predicate token instead read "each
+    # ticket in the REPORT" as being about reports and "each invoice for a
+    # TICKET" as being about tickets -- one regressed valid routing, the other
+    # preserved the original false negative (#2189 round 2).
+    rest = words[1:9]
+    if rest and rest[0] == "of":
+        rest = rest[1:]  # partitive: the head sits inside the of-phrase
     head = ""
-    for word in words[1:9]:
-        if word in _PREDICATE_FOLLOWERS:
+    for word in rest:
+        if word in _PREDICATE_FOLLOWERS or word in _SUBJECT_MODIFIER_PREPOSITIONS:
             break
         head = word
     if not head:
@@ -474,6 +486,13 @@ def _clause_tokens(text: str, span: "tuple[int, int]") -> "list[re.Match]":
 
 
 def _negation_scopes(text: str, span: "tuple[int, int]") -> "list[tuple[int, int]]":
+    """Scopes only; see `_clause_negations` for the verbal classification."""
+    return _clause_negations(text, span)[0]
+
+
+def _clause_negations(
+    text: str, span: "tuple[int, int]"
+) -> "tuple[list[tuple[int, int]], bool]":
     """Negation scopes inside one clause as (start, end) character ranges.
 
     Determiner negation covers itself plus at most two following tokens;
@@ -482,6 +501,7 @@ def _negation_scopes(text: str, span: "tuple[int, int]") -> "list[tuple[int, int
     """
     tokens = _clause_tokens(text, span)
     scopes: list[tuple[int, int]] = []
+    has_verbal = False
     for position, token in enumerate(tokens):
         lower = token.group(0).lower()
         if lower == "without":
@@ -514,8 +534,9 @@ def _negation_scopes(text: str, span: "tuple[int, int]") -> "list[tuple[int, int
                 and tokens[position + 1].group(0).lower() in ("only", "just")
             ):
                 continue
+            has_verbal = True
             scopes.append((token.start(), span[1]))
-    return scopes
+    return scopes, has_verbal
 
 
 def _position_negated(
@@ -711,9 +732,6 @@ def _routing_relation_affirmative(
     return True
 
 
-_VERBAL_NEGATOR_RE = re.compile(r"\b(?:not|never|cannot)\b|n't\b", re.I)
-
-
 def _assertion_negated(
     text: str,
     clause_bounds: "tuple[list[int], list[tuple[int, int]]]",
@@ -742,16 +760,19 @@ def _assertion_negated(
     """
     index, span = _span_for(clause_bounds, start)
     if index not in cache:
-        cache[index] = _negation_scopes(text, span)
+        # Computed once per clause -- rescanning per product term is what made
+        # a clause with many terms quadratic.
+        scopes, has_verbal = _clause_negations(text, span)
+        cache[index] = scopes
+        verbal_cache[index] = has_verbal
     for scope_start, scope_end in cache[index]:
         if scope_start < end and start < scope_end:
             return True
-    # Cached PER CLAUSE: scanning the clause for a verbal negator on every
-    # product-term match is what made a clause with many terms quadratic.
+    # The scope model's OWN verbal classification, not a second matcher: it
+    # already treats emphatic "not only/just" as affirmative, and an
+    # independent regex over every `not` disagreed with it (#2189 round 2).
     if index not in verbal_cache:
-        verbal_cache[index] = (
-            _VERBAL_NEGATOR_RE.search(text, span[0], span[1]) is not None
-        )
+        verbal_cache[index] = _clause_negations(text, span)[1]
     return verbal_cache[index]
 
 
