@@ -35,7 +35,9 @@ to create, match, or mutate contacts under a different lifecycle rule.
   relay identity but logs its interaction without that identity, so a retry on
   a later day can duplicate the interaction; and EOM call/SMS adapters prefer
   a partial extracted phone over a usable transport caller number, so a valid
-  inbound lead can now be rejected.
+  inbound lead can now be rejected. The MCP update guard also checks only an
+  explicitly supplied tenant, so a default-EOM lead-stage request can claim a
+  NULL-context legacy row before its lifecycle transition is rejected.
 - Correct fix must touch/change: centralize EOM inbound identity resolution so
   unmatched non-spam web/relay/calls/SMS/legacy estimate bookings become
   `lead/new` and any matching contact is read-only; resolve only active contacts
@@ -57,7 +59,9 @@ to create, match, or mutate contacts under a different lifecycle rule.
   include `TRUNCATE`. Every inbound delivery with a stable Gmail, call, or SMS
   event identifier must pass it to the interaction's recognized anchor metadata;
   adapters must use a full extracted phone when present, otherwise a full
-  authoritative transport number, before EOM admission.
+  authoritative transport number, before EOM admission. A default effective
+  EOM context must reject an MCP lead-stage mutation before the legacy
+  claim-on-write step.
 - Must not change: existing customer identity, non-EOM CRM behavior, the
   current public intake response/CORS/email acknowledgement semantics, Google
   Calendar booking behavior, Customer/Site onboarding, jobs, payments,
@@ -67,7 +71,8 @@ to create, match, or mutate contacts under a different lifecycle rule.
   email-backed partial-phone form intake retain their current behavior. Existing
   interaction type/intent mapping, non-EOM call/SMS phone selection, and
   ordinary daily interaction dedupe without a stable inbound event remain
-  unchanged.
+  unchanged. Default-scoped non-stage MCP edits retain their existing
+  claim-on-write behavior.
 
 ## Scope (this PR)
 
@@ -102,6 +107,8 @@ Max files: 21
 9. For EOM call/SMS only, prefer a full extracted phone; when extraction is
    partial, fall back to a full authoritative transport caller number before
    shared lead admission.
+10. Reject a default-EOM MCP lead-stage request before any NULL-context legacy
+    claim, while preserving claim-on-write for non-stage edits.
 
 ### Review Contract
 
@@ -139,6 +146,10 @@ Max files: 21
   11. An EOM call or SMS with a partial extracted number and a full transport
       caller number links through the full transport number; a full extracted
       number remains preferred and non-EOM selection is untouched.
+  12. With a default EOM context and no explicit tenant argument, a legacy
+      lead-stage update returns the funnel-transition error without calling
+      `claim_contact` or `update_contact`; a non-stage default-scoped edit
+      remains claimable.
 - Reachability proof: FastAPI `POST /api/v1/leads/intake` is exercised via
   TestClient and the injectable intake core; call/SMS use their real
   `_link_to_crm` paths with only CRM/transport boundaries faked.
@@ -247,14 +258,19 @@ non-EOM caller behavior.
   preference; call/SMS use a complete extracted number when available and
   otherwise a complete transport number, while their non-EOM branches retain
   the prior extracted-or-transport selection.
+- `atlas_brain/mcp/crm_server.py` derives the effective default business
+  context before its EOM lead-stage guard. A default-EOM stage request on a
+  NULL-context legacy lead now returns the transition-service error before
+  `_claim_if_legacy`; an ordinary non-stage edit still reaches that existing
+  claim-on-write path.
 - The focused ingress, public-route, and real-PostgreSQL tests prove direct
   partial-phone rejection, trusted concurrent relay replay, committed/nonfatal
   postcommit emission, legacy/case-sensitive dedupe behavior, `TRUNCATE`
-  rejection, interaction event anchors, and partial-extraction transport
-  fallback.
+  rejection, interaction event anchors, partial-extraction transport fallback,
+  and default-EOM pre-claim stage rejection with preserved non-stage claiming.
 
 Contract reconciliation: every changed production path traces to Scope items
-4 through 9 and Review Contract criteria 8 through 11; every new contract
+4 through 10 and Review Contract criteria 8 through 12; every new contract
 requirement has a focused regression proof. No Customer/Site, jobs, calendar,
 payment, first-clean, non-EOM CRM, or public success-envelope behavior is
 touched. No untraced change or unmet contract item remains in this repair.
@@ -296,6 +312,7 @@ This inventory is derived from `DatabaseCRMProvider.create_contact` and
 | Emit `crm.contact_created` after the contact path creates a row. | Preserved for atomic inserts after transaction commit; event-delivery failure is logged and non-fatal. |
 | Validate that lead pipeline fields require a lead contact type. | Preserved: atomic creates are always `lead/new`; generic writes still validate pipeline requests. |
 | Permit a merge whose requested contact type equals the stored type. | Preserved: the EOM lifecycle guard blocks actual type/stage transitions, not a same-value enrichment request. |
+| Claim a NULL-context legacy row from a default-scoped MCP update. | Preserved for ordinary edits. Intentionally interrupted for an effective-default EOM `lead_stage` transition so an invalid lifecycle write cannot acquire tenant ownership before rejection. |
 | Carry `tags` as supplied and leave metadata outside the generic merge list. | Preserved for new atomic leads; matching EOM rows remain unmodified, while generic merge semantics remain unchanged. |
 
 ## Intentional
@@ -350,9 +367,10 @@ ledger while the new resolver is serving: it intentionally fails closed.
 
 - Current-head repair: Python compile check and the exact EOM lead-pipeline
   workflow test-file list passed against a fresh PostgreSQL 16 database:
-  **150 passed**. This includes the schema-isolated sent-email route proof,
+  **151 passed**. This includes the schema-isolated sent-email route proof,
   trusted relay replay, lifecycle-ledger `TRUNCATE` proof, stable interaction
-  anchors, and EOM transport-phone fallback.
+  anchors, EOM transport-phone fallback, and default-EOM pre-claim stage
+  rejection.
 - Passed the unit ratchet with the checked-out and origin/main baselines.
 - Passed maturity sweeps for atlas_brain/mcp, atlas_brain/tools, and
   atlas_brain/storage against their corresponding baselines; the three accepted
@@ -365,6 +383,10 @@ ledger while the new resolver is serving: it intentionally fails closed.
 - Passed the exact maturity ratchets for `atlas_brain/autonomous` and
   `atlas_brain/comms`; the stable event anchors and EOM-only phone fallback add
   no new brittleness above their baselines.
+- Passed the exact `atlas_brain/reasoning`, `atlas_brain/security`, and
+  `atlas_brain/storage` maturity ratchets after folding non-EOM preservation
+  assertions into existing adapter tests; the storage baseline remains at 168
+  with 41 internal mocks, so this repair introduces no new ratchet count.
 - Passed the plan audit, plan-sync check, Python compile check, and diff check.
 
 ## Estimated diff size
@@ -377,19 +399,19 @@ ledger while the new resolver is serving: it intentionally fails closed.
 | `atlas_brain/autonomous/tasks/gmail_digest.py` | 27 |
 | `atlas_brain/comms/call_intelligence.py` | 47 |
 | `atlas_brain/comms/sms_intelligence.py` | 47 |
-| `atlas_brain/mcp/crm_server.py` | 15 |
+| `atlas_brain/mcp/crm_server.py` | 18 |
 | `atlas_brain/services/crm_provider.py` | 346 |
 | `atlas_brain/services/eom_lead_ingress.py` | 137 |
 | `atlas_brain/storage/migrations/351_eom_lead_lifecycle_events.sql` | 98 |
 | `atlas_brain/tools/scheduling.py` | 28 |
-| `plans/PR-EOM-Funnel-Ingress.md` | 395 |
+| `plans/PR-EOM-Funnel-Ingress.md` | 417 |
 | `tests/maturity_sweep/baseline_atlas_brain_mcp.json` | 6 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 4 |
 | `tests/maturity_sweep/baseline_atlas_brain_tools.json` | 4 |
-| `tests/test_crm_read_scoping.py` | 8 |
-| `tests/test_eom_lead_ingress.py` | 460 |
+| `tests/test_crm_read_scoping.py` | 41 |
+| `tests/test_eom_lead_ingress.py` | 442 |
 | `tests/test_eom_lead_pipeline_integration.py` | 495 |
 | `tests/test_eom_sent_email_tenant_scope.py` | 1 |
 | `tests/test_leads_intake.py` | 56 |
 | `tests/test_tenant_stamping.py` | 31 |
-| **Total** | **2367** |
+| **Total** | **2407** |

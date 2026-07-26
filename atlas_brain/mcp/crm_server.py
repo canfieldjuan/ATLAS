@@ -665,9 +665,12 @@ async def update_contact(
         if eom_stage_change_requested:
             from ..services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
+            effective_business_context_id = (
+                business_context_id or _default_context()
+            )
             if (
                 existing.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID
-                or business_context_id == EOM_BUSINESS_CONTEXT_ID
+                or effective_business_context_id == EOM_BUSINESS_CONTEXT_ID
             ):
                 return json.dumps({
                     "success": False,

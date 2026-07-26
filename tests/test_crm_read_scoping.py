@@ -277,6 +277,39 @@ async def test_update_lead_pipeline_rejects_non_lead_and_foreign(
 
 
 @pytest.mark.asyncio
+async def test_default_eom_stage_rejection_precedes_legacy_claim(default_ctx, monkeypatch):
+    provider = _provider_mock(
+        monkeypatch,
+        get={**LEGACY_NULL, "contact_type": "lead", "lead_stage": "new"},
+    )
+
+    out = json.loads(await crm_srv.update_contact(UUID, lead_stage="qualified"))
+
+    assert out == {
+        "success": False,
+        "error": "EOM lead stages can only change through the funnel transition service",
+    }
+    provider.claim_contact.assert_not_awaited()
+    provider.update_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_default_eom_non_stage_edit_keeps_legacy_claim_on_write(default_ctx, monkeypatch):
+    provider = _provider_mock(
+        monkeypatch,
+        get={**LEGACY_NULL, "contact_type": "lead", "lead_stage": "new"},
+    )
+
+    out = json.loads(await crm_srv.update_contact(UUID, full_name="Updated Legacy"))
+
+    assert out["success"] is True
+    provider.claim_contact.assert_awaited_once_with(UUID, EOM)
+    provider.update_contact.assert_awaited_once_with(
+        UUID, {"full_name": "Updated Legacy"}
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_lead_pipeline_clear_and_validation(default_ctx, monkeypatch):
     provider = _provider_mock(
         monkeypatch,

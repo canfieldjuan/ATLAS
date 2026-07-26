@@ -218,6 +218,16 @@ async def test_real_call_link_uses_eom_lead_resolver(monkeypatch):
     interaction_kwargs = crm.log_interaction.await_args.kwargs
     assert interaction_kwargs["intent"] == "estimate_request"
     assert interaction_kwargs["metadata"] == {"crm_event_id": "call:call-1"}
+    await call_intelligence._link_to_crm(
+        repo,
+        uuid4(),
+        "call-2",
+        "217-555-0199",
+        "another_context",
+        {"customer_phone": "555-0100"},
+        "Call summary",
+    )
+    assert crm.find_or_create_contact.await_args.kwargs["phone"] == "555-0100"
 
 
 @pytest.mark.asyncio
@@ -251,34 +261,6 @@ async def test_real_sms_link_uses_eom_lead_resolver(monkeypatch):
     interaction_kwargs = crm.log_interaction.await_args.kwargs
     assert interaction_kwargs["intent"] == "estimate_request"
     assert interaction_kwargs["metadata"] == {"crm_event_id": f"sms:{sms_id}"}
-
-
-@pytest.mark.asyncio
-async def test_non_eom_call_and_sms_keep_extracted_phone_priority(monkeypatch):
-    from atlas_brain.comms import call_intelligence, sms_intelligence
-    import atlas_brain.services.crm_provider as crm_provider
-    import atlas_brain.storage.database as database
-
-    pool = MagicMock(is_initialized=True)
-    repo = MagicMock()
-    repo.link_contact = AsyncMock()
-    monkeypatch.setattr(database, "get_db_pool", lambda: pool)
-
-    call_crm = _crm(created={"id": "other-call", "_was_created": True})
-    monkeypatch.setattr(crm_provider, "get_crm_provider", lambda: call_crm)
-    await call_intelligence._link_to_crm(
-        repo,
-        uuid4(),
-        "call-1",
-        "217-555-0199",
-        "another_context",
-        {"customer_phone": "555-0100"},
-        "Call summary",
-    )
-    assert call_crm.find_or_create_contact.await_args.kwargs["phone"] == "555-0100"
-
-    sms_crm = _crm(created={"id": "other-sms", "_was_created": True})
-    monkeypatch.setattr(crm_provider, "get_crm_provider", lambda: sms_crm)
     await sms_intelligence._link_to_crm(
         repo,
         uuid4(),
@@ -287,7 +269,7 @@ async def test_non_eom_call_and_sms_keep_extracted_phone_priority(monkeypatch):
         {"customer_phone": "555-0100"},
         "SMS summary",
     )
-    assert sms_crm.find_or_create_contact.await_args.kwargs["phone"] == "555-0100"
+    assert crm.find_or_create_contact.await_args.kwargs["phone"] == "555-0100"
 
 
 @pytest.mark.asyncio
