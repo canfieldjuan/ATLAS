@@ -2,8 +2,11 @@
 
 > The reviewer's job is **not** to "review the code." It is to **disposition the
 > review matrix: every acceptance criterion in the PR's Review Contract, and
-> every rule below that the changed paths trigger.** Every review finding cites
-> a rule ID (R1-R14). This pack is the checklist the reviewer runs; the
+> every rule below.** Every rule is in the matrix -- the path-trigger table sets
+> how DEEPLY a rule is probed, never whether it appears -- so a rule reaches a
+> verdict of pass / fail / not-verified / n-a, and `n-a` carries a reason.
+> Every review finding cites a rule ID (R1-R14). This pack is the checklist the
+> reviewer runs; the
 > recurring-lapse list in `docs/SESSION_BOOTSTRAP.md` is the same checklist
 > front-loaded into the builder so the repeats stop.
 >
@@ -289,22 +292,39 @@ that matrix:
 
 1. **Each acceptance criterion** in the Review Contract: met / not met /
    could-not-determine, with `file:line`.
-2. **Each rule the changed paths trigger** (path table above): pass / fail /
-   not-verified.
+2. **Every rule, R1-R14**: pass / fail / not-verified / n-a-with-reason. The
+   path-trigger table sets how deeply each is probed, **not which appear**. A
+   behavior change under a path the table does not list still owes an R2
+   verdict; deriving matrix membership from the table would let exactly that
+   PR reach LGTM without anyone asking whether the new behavior has tests.
 3. **What was not verified**, listed with the reason.
 
-That is the whole standard. A dispositioned matrix with items honestly marked
-not-verified is a complete review; an exhaustive hunt with no matrix is not.
-Completeness is never "no further case can be found" -- on an open surface no
-such point exists, so a reviewer holding that standard reports forever.
+That is the whole standard for *stopping*. Completeness is never "no further
+case can be found" -- on an open surface no such point exists, so a reviewer
+holding that standard reports forever.
 
-**Discharge.** A triggered rule marked *pass* is discharged for the reviewed
-head. A later round may re-open it, but only by stating **why the earlier
-discharge was wrong** -- the condition that was never actually met -- not by
-presenting one more instance of a decision already reported. Re-opening is a
-real move and sometimes the right one; it just has to be argued, because a
-discharge that keeps being silently overturned is evidence the rule was never
-dischargeable as scoped, which is a finding in itself.
+**Complete is not the same as approved.** A matrix with honest `not-verified`
+or `could-not-determine` entries is a complete review -- the reviewer may stop
+-- but it is **not** an LGTM. LGTM requires every rule to be `pass` or a
+reasoned `n-a` (see the ladder above); an unresolved entry is an open question,
+so the verdict is *needs verification*, and `scripts/set_claude_review_status.py`
+must not be given `success` for it. Conflating the two would let a review that
+verified almost nothing produce a green merge gate, which is the opposite of
+what a stopping rule is for.
+
+**Discharge is per head SHA.** A rule marked *pass* is discharged for **that
+head only**. A new head is new code: every rule re-opens on it freely, with no
+argument owed, because a defect the builder just introduced was not missed
+earlier -- it did not exist earlier. Requiring the reviewer to disown a
+previously-correct pass before reporting it would suppress exactly the
+regressions a re-review is for.
+
+The argument requirement applies only to re-opening a rule **on the same head**
+-- the reviewer revisiting their own verdict on unchanged code. There, state
+why the earlier discharge was wrong: the condition that was never actually met,
+not one more instance of a decision already reported. A discharge repeatedly
+overturned on unchanged code is evidence the rule was never dischargeable as
+scoped, which is a finding in itself.
 
 **Report the class, not the instance.** R13 obliges the *builder* to fix the
 class rather than the cited example. The same duty binds the *reviewer*: when

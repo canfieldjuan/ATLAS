@@ -36,8 +36,10 @@ R1–R14) and the PR's Review Contract. Review the same way the Reviewer session
   actually does from the code.
 - Every finding cites a rule ID (R1–R14) and `file:line`. Blockers must cite
   `file:line`. Classify each finding as **BLOCKER / MAJOR / NIT / LGTM** per the pack.
-- Check the PR's `### Review Contract`: does the diff meet its acceptance criteria,
-  and which rules do the changed paths trigger (the path-to-rule table in the pack)?
+- Check the PR's `### Review Contract`: does the diff meet its acceptance criteria?
+  Then disposition EVERY rule R1-R14 -- the path-to-rule table in the pack sets how
+  deeply each is probed, not which appear, so a rule the table does not trigger is
+  still recorded (Pass, or N-A with a reason).
 - Hunt the rule categories: requirements match (R1), test evidence (R2),
   security/authorization (R3), data & migration safety (R4), backward compatibility
   (R5), error handling & observability (R6), performance (R7), concurrency &
@@ -274,11 +276,14 @@ Intentional / Deferred / Verification -- matches AGENTS.md framework.
 Slice phase is named and matches the PR's scope. Parked hardening is
 named in Deferred or explicitly marked none.
 
-**Rule results (triggered rules plus R14, see docs/REVIEWER_RULES.md):**
-- R1 Requirements match: Pass/Fail/N-A
-- R2 Test evidence: Pass/Fail/N-A
-- R3 Security/auth ... R14 Codebase verification: Pass/Fail/N-A
-(List the rules the changed paths trigger, plus R14; cite file:line on any Fail.)
+**Rule results (EVERY rule R1-R14, see docs/REVIEWER_RULES.md):**
+- R1 Requirements match: Pass/Fail/Not-Verified/N-A
+- R2 Test evidence: Pass/Fail/Not-Verified/N-A
+- R3 Security/auth ... R14 Codebase verification: Pass/Fail/Not-Verified/N-A
+(List every rule R1-R14. The path-trigger table sets probe DEPTH, not which
+rules appear -- a rule the table does not trigger is still recorded, as Pass or
+as N-A with a reason. Cite file:line on any Fail. Not-Verified ends the search
+but blocks LGTM.)
 
 **boundary-probe:** <N-A, or what guard-shaped probe applied + result. Required
 before LGTM on guards, validators, caps, classifiers, gates, sanitizers,
@@ -1189,11 +1194,19 @@ the **allowed-files set**, and a **max-files budget**.
 
 ## 4. Reviewer workflow
 
-The reviewer's job is **not** "review the code" -- it is to **prove whether
-the PR satisfies its Review Contract and violates none of the rules in
-`docs/REVIEWER_RULES.md`.** Every finding cites a rule ID (R1-R14) and maps to
-a verdict level (BLOCKER / MAJOR / NIT). The rule matrix and AI reconciliation
-go in the §2a template.
+The reviewer's job is **not** "review the code" -- it is to **disposition the
+review matrix: every acceptance criterion in the PR's Review Contract, and every
+rule in `docs/REVIEWER_RULES.md`.** Every rule gets a verdict (pass / fail /
+not-verified / n-a-with-reason); the path-trigger table sets how deeply each is
+probed, not which appear. Every finding cites a rule ID (R1-R14) and maps to a
+verdict level (BLOCKER / MAJOR / NIT). The rule matrix and AI reconciliation go
+in the §2a template.
+
+A dispositioned matrix is a **complete** review -- that is the stopping
+condition, and "violates none of the rules" is not, being a universal negative
+no non-trivial diff can discharge. Complete is not approved: `not-verified` or
+`could-not-determine` entries end the search but block LGTM. See **Review
+completion** in the pack.
 
 ### 4a. Independent verification
 
@@ -1230,8 +1243,10 @@ reviewer should:
 4. Sweep for missed call sites with grep patterns more reliable than
    the PR's claim (multi-line constructions, kwargs split across
    lines, etc.).
-5. Walk the rules triggered by the changed paths (per the trigger table in
-   `docs/REVIEWER_RULES.md`) and record Pass/Fail/N-A for each.
+5. Walk EVERY rule R1-R14 and record Pass/Fail/Not-Verified/N-A for each. The
+   trigger table in `docs/REVIEWER_RULES.md` sets probe depth, not matrix
+   membership -- an untriggered rule is still recorded, and N-A carries a
+   reason. A Not-Verified entry ends the search but blocks LGTM.
 6. Apply R14: every claim used in the verdict must be backed by checked-out
    code, a caller/test/artifact spot-check, or a "not verified" note with the
    reason. **No LGTM from the PR story alone.**
@@ -1276,9 +1291,11 @@ Before LGTM, the reviewer confirms:
 - [ ] Plan doc has all 7 required sections, including the `### Review
       Contract` block in Scope (acceptance criteria, affected surfaces, risk
       areas, triggered rule IDs).
-- [ ] Every rule triggered by the changed paths (`docs/REVIEWER_RULES.md`)
-      is recorded Pass/Fail/N-A, and every Fail at BLOCKER level cites
-      file:line.
+- [ ] EVERY rule R1-R14 (`docs/REVIEWER_RULES.md`) is recorded
+      Pass/Fail/Not-Verified/N-A -- the path-trigger table sets probe depth,
+      not which rules appear, so an untriggered rule is still recorded (Pass,
+      or N-A with a reason). Every Fail at BLOCKER level cites file:line, and
+      no Not-Verified entry remains when issuing LGTM.
 - [ ] R14 is recorded Pass/Fail/N-A. The verdict names the reviewed head SHA,
       changed code inspected, caller/test/artifact spot-checks, and any claims
       not verified. No LGTM from PR/body/builder claims alone.
@@ -1469,8 +1486,11 @@ defines:
 - Anti-patterns that should never appear in a builder PR.
 
 Read `docs/REVIEWER_RULES.md` before your first review. Your job is
-not "review the code" -- it is to prove the PR satisfies its Review
-Contract and violates none of R1-R14. Cite a rule ID on every finding.
+not "review the code" -- it is to disposition the review matrix: every
+acceptance criterion in the Review Contract, and every rule R1-R14, each
+pass / fail / not-verified / n-a-with-reason. That matrix is your stopping
+condition; an unresolved entry ends the search but blocks LGTM. Cite a
+rule ID on every finding.
 
 Read AUDITOR_PROMPT.md for the cross-cutting audit checks
 (canonical / integration / scope / debt). Apply both lenses.
@@ -1495,8 +1515,10 @@ For each PR you review:
 4. Sweep for missed call sites with grep patterns more reliable
    than the PR's claim (multi-line constructions, kwargs split
    across lines).
-5. Record Pass/Fail/N-A for each rule the changed paths trigger and for R14
-   (`docs/REVIEWER_RULES.md`); cite file:line on any Fail.
+5. Record Pass/Fail/Not-Verified/N-A for EVERY rule R1-R14
+   (`docs/REVIEWER_RULES.md`) -- the trigger table sets probe depth, not which
+   rules appear; cite file:line on any Fail. Do not LGTM with a Not-Verified
+   entry outstanding.
 6. Reconcile AI findings: do not LGTM until every Codex/Copilot
    finding is fixed or explicitly waived with a reason in the PR body.
 7. Confirm CI is green (extracted-checks x2 + Vercel) before
