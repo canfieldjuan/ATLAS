@@ -1503,3 +1503,56 @@ def test_sentence_definition_is_shared_not_duplicated():
         "",
     ]:
         assert _sentence_structure(text)[1] == sentence_spans(text), text
+
+
+# --- #2219 review: invisible-only bodies admit no locator ----------------
+
+_INVISIBLE_BODIES = [
+    "\u200b",          # zero width space
+    "\ufeff",          # BOM / zero width no-break space
+    "\u034f",          # combining grapheme joiner (category Mn)
+    "\u00ad",          # soft hyphen
+    "  \u200b  ",      # padded with ordinary whitespace
+    "\u200b\u200c\ufeff",
+]
+
+
+@pytest.mark.parametrize("body", _INVISIBLE_BODIES)
+def test_invisible_only_body_admits_no_locator(body):
+    """`str.strip()` leaves a zero-width character intact, so an
+    invisible-only body counted as one sentence and admitted `sentence 1`
+    even though it renders blank -- fail-open on exactly the input class
+    #2201 closed elsewhere."""
+    from atlas_brain.schemas.content_factory import EditorialAuditV2, sentence_count
+    from pydantic import ValidationError
+
+    assert sentence_count(body) == 0
+    with pytest.raises(ValidationError, match="locator names sentence"):
+        EditorialAuditV2.model_validate(
+            {
+                "schema": "editorial_audit.v2",
+                "project_id": "p",
+                "edited_body_markdown": body,
+                "advisory_warnings": ["unqualified-answer-claim: sentence 1"],
+            }
+        )
+
+
+def test_invisible_span_between_sentences_does_not_undercount():
+    """The other direction: an invisible span in the MIDDLE must not shrink
+    the bound, or a legitimate trailing locator would be rejected. This is
+    why the bound is the last content INDEX, not the count of content spans.
+    """
+    from atlas_brain.schemas.content_factory import EditorialAuditV2, sentence_count
+
+    body = "One.\n\n\u200b\n\nThree."
+    assert sentence_count(body) == 3
+    audit = EditorialAuditV2.model_validate(
+        {
+            "schema": "editorial_audit.v2",
+            "project_id": "p",
+            "edited_body_markdown": body,
+            "advisory_warnings": ["unqualified-answer-claim: sentence 3"],
+        }
+    )
+    assert audit.advisory_warnings

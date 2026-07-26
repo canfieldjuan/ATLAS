@@ -205,7 +205,12 @@ def sentence_count(text: str) -> int:
     """
     last = 0
     for index, (start, end) in enumerate(sentence_spans(text), start=1):
-        if text[start:end].strip():
+        # VISIBLE content, not merely non-whitespace. `str.strip()` leaves a
+        # zero-width character intact, so a body of only U+200B/U+FEFF/U+034F
+        # counted as one sentence and admitted `sentence 1` against a body that
+        # renders blank -- the same open-input hole #2201 closed elsewhere, and
+        # a contradiction of "a blank body admits no locator".
+        if _has_visible_content(text[start:end]):
             last = index
     return last
 
@@ -306,7 +311,10 @@ def _validate_advisory_warnings(warnings: "list[str]", body: str = "") -> None:
             raise ValueError(
                 f"advisory warning locator names sentence {locator}, but the "
                 f"audited body has {limit}; a locator must reference the body "
-                "it was computed from"
+                "it was computed from. Repair a pre-existing artifact by "
+                "supplying the edited_body_markdown it was audited against, "
+                "or by dropping the locator warning -- without a body it "
+                "names nothing"
             )
 
 

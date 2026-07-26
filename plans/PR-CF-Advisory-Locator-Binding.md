@@ -156,6 +156,41 @@ emit, which is exactly the property criterion 5 checks.
   probe asserted that `sentence 1000000` is admissible against no body. That IS
   the reported defect, so the probe now checks the real boundary instead.
 
+## Deliberate exception to the v2/v3 freeze
+
+This slice TIGHTENS validation on frozen contracts, which the freeze note
+forbids in general. Recorded here as a decision with its evidence rather than
+made silently.
+
+**Why a new schema version does not solve it.** Putting the bound on a v4 while
+leaving v2/v3 admissible leaves the P1 open for exactly the writer it was filed
+against: a direct v2 writer could still persist a phone number as a locator. A
+new version relocates the hole instead of closing it.
+
+**Why the freeze's stated harm does not occur here.** The freeze exists because
+adding a FIELD makes new artifacts unreadable to an old reader -- `extra=forbid`
+rejects the unknown key, so a rollback loses data (that is the #2192 round-8
+case). This change adds no field. Artifacts written after it remain readable
+byte-for-byte by pre-change code, so the rollback direction is unaffected. Only
+the reverse narrows: an artifact that was ALREADY semantically broken -- a
+locator naming a sentence of a body that does not exist -- stops validating.
+
+**What is actually invalidated.** A payload carrying a locator warning with a
+blank or absent `edited_body_markdown`. That is not incidental breakage; it is
+the P1 in its most extreme form, since a locator with no body is a raw producer
+value with no referent at all. The runner cannot produce it: it clears
+`advisory_warnings` whenever the edited body is blank.
+
+**Evidence.** The local git-backed job store (`~/content-factory/jobs`, 3 jobs
+/ 9 artifacts) contains zero editorial audits carrying a locator warning, so no
+persisted artifact is invalidated in practice. This bounds the local blast
+radius; it does not prove none exists anywhere.
+
+**Migration path**, as the review asked for, and now stated in the validation
+error itself so an operator hitting it gets the repair: supply the
+`edited_body_markdown` the artifact was audited against, or drop the locator
+warning -- without a body it names nothing.
+
 ## Deferred
 
 - #2189 findings 2 and 3 (product-term negation scope, quantified routing
@@ -192,8 +227,8 @@ Detection proven by injection, per AGENTS.md 3i. Neutralizing both fixes
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 114 |
+| `atlas_brain/schemas/content_factory.py` | 122 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 61 |
-| `plans/PR-CF-Advisory-Locator-Binding.md` | 199 |
-| `tests/test_content_factory_copy_verification.py` | 186 |
-| **Total** | **560** |
+| `plans/PR-CF-Advisory-Locator-Binding.md` | 234 |
+| `tests/test_content_factory_copy_verification.py` | 239 |
+| **Total** | **656** |
