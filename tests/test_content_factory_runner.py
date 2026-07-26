@@ -1394,6 +1394,15 @@ def test_job_lock_identity_includes_the_root(tmp_path):
             assert not _job_lock_is_free("job-root", first)
             assert not _job_lock_is_free("job-root", second)
 
+        # Unwind. Asserting only "both held while nested" cannot distinguish a
+        # correct release from one that never happened -- a leaked inner lock
+        # looks identical inside the block. Leaving the inner scope must free
+        # the inner root and leave the outer one held.
+        assert _job_lock_is_free("job-root", second)
+        assert not _job_lock_is_free("job-root", first)
+
+    assert _job_lock_is_free("job-root", first)
+
 
 # --- round 9: vanity grammar both directions and committed-state atomicity ---
 
