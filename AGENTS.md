@@ -1260,6 +1260,18 @@ the absent-value path, and the default-session/default-context path. Any state
 claim, write, enqueue, mutation, or external side effect must sit after the
 admission decision that can still reject the request.
 
+### 3k.7. Enforced-set verification
+
+Enforced-set verification: the plan's Verification section must cite the
+CI-equivalent command copied from the enforcing workflow, not a hand-picked test
+subset.
+
+When a workflow enforces the touched surface, copy that workflow's command into
+a repo script or cite the existing mirror script, then run that command locally.
+If no workflow enforces the touched surface, say so in Verification and name the
+closest local command that was run. A focused test can be listed as extra
+evidence, never as the replacement for the enforced set.
+
 ### 3l. PR fix mode (constrain the fix loop)
 
 A **fix loop** -- iterating on red CI or review comments on an already-open PR

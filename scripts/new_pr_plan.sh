@@ -221,6 +221,10 @@ Parked hardening: none.
 ## Verification
 
 - Pending before push: TODO.
+- CI-equivalent command copied from enforcing workflow: TODO/N/A.
+- Copied from enforcing workflow: TODO/N/A.
+- No enforcing workflow applies: TODO/N/A.
+- Closest local command: TODO/N/A.
 
 ## Estimated diff size
 
