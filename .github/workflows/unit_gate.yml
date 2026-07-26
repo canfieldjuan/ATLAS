@@ -62,8 +62,42 @@ jobs:
           git show "origin/${BASE_REF}:tests/unit_gate_baseline.txt" \
             > /tmp/base_baseline.txt 2>/dev/null || : > /tmp/base_baseline.txt
 
+      - name: Select impacted tests
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${BASE_REF}"
+          python scripts/select_impacted_tests.py \
+            --base "origin/${BASE_REF}" > /tmp/selected.txt
+          echo "--- selection ---"
+          cat /tmp/selected.txt
+
       - name: Unit gate (ratchet against baseline)
         run: |
-          python scripts/check_unit_gate.py \
-            --baseline tests/unit_gate_baseline.txt \
-            --base-baseline /tmp/base_baseline.txt
+          set -euo pipefail
+          if [ "$(cat /tmp/selected.txt)" = "FULL" ]; then
+            echo "running the FULL suite (selection escalated)"
+            python scripts/check_unit_gate.py \
+              --baseline tests/unit_gate_baseline.txt \
+              --base-baseline /tmp/base_baseline.txt
+          elif [ ! -s /tmp/selected.txt ]; then
+            # Every changed file mapped, none is reachable from any test.
+            # The growth guard still runs -- it is a text comparison and must
+            # not be skippable by touching only non-Python files.
+            echo "no test is reachable from the changed files; growth guard only"
+            python scripts/check_unit_gate.py \
+              --baseline tests/unit_gate_baseline.txt \
+              --base-baseline /tmp/base_baseline.txt \
+              --report-file /dev/null
+          else
+            echo "running $(wc -l < /tmp/selected.txt) impacted test file(s)"
+            python scripts/check_unit_gate.py \
+              --baseline tests/unit_gate_baseline.txt \
+              --base-baseline /tmp/base_baseline.txt \
+              --selected-files /tmp/selected.txt \
+              --pytest-args $(tr '\n' ' ' < /tmp/selected.txt) \
+                -m "not integration and not e2e" \
+                --continue-on-collection-errors -rfE --tb=no -q \
+                -p no:cacheprovider
+          fi

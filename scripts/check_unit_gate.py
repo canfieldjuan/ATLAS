@@ -93,6 +93,24 @@ def added_baseline_entries(pr_baseline: set[str], base_baseline: set[str]) -> li
     return sorted(pr_baseline - base_baseline)
 
 
+def node_file(node_id: str) -> str:
+    """The test-file part of a pytest node id (``tests/t.py::k[x::y]`` -> ``tests/t.py``)."""
+    return node_id.split("::", 1)[0]
+
+
+def restrict_baseline(baseline: set[str], selected_files: set[str]) -> set[str]:
+    """Baseline entries belonging to ``selected_files``.
+
+    compare() demands the failing set EXACTLY equal the baseline: an entry that
+    no longer fails is reported as a stale ratchet entry and fails the gate. On
+    a scoped run the unselected baseline entries were never executed, so without
+    this they would every one look "newly passing" and every scoped run would
+    fail. Restricting the baseline to what actually ran keeps both directions of
+    the ratchet meaningful -- regressions AND stale entries -- within that scope.
+    """
+    return {node for node in baseline if node_file(node) in selected_files}
+
+
 def ensure_pytest_ran(returncode: int) -> None:
     """Raise when pytest did not finish as a normal pass/fail run.
 
@@ -153,9 +171,20 @@ def main() -> int:
                     help="Gate a pre-captured pytest summary instead of running pytest.")
     ap.add_argument("--update-baseline", action="store_true",
                     help="Overwrite the baseline with the current failing set and exit 0.")
+    ap.add_argument("--selected-files", type=Path,
+                    help="File listing the test paths this run executed (scoped "
+                         "run). The baseline is restricted to entries in those "
+                         "files, since unselected entries never ran and would "
+                         "otherwise read as newly-passing.")
     ap.add_argument("--pytest-args", nargs=argparse.REMAINDER,
                     help="Override the default pytest args (everything after this flag).")
     args = ap.parse_args()
+
+    if args.selected_files is not None and args.update_baseline:
+        print("--selected-files cannot be combined with --update-baseline: a "
+              "scoped run must never rewrite the repo-wide baseline",
+              file=sys.stderr)
+        return 2
 
     if not args.baseline.exists() and not args.update_baseline:
         print(f"baseline not found: {args.baseline}", file=sys.stderr)
@@ -191,11 +220,34 @@ def main() -> int:
         return 0
 
     baseline = load_baseline(args.baseline)
+    scope_note = ""
+    if args.selected_files is not None:
+        selected = {
+            line.strip()
+            for line in args.selected_files.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        full_size = len(baseline)
+        baseline = restrict_baseline(baseline, selected)
+        # Any failing node from a file we did not select means pytest ran
+        # something the selector did not claim. Comparing that against a
+        # baseline restricted to the selection would score it as a regression
+        # on evidence the run was never scoped to produce, so fail loudly
+        # rather than guess.
+        stray = sorted({node for node in failing if node_file(node) not in selected})
+        if stray:
+            print(f"unit gate: {len(stray)} failing node(s) outside the selected "
+                  f"files; scope is inconsistent with the run:", file=sys.stderr)
+            for node in stray[:20]:
+                print(f"  {node}", file=sys.stderr)
+            return 2
+        scope_note = (f" [scoped: {len(selected)} test file(s); "
+                      f"baseline {len(baseline)}/{full_size}]")
     regressions, fixed = compare(failing, baseline)
 
     print(f"unit gate: {len(failing)} failing/errored node(s); "
           f"baseline={len(baseline)}; regressions={len(regressions)}; "
-          f"newly-passing={len(fixed)}")
+          f"newly-passing={len(fixed)}{scope_note}")
     # The baseline must EXACTLY equal the current failing set: no un-baselined
     # failure (regression), AND no stale entry that now passes. A stale entry
     # is a live allow-list hole -- a later PR could reintroduce that failure and
