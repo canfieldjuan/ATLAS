@@ -31,7 +31,11 @@ to create, match, or mutate contacts under a different lifecycle rule.
   seam treated any caller `source_ref` as a unique replay key, that attribution
   dedupe changed legacy empty-key bytes and lowercased opaque identifiers, and
   that the lifecycle ledger's row trigger did not defend against table
-  truncation.
+  truncation. The current head also resolves an inbound Gmail delivery by its
+  relay identity but logs its interaction without that identity, so a retry on
+  a later day can duplicate the interaction; and EOM call/SMS adapters prefer
+  a partial extracted phone over a usable transport caller number, so a valid
+  inbound lead can now be rejected.
 - Correct fix must touch/change: centralize EOM inbound identity resolution so
   unmatched non-spam web/relay/calls/SMS/legacy estimate bookings become
   `lead/new` and any matching contact is read-only; resolve only active contacts
@@ -50,14 +54,20 @@ to create, match, or mutate contacts under a different lifecycle rule.
   not caller metadata; direct public intake without email or a full phone must
   be rejected before CRM/email side effects. Attribution must retain the exact
   legacy no-attribution key and opaque value bytes. Ledger immutability must
-  include `TRUNCATE`.
+  include `TRUNCATE`. Every inbound delivery with a stable Gmail, call, or SMS
+  event identifier must pass it to the interaction's recognized anchor metadata;
+  adapters must use a full extracted phone when present, otherwise a full
+  authoritative transport number, before EOM admission.
 - Must not change: existing customer identity, non-EOM CRM behavior, the
   current public intake response/CORS/email acknowledgement semantics, Google
   Calendar booking behavior, Customer/Site onboarding, jobs, payments,
   first-clean/card-on-file work, and adjacent PRs #2195/#2200. Existing
   idempotent generic enrichment of an EOM contact whose type/stage is already
   unchanged must continue to work. Full-phone-only form intake and
-  email-backed partial-phone form intake retain their current behavior.
+  email-backed partial-phone form intake retain their current behavior. Existing
+  interaction type/intent mapping, non-EOM call/SMS phone selection, and
+  ordinary daily interaction dedupe without a stable inbound event remain
+  unchanged.
 
 ## Scope (this PR)
 
@@ -87,6 +97,11 @@ Max files: 21
    exact legacy key basis when attribution is absent, retaining opaque value
    case when it is present, and rejecting lifecycle-ledger `TRUNCATE` in the
    same immutable policy as row mutation.
+8. Carry Gmail, call, and SMS delivery identifiers into recognized interaction
+   anchor metadata so a retry does not depend on the UTC-day fallback key.
+9. For EOM call/SMS only, prefer a full extracted phone; when extraction is
+   partial, fall back to a full authoritative transport caller number before
+   shared lead admission.
 
 ### Review Contract
 
@@ -118,6 +133,12 @@ Max files: 21
   9. An interaction with no attribution retains its predecessor dedupe key;
      opaque attribution values remain case-sensitive; and migration 351
      rejects ledger `TRUNCATE` in PostgreSQL.
+  10. Reprocessing the same Gmail, call, or SMS delivery supplies the same
+      recognized interaction anchor metadata, independent of its processing
+      date; adapter tests settle the boundary.
+  11. An EOM call or SMS with a partial extracted number and a full transport
+      caller number links through the full transport number; a full extracted
+      number remains preferred and non-EOM selection is untouched.
 - Reachability proof: FastAPI `POST /api/v1/leads/intake` is exercised via
   TestClient and the injectable intake core; call/SMS use their real
   `_link_to_crm` paths with only CRM/transport boundaries faked.
@@ -188,6 +209,13 @@ Interaction dedupe keeps the predecessor byte basis for no-attribution records
 and appends an exact submitted attribution snapshot only when present. The
 ledger's immutable policy covers table truncation as well as row mutation.
 
+Every inbound Gmail, call, and SMS delivery that has a stable provider event ID
+writes that ID into recognized interaction-anchor metadata, so contact replay
+and interaction replay have the same durability boundary. For EOM call/SMS,
+phone extraction is enrichment: a full extracted number wins, a partial one
+falls back to the full transport caller number, and neither rule changes
+non-EOM caller behavior.
+
 ### Cold diff reconstruction: current-head repair
 
 - `atlas_brain/api/leads.py` preserves the existing seven-digit validation for
@@ -210,16 +238,26 @@ ledger's immutable policy covers table truncation as well as row mutation.
 - `atlas_brain/storage/migrations/351_eom_lead_lifecycle_events.sql` adds the
   statement-level `BEFORE TRUNCATE` ledger guard alongside the existing row
   mutation guard.
+- `atlas_brain/autonomous/tasks/gmail_digest.py` writes each stable Gmail relay
+  ID to `gmail_message_id` interaction metadata. `atlas_brain/comms/call_intelligence.py`
+  and `atlas_brain/comms/sms_intelligence.py` write their stable provider IDs
+  to `crm_event_id`, so all three adapters select the established anchor-key
+  dedupe branch on retry.
+- `atlas_brain/services/eom_lead_ingress.py` centralizes EOM-only full-phone
+  preference; call/SMS use a complete extracted number when available and
+  otherwise a complete transport number, while their non-EOM branches retain
+  the prior extracted-or-transport selection.
 - The focused ingress, public-route, and real-PostgreSQL tests prove direct
   partial-phone rejection, trusted concurrent relay replay, committed/nonfatal
-  postcommit emission, legacy/case-sensitive dedupe behavior, and `TRUNCATE`
-  rejection.
+  postcommit emission, legacy/case-sensitive dedupe behavior, `TRUNCATE`
+  rejection, interaction event anchors, and partial-extraction transport
+  fallback.
 
 Contract reconciliation: every changed production path traces to Scope items
-4 through 7 and Review Contract criteria 8 or 9; every new contract requirement
-has a focused regression proof. No Customer/Site, jobs, calendar, payment,
-first-clean, non-EOM CRM, or public success-envelope behavior is touched. No
-untraced change or unmet contract item remains in this repair.
+4 through 9 and Review Contract criteria 8 through 11; every new contract
+requirement has a focused regression proof. No Customer/Site, jobs, calendar,
+payment, first-clean, non-EOM CRM, or public success-envelope behavior is
+touched. No untraced change or unmet contract item remains in this repair.
 
 ### Decision-seam analysis: fix
 
@@ -252,6 +290,8 @@ This inventory is derived from `DatabaseCRMProvider.create_contact` and
 | Treat a sub-10-digit phone as an ordinary raw lookup input. | Intentionally changed: it is not an asserted identity in EOM ingress; email or a stable relay-event identity must anchor the request. |
 | Admit a name-only relay submission. | Preserved only with an explicit trusted relay-event key; otherwise rejected before insert rather than creating duplicates. |
 | Carry caller `source_ref` metadata. | Preserved for identity-bearing intake. Intentionally changed for identityless intake: caller metadata is not stored or assumed unique; only the relay adapter supplies the stored replay-event provenance. |
+| Log an inbound interaction after linking its contact. | Preserved with its stable Gmail/call/SMS provider ID in recognized interaction metadata; only delivery retries change from UTC-day fallback dedupe to event-anchor dedupe. |
+| Prefer an extracted call/SMS phone whenever it is truthy. | Intentionally changed for EOM only: a partial fragment yields to a full authoritative transport caller number; a full extraction still wins and non-EOM selection is unchanged. |
 | Return `_was_created` so downstream callers can distinguish a new row. | Preserved. |
 | Emit `crm.contact_created` after the contact path creates a row. | Preserved for atomic inserts after transaction commit; event-delivery failure is logged and non-fatal. |
 | Validate that lead pipeline fields require a lead contact type. | Preserved: atomic creates are always `lead/new`; generic writes still validate pipeline requests. |
@@ -310,8 +350,9 @@ ledger while the new resolver is serving: it intentionally fails closed.
 
 - Current-head repair: Python compile check and the exact EOM lead-pipeline
   workflow test-file list passed against a fresh PostgreSQL 16 database:
-  **148 passed**. This includes the schema-isolated sent-email route proof,
-  trusted relay replay, and lifecycle-ledger `TRUNCATE` proof.
+  **150 passed**. This includes the schema-isolated sent-email route proof,
+  trusted relay replay, lifecycle-ledger `TRUNCATE` proof, stable interaction
+  anchors, and EOM transport-phone fallback.
 - Passed the unit ratchet with the checked-out and origin/main baselines.
 - Passed maturity sweeps for atlas_brain/mcp, atlas_brain/tools, and
   atlas_brain/storage against their corresponding baselines; the three accepted
@@ -321,6 +362,9 @@ ledger while the new resolver is serving: it intentionally fails closed.
   `atlas_brain/reasoning`, `atlas_brain/security`, and
   `atlas_brain/storage`; the repair adds no new direct producer mock or storage
   test seam.
+- Passed the exact maturity ratchets for `atlas_brain/autonomous` and
+  `atlas_brain/comms`; the stable event anchors and EOM-only phone fallback add
+  no new brittleness above their baselines.
 - Passed the plan audit, plan-sync check, Python compile check, and diff check.
 
 ## Estimated diff size
@@ -330,22 +374,22 @@ ledger while the new resolver is serving: it intentionally fails closed.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 17 |
 | `atlas_brain/api/comms/webhooks.py` | 28 |
 | `atlas_brain/api/leads.py` | 117 |
-| `atlas_brain/autonomous/tasks/gmail_digest.py` | 22 |
-| `atlas_brain/comms/call_intelligence.py` | 34 |
-| `atlas_brain/comms/sms_intelligence.py` | 34 |
+| `atlas_brain/autonomous/tasks/gmail_digest.py` | 27 |
+| `atlas_brain/comms/call_intelligence.py` | 47 |
+| `atlas_brain/comms/sms_intelligence.py` | 47 |
 | `atlas_brain/mcp/crm_server.py` | 15 |
 | `atlas_brain/services/crm_provider.py` | 346 |
-| `atlas_brain/services/eom_lead_ingress.py` | 121 |
+| `atlas_brain/services/eom_lead_ingress.py` | 137 |
 | `atlas_brain/storage/migrations/351_eom_lead_lifecycle_events.sql` | 98 |
 | `atlas_brain/tools/scheduling.py` | 28 |
-| `plans/PR-EOM-Funnel-Ingress.md` | 351 |
+| `plans/PR-EOM-Funnel-Ingress.md` | 395 |
 | `tests/maturity_sweep/baseline_atlas_brain_mcp.json` | 6 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 4 |
 | `tests/maturity_sweep/baseline_atlas_brain_tools.json` | 4 |
 | `tests/test_crm_read_scoping.py` | 8 |
-| `tests/test_eom_lead_ingress.py` | 393 |
+| `tests/test_eom_lead_ingress.py` | 460 |
 | `tests/test_eom_lead_pipeline_integration.py` | 495 |
 | `tests/test_eom_sent_email_tenant_scope.py` | 1 |
 | `tests/test_leads_intake.py` | 56 |
 | `tests/test_tenant_stamping.py` | 31 |
-| **Total** | **2209** |
+| **Total** | **2367** |

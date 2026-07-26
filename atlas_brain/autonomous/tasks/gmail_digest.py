@@ -397,6 +397,11 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
                 contact_id=contact_id,
                 interaction_type="email",
                 summary=f"Web form submission: {subject}. {message_preview}".strip(),
+                metadata=(
+                    {"gmail_message_id": relay_message_id}
+                    if relay_message_id
+                    else None
+                ),
             )
             logger.info("Lead CRM: contact %s linked to email %s", contact_id, e.get("id"))
 

@@ -19,6 +19,22 @@ def _normalised_phone(value: Any) -> str:
     return re.sub(r"\D", "", str(value or ""))
 
 
+def preferred_eom_inbound_phone(extracted_phone: Any, transport_phone: Any) -> str:
+    """Prefer a full extracted number, then a full transport caller number.
+
+    Call/SMS extraction is enrichment, while the transport's caller number is
+    authoritative.  A local fragment is therefore not allowed to mask a usable
+    caller number before EOM's full-phone identity admission.
+    """
+    extracted = str(extracted_phone or "").strip()
+    transport = str(transport_phone or "").strip()
+    if len(_normalised_phone(extracted)) >= _MIN_MATCH_PHONE_DIGITS:
+        return extracted
+    if len(_normalised_phone(transport)) >= _MIN_MATCH_PHONE_DIGITS:
+        return transport
+    return extracted or transport
+
+
 async def resolve_or_create_eom_inbound_lead(
     crm: Any,
     *,

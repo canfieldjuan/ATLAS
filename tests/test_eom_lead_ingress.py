@@ -110,6 +110,14 @@ async def test_identityless_eom_inbound_uses_only_the_explicit_relay_event_key()
     assert crm.find_or_create_contact.await_args.kwargs["source_ref"] == "web3forms:message-1"
 
 
+def test_preferred_eom_inbound_phone_uses_full_extraction_then_transport():
+    from atlas_brain.services.eom_lead_ingress import preferred_eom_inbound_phone
+
+    assert preferred_eom_inbound_phone("217-555-0100", "+12175550199") == "217-555-0100"
+    assert preferred_eom_inbound_phone("555-0100", "+12175550199") == "+12175550199"
+    assert preferred_eom_inbound_phone("555-0100", "555-0199") == "555-0100"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("contact_type", ["lead", "customer"])
 async def test_matching_eom_contact_is_returned_unchanged(contact_type):
@@ -195,12 +203,21 @@ async def test_real_call_link_uses_eom_lead_resolver(monkeypatch):
 
     contact_id, is_new = await call_intelligence._link_to_crm(
         repo, uuid4(), "call-1", "217-555-0199", EOM_BUSINESS_CONTEXT_ID,
-        {"customer_name": "Caller", "intent": "estimate_request"}, "Need an estimate",
+        {
+            "customer_name": "Caller",
+            "customer_phone": "555-0100",
+            "intent": "estimate_request",
+        },
+        "Need an estimate",
     )
 
     assert (contact_id, is_new) == ("call-lead", True)
-    assert crm.find_or_create_contact.await_args.kwargs["contact_type"] == "lead"
-    assert crm.log_interaction.await_args.kwargs["intent"] == "estimate_request"
+    contact_kwargs = crm.find_or_create_contact.await_args.kwargs
+    assert contact_kwargs["contact_type"] == "lead"
+    assert contact_kwargs["phone"] == "2175550199"
+    interaction_kwargs = crm.log_interaction.await_args.kwargs
+    assert interaction_kwargs["intent"] == "estimate_request"
+    assert interaction_kwargs["metadata"] == {"crm_event_id": "call:call-1"}
 
 
 @pytest.mark.asyncio
@@ -216,14 +233,61 @@ async def test_real_sms_link_uses_eom_lead_resolver(monkeypatch):
     monkeypatch.setattr(crm_provider, "get_crm_provider", lambda: crm)
     monkeypatch.setattr(database, "get_db_pool", lambda: pool)
 
+    sms_id = uuid4()
     contact_id, is_new = await sms_intelligence._link_to_crm(
-        repo, uuid4(), "217-555-0199", EOM_BUSINESS_CONTEXT_ID,
-        {"customer_name": "Texter", "intent": "booking"}, "Can I get an estimate?",
+        repo, sms_id, "217-555-0199", EOM_BUSINESS_CONTEXT_ID,
+        {
+            "customer_name": "Texter",
+            "customer_phone": "555-0100",
+            "intent": "booking",
+        },
+        "Can I get an estimate?",
     )
 
     assert (contact_id, is_new) == ("sms-lead", True)
-    assert crm.find_or_create_contact.await_args.kwargs["contact_type"] == "lead"
-    assert crm.log_interaction.await_args.kwargs["intent"] == "estimate_request"
+    contact_kwargs = crm.find_or_create_contact.await_args.kwargs
+    assert contact_kwargs["contact_type"] == "lead"
+    assert contact_kwargs["phone"] == "2175550199"
+    interaction_kwargs = crm.log_interaction.await_args.kwargs
+    assert interaction_kwargs["intent"] == "estimate_request"
+    assert interaction_kwargs["metadata"] == {"crm_event_id": f"sms:{sms_id}"}
+
+
+@pytest.mark.asyncio
+async def test_non_eom_call_and_sms_keep_extracted_phone_priority(monkeypatch):
+    from atlas_brain.comms import call_intelligence, sms_intelligence
+    import atlas_brain.services.crm_provider as crm_provider
+    import atlas_brain.storage.database as database
+
+    pool = MagicMock(is_initialized=True)
+    repo = MagicMock()
+    repo.link_contact = AsyncMock()
+    monkeypatch.setattr(database, "get_db_pool", lambda: pool)
+
+    call_crm = _crm(created={"id": "other-call", "_was_created": True})
+    monkeypatch.setattr(crm_provider, "get_crm_provider", lambda: call_crm)
+    await call_intelligence._link_to_crm(
+        repo,
+        uuid4(),
+        "call-1",
+        "217-555-0199",
+        "another_context",
+        {"customer_phone": "555-0100"},
+        "Call summary",
+    )
+    assert call_crm.find_or_create_contact.await_args.kwargs["phone"] == "555-0100"
+
+    sms_crm = _crm(created={"id": "other-sms", "_was_created": True})
+    monkeypatch.setattr(crm_provider, "get_crm_provider", lambda: sms_crm)
+    await sms_intelligence._link_to_crm(
+        repo,
+        uuid4(),
+        "217-555-0199",
+        "another_context",
+        {"customer_phone": "555-0100"},
+        "SMS summary",
+    )
+    assert sms_crm.find_or_create_contact.await_args.kwargs["phone"] == "555-0100"
 
 
 @pytest.mark.asyncio
@@ -273,6 +337,9 @@ async def test_web3forms_relay_uses_eom_lead_resolver(monkeypatch):
     assert kwargs["preserve_existing"] is True
     assert kwargs["source_ref"] == "web3forms:web3forms-message-1"
     assert kwargs["tags"] == ["web3forms"]
+    assert crm.log_interaction.await_args.kwargs["metadata"] == {
+        "gmail_message_id": "web3forms-message-1"
+    }
 
 
 @pytest.mark.asyncio

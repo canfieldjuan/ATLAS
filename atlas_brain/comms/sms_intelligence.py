@@ -394,18 +394,24 @@ async def _link_to_crm(
     if not pool.is_initialized:
         return None, False
 
-    phone = extracted_data.get("customer_phone") or from_number
     email_addr = extracted_data.get("customer_email")
     name = extracted_data.get("customer_name")
-
-    if not phone and not email_addr:
-        return None, False
-
     crm = get_crm_provider()
     from ..services.eom_lead_ingress import (
         EOM_BUSINESS_CONTEXT_ID,
+        preferred_eom_inbound_phone,
         resolve_or_create_eom_inbound_lead,
     )
+
+    if context_id == EOM_BUSINESS_CONTEXT_ID:
+        phone = preferred_eom_inbound_phone(
+            extracted_data.get("customer_phone"), from_number
+        )
+    else:
+        phone = extracted_data.get("customer_phone") or from_number
+
+    if not phone and not email_addr:
+        return None, False
 
     if context_id == EOM_BUSINESS_CONTEXT_ID:
         contact = await resolve_or_create_eom_inbound_lead(
@@ -446,6 +452,7 @@ async def _link_to_crm(
         interaction_type="sms",
         summary=summary or f"Inbound SMS from {from_number}",
         intent=business_intent,
+        metadata={"crm_event_id": f"sms:{sms_id}"} if sms_id else None,
     )
 
     return contact_id, is_new_lead
