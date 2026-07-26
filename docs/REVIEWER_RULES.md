@@ -28,6 +28,26 @@ A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 **Blockers must cite `file:line`.** A bare "LGTM" with no rule matrix and no
 independent verification is worse than no comment.
 
+**BLOCKER requires a concrete failure path**: the specific input, sequence, or
+state that produces the harm, stated in the finding. "This could break" is not
+one. Without a failure path the finding is MAJOR at most -- downgrade it, do not
+drop it, and the level can be raised later once the path is shown. This does not
+touch the unresolved-entry rule in Review completion: a Not-Verified rule is a
+BLOCKER because the evidence is missing, which is a different thing from a
+speculative defect.
+
+**The escape valve from "do not manufacture NITs" is not filing the finding, not
+promoting it.** That instruction bars padding a review with polish; it is not a
+reason to enter a marginal finding at BLOCKER so it clears the bar. If a finding
+is real but minor, MAJOR and NIT exist for it; if it is not worth reporting,
+report nothing and mark the rule dispositioned.
+
+**Why:** across #2195 and #2184 all **68** filed findings are P1/P2 and none is
+lower. Real severity is not distributed that way, and a ladder where everything
+is a blocker carries no information -- the reviewer cannot lead with blockers
+(above) when every finding is one, and the builder cannot tell an exploitable
+gap from an ordering nit.
+
 R14 is universal: it applies to every review verdict, even when no changed path
 specifically triggers it. A reviewer who has not inspected the checked-out PR
 head and relevant codebase evidence cannot issue LGTM.
