@@ -527,6 +527,25 @@ shared parsing, evidence, and source-construction boundaries.
    those same bytes before dispatch. The existing under-lock re-read still
    rejects a replacement during the worker call.
 
+### Review round 13 (Codex, follow-up PR #2201)
+
+Three findings, all verified against the published follow-up and corrected at
+the same classifier and source-construction seams.
+
+1. **P1 — slash-delimited numeric renderer values entered the unconditional
+   E.164 shortcut.** Compact explicit-prefix digits remain strong evidence;
+   slash-delimited numeric shapes now pass through the structural-intent
+   decision. Generated proofs keep slash phonewords and structurally governed
+   numbers failing while renderer dimensions and dates remain admissible.
+2. **P1 — line-break formatting split direct dial syntax.** The finite bridge
+   now admits exactly one logical LF, CR, or CRLF while continuing to reject
+   paragraph breaks and descriptive intervening words.
+3. **P1 — an arbitrary prompt callback could ignore its draft argument.**
+   Source-bound stages now accept no caller prompt payload. The runner owns the
+   fixed stage instruction and deterministic serialization of the committed
+   draft snapshot, then hashes the same source bytes and retains the under-lock
+   comparison.
+
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
@@ -582,12 +601,13 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 928 passed (incl. the round-6 contact oracle, round-7
+    # -> 945 passed (incl. the round-6 contact oracle, round-7
     #    content-binding probes, round-8 descriptive-number boundary, and
     #    rounds 9-10 separator-partition, international/detached-prose,
     #    IDNA, dispatch-binding, and committed-residue proofs, plus round-11
     #    canonical-composition/whitespace-run proofs and round-12 normalized
-    #    parser, structural-bridge, and prompt-construction proofs)
+    #    parser and structural-bridge proofs, plus round-13 slash/line-break
+    #    boundaries and runner-owned prompt-construction proofs)
     #
     # Mutation check on the round-8 lock test: removing `with job_lock(...)`
     # from run_stage makes test_run_stage_holds_job_lock_across_validation_
@@ -604,10 +624,10 @@ Parked hardening: none new.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 60 |
-| `atlas_brain/services/content_factory_runner.py` | 340 |
+| `atlas_brain/services/content_factory_runner.py` | 358 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 243 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 246 |
-| `tests/test_content_factory_runner.py` | 508 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 263 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 270 |
+| `tests/test_content_factory_runner.py` | 577 |
 | `tests/test_content_factory_schemas.py` | 68 |
-| **Total** | **1567** |
+| **Total** | **1698** |

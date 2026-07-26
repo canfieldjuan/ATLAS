@@ -29,11 +29,6 @@ from atlas_brain.services.content_factory_store import job_dir
 BRIEF_JSON = '{"schema": "content_brief.v1", "project_id": "resolution-audit", "request_raw": "x"}'
 
 
-def _source_request(text):
-    """Prompt builder for tests whose worker reply, not prompt, is under test."""
-    return lambda _draft: text
-
-
 class _FakeResponse:
     def __init__(self, data: bytes):
         self._data = data
@@ -155,7 +150,7 @@ def _stored(rec):
 
 def test_editor_stage_injects_deterministic_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: _editor_json(_CLEAN_BODY, "promote"))
-    rec = runner.run_stage("job1", "audit", "cf-editor", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job1", "audit", "cf-editor", None, api_key="k", root=tmp_path)
     stored = _stored(rec)
     assert stored["copy_verification"]["verdict"] == "pass"
     assert stored["recommendation"] == "promote"  # clean copy may promote
@@ -166,13 +161,13 @@ def test_editor_worker_cannot_self_promote_overclaim(tmp_path, monkeypatch):
     reply = _editor_json(_BAD_BODY, "promote", copy_verification={"verdict": "pass", "hits": []})
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ValidationError):  # injected fail vs promote -> #2116 guard rejects
-        runner.run_stage("job1", "audit", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job1", "audit", "m", None, api_key="k", root=tmp_path)
     assert not job_dir("job1", root=tmp_path).exists()
 
 
 def test_editor_overclaim_revise_persists_with_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: _editor_json(_BAD_BODY, "revise"))
-    rec = runner.run_stage("job1", "audit", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job1", "audit", "m", None, api_key="k", root=tmp_path)
     stored = _stored(rec)
     assert stored["copy_verification"]["verdict"] == "fail"
     assert any("guaranteed-savings" in h for h in stored["copy_verification"]["hits"])
@@ -183,7 +178,7 @@ def test_editor_worker_claimed_verdict_is_overridden(tmp_path, monkeypatch):
     # verdict must still overwrite the worker's claim.
     reply = _editor_json(_BAD_BODY, "revise", copy_verification={"verdict": "pass", "hits": []})
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job1", "audit", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job1", "audit", "m", None, api_key="k", root=tmp_path)
     assert _stored(rec)["copy_verification"]["verdict"] == "fail"
 
 
@@ -198,13 +193,13 @@ def test_empty_edited_copy_cannot_promote(tmp_path, monkeypatch):
     # self-promote by omitting the edited copy.
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: _editor_json("", "promote"))
     with pytest.raises(ValidationError):
-        runner.run_stage("job1", "audit", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job1", "audit", "m", None, api_key="k", root=tmp_path)
     assert not job_dir("job1", root=tmp_path).exists()
 
 
 def test_empty_edited_copy_revise_persists_with_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: _editor_json("   ", "revise"))
-    rec = runner.run_stage("job1", "audit", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job1", "audit", "m", None, api_key="k", root=tmp_path)
     stored = _stored(rec)
     assert stored["copy_verification"]["verdict"] == "fail"
     assert any("unverified-copy" in h for h in stored["copy_verification"]["hits"])
@@ -216,7 +211,7 @@ def test_custom_stage_audit_is_also_gated(tmp_path, monkeypatch):
     reply = _editor_json(_BAD_BODY, "promote", copy_verification={"verdict": "pass", "hits": []})
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ValidationError):
-        runner.run_stage("job1", "audit-v2", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job1", "audit-v2", "m", None, api_key="k", root=tmp_path)
     assert not job_dir("job1", root=tmp_path).exists()
 
 
@@ -268,7 +263,7 @@ def test_run_stage_persists_deterministic_warnings_and_normalizes_v1(tmp_path, m
         }
     )
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-adv", "audit", "cf-editor-verifier", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-adv", "audit", "cf-editor-verifier", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert rec["schema"] == "editorial_audit.v3"
     assert stored["schema"] == "editorial_audit.v3"
@@ -295,7 +290,7 @@ def test_run_stage_rejects_contradictory_v2_version(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ValidationError):
-        runner.run_stage("job-v2v", "audit", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-v2v", "audit", "m", None, api_key="k", root=tmp_path)
     assert not job_dir("job-v2v", root=tmp_path).exists()
 
 
@@ -355,7 +350,7 @@ def test_run_stage_overwrites_variant_verdicts_and_blocks_bad_ship(tmp_path, mon
     # separate lineage check first.
     _seed_draft(tmp_path, "job-rp", ["e1"])
     with pytest.raises(ValidationError):
-        runner.run_stage("job-rp", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-rp", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 def test_run_stage_persists_clean_variants_with_computed_verdicts(tmp_path, monkeypatch):
@@ -374,7 +369,7 @@ def test_run_stage_persists_clean_variants_with_computed_verdicts(tmp_path, monk
         }
     )
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-rp2", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-rp2", "repurposing", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["variants"][0]["copy_verification"]["verdict"] == "pass"
     assert stored["variants"][0]["advisory_warnings"][-1].startswith("reminder:")
@@ -398,7 +393,7 @@ def test_run_stage_blank_variant_body_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     # blank body is rejected by the contract (NonEmptyStr) -- nothing persists
     with pytest.raises(ValidationError):
-        runner.run_stage("job-rp3", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-rp3", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 def test_run_stage_gates_image_prompt_text(tmp_path, monkeypatch):
@@ -418,7 +413,7 @@ def test_run_stage_gates_image_prompt_text(tmp_path, monkeypatch):
         }
     )
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-img", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-img", "image_prompt", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["copy_verification"]["verdict"] == "fail"
     assert any("guaranteed-savings" in hit for hit in stored["copy_verification"]["hits"])
@@ -435,7 +430,7 @@ def test_run_stage_image_prompt_pii_is_caught(tmp_path, monkeypatch):
         }
     )
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-img2", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-img2", "image_prompt", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["copy_verification"]["verdict"] == "fail"
     # The VERDICT never carries the raw value (the persisted-evidence
@@ -456,7 +451,7 @@ def test_run_stage_clean_image_prompt_passes(tmp_path, monkeypatch):
         }
     )
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-img3", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-img3", "image_prompt", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["copy_verification"]["verdict"] == "pass"
 
@@ -474,7 +469,7 @@ def test_stage_schema_mismatch_still_enforced_for_phase6(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError):
-        runner.run_stage("job-mix", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-mix", "image_prompt", "m", None, api_key="k", root=tmp_path)
 
 
 def test_negative_prompt_naming_banned_terms_still_passes(tmp_path, monkeypatch):
@@ -490,7 +485,7 @@ def test_negative_prompt_naming_banned_terms_still_passes(tmp_path, monkeypatch)
         }],
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-neg", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-neg", "image_prompt", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["copy_verification"]["verdict"] == "pass"
     assert stored["prompts"][0]["negative_prompt"].startswith("blurry")
@@ -507,7 +502,7 @@ def test_positive_prompt_with_banned_claim_still_fails(tmp_path, monkeypatch):
         }],
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-pos", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-pos", "image_prompt", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["copy_verification"]["verdict"] == "fail"
 
@@ -523,7 +518,7 @@ def test_worker_cannot_self_declare_ready_to_generate(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ValidationError):
-        runner.run_stage("job-selfgen", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-selfgen", "image_prompt", "m", None, api_key="k", root=tmp_path)
     assert not job_dir("job-selfgen", root=tmp_path).exists()
 
 
@@ -542,7 +537,7 @@ def test_fabricated_lineage_blocks_shipping(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="absent from the draft"):
-        runner.run_stage("job-lin", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-lin", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 def test_real_lineage_ships(tmp_path, monkeypatch):
@@ -554,7 +549,7 @@ def test_real_lineage_ships(tmp_path, monkeypatch):
         "ready_to_publish": True,
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-lin2", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-lin2", "repurposing", "m", None, api_key="k", root=tmp_path)
     assert json.loads(Path(rec["path"]).read_text())["ready_to_publish"] is True
 
 
@@ -567,7 +562,7 @@ def test_unready_package_skips_lineage_check(tmp_path, monkeypatch):
         "ready_to_publish": False,
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-lin3", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-lin3", "repurposing", "m", None, api_key="k", root=tmp_path)
     assert Path(rec["path"]).exists()
 
 
@@ -580,7 +575,7 @@ def test_missing_draft_fails_closed_on_ship(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="readable draft artifact"):
-        runner.run_stage("job-nodraft", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-nodraft", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 def test_international_phone_in_prompt_fails(tmp_path, monkeypatch):
@@ -589,7 +584,7 @@ def test_international_phone_in_prompt_fails(tmp_path, monkeypatch):
         "prompts": [{"purpose": "hero", "prompt_text": "Call us at +442079460958"}],
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-intl", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-intl", "image_prompt", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["copy_verification"]["verdict"] == "fail"
     assert "442079460958" not in json.dumps(stored["copy_verification"])
@@ -605,7 +600,7 @@ def test_prompts_verified_independently_no_cross_synthesis(tmp_path, monkeypatch
         ],
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-split", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-split", "image_prompt", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["copy_verification"]["verdict"] == "pass", stored["copy_verification"]
 
@@ -619,7 +614,7 @@ def test_hits_identify_the_offending_prompt(tmp_path, monkeypatch):
         ],
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-which", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-which", "image_prompt", "m", None, api_key="k", root=tmp_path)
     hits = json.loads(Path(rec["path"]).read_text())["copy_verification"]["hits"]
     assert all(h.startswith("prompt 2:") for h in hits), hits
 
@@ -640,7 +635,7 @@ def test_stale_source_revision_blocks_shipping(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="superseded copy"):
-        runner.run_stage("job-rev", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-rev", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 def test_matching_source_revision_ships(tmp_path, monkeypatch):
@@ -653,7 +648,7 @@ def test_matching_source_revision_ships(tmp_path, monkeypatch):
         "ready_to_publish": True,
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-rev2", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-rev2", "repurposing", "m", None, api_key="k", root=tmp_path)
     assert json.loads(Path(rec["path"]).read_text())["ready_to_publish"] is True
 
 
@@ -668,7 +663,7 @@ def test_image_prompt_readiness_also_checks_revision(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="superseded copy"):
-        runner.run_stage("job-imgrev", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-imgrev", "image_prompt", "m", None, api_key="k", root=tmp_path)
 
 
 def test_string_false_readiness_persists_as_intermediate(tmp_path, monkeypatch):
@@ -681,7 +676,7 @@ def test_string_false_readiness_persists_as_intermediate(tmp_path, monkeypatch):
         "ready_to_publish": "false",
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-strfalse", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-strfalse", "repurposing", "m", None, api_key="k", root=tmp_path)
     assert json.loads(Path(rec["path"]).read_text())["ready_to_publish"] is False
 
 
@@ -696,7 +691,7 @@ def test_negated_banned_phrase_in_prompt_still_fails(text, tmp_path, monkeypatch
         "prompts": [{"purpose": "hero", "prompt_text": text}],
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-neg2", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-neg2", "image_prompt", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["copy_verification"]["verdict"] == "fail", stored["copy_verification"]
 
@@ -723,7 +718,7 @@ def test_unaudited_draft_cannot_ship(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="recommending 'promote'"):
-        runner.run_stage("job-noaudit", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-noaudit", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 def test_revise_audit_cannot_ship(tmp_path, monkeypatch):
@@ -744,7 +739,7 @@ def test_revise_audit_cannot_ship(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="recommending 'promote'"):
-        runner.run_stage("job-revise", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-revise", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 def test_cross_project_derivation_blocked(tmp_path, monkeypatch):
@@ -758,7 +753,7 @@ def test_cross_project_derivation_blocked(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="project mismatch"):
-        runner.run_stage("job-xproj", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-xproj", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 def test_stale_audit_cannot_approve_newer_draft(tmp_path, monkeypatch):
@@ -781,7 +776,7 @@ def test_stale_audit_cannot_approve_newer_draft(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="audit approved draft revision"):
-        runner.run_stage("job-staleaudit", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-staleaudit", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 def test_foreign_project_audit_cannot_approve(tmp_path, monkeypatch):
@@ -802,7 +797,7 @@ def test_foreign_project_audit_cannot_approve(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="audit project"):
-        runner.run_stage("job-xaudit", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-xaudit", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 
@@ -837,7 +832,7 @@ def _prompt_verdict(text, tmp_path, monkeypatch, job):
     reply = json.dumps({"schema": "image_prompt.v1", "project_id": "p",
                         "prompts": [{"purpose": "hero", "prompt_text": text}]})
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage(job, "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage(job, "image_prompt", "m", None, api_key="k", root=tmp_path)
     return json.loads(Path(rec["path"]).read_text())["copy_verification"]
 
 
@@ -925,7 +920,7 @@ def test_same_revision_draft_replacement_invalidates_approval(tmp_path, monkeypa
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="does not match the draft currently"):
-        runner.run_stage("job-swap", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-swap", "repurposing", "m", None, api_key="k", root=tmp_path)
 
 
 def test_image_prompt_readiness_also_content_bound(tmp_path, monkeypatch):
@@ -943,7 +938,7 @@ def test_image_prompt_readiness_also_content_bound(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
     with pytest.raises(ArtifactStoreError, match="does not match the draft currently"):
-        runner.run_stage("job-swap2", "image_prompt", "m", _source_request("req"), api_key="k", root=tmp_path)
+        runner.run_stage("job-swap2", "image_prompt", "m", None, api_key="k", root=tmp_path)
 
 
 def test_audit_stage_stamps_the_fingerprint(tmp_path, monkeypatch):
@@ -956,7 +951,7 @@ def test_audit_stage_stamps_the_fingerprint(tmp_path, monkeypatch):
         "source_draft_fingerprint": "worker-supplied-lie",
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-stamp", "audit", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-stamp", "audit", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["source_draft_fingerprint"] == runner._draft_fingerprint("job-stamp", tmp_path)
     assert stored["source_draft_fingerprint"] != "worker-supplied-lie"
@@ -975,7 +970,7 @@ def test_source_bound_stage_rejects_prebuilt_prompt_before_dispatch(
         return _editor_json("unreachable", "revise")
 
     monkeypatch.setattr(runner, "call_worker", unexpected_worker)
-    with pytest.raises(ArtifactStoreError, match="requires a prompt builder"):
+    with pytest.raises(ArtifactStoreError, match="runner-owned prompt"):
         runner.run_stage(
             "job-prebuilt",
             "audit",
@@ -987,7 +982,7 @@ def test_source_bound_stage_rejects_prebuilt_prompt_before_dispatch(
     assert called is False
 
 
-def test_prompt_builder_uses_draft_current_at_run_stage_entry(tmp_path, monkeypatch):
+def test_runner_prompt_uses_draft_current_at_run_stage_entry(tmp_path, monkeypatch):
     """A pre-entry A->B replacement makes the worker receive B, never stale A."""
     from atlas_brain.services.content_factory_store import write_artifact
 
@@ -1015,16 +1010,45 @@ def test_prompt_builder_uses_draft_current_at_run_stage_entry(tmp_path, monkeypa
         "job-pre-entry",
         "audit",
         "m",
-        lambda draft: f"Review this exact draft: {draft['body_markdown']}",
+        None,
         api_key="k",
         root=tmp_path,
     )
 
     stored = json.loads(Path(rec["path"]).read_text())
-    assert observed == ["Review this exact draft: source B committed before run_stage"]
+    assert len(observed) == 1
+    assert "source B committed before run_stage" in observed[0]
+    assert "claim e1 from B" in observed[0]
     assert stored["source_draft_fingerprint"] == runner._draft_fingerprint(
         "job-pre-entry", tmp_path
     )
+
+
+@pytest.mark.parametrize("stage", ["audit", "audit-v2", "repurposing", "image_prompt"])
+def test_source_bound_stage_rejects_callback_that_ignores_draft(
+    stage, tmp_path, monkeypatch
+):
+    """No source stage lets a stale lambda inherit the current fingerprint."""
+    job_id = f"job-ignored-draft-{stage}"
+    _seed_draft(tmp_path, job_id, ["e1"], approved=False)
+    called = False
+
+    def unexpected_worker(*args, **kwargs):
+        nonlocal called
+        called = True
+        return _editor_json("unreachable", "revise")
+
+    monkeypatch.setattr(runner, "call_worker", unexpected_worker)
+    with pytest.raises(ArtifactStoreError, match="runner-owned prompt"):
+        runner.run_stage(
+            job_id,
+            stage,
+            "m",
+            lambda _draft: "stale prompt from source A",
+            api_key="k",
+            root=tmp_path,
+        )
+    assert called is False
 
 
 def test_audit_rejects_draft_replaced_while_worker_runs(tmp_path, monkeypatch):
@@ -1050,7 +1074,7 @@ def test_audit_rejects_draft_replaced_while_worker_runs(tmp_path, monkeypatch):
             "job-dispatch-audit",
             "audit",
             "m",
-            _source_request("request built from source A"),
+            None,
             api_key="k",
             root=tmp_path,
         )
@@ -1112,7 +1136,7 @@ def test_phase6_rejects_draft_replaced_while_worker_runs(
             job_id,
             stage,
             "m",
-            _source_request("request built from source A"),
+            None,
             api_key="k",
             root=tmp_path,
         )
@@ -1128,7 +1152,7 @@ def test_unchanged_draft_keeps_approval_valid(tmp_path, monkeypatch):
         "ready_to_publish": True,
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-stable", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-stable", "repurposing", "m", None, api_key="k", root=tmp_path)
     assert json.loads(Path(rec["path"]).read_text())["ready_to_publish"] is True
 
 
@@ -1225,7 +1249,7 @@ def test_run_stage_normalizes_v2_audit_to_v3(tmp_path, monkeypatch):
         "recommendation": "revise",
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    rec = runner.run_stage("job-v23", "audit", "m", _source_request("req"), api_key="k", root=tmp_path)
+    rec = runner.run_stage("job-v23", "audit", "m", None, api_key="k", root=tmp_path)
     stored = json.loads(Path(rec["path"]).read_text())
     assert stored["schema"] == "editorial_audit.v3"
     assert stored["schema_version"] == 3
@@ -1269,7 +1293,7 @@ def test_run_stage_holds_job_lock_across_validation_and_write(tmp_path, monkeypa
         "ready_to_publish": True,
     })
     monkeypatch.setattr(runner, "call_worker", lambda *a, **k: reply)
-    runner.run_stage("job-lock", "repurposing", "m", _source_request("req"), api_key="k", root=tmp_path)
+    runner.run_stage("job-lock", "repurposing", "m", None, api_key="k", root=tmp_path)
 
     assert observed == [False], "readiness was decided outside the job lock"
     assert _job_lock_is_free("job-lock", tmp_path), "lock leaked after run_stage"
@@ -1408,6 +1432,51 @@ def test_compatibility_normalization_does_not_promote_renderer_specs(renderer_sp
     assert runner._prompt_contact_hits(f"studio render {renderer_spec}") == []
 
 
+@pytest.mark.parametrize(
+    "renderer_value",
+    [
+        "+1920/1080",
+        "+3840/2160",
+        "+2026/07/25",
+        "+255/255/255",
+    ],
+)
+def test_slash_separated_renderer_numbers_require_dial_evidence(renderer_value):
+    """An explicit plus does not turn dimensions, dates, or RGB into a phone."""
+    prompt = f"display {renderer_value} landscape artwork"
+    assert runner._prompt_contact_hits(prompt) == [], prompt
+
+
+@pytest.mark.parametrize(
+    "dial_candidate",
+    [
+        "+44/800/FLOWERS",
+        "+44/800/3569377",
+        "0044/800/FLOWERS",
+    ],
+)
+def test_slash_separated_candidates_with_structural_dial_intent_fail(
+    dial_candidate,
+):
+    """Slash parity remains when direct dial syntax supplies the evidence."""
+    prompt = f"Call {dial_candidate} today"
+    assert runner._prompt_contact_hits(prompt) != [], prompt
+
+
+@pytest.mark.parametrize("line_break", ["\n", "\r", "\r\n"])
+def test_single_line_break_preserves_structural_dial_intent(line_break):
+    """One logical CTA line break is formatting, not a dial-evidence boundary."""
+    prompt = f"Call{line_break}+44 800 FLOWERS"
+    assert runner._prompt_contact_hits(prompt) != [], prompt
+
+
+@pytest.mark.parametrize("line_break", ["\n\n", "\r\r", "\r\n\r\n"])
+def test_paragraph_break_does_not_bridge_dial_intent(line_break):
+    """The finite bridge does not govern a candidate in another paragraph."""
+    prompt = f"Call{line_break}+44 800 FLOWERS"
+    assert runner._prompt_contact_hits(prompt) == [], prompt
+
+
 @pytest.mark.parametrize("intent", ["Call", "Text", "Contact", "Reach"])
 @pytest.mark.parametrize("candidate", ["212 ART DECO", "+44 800 FLOWERS"])
 @pytest.mark.parametrize(
@@ -1534,7 +1603,7 @@ def test_uncommitted_crash_residue_cannot_authorize_ready_artifact(
         "job-crash",
         "repurposing",
         "m",
-        _source_request("req"),
+        None,
         api_key="k",
         root=tmp_path,
     )

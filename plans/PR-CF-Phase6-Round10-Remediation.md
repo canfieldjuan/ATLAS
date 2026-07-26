@@ -19,6 +19,11 @@ in multiple narrow regexes; detached spelling still treated proximity to an
 open intent vocabulary as mechanical dial evidence; and `run_stage` accepted
 caller-built prompt text independently from the committed draft bytes it
 fingerprinted.
+The following current-head review found three remaining trust-boundary gaps:
+slash-delimited numeric renderer specifications entered through the
+unconditional E.164 shortcut; the otherwise finite bridge excluded a single
+formatting line break; and a caller callback could ignore the supplied draft
+while inheriting its fingerprint.
 
 This production-hardening follow-up carries the already verified correction
 onto the merged mainline. It preserves the Phase 6 product shape and closes the
@@ -49,10 +54,14 @@ reported classes at their shared classifier and execution seams.
   remain E.164-bounded. Phone admission must classify an NFKC-normalized view
   with one bounded separator grammar and must replace open keyword proximity
   with a finite structural bridge whose ambiguous default is admissible.
-  `run_stage` must construct source-bound prompt text from the exact committed
-  bytes whose fingerprint it records, then retain the post-worker under-lock
-  comparison. Canonical store reads must remain committed-object reads so a
-  source snapshot cannot be replaced by worktree residue.
+  Slash-delimited numeric shapes must require structural dial syntax instead
+  of entering through an unconditional prefix shortcut, while one logical line
+  break remains formatting inside the finite bridge. `run_stage` must own a
+  fixed stage prompt template and construct it from the exact committed bytes
+  whose fingerprint it records; caller-controlled builders are not proof of
+  derivation. The post-worker under-lock comparison remains required.
+  Canonical store reads must remain committed-object reads so a source snapshot
+  cannot be replaced by worktree residue.
 - Must not change: Phase 6 artifact schema tags/field shapes, editorial
   decision semantics, negative-prompt exclusion semantics, body-copy verifier
   policy, image generation, worker wrappers, or any EOM/CRM lane.
@@ -106,6 +115,17 @@ Max files: 7
       from the same committed draft bytes it fingerprints. A draft replacement
       before entry changes the prompt source, while a replacement after prompt
       construction remains rejected under the job lock.
+  12. Slash-delimited numeric renderer values such as `+1920/1080` and
+      `+2026/07/25` remain admissible without structural dial syntax, while
+      slash-separated phonewords and numeric candidates under that syntax
+      retain the failing phone verdict.
+  13. A single LF, CR, or CRLF between a dial marker and candidate is formatting
+      and preserves dial evidence; paragraph breaks and descriptive intervening
+      words remain inadmissible as bridges.
+  14. Source-bound stages accept no caller-controlled prompt or callback. The
+      runner selects the stage instruction and serializes the committed draft
+      snapshot itself; a callback that ignores its argument is rejected before
+      worker dispatch.
 - Reachability proof: `run_stage(job_id, stage, model, user_content, ...)` calls
   the worker, applies prompt enforcement, compares committed source identity
   under `job_lock`, validates, and writes. Tests replace the committed draft
@@ -177,14 +197,14 @@ The schema defines the Unicode default-ignorable ranges once, excludes them
 from visible-only content, and removes them before the NFKC/casefold routing
 key so an ignored code point cannot alter composition.
 
-For source-bound work, `run_stage` receives a prompt builder rather than
-already-built text. It reads committed draft bytes once, parses those bytes for
-the builder, hashes the same bytes, and dispatches the resulting prompt. After
-the response is enforced, it takes `job_lock`, rejects any source-derived
-schema whose current committed fingerprint differs, stamps audits with the
-dispatch fingerprint, runs readiness/lineage, and commits. Store reads use
-Git's committed-object lookup for the stage JSON; cleanup is hygiene rather
-than correctness.
+For source-bound work, `run_stage` accepts no caller prompt payload. It selects
+a fixed instruction from the known stage contract, reads committed draft bytes
+once, parses and deterministically serializes that snapshot into the prompt,
+hashes the same bytes, and dispatches. After the response is enforced, it takes
+`job_lock`, rejects any source-derived schema whose current committed
+fingerprint differs, stamps audits with the dispatch fingerprint, runs
+readiness/lineage, and commits. Store reads use Git's committed-object lookup
+for the stage JSON; cleanup is hygiene rather than correctness.
 
 ## Intentional
 
@@ -200,8 +220,9 @@ than correctness.
   admission-only phone view; raw prompt/artifact text is not rewritten.
 - Arbitrary proximity to an intent-like word is not dial evidence. Ambiguous
   detached spelling without the finite bridge remains admissible.
-- Source-bound stage callers now provide a prompt builder. This intentionally
-  changes the unshipped runner API before the deferred OWUI wrappers are wired.
+- Source-bound stage callers now pass no prompt payload; the runner owns the
+  fixed instruction plus committed-draft serialization. This intentionally
+  changes the unshipped API before the deferred OWUI wrappers are wired.
 - The default-ignorable routing normalization is broader than the two reported
   code points by design; one invisible Unicode property is one defect class.
 - The originating Phase 6 plan remains modified in this follow-up so its
@@ -210,7 +231,7 @@ than correctness.
 
 ## Deferred
 
-- None for the five round-10 findings or five current-head class-boundary
+- None for the five round-10 findings or eight current-head class-boundary
   findings.
 - Existing Phase 6 deferrals remain: ComfyUI generation, OWUI wrappers, and
   Phase 7 manifest entries.
@@ -219,8 +240,11 @@ Parked hardening: none.
 
 ## Verification
 
-- Focused content-factory/intake suite: 928 passed.
-- Latest current-head regression subset: 126 passed, covering
+- Focused content-factory/intake suite: 945 passed.
+- Latest round-13 regression subset: 22 passed, covering
+  slash-separated renderer/phone both-direction cases, bounded line-break
+  bridges, runner-owned source prompts, and callback rejection. The prior
+  126-case current-head subset remains covered for
   compatibility/separator parity, evidence-keyed dial bridges, prebuilt-prompt
   rejection, pre-entry source replacement, and during-worker replacement.
 - Prior current-head review regressions remain covered by generated
@@ -237,10 +261,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 60 |
-| `atlas_brain/services/content_factory_runner.py` | 340 |
+| `atlas_brain/services/content_factory_runner.py` | 358 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 243 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 246 |
-| `tests/test_content_factory_runner.py` | 508 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 263 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 270 |
+| `tests/test_content_factory_runner.py` | 577 |
 | `tests/test_content_factory_schemas.py` | 68 |
-| **Total** | **1567** |
+| **Total** | **1698** |

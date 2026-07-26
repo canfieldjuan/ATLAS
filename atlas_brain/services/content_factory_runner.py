@@ -16,7 +16,6 @@ import re
 import unicodedata
 import urllib.error
 import urllib.request
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -209,7 +208,10 @@ _DIAL_PUNCTUATION = r".\-/"
 _DIAL_SEPARATOR_RE = re.compile(rf"[\s{_DIAL_PUNCTUATION}]+")
 _NUMERIC_DIAL_SEPARATOR = rf"(?:\s+(?=\d)|[{_DIAL_PUNCTUATION}])"
 # E.164 / international: explicit + or 00 prefix then 7-15 digits.
-_E164_RE = re.compile(r"(?:\+|\b00)[\d\s().\-/]{7,20}\d")
+# Slash is deliberately excluded from this unconditional shortcut; slash-
+# delimited candidates go through the structural dial decision below so
+# renderer dimensions and dates do not become phone evidence.
+_E164_RE = re.compile(r"(?:\+|\b00)[\d\s().\-]{7,20}\d")
 # North American 3-3-4, the one local shape that is unambiguous.
 _NANP_RE = re.compile(r"\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b")
 # A token someone could dial: starts with a digit, 7+ alphanumerics once
@@ -233,7 +235,7 @@ _UNAMBIGUOUS_GROUPINGS = frozenset({(3, 4), (3, 3, 4), (1, 3, 3, 4)})
 # These are function words in direct-address/dial syntax, not content nouns.
 _DIAL_BRIDGE_WORDS = frozenset({"at", "me", "on", "us", "via"})
 _DIAL_BRIDGE_WORD_RE = re.compile(r"[A-Za-z]+")
-_DIAL_BRIDGE_PUNCT_RE = re.compile(r"^[ \t,;:()\-]*$")
+_DIAL_BRIDGE_PUNCT_RE = re.compile(r"^[ \t,;:()\-\r\n]*$")
 
 
 def _is_nanp_digits(digits: str) -> bool:
@@ -385,7 +387,10 @@ def _is_structural_dial_bridge(gap: str) -> bool:
     ):
         return False
     punctuation = _DIAL_BRIDGE_WORD_RE.sub("", gap)
-    return _DIAL_BRIDGE_PUNCT_RE.fullmatch(punctuation) is not None
+    if _DIAL_BRIDGE_PUNCT_RE.fullmatch(punctuation) is None:
+        return False
+    logical_lines = punctuation.replace("\r\n", "\n").replace("\r", "\n")
+    return logical_lines.count("\n") <= 1
 
 
 def _has_structural_dial_intent(
@@ -636,18 +641,26 @@ def _stamp_draft_fingerprint(
 _SOURCE_BOUND_SCHEMAS = frozenset(
     (*_EDITOR_SCHEMAS, _REPURPOSING_SCHEMA, _IMAGE_PROMPT_SCHEMA)
 )
-_SOURCE_BOUND_STAGES = frozenset(
-    {"audit", "audit-v2", "repurposing", "image_prompt"}
-)
-SourcePromptBuilder = Callable[[dict[str, Any] | None], str]
+_SOURCE_STAGE_INSTRUCTIONS = {
+    "audit": "Review the committed draft and return only an editorial audit JSON artifact.",
+    "audit-v2": "Review the committed draft and return only an editorial audit JSON artifact.",
+    "repurposing": (
+        "Transform the committed draft and return only a repurposing.v1 JSON artifact."
+    ),
+    "image_prompt": (
+        "Derive image prompts from the committed draft and return only an "
+        "image_prompt.v1 JSON artifact."
+    ),
+}
+_SOURCE_BOUND_STAGES = frozenset(_SOURCE_STAGE_INSTRUCTIONS)
 
 
 def _build_source_prompt(
     job_id: str,
     root: "Path | str",
-    builder: SourcePromptBuilder,
+    stage: str,
 ) -> "tuple[str, str | None]":
-    """Build a prompt and fingerprint from one committed draft byte snapshot."""
+    """Build the fixed stage prompt and fingerprint from one draft snapshot."""
     raw = read_committed_artifact_bytes(job_id, "draft", root=root)
     draft: dict[str, Any] | None = None
     if raw is not None:
@@ -662,9 +675,16 @@ def _build_source_prompt(
                 "source-bound stage requires a committed draft JSON object"
             )
         draft = parsed
-    user_content = builder(draft)
-    if not isinstance(user_content, str):
-        raise TypeError("source prompt builder must return str")
+    draft_json = json.dumps(
+        draft,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    user_content = (
+        f"{_SOURCE_STAGE_INSTRUCTIONS[stage]}\n\n"
+        f"Committed draft JSON:\n{draft_json}"
+    )
     fingerprint = hashlib.sha256(raw).hexdigest() if raw is not None else None
     return user_content, fingerprint
 
@@ -795,7 +815,7 @@ def run_stage(
     job_id: str,
     stage: str,
     model: str,
-    user_content: str | SourcePromptBuilder,
+    user_content: str | None,
     *,
     api_key: str,
     base_url: str = DEFAULT_OWUI_URL,
@@ -809,21 +829,21 @@ def run_stage(
     ValueError / pydantic ValidationError (from the store) if the artifact fails
     its contract -- so a malformed or self-promoting stage output is never persisted.
     """
-    # Source-bound stages receive a builder, not already-built text. The prompt
-    # and fingerprint therefore come from the SAME committed bytes even if a
-    # writer replaced the draft before this function began.
-    prompt_is_source_bound = callable(user_content)
-    if stage in _SOURCE_BOUND_STAGES and not prompt_is_source_bound:
+    # Source-bound stages accept no caller prompt payload. The runner owns the
+    # instruction and draft serialization, so a callback cannot ignore the
+    # snapshotted draft while inheriting its fingerprint.
+    prompt_is_source_bound = stage in _SOURCE_BOUND_STAGES
+    if prompt_is_source_bound and user_content is not None:
         raise ArtifactStoreError(
-            "source-bound stage requires a prompt builder over the committed draft"
+            "source-bound stage uses a runner-owned prompt; user_content must be None"
         )
     if prompt_is_source_bound:
         dispatched_content, dispatch_fingerprint = _build_source_prompt(
-            job_id, root, user_content
+            job_id, root, stage
         )
     else:
         if not isinstance(user_content, str):
-            raise TypeError("user_content must be str or a source prompt builder")
+            raise TypeError("non-source stage user_content must be str")
         dispatched_content = user_content
         dispatch_fingerprint = _draft_fingerprint(job_id, root)
     reply = call_worker(
@@ -839,7 +859,7 @@ def run_stage(
     _enforce_image_prompts(artifact)
     if artifact.get("schema") in _SOURCE_BOUND_SCHEMAS and not prompt_is_source_bound:
         raise ArtifactStoreError(
-            "source-derived artifact requires a prompt built from its committed draft"
+            "source-derived artifact requires a runner-owned source stage prompt"
         )
     # Everything that re-checks the source, reads readiness state, or writes the
     # job sits inside one lock. The pre-dispatch snapshot is compared first;
