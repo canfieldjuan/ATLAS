@@ -606,6 +606,14 @@ class ScopedGmailEmailProvider:
     def __init__(self, client: Any) -> None:
         self._gmail_client = client
 
+    async def _assert_credentials_unchanged(self) -> None:
+        """Fail closed if the credential row moved under a cached token."""
+        checker = getattr(
+            self._gmail_client, "assert_credentials_unchanged", None
+        )
+        if checker is not None:
+            await checker()
+
     async def list_messages(
         self,
         query: str = "is:unread",
@@ -654,7 +662,12 @@ class ScopedGmailEmailProvider:
                     )
                     return None
 
+            # The fence must run before EVERY successful return. An empty
+            # candidate list is still a delivered answer: without this, a
+            # revoke committing during the list request reports an empty but
+            # PRESENT inbox rather than an omitted source.
             if not candidates:
+                await self._assert_credentials_unchanged()
                 return []
 
             # Plain gather() propagates the FIRST exception without waiting for
@@ -697,11 +710,7 @@ class ScopedGmailEmailProvider:
             # the database, so a revoke or rebind that committed during this
             # read would otherwise ship stale mailbox data with the source
             # reported as present. Fence the RESULTS, not just the entry point.
-            checker = getattr(
-                self._gmail_client, "assert_credentials_unchanged", None
-            )
-            if checker is not None:
-                await checker()
+            await self._assert_credentials_unchanged()
             return messages
         finally:
             await self._gmail_client.close()

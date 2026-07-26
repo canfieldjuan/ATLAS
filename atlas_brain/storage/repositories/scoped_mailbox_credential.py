@@ -200,11 +200,14 @@ class ScopedMailboxCredentialRepository:
         refresh_token: str,
     ) -> int:
         context = _exact_context(business_context_id)
-        # Same-context mutations share the refresh gate: a rebind or revoke
+        # Same-context mutations share the refresh GATE: a rebind or revoke
         # arriving while a refresh holds the row would otherwise occupy a pool
-        # connection blocked on the row lock -- the profile the gate exists to
-        # prevent. Cross-context mutations are unaffected.
-        async with _refresh_gate(context), self._slot():
+        # connection blocked on the row lock. They deliberately do NOT take the
+        # portfolio-wide slot -- that reserves headroom against sections which
+        # hold a connection across Google's token endpoint, and this is a short
+        # database-only write. Coupling them would delay an operator revocation
+        # for the length of unrelated contexts' external calls.
+        async with _refresh_gate(context):
             ciphertext, kid = _encrypt_bundle(
                 client_id=client_id,
                 client_secret=client_secret,
@@ -254,7 +257,10 @@ class ScopedMailboxCredentialRepository:
 
     async def revoke_gmail(self, business_context_id: str) -> int | None:
         context = _exact_context(business_context_id)
-        async with _refresh_gate(context), self._slot():
+        # Gate only, not the portfolio slot: revocation is a short
+        # database-only write, and an operator revoking must not queue
+        # behind unrelated contexts' token exchanges.
+        async with _refresh_gate(context):
             row = await self._db().fetchrow(
                 """
                 UPDATE scoped_mailbox_credentials

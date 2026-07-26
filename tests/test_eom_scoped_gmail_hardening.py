@@ -875,3 +875,112 @@ async def test_unchanged_credentials_deliver_normally():
 
     messages = await ScopedGmailEmailProvider(client).list_messages()
     assert [m["id"] for m in messages] == ["m1"]
+
+
+class _EmptyInboxClient(_FencedClient):
+    """Gmail returns no message IDs -- still a delivered answer."""
+
+    async def list_messages(self, query, max_results):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_empty_result_is_fenced_too():
+    """R5/R8: the empty-candidate early return bypassed the fence, so a revoke
+    committing during the list request reported an empty but PRESENT inbox
+    instead of an omitted source."""
+    from atlas_brain.services.email_provider import ScopedGmailEmailProvider
+
+    source = _FenceSource(_GenerationRepo(None), TENANT)  # revoked mid-list
+    client = _EmptyInboxClient(source, generation=3)
+
+    with pytest.raises(repo_mod.ScopedMailboxCredentialUnavailable):
+        await ScopedGmailEmailProvider(client).list_messages()
+
+
+@pytest.mark.asyncio
+async def test_genuinely_empty_inbox_still_delivers_empty():
+    """Boundary second side: an untouched row with no messages is an empty
+    inbox, not an omission."""
+    from atlas_brain.services.email_provider import ScopedGmailEmailProvider
+
+    same = repo_mod.ScopedGmailCredentials(
+        client_id="cid", client_secret="csec", refresh_token="rtok", generation=3
+    )
+    client = _EmptyInboxClient(_FenceSource(_GenerationRepo(same), TENANT), 3)
+
+    assert await ScopedGmailEmailProvider(client).list_messages() == []
+
+
+@pytest.mark.asyncio
+async def test_short_lived_token_is_still_served_from_cache():
+    """R7: a fixed 60s early-refresh margin exceeds a short issued lifetime, so
+    the cached token is never accepted and each of up to 50 hydrations takes the
+    row lock and exchanges again -- ~51 serialized refreshes for one read.
+
+    Drives the REAL _refresh_token cache decision rather than restating the
+    formula: with a 60-second token, the second call must be served from cache.
+    """
+    from atlas_brain.autonomous.tasks.gmail_digest import GmailClient
+
+    exchanges = []
+
+    async def _fake_exchange(*_args, **kwargs):
+        exchanges.append(kwargs.get("refresh_token"))
+        return {"access_token": "short-lived", "expires_in": 60}
+
+    creds = repo_mod.ScopedGmailCredentials(
+        client_id="cid", client_secret="csec", refresh_token="rtok", generation=7
+    )
+
+    class _Lease:
+        credentials = creds
+
+        async def persist_refresh_token(self, _token):
+            raise AssertionError("no rotation in this scenario")
+
+    class _Source:
+        business_context_id = TENANT
+        repository = None
+
+        @asynccontextmanager
+        async def locked_credentials(self):
+            yield _Lease()
+
+    client = GmailClient(credential_source=_Source(), token_exchange=_fake_exchange)
+    try:
+        first = await client._refresh_token()
+        second = await client._refresh_token()
+    finally:
+        await client.close()
+
+    assert first == "short-lived" and second == "short-lived"
+    assert len(exchanges) == 1, (
+        f"a 60s token must remain usable for part of its life; the cache was "
+        f"bypassed and the exchange ran {len(exchanges)} times"
+    )
+    assert client._credential_generation == 7
+
+
+@pytest.mark.asyncio
+async def test_revocation_does_not_queue_behind_the_refresh_budget(row_lock_repo):
+    """R1/R7/R8: revoke performs no external I/O, so it must not wait on the
+    portfolio slot that reserves headroom against token-endpoint calls. An
+    operator revoking must not queue behind unrelated contexts' refreshes.
+
+    The budget is stated outright so the test saturates the SAME semaphore the
+    repository will reach for -- saturating a differently-keyed one would make
+    this pass no matter how revoke behaves.
+    """
+    _, pool = row_lock_repo
+    repo = repo_mod.ScopedMailboxCredentialRepository(pool=pool, refresh_budget=1)
+
+    slot = repo._slot()
+    await slot.acquire()  # the one permit is now held, as a refresh would
+    try:
+        # A different context: only the portfolio slot could couple them.
+        await asyncio.wait_for(
+            repo.revoke_gmail("some-other-context"), timeout=2
+        )
+    finally:
+        slot.release()

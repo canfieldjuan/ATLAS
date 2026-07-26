@@ -398,6 +398,7 @@ class GmailClient:
     def __init__(
         self,
         credential_source: ScopedGmailCredentialSource | None = None,
+        token_exchange=None,
     ) -> None:
         self._access_token: str | None = None
         self._token_expires: float = 0.0
@@ -405,6 +406,15 @@ class GmailClient:
         self._lock = asyncio.Lock()
         self._credential_source = credential_source
         self._credential_generation: int | None = None
+        # Early-refresh margin. A fixed 60s margin exceeds a short issued
+        # lifetime, which makes the cache permanently unusable: every one of the
+        # up to 50 metadata hydrations would take the row lock and exchange
+        # again, turning one read into ~51 serialized refreshes. Never spend
+        # more than half the issued lifetime on the margin.
+        self._token_skew: float = 60.0
+        # Edge seam: tests drive the token endpoint with a double instead of
+        # patching this class's internals.
+        self._token_exchange = token_exchange or self._exchange_refresh_token
 
     async def _ensure_client(self) -> httpx.AsyncClient:
         async with self._lock:
@@ -451,7 +461,10 @@ class GmailClient:
     async def _refresh_token(self) -> str:
         """Refresh OAuth2 access token using the Gmail refresh token."""
         async with self._lock:
-            if self._access_token and time.time() < self._token_expires - 60:
+            if (
+                self._access_token
+                and time.time() < self._token_expires - self._token_skew
+            ):
                 return self._access_token
 
             if self._credential_source is not None:
@@ -472,7 +485,7 @@ class GmailClient:
 
             if self._client is None:
                 self._client = httpx.AsyncClient(timeout=15.0)
-            token_data = await self._exchange_refresh_token(
+            token_data = await self._token_exchange(
                 self._client,
                 client_id=creds.client_id,
                 client_secret=creds.client_secret,
@@ -483,6 +496,7 @@ class GmailClient:
             self._access_token = token_data["access_token"]
             expires_in = token_data.get("expires_in", 3600)
             self._token_expires = time.time() + expires_in
+            self._token_skew = min(60.0, max(0.0, expires_in / 2))
 
             # Auto-persist rotated refresh token
             new_refresh = token_data.get("refresh_token")
@@ -538,7 +552,7 @@ class GmailClient:
 
         async with source.locked_credentials() as lease:
             creds = lease.credentials
-            token_data = await self._exchange_refresh_token(
+            token_data = await self._token_exchange(
                 client,
                 client_id=creds.client_id,
                 client_secret=creds.client_secret,
@@ -557,6 +571,7 @@ class GmailClient:
             self._access_token = token_data["access_token"]
             expires_in = token_data.get("expires_in", 3600)
             self._token_expires = time.time() + expires_in
+            self._token_skew = min(60.0, max(0.0, expires_in / 2))
             # The generation this access token was minted under. _refresh_token
             # short-circuits on the cached token for the next ~hour without
             # touching the database, so a rebind or revoke committing after this
