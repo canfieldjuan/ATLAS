@@ -598,6 +598,127 @@ class GmailEmailProvider:
             return {}
 
 
+class ScopedGmailEmailProvider:
+    """Read-only Gmail provider backed by one exact-context credential source."""
+
+    _METADATA_CONCURRENCY = 5
+
+    def __init__(self, client: Any) -> None:
+        self._gmail_client = client
+
+    async def _assert_credentials_unchanged(self) -> None:
+        """Fail closed if the credential row moved under a cached token."""
+        checker = getattr(
+            self._gmail_client, "assert_credentials_unchanged", None
+        )
+        if checker is not None:
+            await checker()
+
+    async def list_messages(
+        self,
+        query: str = "is:unread",
+        max_results: int = 20,
+        **_kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        """Hydrate candidate IDs with uncollapsed sender evidence."""
+        # Imported here, like the other repository imports in this module, to
+        # keep services -> storage a call-time edge.
+        from ..storage.repositories.scoped_mailbox_credential import (
+            ScopedMailboxCredentialUnavailable,
+        )
+
+        try:
+            candidates = await self._gmail_client.list_messages(
+                query=query,
+                max_results=max_results,
+            )
+            semaphore = asyncio.Semaphore(self._METADATA_CONCURRENCY)
+
+            async def _hydrate(
+                candidate: dict[str, Any],
+            ) -> dict[str, Any] | None:
+                if not isinstance(candidate, dict):
+                    return None
+                message_id = candidate.get("id")
+                if not isinstance(message_id, str) or not message_id:
+                    return None
+                try:
+                    async with semaphore:
+                        return await self._gmail_client.get_message_envelope(
+                            message_id
+                        )
+                except ScopedMailboxCredentialUnavailable:
+                    # Revocation landing mid-hydration is not a per-message
+                    # failure: every remaining read will fail the same way, and
+                    # swallowing it returns a SHORT inbox that the caller cannot
+                    # tell apart from a genuinely short one. Propagate so the
+                    # scoped read marks the source omitted.
+                    raise
+                except Exception as exc:
+                    logger.warning(
+                        "Scoped Gmail metadata read failed for message %s: %s",
+                        message_id,
+                        exc,
+                    )
+                    return None
+
+            # The fence must run before EVERY successful return. An empty
+            # candidate list is still a delivered answer: without this, a
+            # revoke committing during the list request reports an empty but
+            # PRESENT inbox rather than an omitted source.
+            if not candidates:
+                await self._assert_credentials_unchanged()
+                return []
+
+            # Plain gather() propagates the FIRST exception without waiting for
+            # its siblings, and the finally below then closes the shared client
+            # while up to 49 hydrations are still in flight. A survivor that
+            # refreshes would rebuild an AsyncClient after close() set it to
+            # None and leave the replacement unclosed. So: stop at the first
+            # failure, cancel the rest, and DRAIN before returning -- nothing
+            # may still be touching the client when it is closed.
+            tasks = [
+                asyncio.ensure_future(_hydrate(candidate))
+                for candidate in candidates
+            ]
+            try:
+                await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            messages: list[dict[str, Any]] = []
+            failure: BaseException | None = None
+            for task in tasks:
+                if task.cancelled():
+                    continue
+                error = task.exception()
+                if error is not None:
+                    # Only revocation escapes _hydrate; ordinary read failures
+                    # are already absorbed into a dropped message above.
+                    failure = failure or error
+                    continue
+                result = task.result()
+                if result is not None:
+                    messages.append(result)
+            if failure is not None:
+                raise failure
+
+            # A cached access token stays usable for ~an hour without touching
+            # the database, so a revoke or rebind that committed during this
+            # read would otherwise ship stale mailbox data with the source
+            # reported as present. Fence the RESULTS, not just the entry point.
+            await self._assert_credentials_unchanged()
+            return messages
+        finally:
+            await self._gmail_client.close()
+
+    async def send(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise NotImplementedError("Scoped Gmail inbox provider is read-only")
+
+
 # ---------------------------------------------------------------------------
 # ResendEmailProvider  (send-only fallback)
 # ---------------------------------------------------------------------------
@@ -785,9 +906,9 @@ class UnmappedInboxContextError(LookupError):
     """Raised before mailbox I/O when a CRM context has no inbox binding."""
 
 
-def get_scoped_inbox_provider(
+async def get_scoped_inbox_provider(
     business_context_id: str,
-) -> IMAPEmailProvider:
+) -> IMAPEmailProvider | ScopedGmailEmailProvider:
     """Return the single inbox reader explicitly bound to a CRM context.
 
     Scoped readers never use ``CompositeEmailProvider`` because its IMAP error
@@ -807,4 +928,17 @@ def get_scoped_inbox_provider(
             f"No inbox mailbox is bound to business context {context!r}"
         )
 
-    return IMAPEmailProvider(binding)
+    if binding.provider == "imap":
+        return IMAPEmailProvider(binding)
+
+    from ..autonomous.tasks.gmail_digest import GmailClient
+    from ..storage.repositories.scoped_mailbox_credential import (
+        ScopedGmailCredentialSource,
+    )
+
+    source = ScopedGmailCredentialSource(context)
+    if not await source.is_available():
+        raise UnmappedInboxContextError(
+            f"No active Gmail credential is bound to business context {context!r}"
+        )
+    return ScopedGmailEmailProvider(GmailClient(source))
