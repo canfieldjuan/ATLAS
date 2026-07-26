@@ -52,6 +52,16 @@ reviewer reviews against it. No contract, nothing to check against.
 The contract is optional for one-off scratch, mandatory for non-trivial PRs
 (same threshold as the plan doc itself, per `AGENTS.md`).
 
+**A criterion the reviewer cannot disposition is a defect in the contract, and
+the reviewer says so.** Review completion (below) checks each criterion met /
+not met / could-not-determine; a criterion that names an open category rather
+than a structural property -- "no TOCTOU", "all exit paths finalize truthfully",
+"handles every malformed input" -- can never be marked met, so it reopens the
+review indefinitely and defeats the stopping rule. The authoring requirement
+lives in `AGENTS.md` 1a. On review, flag it as **R1** against the plan and ask
+for the property restatement; do not silently work around it by hunting the
+category, which is the behavior that produced 13 rounds on #2195.
+
 ---
 
 ## The rules

@@ -120,6 +120,30 @@ contract surface, the Review Contract must also name the reachability proof:
 the real entrypoint exercised and the observable output/state/artifact/job/gate
 result that proves the surface is wired.
 
+**Every acceptance criterion must be dispositionable.** A reviewer has to be
+able to mark it met / not met / could-not-determine from evidence in the diff --
+that is what the reviewer's completion matrix (`docs/REVIEWER_RULES.md`, Review
+completion) checks against, so a criterion that cannot be dispositioned makes
+the whole review unfinishable no matter how bounded the rest of the pack is.
+
+A criterion states a **structural property** the code either has or lacks. It
+does not name an open category as its target: "no preflight-to-import TOCTOU",
+"all exit paths finalize truthfully", "handles every malformed input" are
+unbounded -- there is no evidence that discharges them, so the reviewer is
+correct to keep producing cases forever. Restate the same intent as a property:
+*"the receipt is constructed before any fallible work, and no path after
+finalization can change the process outcome"* is checkable by reading, and it
+covers the exit paths the open phrasing was reaching for.
+
+The same applies to **risk areas**: name the risk, then the property that closes
+it. A risk area listed without a closing property is an open-ended review
+mandate the builder wrote for themselves.
+
+Where the slice genuinely is open-input or open-execution work, the criterion
+points at the mechanism that closes it -- the evidence-gate of 3k.3 or the
+execution model of 3k.4 -- rather than at the category. Those sections are the
+"how"; this is the requirement that the contract use them.
+
 ### 1b. PR body
 
 For a non-empty human PR that intentionally carries no plan and changes only
