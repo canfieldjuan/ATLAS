@@ -66,15 +66,38 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-_direct_args = None
+def _receipt_dir_from_argv(argv) -> str | None:
+    for index, argument in enumerate(argv):
+        if argument == "--receipt-dir":
+            if index + 1 < len(argv):
+                return argv[index + 1]
+            return None
+        if argument.startswith("--receipt-dir="):
+            value = argument.partition("=")[2]
+            return value or None
+    return None
+
+
+def _argv_requests_dry_run(argv) -> bool:
+    return "--dry-run" in argv
+
+
+def _argv_requests_help(argv) -> bool:
+    return "-h" in argv or "--help" in argv
+
+
+_direct_argv = None
 _validated_git_sha = None
 _receipt_module = None
 if __name__ == "__main__":
+    _direct_argv = sys.argv[1:]
     _direct_parser = _parser()
-    _direct_args = _direct_parser.parse_args()
-    if not _direct_args.dry_run and not _direct_args.receipt_dir:
+    _direct_receipt_dir = _receipt_dir_from_argv(_direct_argv)
+    if _argv_requests_help(_direct_argv):
+        _direct_parser.parse_args(_direct_argv)
+    if not _argv_requests_dry_run(_direct_argv) and not _direct_receipt_dir:
         _direct_parser.error("live writes require --receipt-dir")
-    if _direct_args.receipt_dir:
+    if _direct_receipt_dir:
         if not sys.flags.isolated:
             _direct_parser.error(
                 "receipted execution requires isolated Python startup; "
@@ -866,19 +889,31 @@ async def run(args, receipt=None):
 
 def main(argv=None) -> int:
     parser = _parser()
-    args = _direct_args if argv is None and _direct_args is not None else parser.parse_args(argv)
-    if not args.dry_run and not args.receipt_dir:
-        parser.error("live writes require --receipt-dir")
+    effective_argv = (
+        _direct_argv if argv is None and _direct_argv is not None else argv
+    )
+    receipt_dir = _receipt_dir_from_argv(effective_argv or [])
     receipt = None
-    if args.receipt_dir:
+    if receipt_dir:
         receipt = EomExecutionReceipt(
-            receipt_dir=args.receipt_dir,
+            receipt_dir=receipt_dir,
             tool="import_eom_customers_live",
-            mode="dry-run" if args.dry_run else "write",
+            mode=(
+                "dry-run"
+                if _argv_requests_dry_run(effective_argv or [])
+                else "write"
+            ),
             script_path=Path(__file__),
             git_sha=_validated_git_sha,
         )
-    return run_receipted(receipt, lambda: asyncio.run(run(args, receipt=receipt)))
+
+    def operation() -> int:
+        args = parser.parse_args(effective_argv)
+        if not args.dry_run and not args.receipt_dir:
+            parser.error("live writes require --receipt-dir")
+        return asyncio.run(run(args, receipt=receipt))
+
+    return run_receipted(receipt, operation)
 
 
 if __name__ == "__main__":

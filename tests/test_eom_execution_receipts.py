@@ -416,6 +416,71 @@ def _run_receipted_calendar(
     )
 
 
+def test_source_trust_pins_one_revision_for_validation_and_receipt(
+    tmp_path, monkeypatch
+):
+    completed_process = receipt_module.subprocess.CompletedProcess
+    resolved_sha = "b" * 40
+    sha_calls = 0
+    tracked_revisions = []
+
+    def fake_run(command, **_kwargs):
+        return completed_process(command, 0, stdout="", stderr="")
+
+    def fake_git_sha(_repo_root):
+        nonlocal sha_calls
+        sha_calls += 1
+        return resolved_sha
+
+    def fake_tracked_entries(_repo_root, revision):
+        tracked_revisions.append(revision)
+        return []
+
+    monkeypatch.setattr(receipt_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(receipt_module, "_git_sha", fake_git_sha)
+    monkeypatch.setattr(
+        receipt_module, "_tracked_python_entries", fake_tracked_entries
+    )
+
+    assert receipt_module.establish_source_trust(tmp_path) == resolved_sha
+    assert sha_calls == 1
+    assert tracked_revisions == [resolved_sha]
+
+
+def test_git_attestation_subprocesses_disable_replacement_objects(
+    tmp_path, monkeypatch
+):
+    completed_process = receipt_module.subprocess.CompletedProcess
+    observed_git_commands = []
+
+    def fake_run(command, **kwargs):
+        if command[0] == "git":
+            observed_git_commands.append(
+                (tuple(command), kwargs.get("env", {}).get("GIT_NO_REPLACE_OBJECTS"))
+            )
+        if command[:3] == ["git", "rev-parse", "--verify"]:
+            stdout = GIT_SHA + "\n"
+        elif kwargs.get("text") is False:
+            stdout = b""
+        else:
+            stdout = ""
+        return completed_process(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(receipt_module.subprocess, "run", fake_run)
+
+    assert receipt_module.establish_source_trust(tmp_path) == GIT_SHA
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    receipt_module._materialize_reviewed_python(tmp_path, GIT_SHA, snapshot)
+
+    assert observed_git_commands
+    assert all(disabled == "1" for _command, disabled in observed_git_commands)
+    assert any(
+        command[:2] == ("git", "cat-file")
+        for command, _disabled in observed_git_commands
+    )
+
+
 def _write_process_fixture_files(tmp_path, *, wait_for_rewrite=False):
     mutation_marker = tmp_path / "trusted-mutation"
     ready_marker = tmp_path / "calendar-fetch-started"
@@ -614,6 +679,27 @@ def test_reviewed_launcher_rejects_write_without_receipt_before_import(
     assert list(receipt_dir.iterdir()) == []
 
 
+def test_receipted_invalid_arguments_finalize_exit_2_before_runtime(
+    tmp_path
+):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+
+    result = _run_receipted_calendar(
+        repo,
+        scripts,
+        receipt_dir,
+        extra_args=("--calendar", "invalid-calendar"),
+    )
+
+    assert result.returncode == 2
+    assert "invalid choice" in result.stderr
+    final_path, payload = _load_only_final(receipt_dir)
+    assert final_path.name.endswith(".exit-2.json")
+    assert payload["exit_code"] == 2
+
+
 def test_reviewed_launcher_write_mutates_and_finalizes_receipt(tmp_path):
     extra_files, mutation_marker, _ready, _release = (
         _write_process_fixture_files(tmp_path)
@@ -642,6 +728,49 @@ def test_reviewed_launcher_write_mutates_and_finalizes_receipt(tmp_path):
     assert payload["git_sha"] == receipt_module._git_sha(repo)
     assert payload["outcome_counts"]["created"] == 1
     assert payload["changed_contact_ids"] == [CONTACT_A]
+
+
+def test_reviewed_launcher_cleanup_failure_preserves_finalized_receipt(
+    tmp_path
+):
+    extra_files, _mutation_marker, _ready, _release = (
+        _write_process_fixture_files(tmp_path)
+    )
+    launcher_source = (SCRIPTS / "eom_execution_receipt.py").read_text()
+    extra_files["scripts/eom_execution_receipt.py"] = launcher_source.replace(
+        "def _remove_reviewed_python(snapshot_root: Path) -> None:\n"
+        "    \"\"\"Restore owner permissions only long enough to remove the snapshot.\"\"\"\n",
+        "def _remove_reviewed_python(snapshot_root: Path) -> None:\n"
+        "    \"\"\"Restore owner permissions only long enough to remove the snapshot.\"\"\"\n"
+        "    raise OSError('cleanup failed after finalization')\n",
+        1,
+    )
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral", extra_files=extra_files
+    )
+    process_tmp = tmp_path / "process-tmp"
+    process_tmp.mkdir()
+    env = {
+        **os.environ,
+        "EOM_CALENDAR_RESIDENTIAL": "residential-fixture",
+        "TMPDIR": str(process_tmp),
+    }
+
+    result = _run_receipted_calendar(
+        repo,
+        scripts,
+        receipt_dir,
+        extra_args=("--calendar", "residential"),
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "could not remove reviewed Python snapshot" in result.stderr
+    final_path, payload = _load_only_final(receipt_dir)
+    assert final_path.name.endswith(".exit-0.json")
+    assert payload["exit_code"] == 0
+    for snapshot in process_tmp.glob("atlas-eom-reviewed-python-*"):
+        receipt_module._remove_reviewed_python(snapshot)
 
 
 def test_reviewed_launcher_write_ignores_concurrent_worktree_rewrite(
@@ -831,7 +960,54 @@ def test_process_preflight_rejects_ignored_package_symlink(
     assert list(receipt_dir.iterdir()) == []
 
 
-def test_process_preflight_compares_skip_worktree_source_to_head(tmp_path):
+def test_reviewed_launcher_rejects_git_replacement_refs(tmp_path):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+    subprocess_options = {
+        "cwd": repo,
+        "check": True,
+        "capture_output": True,
+        "text": True,
+    }
+    base_sha = receipt_module.subprocess.run(
+        ["git", "rev-parse", "HEAD"], **subprocess_options
+    ).stdout.strip()
+    (repo / "replacement-note.txt").write_text("replacement\n")
+    receipt_module.subprocess.run(["git", "add", "."], **subprocess_options)
+    receipt_module.subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Receipt Test",
+            "-c",
+            "user.email=receipt-test@example.invalid",
+            "commit",
+            "-qm",
+            "replacement",
+        ],
+        **subprocess_options,
+    )
+    replacement_sha = receipt_module.subprocess.run(
+        ["git", "rev-parse", "HEAD"], **subprocess_options
+    ).stdout.strip()
+    receipt_module.subprocess.run(
+        ["git", "checkout", "-q", base_sha], **subprocess_options
+    )
+    receipt_module.subprocess.run(
+        ["git", "replace", base_sha, replacement_sha], **subprocess_options
+    )
+
+    result = _run_receipted_calendar(repo, scripts, receipt_dir)
+
+    assert result.returncode != 0
+    assert "rejects Git replacement refs" in result.stderr
+    assert list(receipt_dir.iterdir()) == []
+
+
+def test_process_preflight_compares_skip_worktree_source_to_reviewed_revision(
+    tmp_path
+):
     repo, scripts, receipt_dir = _calendar_process_fixture(
         tmp_path, ".cache/neutral"
     )
@@ -865,7 +1041,7 @@ def test_process_preflight_compares_skip_worktree_source_to_head(tmp_path):
     result = _run_receipted_calendar(repo, scripts, receipt_dir)
 
     assert result.returncode != 0
-    assert "tracked Python source to match HEAD" in result.stderr
+    assert "tracked Python source to match the reviewed Git revision" in result.stderr
     assert not marker.exists()
     assert list(receipt_dir.iterdir()) == []
 

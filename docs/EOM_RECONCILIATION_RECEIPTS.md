@@ -28,20 +28,21 @@ already exist, be owned by the current user, and not be group/world writable.
 Each run creates a mode-0600 `.in-progress.json` artifact before the Calendar
 runtime, then exclusively publishes one `.exit-N.json` receipt.
 
-Receipted runs pipe the receipt launcher from the reviewed `HEAD` object into
-Python's isolated `-I` startup. The launcher authenticates the checkout,
-materializes every tracked Python module from the same exact Git SHA into a
-private read-only snapshot, and runs the Calendar entrypoint and its
-repository-local imports from that snapshot. Mutable worktree code therefore
-cannot enter after preflight. Direct
+Receipted runs pipe the receipt launcher selected by `HEAD` into Python's
+isolated `-I` startup. The launcher rejects Git replacement refs, resolves one
+full Git SHA with replacement-object processing disabled, authenticates the
+checkout against that pinned revision, materializes every tracked Python module
+from the same exact Git SHA into a private read-only snapshot, and runs the
+Calendar entrypoint and its repository-local imports from that snapshot.
+Mutable worktree code therefore cannot enter after preflight. Direct
 `python -I scripts/import_eom_customers_live.py --receipt-dir ...` invocation
 is rejected.
 
 The launcher rejects tracked or untracked changes, tracked Python bytes or
-executable modes that differ from `HEAD`, ignored Python import shadows,
-ignored package and module-file symlinks beneath the CLI import roots, and
-bytecode caches for tracked source. Run from the exact clean checkout whose
-`HEAD` SHA belongs in the receipt.
+executable modes that differ from the pinned reviewed revision, ignored Python
+import shadows, ignored package and module-file symlinks beneath the CLI import
+roots, and bytecode caches for tracked source. Run from the exact clean checkout
+whose resolved Git SHA belongs in the receipt.
 
 Receipts contain only source bindings, UTC lifecycle timestamps, non-PII
 counts, and changed contact UUIDs. They never contain credentials, tokens,

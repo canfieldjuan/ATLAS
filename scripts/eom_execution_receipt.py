@@ -32,6 +32,7 @@ OUTCOME_KEYS = {
     "import-planned",
 }
 _REVIEWED_ENTRYPOINTS = {"scripts/import_eom_customers_live.py"}
+_GIT_NO_REPLACE_ENV = "GIT_NO_REPLACE_OBJECTS"
 _PYTHON_IMPORT_SUFFIXES = tuple(
     sorted(
         {
@@ -49,10 +50,16 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _git_env() -> dict[str, str]:
+    """Return an environment that ignores Git replacement objects."""
+    return {**os.environ, _GIT_NO_REPLACE_ENV: "1"}
+
+
 def _git_sha(repo_root: Path) -> str:
     result = subprocess.run(
         ["git", "rev-parse", "--verify", "HEAD"],
         cwd=repo_root,
+        env=_git_env(),
         check=True,
         capture_output=True,
         text=True,
@@ -101,6 +108,7 @@ def _tracked_python_entries(
     tree = subprocess.run(
         ["git", "ls-tree", "-r", "-z", "--full-tree", revision],
         cwd=repo_root,
+        env=_git_env(),
         check=True,
         capture_output=True,
         text=True,
@@ -125,30 +133,33 @@ def _tracked_python_entries(
     return entries
 
 
-def _verify_tracked_python_matches_head(repo_root: Path) -> None:
-    """Compare tracked Python bytes and executable modes directly with HEAD."""
-    entries = _tracked_python_entries(repo_root, "HEAD")
+def _tracked_python_mismatch_error() -> RuntimeError:
+    return RuntimeError(
+        "receipted execution requires tracked Python source to match "
+        "the reviewed Git revision"
+    )
+
+
+def _verify_tracked_python_matches_revision(
+    repo_root: Path, revision: str
+) -> None:
+    """Compare tracked Python bytes and executable modes with one revision."""
+    entries = _tracked_python_entries(repo_root, revision)
 
     for expected_mode, expected_hash, relative_path in entries:
         source = repo_root / relative_path
         try:
             descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
         except OSError as exc:
-            raise RuntimeError(
-                "receipted execution requires tracked Python source to match HEAD"
-            ) from exc
+            raise _tracked_python_mismatch_error() from exc
         try:
             source_stat = os.fstat(descriptor)
             if not stat.S_ISREG(source_stat.st_mode):
-                raise RuntimeError(
-                    "receipted execution requires tracked Python source to match HEAD"
-                )
+                raise _tracked_python_mismatch_error()
             with os.fdopen(descriptor, "rb", closefd=False) as handle:
                 source_bytes = handle.read()
         except OSError as exc:
-            raise RuntimeError(
-                "receipted execution requires tracked Python source to match HEAD"
-            ) from exc
+            raise _tracked_python_mismatch_error() from exc
         finally:
             os.close(descriptor)
         header = f"blob {len(source_bytes)}\0".encode("ascii")
@@ -160,9 +171,7 @@ def _verify_tracked_python_matches_head(repo_root: Path) -> None:
             actual_mode != expected_mode
             or actual_hash != expected_hash
         ):
-            raise RuntimeError(
-                "receipted execution requires tracked Python source to match HEAD"
-            )
+            raise _tracked_python_mismatch_error()
 
 
 def _materialize_reviewed_python(
@@ -173,6 +182,7 @@ def _materialize_reviewed_python(
     batch = subprocess.run(
         ["git", "cat-file", "--batch"],
         cwd=repo_root,
+        env=_git_env(),
         check=True,
         input="".join(
             f"{object_id}\n" for _mode, object_id, _path in entries
@@ -233,8 +243,33 @@ def _remove_reviewed_python(snapshot_root: Path) -> None:
     shutil.rmtree(snapshot_root)
 
 
+def _reject_git_replacement_refs(repo_root: Path) -> None:
+    result = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname)", "refs/replace"],
+        cwd=repo_root,
+        env=_git_env(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if result.stdout.strip():
+        raise RuntimeError("receipted execution rejects Git replacement refs")
+
+
+def _cleanup_reviewed_python(snapshot_root: Path) -> None:
+    try:
+        _remove_reviewed_python(snapshot_root)
+    except Exception as exc:  # noqa: BLE001 -- cleanup must not rewrite outcome
+        print(
+            f"warning: could not remove reviewed Python snapshot: {exc}",
+            file=sys.stderr,
+        )
+
+
 def establish_source_trust(repo_root: Path) -> str:
     """Validate checkout inputs before any repository-local import executes."""
+    _reject_git_replacement_refs(repo_root)
+    git_sha = _git_sha(repo_root)
     status = subprocess.run(
         [
             "git",
@@ -244,16 +279,18 @@ def establish_source_trust(repo_root: Path) -> str:
             "--ignore-submodules=none",
         ],
         cwd=repo_root,
+        env=_git_env(),
         check=True,
         capture_output=True,
         text=True,
     )
     if status.stdout:
         raise RuntimeError("receipted execution requires a clean worktree")
-    _verify_tracked_python_matches_head(repo_root)
+    _verify_tracked_python_matches_revision(repo_root, git_sha)
     ignored = subprocess.run(
         ["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
         cwd=repo_root,
+        env=_git_env(),
         check=True,
         capture_output=True,
         text=True,
@@ -266,6 +303,7 @@ def establish_source_trust(repo_root: Path) -> str:
     tracked_python = subprocess.run(
         ["git", "ls-files", "-z", "--", "*.py"],
         cwd=repo_root,
+        env=_git_env(),
         check=True,
         capture_output=True,
         text=True,
@@ -282,7 +320,7 @@ def establish_source_trust(repo_root: Path) -> str:
             raise RuntimeError(
                 "receipted execution rejects cached bytecode for tracked source"
             )
-    return _git_sha(repo_root)
+    return git_sha
 
 
 def _script_sha256(script_path: Path) -> str:
@@ -529,7 +567,7 @@ def run_receipted(
 
 
 def _launch_reviewed_entrypoint(argv: list[str]) -> None:
-    """Validate the checkout, then execute an allowlisted entrypoint from HEAD."""
+    """Validate the checkout, then execute an allowlisted entrypoint revision."""
     if not sys.flags.isolated:
         raise SystemExit(
             "reviewed EOM execution requires isolated Python startup"
@@ -567,7 +605,7 @@ def _launch_reviewed_entrypoint(argv: list[str]) -> None:
         }
         exec(compile(source, str(source_path), "exec"), namespace)
     finally:
-        _remove_reviewed_python(snapshot_root)
+        _cleanup_reviewed_python(snapshot_root)
 
 
 if __name__ == "__main__":
