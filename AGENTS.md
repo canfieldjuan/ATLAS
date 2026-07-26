@@ -126,6 +126,63 @@ contract surface, the Review Contract must also name the reachability proof:
 the real entrypoint exercised and the observable output/state/artifact/job/gate
 result that proves the surface is wired.
 
+**An acceptance criterion names a claim about the code, or the evidence that
+settles it -- never a bare risk category.** The reviewer marks each criterion
+met / not met / could-not-determine, so a criterion has to point at something to
+look at: a `file:line`, a command and its output, a CI run/job, a generated
+artifact.
+
+Behavioral criteria are not merely allowed, they are **required** wherever this
+section asks for a reachability proof. "POST /api/v1/leads/intake returns 204 to
+a preflight" is a good criterion -- the command and its output settle it.
+
+A **bare risk category** is not a criterion. "No preflight-to-import TOCTOU",
+"no race conditions", "handles every malformed input" name a hazard with no
+referent -- there is nothing to look at. For a contract authored or materially
+revised after this rule lands, fail the contract authoring and ask for the code
+claim or settling evidence; do not hunt the category on the builder's behalf.
+
+Naming the evidence rescues it. *"No unmasked email addresses in the audit
+export -- settled by `tests/test_audit_export.py::test_masks_email_addresses`"*
+is a perfectly good criterion: it is risk-shaped, but it says where to look, and
+the reviewer marks it met or not from that evidence. The defect is the missing
+referent, not the word "no" and not the hazard framing.
+For concurrency or open-execution criteria, a sampled concurrent test is not
+settling evidence by itself: the criterion names the 3k.4 execution model and
+the property-level invariant that holds across every admitted interleaving, with
+tests used as evidence under that model.
+For open-input criteria, a sampled fixture list is not settling evidence by
+itself: the criterion names the 3k.3 evidence-gated mechanism -- the single
+choke-point decision, safe default for ambiguous/unrecognized/malformed input,
+and bounded recognizer evidence -- with tests used as evidence under that
+mechanism.
+For a hazard-labelled concern, name the code claim it translates into --
+*"the receipt is constructed before any fallible work"* -- and the reviewer has
+a place to look.
+
+This is deliberately the narrow rule. It does **not** require criteria to avoid
+universally-quantified claims: "no path after finalization changes the process
+outcome" quantifies over paths and is perfectly reviewable, because the paths
+are in the diff. The defect is naming a hazard with no referent, not breadth.
+
+**Risk areas are not criteria.** They name the hazards the reviewer probes and
+set probe depth; the completion matrix does not disposition them, so a risk area
+may name a category -- that is what the field is for. Where a slice is genuinely
+open-input or open-execution work, the *criterion* points at the mechanism that
+closes it (3k.3's evidence-gate, 3k.4's execution model) rather than at the
+hazard.
+
+**Legacy contracts.** This binds contracts authored or materially revised after
+it lands; a plan already open is not retroactively invalid, since root `plans/`
+holds other sessions' in-flight slices (3a.1). Do not retroactively
+re-disposition a legacy criterion merely because this new authoring rule would
+have asked for clearer wording. Review the legacy contract as authored: follow
+the evidence and diff it points to, disposition normally when that evidence
+settles it, and record `could-not-determine` only if the criterion still has no
+claim or evidence to settle after that review. What is grandfathered is the
+**authoring** finding -- on a pre-existing contract the reviewer records the
+phrasing as an advisory NIT rather than an R1 against the plan.
+
 ### 1b. PR body
 
 For a non-empty human PR that intentionally carries no plan and changes only

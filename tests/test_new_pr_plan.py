@@ -10,6 +10,10 @@ SCRIPT = REPO_ROOT / "scripts" / "new_pr_plan.sh"
 AUDIT_PLAN_DOC = REPO_ROOT / "scripts" / "audit_plan_doc.py"
 
 
+def _compact_ws(text: str) -> str:
+    return " ".join(text.split())
+
+
 def _init_git_repo(path: Path, *, with_state: bool = True) -> None:
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
     if with_state:
@@ -59,6 +63,7 @@ def test_new_pr_plan_creates_agents_plan_skeleton(tmp_path: Path) -> None:
     assert "created plan scaffold: plans/PR-Dev-Workflow-Example.md" in result.stdout
     plan_path = tmp_path / "plans" / "PR-Dev-Workflow-Example.md"
     text = plan_path.read_text(encoding="utf-8")
+    compact_text = _compact_ws(text)
     assert text.startswith("# PR-Dev-Workflow-Example\n")
     assert "Ownership lane: dev-workflow/test" in text
     assert "Slice phase: Workflow/process" in text
@@ -72,6 +77,20 @@ def test_new_pr_plan_creates_agents_plan_skeleton(tmp_path: Path) -> None:
     assert "- Affected surfaces:" in text
     assert "- Risk areas:" in text
     assert "- Reviewer rules triggered:" in text
+    # The scaffold must keep PROMPTING for a settleable contract, not merely
+    # emit the headings: a newly authored acceptance criterion with no code
+    # claim or settling evidence is an authoring defect, while risk areas remain
+    # exempt because the review matrix does not disposition them.
+    # Asserting only the headings let those prompts be deleted while green.
+    assert "names a claim about the code, or the evidence that settles it" in text
+    assert "Do NOT name a BARE risk category" in text
+    assert "fail authoring until the builder names the code claim" in compact_text
+    assert "Naming the evidence rescues it" in compact_text
+    assert "3k.3 evidence-gated mechanism" in compact_text
+    assert "sampled fixture list alone is not enough" in compact_text
+    assert "3k.4 execution model and property-level invariant" in compact_text
+    assert "sampled concurrent test alone is not enough" in compact_text
+    assert "not\n  dispositioned by the review matrix" in text
     assert "### Files touched" in text
     assert "| **Total** | **0** |" in text
 
@@ -82,6 +101,54 @@ def test_new_pr_plan_creates_agents_plan_skeleton(tmp_path: Path) -> None:
         text=True,
     )
     assert audit.returncode == 0
+
+
+def test_contract_rule_preserves_legacy_disposition_behavior() -> None:
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    reviewer_rules = (REPO_ROOT / "docs" / "REVIEWER_RULES.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Do not retroactively\nre-disposition a legacy criterion" in agents
+    assert "review against the contract as authored" in reviewer_rules
+    assert (
+        "Do not mark a legacy\n  criterion `could-not-determine` solely because"
+        in reviewer_rules
+    )
+
+
+def test_contract_rule_qualifies_risk_category_prohibitions(tmp_path: Path) -> None:
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    reviewer_rules = (REPO_ROOT / "docs" / "REVIEWER_RULES.md").read_text(
+        encoding="utf-8"
+    )
+    _init_git_repo(tmp_path)
+    result = _run_new_plan(
+        tmp_path,
+        "Qualifier-Regression",
+        "--lane",
+        "dev-workflow/test",
+    )
+    assert result.returncode == 0
+    scaffold = (tmp_path / "plans" / "PR-Qualifier-Regression.md").read_text(
+        encoding="utf-8"
+    )
+
+    for source in (agents, reviewer_rules, scaffold):
+        assert "never a risk category" not in source
+        assert "forbids a risk category" not in source
+        assert "criterion sits at could-not-determine" not in source
+        assert "test_concurrent_claim" not in source
+
+    assert "never a bare risk category" in agents
+    assert "BARE risk category with no referent" in reviewer_rules
+    assert "Do NOT name a BARE risk category" in scaffold
+    assert "3k.3 evidence-gated mechanism" in _compact_ws(agents)
+    assert "3k.3 evidence-gated mechanism" in _compact_ws(reviewer_rules)
+    assert "3k.3 evidence-gated mechanism" in _compact_ws(scaffold)
+    assert "3k.4 execution model" in _compact_ws(agents)
+    assert "3k.4 execution model" in _compact_ws(reviewer_rules)
+    assert "3k.4 execution model and property-level invariant" in _compact_ws(scaffold)
 
 
 def test_new_pr_plan_does_not_double_prefix_existing_pr_name(tmp_path: Path) -> None:
