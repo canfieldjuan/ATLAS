@@ -20,7 +20,7 @@ This pack sits **under** the existing verdict ladder, it does not replace it:
 | Verdict | Meaning |
 |---|---|
 | **BLOCKER** | A rule below is failed in a way that breaks correctness, security, a contract, or CI. Must fix before merge. |
-| **MAJOR** | A rule is at risk: architectural / scope / pattern concern. Fix if small; else discuss. |
+| **MAJOR** | A rule is at risk: architectural / scope / pattern concern; **or** a proven defect whose blast radius does not warrant blocking. Fix if small; else discuss. |
 | **NIT** | Style / naming / polish. Apply only if 1-line; reviewer marks skip-worthy. |
 | **LGTM** | Every rule R1-R14 is Pass or a reasoned N-A (no Not-Verified outstanding), R14 is satisfied, and all AI findings are fixed-or-waived. |
 
@@ -35,22 +35,28 @@ not drop it, and the level can be raised later once the path is shown.
 
 Three carve-outs, because a missing-evidence finding is not a speculative one:
 
-- **Absent mandatory proof is itself the failure.** Where this pack already
-  makes missing evidence blocking -- the guard boundary-probe on security,
-  billing, data-deletion, customer-visible-output or CI/release surfaces, and a
-  Not-Verified entry under Review completion -- the absence IS the blocker and
-  no exploit path is owed. A guard with only happy-path tests blocks on those
-  surfaces whether or not anyone has found the bypass yet.
+- **Absent mandatory proof is itself the failure path.** Wherever a rule's own
+  **Block if** clause names missing evidence as the defect, the absence IS the
+  blocker and no input sequence is owed. That is general, not a short list: R2's
+  untested new logic and missing regression test, R5's changed contract without
+  contract tests, R4's absent rollback plan, the guard boundary-probe on
+  security / billing / data-deletion / customer-output / CI-release surfaces,
+  and a Not-Verified entry under Review completion all qualify. A guard with
+  only happy-path tests blocks on those surfaces whether or not anyone has yet
+  found the bypass -- "no one has exploited it" is not evidence it is safe.
 - **Established, not necessarily published.** For an exploitable
   authentication, payment, data-access, credential, or report-access flaw,
   `SECURITY.md` routes details privately and forbids putting them in a public
   thread. The public finding states the rule, the surface, and the impact, and
   points at the private report; the failure path is recorded there. Routing it
   privately does not downgrade it.
-- **A failure path is necessary, not sufficient.** Severity is blast radius. A
-  proven but immaterial correctness defect is MAJOR or NIT on the strength of
-  its impact -- proving a path does not oblige BLOCKER, and the ladder's
-  "breaks correctness" line reads as material breakage, not any defect.
+- **A failure path is necessary, not sufficient.** Severity is blast radius, so
+  a proven but immaterial defect is MAJOR or NIT on the strength of its impact.
+  The ladder above is amended to say so: BLOCKER's "breaks correctness" reads as
+  *material* breakage, and MAJOR now explicitly admits a proven low-impact
+  defect rather than being reserved for architectural concerns. Without that
+  amendment the two would contradict and every proven defect would land at
+  BLOCKER by elimination.
 
 **The escape valve from "do not manufacture NITs" is not filing the finding, not
 promoting it.** That instruction bars padding a review with polish; it is not a
