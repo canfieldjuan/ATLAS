@@ -404,6 +404,7 @@ class GmailClient:
         self._client: httpx.AsyncClient | None = None
         self._lock = asyncio.Lock()
         self._credential_source = credential_source
+        self._credential_generation: int | None = None
 
     async def _ensure_client(self) -> httpx.AsyncClient:
         async with self._lock:
@@ -416,6 +417,36 @@ class GmailClient:
             if self._client:
                 await self._client.aclose()
                 self._client = None
+
+    async def assert_credentials_unchanged(self) -> None:  # noqa: D401
+        """Fail closed if the credential row moved under a cached token.
+
+        A successful scoped refresh caches the access token AFTER releasing the
+        ``FOR UPDATE`` lease, and that token stays usable for about an hour. A
+        rebind or revoke committing in between would otherwise be ignored for
+        the rest of the read, delivering data from the old or revoked mailbox
+        with the source reported as present. Callers invoke this before handing
+        results back, so a completed mutation turns into an omitted source
+        rather than stale delivery.
+        """
+        from ...storage.repositories.scoped_mailbox_credential import (
+            ScopedMailboxCredentialUnavailable,
+        )
+
+        source = self._credential_source
+        if source is None or self._credential_generation is None:
+            return
+        current = await source.repository.get_active_gmail(
+            source.business_context_id
+        )
+        if current is None:
+            raise ScopedMailboxCredentialUnavailable(
+                "scoped_gmail_credentials_revoked_during_read"
+            )
+        if current.generation != self._credential_generation:
+            raise ScopedMailboxCredentialUnavailable(
+                "scoped_gmail_credentials_rebound_during_read"
+            )
 
     async def _refresh_token(self) -> str:
         """Refresh OAuth2 access token using the Gmail refresh token."""
@@ -515,12 +546,22 @@ class GmailClient:
                 global_credentials=False,
             )
             new_refresh = token_data.get("refresh_token")
+            generation = creds.generation
             if new_refresh and new_refresh != creds.refresh_token:
-                await lease.persist_refresh_token(new_refresh)
+                # Rotation advances the row's generation, so the fence must
+                # record the value as of the END of the lease. Capturing
+                # creds.generation here would make every rotating refresh look
+                # like a concurrent rebind and omit its own results.
+                generation = await lease.persist_refresh_token(new_refresh)
 
             self._access_token = token_data["access_token"]
             expires_in = token_data.get("expires_in", 3600)
             self._token_expires = time.time() + expires_in
+            # The generation this access token was minted under. _refresh_token
+            # short-circuits on the cached token for the next ~hour without
+            # touching the database, so a rebind or revoke committing after this
+            # point is invisible to the read unless we fence on it explicitly.
+            self._credential_generation = generation
 
         logger.debug("Refreshed scoped Gmail access token")
         return self._access_token

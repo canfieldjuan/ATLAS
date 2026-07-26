@@ -345,11 +345,11 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 21 |
 | `CLAUDE.md` | 33 |
-| `atlas_brain/autonomous/tasks/gmail_digest.py` | 199 |
+| `atlas_brain/autonomous/tasks/gmail_digest.py` | 240 |
 | `atlas_brain/config.py` | 20 |
 | `atlas_brain/mcp/crm_server.py` | 73 |
 | `atlas_brain/services/customer_context.py` | 51 |
-| `atlas_brain/services/email_provider.py` | 121 |
+| `atlas_brain/services/email_provider.py` | 131 |
 | `atlas_brain/storage/migrations/350_scoped_mailbox_credentials.sql` | 29 |
 | `atlas_brain/storage/migrations/__init__.py` | 175 |
 | `atlas_brain/storage/repositories/scoped_mailbox_credential.py` | 417 |
@@ -357,7 +357,7 @@ Parked hardening: none.
 | `plans/PR-EOM-Scoped-Gmail-DB-Credentials.md` | 363 |
 | `plans/archive/PR-EOM-Mailbox-Context-Binding.md` | 0 |
 | `tests/test_eom_mailbox_context_binding.py` | 39 |
-| `tests/test_eom_scoped_gmail_credentials.py` | 723 |
-| `tests/test_eom_scoped_gmail_hardening.py` | 776 |
+| `tests/test_eom_scoped_gmail_credentials.py` | 725 |
+| `tests/test_eom_scoped_gmail_hardening.py` | 877 |
 | `tests/test_migrations_runner.py` | 394 |
-| **Total** | **3435** |
+| **Total** | **3589** |

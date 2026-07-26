@@ -150,6 +150,7 @@ async def test_scoped_rotation_finishes_before_cancellation_propagates():
             client_id="client",
             client_secret="secret",
             refresh_token="old-refresh",
+            generation=1,
         )
 
         async def persist_refresh_token(self, token):
@@ -212,6 +213,7 @@ async def test_scoped_refresh_failure_preserves_recorded_cancellation():
             client_id="client",
             client_secret="secret",
             refresh_token="old-refresh",
+            generation=1,
         )
 
         async def persist_refresh_token(self, _token):

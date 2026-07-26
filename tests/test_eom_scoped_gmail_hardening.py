@@ -774,3 +774,104 @@ async def test_two_connection_pool_still_permits_refresh(row_lock_repo):
     async with repo.locked_gmail(TENANT) as locked:
         assert locked.credentials.refresh_token == "rtok"
     pool.holder_done.set()
+
+
+class _FencedClient:
+    """Gmail client double carrying the generation fence, so the provider's
+    result-fencing can be exercised without a live Google exchange."""
+
+    def __init__(self, source, generation):
+        self._source = source
+        self._generation = generation
+        self.closed = False
+
+    async def list_messages(self, query, max_results):
+        return [{"id": "m1"}]
+
+    async def get_message_envelope(self, message_id):
+        return {"id": message_id, "from": "a@example.com"}
+
+    async def assert_credentials_unchanged(self):
+        from atlas_brain.autonomous.tasks.gmail_digest import GmailClient
+
+        # Reuse the real implementation against this double's state.
+        return await GmailClient.assert_credentials_unchanged(self)
+
+    @property
+    def _credential_source(self):
+        return self._source
+
+    @property
+    def _credential_generation(self):
+        return self._generation
+
+    async def close(self):
+        self.closed = True
+
+
+class _FenceSource:
+    def __init__(self, repository, business_context_id):
+        self.repository = repository
+        self.business_context_id = business_context_id
+
+
+class _GenerationRepo:
+    """Repository double returning whatever the row currently looks like."""
+
+    def __init__(self, credentials):
+        self._credentials = credentials
+
+    async def get_active_gmail(self, business_context_id):
+        return self._credentials
+
+
+@pytest.mark.asyncio
+async def test_revoke_during_read_is_not_delivered_from_a_cached_token():
+    """R3/R8: a successful refresh caches the access token AFTER releasing the
+    lease, and _refresh_token then short-circuits on it for ~an hour without
+    rereading the row. A revoke committing mid-read would otherwise return the
+    revoked mailbox's data with the source reported as present."""
+    from atlas_brain.services.email_provider import ScopedGmailEmailProvider
+
+    source = _FenceSource(_GenerationRepo(None), TENANT)  # row now gone
+    client = _FencedClient(source, generation=3)
+
+    with pytest.raises(repo_mod.ScopedMailboxCredentialUnavailable) as exc:
+        await ScopedGmailEmailProvider(client).list_messages()
+
+    assert "revoked_during_read" in str(exc.value)
+    assert client.closed
+
+
+@pytest.mark.asyncio
+async def test_rebind_during_read_is_not_delivered_from_a_cached_token():
+    """Same fence, other mutation: a rebind advances generation, so the cached
+    token belongs to the PREVIOUS mailbox."""
+    from atlas_brain.services.email_provider import ScopedGmailEmailProvider
+
+    rebound = repo_mod.ScopedGmailCredentials(
+        client_id="cid", client_secret="csec", refresh_token="rtok", generation=4
+    )
+    source = _FenceSource(_GenerationRepo(rebound), TENANT)
+    client = _FencedClient(source, generation=3)
+
+    with pytest.raises(repo_mod.ScopedMailboxCredentialUnavailable) as exc:
+        await ScopedGmailEmailProvider(client).list_messages()
+
+    assert "rebound_during_read" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_unchanged_credentials_deliver_normally():
+    """Boundary second side: an untouched row must still deliver, or the fence
+    has turned every scoped read into an omission."""
+    from atlas_brain.services.email_provider import ScopedGmailEmailProvider
+
+    same = repo_mod.ScopedGmailCredentials(
+        client_id="cid", client_secret="csec", refresh_token="rtok", generation=3
+    )
+    source = _FenceSource(_GenerationRepo(same), TENANT)
+    client = _FencedClient(source, generation=3)
+
+    messages = await ScopedGmailEmailProvider(client).list_messages()
+    assert [m["id"] for m in messages] == ["m1"]

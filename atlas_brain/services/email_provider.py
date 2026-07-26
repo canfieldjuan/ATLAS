@@ -692,6 +692,16 @@ class ScopedGmailEmailProvider:
                     messages.append(result)
             if failure is not None:
                 raise failure
+
+            # A cached access token stays usable for ~an hour without touching
+            # the database, so a revoke or rebind that committed during this
+            # read would otherwise ship stale mailbox data with the source
+            # reported as present. Fence the RESULTS, not just the entry point.
+            checker = getattr(
+                self._gmail_client, "assert_credentials_unchanged", None
+            )
+            if checker is not None:
+                await checker()
             return messages
         finally:
             await self._gmail_client.close()
