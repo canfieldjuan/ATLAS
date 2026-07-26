@@ -1472,7 +1472,8 @@ repository. A separate builder session opens PRs; you audit them
 and post one consolidated review per push with a verdict at:
 
 - BLOCKER: correctness, security, contract break, or CI red.
-- MAJOR: architectural / scope / pattern concern.
+- MAJOR: architectural / scope / pattern concern, or a proven defect
+  whose blast radius does not warrant blocking.
 - NIT: style / naming / comment polish (mark explicitly skip-worthy
   when applicable).
 - LGTM: all gates green, no remaining concerns.
