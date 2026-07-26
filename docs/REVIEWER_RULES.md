@@ -354,3 +354,22 @@ recur: a new `scripts/audit_*.py`, a new rule ID here, a new path trigger above,
 a line in the recurring-lapse checklist, or a Review Contract template change.
 **No escaped defect is fixed only once.** This is the reviewer-side mirror of
 the builder's `HARDENING.md` + recurring-lapse flywheel.
+
+**The ratchet releases too.** As written this section only ever adds, and the
+reviewer's mandate grows with it -- every added rule is another category to hunt
+on every future PR, forever, which is a cost paid by every subsequent review.
+So each addition is reviewed for removal on the same terms it was added:
+
+- A rule, path trigger, or checklist line that **has not fired** in the last
+  ~50 merged PRs is either redundant with something else here or is addressing a
+  failure mode that has stopped happening. Remove it, or state why it stays.
+- One whose firings are **consistently waived** is mis-scoped, not load-bearing.
+  Re-scope it to what actually blocks, or remove it.
+- Removals are recorded the same way additions are, with the reasoning, so a
+  removal is a decision and not an erosion.
+
+Nothing here weakens the "no escaped defect is fixed only once" rule -- an
+escaped defect still converts into mechanism. This governs what happens to that
+mechanism afterwards, so the pack stays the size a reviewer can actually apply.
+A checklist nobody can finish is the failure mode Review completion exists to
+prevent, and an unbounded ratchet recreates it one rule at a time.
