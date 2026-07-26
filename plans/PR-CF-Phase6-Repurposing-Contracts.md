@@ -13,7 +13,7 @@ deterministic gates. Image GENERATION (ComfyUI) is deliberately not here --
 the epic keeps prompt designer and generator split, and generation is
 human-triggered and VRAM-guarded.
 
-**Diff-budget overage (~1,190 LOC vs the 400 soft cap) — why this slice is
+**Diff-budget overage (~3,150 LOC vs the 400 soft cap) — why this slice is
 indivisible.** The two contracts, their stage admission, and their
 deterministic gates are one enforceable behaviour, and splitting them
 produces a strictly worse intermediate state:
@@ -26,7 +26,7 @@ produces a strictly worse intermediate state:
 * stage admission without either would let unvalidated artifacts land in
   the git-backed job folder under a Phase 6 stage name.
 
-Roughly 60% of the LOC is tests (four review rounds of adversarial
+Roughly 46% of the LOC is tests (ten review rounds of adversarial
 regressions, kept because each pins a defect that actually shipped in an
 earlier revision of this branch). The behaviour itself is two contracts,
 one enforcement hook, and one lineage check.
@@ -60,17 +60,22 @@ one enforcement hook, and one lineage check.
     REJECTED (proving the freeze); self-contradictory worker metadata is
     still refused rather than repaired.
   - **Store concurrency + write atomicity.** Readiness reads the job
-    folder and then writes it, so both must sit in one critical section,
-    and a failed commit must leave no residue for the next read to trust.
-    Adds a re-entrant per-job `flock` and all-or-nothing artifact writes.
-    Acceptance: readiness is decided with the lock HELD (mutation-checked)
-    and released after; a failed commit restores the previous bytes and
-    leaves nothing staged.
+    history and then writes it, so both must sit in one critical section.
+    Canonical readiness inputs must come from the committed Git tree, never
+    mutable worktree/index residue. Adds a re-entrant per-job `flock`,
+    committed-artifact reads, and failure cleanup that restores the previous
+    committed bytes/index state. Acceptance: readiness is decided with the
+    lock HELD (mutation-checked) and released after; a failed commit is never
+    readable as canonical source state, even if interruption prevents cleanup.
+    A source fingerprint is also captured before worker dispatch and compared
+    again under the lock, so a response can never be stamped against a
+    same-revision draft that replaced the one present when work began.
 
 ## Scope (this PR)
 
 Ownership lane: content-factory
 Slice phase: vertical slice
+Max files: 8
 
 1. `atlas_brain/schemas/content_factory.py`:
    - `ChannelVariant` + `RepurposingPackage` (`repurposing.v1`): non-empty
@@ -88,8 +93,10 @@ Slice phase: vertical slice
    `_enforce_image_prompts` gates the POSITIVE prompt text only, verifying
    each prompt independently (`negative_prompt` is an exclusion list and is
    deliberately excluded; joining items would synthesize cross-prompt
-   claims). Prompt PII is stricter than body copy: international phone
-   forms fail here.
+   claims). Prompt PII is stricter than body copy: international phonewords
+   with bounded dial evidence and IDNA-equivalent email separators fail here,
+   while detached numeric/art-direction prose remains admissible, including
+   renderer nouns that trail an ambiguous candidate.
    Blank bodies/prompts fail closed via a shared `_deterministic_verdict`.
 4. Proof: contract invariants both directions + real-entrypoint tests
    through `run_stage`.
@@ -112,8 +119,14 @@ Slice phase: vertical slice
      unchanged and REJECTS the new fingerprint field; v1/v2 worker replies
      normalize to v3; contradictory `schema_version` still fails.
   7. Concurrency + atomicity (rounds 8-9): readiness is decided under the
-     per-job lock and the lock is released afterwards; a failed commit
-     leaves neither modified content on disk nor a staged path.
+     per-job lock and the lock is released afterwards; readiness reads the
+     committed Git tree, so a failed/uncommitted artifact cannot authorize a
+     later stage. An ordinary raised commit failure also restores the prior
+     worktree bytes and index state.
+  8. Dispatch binding (round 10): the committed draft fingerprint observed
+     before the worker call must still match under the job lock before any
+     audit, repurposing, or image-prompt response may persist, including an
+     unready Phase 6 intermediate artifact.
 - Reachability proof: `run_stage(job, "repurposing"|"image_prompt", ...)`,
   the same entrypoint the four existing stages use; artifacts land in the
   git-backed job folder.
@@ -121,11 +134,74 @@ Slice phase: vertical slice
   locking, runner enforcement and audit normalization. The audit stage's
   persisted VERSION changes (v3); its decision behavior does not. No change
   to image generation.
-- Risk areas: none live -- no worker wrappers are wired to these stages
-  yet (next slice), so this cannot alter current pipeline behavior.
+- Risk areas: persisted-contract compatibility, PII false positives/negatives,
+  and the per-job Git store's concurrency/crash boundary. No worker wrappers
+  are wired to the Phase 6 stages yet (next slice), so those new stages cannot
+  alter current pipeline behavior.
 - Reviewer rules triggered: R1 (#2109 Phase 6), R2 (both-direction tests),
-  R3 (gate cannot be self-reported), R5 (no existing-stage behavior
-  change), R10 (one advisory grammar shared by three artifacts), R14.
+  R3 (gate cannot be self-reported), R5 (versioned audit compatibility),
+  R6 (failed-write recovery), R8 (per-job serialization), R10 (one advisory
+  grammar shared by three artifacts), R13 (class findings), R14.
+
+### Decision-Seam Analysis
+
+- **One decision:** `_phone_evidence` decides whether a mixed digit/letter
+  candidate carries enough bounded mechanical evidence to be contact data
+  rather than renderer prose.
+- **Why the seam was wrong:** treating keypad-mappable spelling as sufficient
+  evidence made `212 art deco` a phone number, while limiting the accepted
+  structure to NANP membership missed explicit international phonewords.
+  Earlier rounds also equated any attached letters with vanity and stopped
+  before space-separated suffixes. These are both-direction failures at one
+  admission seam, not separate spellings to enumerate.
+- **Structural direction:** attached NANP vanity spelling is structural
+  evidence. Detached spelling requires a preceding structural dial marker; an
+  international spelling additionally requires an explicit `+`/`00` prefix and
+  must map inside E.164's digit bound. No evidence defaults to ordinary renderer
+  description. The oracle crosses renderer specifications, ordinary three-digit
+  art directions, and trailing renderer nouns on the admit side, and separator
+  partitions plus domestic/international prefixes on the reject side.
+
+### Execution model
+
+- **Selected closed-surface components:** Git's content-addressed committed
+  tree is the canonical artifact source, and the operating system's `flock`
+  supplies per-file mutual exclusion. Git closes the durable-read seam:
+  worktree/index bytes do not exist to a canonical reader until a commit
+  records them. `flock` closes the cooperative scheduling seam while the
+  process is alive and the kernel releases it on process exit. Worker
+  transport remains outside the lock; pre-dispatch snapshot/under-lock
+  comparison closes that interval without holding a filesystem lock over a
+  network call.
+- **Admitted actors and invariant:** synchronous `run_stage` /
+  `write_artifact` calls that use this store, possibly from multiple threads
+  or processes, against one trusted local root. The lock identity is the
+  resolved root plus job id. For every interleaving of those actors, only one
+  call for that job may read committed readiness inputs and commit its result;
+  a ready artifact therefore binds to the draft/audit pair from the committed
+  tree observed inside its critical section. Source-derived stages also
+  snapshot the committed draft immediately before dispatch and compare that
+  snapshot under the lock before writing; a cooperative draft replacement
+  during worker execution makes the response stale and unpersistable.
+- **Failure boundary:** an ordinary raised Git failure restores the target's
+  previous committed bytes and index entry. Abrupt process death or
+  `BaseException` may leave mutable worktree/index residue, but the kernel
+  releases the lock and subsequent readiness reads ignore that residue by
+  reading Git `HEAD`. A later write to that stage overwrites the target from
+  canonical input. Duplicate identical writes create no new commit;
+  out-of-order ready writes fail the committed revision/fingerprint checks.
+- **Assumptions:** the root, `.git` directory, and `.locks` directory are
+  trusted same-user local state; all writers use this API; Git and POSIX
+  `flock` are available; an external process that mutates the job repository
+  while bypassing the lock is outside the model and unsupported.
+- **Rejected component (hand-roll disclosure):** a database transaction would
+  require replacing the accepted per-job Git artifact/audit surface with new
+  schema and repository wiring. That is a storage migration, not a compatible
+  primitive for this vertical slice. No lease, retry service, clock protocol,
+  or cross-host coordinator is introduced.
+- **One execution surface:** only the existing per-job Git artifact store is
+  coordinated. Worker transport, image generation, and any future database
+  storage remain outside this slice.
 
 ### Review round 1 (Codex)
 
@@ -350,16 +426,19 @@ Four findings, all verified against the code before acting and all fixed.
    vanity number are DIGIT SUBSTITUTES, so the token must (a) lead with an
    area code -- exactly 3 digits, or "1" plus 3 -- and (b) map through the
    phone keypad to a syntactically valid NANP number. A spec's leading group
-   is 2 or 4 digits, so the whole class renders. The other direction is
-   closed by extending each candidate with up to three following alpha words,
-   which cannot over-reach because the same two conditions still apply.
+   is 2 or 4 digits, so the whole class renders. Space-joined suffixes extend
+   only while the NANP symbol-count bound remains reachable, so every possible
+   partition of a seven-letter suffix is covered without an arbitrary
+   word-count cap.
 
 2. **P1 — a failed commit left artifact residue the readiness gate trusted.**
    `write_artifact` wrote and staged the file before committing, so a commit
-   failure left the job's modified draft artifact in the working tree with no commit
-   recording it -- and the readiness gate reads the working tree. Writes are
-   now all-or-nothing: on any failure the previous bytes are restored (or the
-   file removed if the stage had none) and the path unstaged.
+   failure left the job's modified draft artifact in the working tree with no
+   commit recording it -- and the readiness gate read the working tree.
+   Readiness now reads committed Git objects only, so uncommitted residue
+   cannot become source state. Ordinary raised failures also restore the
+   previous committed bytes/index entry; process-death residue remains
+   non-canonical and is ignored.
 
 3. **P2 — the governing contract did not cover round 8's changes.** The
    Problem-derived and Review Contracts still said "must not change existing
@@ -374,7 +453,116 @@ Four findings, all verified against the code before acting and all fixed.
    format/control characters, so `email` and `email<ZWSP>` collide.
 
 Both P1 fixes are mutation-checked: reverting either makes the new tests
-fail, so they are load-bearing rather than vacuous.
+fail, so they are load-bearing rather than vacuous. The execution model above
+records the current-main `AGENTS.md` 3k.4 boundary.
+
+### Review round 10 (Codex)
+
+Five findings, all verified against the code before acting and fixed at their
+shared decision/execution seams.
+
+1. **P1 — international phonewords bypassed a NANP-only decision.** An
+   explicit `+`/`00` prefix plus dial intent and keypad-mappable spelling now
+   admits a bounded 7-15 digit international candidate without pretending it
+   belongs to NANP.
+2. **P2 — detached prose was treated as vanity spelling.** Space-joined alpha
+   extensions no longer prove contact data by themselves. They require nearby
+   dial intent, so ordinary three-digit renderer prose such as `room 212 art
+   deco sign` remains admissible. Attached NANP vanity syntax stays structural
+   evidence.
+3. **P2 — default-ignorable marks split routing identities.** The channel
+   routing key now drops the Unicode default-ignorable class, including
+   variation selectors and combining grapheme joiners, as well as format and
+   control characters. Visible labels that differ only by those marks collide.
+4. **P1 — post-worker fingerprinting attested to the wrong draft.** The runner
+   now snapshots committed draft identity before dispatch and compares it
+   under the per-job lock before persisting any source-derived response.
+   Audit, repurposing, and image-prompt artifacts all reject a same-revision
+   replacement that lands while their worker is running.
+5. **P1 — IDNA-equivalent email separators bypassed the prompt gate.** Email
+   admission normalizes U+3002, U+FF0E, and U+FF61 to the ASCII domain-label
+   separator before matching; findings remain redacted.
+
+The phone oracle covers both directions from grammars: domestic separator
+partitions and international prefix/spelling combinations reject under dial
+evidence, while three-digit values crossed with art-direction phrases admit.
+The dispatch tests replace the committed draft inside the worker boundary, so
+moving the snapshot back after dispatch makes them fail.
+
+### Review round 11 (Codex, follow-up PR #2201)
+
+Two findings, both verified against the published follow-up before acting and
+fixed at the generating operation rather than at the reported strings.
+
+1. **P1 — removing ignorables after NFKC left composition-sensitive aliases.**
+   A combining grapheme joiner between a base and combining mark could block
+   canonical composition before being removed, so `é` and
+   `e<U+034F><U+0301>` remained distinct routing keys. Routing now removes the
+   full default-ignorable/format/control class before NFKC. Generated proofs
+   cross four canonical compositions with four ignorable marks.
+2. **P1 — the numeric separator grammar accepted one whitespace code point.**
+   Extra formatting whitespace split an international phoneword before its
+   explicit prefix and keypad spelling could be evaluated together. Numeric
+   groups now consume a whitespace run as one separator. The existing group
+   cap, compact E.164 symbol bound, explicit international prefix, and bounded
+   intent gate remain unchanged; generated proofs vary prefixes, whitespace
+   classes, and run widths, with detached prose proving the passing side.
+
+### Review round 12 (Codex, follow-up PR #2201)
+
+Three findings, all verified against the published follow-up and fixed at the
+shared parsing, evidence, and source-construction boundaries.
+
+1. **P1 — compatibility/separator spelling changed the phone verdict.** Phone
+   admission now classifies an NFKC-normalized view and shares one dial
+   separator grammar across tokenization, splitting, and compaction. Generated
+   proofs cross compatibility forms and separator choices, including slash,
+   against the same semantic oracle.
+2. **P1 — proximity to an open intent vocabulary was not structural evidence.**
+   Detached phonewords now require a finite bridge between the dial marker and
+   candidate. The oracle crosses direct/functional bridge evidence against
+   descriptive intervening words; ambiguous prose defaults to admissible.
+3. **P1 — the pre-dispatch fingerprint did not bind caller-built prompt text.**
+   Source-bound stages now take a prompt builder. `run_stage` reads committed
+   draft bytes once, builds the prompt from their parsed document, and hashes
+   those same bytes before dispatch. The existing under-lock re-read still
+   rejects a replacement during the worker call.
+
+### Review round 13 (Codex, follow-up PR #2201)
+
+Three findings, all verified against the published follow-up and corrected at
+the same classifier and source-construction seams.
+
+1. **P1 — slash-delimited numeric renderer values entered the unconditional
+   E.164 shortcut.** Compact explicit-prefix digits remain strong evidence;
+   slash-delimited numeric shapes now pass through the structural-intent
+   decision. Generated proofs keep slash phonewords and structurally governed
+   numbers failing while renderer dimensions and dates remain admissible.
+2. **P1 — line-break formatting split direct dial syntax.** The finite bridge
+   now admits exactly one logical LF, CR, or CRLF while continuing to reject
+   paragraph breaks and descriptive intervening words.
+3. **P1 — an arbitrary prompt callback could ignore its draft argument.**
+   Source-bound stages now accept no caller prompt payload. The runner owns the
+   fixed stage instruction and deterministic serialization of the committed
+   draft snapshot, then hashes the same source bytes and retains the under-lock
+   comparison.
+
+### Review round 14 (Codex, follow-up PR #2201)
+
+Three findings, all verified against the published follow-up and corrected at
+the same classifier and source-construction seams.
+
+1. **P1 - trailing renderer nouns were reverse dial intent.** Ambiguous
+   detached candidates now require structural dial evidence before the
+   candidate; renderer nouns such as `contact sheet` and `text treatment` after
+   `212 art deco` remain admissible prose.
+2. **P1 - parenthesized phoneword groups missed the shared separator grammar.**
+   Parentheses are parsed by the bounded dial grammar, so `Call +44 (800)
+   FLOWERS` receives the same verdict as its unparenthesized and numeric
+   keypad-equivalent forms.
+3. **P1 - a missing committed draft became JSON null.** Source-bound stages now
+   require a valid committed draft before constructing the runner-owned prompt
+   or dispatching the worker.
 
 ### Files touched
 
@@ -383,6 +571,7 @@ fail, so they are load-bearing rather than vacuous.
 - `atlas_brain/services/content_factory_runner.py`
 - `atlas_brain/services/content_factory_store.py`
 - `plans/PR-CF-Phase6-Repurposing-Contracts.md`
+- `plans/PR-CF-Phase6-Round10-Remediation.md`
 - `tests/test_content_factory_runner.py`
 - `tests/test_content_factory_schemas.py`
 
@@ -391,8 +580,13 @@ fail, so they are load-bearing rather than vacuous.
 Two artifacts, two stages, one enforcement idea reused: the deterministic
 verdict is always computed by the runner from the artifact's own text and
 overwrites whatever the worker claimed. Variants get a per-variant verdict
-because each ships independently; the prompt set gets one verdict over all
-prompt text because it is rendered as a unit.
+because each ships independently; image prompts are checked independently and
+their redacted hits aggregate into the prompt-set verdict. Readiness consumes
+committed Git objects inside one per-job critical section, and source identity
+is snapshotted before worker dispatch then rechecked inside that section, so
+mutable residue or a mid-worker draft replacement cannot become approval input.
+Source-bound prompts require a committed draft object before dispatch; missing
+source is not a serializable stage input.
 
 ## Intentional
 
@@ -428,31 +622,35 @@ Parked hardening: none new.
         tests/test_content_factory_store.py \
         tests/test_content_factory_copy_verification.py \
         tests/test_leads_intake.py -q
-    # -> 620 passed (311 new; incl. the round-6 generative oracle, the
-    #    round-7 casing/content-binding probes, and the round-8
-    #    descriptive-numbers x dial-words class-closure oracle)
+    # -> 956 passed (incl. the round-6 contact oracle, round-7
+    #    content-binding probes, round-8 descriptive-number boundary, and
+    #    rounds 9-10 separator-partition, international/detached-prose,
+    #    IDNA, dispatch-binding, and committed-residue proofs, plus round-11
+    #    canonical-composition/whitespace-run proofs and round-12 normalized
+    #    parser and structural-bridge proofs, round-13 slash/line-break
+    #    boundaries and runner-owned prompt-construction proofs, and round-14
+    #    parenthesized phonewords, trailing renderer nouns, and missing-source
+    #    pre-dispatch proofs)
     #
     # Mutation check on the round-8 lock test: removing `with job_lock(...)`
     # from run_stage makes test_run_stage_holds_job_lock_across_validation_
     # and_write FAIL, so the assertion is load-bearing rather than vacuous.
     #
-    # Repo-wide: 20155 passed / 169 failed / 8 collection errors. Every
-    # failure and error reproduces identically on a stashed (clean) tree --
-    # they are pre-existing local dependency issues in invoicing / mcp /
-    # scheduler / reasoning, and none are in a file this diff touches.
-
-- `python -m py_compile` clean (SyntaxWarning as error) on touched modules.
+- Ruff, `python -m py_compile`, and `git diff --check` passed on the touched
+  Python/diff surface.
+- Guard class-closure advisory and plan shape/files/diff-size/rule audits
+  passed against current `origin/main`.
 - NOT run: live worker pass (no wrappers wired yet, by design).
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/schemas/content_factory.py` | 266 |
-| `atlas_brain/services/content_factory_copy_verification.py` | 20 |
-| `atlas_brain/services/content_factory_runner.py` | 557 |
-| `atlas_brain/services/content_factory_store.py` | 133 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 417 |
-| `tests/test_content_factory_runner.py` | 957 |
-| `tests/test_content_factory_schemas.py` | 269 |
-| **Total** | **2619** |
+| `atlas_brain/schemas/content_factory.py` | 60 |
+| `atlas_brain/services/content_factory_runner.py` | 365 |
+| `atlas_brain/services/content_factory_store.py` | 102 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 285 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 296 |
+| `tests/test_content_factory_runner.py` | 686 |
+| `tests/test_content_factory_schemas.py` | 68 |
+| **Total** | **1862** |
