@@ -23,8 +23,8 @@ services:
       - key: ATLAS_DB_PASSWORD
         sync: false
       - key: ATLAS_INVOICING_RECEIVABLES_API_ENABLED
-        value: "true"
-      - key: ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN
+        value: "false"
+      - key: ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256
         sync: false
       - key: ATLAS_EOM_RUN_MIGRATIONS
         value: "false"

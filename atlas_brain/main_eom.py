@@ -114,6 +114,9 @@ app = FastAPI(
         "mounted in this profile."
     ),
     version="0.1.0",
+    openapi_url=None,
+    docs_url=None,
+    redoc_url=None,
     lifespan=lifespan,
 )
 
