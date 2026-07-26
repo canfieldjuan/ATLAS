@@ -332,12 +332,12 @@ Parked hardening: none.
 | `atlas_brain/services/email_provider.py` | 86 |
 | `atlas_brain/storage/migrations/350_scoped_mailbox_credentials.sql` | 29 |
 | `atlas_brain/storage/migrations/__init__.py` | 115 |
-| `atlas_brain/storage/repositories/scoped_mailbox_credential.py` | 343 |
+| `atlas_brain/storage/repositories/scoped_mailbox_credential.py` | 356 |
 | `plans/INDEX.md` | 1 |
 | `plans/PR-EOM-Scoped-Gmail-DB-Credentials.md` | 343 |
 | `plans/archive/PR-EOM-Mailbox-Context-Binding.md` | 0 |
 | `tests/test_eom_mailbox_context_binding.py` | 39 |
 | `tests/test_eom_scoped_gmail_credentials.py` | 723 |
-| `tests/test_eom_scoped_gmail_hardening.py` | 435 |
+| `tests/test_eom_scoped_gmail_hardening.py` | 429 |
 | `tests/test_migrations_runner.py` | 265 |
-| **Total** | **2735** |
+| **Total** | **2742** |

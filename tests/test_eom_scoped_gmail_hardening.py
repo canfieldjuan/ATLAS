@@ -15,8 +15,6 @@ import pytest
 import atlas_brain.services.customer_context as context_mod
 import atlas_brain.services.crm_provider as crm_provider_mod
 import atlas_brain.services.email_provider as email_provider_mod
-import contextlib
-
 import atlas_brain.storage.repositories.scoped_mailbox_credential as repo_mod
 from atlas_brain.storage.config import db_settings
 
@@ -312,18 +310,13 @@ async def test_cross_context_refresh_draw_is_bounded_by_the_pool_budget(
 
 
 @pytest.mark.asyncio
-async def test_without_the_global_slot_distinct_contexts_take_the_whole_pool(
-    row_lock_repo, monkeypatch
-):
-    """Proven-failure companion (3i): remove ONLY the global slot and the same
-    ten distinct contexts each hold a connection through the token exchange.
-    This is what the assertion above is measuring -- not the fixture."""
-    repo, pool = row_lock_repo
-    monkeypatch.setattr(
-        repo_mod,
-        "_refresh_slot",
-        lambda: contextlib.nullcontext(),
-    )
+async def test_refresh_budget_tracks_the_configured_pool_size(row_lock_repo):
+    """Proven-failure companion (3i): move the ONLY input the cap derives from
+    -- the budget -- through the constructor seam, and the observed draw moves
+    with it. The bound is the slot, not the fixture: given headroom for all
+    ten, all ten run, which is the pre-fix profile."""
+    _, pool = row_lock_repo
+    repo = repo_mod.ScopedMailboxCredentialRepository(pool=pool, refresh_budget=10)
     release = asyncio.Event()
     entered = asyncio.Event()
 
@@ -339,7 +332,8 @@ async def test_without_the_global_slot_distinct_contexts_take_the_whole_pool(
     for _ in range(20):
         await asyncio.sleep(0)
     assert pool.max_open == 10, (
-        "ungated waiters must each hold a connection blocked on the row lock"
+        "with budget for all ten, none should be held back -- the cap must "
+        f"follow the stated budget; saw {pool.max_open}"
     )
     pool.holder_done.set()
     release.set()

@@ -42,7 +42,10 @@ def _refresh_gate(context: str) -> asyncio.Lock:
 # HTTP call. This semaphore caps how many connection-holding refresh sections run
 # at once, portfolio-wide, leaving the rest of the pool for everything else.
 # Waiters queue here WITHOUT a connection, same as the per-context gate.
-_REFRESH_SLOTS: dict[int, asyncio.Semaphore] = {}
+# Keyed by (loop, budget) so a configuration reload that changes the pool size
+# yields a semaphore sized to the NEW pool rather than pinning the first budget
+# this process ever computed.
+_REFRESH_SLOTS: dict[tuple[int, int], asyncio.Semaphore] = {}
 
 
 def _refresh_budget() -> int:
@@ -50,11 +53,13 @@ def _refresh_budget() -> int:
     return max(1, db_settings.max_pool_size // 2)
 
 
-def _refresh_slot() -> asyncio.Semaphore:
-    key = id(asyncio.get_running_loop())
+def _refresh_slot(budget: int | None = None) -> asyncio.Semaphore:
+    if budget is None:
+        budget = _refresh_budget()
+    key = (id(asyncio.get_running_loop()), budget)
     slot = _REFRESH_SLOTS.get(key)
     if slot is None:
-        slot = _REFRESH_SLOTS[key] = asyncio.Semaphore(_refresh_budget())
+        slot = _REFRESH_SLOTS[key] = asyncio.Semaphore(budget)
     return slot
 
 GMAIL_PROVIDER = "gmail"
@@ -124,13 +129,21 @@ class LockedScopedGmailCredentials:
 class ScopedMailboxCredentialRepository:
     """Narrow repository; no list API or broad secret projection exists."""
 
-    def __init__(self, pool=None) -> None:
+    def __init__(self, pool=None, refresh_budget: int | None = None) -> None:
         # Edge seam: tests hand in a pool double; production resolves the
         # process pool lazily so import order stays unconstrained.
         self._pool = pool
+        # Same seam for the refresh budget: production derives it from the
+        # configured pool size, tests state it outright. The semaphore stays
+        # process-global (keyed by budget), so every instance deriving the same
+        # budget shares one -- an instance cannot mint itself extra headroom.
+        self._refresh_budget = refresh_budget
 
     def _db(self):
         return self._pool if self._pool is not None else get_db_pool()
+
+    def _slot(self):
+        return _refresh_slot(self._refresh_budget)
 
     async def bind_gmail(
         self,
@@ -145,7 +158,7 @@ class ScopedMailboxCredentialRepository:
         # arriving while a refresh holds the row would otherwise occupy a pool
         # connection blocked on the row lock -- the profile the gate exists to
         # prevent. Cross-context mutations are unaffected.
-        async with _refresh_gate(context), _refresh_slot():
+        async with _refresh_gate(context), self._slot():
             ciphertext, kid = _encrypt_bundle(
                 client_id=client_id,
                 client_secret=client_secret,
@@ -195,7 +208,7 @@ class ScopedMailboxCredentialRepository:
 
     async def revoke_gmail(self, business_context_id: str) -> int | None:
         context = _exact_context(business_context_id)
-        async with _refresh_gate(context), _refresh_slot():
+        async with _refresh_gate(context), self._slot():
             row = await self._db().fetchrow(
                 """
                 UPDATE scoped_mailbox_credentials
@@ -219,7 +232,7 @@ class ScopedMailboxCredentialRepository:
     ) -> AsyncIterator[LockedScopedGmailCredentials]:
         """Serialize token refresh for one exact context across processes."""
         context = _exact_context(business_context_id)
-        async with _refresh_gate(context), _refresh_slot():
+        async with _refresh_gate(context), self._slot():
             async with self._db().transaction() as conn:
                 row = await conn.fetchrow(
                     """
