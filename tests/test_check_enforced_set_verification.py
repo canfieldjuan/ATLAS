@@ -18,12 +18,14 @@ _SPEC.loader.exec_module(mod)
 COMPLIANT_PLAN = """
 ## Verification
 
+- bash scripts/run_eom_lead_pipeline_checks.sh - 189 passed.
 - CI-equivalent command copied from enforcing workflow: `bash scripts/run_eom_lead_pipeline_checks.sh`.
 - Copied from enforcing workflow: `.github/workflows/atlas_eom_lead_pipeline_checks.yml`.
 """
 NO_WORKFLOW_PLAN = """
 ## Verification
 
+- python scripts/audit_plan_doc.py plans/PR-Docs.md - OK.
 - No enforcing workflow applies: documentation-only surface has no workflow owner.
 - Closest local command: `python scripts/audit_plan_doc.py plans/PR-Docs.md`.
 """
@@ -77,8 +79,64 @@ def test_negative_execution_attestation_is_flagged() -> None:
 
 - CI-equivalent command copied from enforcing workflow: `bash scripts/run_eom_lead_pipeline_checks.sh` (not run locally).
 - Copied from enforcing workflow: `.github/workflows/atlas_eom_lead_pipeline_checks.yml`.
+    """
+    assert len(mod.scan_plans({"plans/PR-Thing.md": text})) == 1
+
+
+def test_skipped_execution_attestation_is_flagged() -> None:
+    text = """
+## Verification
+
+- CI-equivalent command copied from enforcing workflow: `bash scripts/run_eom_lead_pipeline_checks.sh` (skipped locally).
+- Copied from enforcing workflow: `.github/workflows/atlas_eom_lead_pipeline_checks.yml`.
 """
     assert len(mod.scan_plans({"plans/PR-Thing.md": text})) == 1
+
+
+def test_command_markers_without_affirmative_result_are_flagged() -> None:
+    text = """
+## Verification
+
+- CI-equivalent command copied from enforcing workflow: `bash scripts/run_eom_lead_pipeline_checks.sh`.
+- Copied from enforcing workflow: `.github/workflows/atlas_eom_lead_pipeline_checks.yml`.
+"""
+    assert len(mod.scan_plans({"plans/PR-Thing.md": text})) == 1
+
+
+def test_unrelated_pass_does_not_satisfy_required_command() -> None:
+    text = """
+## Verification
+
+- python -m pytest tests/test_one.py - passed.
+- CI-equivalent command copied from enforcing workflow: `bash scripts/run_eom_lead_pipeline_checks.sh`.
+- Copied from enforcing workflow: `.github/workflows/atlas_eom_lead_pipeline_checks.yml`.
+"""
+    assert len(mod.scan_plans({"plans/PR-Thing.md": text})) == 1
+
+
+def test_prefix_subset_command_does_not_satisfy_required_command() -> None:
+    text = """
+## Verification
+
+- python -m pytest tests/test_one.py::test_only - 1 passed.
+- CI-equivalent command copied from enforcing workflow: `python -m pytest tests/test_one.py`.
+- Copied from enforcing workflow: `.github/workflows/example.yml`.
+"""
+    assert len(mod.scan_plans({"plans/PR-Thing.md": text})) == 1
+
+
+def test_unrelated_skipped_optional_check_does_not_poison_command_result() -> None:
+    text = COMPLIANT_PLAN + "\n- optional browser check - skipped."
+    assert mod.scan_plans({"plans/PR-Thing.md": text}) == []
+
+
+def test_no_workflow_fallback_rejects_workflow_enrolled_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "path_has_enforcing_workflow", lambda path: path == "atlas_brain/api/leads.py")
+    findings = mod.scan_plans(
+        {"plans/PR-Thing.md": NO_WORKFLOW_PLAN},
+        changed_paths=["atlas_brain/api/leads.py"],
+    )
+    assert len(findings) == 1
 
 
 def test_verification_section_stops_at_next_top_level_heading() -> None:
@@ -92,6 +150,7 @@ def test_cli_entrypoint_warns_advisory_and_fails_strict(monkeypatch: pytest.Monk
         "changed_plan_texts",
         lambda base: {"plans/PR-Thing.md": "## Verification\n- pytest tests/test_one.py"},
     )
+    monkeypatch.setattr(mod, "changed_paths", lambda base: ["plans/PR-Thing.md"])
 
     assert mod.main(["--base", "ignored"]) == 0
     out = capsys.readouterr().out

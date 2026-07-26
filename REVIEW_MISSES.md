@@ -53,3 +53,4 @@ in issue #1319 so it does not become write-only sediment.
 | Date | Mechanism | Last fired | Outcome (kept / removed) | Replacement coverage |
 |---|---|---|---|---|
 | 2026-07-26 | `docs/SESSION_BOOTSTRAP.md` producer/consumer field-parity enumeration for identity guards | 2026-07-24 EOM Calendar demotion veto miss | kept | No replacement: this remains the only durable reminder to trace canonical producer fields into consumer identity guards before review approval. |
+| 2026-07-26 | `scripts/check_guard_class_closure.py` guard-class closure advisory | ATLAS #2216 rounds 1-7 boundary fallout | kept | No replacement: enforced-set verification closes a different failure class (hand-picked verification subsets) and does not replace guard closure. |
