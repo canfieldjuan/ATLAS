@@ -402,16 +402,34 @@ the builder's `HARDENING.md` + recurring-lapse flywheel.
 **The ratchet releases too.** As written this section only ever adds, and the
 reviewer's mandate grows with it -- every added rule is another category to
 disposition on every future PR, forever, which is a cost paid by every
-subsequent review. So each addition is reviewed for removal on the same terms it
-was added:
+subsequent review.
 
-- A rule, path trigger, or checklist line that **has not fired** in the last
-  ~50 merged PRs is either redundant with something else here or is addressing a
-  failure mode that has stopped happening. Remove it, or state why it stays.
-- One whose firings are **consistently waived** is mis-scoped, not load-bearing.
-  Re-scope it to what actually blocks, or remove it.
-- Removals are recorded the same way additions are, with the reasoning, so a
-  removal is a decision and not an erosion.
+**When retirement is considered:** on each addition. Adding a durable mechanism
+is the trigger to examine one existing candidate for removal, so the ratchet
+self-balances and there is no separate cadence, owner, or audit to maintain. All
+**five** mechanism kinds this section creates are in scope -- `scripts/audit_*`
+checks, rule IDs, path triggers, recurring-lapse lines, and Review Contract
+template additions -- not only the ones that are cheapest to delete.
+
+Retirement terms:
+
+- **Silence is not evidence of absence.** A mechanism that has not fired may be
+  the reason the failure stopped. So not-firing is a prompt to examine, never a
+  licence to delete: a mechanism that is the sole protection for a defect logged
+  in `REVIEW_MISSES.md` may be removed **only** by naming what now covers that
+  defect -- a broader rule, a type, a test, a structural change that makes it
+  unrepresentable. No replacement named, no removal; state why it stays.
+- **Consistently waived** is the stronger signal, because it means the mechanism
+  fires and reviewers keep judging it wrong. Re-scope it to what actually
+  blocks, or remove it.
+- **Removals are atomic across mirrors.** A rule ID, checklist line, or template
+  entry is referenced from more than one place -- `AGENTS.md` review guidelines,
+  the §2a verification template, the 4d audit checklist, and the completion
+  matrix all enumerate rules. A removal updates every mirror in the same change,
+  or it leaves the matrix demanding a verdict on a rule that no longer exists.
+- **Removals are recorded** in `REVIEW_MISSES.md` beside the defect that
+  prompted the addition, with the replacement coverage named, so a removal is a
+  decision with a paper trail and not an erosion.
 
 Nothing here weakens the "no escaped defect is fixed only once" rule -- an
 escaped defect still converts into mechanism. This governs what happens to that
