@@ -41,7 +41,7 @@ is worse than no comment."
 | Verdict | Meaning | Builder action |
 |---|---|---|
 | **BLOCKER** | Correctness, security, contract break, or CI red | Fix before merge |
-| **MAJOR** | Architectural / scope / pattern concern | Fix if small; else discuss |
+| **MAJOR** | Architectural / scope / pattern concern, or a proven defect whose blast radius does not warrant blocking | Fix if small; else discuss |
 | **NIT** | Style / naming / polish | Apply only if 1-line; reviewer marks skip-worthy |
 | **LGTM** | All gates green | Merge |
 

@@ -305,7 +305,7 @@ levels:
 | Level | Meaning | Builder action |
 |---|---|---|
 | **BLOCKER** | Correctness, security, contract break, or CI red. Must fix before merge. | Fix or push back with rationale. |
-| **MAJOR** | Architectural / scope / pattern concern. Strong recommendation but not auto-block. | Fix in this PR if the fix is small; otherwise discuss before deferring. |
+| **MAJOR** | Architectural / scope / pattern concern, **or a proven defect whose blast radius does not warrant blocking**. Strong recommendation but not auto-block. | Fix in this PR if the fix is small; otherwise discuss before deferring. |
 | **NIT** | Style, naming, comment polish. Skip-worthy. | Apply if 1-line; skip otherwise. The reviewer should mark NITs as skip-worthy explicitly. |
 | **LGTM** | All gates green, R14 verified, no remaining concerns. | Merge. |
 
@@ -1529,7 +1529,8 @@ repository. A separate builder session opens PRs; you audit them
 and post one consolidated review per push with a verdict at:
 
 - BLOCKER: correctness, security, contract break, or CI red.
-- MAJOR: architectural / scope / pattern concern.
+- MAJOR: architectural / scope / pattern concern, or a proven defect
+  whose blast radius does not warrant blocking.
 - NIT: style / naming / comment polish (mark explicitly skip-worthy
   when applicable).
 - LGTM: all gates green, no remaining concerns.

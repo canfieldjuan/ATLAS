@@ -20,13 +20,61 @@ This pack sits **under** the existing verdict ladder, it does not replace it:
 | Verdict | Meaning |
 |---|---|
 | **BLOCKER** | A rule below is failed in a way that breaks correctness, security, a contract, or CI. Must fix before merge. |
-| **MAJOR** | A rule is at risk: architectural / scope / pattern concern. Fix if small; else discuss. |
+| **MAJOR** | A rule is at risk: architectural / scope / pattern concern; **or** a proven defect whose blast radius does not warrant blocking. Fix if small; else discuss. |
 | **NIT** | Style / naming / polish. Apply only if 1-line; reviewer marks skip-worthy. |
 | **LGTM** | Every rule R1-R14 is Pass or a reasoned N-A (no Not-Verified outstanding), R14 is satisfied, and all AI findings are fixed-or-waived. |
 
 A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 **Blockers must cite `file:line`.** A bare "LGTM" with no rule matrix and no
 independent verification is worse than no comment.
+
+**BLOCKER requires a concrete failure path**: the specific input, sequence, or
+state that produces the harm, established by the reviewer. "This could break" is
+not one. Without a failure path the finding is MAJOR at most -- downgrade it, do
+not drop it, and the level can be raised later once the path is shown.
+
+Three carve-outs, because a missing-evidence finding is not a speculative one:
+
+- **Absent mandatory proof is itself the failure path.** Wherever a rule's own
+  **Block if** clause names missing evidence as the defect, the absence IS the
+  blocker and no input sequence is owed. That is general, not a short list: R2's
+  untested new logic and missing regression test, R5's changed contract without
+  contract tests, R4's absent rollback plan, the guard boundary-probe on
+  security / billing / data-deletion / customer-output / CI-release surfaces,
+  a Not-Verified rule, **and a `could-not-determine` acceptance criterion** all
+  qualify. A guard with only happy-path tests blocks on those surfaces whether
+  or not anyone has yet found the bypass -- "no one has exploited it" is not
+  evidence it is safe. The unifying test is simple: if what is missing is the
+  *evidence*, the absence is the failure path; only a speculative claim about
+  code you have read needs an input sequence.
+- **Established, not necessarily published.** For **any category
+  `SECURITY.md` routes privately** -- it names exploitable vulnerabilities,
+  exposed credentials, authentication bypasses, payment or billing issues, data
+  deletion gaps, and report-access bugs, and that policy governs, not this list
+  -- the public finding states the rule, the surface, and the impact and points
+  at the private report; the failure path is recorded there. Routing it
+  privately never downgrades it.
+- **A failure path is necessary, not sufficient.** Severity is blast radius, so
+  a proven but immaterial defect is MAJOR or NIT on the strength of its impact.
+  The ladder above is amended to say so: BLOCKER's "breaks correctness" reads as
+  *material* breakage, and MAJOR now explicitly admits a proven low-impact
+  defect rather than being reserved for architectural concerns. Without that
+  amendment the two would contradict and every proven defect would land at
+  BLOCKER by elimination.
+
+**The escape valve from "do not manufacture NITs" is not filing the finding, not
+promoting it.** That instruction bars padding a review with polish; it is not a
+reason to enter a marginal finding at BLOCKER so it clears the bar. If a finding
+is real but minor, MAJOR and NIT exist for it -- **use them**. A defect you have
+identified is never silently dispositioned: the matrix offers Pass, Fail,
+Not-Verified and reasoned N-A, and none of those honestly represents "I found
+something and said nothing". Report nothing only when you found nothing.
+
+**Why:** across #2195 and #2184 all **68** filed findings are P1/P2 and none is
+lower. Real severity is not distributed that way, and a ladder where everything
+is a blocker carries no information -- the reviewer cannot lead with blockers
+(above) when every finding is one, and the builder cannot tell an exploitable
+gap from an ordering nit.
 
 R14 is universal: it applies to every review verdict, even when no changed path
 specifically triggers it. A reviewer who has not inspected the checked-out PR
