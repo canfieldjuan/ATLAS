@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import bisect
 import re
+import unicodedata
 
 from atlas_brain.schemas.content_factory import (
     ADVISORY_CTA_REMINDER,
@@ -107,6 +108,48 @@ _RULES: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+# Default-ignorable / zero-width code points that a producer can sprinkle
+# between digits without changing what a human or a renderer sees. Unicode
+# calls these Default_Ignorable_Code_Point; the property is not exposed by
+# `unicodedata`, so the equivalent is category Cf plus the ranges below.
+# Cc is included EXCEPT the whitespace controls, which are real separators.
+_DEFAULT_IGNORABLE_EXTRA = frozenset(
+    list(range(0xFE00, 0xFE10))  # variation selectors
+    + list(range(0xE0100, 0xE01F0))  # variation selectors supplement
+    + list(range(0x180B, 0x180F))  # Mongolian free variation selectors
+    + list(range(0x1BCA0, 0x1BCA4))  # shorthand format controls
+    + list(range(0xE0000, 0xE0080))  # tag characters
+    + [0x3164, 0xFFA0]  # Hangul fillers
+)
+_SCAN_KEEP_CONTROLS = frozenset("\t\n\r\v\f")
+
+
+def scan_view(text: str) -> str:
+    """The view PII detection runs against: same visible content, no
+    zero-width characters.
+
+    A zero-width character between digits defeats every contact pattern while
+    rendering identically -- `555-123<ZWSP>-4567` and `a@b<ZWSP>.com` both
+    passed the gate. That is a formatting-only bypass, not a different kind
+    of copy, so it is removed before scanning rather than enumerated as new
+    patterns (#2201).
+
+    This does NOT change which real forms count as PII -- the frozen
+    body-copy verdict semantics are untouched -- it only denies the evasion.
+    Whitespace controls are kept: they separate tokens, and dropping them
+    would join a word to a following number.
+    """
+    return "".join(
+        ch
+        for ch in text
+        if not (
+            unicodedata.category(ch) == "Cf"
+            or (unicodedata.category(ch) == "Cc" and ch not in _SCAN_KEEP_CONTROLS)
+            or ord(ch) in _DEFAULT_IGNORABLE_EXTRA
+        )
+    )
+
+
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 _PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})\b")
 _INTL_PHONE_RE = re.compile(r"\+\d{1,3}(?:[\s().-]?\d){7,12}\b")
@@ -142,7 +185,15 @@ def _is_negated(text: str, start: int) -> bool:
 
 def _redact_pii(evidence: str) -> str:
     """Make claim evidence safe to persist: named markers for the common
-    contact shapes, then the digit theorem -- every remaining digit masks."""
+    contact shapes, then the digit theorem -- every remaining digit masks.
+
+    Zero-width characters are stripped FIRST (#2201). The digit theorem
+    already covered phone digits, but an address carrying a zero-width
+    character (`a@b<ZWSP>.com`) evaded the email pattern and its LETTERS are
+    not digits, so it would have persisted intact. Dropping invisible
+    characters from persisted evidence changes nothing a reader sees.
+    """
+    evidence = scan_view(evidence)
     evidence = _EMAIL_RE.sub("<redacted-email>", evidence)
     evidence = _INTL_PHONE_RE.sub("<redacted-phone>", evidence)
     evidence = _PHONE_RE.sub("<redacted-phone>", evidence)
@@ -192,9 +243,14 @@ def verify_copy(text: str) -> CopyVerification:
         raise TypeError("verify_copy requires a string; draft body is text")
 
     hits = _claim_hits(text)
-    if _EMAIL_RE.search(text):
+    # Contact patterns run against the zero-width-stripped view so a
+    # formatting-only insertion cannot defeat the gate (#2201). Claim
+    # detection keeps the ORIGINAL text: its locators are sentence indices,
+    # and rewriting the input would shift them.
+    scanned = scan_view(text)
+    if _EMAIL_RE.search(scanned):
         hits.append("email: <redacted>")
-    if _PHONE_RE.search(text):
+    if _PHONE_RE.search(scanned):
         hits.append("phone: <redacted>")
 
     verdict = "fail" if hits else "pass"

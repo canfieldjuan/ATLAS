@@ -84,7 +84,7 @@ reported classes at their shared classifier and execution seams.
 
 Ownership lane: content-factory
 Slice phase: production hardening
-Max files: 7
+Max files: 8
 
 1. Make mixed digit/letter contact admission evidence-gated in both directions:
    attached NANP vanity stays structural; detached spelling requires structural
@@ -148,13 +148,22 @@ Max files: 7
       for room 212 art deco, contact sheet layout` remain admissible.
   17. Every source-bound stage requires a valid committed draft before worker
       dispatch; no stage may send `Committed draft JSON:\nnull`.
+  18. A default-ignorable code point inserted at ANY seam of a contact string
+      -- before or inside the `+`/`00` prefix, between or inside numeric
+      groups, inside the vanity suffix, or inside an address -- preserves the
+      failing verdict, in the prompt gate AND in `verify_copy`. Redacted claim
+      evidence never carries an address that evaded the pattern that way.
+      Whitespace controls are preserved, so stripping cannot glue a word to a
+      following number and manufacture a candidate.
 - Reachability proof: `run_stage(job_id, stage, model, user_content, ...)` calls
   the worker, applies prompt enforcement, compares committed source identity
   under `job_lock`, validates, and writes. Tests replace the committed draft
   from inside the worker boundary and exercise image prompts through the real
   entrypoint/store.
-- Affected surfaces: content-factory schemas, runner, committed Git artifact
-  store, the originating Phase 6 plan record, and their focused tests.
+- Affected surfaces: content-factory schemas, runner, the shared copy
+  verifier's PII SCAN INPUT (its verdict policy is unchanged -- see the
+  round-eleven note under Mechanism), committed Git artifact store, the
+  originating Phase 6 plan record, and their focused tests.
 - Risk areas: false-positive/false-negative contact classification, Unicode
   normalization overreach, worker-time source races, and failed-commit residue.
 - Reviewer rules triggered: R1, R2, R3, R6, R8, R13, R14.
@@ -196,6 +205,7 @@ Max files: 7
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
+- `atlas_brain/services/content_factory_copy_verification.py`
 - `atlas_brain/services/content_factory_runner.py`
 - `atlas_brain/services/content_factory_store.py`
 - `plans/PR-CF-Phase6-Repurposing-Contracts.md`
@@ -229,6 +239,33 @@ it takes
 fingerprint differs, stamps audits with the dispatch fingerprint, runs
 readiness/lineage, and commits. Store reads use Git's committed-object lookup
 for the stage JSON; cleanup is hygiene rather than correctness.
+
+### Review round 11 (Codex) -- default-ignorable admission
+
+One finding, confirmed against the code before correction and WIDER than
+reported. A default-ignorable code point renders as nothing, so inserting one
+must not change a verdict -- but it defeated:
+
+- the `+`/`00` international prefix (`Call +44<ZWSP>800 FLOWERS`), as reported;
+- the structural NANP pattern (`reach 555-123<ZWSP>-4567`) and the vanity
+  suffix (`FLOW<ZWSP>ERS`), which the report did not name;
+- the SAME class in `verify_copy` -- the merged body-copy gate behind the
+  editorial promote decision -- for both phone and address;
+- `_redact_pii`, where the digit theorem masks phone digits but an address's
+  LETTERS are not digits, so `a@b<ZWSP>.com` persisted intact in claim
+  evidence.
+
+Root fix at the admission boundary rather than per-pattern: a shared
+`scan_view()` removes default-ignorables (category Cf, category Cc except the
+whitespace controls, plus the variation-selector / Mongolian / tag / Hangul
+filler ranges Unicode marks Default_Ignorable but `unicodedata` does not
+expose) before ANY contact parsing. Claim detection keeps the ORIGINAL text,
+because its locators are sentence indices and rewriting the input would shift
+them.
+
+This does not change body-copy verdict POLICY -- which real forms count as PII
+is untouched, so #2181's frozen semantics hold. It denies an evasion of the
+existing policy. Mutation-checked: neutralizing `scan_view` fails 64 tests.
 
 ## Intentional
 
@@ -287,10 +324,11 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 60 |
-| `atlas_brain/services/content_factory_runner.py` | 365 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 62 |
+| `atlas_brain/services/content_factory_runner.py` | 374 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
 | `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 285 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 296 |
-| `tests/test_content_factory_runner.py` | 686 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 334 |
+| `tests/test_content_factory_runner.py` | 774 |
 | `tests/test_content_factory_schemas.py` | 68 |
-| **Total** | **1862** |
+| **Total** | **2059** |

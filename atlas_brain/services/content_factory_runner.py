@@ -22,6 +22,7 @@ from typing import Any
 from atlas_brain.services.content_factory_copy_verification import (
     advisory_warnings,
     literal_claim_hits,
+    scan_view,
     verify_copy,
 )
 from atlas_brain.schemas.content_factory import model_for
@@ -467,10 +468,16 @@ def _prompt_contact_hits(text: str) -> list[str]:
 
     Fails on evidence of contact intent; stays silent on description.
     """
+    # Scan the zero-width-stripped view: a default-ignorable character between
+    # dial groups renders identically but defeated every pattern here --
+    # `+44<ZWSP>800 FLOWERS`, `555-123<ZWSP>-4567` and `FLOW<ZWSP>ERS` all
+    # passed. Stripping before parsing closes the class at the admission
+    # boundary rather than teaching each pattern about each character (#2201).
+    scanned = scan_view(text)
     hits: list[str] = []
-    if _ANY_EMAIL_RE.search(text.translate(_IDNA_DOT_TRANSLATION)):
+    if _ANY_EMAIL_RE.search(scanned.translate(_IDNA_DOT_TRANSLATION)):
         hits.append("email: <redacted>")
-    if _phone_evidence(text):
+    if _phone_evidence(scanned):
         hits.append("phone: <redacted>")
     return hits
 

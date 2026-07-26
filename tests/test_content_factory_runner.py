@@ -1707,3 +1707,93 @@ def test_uncommitted_crash_residue_cannot_authorize_ready_artifact(
         capture_output=True,
     ).stdout == committed
     assert b"UNCOMMITTED replacement" in draft_path.read_bytes()
+
+
+# --- #2201: default-ignorable PII-gate bypass -----------------------------
+
+# One representative per default-ignorable family a producer can reach for.
+_ZERO_WIDTH = [
+    "​",  # zero width space
+    "‌",  # zero width non-joiner
+    "‍",  # zero width joiner
+    "﻿",  # zero width no-break space / BOM
+    "­",  # soft hyphen
+    "⁠",  # word joiner
+    "️",  # variation selector-16
+    "᠎",  # Mongolian vowel separator
+]
+# Every seam in a phone string: before the prefix, inside it, between numeric
+# groups, inside a group, and inside the vanity suffix.
+_SEAM_TEMPLATES = [
+    "Call +44{z}800 FLOWERS",
+    "Call +{z}44 800 FLOWERS",
+    "call 1-800-FLOW{z}ERS now",
+    "reach 555-123{z}-4567",
+    "reach 555{z}-123-4567",
+    "call me at 555{z}1234567",
+    "text 5552345{z}678",
+]
+
+
+@pytest.mark.parametrize("zw", _ZERO_WIDTH)
+@pytest.mark.parametrize("template", _SEAM_TEMPLATES)
+def test_zero_width_insertion_cannot_bypass_prompt_pii_gate(zw, template):
+    """#2201: a default-ignorable character renders as nothing, so inserting
+    one must not change the verdict. Before the fix it defeated the prefix,
+    the structural NANP pattern and the vanity suffix alike."""
+    assert runner._prompt_contact_hits(template.format(z=zw)) != []
+
+
+@pytest.mark.parametrize("zw", _ZERO_WIDTH)
+def test_zero_width_insertion_cannot_bypass_email_gates(zw):
+    """Same class on the address side, in both the prompt gate and the
+    merged body-copy gate."""
+    from atlas_brain.services.content_factory_copy_verification import verify_copy
+
+    assert runner._prompt_contact_hits("write to a" + zw + "lice@example.com") != []
+    assert runner._prompt_contact_hits("write to alice@example" + zw + ".com") != []
+    assert verify_copy("write to alice@example" + zw + ".com").verdict == "fail"
+
+
+@pytest.mark.parametrize("zw", _ZERO_WIDTH)
+def test_zero_width_insertion_cannot_bypass_body_copy_phone_gate(zw):
+    """The bypass also defeated `verify_copy`, which gates the editorial
+    audit's promote decision -- a wider surface than the prompt gate."""
+    from atlas_brain.services.content_factory_copy_verification import verify_copy
+
+    assert verify_copy("Call 555-123" + zw + "-4567 today").verdict == "fail"
+
+
+@pytest.mark.parametrize("zw", _ZERO_WIDTH)
+def test_redacted_evidence_never_carries_a_hidden_address(zw):
+    """The digit theorem covered phone digits, but an address's LETTERS are
+    not digits: a zero-width character made it evade the email pattern and
+    persist intact in claim evidence."""
+    from atlas_brain.services.content_factory_copy_verification import _redact_pii
+
+    redacted = _redact_pii("reach alice@example" + zw + ".com now")
+    assert "alice@example" not in redacted
+    assert "<redacted-email>" in redacted
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "a person calling across a room, RGB palette 255 255 255",
+        "a 16-bit-color render, studio light",
+        "a call center scene, 1920 1080 resolution poster",
+        "a poster of serial 12345678 engraved on a plate",
+    ],
+)
+def test_scan_view_does_not_create_false_positives(prompt):
+    """Stripping must not join tokens into a hit that was not there."""
+    assert runner._prompt_contact_hits(prompt) == []
+
+
+def test_scan_view_keeps_whitespace_controls():
+    """Newlines and tabs are real separators: dropping them would glue a word
+    onto a following number and manufacture candidates."""
+    from atlas_brain.services.content_factory_copy_verification import scan_view
+
+    assert scan_view("room 255\nx255 blue\tgrade") == "room 255\nx255 blue\tgrade"
+    assert scan_view("a​b c") == "ab c"

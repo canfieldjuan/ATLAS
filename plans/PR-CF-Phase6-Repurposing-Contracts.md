@@ -75,7 +75,7 @@ one enforcement hook, and one lineage check.
 
 Ownership lane: content-factory
 Slice phase: vertical slice
-Max files: 7
+Max files: 8
 
 1. `atlas_brain/schemas/content_factory.py`:
    - `ChannelVariant` + `RepurposingPackage` (`repurposing.v1`): non-empty
@@ -567,6 +567,7 @@ the same classifier and source-construction seams.
 ### Files touched
 
 - `atlas_brain/schemas/content_factory.py`
+- `atlas_brain/services/content_factory_copy_verification.py`
 - `atlas_brain/services/content_factory_runner.py`
 - `atlas_brain/services/content_factory_store.py`
 - `plans/PR-CF-Phase6-Repurposing-Contracts.md`
