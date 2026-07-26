@@ -305,6 +305,7 @@ class DatabaseCRMProvider:
                                   = RIGHT($1, 10)
                             ORDER BY updated_at DESC, id ASC
                             LIMIT 1
+                            FOR UPDATE
                             """,
                             value,
                         )
@@ -316,6 +317,7 @@ class DatabaseCRMProvider:
                           AND LOWER(email) = $1
                         ORDER BY updated_at DESC, id ASC
                         LIMIT 1
+                        FOR UPDATE
                         """,
                         value,
                     )
@@ -329,6 +331,7 @@ class DatabaseCRMProvider:
                               = RIGHT($2, 10)
                         ORDER BY updated_at DESC, id ASC
                         LIMIT 1
+                        FOR UPDATE
                         """,
                         context,
                         value,
@@ -341,6 +344,7 @@ class DatabaseCRMProvider:
                       AND LOWER(email) = $2
                     ORDER BY updated_at DESC, id ASC
                     LIMIT 1
+                    FOR UPDATE
                     """,
                     context,
                     value,

@@ -326,10 +326,49 @@ class _TransactionPool:
         async with self._pool.acquire() as connection:
             return await connection.fetch(*args)
 
+    async def execute(self, *args):
+        async with self._pool.acquire() as connection:
+            return await connection.execute(*args)
+
     @asynccontextmanager
     async def acquire(self):
         async with self._pool.acquire() as connection:
             yield connection
+
+
+class _SelectionGateConnection:
+    """Pause a real selected-contact lock long enough to exercise an archive."""
+
+    def __init__(self, connection, selected: asyncio.Event, release: asyncio.Event):
+        self._connection = connection
+        self._selected = selected
+        self._release = release
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+    async def fetchrow(self, *args):
+        row = await self._connection.fetchrow(*args)
+        sql = str(args[0]) if args else ""
+        if row is not None and "FROM contacts" in sql and "FOR UPDATE" in sql:
+            self._selected.set()
+            await self._release.wait()
+        return row
+
+
+class _SelectionGatePool(_TransactionPool):
+    def __init__(self, pool, selected: asyncio.Event, release: asyncio.Event):
+        super().__init__(pool)
+        self._selected = selected
+        self._release = release
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                yield _SelectionGateConnection(
+                    connection, self._selected, self._release
+                )
 
 
 def test_interaction_dedupe_preserves_legacy_keys_and_opaque_attribution_case():
@@ -622,6 +661,107 @@ async def test_atomic_eom_inbound_resolution_is_active_phone_first_and_blocks_cl
         assert triage_update is not None
         assert triage_update["lead_owner"] == "Juan"
     finally:
+        if pool is not None:
+            await pool.close()
+        await setup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await setup.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "business_context_id", "inbound_phone", "inbound_email"),
+    [
+        ("eom-phone", "effingham_maids", "217-555-0177", None),
+        ("legacy-phone", None, "217-555-0177", None),
+        ("eom-email", "effingham_maids", None, "eom-email@example.com"),
+        ("legacy-email", None, None, "legacy-email@example.com"),
+        ("eom-phone-formatted", "effingham_maids", "+1 (217) 555-0177", None),
+        ("legacy-email-mixed-case", None, None, "LEGACY-MIXED@example.com"),
+    ],
+)
+async def test_atomic_eom_resolution_holds_selected_match_against_concurrent_archive(
+    monkeypatch,
+    case,
+    business_context_id,
+    inbound_phone,
+    inbound_email,
+):
+    database_url = os.environ.get(DATABASE_URL_ENV)
+    if not database_url:
+        pytest.skip(f"{DATABASE_URL_ENV} is not configured")
+
+    schema = f"atlas_eom_archive_lock_{uuid.uuid4().hex}"
+    setup = await asyncpg.connect(database_url)
+    pool = None
+    release = asyncio.Event()
+    try:
+        await setup.execute(f'CREATE SCHEMA "{schema}"')
+        await setup.execute(f'SET search_path TO "{schema}", public')
+        await setup.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
+        for name in (
+            "035_contacts.sql",
+            "346_contact_lead_pipeline.sql",
+            "351_eom_lead_lifecycle_events.sql",
+        ):
+            await setup.execute((MIGRATIONS / name).read_text())
+
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=2,
+            server_settings={"search_path": f'"{schema}", public'},
+        )
+        selected = asyncio.Event()
+        import atlas_brain.storage.database as db_mod
+
+        monkeypatch.setattr(
+            db_mod,
+            "get_db_pool",
+            lambda: _SelectionGatePool(pool, selected, release),
+        )
+        provider = DatabaseCRMProvider()
+        contact_id = uuid.uuid4()
+        stored_email = (inbound_email or f"{case}@example.com").lower()
+        stored_phone = "2175550177" if inbound_phone else None
+        await setup.execute(
+            """
+            INSERT INTO contacts (
+                id, full_name, email, phone, business_context_id, contact_type,
+                status
+            ) VALUES ($1, 'Concurrent Active', $2, $3, $4, 'lead', 'active')
+            """,
+            contact_id,
+            stored_email,
+            stored_phone,
+            business_context_id,
+        )
+
+        resolve_task = asyncio.create_task(
+            resolve_or_create_eom_inbound_lead(
+                provider,
+                full_name="Concurrent Inbound",
+                phone=inbound_phone,
+                email=inbound_email,
+                address=None,
+                source="sms",
+                source_ref="SM-concurrent-archive",
+            )
+        )
+        await asyncio.wait_for(selected.wait(), timeout=2)
+        archive_task = asyncio.create_task(provider.delete_contact(str(contact_id)))
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(archive_task), timeout=0.1)
+
+        release.set()
+        resolved = await resolve_task
+        assert resolved["id"] == contact_id
+        assert resolved["status"] == "active"
+        assert await archive_task is True
+        assert await setup.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "archived"
+    finally:
+        release.set()
         if pool is not None:
             await pool.close()
         await setup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

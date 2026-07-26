@@ -91,6 +91,7 @@ async def process_inbound_sms(
     business_context_id: str,
     business_context=None,
     media_urls: Optional[list] = None,
+    provider_message_id: Optional[str] = None,
 ) -> None:
     """
     Process an inbound SMS through the intelligence pipeline.
@@ -164,6 +165,7 @@ async def process_inbound_sms(
         contact_id, is_new_lead = await _link_to_crm(
             repo, sms_id, from_number, business_context_id,
             extracted_data, summary or f"Inbound SMS: {body[:100]}",
+            provider_message_id=provider_message_id,
         )
         if contact_id:
             logger.info("Step 2/4 OK: Linked SMS to contact %s (new=%s)", contact_id, is_new_lead)
@@ -382,6 +384,8 @@ async def _link_to_crm(
     context_id: str,
     extracted_data: dict,
     summary: str,
+    *,
+    provider_message_id: Optional[str] = None,
 ) -> tuple[Optional[str], bool]:
     """Look up or create a CRM contact from SMS extraction data.
 
@@ -396,6 +400,9 @@ async def _link_to_crm(
 
     email_addr = extracted_data.get("customer_email")
     name = extracted_data.get("customer_name")
+    inbound_message_id = str(provider_message_id or "").strip() or (
+        str(sms_id) if sms_id else None
+    )
     crm = get_crm_provider()
     from ..services.eom_lead_ingress import (
         EOM_BUSINESS_CONTEXT_ID,
@@ -421,7 +428,7 @@ async def _link_to_crm(
             email=email_addr,
             address=extracted_data.get("address"),
             source="sms",
-            source_ref=str(sms_id) if sms_id else None,
+            source_ref=inbound_message_id,
         )
     else:
         contact = await crm.find_or_create_contact(
@@ -432,7 +439,7 @@ async def _link_to_crm(
             business_context_id=context_id,
             contact_type="customer",
             source="sms",
-            source_ref=str(sms_id) if sms_id else None,
+            source_ref=inbound_message_id,
         )
     if not contact.get("id"):
         return None, False
@@ -452,7 +459,11 @@ async def _link_to_crm(
         interaction_type="sms",
         summary=summary or f"Inbound SMS from {from_number}",
         intent=business_intent,
-        metadata={"crm_event_id": f"sms:{sms_id}"} if sms_id else None,
+        metadata=(
+            {"crm_event_id": f"sms:{inbound_message_id}"}
+            if inbound_message_id
+            else None
+        ),
     )
 
     return contact_id, is_new_lead

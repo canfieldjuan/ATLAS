@@ -252,24 +252,69 @@ async def test_real_sms_link_uses_eom_lead_resolver(monkeypatch):
             "intent": "booking",
         },
         "Can I get an estimate?",
+        provider_message_id="SM-provider-1",
     )
 
     assert (contact_id, is_new) == ("sms-lead", True)
     contact_kwargs = crm.find_or_create_contact.await_args.kwargs
     assert contact_kwargs["contact_type"] == "lead"
     assert contact_kwargs["phone"] == "2175550199"
+    assert contact_kwargs["source_ref"] == "SM-provider-1"
     interaction_kwargs = crm.log_interaction.await_args.kwargs
     assert interaction_kwargs["intent"] == "estimate_request"
-    assert interaction_kwargs["metadata"] == {"crm_event_id": f"sms:{sms_id}"}
+    assert interaction_kwargs["metadata"] == {"crm_event_id": "sms:SM-provider-1"}
+    fallback_sms_id = uuid4()
     await sms_intelligence._link_to_crm(
         repo,
-        uuid4(),
+        fallback_sms_id,
         "217-555-0199",
         "another_context",
         {"customer_phone": "555-0100"},
         "SMS summary",
     )
     assert crm.find_or_create_contact.await_args.kwargs["phone"] == "555-0100"
+    assert crm.find_or_create_contact.await_args.kwargs["source_ref"] == str(fallback_sms_id)
+    assert crm.log_interaction.await_args.kwargs["metadata"] == {
+        "crm_event_id": f"sms:{fallback_sms_id}"
+    }
+
+
+@pytest.mark.asyncio
+async def test_sms_link_uses_provider_identity_without_a_local_sms_row(monkeypatch):
+    from atlas_brain.comms import sms_intelligence
+    import atlas_brain.services.crm_provider as crm_provider
+    import atlas_brain.storage.database as database
+
+    crm = _crm(created={
+        "id": "sms-provider-lead",
+        "contact_type": "lead",
+        "lead_stage": "new",
+        "_was_created": True,
+    })
+    pool = MagicMock(is_initialized=True)
+    repo = MagicMock()
+    repo.link_contact = AsyncMock()
+    monkeypatch.setattr(crm_provider, "get_crm_provider", lambda: crm)
+    monkeypatch.setattr(database, "get_db_pool", lambda: pool)
+
+    contact_id, is_new = await sms_intelligence._link_to_crm(
+        repo,
+        None,
+        "217-555-0199",
+        EOM_BUSINESS_CONTEXT_ID,
+        {"customer_name": "Retry Texter", "intent": "booking"},
+        "Retry-safe estimate request",
+        provider_message_id="SM-persistence-failed-1",
+    )
+
+    assert (contact_id, is_new) == ("sms-provider-lead", True)
+    assert crm.find_or_create_contact.await_args.kwargs["source_ref"] == (
+        "SM-persistence-failed-1"
+    )
+    assert crm.log_interaction.await_args.kwargs["metadata"] == {
+        "crm_event_id": "sms:SM-persistence-failed-1"
+    }
+    repo.link_contact.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -287,10 +332,15 @@ async def test_sms_fallback_uses_eom_lead_resolver(monkeypatch):
     await webhooks._sms_fallback_crm_and_notify(
         uuid4(), sms_repo, "217-555-0199", "Need an estimate",
         SimpleNamespace(id=EOM_BUSINESS_CONTEXT_ID, name="Effingham Office Maids"),
+        provider_message_id="SM-fallback-1",
     )
 
     assert crm.find_or_create_contact.await_args.kwargs["contact_type"] == "lead"
+    assert crm.find_or_create_contact.await_args.kwargs["source_ref"] == "SM-fallback-1"
     assert crm.log_interaction.await_args.kwargs["interaction_type"] == "sms"
+    assert crm.log_interaction.await_args.kwargs["metadata"] == {
+        "crm_event_id": "sms:SM-fallback-1"
+    }
 
 
 @pytest.mark.asyncio

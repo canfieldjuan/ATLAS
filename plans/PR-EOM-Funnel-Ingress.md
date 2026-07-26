@@ -43,7 +43,13 @@ to create, match, or mutate contacts under a different lifecycle rule.
   generic updates can attempt to leave EOM before changing lifecycle state.
   Finally, an EOM appointment has a durable database ID but does not pass that
   ID as the resolver's trusted event identity; a local-only phone and no email
-  therefore leaves the calendar booking confirmed but drops its CRM lead.
+  therefore leaves the calendar booking confirmed but drops its CRM lead. The
+  resolver's active-only match query also reads without a row lock, so a
+  concurrent soft archive can commit after the active predicate is evaluated
+  but before the resolver returns that row. Separately, inbound SMS carries a
+  provider `MessageSid`, but the background pipeline currently receives only
+  its optional local SMS row ID; a persistence failure loses the durable ID and
+  makes the interaction fall back to an unanchored daily dedupe key on retry.
 - Correct fix must touch/change: centralize EOM inbound identity resolution so
   unmatched non-spam web/relay/calls/SMS/legacy estimate bookings become
   `lead/new` and any matching contact is read-only; resolve only active contacts
@@ -72,7 +78,13 @@ to create, match, or mutate contacts under a different lifecycle rule.
   claim operation as the only way to acquire EOM ownership. Once an EOM
   appointment is durably recorded, its namespaced appointment ID must anchor an
   otherwise identityless resolver call without treating a partial phone as a
-  matching identity.
+  matching identity. The atomic resolver must lock each selected active match
+  until its transaction completes, so a competing archive either waits for
+  that resolution or commits first and forces the resolver to create an active
+  replacement. The inbound-SMS webhook must carry `MessageSid` independently
+  of optional persistence through the background pipeline, resolver provenance,
+  and `crm_event_id` interaction anchor; only callers without a provider ID may
+  retain the legacy local-row fallback.
 - Must not change: existing customer identity, non-EOM CRM behavior, the
   current public intake response/CORS/email acknowledgement semantics, Google
   Calendar booking behavior, Customer/Site onboarding, jobs, payments,
@@ -126,6 +138,13 @@ Max files: 21
     reject actual provider ownership transitions into or out of EOM before
     writing, and use a persisted EOM appointment's namespaced ID as a trusted
     replay identity only when full phone/email identity is absent.
+12. Close the selected-contact archive race by holding a row lock for each
+    active atomic-resolver match until the resolution transaction commits; an
+    archive that wins first must cause normal unmatched-lead creation instead.
+13. Preserve the provider `MessageSid` through the inbound-SMS background and
+    fallback paths even if no local SMS row exists, and use it as the EOM
+    resolver provenance and recognized interaction anchor with the local ID
+    only as backward-compatible fallback.
 
 ### Review Contract
 
@@ -174,6 +193,15 @@ Max files: 21
       its namespaced appointment ID as the resolver replay anchor, creates or
       returns a `lead/new` contact, and still confirms the booking if the CRM
       link fails.
+  15. A concurrent archive cannot commit between an active atomic-resolver
+      selection and that resolver's transaction completion: the real-PostgreSQL
+      interleaving holds the selected row lock, then releases the archive only
+      after the resolver's transaction completes its active-match decision.
+  16. An inbound SMS that reaches processing without a local SMS row still
+      passes its Twilio `MessageSid` from the webhook to the EOM resolver and
+      `crm_event_id` interaction metadata; a retry therefore retains the same
+      dedupe anchor. Direct callers with no provider ID retain their local-ID
+      anchor fallback.
 - Reachability proof: FastAPI `POST /api/v1/leads/intake` is exercised via
   TestClient and the injectable intake core; call/SMS use their real
   `_link_to_crm` paths with only CRM/transport boundaries faked.
@@ -222,8 +250,12 @@ MCP and approved call-plan writes cannot become a lifecycle back door.
 The atomic resolver checks the migration-351 table and contacts trigger inside
 the transaction before any identity lookup or write. If either is absent, that
 inbound path fails closed rather than creating an unledgered EOM lead. Its
-lookup admits active rows only and resolves phone across both eligible
-populations before attempting email.
+lookup locks an active selected row until transaction completion, admits only
+active rows, and resolves phone across both eligible populations before
+attempting email. Thus a soft archive serializes either before selection (which
+creates an active replacement) or after the resolver has committed its
+active-match decision; it cannot commit between predicate evaluation and that
+transaction completion.
 
 Migration 351 adds `eom_lead_lifecycle_events` and an EOM-only contact trigger:
 a new `lead/new` contact records one immutable `lead_created` event in its
@@ -248,7 +280,10 @@ ledger's immutable policy covers table truncation as well as row mutation.
 
 Every inbound Gmail, call, and SMS delivery that has a stable provider event ID
 writes that ID into recognized interaction-anchor metadata, so contact replay
-and interaction replay have the same durability boundary. For EOM call/SMS,
+and interaction replay have the same durability boundary. The SMS webhook
+carries `MessageSid` separately from its optional local row through both the
+intelligence and fallback adapters; the local row remains a compatibility
+fallback only when the provider did not supply an ID. For EOM call/SMS,
 phone extraction is enrichment: a full extracted number wins, a partial one
 falls back to the full transport caller number, and neither rule changes
 non-EOM caller behavior.
@@ -299,6 +334,15 @@ non-EOM caller behavior.
   The shared resolver consequently creates a `lead/new` booking contact from a
   local-only phone without using that fragment as a matching identity; the
   existing catch still confirms a booking when CRM linking fails.
+- `atlas_brain/services/crm_provider.py` takes `FOR UPDATE` locks on active
+  EOM and claimable-legacy identity matches before completing its resolution
+  transaction, so a concurrent `delete_contact` update cannot archive that
+  selected row before its resolver transaction commits.
+- `atlas_brain/api/comms/webhooks.py` passes the provider `MessageSid` into
+  background intelligence and fallback handling even when SMS persistence
+  failed. `atlas_brain/comms/sms_intelligence.py` prefers that stable provider
+  ID for EOM source provenance and `crm_event_id`, retaining the local SMS ID
+  only as direct-caller fallback.
 - The focused ingress, public-route, and real-PostgreSQL tests prove direct
   partial-phone rejection, trusted concurrent relay replay, committed/nonfatal
   postcommit emission, legacy/case-sensitive dedupe behavior, `TRUNCATE`
@@ -308,7 +352,7 @@ non-EOM caller behavior.
   anchoring.
 
 Contract reconciliation: every changed production path traces to Scope items
-4 through 11 and Review Contract criteria 8 through 14; every new contract
+4 through 13 and Review Contract criteria 8 through 16; every new contract
 requirement has a focused regression proof. No Customer/Site, jobs, calendar,
 payment, first-clean, non-EOM CRM, or public success-envelope behavior is
 touched. No untraced change or unmet contract item remains in this repair.
@@ -411,7 +455,7 @@ ledger while the new resolver is serving: it intentionally fails closed.
 
 ## Verification
 
-- Current-head repair: Python compile check and the exact EOM lead-pipeline
+- Earlier current-head repair: Python compile check and the exact EOM lead-pipeline
   workflow test-file list passed against a fresh PostgreSQL 16 database after
   rebasing the scoped-Gmail credential lane: **224 passed**. This includes the
   schema-isolated sent-email route proof, trusted relay replay,
@@ -439,30 +483,41 @@ ledger while the new resolver is serving: it intentionally fails closed.
   assertions into existing adapter tests; the storage baseline remains at 168
   with 41 internal mocks, so this repair introduces no new ratchet count.
 - Passed the plan audit, plan-sync check, Python compile check, and diff check.
+- Current archive/SMS review repair: `tests/test_eom_lead_ingress.py` passed
+  **17 tests** and the real-PostgreSQL
+  `tests/test_eom_lead_pipeline_integration.py` passed **13 tests**. The latter
+  executes six selected-match/archive interleavings across EOM and
+  claimable-legacy phone/email identity branches; the former proves stable
+  provider anchoring with and without a local SMS row and through the
+  intelligence and fallback adapters.
+- Current rebased head: the exact EOM lead-pipeline workflow list passed **231
+  tests** against PostgreSQL 16 after rebasing onto `origin/main` at
+  `9b983be1f`. The `atlas_brain/api` and `atlas_brain/comms` maturity ratchets
+  also passed with no baseline update.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 15 |
-| `atlas_brain/api/comms/webhooks.py` | 28 |
+| `atlas_brain/api/comms/webhooks.py` | 51 |
 | `atlas_brain/api/leads.py` | 117 |
 | `atlas_brain/autonomous/tasks/gmail_digest.py` | 27 |
 | `atlas_brain/comms/call_intelligence.py` | 47 |
-| `atlas_brain/comms/sms_intelligence.py` | 47 |
+| `atlas_brain/comms/sms_intelligence.py` | 58 |
 | `atlas_brain/mcp/crm_server.py` | 18 |
-| `atlas_brain/services/crm_provider.py` | 360 |
+| `atlas_brain/services/crm_provider.py` | 364 |
 | `atlas_brain/services/eom_lead_ingress.py` | 137 |
 | `atlas_brain/storage/migrations/351_eom_lead_lifecycle_events.sql` | 98 |
 | `atlas_brain/tools/scheduling.py` | 29 |
-| `plans/PR-EOM-Funnel-Ingress.md` | 468 |
+| `plans/PR-EOM-Funnel-Ingress.md` | 523 |
 | `tests/maturity_sweep/baseline_atlas_brain_mcp.json` | 6 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 4 |
 | `tests/maturity_sweep/baseline_atlas_brain_tools.json` | 4 |
 | `tests/test_crm_read_scoping.py` | 41 |
-| `tests/test_eom_lead_ingress.py` | 453 |
-| `tests/test_eom_lead_pipeline_integration.py` | 524 |
+| `tests/test_eom_lead_ingress.py` | 503 |
+| `tests/test_eom_lead_pipeline_integration.py` | 664 |
 | `tests/test_eom_sent_email_tenant_scope.py` | 1 |
 | `tests/test_leads_intake.py` | 56 |
 | `tests/test_tenant_stamping.py` | 31 |
-| **Total** | **2511** |
+| **Total** | **2794** |
