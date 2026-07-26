@@ -30,6 +30,27 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-07-26
+
+### job_lock depth map never deletes released entries
+- File/location: `atlas_brain/services/content_factory_store.py` (`job_lock`,
+  the re-entrancy depth branch and its `finally`).
+- Description: releasing sets `depth[lock_key] = 0` instead of deleting the
+  key, so the per-thread depth map retains one entry per distinct (job id,
+  root) pair for the life of the thread. The zero value is correct for the
+  re-entrancy check; only the key lingers.
+- Why it matters: unbounded growth in a long-lived worker that processes many
+  distinct jobs. No correctness impact -- a stale zero entry is
+  indistinguishable from an absent one at every read site -- and no
+  demonstrated failure path, which is why it is parked rather than fixed in a
+  test-only slice.
+- Effort: S
+- Category: tech-debt
+- Owner/session: content-factory/store-locking
+- Found during: review of #2213; carried out of the #2214 plan's Deferred so it
+  survives that plan's archival on merge.
+
+
 ## 2026-07-15
 
 ### ASR Torch/Torchaudio compatibility baseline

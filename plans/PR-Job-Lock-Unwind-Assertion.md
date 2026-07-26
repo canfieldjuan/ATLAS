@@ -41,18 +41,40 @@ Slice phase: Robust testing
   3. The assertions detect a real defect: injecting a leak into `job_lock`'s
      `finally` fails this test, while the pre-change version of the same test
      passes with that leak present.
-  4. No other test changes behavior -- settled by the full content-factory
-     suite at 1184 passed.
+  4. No other test changes behavior -- settled by the content-factory suite
+     (runner + store + schemas + copy-verification) at 1354 passed on this
+     branch, matching `main`, since this slice adds assertions to an existing
+     test rather than new tests.
 - Reachability proof: the test drives the real `job_lock` context manager and
   probes exclusion through `_job_lock_is_free`, which opens a second file
   description and attempts a non-blocking `flock`, so it observes the OS lock.
 - Affected surfaces: one test function. No runtime code changes.
+- Execution model (R8). The invariant proved is: on leaving a `job_lock` scope,
+  exactly the lock identity that scope acquired is released, and no other. The
+  admitted model and what settles it:
+  - **Normal exit** -- the assertions added here, at both nesting levels.
+  - **Exception / early return** -- `job_lock` is a `@contextmanager` whose
+    release lives in a `finally`, so the generator is closed and the release
+    runs on any non-fatal unwind. `with` guarantees this; it is not sampled
+    separately because the same `finally` is the only release path, and a
+    probe would assert Python's context-manager contract rather than this
+    module's behaviour.
+  - **Re-entrant exit** -- the depth branch returns before touching `flock`, so
+    an inner same-identity release cannot free the outer OS lock. Covered by
+    the existing re-entrancy test.
+  - **Cross-process** -- `flock` is released by the kernel on fd close or
+    process death, so a crashed holder cannot wedge the lock permanently. Out
+    of scope for this slice: no test drives a second process.
+  - **Assumption, stated:** the probe reads the OS lock through a SECOND file
+    description, because `flock` is per-open-file-description; an in-process
+    flag would not observe a leak.
 - Risk areas: none -- test-only, and the injection probe bounds whether the new
   assertions are meaningful rather than decorative.
-- Reviewer rules triggered: R2, R10, R14.
+- Reviewer rules triggered: R2, R8, R10, R14.
 
 ### Files touched
 
+- `HARDENING.md`
 - `plans/PR-Job-Lock-Unwind-Assertion.md`
 - `tests/test_content_factory_runner.py`
 
@@ -74,9 +96,15 @@ as redundant with the two above them.
 
 ## Deferred
 
-- The two NITs recorded on #2213: `depth[lock_key] = 0` never deletes its entry,
-  and the depth key resolves the root while the lock path does not. Neither has
-  a demonstrated failure path.
+- One NIT from #2213 survives review: `depth[lock_key] = 0` never deletes its
+  entry, so the per-thread depth map grows one key per distinct (job, root).
+  No demonstrated failure path, so it is parked in `HARDENING.md` rather than
+  left only in this plan -- an in-flight plan is archived on merge, which would
+  drop the item out of the active queue.
+- The second #2213 NIT is WITHDRAWN as stale, not deferred: it claimed the
+  depth key and the lock path disagree about resolution, but the key is derived
+  FROM the resolved path, so they cannot differ. Recording the withdrawal
+  rather than deleting it silently, so the plan is not misleading history.
 
 Parked hardening: none.
 
@@ -102,6 +130,7 @@ so the added assertions catch something the previous ones could not.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Job-Lock-Unwind-Assertion.md` | 107 |
+| `HARDENING.md` | 21 |
+| `plans/PR-Job-Lock-Unwind-Assertion.md` | 135 |
 | `tests/test_content_factory_runner.py` | 9 |
-| **Total** | **116** |
+| **Total** | **165** |
