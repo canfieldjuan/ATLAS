@@ -411,7 +411,12 @@ self-balances and there is no separate cadence, owner, or audit to maintain.
 The ledger's columns record the original miss, not the retirement pass, so this
 needs its own row shape -- add a **Retirement reviews** table beside the ledger
 with `Date | Mechanism | Last fired | Outcome (kept / removed) | Replacement
-coverage`. Without a durable `Date` and `Mechanism` per pass, the
+coverage`. **The replacement is itself recorded as a tracked mechanism** in that table: a
+required-check test, its CI enrollment, or a structural or type invariant
+becomes the sole protection for that defect the moment the old gate goes, so it
+inherits the same retirement lifecycle instead of sitting outside the five kinds
+and rotting unreviewed. Retiring a gate onto untracked coverage only moves the
+unreviewed mechanism. Without a durable `Date` and `Mechanism` per pass, the
 least-recently-examined ordering below cannot be computed from repository state
 and the rotation degrades to whatever the current reviewer remembers.
 and take the least-recently-examined mechanism -- when every mechanism has been
