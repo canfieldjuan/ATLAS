@@ -41,15 +41,19 @@ Three carve-outs, because a missing-evidence finding is not a speculative one:
   untested new logic and missing regression test, R5's changed contract without
   contract tests, R4's absent rollback plan, the guard boundary-probe on
   security / billing / data-deletion / customer-output / CI-release surfaces,
-  and a Not-Verified entry under Review completion all qualify. A guard with
-  only happy-path tests blocks on those surfaces whether or not anyone has yet
-  found the bypass -- "no one has exploited it" is not evidence it is safe.
-- **Established, not necessarily published.** For an exploitable
-  authentication, payment, data-access, credential, or report-access flaw,
-  `SECURITY.md` routes details privately and forbids putting them in a public
-  thread. The public finding states the rule, the surface, and the impact, and
-  points at the private report; the failure path is recorded there. Routing it
-  privately does not downgrade it.
+  a Not-Verified rule, **and a `could-not-determine` acceptance criterion** all
+  qualify. A guard with only happy-path tests blocks on those surfaces whether
+  or not anyone has yet found the bypass -- "no one has exploited it" is not
+  evidence it is safe. The unifying test is simple: if what is missing is the
+  *evidence*, the absence is the failure path; only a speculative claim about
+  code you have read needs an input sequence.
+- **Established, not necessarily published.** For **any category
+  `SECURITY.md` routes privately** -- it names exploitable vulnerabilities,
+  exposed credentials, authentication bypasses, payment or billing issues, data
+  deletion gaps, and report-access bugs, and that policy governs, not this list
+  -- the public finding states the rule, the surface, and the impact and points
+  at the private report; the failure path is recorded there. Routing it
+  privately never downgrades it.
 - **A failure path is necessary, not sufficient.** Severity is blast radius, so
   a proven but immaterial defect is MAJOR or NIT on the strength of its impact.
   The ladder above is amended to say so: BLOCKER's "breaks correctness" reads as
@@ -61,8 +65,10 @@ Three carve-outs, because a missing-evidence finding is not a speculative one:
 **The escape valve from "do not manufacture NITs" is not filing the finding, not
 promoting it.** That instruction bars padding a review with polish; it is not a
 reason to enter a marginal finding at BLOCKER so it clears the bar. If a finding
-is real but minor, MAJOR and NIT exist for it; if it is not worth reporting,
-report nothing and mark the rule dispositioned.
+is real but minor, MAJOR and NIT exist for it -- **use them**. A defect you have
+identified is never silently dispositioned: the matrix offers Pass, Fail,
+Not-Verified and reasoned N-A, and none of those honestly represents "I found
+something and said nothing". Report nothing only when you found nothing.
 
 **Why:** across #2195 and #2184 all **68** filed findings are P1/P2 and none is
 lower. Real severity is not distributed that way, and a ladder where everything
