@@ -29,7 +29,7 @@ them did anything wrong; main advanced under them.
 
 Ownership lane: ci-gates
 Slice phase: Production hardening
-Max files: 2
+Max files: 3
 
 1. `.github/workflows/unit_gate.yml`: if `scripts/select_impacted_tests.py` is
    absent from the checked-out tree, write `FULL` to the selection file instead
@@ -47,6 +47,10 @@ Max files: 2
   3. The FULL branch calls `check_unit_gate.py` with only `--baseline` and
      `--base-baseline`, both of which exist on pre-#2207 heads, so the fallback
      cannot fail on a missing flag.
+  4. `tests/test_unit_gate_selector_fallback.py` executes the Select step's own
+     `run:` body in a temp tree and asserts `FULL` when the selector is absent
+     -- settled by running `tests/test_unit_gate_selector_fallback.py`, and by
+     reverting the guard, which fails 3 of its 4 tests.
 - Reachability proof: the `unit-gate` workflow on any affected PR; the observable
   output is the `--- selection ---` echo and a non-zero-length gate run.
 - Affected surfaces: CI only.
@@ -58,6 +62,7 @@ Max files: 2
 
 - `.github/workflows/unit_gate.yml`
 - `plans/PR-Unit-Gate-Selector-Absent-Fallback.md`
+- `tests/test_unit_gate_selector_fallback.py`
 
 ## Mechanism
 
@@ -80,6 +85,10 @@ Parked hardening: none.
 
 ## Verification
 
+Run `tests/test_unit_gate_selector_fallback.py` under pytest: 4 passed. With the
+guard reverted to its pre-#2212 form, 3 of the 4 fail -- the 3i proof that the
+tests detect the regression rather than merely coexisting with the fix.
+
     python -c "import yaml; yaml.safe_load(open('.github/workflows/unit_gate.yml'))"
 
 - Diagnosis confirmed against a real failing run (`30186458544`, #2210) and by
@@ -90,5 +99,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/unit_gate.yml` | 15 |
-| `plans/PR-Unit-Gate-Selector-Absent-Fallback.md` | 94 |
-| **Total** | **109** |
+| `plans/PR-Unit-Gate-Selector-Absent-Fallback.md` | 104 |
+| `tests/test_unit_gate_selector_fallback.py` | 100 |
+| **Total** | **219** |
