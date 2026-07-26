@@ -386,9 +386,14 @@ ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS='{"effingham_maids":{"provider":"imap","imap_
 # Gmail alternative (requires a KEK and a repository-provisioned credential row):
 # ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS='{"effingham_maids":{"provider":"gmail"}}'
 # ATLAS_SAAS_BYOK_ENCRYPTION_KEK=<kid:fernet-key>
-# The scoped_mailbox_credentials table (migration 350) is applied automatically
-# at startup by both the main app and the standalone CRM MCP server
-# (python -m atlas_brain.mcp.crm_server); no separate migration step is needed.
+# The scoped_mailbox_credentials table (migration 350) is applied at startup:
+# the main app runs the migration chain, and the standalone CRM MCP server
+# (python -m atlas_brain.mcp.crm_server) applies exactly this one migration as
+# its prerequisite. It does NOT run the whole chain -- migrations from 076 on
+# reference an out-of-band product_metadata table that no migration creates, so
+# a fresh database cannot apply the full set. If that prerequisite fails, the
+# CRM server still starts and every other CRM tool works; scoped Gmail reads
+# stay fail-closed (omitted) until it is applied.
 ```
 
 ## NocoDB CRM Setup

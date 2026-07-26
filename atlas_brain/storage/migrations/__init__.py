@@ -4,8 +4,10 @@ Database migrations for Atlas Brain.
 Tracks applied migrations in `schema_migrations` table to avoid re-running.
 """
 
+import asyncio
 import logging
 import re
+from collections.abc import Collection
 from pathlib import Path
 
 logger = logging.getLogger("atlas.storage.migrations")
@@ -104,9 +106,15 @@ async def _record_migration(executor, filename: str) -> None:
 # snapshot the pending set independently and race the check-then-insert in
 # _record_migration against the unique schema_migrations.version constraint.
 _MIGRATIONS_ADVISORY_LOCK_KEY = 0x41544C41  # "ATLA"
+_MIGRATIONS_LOCK_POLL_SECONDS = 0.25
 
 
-async def run_migrations(pool, *, migrations_dir: Path | None = None) -> None:
+async def run_migrations(
+    pool,
+    *,
+    migrations_dir: Path | None = None,
+    only: Collection[str] | None = None,
+) -> None:
     """
     Run all pending migrations.
 
@@ -131,13 +139,39 @@ async def run_migrations(pool, *, migrations_dir: Path | None = None) -> None:
     Args:
         pool: The database pool to run migrations against
         migrations_dir: override for tests; defaults to the packaged dir
+        only: restrict the run to these migration stems (e.g.
+            ``{"350_scoped_mailbox_credentials"}``). A component that depends on
+            one specific table can apply exactly that prerequisite instead of
+            the whole chain. The full chain is NOT fresh-applicable -- 076+
+            reference an out-of-band ``product_metadata`` table that no
+            migration creates -- so a component which needs a later, otherwise
+            self-contained migration cannot get it by running everything.
     """
     directory = migrations_dir if migrations_dir is not None else MIGRATIONS_DIR
     conn = await pool.acquire()
     try:
-        await conn.execute(
-            "SELECT pg_advisory_lock($1)", _MIGRATIONS_ADVISORY_LOCK_KEY
-        )
+        # POLL with try-lock instead of blocking in pg_advisory_lock.
+        #
+        # A blocking waiter sits inside an open (implicit) transaction for as
+        # long as it waits. CREATE INDEX CONCURRENTLY -- used by five packaged
+        # migrations -- must wait for every concurrent transaction on the table
+        # to drain before it can finish. So a blocked waiter and a holder
+        # running CONCURRENTLY wait on each other and PostgreSQL kills one with
+        # a deadlock. Two replicas starting together is enough to trigger it.
+        #
+        # try-lock returns immediately, so between polls this connection holds
+        # no transaction and the holder's CONCURRENTLY build can complete.
+        waited = 0.0
+        while not await conn.fetchval(
+            "SELECT pg_try_advisory_lock($1)", _MIGRATIONS_ADVISORY_LOCK_KEY
+        ):
+            await asyncio.sleep(_MIGRATIONS_LOCK_POLL_SECONDS)
+            waited += _MIGRATIONS_LOCK_POLL_SECONDS
+            if waited % 10 < _MIGRATIONS_LOCK_POLL_SECONDS:
+                logger.info(
+                    "Waiting %.0fs for another process to finish migrations",
+                    waited,
+                )
         try:
             await _ensure_migrations_table(conn)
 
@@ -146,6 +180,16 @@ async def run_migrations(pool, *, migrations_dir: Path | None = None) -> None:
             applied = await _get_applied_migrations(conn)
 
             migration_files = sorted(directory.glob("*.sql"))
+            if only is not None:
+                requested = set(only)
+                migration_files = [
+                    f for f in migration_files if f.stem in requested
+                ]
+                missing = requested - {f.stem for f in migration_files}
+                if missing:
+                    raise FileNotFoundError(
+                        f"requested migrations not found: {sorted(missing)}"
+                    )
 
             if not migration_files:
                 logger.info("No migration files found")

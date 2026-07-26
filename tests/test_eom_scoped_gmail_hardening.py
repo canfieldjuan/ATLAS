@@ -142,8 +142,8 @@ def _lifespan_fakes(pool):
     async def _close():
         closed.append(True)
 
-    async def _migrate(p):
-        ran.append(p)
+    async def _migrate(p, *, only=None):
+        ran.append((p, only))
 
     return {
         "init_database_fn": _init,
@@ -161,8 +161,15 @@ async def test_crm_lifespan_runs_migrations_when_pool_is_up():
     fns, ran, closed = _lifespan_fakes(pool)
     async with crm_server._database_lifespan(**fns):
         pass
-    assert ran == [pool], "lifespan must apply migrations to the live pool"
     assert closed == [True]
+    assert len(ran) == 1
+    applied_pool, only = ran[0]
+    assert applied_pool is pool
+    # NOT the whole chain: 076+ reference an out-of-band product_metadata table
+    # that no migration creates, so a fresh database dies partway through and
+    # would take this server's whole lifespan with it.
+    assert only == crm_server.SCOPED_MAILBOX_MIGRATIONS
+    assert "350_scoped_mailbox_credentials" in only
 
 
 @pytest.mark.asyncio
@@ -427,3 +434,34 @@ async def test_ordinary_hydration_failure_still_drops_only_that_message():
     messages = await ScopedGmailEmailProvider(provider).list_messages()
 
     assert [m["id"] for m in messages] == ["m1"]
+
+
+@pytest.mark.asyncio
+async def test_crm_lifespan_survives_a_failing_prerequisite_migration(caplog):
+    """R4/R12: a migration failure must degrade the Gmail binding to its
+    documented fail-closed state, not abort the CRM server. Contacts, tickets
+    and appointments do not depend on migration 350."""
+    import atlas_brain.mcp.crm_server as crm_server
+
+    pool = _Pool(initialized=True)
+    fns, ran, closed = _lifespan_fakes(pool)
+    served = []
+
+    async def _boom(p, *, only=None):
+        raise RuntimeError("relation \"product_metadata\" does not exist")
+
+    fns["run_migrations_fn"] = _boom
+
+    with caplog.at_level(logging.WARNING):
+        async with crm_server._database_lifespan(**fns):
+            served.append(True)
+
+    assert served == [True], "the server must still come up and serve tools"
+    assert closed == [True], "shutdown must still run"
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("scoped Gmail" in m for m in messages), (
+        "the operator must be told which capability is degraded"
+    )
+    assert not any("product_metadata" in m for m in messages), (
+        "log the exception class, not a message that may carry schema detail"
+    )

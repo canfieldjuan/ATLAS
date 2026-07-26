@@ -292,11 +292,6 @@ class _Conn:
         self.held = False
 
     async def execute(self, query, *args):
-        if "pg_advisory_lock" in query:
-            if self.pool.honor_lock:
-                await self.pool._lock().acquire()
-                self.held = True
-            return
         if "pg_advisory_unlock" in query:
             if self.pool.honor_lock and self.held:
                 self.pool._lock().release()
@@ -308,6 +303,17 @@ class _Conn:
         return await self.pool.fetch(query, *args)
 
     async def fetchval(self, query, *args):
+        if "pg_try_advisory_lock" in query:
+            # Non-blocking, like the real thing: hand back False rather than
+            # waiting, so the runner polls instead of sitting in a transaction.
+            if not self.pool.honor_lock:
+                return True
+            gate = self.pool._lock()
+            if gate.locked():
+                return False
+            await gate.acquire()
+            self.held = True
+            return True
         return await self.pool.fetchval(query, *args)
 
 
@@ -415,6 +421,8 @@ class _SingleConn:
         return []
 
     async def fetchval(self, query, *args):
+        if "pg_try_advisory_lock" in query:
+            return True
         return None
 
 
@@ -458,6 +466,12 @@ async def test_migration_sql_does_not_run_inside_a_transaction(tmp_path):
                     "a transaction-scoped advisory lock implies an open "
                     "transaction; CREATE INDEX CONCURRENTLY cannot run there"
                 )
+            if "pg_advisory_lock(" in query:
+                raise AssertionError(
+                    "a BLOCKING advisory lock holds an open transaction while "
+                    "it waits, which deadlocks against a holder running "
+                    "CREATE INDEX CONCURRENTLY; poll with try-lock instead"
+                )
             return await super().execute(query, *args)
 
     pool.acquire = lambda: _acquire_banning(pool, _TxnBanningConn)
@@ -493,6 +507,7 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
     schema = f"atlas_migration_lock_{uuid.uuid4().hex}"
     admin = await asyncpg.connect(database_url)
     pool = None
+    other = None
     try:
         await admin.execute(f'CREATE SCHEMA "{schema}"')
 
@@ -510,19 +525,28 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
             "ON migration_lock_probe_a (id);"
         )
 
+        # TWO INDEPENDENT pools -> two independent backend sessions. A single
+        # max_size=1 pool would serialize the runners in acquire() before they
+        # ever reached the lock, so the advisory lock could be deleted outright
+        # and the test would still pass. Contention has to be between separate
+        # sessions or it is not the lock being measured.
         pool = await asyncpg.create_pool(
             database_url,
             min_size=1,
             max_size=1,
             server_settings={"search_path": f"{schema},public"},
         )
+        other = await asyncpg.create_pool(
+            database_url,
+            min_size=1,
+            max_size=1,
+            server_settings={"search_path": f"{schema},public"},
+        )
 
-        # Both runners share the one connection the pool owns. A design that
-        # reached back to the pool mid-run would block here forever.
         await asyncio.wait_for(
             asyncio.gather(
                 run_migrations(pool, migrations_dir=tmp_path),
-                run_migrations(pool, migrations_dir=tmp_path),
+                run_migrations(other, migrations_dir=tmp_path),
             ),
             timeout=60,
         )
@@ -564,7 +588,8 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
             "connection, not carried into the next borrower"
         )
     finally:
-        if pool is not None:
-            await pool.close()
+        for p in (pool, other):
+            if p is not None:
+                await p.close()
         await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await admin.close()
