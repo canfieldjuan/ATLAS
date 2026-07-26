@@ -99,7 +99,7 @@ _ADVISORY_STATIC_WARNINGS = frozenset(
 # locator this grammar rejects.
 _ADVISORY_GRAMMAR_RE = re.compile(
     r"^(?:unqualified-answer-claim|unqualified-ownership-claim): "
-    r"sentence [1-9]\d{0,9}$"
+    r"sentence (?P<sentence>[1-9]\d{0,9})$"
 )
 
 
@@ -139,6 +139,75 @@ def is_default_ignorable(char: str) -> bool:
 
 # Back-compat alias for existing private callers in this module.
 _is_default_ignorable = is_default_ignorable
+
+
+# --- shared sentence machinery ------------------------------------------
+#
+# Lives HERE, not in the copy-verification engine, because the CONTRACT needs
+# it: an advisory locator names a sentence of the audited body, so validating
+# that locator requires counting sentences exactly the way the producer does.
+# Two implementations would drift, and a locator bound that disagrees with the
+# producer is either a false rejection or an open door (#2189). Same
+# one-definition rule as `is_default_ignorable`.
+
+SENTENCE_BOUNDARY_RE = re.compile(r"[.!?]+\s+(?=[A-Z\"'(])|[.!?]+\s*\Z|\n\s*\n+")
+ABBREVIATIONS = frozenset(
+    {"dr", "mr", "mrs", "ms", "prof", "inc", "ltd", "co", "corp", "dept",
+     "vs", "etc", "jr", "sr", "st", "fig", "approx", "est"}
+)
+# Capitalized words that overwhelmingly START sentences: an abbreviation
+# period followed by one of these is a real terminator ("Acme Inc. We
+# draft ..."), while "Dr. Billing" (a name) stays internal.
+SENTENCE_STARTERS = frozenset(
+    {"we", "the", "our", "this", "these", "those", "it", "they", "a", "an",
+     "i", "he", "she", "you", "all", "each", "no", "if", "when", "after",
+     "before", "there", "here"}
+)
+LAST_WORD_RE = re.compile(r"([A-Za-z][\w'-]*)\s*$")
+
+
+def sentence_spans(text: str) -> "list[tuple[int, int]]":
+    """Sentence spans with abbreviation protection: a period run is not a
+    terminator when the word before it is a known abbreviation or a single
+    initial ("Dr. Billing", "J. Smith") -- locators must count sentences the
+    way the reviewing human does."""
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for match in SENTENCE_BOUNDARY_RE.finditer(text):
+        marks = set(match.group(0).strip()) - set("\n \t")
+        if marks and marks <= {"."}:
+            before = LAST_WORD_RE.search(text[max(0, match.start() - 40) : match.start()])
+            if before is not None:
+                word = before.group(1).lower()
+                if word in ABBREVIATIONS or len(word) == 1:
+                    follower = re.match(r"\s*([A-Za-z][\w'\u2019-]*)", text[match.end() :])
+                    if follower is None or follower.group(1).lower() not in SENTENCE_STARTERS:
+                        continue
+        spans.append((start, match.start()))
+        start = match.end()
+    spans.append((start, len(text)))
+    return spans
+
+
+def sentence_count(text: str) -> int:
+    """The highest sentence number a locator may legitimately reference.
+
+    This is the 1-based index of the LAST span carrying content, not the span
+    count: a terminator at the end of the text yields a trailing empty span,
+    so `len()` would admit a locator naming a sentence that does not exist.
+
+    It is deliberately the last CONTENT index rather than the number of
+    content spans. An empty span can also fall in the MIDDLE (a blank line
+    between sentences), and the producer numbers locators by span position --
+    so counting only non-empty spans would under-count and false-reject a
+    legitimate locator. The last content index can never be smaller than any
+    locator the producer can emit.
+    """
+    last = 0
+    for index, (start, end) in enumerate(sentence_spans(text), start=1):
+        if text[start:end].strip():
+            last = index
+    return last
 
 
 def _routing_key(channel: str) -> str:
@@ -196,7 +265,7 @@ def _raise_invisible():
     )
 
 
-def _validate_advisory_warnings(warnings: "list[str]") -> None:
+def _validate_advisory_warnings(warnings: "list[str]", body: str = "") -> None:
     """Persistence choke point for ALL writers (runner or direct) on EVERY
     artifact that carries advisory warnings.
 
@@ -205,17 +274,40 @@ def _validate_advisory_warnings(warnings: "list[str]") -> None:
     validation, before the store persists anything. Kept as one function so
     the audit, the repurposing variants, and the image prompts cannot drift
     into three different grammars.
+
+    The locator is also BOUND TO ``body`` (#2189). Grammar alone validated the
+    digit SHAPE, so a direct writer could persist
+    ``unqualified-answer-claim: sentence 2125551234`` against a one-sentence
+    body -- a raw phone number wearing a locator's clothes, which contradicts
+    the contract that PII-shaped producer values are unrepresentable for every
+    writer. A locator may now only name a sentence the audited body actually
+    has, which caps it at the body's own length: a ten-digit locator would
+    need a ten-digit-sentence body, and each sentence needs at least two
+    characters.
+
+    ``body`` defaults to empty, which admits NO locator. That is the correct
+    default for an artifact with no single audited body (an image-prompt set
+    verifies each prompt independently), and it fails closed for any future
+    caller that forgets to pass one.
     """
+    limit = sentence_count(body)
     for warning in warnings:
         if warning in _ADVISORY_STATIC_WARNINGS:
             continue
-        if _ADVISORY_GRAMMAR_RE.fullmatch(warning):
-            continue
-        raise ValueError(
-            "advisory_warnings entries must be deterministic checklist "
-            "lines (bounded locator grammar); free-text evidence is not "
-            "representable"
-        )
+        match = _ADVISORY_GRAMMAR_RE.fullmatch(warning)
+        if match is None:
+            raise ValueError(
+                "advisory_warnings entries must be deterministic checklist "
+                "lines (bounded locator grammar); free-text evidence is not "
+                "representable"
+            )
+        locator = int(match.group("sentence"))
+        if locator > limit:
+            raise ValueError(
+                f"advisory warning locator names sentence {locator}, but the "
+                f"audited body has {limit}; a locator must reference the body "
+                "it was computed from"
+            )
 
 
 Confidence = Literal["high", "medium", "low"]
@@ -393,7 +485,7 @@ class EditorialAuditV2(BaseModel):
 
     @model_validator(mode="after")
     def _advisory_warnings_bounded(self) -> "EditorialAuditV2":
-        _validate_advisory_warnings(self.advisory_warnings)
+        _validate_advisory_warnings(self.advisory_warnings, self.edited_body_markdown)
         return self
 
     @model_validator(mode="after")
@@ -503,7 +595,7 @@ class ChannelVariant(BaseModel):
 
     @model_validator(mode="after")
     def _advisory_warnings_bounded(self) -> "ChannelVariant":
-        _validate_advisory_warnings(self.advisory_warnings)
+        _validate_advisory_warnings(self.advisory_warnings, self.body_markdown)
         return self
 
 
