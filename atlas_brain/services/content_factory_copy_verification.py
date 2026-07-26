@@ -62,10 +62,15 @@ import re
 import unicodedata
 
 from atlas_brain.schemas.content_factory import (
+    ABBREVIATIONS,
     ADVISORY_CTA_REMINDER,
     ADVISORY_OWNER_ROUTING_WARNING,
+    LAST_WORD_RE,
+    SENTENCE_BOUNDARY_RE,
+    SENTENCE_STARTERS,
     CopyVerification,
     is_default_ignorable,
+    sentence_spans,
 )
 
 # ---------------------------------------------------------------------------
@@ -108,6 +113,11 @@ _RULES: dict[str, list[tuple[str, str]]] = {
         ),
     ],
 }
+
+_LAST_WORD_RE = LAST_WORD_RE
+_ABBREVIATIONS = ABBREVIATIONS
+_SENTENCE_STARTERS = SENTENCE_STARTERS
+_SENTENCE_BOUNDARY_RE = SENTENCE_BOUNDARY_RE
 
 _SCAN_KEEP_CONTROLS = frozenset("\t\n\r\v\f")
 
@@ -260,10 +270,6 @@ _WORD_RE = re.compile(r"[A-Za-z][\w'\u2019-]*|\d[\w.-]*")
 # Sentence terminators: runs of .!? followed by whitespace + a capital/quote,
 # or end of text; a blank line is a structural break. Single newlines (soft
 # wraps) never split; digit-internal and abbreviation periods never split.
-_SENTENCE_BOUNDARY_RE = re.compile(
-    r"[.!?]+\s+(?=[A-Z\"'(])|[.!?]+\s*\Z|\n\s*\n+"
-)
-
 # Clause boundaries: the minimal proposition. Punctuation (incl. dashes,
 # slashes, parens), coordinators, and relativizer/adjunct openers.
 _CLAUSE_BOUNDARY_RE = re.compile(
@@ -357,49 +363,13 @@ _REPORT_ITEM_NOUNS = frozenset(
 _CTA_REMINDER = ADVISORY_CTA_REMINDER
 
 
-_ABBREVIATIONS = frozenset(
-    {"dr", "mr", "mrs", "ms", "prof", "inc", "ltd", "co", "corp", "dept",
-     "vs", "etc", "jr", "sr", "st", "fig", "approx", "est"}
-)
-# Capitalized words that overwhelmingly START sentences: an abbreviation
-# period followed by one of these is a real terminator ("Acme Inc. We
-# draft ..."), while "Dr. Billing" (a name) stays internal.
-_SENTENCE_STARTERS = frozenset(
-    {"we", "the", "our", "this", "these", "those", "it", "they", "a", "an",
-     "i", "he", "she", "you", "all", "each", "no", "if", "when", "after",
-     "before", "there", "here"}
-)
 _FOCUS_MODIFIERS = frozenset({"only", "even", "just", "especially", "particularly"})
-_LAST_WORD_RE = re.compile(r"([A-Za-z][\w'-]*)\s*$")
 
 
 def _sentence_structure(text: str) -> "tuple[list[int], list[tuple[int, int]]]":
-    """Sentence spans with abbreviation protection: a period run is not a
-    terminator when the word before it is a known abbreviation or a single
-    initial ("Dr. Billing", "J. Smith") -- locators must count sentences the
-    way the reviewing human does."""
-    spans: list[tuple[int, int]] = []
-    start = 0
-    for match in _SENTENCE_BOUNDARY_RE.finditer(text):
-        marks = set(match.group(0).strip()) - set("\n \t")
-        if marks and marks <= {"."}:
-            before = _LAST_WORD_RE.search(
-                text[max(0, match.start() - 40) : match.start()]
-            )
-            if before is not None:
-                word = before.group(1).lower()
-                if word in _ABBREVIATIONS or len(word) == 1:
-                    follower = re.match(
-                        r"\s*([A-Za-z][\w'\u2019-]*)", text[match.end() :]
-                    )
-                    if (
-                        follower is None
-                        or follower.group(1).lower() not in _SENTENCE_STARTERS
-                    ):
-                        continue
-        spans.append((start, match.start()))
-        start = match.end()
-    spans.append((start, len(text)))
+    """(starts, spans) over the SHARED sentence definition in the contracts
+    module, so the engine and the locator validator cannot disagree (#2189)."""
+    spans = sentence_spans(text)
     return [s for s, _e in spans], spans
 
 
@@ -575,9 +545,14 @@ def _unqualified_claims(
         # "if the tickets contain no proof" must not excuse the claim
         # (the standing honest-gap form "no proven answer" matches as a
         # whole phrase and is unaffected).
+        # Case-insensitive, like the qualifier detector itself. Without re.I
+        # this check saw "no proof" but not "NO proof", so ordinary generated
+        # casing was accepted as a qualification and suppressed the warning
+        # (#2189). Polarity is not a property of capitalization.
         if re.match(
             r"\s+(?:[\w'\u2019-]+\s+){0,2}(?:no|not|never|nothing|none|zero)\b",
             text[qualifier.end() :],
+            re.IGNORECASE,
         ):
             continue
         index, _span = _span_for(clause_bounds, max(qualifier.end() - 1, 0))
