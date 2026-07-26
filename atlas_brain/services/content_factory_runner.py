@@ -237,7 +237,17 @@ _UNAMBIGUOUS_GROUPINGS = frozenset({(3, 4), (3, 3, 4), (1, 3, 3, 4)})
 # dial marker. Arbitrary nearby words are not evidence: the open semantic
 # category behind "text for room 212 art deco" cannot be closed by proximity.
 # These are function words in direct-address/dial syntax, not content nouns.
-_DIAL_BRIDGE_WORDS = frozenset({"at", "me", "on", "us", "via"})
+# "to" is the dative marker every message verb takes for its recipient
+# ("text/SMS/WhatsApp to <number>"), so omitting it let a one-word connector
+# defeat the gate while the same marker and number without it were rejected.
+#
+# Possessive determiners ("our", "your", "their") are DELIBERATELY excluded
+# even though they are also function words: they occur in ordinary renderer
+# prose ("text your 1920 1080 export"), so admitting them would make a
+# typography instruction read as a dial instruction. "to" does not appear that
+# way -- "text to 1920 1080 export" is not something a prompt says. The class
+# is function words that mark a RECIPIENT, not every function word.
+_DIAL_BRIDGE_WORDS = frozenset({"at", "me", "on", "to", "us", "via"})
 _DIAL_BRIDGE_WORD_RE = re.compile(r"[A-Za-z]+")
 _DIAL_BRIDGE_PUNCT_RE = re.compile(r"^[ \t,;:()\-\r\n]*$")
 

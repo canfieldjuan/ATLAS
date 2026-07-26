@@ -1797,3 +1797,38 @@ def test_scan_view_keeps_whitespace_controls():
 
     assert scan_view("room 255\nx255 blue\tgrade") == "room 255\nx255 blue\tgrade"
     assert scan_view("a​b c") == "ab c"
+
+
+# --- #2201 round 12: recipient-marking bridge ----------------------------
+
+_MESSAGE_INTENTS = ["Call", "Text", "SMS", "WhatsApp", "dial", "phone", "contact"]
+_BRIDGES = ["", "to ", "me at ", "us on ", "to me at "]
+
+
+@pytest.mark.parametrize("intent", _MESSAGE_INTENTS)
+@pytest.mark.parametrize("bridge", _BRIDGES)
+def test_recipient_bridge_cross_product_fails(intent, bridge):
+    """#2201: the bridge vocabulary omitted the dative `to`, so `Text to +44
+    800 FLOWERS` passed while `Text +44 800 FLOWERS` failed -- a one-word
+    connector defeated the gate. Evidence-keyed across every admitted intent
+    and bridge form."""
+    assert runner._prompt_contact_hits(f"{intent} {bridge}+44 800 FLOWERS") != []
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        # `to` must bridge only a RECIPIENT, never descriptive prose.
+        "text to room 212 art deco",
+        "poster for room 212 art deco, contact sheet layout",
+        "text treatment for room 212 art deco",
+        # Possessive determiners are deliberately NOT bridge words: they occur
+        # in ordinary renderer prose, so admitting them would read a
+        # typography instruction as a dial instruction.
+        "text your 1920 1080 export",
+        "call our 1920 1080 render sheet",
+        "a call center scene, 1920 1080 resolution poster",
+    ],
+)
+def test_recipient_bridge_does_not_admit_renderer_prose(prompt):
+    assert runner._prompt_contact_hits(prompt) == []

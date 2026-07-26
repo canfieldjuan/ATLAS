@@ -148,6 +148,11 @@ Max files: 8
       for room 212 art deco, contact sheet layout` remain admissible.
   17. Every source-bound stage requires a valid committed draft before worker
       dispatch; no stage may send `Committed draft JSON:\nnull`.
+  19. A dial marker connected to its number by the dative `to` -- `Text to
+      +44 800 FLOWERS`, `SMS to ...`, `WhatsApp to ...` -- fails, matching the
+      same marker and number without the connector. Possessive determiners
+      stay OUT of the bridge: `text your 1920 1080 export` and `call our 1920
+      1080 render sheet` remain renderer prose.
   18. A default-ignorable code point inserted at ANY seam of a contact string
       -- before or inside the `+`/`00` prefix, between or inside numeric
       groups, inside the vanity suffix, or inside an address -- preserves the
@@ -267,6 +272,23 @@ This does not change body-copy verdict POLICY -- which real forms count as PII
 is untouched, so #2181's frozen semantics hold. It denies an evasion of the
 existing policy. Mutation-checked: neutralizing `scan_view` fails 64 tests.
 
+### Review round 12 (Codex) -- recipient-marking bridge
+
+One finding, confirmed: the bridge vocabulary omitted `to`, so `Text to +44
+800 FLOWERS` produced no hit while `Text +44 800 FLOWERS` was rejected. A
+one-word grammatical connector defeated the gate.
+
+`to` is the dative marker every message verb takes for its recipient, so it
+belongs to the same closed function-word class the bridge already models.
+
+Possessive determiners are deliberately NOT added, and the boundary is
+recorded so the exclusion is not mistaken for an oversight: `our`/`your`/
+`their` are function words too, but they occur in ordinary renderer prose
+("text your 1920 1080 export"), so admitting them would read a typography
+instruction as a dial instruction. The class is function words that mark a
+RECIPIENT, not every function word. Covered by a 7 intents x 5 bridge-forms
+cross-product plus the prose-side probes.
+
 ## Intentional
 
 - Detached phonewords without preceding structural dial intent pass, even if
@@ -325,10 +347,10 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 60 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 62 |
-| `atlas_brain/services/content_factory_runner.py` | 374 |
+| `atlas_brain/services/content_factory_runner.py` | 382 |
 | `atlas_brain/services/content_factory_store.py` | 102 |
-| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 285 |
-| `plans/PR-CF-Phase6-Round10-Remediation.md` | 334 |
-| `tests/test_content_factory_runner.py` | 774 |
+| `plans/PR-CF-Phase6-Repurposing-Contracts.md` | 284 |
+| `plans/PR-CF-Phase6-Round10-Remediation.md` | 356 |
+| `tests/test_content_factory_runner.py` | 809 |
 | `tests/test_content_factory_schemas.py` | 68 |
-| **Total** | **2059** |
+| **Total** | **2123** |
