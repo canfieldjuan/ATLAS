@@ -19,7 +19,9 @@ This slice is that follow-up, and #2189 closes with it.
   `[term_start, CLAUSE END]`, so any negation later in the clause denies the
   report surface -- including one inside an unrelated trailing adjunct. `The
   Resolution Audit is provided without delay.` affirmatively provides the
-  report with no routing, and emitted nothing.
+  report with no routing, and emitted nothing. The deeper cause is that a
+  character RANGE cannot express which negations govern the assertion; kind
+  can.
 - Root cause (finding 3): `_ANAPHORIC_SUBJECTS` lumps bare anaphors (`it`,
   `they`) together with quantifiers that CARRY A NOUN (`each`, `every`, `all`,
   `these`). `every` alone satisfied the subject test, so `Every invoice is
@@ -37,8 +39,8 @@ Slice phase: production hardening
 Max files: 3
 
 1. `atlas_brain/services/content_factory_copy_verification.py`:
-   - `_predicate_end` truncates the polarity range at the first adjunct
-     preposition; `_report_shape_sentences` uses it.
+   - `_assertion_negated` decides product-term polarity by negation KIND,
+     with scopes and the verbal check cached per clause.
    - `_subject_binds_to_report(words)` replaces the duplicated inline subject
      test at both call sites.
 2. Proof: generated cross-products on both sides of each decision.
@@ -59,7 +61,16 @@ Max files: 3
      `Each one is routed`, `Each of them is routed`.
   6. Partitives do not smuggle a non-report subject: `Each of the invoices is
      routed` warns, `Each of the tickets is routed` does not.
-  7. The standing 18-round regression corpus stays green.
+  7. `both` is treated as noun-bearing: `Both invoices are assigned` warns,
+     `Both tickets are assigned` does not.
+  8. Modified heads are classified correctly: `Each of the open tickets is
+     assigned` covers, `Each of the open invoices is assigned` does not.
+  9. A noun-attached PP does not defeat a governing negation: `The Resolution
+     Audit for this month is not provided.` emits nothing, while the same
+     sentence without `not` warns.
+  10. The pass stays linear: a 67 KB clause with 3,200 product terms runs in
+      0.023s, against 0.022s on `main` (it was 4.6s mid-review).
+  11. The standing 18-round regression corpus stays green.
 - Reachability proof: both fixes sit inside `advisory_warnings`, the same entry
   point the runner calls for every audit and channel variant.
 - Affected surfaces: routing-coverage scope only. No change to the verdict,
@@ -76,24 +87,35 @@ Max files: 3
 
 ## Mechanism
 
-**Predicate boundary.** A predicate ends where an adjunct PP begins, so the
-polarity range stops at the first adjunct preposition after the product term
-rather than at the clause end. Prepositions are a CLOSED class, which is what
-makes this a grammar rule rather than a word list -- the contrast that matters
-is `is not provided` (negation inside the predicate, still denies) versus `is
-provided without delay` (negation inside an adjunct, does not).
+**Polarity by negation KIND, not by position.** The first attempt truncated the
+range at the first preposition after the product term. Review found three
+problems with that, all real: a PP can attach to the NOUN (`The Resolution
+Audit for this month is not provided` truncated at `for` and ignored the
+governing `not`); and re-scanning the clause suffix per term made the checker
+quadratic (7.1s on a 54 KB clause).
 
-**Subject binding.** One helper, used by both the same-sentence and
-later-sentence paths. They previously carried the same test written twice,
-which is how one hole existed in both. A quantifier binds when it is bare (a
-predicate follows), when it carries a report item, or when a pro-form continues
-the reference. Any other noun renames the subject.
+The range is gone. Polarity is decided by the negation's KIND, which the scope
+model already encodes: a scope covering the term itself denies it; a VERBAL
+negator anywhere in the clause attaches to the predicate and denies wherever
+the term sits; a bounded scope elsewhere is an adjunct's own complement and
+denies nothing. Verbal negators are detected directly rather than inferred from
+scope extent -- `without delay` at the end of a clause produces a bounded scope
+that happens to reach the clause end, and was misread as verbal on the way
+here. Both the scopes and the verbal check are cached per clause, so the pass
+is linear again (0.023s vs 0.022s on `main` for the same input).
 
-The partitive branch looks THROUGH `of` and any determiner to the head noun.
-Admitting `of` wholesale -- the first thing that made the regression corpus
-pass -- would have reproduced the same hole one token further out, since `each
-of the invoices` is about invoices exactly as `each invoice` is. That is the
-string-closure trap AGENTS.md 3k.1 names, so it is closed as a class.
+**Subject binding by the actual head.** One helper, used by both the
+same-sentence and later-sentence paths; they previously carried the same test
+written twice, which is how one hole existed in both.
+
+A noun-bearing quantifier is classified by its SUBJECT HEAD: the last token
+before the predicate. That handles determiners, modifiers and partitives
+uniformly (`each of the open tickets` -> `tickets`) instead of special-casing
+`of` and inspecting a fixed four-token window -- which review showed both
+missed `both invoices` and rejected valid modified heads. `both` is noun-bearing
+and moved out of the bare set. Bare use (a predicate follows directly) and
+pro-forms still bind, since a pro-form inherits reference rather than renaming
+the subject.
 
 ## Intentional
 
@@ -132,7 +154,7 @@ polarity range back to the clause end, and quantifiers binding unconditionally:
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/content_factory_copy_verification.py` | 98 |
-| `plans/PR-CF-Routing-Coverage-Scope.md` | 125 |
+| `atlas_brain/services/content_factory_copy_verification.py` | 131 |
+| `plans/PR-CF-Routing-Coverage-Scope.md` | 160 |
 | `tests/test_content_factory_copy_verification.py` | 100 |
-| **Total** | **323** |
+| **Total** | **391** |
