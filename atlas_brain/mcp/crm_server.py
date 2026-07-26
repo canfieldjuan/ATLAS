@@ -46,13 +46,51 @@ logger = logging.getLogger("atlas.mcp.crm")
 
 
 @asynccontextmanager
+async def _database_lifespan(
+    *,
+    init_database_fn,
+    get_db_pool_fn,
+    run_migrations_fn,
+    close_database_fn,
+):
+    """Initialize the DB pool and apply migrations on startup, close on shutdown.
+
+    Parameterized like the invoicing MCP's lifespan so tests drive it with
+    edge fakes instead of monkeypatching storage internals. Migrations run
+    here for the same reason they run there: this server is a documented
+    standalone deployment, and scoped Gmail bindings depend on the
+    scoped_mailbox_credentials table (migration 350). Without this, upgrading
+    an existing standalone CRM deployment and enabling a Gmail binding fails
+    at first use instead of at startup.
+    """
+    try:
+        await init_database_fn()
+        pool = get_db_pool_fn()
+        if pool.is_initialized:
+            await run_migrations_fn(pool)
+            logger.info("CRM MCP: DB pool initialized and migrated")
+        else:
+            logger.warning(
+                "CRM MCP: DB pool not initialized (persistence disabled?); "
+                "migrations skipped -- scoped Gmail bindings will be unavailable"
+            )
+        yield
+    finally:
+        await close_database_fn()
+
+
+@asynccontextmanager
 async def _lifespan(server):
-    """Initialize DB pool on startup, close on shutdown."""
-    from ..storage.database import init_database, close_database
-    await init_database()
-    logger.info("CRM MCP: DB pool initialized")
-    yield
-    await close_database()
+    from ..storage.database import init_database, close_database, get_db_pool
+    from ..storage.migrations import run_migrations
+
+    async with _database_lifespan(
+        init_database_fn=init_database,
+        get_db_pool_fn=get_db_pool,
+        run_migrations_fn=run_migrations,
+        close_database_fn=close_database,
+    ):
+        yield
 
 
 mcp = FastMCP(

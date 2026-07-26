@@ -175,10 +175,15 @@ class CustomerContextService:
                     business_context_id,
                 )
                 inbox_email_source_omitted = True
-            except Exception:
+            except Exception as exc:
+                # Class name only: exception MESSAGES on this path can carry
+                # credential-configuration text (see the decrypt boundary in
+                # scoped_mailbox_credential), but the type alone separates a
+                # dead pool from a missing migration from a provider bug.
                 logger.warning(
-                    "CustomerContext inbox provider setup failed for %s",
+                    "CustomerContext inbox provider setup failed for %s: %s",
                     business_context_id,
+                    type(exc).__name__,
                 )
                 inbox_email_source_omitted = True
             else:
@@ -227,14 +232,26 @@ class CustomerContextService:
             if inbox_provider is None:
                 inbox_coro = asyncio.sleep(0, result=[])
             else:
-                inbox_coro = _safe(
-                    self._get_inbox_emails(
-                        contact,
-                        inbox_max_emails,
-                        provider=inbox_provider,
-                    ),
-                    "inbox_emails",
-                )
+                async def _scoped_inbox():
+                    from ..storage.repositories.scoped_mailbox_credential import (
+                        ScopedMailboxCredentialUnavailable,
+                    )
+
+                    try:
+                        return await self._get_inbox_emails(
+                            contact,
+                            inbox_max_emails,
+                            provider=inbox_provider,
+                        )
+                    except ScopedMailboxCredentialUnavailable:
+                        logger.info(
+                            "CustomerContext inbox omitted: credential revoked "
+                            "mid-read for %s",
+                            business_context_id,
+                        )
+                        return None
+
+                inbox_coro = _safe(_scoped_inbox(), "inbox_emails")
         else:
             inbox_coro = _safe(
                 self._get_inbox_emails(contact, inbox_max_emails),
@@ -261,6 +278,11 @@ class CustomerContextService:
             interactions_coro, appointments_coro, calls_coro,
             emails_coro, inbox_coro, sms_coro, invoices_coro, b2b_coro,
         )
+        if inbox is None:
+            # Late-revocation sentinel from _scoped_inbox: the source was
+            # withdrawn between setup and read, so it is omitted, not empty.
+            inbox_email_source_omitted = True
+            inbox = []
 
         return CustomerContext(
             contact=contact,
@@ -388,6 +410,10 @@ class CustomerContextService:
         safe_limit = max(0, min(limit, 50))
         if safe_limit == 0:
             return []
+        from ..storage.repositories.scoped_mailbox_credential import (
+            ScopedMailboxCredentialUnavailable,
+        )
+
         try:
             messages = await provider.list_messages(
                 query=f'from:"{email_addr}"',
@@ -415,6 +441,11 @@ class CustomerContextService:
                 if len(admitted) >= safe_limit:
                     break
             return admitted
+        except ScopedMailboxCredentialUnavailable:
+            # Revoked after the advisory setup check but before the locked
+            # read: this is an authorization outcome, not an empty inbox.
+            # Propagate so the aggregation records the source as omitted.
+            raise
         except Exception as exc:
             logger.warning("_get_inbox_emails failed for %s: %s", email_addr, exc)
             return []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import json
@@ -12,6 +13,25 @@ from ...auth.encryption import decrypt_secret, encrypt_secret
 from ..database import get_db_pool
 
 logger = logging.getLogger("atlas.storage.scoped_mailbox_credentials")
+
+# In-process refresh gate, one per (event loop, exact context). The row-level
+# FOR UPDATE in locked_gmail() serializes refreshes across processes, but every
+# in-process waiter would otherwise hold a pool connection while blocked on the
+# same row -- ten concurrent scoped reads for one context could pin the entire
+# default ten-connection pool behind one token exchange. Waiters queue here
+# WITHOUT a connection; each process then holds at most one connection per
+# context inside the locked section. Keyed by running loop because an
+# asyncio.Lock is loop-bound; growth is bounded by loops x contexts (one loop in
+# production, and contexts come from the validated binding config).
+_REFRESH_GATES: dict[tuple[int, str], asyncio.Lock] = {}
+
+
+def _refresh_gate(context: str) -> asyncio.Lock:
+    key = (id(asyncio.get_running_loop()), context)
+    gate = _REFRESH_GATES.get(key)
+    if gate is None:
+        gate = _REFRESH_GATES[key] = asyncio.Lock()
+    return gate
 
 GMAIL_PROVIDER = "gmail"
 
@@ -80,6 +100,14 @@ class LockedScopedGmailCredentials:
 class ScopedMailboxCredentialRepository:
     """Narrow repository; no list API or broad secret projection exists."""
 
+    def __init__(self, pool=None) -> None:
+        # Edge seam: tests hand in a pool double; production resolves the
+        # process pool lazily so import order stays unconstrained.
+        self._pool = pool
+
+    def _db(self):
+        return self._pool if self._pool is not None else get_db_pool()
+
     async def bind_gmail(
         self,
         *,
@@ -94,7 +122,7 @@ class ScopedMailboxCredentialRepository:
             client_secret=client_secret,
             refresh_token=refresh_token,
         )
-        row = await get_db_pool().fetchrow(
+        row = await self._db().fetchrow(
             """
             INSERT INTO scoped_mailbox_credentials (
                 business_context_id,
@@ -123,7 +151,7 @@ class ScopedMailboxCredentialRepository:
         business_context_id: str,
     ) -> ScopedGmailCredentials | None:
         context = _exact_context(business_context_id)
-        row = await get_db_pool().fetchrow(
+        row = await self._db().fetchrow(
             """
             SELECT encrypted_credentials, encryption_kid, generation
             FROM scoped_mailbox_credentials
@@ -138,7 +166,7 @@ class ScopedMailboxCredentialRepository:
 
     async def revoke_gmail(self, business_context_id: str) -> int | None:
         context = _exact_context(business_context_id)
-        row = await get_db_pool().fetchrow(
+        row = await self._db().fetchrow(
             """
             UPDATE scoped_mailbox_credentials
             SET revoked_at = NOW(),
@@ -161,29 +189,30 @@ class ScopedMailboxCredentialRepository:
     ) -> AsyncIterator[LockedScopedGmailCredentials]:
         """Serialize token refresh for one exact context across processes."""
         context = _exact_context(business_context_id)
-        async with get_db_pool().transaction() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT encrypted_credentials, encryption_kid, generation
-                FROM scoped_mailbox_credentials
-                WHERE business_context_id = $1
-                  AND provider = $2
-                  AND revoked_at IS NULL
-                FOR UPDATE
-                """,
-                context,
-                GMAIL_PROVIDER,
-            )
-            credentials = _decrypt_row(row, context)
-            if credentials is None:
-                raise ScopedMailboxCredentialUnavailable(
-                    "scoped_gmail_credentials_unavailable"
+        async with _refresh_gate(context):
+            async with self._db().transaction() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT encrypted_credentials, encryption_kid, generation
+                    FROM scoped_mailbox_credentials
+                    WHERE business_context_id = $1
+                      AND provider = $2
+                      AND revoked_at IS NULL
+                    FOR UPDATE
+                    """,
+                    context,
+                    GMAIL_PROVIDER,
                 )
-            yield LockedScopedGmailCredentials(
-                _conn=conn,
-                business_context_id=context,
-                credentials=credentials,
-            )
+                credentials = _decrypt_row(row, context)
+                if credentials is None:
+                    raise ScopedMailboxCredentialUnavailable(
+                        "scoped_gmail_credentials_unavailable"
+                    )
+                yield LockedScopedGmailCredentials(
+                    _conn=conn,
+                    business_context_id=context,
+                    credentials=credentials,
+                )
 
 
 class ScopedGmailCredentialSource:

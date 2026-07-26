@@ -61,7 +61,9 @@ settings object actually owned by the global token store.
 
 Ownership lane: eom-crm/email-tenancy
 Slice phase: Production hardening
-Max files: 14
+Max files: 16
+<!-- raised from 14: the round-2 review fixes add
+     tests/test_eom_scoped_gmail_hardening.py and touch CLAUDE.md -->
 
 1. Add one encrypted, generation-aware scoped Gmail credential row and
    transaction-serialized refresh path for exact CRM business contexts.
@@ -126,6 +128,7 @@ Max files: 14
 - `CLAUDE.md`
 - `atlas_brain/autonomous/tasks/gmail_digest.py`
 - `atlas_brain/config.py`
+- `atlas_brain/mcp/crm_server.py`
 - `atlas_brain/services/customer_context.py`
 - `atlas_brain/services/email_provider.py`
 - `atlas_brain/storage/migrations/350_scoped_mailbox_credentials.sql`
@@ -135,6 +138,7 @@ Max files: 14
 - `plans/archive/PR-EOM-Mailbox-Context-Binding.md`
 - `tests/test_eom_mailbox_context_binding.py`
 - `tests/test_eom_scoped_gmail_credentials.py`
+- `tests/test_eom_scoped_gmail_hardening.py`
 - `tests/test_migrations_runner.py`
 
 ## Mechanism
@@ -238,6 +242,33 @@ Direct SQL writers outside this repository are also outside the model.
 
 Parked hardening: none.
 
+## Review follow-up (round: four Codex findings, all fixed)
+
+1. **Sanitized setup-failure reason** -- provider setup failures now log the
+   exception class name (never the message, which can carry credential text),
+   so a dead pool is distinguishable from a missing migration in production
+   logs. `tests/test_eom_scoped_gmail_hardening.py` proves the class appears
+   and a secret-bearing message does not.
+2. **Late revocation is an omitted source** -- `ScopedMailboxCredentialUnavailable`
+   raised between the advisory availability check and the locked read now
+   propagates to the aggregation, which records `inbox_email_source_omitted`
+   instead of returning an indistinguishable empty inbox. A transient provider
+   failure still reads as an ordinary empty result (both directions tested).
+3. **Standalone CRM server migrates at startup** -- `_lifespan` now applies
+   migrations when the pool is initialized (mirroring the invoicing MCP), so
+   migration 350 is present before the first scoped Gmail read; a disabled-DB
+   deployment logs a warning instead of skipping silently. CLAUDE.md states no
+   separate migration step is needed.
+4. **Refresh waiters are bounded** -- an in-process per-(loop, context) gate in
+   front of `locked_gmail` queues concurrent refreshes WITHOUT pool
+   connections; cross-process serialization stays on FOR UPDATE. Ten
+   concurrent scoped reads for one context now hold at most one connection per
+   process. The paired probe defeats the gate and reproduces the reviewed
+   pool-exhaustion profile, proving the test measures the gate. Residual,
+   stated: each *process* still contributes one blocked connection per context
+   while another process refreshes -- the same bound the FOR UPDATE design
+   always had.
+
 ## Verification
 
 - PASS — changed-module compilation:
@@ -291,17 +322,19 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 16 |
-| `CLAUDE.md` | 17 |
+| `CLAUDE.md` | 20 |
 | `atlas_brain/autonomous/tasks/gmail_digest.py` | 199 |
 | `atlas_brain/config.py` | 20 |
-| `atlas_brain/services/customer_context.py` | 8 |
+| `atlas_brain/mcp/crm_server.py` | 50 |
+| `atlas_brain/services/customer_context.py` | 51 |
 | `atlas_brain/services/email_provider.py` | 73 |
 | `atlas_brain/storage/migrations/350_scoped_mailbox_credentials.sql` | 29 |
-| `atlas_brain/storage/repositories/scoped_mailbox_credential.py` | 284 |
-| `plans/INDEX.md` | 3 |
-| `plans/PR-EOM-Scoped-Gmail-DB-Credentials.md` | 307 |
+| `atlas_brain/storage/repositories/scoped_mailbox_credential.py` | 313 |
+| `plans/INDEX.md` | 1 |
+| `plans/PR-EOM-Scoped-Gmail-DB-Credentials.md` | 340 |
 | `plans/archive/PR-EOM-Mailbox-Context-Binding.md` | 0 |
 | `tests/test_eom_mailbox_context_binding.py` | 39 |
 | `tests/test_eom_scoped_gmail_credentials.py` | 723 |
+| `tests/test_eom_scoped_gmail_hardening.py` | 288 |
 | `tests/test_migrations_runner.py` | 23 |
-| **Total** | **1741** |
+| **Total** | **2185** |
