@@ -5,6 +5,7 @@ Configuration is loaded from environment variables with sensible defaults.
 """
 
 from typing import Optional
+from urllib.parse import urlsplit
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -45,6 +46,10 @@ class DatabaseConfig(BaseSettings):
         default="",
         description="Database password"
     )
+    connection_string: str = Field(
+        default="",
+        description="Full PostgreSQL connection string (override: ATLAS_DB_CONNECTION_STRING)",
+    )
     min_pool_size: int = Field(
         default=2,
         description="Minimum connections in pool"
@@ -72,12 +77,58 @@ class DatabaseConfig(BaseSettings):
     @property
     def dsn(self) -> str:
         """Build PostgreSQL connection string."""
+        if self.connection_string.strip():
+            return self.connection_string.strip()
         if self.socket_path:
             # Unix socket connection (lowest latency)
             return f"postgresql://{self.user}:{self.password}@/{self.database}?host={self.socket_path}"
         else:
             # TCP connection
             return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+
+    @property
+    def target_label(self) -> str:
+        """Return a log-safe database target label without credentials."""
+        if self.connection_string.strip():
+            try:
+                parsed = urlsplit(self.connection_string.strip())
+                database = parsed.path.lstrip("/") or "<database>"
+                host = parsed.hostname or "connection-string"
+                port = f":{parsed.port}" if parsed.port else ""
+                return f"dsn={host}{port}/{database}"
+            except ValueError:
+                return "dsn=<connection-string>"
+        if self.socket_path:
+            return f"socket={self.socket_path}, db={self.database}"
+        return f"host={self.host}, port={self.port}, db={self.database}"
+
+    def connection_kwargs(
+        self,
+        *,
+        command_timeout: float | None = None,
+    ) -> dict[str, object]:
+        """Return asyncpg connection kwargs from the configured DB target."""
+        timeout_kwargs: dict[str, object] = {
+            "timeout": self.connect_timeout,
+            "command_timeout": (
+                self.command_timeout
+                if command_timeout is None
+                else command_timeout
+            ),
+        }
+        if self.connection_string.strip():
+            return {
+                "dsn": self.connection_string.strip(),
+                **timeout_kwargs,
+            }
+        return {
+            "host": self.host,
+            "port": self.port,
+            "database": self.database,
+            "user": self.user,
+            "password": self.password,
+            **timeout_kwargs,
+        }
 
 
 # Singleton settings instance
