@@ -224,3 +224,116 @@ def test_scoped_mailbox_credential_migration_is_additive_and_constrained():
     assert "CHECK (generation > 0)" in migration
     assert "WHERE revoked_at IS NULL" in migration
     assert "DROP " not in upper
+
+
+class _SerializingPool(FakeMigrationPool):
+    """transaction() + pg_advisory_xact_lock with real blocking semantics.
+
+    ``honor_lock=False`` makes the advisory lock a no-op so the paired probe
+    below shows the single-application result comes from the lock statement,
+    not from an accident of the fixture.
+    """
+
+    def __init__(self, *, honor_lock=True):
+        super().__init__()
+        self.honor_lock = honor_lock
+        self.applied_sql = []
+        self._gate = None
+
+    def _lock(self):
+        import asyncio
+
+        if self._gate is None:
+            self._gate = asyncio.Lock()
+        return self._gate
+
+    async def fetch(self, query, *args):
+        assert "FROM schema_migrations" in query
+        # Snapshot BEFORE yielding, like a real query that reads at statement
+        # start and then awaits I/O. Snapshotting after the yield would let a
+        # concurrent runner's write leak into this result and mask the race.
+        import asyncio
+
+        snapshot = [{"name": name} for _version, name in self.records]
+        await asyncio.sleep(0)
+        return snapshot
+
+    async def execute(self, query, *args):
+        normalized = " ".join(query.split())
+        if normalized.startswith("CREATE TABLE IF NOT EXISTS schema_migrations"):
+            return
+        if normalized.startswith("INSERT INTO schema_migrations"):
+            return await super().execute(query, *args)
+        self.applied_sql.append(normalized)
+
+    def transaction(self):
+        from contextlib import asynccontextmanager
+
+        pool = self
+
+        @asynccontextmanager
+        async def _txn():
+            conn = _Conn(pool)
+            try:
+                yield conn
+            finally:
+                if conn.held:
+                    pool._lock().release()
+
+        return _txn()
+
+
+class _Conn:
+    def __init__(self, pool):
+        self.pool = pool
+        self.held = False
+
+    async def execute(self, query, *args):
+        if "pg_advisory_xact_lock" in query:
+            if self.pool.honor_lock:
+                await self.pool._lock().acquire()
+                self.held = True
+            return
+        raise AssertionError(f"unexpected conn.execute: {query}")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_runners_apply_each_migration_once(tmp_path):
+    """Two simultaneous startups (main app + standalone MCP, or two replicas)
+    must not both apply the same pending migration."""
+    import asyncio
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_probe.sql").write_text("SELECT 900")
+    pool = _SerializingPool(honor_lock=True)
+
+    await asyncio.gather(
+        run_migrations(pool, migrations_dir=tmp_path),
+        run_migrations(pool, migrations_dir=tmp_path),
+    )
+    assert pool.applied_sql == ["SELECT 900"], (
+        "the second entrant must re-snapshot under the lock and find nothing "
+        "pending"
+    )
+    assert pool.inserted == [(900, "900_probe")]
+
+
+@pytest.mark.asyncio
+async def test_without_the_advisory_lock_both_runners_apply(tmp_path):
+    """3i probe: with the lock a no-op the same fixture double-applies,
+    proving the test above measures the lock."""
+    import asyncio
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_probe.sql").write_text("SELECT 900")
+    pool = _SerializingPool(honor_lock=False)
+
+    await asyncio.gather(
+        run_migrations(pool, migrations_dir=tmp_path),
+        run_migrations(pool, migrations_dir=tmp_path),
+    )
+    assert len(pool.applied_sql) == 2, (
+        "no-op lock must reproduce the double-apply race the real lock prevents"
+    )

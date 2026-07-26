@@ -200,12 +200,26 @@ class _RowLockPool:
         finally:
             self.open -= 1
 
+    async def fetchrow(self, query, *args):
+        """Pool-level query: asyncpg holds a connection for its duration, and
+        an UPDATE against a FOR UPDATE-locked row blocks while holding it."""
+        self.open += 1
+        self.max_open = max(self.max_open, self.open)
+        try:
+            if "UPDATE scoped_mailbox_credentials" in query and self.has_holder:
+                await self.holder_done.wait()
+            return {"generation": 2}
+        finally:
+            self.open -= 1
+
 
 class _RowLockConn:
     def __init__(self, pool):
         self.pool = pool
 
     async def fetchrow(self, query, *args):
+        if "UPDATE scoped_mailbox_credentials" in query:
+            return {"generation": 2}
         if not self.pool.has_holder:
             self.pool.has_holder = True
             return dict(self.pool.row)
@@ -286,3 +300,41 @@ async def test_ungated_waiters_hold_connections_while_blocked(row_lock_repo):
     pool.holder_done.set()
     release.set()
     await asyncio.wait_for(asyncio.gather(*workers), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_revoke_shares_the_refresh_gate(row_lock_repo):
+    """A same-context revoke must queue on the gate, not on a pool connection.
+
+    Reviewed case: a refresh holds the row through Google's token exchange
+    while same-context rebind/revoke retries arrive. Ungated, each occupies a
+    connection blocked on the row lock.
+    """
+    repo, pool = row_lock_repo
+    release = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def _refresher():
+        async with repo.locked_gmail(TENANT):
+            entered.set()
+            await release.wait()
+
+    refresher = asyncio.create_task(_refresher())
+    await asyncio.wait_for(entered.wait(), timeout=5)
+
+    revokes = [
+        asyncio.create_task(repo.revoke_gmail(TENANT)) for _ in range(9)
+    ]
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert pool.max_open == 1, (
+        f"same-context revokes must wait on the gate without a pool "
+        f"connection; saw {pool.max_open}"
+    )
+
+    pool.holder_done.set()
+    release.set()
+    await asyncio.wait_for(refresher, timeout=5)
+    for task in revokes:
+        task.cancel()
+    await asyncio.gather(*revokes, return_exceptions=True)

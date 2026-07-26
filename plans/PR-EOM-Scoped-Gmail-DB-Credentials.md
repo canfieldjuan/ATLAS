@@ -61,9 +61,10 @@ settings object actually owned by the global token store.
 
 Ownership lane: eom-crm/email-tenancy
 Slice phase: Production hardening
-Max files: 16
-<!-- raised from 14: the round-2 review fixes add
-     tests/test_eom_scoped_gmail_hardening.py and touch CLAUDE.md -->
+Max files: 17
+<!-- raised from 14: round-2 fixes added
+     tests/test_eom_scoped_gmail_hardening.py and CLAUDE.md; round 3 added
+     the migration-runner advisory lock -->
 
 1. Add one encrypted, generation-aware scoped Gmail credential row and
    transaction-serialized refresh path for exact CRM business contexts.
@@ -132,6 +133,7 @@ Max files: 16
 - `atlas_brain/services/customer_context.py`
 - `atlas_brain/services/email_provider.py`
 - `atlas_brain/storage/migrations/350_scoped_mailbox_credentials.sql`
+- `atlas_brain/storage/migrations/__init__.py`
 - `atlas_brain/storage/repositories/scoped_mailbox_credential.py`
 - `plans/INDEX.md`
 - `plans/PR-EOM-Scoped-Gmail-DB-Credentials.md`
@@ -329,12 +331,13 @@ Parked hardening: none.
 | `atlas_brain/services/customer_context.py` | 51 |
 | `atlas_brain/services/email_provider.py` | 73 |
 | `atlas_brain/storage/migrations/350_scoped_mailbox_credentials.sql` | 29 |
-| `atlas_brain/storage/repositories/scoped_mailbox_credential.py` | 313 |
+| `atlas_brain/storage/migrations/__init__.py` | 72 |
+| `atlas_brain/storage/repositories/scoped_mailbox_credential.py` | 319 |
 | `plans/INDEX.md` | 1 |
-| `plans/PR-EOM-Scoped-Gmail-DB-Credentials.md` | 340 |
+| `plans/PR-EOM-Scoped-Gmail-DB-Credentials.md` | 343 |
 | `plans/archive/PR-EOM-Mailbox-Context-Binding.md` | 0 |
 | `tests/test_eom_mailbox_context_binding.py` | 39 |
 | `tests/test_eom_scoped_gmail_credentials.py` | 723 |
-| `tests/test_eom_scoped_gmail_hardening.py` | 288 |
-| `tests/test_migrations_runner.py` | 23 |
-| **Total** | **2185** |
+| `tests/test_eom_scoped_gmail_hardening.py` | 340 |
+| `tests/test_migrations_runner.py` | 136 |
+| **Total** | **2431** |

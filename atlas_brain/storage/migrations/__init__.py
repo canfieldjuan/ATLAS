@@ -91,49 +91,71 @@ async def _record_migration(pool, filename: str) -> None:
     )
 
 
-async def run_migrations(pool) -> None:
+# Cluster-wide advisory key serializing migration runs. Concurrent first
+# starts (main app + standalone MCP servers, or two replicas) otherwise
+# snapshot the pending set independently and race the check-then-insert in
+# _record_migration against the unique schema_migrations.version constraint.
+_MIGRATIONS_ADVISORY_LOCK_KEY = 0x41544C41  # "ATLA"
+
+
+async def run_migrations(pool, *, migrations_dir: Path | None = None) -> None:
     """
     Run all pending migrations.
 
     Only runs migrations that haven't been applied yet.
     Tracks applied migrations in schema_migrations table.
 
+    The whole run happens under a Postgres advisory transaction lock, so
+    concurrent entrants (another replica or another standalone MCP server
+    starting at the same time) queue at the lock, then re-snapshot and find
+    nothing pending. Migration SQL itself still executes on ordinary pool
+    connections, outside the lock holder's transaction, preserving existing
+    semantics for statements that cannot run transactionally.
+
     Args:
         pool: The database pool to run migrations against
+        migrations_dir: override for tests; defaults to the packaged dir
     """
-    # Ensure tracking table exists
-    await _ensure_migrations_table(pool)
+    directory = migrations_dir if migrations_dir is not None else MIGRATIONS_DIR
+    async with pool.transaction() as conn:
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock($1)", _MIGRATIONS_ADVISORY_LOCK_KEY
+        )
 
-    # Get already applied migrations
-    applied = await _get_applied_migrations(pool)
+        # Ensure tracking table exists
+        await _ensure_migrations_table(pool)
 
-    # Get list of SQL migration files
-    migration_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
+        # Get already applied migrations -- snapshot under the lock, so a
+        # queued entrant re-reads AFTER the winner recorded its work.
+        applied = await _get_applied_migrations(pool)
 
-    if not migration_files:
-        logger.info("No migration files found")
-        return
+        # Get list of SQL migration files
+        migration_files = sorted(directory.glob("*.sql"))
 
-    pending = [f for f in migration_files if f.stem not in applied]
+        if not migration_files:
+            logger.info("No migration files found")
+            return
 
-    if not pending:
-        logger.debug("All %d migrations already applied", len(migration_files))
-        return
+        pending = [f for f in migration_files if f.stem not in applied]
 
-    logger.info("Running %d pending migrations (of %d total)", len(pending), len(migration_files))
+        if not pending:
+            logger.debug("All %d migrations already applied", len(migration_files))
+            return
 
-    for migration_file in pending:
-        logger.info("Running migration: %s", migration_file.name)
+        logger.info("Running %d pending migrations (of %d total)", len(pending), len(migration_files))
 
-        sql = migration_file.read_text()
+        for migration_file in pending:
+            logger.info("Running migration: %s", migration_file.name)
 
-        try:
-            await pool.execute(sql)
-            await _record_migration(pool, migration_file.name)
-            logger.info("Migration %s completed successfully", migration_file.name)
-        except Exception as e:
-            logger.error("Migration %s failed: %s", migration_file.name, e)
-            raise
+            sql = migration_file.read_text()
+
+            try:
+                await pool.execute(sql)
+                await _record_migration(pool, migration_file.name)
+                logger.info("Migration %s completed successfully", migration_file.name)
+            except Exception as e:
+                logger.error("Migration %s failed: %s", migration_file.name, e)
+                raise
 
 
 async def check_schema_exists(pool) -> bool:

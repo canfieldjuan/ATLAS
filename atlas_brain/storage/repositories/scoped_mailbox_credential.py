@@ -117,34 +117,39 @@ class ScopedMailboxCredentialRepository:
         refresh_token: str,
     ) -> int:
         context = _exact_context(business_context_id)
-        ciphertext, kid = _encrypt_bundle(
-            client_id=client_id,
-            client_secret=client_secret,
-            refresh_token=refresh_token,
-        )
-        row = await self._db().fetchrow(
-            """
-            INSERT INTO scoped_mailbox_credentials (
-                business_context_id,
-                provider,
-                encrypted_credentials,
-                encryption_kid
+        # Same-context mutations share the refresh gate: a rebind or revoke
+        # arriving while a refresh holds the row would otherwise occupy a pool
+        # connection blocked on the row lock -- the profile the gate exists to
+        # prevent. Cross-context mutations are unaffected.
+        async with _refresh_gate(context):
+            ciphertext, kid = _encrypt_bundle(
+                client_id=client_id,
+                client_secret=client_secret,
+                refresh_token=refresh_token,
             )
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (business_context_id, provider) DO UPDATE
-            SET encrypted_credentials = EXCLUDED.encrypted_credentials,
-                encryption_kid = EXCLUDED.encryption_kid,
-                generation = scoped_mailbox_credentials.generation + 1,
-                updated_at = NOW(),
-                revoked_at = NULL
-            RETURNING generation
-            """,
-            context,
-            GMAIL_PROVIDER,
-            ciphertext,
-            kid,
-        )
-        return int(row["generation"])
+            row = await self._db().fetchrow(
+                """
+                INSERT INTO scoped_mailbox_credentials (
+                    business_context_id,
+                    provider,
+                    encrypted_credentials,
+                    encryption_kid
+                )
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (business_context_id, provider) DO UPDATE
+                SET encrypted_credentials = EXCLUDED.encrypted_credentials,
+                    encryption_kid = EXCLUDED.encryption_kid,
+                    generation = scoped_mailbox_credentials.generation + 1,
+                    updated_at = NOW(),
+                    revoked_at = NULL
+                RETURNING generation
+                """,
+                context,
+                GMAIL_PROVIDER,
+                ciphertext,
+                kid,
+            )
+            return int(row["generation"])
 
     async def get_active_gmail(
         self,
@@ -166,21 +171,22 @@ class ScopedMailboxCredentialRepository:
 
     async def revoke_gmail(self, business_context_id: str) -> int | None:
         context = _exact_context(business_context_id)
-        row = await self._db().fetchrow(
-            """
-            UPDATE scoped_mailbox_credentials
-            SET revoked_at = NOW(),
-                generation = generation + 1,
-                updated_at = NOW()
-            WHERE business_context_id = $1
-              AND provider = $2
-              AND revoked_at IS NULL
-            RETURNING generation
-            """,
-            context,
-            GMAIL_PROVIDER,
-        )
-        return int(row["generation"]) if row is not None else None
+        async with _refresh_gate(context):
+            row = await self._db().fetchrow(
+                """
+                UPDATE scoped_mailbox_credentials
+                SET revoked_at = NOW(),
+                    generation = generation + 1,
+                    updated_at = NOW()
+                WHERE business_context_id = $1
+                  AND provider = $2
+                  AND revoked_at IS NULL
+                RETURNING generation
+                """,
+                context,
+                GMAIL_PROVIDER,
+            )
+            return int(row["generation"]) if row is not None else None
 
     @asynccontextmanager
     async def locked_gmail(
