@@ -417,8 +417,11 @@ Retirement terms:
   the reason the failure stopped. So not-firing is a prompt to examine, never a
   licence to delete: a mechanism that is the sole protection for a defect logged
   in `REVIEW_MISSES.md` may be removed **only** by naming what now covers that
-  defect -- a broader rule, a type, a test, a structural change that makes it
-  unrepresentable. No replacement named, no removal; state why it stays.
+  defect, and the replacement has to be able to **stop the escape** -- a broader
+  rule in this pack, a type or structural change that makes the defect
+  unrepresentable, or a test that runs in a **required** check. A test that no
+  required check executes cannot prevent anything, so it is not a replacement.
+  No enforcing replacement named, no removal; state why it stays.
 - **Consistently waived** is the stronger signal, because it means the mechanism
   fires and reviewers keep judging it wrong. Re-scope it to what actually
   blocks, or remove it.
