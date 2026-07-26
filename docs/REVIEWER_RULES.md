@@ -1,10 +1,16 @@
 # Reviewer Rules Pack v1
 
-> The reviewer's job is **not** to "review the code." It is to **prove whether
-> the PR satisfies its Review Contract and violates none of the rules below.**
-> Every review finding cites a rule ID (R1-R14). This pack is the checklist the
-> reviewer runs; the recurring-lapse list in `docs/SESSION_BOOTSTRAP.md` is the
-> same checklist front-loaded into the builder so the repeats stop.
+> The reviewer's job is **not** to "review the code." It is to **disposition the
+> review matrix: every acceptance criterion in the PR's Review Contract, and
+> every rule below that the changed paths trigger.** Every review finding cites
+> a rule ID (R1-R14). This pack is the checklist the reviewer runs; the
+> recurring-lapse list in `docs/SESSION_BOOTSTRAP.md` is the same checklist
+> front-loaded into the builder so the repeats stop.
+>
+> The standard is *the matrix is dispositioned*, not *the code violates no rule*.
+> "Violates none of the rules" is a universal negative -- undischargeable on any
+> non-trivial diff, so it defines no point at which a review is done. See
+> **Review completion** below, which is what makes a review finishable.
 
 This pack sits **under** the existing verdict ladder, it does not replace it:
 
@@ -273,6 +279,55 @@ example. Before LGTM on an R13-triggering finding, verify one of:
 - a property/parametrized test generates diverse same-class cases;
 - unseen fixtures cover varied cases not listed in the original finding; or
 - the reviewer reran a held-out probe and the verdict records it.
+
+---
+
+## Review completion (the stopping rule)
+
+A review is **complete** when its matrix is dispositioned, and the review states
+that matrix:
+
+1. **Each acceptance criterion** in the Review Contract: met / not met /
+   could-not-determine, with `file:line`.
+2. **Each rule the changed paths trigger** (path table above): pass / fail /
+   not-verified.
+3. **What was not verified**, listed with the reason.
+
+That is the whole standard. A dispositioned matrix with items honestly marked
+not-verified is a complete review; an exhaustive hunt with no matrix is not.
+Completeness is never "no further case can be found" -- on an open surface no
+such point exists, so a reviewer holding that standard reports forever.
+
+**Discharge.** A triggered rule marked *pass* is discharged for the reviewed
+head. A later round may re-open it, but only by stating **why the earlier
+discharge was wrong** -- the condition that was never actually met -- not by
+presenting one more instance of a decision already reported. Re-opening is a
+real move and sometimes the right one; it just has to be argued, because a
+discharge that keeps being silently overturned is evidence the rule was never
+dischargeable as scoped, which is a finding in itself.
+
+**Report the class, not the instance.** R13 obliges the *builder* to fix the
+class rather than the cited example. The same duty binds the *reviewer*: when
+two or more findings share one underlying decision, file **one** finding that
+names the decision, carrying the instances as illustrations. A finding whose own
+text opens "fresh evidence beyond the earlier `<X>` finding" is by its own words
+another instance of a decision already reported -- merge it into that finding
+instead of filing it separately. Where the decision keeps producing instances,
+the `AGENTS.md` 3k.2 breaker applies to the reviewer too: file the seam once and
+say so, rather than the next adjacent case.
+
+Nothing here licenses withholding a real defect. It changes how defects are
+*reported* -- once, at the level the fix has to happen anyway -- not whether.
+
+**Why:** measured on two PRs. #2195 drew 35 findings over 13 rounds; **18 of the
+35 (51%) explicitly declared themselves adjacent to an earlier finding**, and 27
+collapse into three decisions (source attestation 12, receipt lifecycle 12,
+preflight ordering 3). #2184 drew 33 over 14 rounds, collapsing into four
+decisions plus four distinct findings. Reported class-first, the same defects
+surface in roughly three rounds instead of thirteen, with none lost. Round 6 of
+#2195 is the cost of the alternative: it reverses round 5 ("reject ignored
+bytecode" became "stop rejecting bytecode created by the CLI itself"), which is
+what instance-by-instance boundary-shifting produces.
 
 ---
 

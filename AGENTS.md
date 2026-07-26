@@ -43,6 +43,16 @@ R1–R14) and the PR's Review Contract. Review the same way the Reviewer session
   (R5), error handling & observability (R6), performance (R7), concurrency &
   idempotency (R8), frontend (R9), maintainability (R10), dependencies & config
   (R11), deployment safety & CI (R12). Fix the class, not the example (R13).
+- **Know when you are done** (Review completion, in the pack): a review is complete
+  when its matrix is dispositioned -- each acceptance criterion met / not met /
+  could-not-determine, each triggered rule pass / fail / not-verified, and what you
+  did not verify listed with the reason. State that matrix. Completeness is never
+  "no further case can be found"; on an open surface that point does not exist.
+- **Report the class, not the instance.** R13 obliges the builder to fix the class
+  rather than the example; the same duty binds you. Findings that share one
+  underlying decision are **one** finding naming that decision, with the instances
+  as illustrations. If a finding of yours would open "fresh evidence beyond the
+  earlier X finding", it belongs merged into X, not filed separately.
 - Lead with blockers. `LGTM` (all triggered rules pass, no open BLOCKER/MAJOR) is a
   valid, complete result; do not manufacture NITs.
 
