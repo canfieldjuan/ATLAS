@@ -332,6 +332,7 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
     Fail-open: CRM errors never block the digest.
     """
     from ...services.crm_provider import get_crm_provider
+    from ...services.eom_lead_ingress import resolve_or_create_eom_inbound_lead
 
     lead_emails = [e for e in emails if e.get("category") == "lead"]
     if not lead_emails:
@@ -358,13 +359,18 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
             e["_lead_name"] = submitter_name
             e["_lead_email"] = submitter_email
 
-            contact = await crm.find_or_create_contact(
+            # Web3Forms is the public form's parallel email relay.  It must
+            # share the same EOM lead-safe resolver as the direct Atlas POST:
+            # a relay-only delivery creates lead/new, and a matching contact
+            # is evidence-only rather than mutable enrichment.
+            contact = await resolve_or_create_eom_inbound_lead(
+                crm,
                 full_name=submitter_name or submitter_email,
                 email=submitter_email or None,
                 phone=submitter_phone,
+                address=None,
                 source="web",
-                business_context_id="effingham_maids",
-                contact_type="lead",
+                source_ref=f"web3forms:{e.get('id', '')}",
                 tags=["web3forms"],
             )
             if not contact.get("id"):

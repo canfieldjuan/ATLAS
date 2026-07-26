@@ -424,13 +424,29 @@ class BookAppointmentTool:
                     from ..storage.database import get_db_pool
 
                     crm = get_crm_provider()
-                    contact = await crm.find_or_create_contact(
-                        full_name=customer_name,
-                        phone=customer_phone,
-                        email=customer_email,
-                        source="booking",
-                        business_context_id=context.id,
+                    from ..services.eom_lead_ingress import (
+                        EOM_BUSINESS_CONTEXT_ID,
+                        resolve_or_create_eom_inbound_lead,
                     )
+
+                    if context.id == EOM_BUSINESS_CONTEXT_ID:
+                        contact = await resolve_or_create_eom_inbound_lead(
+                            crm,
+                            full_name=customer_name,
+                            phone=customer_phone,
+                            email=customer_email,
+                            address=address,
+                            source="booking",
+                            source_ref=db_id,
+                        )
+                    else:
+                        contact = await crm.find_or_create_contact(
+                            full_name=customer_name,
+                            phone=customer_phone,
+                            email=customer_email,
+                            source="booking",
+                            business_context_id=context.id,
+                        )
                     contact_id_str = str(contact.get("id", "")) if contact else None
                     if contact_id_str:
                         pool = get_db_pool()

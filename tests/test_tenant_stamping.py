@@ -89,41 +89,56 @@ def test_source_tier_is_opt_in():
 
 
 # ---------------------------------------------------------------------------
-# Writer stamps: every previously NULL-context CRM write now carries a
-# business_context_id argument. AST-verified so refactors that drop the
-# kwarg fail loudly (and so this test can't pass on comment text alone).
+# Writer stamps: direct writers carry a business_context_id argument. A writer
+# that delegates to the EOM inbound resolver is verified as a delegation instead:
+# the resolver, not the email-digest caller, owns the tenant/type/stage stamp.
+# AST checks make either guarantee fail loudly on a refactor.
 # ---------------------------------------------------------------------------
 
 WRITER_SITES = [
     # (file, callee substring, expected context expression substring)
     ("atlas_brain/tools/scheduling.py", "find_or_create_contact", "context.id"),
-    ("atlas_brain/autonomous/tasks/gmail_digest.py", "find_or_create_contact", "effingham_maids"),
     ("atlas_brain/autonomous/tasks/email_backfill.py", "find_or_create_contact", "effingham_maids"),
     ("atlas_brain/api/b2b_vendor_briefing.py", "find_or_create_contact", "churnsignals"),
     ("extracted_competitive_intelligence/api/b2b_vendor_briefing.py",
      "find_or_create_contact", "churnsignals"),
 ]
 
+EOM_INBOUND_DELEGATES = [
+    "atlas_brain/autonomous/tasks/gmail_digest.py",
+]
 
-def _calls_with_kwarg(path: str, callee: str):
+
+def _calls_named(path: str, callee: str):
     tree = ast.parse((REPO / path).read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == callee
+            and (
+                (isinstance(node.func, ast.Attribute) and node.func.attr == callee)
+                or (isinstance(node.func, ast.Name) and node.func.id == callee)
+            )
         ):
             yield node
 
 
 def test_every_stamped_writer_passes_business_context_id():
     for path, callee, expected in WRITER_SITES:
-        calls = list(_calls_with_kwarg(path, callee))
+        calls = list(_calls_named(path, callee))
         assert calls, f"{path}: no {callee} call found"
         for call in calls:
             kw = {k.arg: k for k in call.keywords}
             assert "business_context_id" in kw, f"{path}: {callee} missing tenant stamp"
             assert expected in ast.unparse(kw["business_context_id"].value), path
+
+
+def test_eom_inbound_writers_delegate_to_the_lead_safe_resolver():
+    for path in EOM_INBOUND_DELEGATES:
+        calls = list(_calls_named(path, "resolve_or_create_eom_inbound_lead"))
+        assert calls, f"{path}: no EOM inbound resolver call found"
+        for call in calls:
+            kwargs = {keyword.arg: keyword for keyword in call.keywords}
+            assert {"source", "source_ref"} <= kwargs.keys(), path
 
 
 def test_dict_style_writers_carry_context_key():

@@ -17,6 +17,8 @@ Usage:
 import json
 import logging
 import hashlib
+import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
@@ -35,6 +37,38 @@ _INTERACTION_DEDUPE_ANCHOR_KEYS = (
     "invoice_id",
     "external_id",
 )
+
+
+@asynccontextmanager
+async def _transaction_connection(pool: Any):
+    """Yield a transaction from Atlas' wrapper, asyncpg connection, or pool.
+
+    Production uses ``DatabasePool.transaction``.  Supporting a raw asyncpg
+    connection/pool keeps the migration integration proof on the real SQL path.
+    """
+    transaction = getattr(pool, "transaction", None)
+    if callable(transaction):
+        # ``asyncpg.Connection.transaction()`` enters as ``None``; the raw
+        # connection itself remains the query object. Atlas' DatabasePool and
+        # test adapters instead enter as a connection.
+        if hasattr(pool, "fetchrow") and not hasattr(pool, "acquire"):
+            async with transaction():
+                yield pool
+            return
+        async with transaction() as connection:
+            yield connection
+        return
+    # Lightweight repository test adapters expose query methods directly but
+    # deliberately do not model transaction/acquire.  They are not a runtime
+    # database implementation; preserving their direct query boundary keeps
+    # intake's injectable test surface intact while real pools take one of the
+    # transaction branches above.
+    if hasattr(pool, "fetchrow") and not hasattr(pool, "acquire"):
+        yield pool
+        return
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            yield connection
 
 
 def _normalize_interaction_text(value: Any) -> str:
@@ -62,6 +96,28 @@ def _interaction_anchor(metadata: dict[str, Any]) -> str:
     return ""
 
 
+def _interaction_attribution_identity(metadata: dict[str, Any]) -> str:
+    """Return a stable identity for a non-empty lead-attribution snapshot.
+
+    The dedupe key is stored as a digest, not this value.  Retaining a distinct
+    interaction when attribution changes avoids silently discarding the only
+    click-level evidence that a repeat form submission carries.
+    """
+
+    attribution = metadata.get("attribution")
+    if not isinstance(attribution, dict):
+        return ""
+    normalized = sorted(
+        (
+            _normalize_interaction_text(key),
+            _normalize_interaction_text(value),
+        )
+        for key, value in attribution.items()
+        if _normalize_interaction_text(key) and _normalize_interaction_text(value)
+    )
+    return json.dumps(normalized, separators=(",", ":"))
+
+
 def _interaction_dedupe_key(
     *,
     interaction_type: str,
@@ -76,8 +132,9 @@ def _interaction_dedupe_key(
     normalized_intent = _normalize_interaction_text(intent)
     metadata_dict = metadata if isinstance(metadata, dict) else {}
     anchor = _interaction_anchor(metadata_dict)
+    attribution_identity = _interaction_attribution_identity(metadata_dict)
     if anchor:
-        basis = f"anchor|{normalized_type}|{anchor}"
+        basis = f"anchor|{normalized_type}|{anchor}|attribution|{attribution_identity}"
         return hashlib.md5(basis.encode("utf-8")).hexdigest()
     normalized_summary = _normalize_interaction_text(summary)
     if not normalized_summary:
@@ -90,6 +147,7 @@ def _interaction_dedupe_key(
             bucket,
             normalized_intent,
             normalized_summary[:_INTERACTION_DEDUPE_SUMMARY_MAX_CHARS],
+            attribution_identity,
         ]
     )
     return hashlib.md5(basis.encode("utf-8")).hexdigest()
@@ -110,11 +168,162 @@ class DatabaseCRMProvider:
         except Exception:
             return False
 
+    async def resolve_or_create_eom_inbound_lead_atomic(
+        self,
+        *,
+        full_name: str,
+        phone: Optional[str],
+        email: Optional[str],
+        address: Optional[str],
+        source: str,
+        source_ref: Optional[str],
+        tags: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
+        """Resolve EOM inbound identity under transaction-scoped advisory locks.
+
+        There is intentionally no global phone/email uniqueness migration: old
+        tenant data may contain legitimate historical duplicates.  Instead all
+        current EOM inbound writers share a stable lock for each asserted
+        identity, then perform the exact scoped lookup and insert in one
+        transaction.  A legacy row is returned untouched, never claimed or
+        merged from extracted/web-form data.
+        """
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+        from ..storage.database import get_db_pool
+
+        normalized_email = str(email or "").strip().lower()
+        phone_digits = re.sub(r"\D", "", str(phone or ""))
+        if len(phone_digits) < 10:
+            phone_digits = ""
+        lock_keys = []
+        if phone_digits:
+            lock_keys.append(f"eom-inbound:phone:{phone_digits[-10:]}")
+        if normalized_email:
+            lock_keys.append(f"eom-inbound:email:{normalized_email}")
+
+        pool = get_db_pool()
+        async with _transaction_connection(pool) as conn:
+            lifecycle_ready = await conn.fetchval(
+                """
+                SELECT to_regclass('eom_lead_lifecycle_events') IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1
+                       FROM pg_trigger
+                       WHERE tgrelid = 'contacts'::regclass
+                         AND tgname = 'trg_record_eom_lead_created'
+                         AND NOT tgisinternal
+                         AND tgenabled IN ('O', 'A')
+                   )
+                """
+            )
+            if not lifecycle_ready:
+                raise RuntimeError(
+                    "EOM inbound lead ingress unavailable: migration 351 lifecycle ledger is not ready"
+                )
+            for lock_key in sorted(set(lock_keys)):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+
+            async def _find(context: Optional[str], *, channel: str, value: str):
+                if context is None:
+                    if channel == "phone":
+                        return await conn.fetchrow(
+                            """
+                            SELECT * FROM contacts
+                            WHERE business_context_id IS NULL
+                              AND status != 'archived'
+                              AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)
+                                  = RIGHT($1, 10)
+                            ORDER BY updated_at DESC, id ASC
+                            LIMIT 1
+                            """,
+                            value,
+                        )
+                    return await conn.fetchrow(
+                        """
+                        SELECT * FROM contacts
+                        WHERE business_context_id IS NULL
+                          AND status != 'archived'
+                          AND LOWER(email) = $1
+                        ORDER BY updated_at DESC, id ASC
+                        LIMIT 1
+                        """,
+                        value,
+                    )
+                if channel == "phone":
+                    return await conn.fetchrow(
+                        f"""
+                        SELECT * FROM contacts
+                        WHERE business_context_id = $1
+                          AND status != 'archived'
+                          AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)
+                              = RIGHT($2, 10)
+                        ORDER BY updated_at DESC, id ASC
+                        LIMIT 1
+                        """,
+                        context,
+                        value,
+                    )
+                return await conn.fetchrow(
+                    f"""
+                    SELECT * FROM contacts
+                    WHERE business_context_id = $1
+                      AND status != 'archived'
+                      AND LOWER(email) = $2
+                    ORDER BY updated_at DESC, id ASC
+                    LIMIT 1
+                    """,
+                    context,
+                    value,
+                )
+
+            existing = None
+            for channel, value in (("phone", phone_digits), ("email", normalized_email)):
+                if not value:
+                    continue
+                for context in (EOM_BUSINESS_CONTEXT_ID, None):
+                    existing = await _find(context, channel=channel, value=value)
+                    if existing is not None:
+                        result = dict(existing)
+                        result["_was_created"] = False
+                        return result
+
+            contact_id = str(uuid4())
+            now = datetime.now(timezone.utc)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO contacts (
+                    id, full_name, email, phone, address, business_context_id,
+                    contact_type, status, tags, source, source_ref, lead_stage,
+                    created_at, updated_at, metadata
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, 'lead', 'active', $7, $8, $9, 'new',
+                    $10, $10, '{}'::jsonb
+                ) RETURNING *
+                """,
+                contact_id,
+                full_name.strip() or phone_digits or normalized_email or "Unknown",
+                normalized_email or None,
+                phone_digits or None,
+                address or None,
+                EOM_BUSINESS_CONTEXT_ID,
+                tags or [],
+                source,
+                source_ref,
+                now,
+            )
+            result = dict(row) if row else {}
+            result["_was_created"] = True
+            return result
+
     async def create_contact(
         self,
         data: dict[str, Any],
         *,
         merge_existing: bool = True,
+        preserve_existing: bool = False,
     ) -> dict[str, Any]:
         """
         Create a contact, returning an existing one if phone or email already matches.
@@ -213,6 +422,25 @@ class DatabaseCRMProvider:
             return result
 
         if existing is not None:
+            from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+            existing_type = str(existing.get("contact_type") or "")
+            incoming_type = str(data.get("contact_type") or "")
+            # An EOM lead/customer type is a lifecycle decision, not inbound
+            # enrichment.  Keep a matching EOM contact unchanged when a generic
+            # creator asks for a different type; the later funnel transition
+            # service is the sole promotion path.
+            protected_eom_type = (
+                ctx == EOM_BUSINESS_CONTEXT_ID
+                and existing.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID
+                and existing_type
+                and incoming_type
+                and existing_type != incoming_type
+            )
+            if preserve_existing or protected_eom_type:
+                result = dict(existing)
+                result["_was_created"] = False
+                return result
             # Merge any new non-null fields into the existing record
             _MERGEABLE = {
                 "full_name", "first_name", "last_name", "email", "phone",
@@ -286,6 +514,7 @@ class DatabaseCRMProvider:
         full_name: str,
         phone: Optional[str] = None,
         email: Optional[str] = None,
+        preserve_existing: bool = False,
         **extra: Any,
     ) -> dict[str, Any]:
         """
@@ -302,7 +531,7 @@ class DatabaseCRMProvider:
         if email:
             data["email"] = email
         data.update(extra)
-        result = await self.create_contact(data)
+        result = await self.create_contact(data, preserve_existing=preserve_existing)
 
         # Emit event for reasoning agent
         from ..reasoning.producers import emit_if_enabled
@@ -406,6 +635,7 @@ class DatabaseCRMProvider:
             "metadata", "lead_stage", "lead_owner", "next_follow_up_at",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
+        lifecycle_requested = bool({"contact_type", "lead_stage"} & updates.keys())
         pipeline_requested = any(
             key in updates
             for key in ("lead_stage", "lead_owner", "next_follow_up_at")
@@ -429,6 +659,26 @@ class DatabaseCRMProvider:
             updates["metadata"] = json.dumps(updates["metadata"]) if isinstance(updates["metadata"], dict) else updates["metadata"]
         if not updates:
             return await self.get_contact(contact_id)
+
+        if lifecycle_requested:
+            from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+            existing = await pool.fetchrow(
+                """
+                SELECT business_context_id FROM contacts WHERE id = $1
+                """,
+                contact_id,
+            )
+            if (
+                existing
+                and (
+                    existing["business_context_id"] in (None, EOM_BUSINESS_CONTEXT_ID)
+                    or updates.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID
+                )
+            ):
+                raise ValueError(
+                    "EOM lead type and stage changes require the funnel transition service"
+                )
 
         updates["updated_at"] = datetime.now(timezone.utc)
         set_parts: list[str] = []

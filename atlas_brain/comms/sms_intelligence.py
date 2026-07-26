@@ -402,16 +402,32 @@ async def _link_to_crm(
         return None, False
 
     crm = get_crm_provider()
-    contact = await crm.find_or_create_contact(
-        full_name=name or phone or "Unknown",
-        phone=phone,
-        email=email_addr,
-        address=extracted_data.get("address"),
-        business_context_id=context_id,
-        contact_type="customer",
-        source="sms",
-        source_ref=str(sms_id) if sms_id else None,
+    from ..services.eom_lead_ingress import (
+        EOM_BUSINESS_CONTEXT_ID,
+        resolve_or_create_eom_inbound_lead,
     )
+
+    if context_id == EOM_BUSINESS_CONTEXT_ID:
+        contact = await resolve_or_create_eom_inbound_lead(
+            crm,
+            full_name=name or phone or "Unknown",
+            phone=phone,
+            email=email_addr,
+            address=extracted_data.get("address"),
+            source="sms",
+            source_ref=str(sms_id) if sms_id else None,
+        )
+    else:
+        contact = await crm.find_or_create_contact(
+            full_name=name or phone or "Unknown",
+            phone=phone,
+            email=email_addr,
+            address=extracted_data.get("address"),
+            business_context_id=context_id,
+            contact_type="customer",
+            source="sms",
+            source_ref=str(sms_id) if sms_id else None,
+        )
     if not contact.get("id"):
         return None, False
 

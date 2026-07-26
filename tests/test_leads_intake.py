@@ -125,6 +125,7 @@ async def test_contact_stamped_with_eom_tenant_and_web_source():
     assert kwargs["source_ref"] == "website_estimate_form"
     assert kwargs["tags"] == ["website", "estimate_request"]
     assert kwargs["lead_stage"] == "new"
+    assert kwargs["preserve_existing"] is True
     assert kwargs["email"] == "jane@example.com"
     assert kwargs["phone"] == "2175550100"  # digits-only normalization
 
@@ -150,6 +151,45 @@ async def test_interaction_summary_keeps_all_fields_untruncated():
     assert "2400" in summary
     assert LONG_MESSAGE in summary  # full message, no truncation
     assert kwargs["metadata"]["square_feet"] == "2400"
+
+
+@pytest.mark.asyncio
+async def test_intake_persists_attribution_as_interaction_evidence():
+    crm, provider = _crm(), _email_provider()
+    await _process_lead_intake(_payload(
+        utm_source="google",
+        utm_medium="cpc",
+        utm_campaign="spring-residential",
+        utm_term="house cleaning",
+        utm_content="ad-3",
+        gclid="gclid-1",
+        gbraid="gbraid-1",
+        wbraid="wbraid-1",
+        landing_path="/house-cleaning-services/?utm_source=google",
+        referrer="https://www.google.com/",
+    ), crm=crm, email_provider=provider)
+
+    assert crm.log_interaction.await_args.kwargs["metadata"]["attribution"] == {
+        "utm_source": "google",
+        "utm_medium": "cpc",
+        "utm_campaign": "spring-residential",
+        "utm_term": "house cleaning",
+        "utm_content": "ad-3",
+        "gclid": "gclid-1",
+        "gbraid": "gbraid-1",
+        "wbraid": "wbraid-1",
+        "landing_path": "/house-cleaning-services/?utm_source=google",
+        "referrer": "https://www.google.com/",
+    }
+
+
+@pytest.mark.asyncio
+async def test_intake_omits_empty_attribution_metadata():
+    crm, provider = _crm(), _email_provider()
+
+    await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+
+    assert "attribution" not in crm.log_interaction.await_args.kwargs["metadata"]
 
 
 # ---------------------------------------------------------------------------

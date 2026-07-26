@@ -630,6 +630,7 @@ async def update_contact(
             clear_lead_owner,
             clear_next_follow_up,
         ))
+        eom_stage_change_requested = lead_stage is not None
         if lead_stage is not None:
             data["lead_stage"] = _pipeline_text(
                 lead_stage, "lead_stage", 64
@@ -661,6 +662,20 @@ async def update_contact(
                 "success": False,
                 "error": "Lead pipeline fields require a lead contact",
             })
+        if eom_stage_change_requested:
+            from ..services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+            if (
+                existing.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID
+                or business_context_id == EOM_BUSINESS_CONTEXT_ID
+            ):
+                return json.dumps({
+                    "success": False,
+                    "error": (
+                        "EOM lead stages can only change through the funnel "
+                        "transition service"
+                    ),
+                })
         # Claim-on-write: an update from a scoped session takes ownership of
         # the NULL-context legacy row, so corrected data stops being visible
         # to every tenant as unclaimed legacy.

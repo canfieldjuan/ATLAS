@@ -1,0 +1,100 @@
+"""Shared EOM inbound identity handling.
+
+Inbound call and SMS extraction is untrusted enrichment.  It may create a new
+lead, but it must not alter the identity, type, or pipeline state of a matching
+contact.  The public website intake has the same rule.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Optional
+
+
+EOM_BUSINESS_CONTEXT_ID = "effingham_maids"
+_MIN_MATCH_PHONE_DIGITS = 10
+
+
+def _normalised_phone(value: Any) -> str:
+    return re.sub(r"\D", "", str(value or ""))
+
+
+async def resolve_or_create_eom_inbound_lead(
+    crm: Any,
+    *,
+    full_name: str,
+    phone: Optional[str],
+    email: Optional[str],
+    address: Optional[str],
+    source: str,
+    source_ref: Optional[str],
+    tags: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Return a matching EOM contact unchanged or create one as ``lead/new``.
+
+    Exact tenant and claimable-legacy populations are searched directly instead
+    of relying on the provider's mutable find-or-create merge.  The provider's
+    ``preserve_existing`` option closes the narrow race between the final lookup
+    and insert without turning extracted caller data into a CRM overwrite.
+    """
+
+    # DatabaseCRMProvider supplies the authoritative transaction + advisory
+    # lock implementation.  The class lookup (rather than ``getattr`` on the
+    # instance) deliberately leaves lightweight protocol fakes on this safe,
+    # read-only fallback path.
+    atomic_resolver = getattr(
+        type(crm), "resolve_or_create_eom_inbound_lead_atomic", None
+    )
+    if atomic_resolver is not None:
+        return await atomic_resolver(
+            crm,
+            full_name=full_name,
+            phone=phone,
+            email=email,
+            address=address,
+            source=source,
+            source_ref=source_ref,
+            tags=tags,
+        )
+
+    normalized_email = str(email or "").strip().lower()
+    phone_digits = _normalised_phone(phone)
+
+    async def _resolve_readonly(**channel: Any) -> Optional[dict[str, Any]]:
+        scoped = await crm.search_contacts(
+            business_context_id=EOM_BUSINESS_CONTEXT_ID, **channel
+        )
+        if scoped:
+            return scoped[0]
+        legacy = await crm.search_contacts(
+            business_context_id_is_null=True, **channel
+        )
+        return legacy[0] if legacy else None
+
+    existing: Optional[dict[str, Any]] = None
+    if len(phone_digits) >= _MIN_MATCH_PHONE_DIGITS:
+        existing = await _resolve_readonly(phone=phone_digits)
+    if existing is None and normalized_email:
+        existing = await _resolve_readonly(email=normalized_email)
+    if existing is not None:
+        result = dict(existing)
+        result["_was_created"] = False
+        return result
+
+    create_kwargs: dict[str, Any] = {
+        "full_name": full_name.strip() or phone_digits or "Unknown",
+        "phone": phone_digits if len(phone_digits) >= _MIN_MATCH_PHONE_DIGITS else None,
+        "email": normalized_email or None,
+        "address": address or None,
+        "business_context_id": EOM_BUSINESS_CONTEXT_ID,
+        "contact_type": "lead",
+        "lead_stage": "new",
+        "source": source,
+        "source_ref": source_ref,
+        "preserve_existing": True,
+    }
+    if tags:
+        create_kwargs["tags"] = tags
+    return await crm.find_or_create_contact(
+        **create_kwargs,
+    )

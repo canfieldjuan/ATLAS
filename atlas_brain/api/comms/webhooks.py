@@ -1537,13 +1537,29 @@ async def _sms_fallback_crm_and_notify(
     is_new_lead = False
     try:
         crm = get_crm_provider()
-        contact = await crm.find_or_create_contact(
-            full_name=from_number,
-            phone=from_number,
-            contact_type="customer",
-            source="sms",
-            business_context_id=context.id,
+        from ...services.eom_lead_ingress import (
+            EOM_BUSINESS_CONTEXT_ID,
+            resolve_or_create_eom_inbound_lead,
         )
+
+        if context.id == EOM_BUSINESS_CONTEXT_ID:
+            contact = await resolve_or_create_eom_inbound_lead(
+                crm,
+                full_name=from_number,
+                phone=from_number,
+                email=None,
+                address=None,
+                source="sms",
+                source_ref=str(sms_id) if sms_id else None,
+            )
+        else:
+            contact = await crm.find_or_create_contact(
+                full_name=from_number,
+                phone=from_number,
+                contact_type="customer",
+                source="sms",
+                business_context_id=context.id,
+            )
         if contact.get("id"):
             contact_id = str(contact["id"])
             contact_name = contact.get("full_name") or from_number
