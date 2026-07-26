@@ -17,10 +17,10 @@ RULE = (
     "shape, each dispositioned."
 )
 
-CODE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+CODE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".sh"}
 BOUNDARY_PATH_PART_RE = re.compile(
     r"(^|[-_./])"
-    r"(guard|validat(?:e|or|ion)?|resolver|resolution|admission|intake|claim|"
+    r"(guard|validat(?:e|or|ion)?|normaliz(?:e|er|ation|ing)?|resolver|resolution|admission|intake|"
     r"dedupe|scope|tenant|auth(?:entication|orization)?)"
     r"($|[-_./])",
     re.IGNORECASE,
@@ -29,18 +29,22 @@ BOUNDARY_CODE_RE = re.compile(
     r"^(?:[+-]\s*|@@[^@\n]*@@\s*.*?)"
     r"(?:"
     r"(?:export\s+)?(?:async\s+)?function\s+"
-    r"[a-zA-Z0-9_$]*(?:guard|validat|resolve|admit|reject|claim|dedupe|scope|auth)"
+    r"[a-zA-Z0-9_$]*(?:guard|validat|normaliz|resolve|admit|reject|dedupe|scope|auth)"
     r"[a-zA-Z0-9_$]*\s*\("
     r"|(?:async\s+)?def\s+"
-    r"[a-zA-Z0-9_]*(?:guard|validat|resolve|admit|reject|claim|dedupe|scope|auth)"
+    r"[a-zA-Z0-9_]*(?:guard|validat|normaliz|resolve|admit|reject|dedupe|scope|auth)"
     r"[a-zA-Z0-9_]*\s*\("
     r"|(?:const|let|var)\s+"
-    r"[a-zA-Z0-9_$]*(?:Guard|Validat|Resolve|Admit|Reject|Claim|Dedupe|Scope|Auth)"
+    r"[a-zA-Z0-9_$]*(?:Guard|Validat|Normaliz|Resolve|Admit|Reject|Dedupe|Scope|Auth)"
     r"[a-zA-Z0-9_$]*\s*="
     r"|class\s+[a-zA-Z0-9_$]*(?:Guard|Validator|Resolver|Admission|Auth)"
     r"[a-zA-Z0-9_$]*"
+    r"|(?:async\s+)?[a-zA-Z0-9_$]*(?:guard|validat|normaliz|resolve|admit|reject|dedupe|scope|auth)"
+    r"[a-zA-Z0-9_$]*\s*\([^)]*\)\s*\{"
+    r"|(?:function\s+)?[a-zA-Z0-9_]*(?:guard|validat|normaliz|resolve|admit|reject|dedupe|scope|auth)"
+    r"[a-zA-Z0-9_]*\s*\(\)\s*\{"
     r")",
-    re.MULTILINE,
+    re.MULTILINE | re.IGNORECASE,
 )
 REQUIRED_PLAN_MARKERS = (
     "boundary-change enumeration",
@@ -119,6 +123,8 @@ def _is_dispositioned_value(value: str | None) -> bool:
     normalized = value.strip().lower()
     if "todo" in normalized:
         return False
+    if normalized.startswith(("n/a -", "na -", "not applicable -")):
+        return True
     return normalized not in PLACEHOLDER_VALUES
 
 
@@ -150,11 +156,15 @@ def _git(args: Sequence[str]) -> str:
     return result.stdout
 
 
-def _added_lines(diff_hunk: str) -> str:
+def _changed_lines(diff_hunk: str) -> str:
     return "\n".join(
         line
         for line in diff_hunk.splitlines()
-        if (line.startswith("+") and not line.startswith("+++")) or line.startswith("@@")
+        if (
+            (line.startswith("+") and not line.startswith("+++"))
+            or (line.startswith("-") and not line.startswith("---"))
+            or line.startswith("@@")
+        )
     )
 
 
@@ -163,7 +173,7 @@ def changed_added_lines(base: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for name in names:
         if PurePosixPath(name).suffix in CODE_SUFFIXES:
-            out[name] = _added_lines(_git(["diff", "--unified=0", f"{base}...HEAD", "--", name]))
+            out[name] = _changed_lines(_git(["diff", "--unified=0", f"{base}...HEAD", "--", name]))
     return out
 
 

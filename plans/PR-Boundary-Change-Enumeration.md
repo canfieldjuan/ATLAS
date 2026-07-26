@@ -91,12 +91,12 @@ an Atlas product guard, validator, resolver, or admission boundary.
 `AGENTS.md` gains a short imperative §3k.5 rule. `new_pr_plan.sh` adds a
 matching optional subsection so the requirement appears while the plan is being
 written. `check_boundary_change_enumeration.py` scans changed Python,
-JavaScript, and TypeScript-family files for boundary-shaped path/function/class
-signals and warns unless the `### Boundary-change enumeration` section carries
-non-placeholder rows for replaced-path behaviors, guard-relevant fields, and
-caller x input shape. The self-bootstrap exemption is limited to this detector;
-other checker/admission files still scan. The workflow runs the detector on PRs
-and emits warnings only.
+JavaScript, TypeScript-family, and shell files for added or removed
+boundary-shaped path/function/method/class signals and warns unless the `### Boundary-change
+enumeration` section carries non-placeholder rows for replaced-path behaviors,
+guard-relevant fields, and caller x input shape. The self-bootstrap exemption is
+limited to this detector; other checker/admission files still scan. The workflow
+runs the detector on PRs and emits warnings only.
 
 ## Intentional
 
@@ -118,7 +118,7 @@ Parked hardening: none.
 
 ## Verification
 
-- python -m pytest tests/test_check_boundary_change_enumeration.py -q --noconftest - 13 passed.
+- python -m pytest tests/test_check_boundary_change_enumeration.py -q --noconftest - 19 passed.
 - python -m pytest tests/test_new_pr_plan.py -q --noconftest - 16 passed.
 - python scripts/check_boundary_change_enumeration.py --base origin/main - OK.
 - python scripts/audit_plan_doc.py plans/PR-Boundary-Change-Enumeration.md - OK.
@@ -131,9 +131,9 @@ Parked hardening: none.
 |---|---:|
 | `AGENTS.md` | +20 |
 | `scripts/new_pr_plan.sh` | +9 |
-| `scripts/check_boundary_change_enumeration.py` | +200 |
-| `tests/test_check_boundary_change_enumeration.py` | +134 |
+| `scripts/check_boundary_change_enumeration.py` | +210 |
+| `tests/test_check_boundary_change_enumeration.py` | +175 |
 | `tests/test_new_pr_plan.py` | +5 |
 | `.github/workflows/boundary_change_enumeration.yml` | +46 |
-| `plans/PR-Boundary-Change-Enumeration.md` | +118 |
-| **Total** | **~553** |
+| `plans/PR-Boundary-Change-Enumeration.md` | +139 |
+| **Total** | **~604** |
