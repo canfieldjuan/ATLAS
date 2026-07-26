@@ -1,5 +1,11 @@
-import pytest
+import asyncio
+import os
+import uuid
 from pathlib import Path
+
+import pytest
+
+DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 
 
 class FakeMigrationPool:
@@ -201,3 +207,389 @@ def test_sent_email_tenant_migration_is_additive_replay_safe_and_unclassified():
     assert "SET DEFAULT" not in upper
     assert "SET NOT NULL" not in upper
     assert "DROP " not in upper
+
+
+def test_scoped_mailbox_credential_migration_is_additive_and_constrained():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "350_scoped_mailbox_credentials.sql"
+    ).read_text()
+    upper = migration.upper()
+    normalized = " ".join(migration.split())
+
+    assert "CREATE TABLE IF NOT EXISTS scoped_mailbox_credentials" in migration
+    assert "PRIMARY KEY (business_context_id, provider)" in migration
+    assert "encrypted_credentials BYTEA NOT NULL" in normalized
+    assert "encryption_kid" in migration
+    assert "generation BIGINT NOT NULL DEFAULT 1" in normalized
+    assert "CHECK (btrim(business_context_id) <> '')" in migration
+    assert "CHECK (provider = 'gmail')" in migration
+    assert "CHECK (generation > 0)" in migration
+    assert "WHERE revoked_at IS NULL" in migration
+    assert "DROP " not in upper
+
+
+class _SerializingPool(FakeMigrationPool):
+    """transaction() + pg_advisory_xact_lock with real blocking semantics.
+
+    ``honor_lock=False`` makes the advisory lock a no-op so the paired probe
+    below shows the single-application result comes from the lock statement,
+    not from an accident of the fixture.
+    """
+
+    def __init__(self, *, honor_lock=True):
+        super().__init__()
+        self.honor_lock = honor_lock
+        self.applied_sql = []
+        self.acquired = 0
+        self.max_acquired = 0
+        self._gate = None
+
+    def _lock(self):
+        import asyncio
+
+        if self._gate is None:
+            self._gate = asyncio.Lock()
+        return self._gate
+
+    async def fetch(self, query, *args):
+        assert "FROM schema_migrations" in query
+        # Snapshot BEFORE yielding, like a real query that reads at statement
+        # start and then awaits I/O. Snapshotting after the yield would let a
+        # concurrent runner's write leak into this result and mask the race.
+        import asyncio
+
+        snapshot = [{"name": name} for _version, name in self.records]
+        await asyncio.sleep(0)
+        return snapshot
+
+    async def execute(self, query, *args):
+        normalized = " ".join(query.split())
+        if normalized.startswith("CREATE TABLE IF NOT EXISTS schema_migrations"):
+            return
+        if normalized.startswith("INSERT INTO schema_migrations"):
+            return await super().execute(query, *args)
+        self.applied_sql.append(normalized)
+
+    async def acquire(self):
+        self.acquired += 1
+        self.max_acquired = max(self.max_acquired, self.acquired)
+        return _Conn(self)
+
+    async def release(self, conn):
+        self.acquired -= 1
+
+
+class _Conn:
+    """Single acquired connection: the lock, bookkeeping and migration SQL all
+    run here, which is what proves a one-connection pool cannot deadlock."""
+
+    def __init__(self, pool):
+        self.pool = pool
+        self.held = False
+
+    async def execute(self, query, *args):
+        if "pg_advisory_unlock" in query:
+            if self.pool.honor_lock and self.held:
+                self.pool._lock().release()
+                self.held = False
+            return
+        return await self.pool.execute(query, *args)
+
+    async def fetch(self, query, *args):
+        return await self.pool.fetch(query, *args)
+
+    async def fetchval(self, query, *args):
+        if "pg_try_advisory_lock" in query:
+            # Non-blocking, like the real thing: hand back False rather than
+            # waiting, so the runner polls instead of sitting in a transaction.
+            if not self.pool.honor_lock:
+                return True
+            gate = self.pool._lock()
+            if gate.locked():
+                return False
+            await gate.acquire()
+            self.held = True
+            return True
+        return await self.pool.fetchval(query, *args)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_runners_apply_each_migration_once(tmp_path):
+    """Two simultaneous startups (main app + standalone MCP, or two replicas)
+    must not both apply the same pending migration."""
+    import asyncio
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_probe.sql").write_text("SELECT 900")
+    pool = _SerializingPool(honor_lock=True)
+
+    await asyncio.gather(
+        run_migrations(pool, migrations_dir=tmp_path),
+        run_migrations(pool, migrations_dir=tmp_path),
+    )
+    assert pool.applied_sql == ["SELECT 900"], (
+        "the second entrant must re-snapshot under the lock and find nothing "
+        "pending"
+    )
+    assert pool.inserted == [(900, "900_probe")]
+
+
+@pytest.mark.asyncio
+async def test_without_the_advisory_lock_both_runners_apply(tmp_path):
+    """3i probe: with the lock a no-op the same fixture double-applies,
+    proving the test above measures the lock."""
+    import asyncio
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_probe.sql").write_text("SELECT 900")
+    pool = _SerializingPool(honor_lock=False)
+
+    await asyncio.gather(
+        run_migrations(pool, migrations_dir=tmp_path),
+        run_migrations(pool, migrations_dir=tmp_path),
+    )
+    assert len(pool.applied_sql) == 2, (
+        "no-op lock must reproduce the double-apply race the real lock prevents"
+    )
+
+
+class _SingleConnectionPool:
+    """A pool configured min=max=1: the second concurrent acquire() waits
+    forever, which is precisely what a transaction that then reaches back to
+    the pool would do."""
+
+    def __init__(self, tmp_path):
+        self.tmp_path = tmp_path
+        self.applied_sql = []
+        self.in_use = False
+        self.autocommit_sql = []
+
+    async def acquire(self):
+        if self.in_use:
+            # A real asyncpg pool would block here until timeout; failing loudly
+            # keeps the deadlock from hanging the suite.
+            raise AssertionError(
+                "second connection requested while the migration run holds the "
+                "only one -- this is the min=max=1 deadlock"
+            )
+        self.in_use = True
+        return _SingleConn(self)
+
+    async def release(self, conn):
+        self.in_use = False
+
+    # Any helper still calling the POOL mid-run re-enters acquire() and trips
+    # the assertion above.
+    async def execute(self, query, *args):
+        conn = await self.acquire()
+        try:
+            return await conn.execute(query, *args)
+        finally:
+            await self.release(conn)
+
+    async def fetch(self, query, *args):
+        conn = await self.acquire()
+        try:
+            return await conn.fetch(query, *args)
+        finally:
+            await self.release(conn)
+
+    async def fetchval(self, query, *args):
+        conn = await self.acquire()
+        try:
+            return await conn.fetchval(query, *args)
+        finally:
+            await self.release(conn)
+
+
+class _SingleConn:
+    def __init__(self, pool):
+        self.pool = pool
+
+    async def execute(self, query, *args):
+        if "pg_advisory" in query:
+            return
+        self.pool.applied_sql.append(query)
+
+    async def fetch(self, query, *args):
+        return []
+
+    async def fetchval(self, query, *args):
+        if "pg_try_advisory_lock" in query:
+            return True
+        return None
+
+
+@pytest.mark.asyncio
+async def test_migrations_run_on_a_single_connection_pool(tmp_path):
+    """F3: the whole run -- advisory lock, bookkeeping and migration SQL --
+    must occupy exactly ONE connection, or a deployment with
+    min_pool_size == max_pool_size == 1 deadlocks at startup."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "001_first.sql").write_text("CREATE TABLE a (id int);")
+    (tmp_path / "002_second.sql").write_text("CREATE TABLE b (id int);")
+
+    pool = _SingleConnectionPool(tmp_path)
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert any("CREATE TABLE a" in sql for sql in pool.applied_sql)
+    assert any("CREATE TABLE b" in sql for sql in pool.applied_sql)
+    assert pool.in_use is False, "the connection must be released"
+
+
+@pytest.mark.asyncio
+async def test_migration_sql_does_not_run_inside_a_transaction(tmp_path):
+    """F3 second side: five packaged migrations use CREATE INDEX
+    CONCURRENTLY, which Postgres refuses inside a transaction block. The run
+    must therefore hold a SESSION-level lock, not a transaction-scoped one."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "001_concurrent.sql").write_text(
+        "CREATE INDEX CONCURRENTLY idx_x ON t (c);"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+    started = []
+
+    class _TxnBanningConn(_SingleConn):
+        async def execute(self, query, *args):
+            if query.strip().upper().startswith(("BEGIN", "START TRANSACTION")):
+                started.append(query)
+            if "pg_advisory_xact_lock" in query:
+                raise AssertionError(
+                    "a transaction-scoped advisory lock implies an open "
+                    "transaction; CREATE INDEX CONCURRENTLY cannot run there"
+                )
+            if "pg_advisory_lock(" in query:
+                raise AssertionError(
+                    "a BLOCKING advisory lock holds an open transaction while "
+                    "it waits, which deadlocks against a holder running "
+                    "CREATE INDEX CONCURRENTLY; poll with try-lock instead"
+                )
+            return await super().execute(query, *args)
+
+    pool.acquire = lambda: _acquire_banning(pool, _TxnBanningConn)
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert not started, f"migration run opened a transaction: {started}"
+    assert any("CONCURRENTLY" in sql for sql in pool.applied_sql)
+
+
+async def _acquire_banning(pool, conn_cls):
+    if pool.in_use:
+        raise AssertionError("second connection requested during the run")
+    pool.in_use = True
+    return conn_cls(pool)
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_path):
+    """R2/R8: the fake-pool proofs above model asyncpg and advisory-lock
+    semantics; this one uses them. Two concurrent run_migrations() against a
+    real asyncpg pool sized min=max=1 must apply each migration exactly once
+    and must not deadlock -- the two properties the single-connection
+    session-lock design exists to provide. Skips when no database is wired,
+    same as the other real-PostgreSQL probes in this repo."""
+    import asyncpg
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    database_url = os.environ.get(DATABASE_URL_ENV)
+    if not database_url:
+        pytest.skip(f"{DATABASE_URL_ENV} is not configured")
+
+    schema = f"atlas_migration_lock_{uuid.uuid4().hex}"
+    admin = await asyncpg.connect(database_url)
+    pool = None
+    other = None
+    try:
+        await admin.execute(f'CREATE SCHEMA "{schema}"')
+
+        (tmp_path / "001_first.sql").write_text(
+            "CREATE TABLE migration_lock_probe_a (id integer primary key);"
+        )
+        (tmp_path / "002_second.sql").write_text(
+            "CREATE TABLE migration_lock_probe_b (id integer primary key);"
+        )
+        # Statement Postgres refuses inside a transaction block: it passes only
+        # because the run holds a SESSION-level lock on an autocommit
+        # connection, not a transaction-scoped one.
+        (tmp_path / "003_concurrent_index.sql").write_text(
+            "CREATE INDEX CONCURRENTLY migration_lock_probe_idx "
+            "ON migration_lock_probe_a (id);"
+        )
+
+        # TWO INDEPENDENT pools -> two independent backend sessions. A single
+        # max_size=1 pool would serialize the runners in acquire() before they
+        # ever reached the lock, so the advisory lock could be deleted outright
+        # and the test would still pass. Contention has to be between separate
+        # sessions or it is not the lock being measured.
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=1,
+            max_size=1,
+            server_settings={"search_path": f"{schema},public"},
+        )
+        other = await asyncpg.create_pool(
+            database_url,
+            min_size=1,
+            max_size=1,
+            server_settings={"search_path": f"{schema},public"},
+        )
+
+        await asyncio.wait_for(
+            asyncio.gather(
+                run_migrations(pool, migrations_dir=tmp_path),
+                run_migrations(other, migrations_dir=tmp_path),
+            ),
+            timeout=60,
+        )
+
+        await admin.execute(f'SET search_path TO "{schema}", public')
+        applied = await admin.fetch(
+            "SELECT name FROM schema_migrations ORDER BY name"
+        )
+        assert [r["name"] for r in applied] == [
+            "001_first",
+            "002_second",
+            "003_concurrent_index",
+        ], "each migration must be recorded exactly once"
+
+        index_rows = await admin.fetch(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE schemaname = $1 AND indexname = $2",
+            schema,
+            "migration_lock_probe_idx",
+        )
+        assert index_rows, (
+            "CREATE INDEX CONCURRENTLY must have run -- if the runner opened a "
+            "transaction, Postgres would have rejected it"
+        )
+
+        # The SESSION lock outlives its transaction, so it must be released
+        # explicitly or the pooled connection carries it into unrelated work.
+        # Scoped to THIS pool's backend: the running app uses the same key, so
+        # a global count would be a coin flip.
+        backend_pid = await pool.fetchval("SELECT pg_backend_pid()")
+        held = await admin.fetchval(
+            "SELECT count(*) FROM pg_locks "
+            "WHERE locktype = 'advisory' AND objid = $1 AND pid = $2",
+            0x41544C41,
+            backend_pid,
+        )
+        assert held == 0, (
+            "the session advisory lock must be released back to the pooled "
+            "connection, not carried into the next borrower"
+        )
+    finally:
+        for p in (pool, other):
+            if p is not None:
+                await p.close()
+        await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await admin.close()

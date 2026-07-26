@@ -7,9 +7,12 @@ work:
 2. **Reviewer session** — audits each PR independently and posts a
    verdict (BLOCKER / MAJOR / NIT / LGTM). After the verdict, record it as the
    machine-readable `claude-review` gate for the reviewed head SHA with
-   `scripts/set_claude_review_status.py` (LGTM/no-blocker -> `success`, an open
-   BLOCKER -> `failure`); see `docs/REVIEWER_MERGE_GATE.md` for the two-gate
-   merge condition and its trust boundary.
+   `scripts/set_claude_review_status.py` (no open BLOCKER -> `success`, i.e. an
+   LGTM or only non-blocking MAJOR/NIT notes; an open BLOCKER -> `failure`).
+   Unresolved matrix entries are themselves filed as BLOCKERs, so a review with
+   open questions lands on `failure` without changing this mapping; see
+   `docs/REVIEWER_MERGE_GATE.md` for the two-gate merge condition and its trust
+   boundary.
 
 This file is the contract both sessions work from. The auditor
 (prompt at `AUDITOR_PROMPT.md`) handles cross-cutting integration /
@@ -36,15 +39,28 @@ R1–R14) and the PR's Review Contract. Review the same way the Reviewer session
   actually does from the code.
 - Every finding cites a rule ID (R1–R14) and `file:line`. Blockers must cite
   `file:line`. Classify each finding as **BLOCKER / MAJOR / NIT / LGTM** per the pack.
-- Check the PR's `### Review Contract`: does the diff meet its acceptance criteria,
-  and which rules do the changed paths trigger (the path-to-rule table in the pack)?
+- Check the PR's `### Review Contract`: does the diff meet its acceptance criteria?
+  Then disposition EVERY rule R1-R14 -- the path-to-rule table in the pack sets how
+  deeply each is probed, not which appear, so a rule the table does not trigger is
+  still recorded (Pass, or N-A with a reason).
 - Hunt the rule categories: requirements match (R1), test evidence (R2),
   security/authorization (R3), data & migration safety (R4), backward compatibility
   (R5), error handling & observability (R6), performance (R7), concurrency &
   idempotency (R8), frontend (R9), maintainability (R10), dependencies & config
   (R11), deployment safety & CI (R12). Fix the class, not the example (R13).
-- Lead with blockers. `LGTM` (all triggered rules pass, no open BLOCKER/MAJOR) is a
-  valid, complete result; do not manufacture NITs.
+- **Know when you are done** (Review completion, in the pack): a review is complete
+  when its matrix is dispositioned -- each acceptance criterion met / not met /
+  could-not-determine, EVERY rule R1-R14 pass / fail / not-verified / n-a-with-reason
+  (the path table sets probe depth, not which rules appear), and what you
+  did not verify listed with the reason. State that matrix. Completeness is never
+  "no further case can be found"; on an open surface that point does not exist.
+- **Report the class, not the instance.** R13 obliges the builder to fix the class
+  rather than the example; the same duty binds you. Findings that share one
+  underlying decision are **one** finding naming that decision, with the instances
+  as illustrations. If a finding of yours would open "fresh evidence beyond the
+  earlier X finding", it belongs merged into X, not filed separately.
+- Lead with blockers. `LGTM` (every rule R1-R14 Pass or reasoned N-A, no open
+  BLOCKER/MAJOR) is a valid, complete result; do not manufacture NITs.
 
 ---
 
@@ -109,6 +125,63 @@ For any new runtime, workflow, UI, report, billing, delivery, or public
 contract surface, the Review Contract must also name the reachability proof:
 the real entrypoint exercised and the observable output/state/artifact/job/gate
 result that proves the surface is wired.
+
+**An acceptance criterion names a claim about the code, or the evidence that
+settles it -- never a bare risk category.** The reviewer marks each criterion
+met / not met / could-not-determine, so a criterion has to point at something to
+look at: a `file:line`, a command and its output, a CI run/job, a generated
+artifact.
+
+Behavioral criteria are not merely allowed, they are **required** wherever this
+section asks for a reachability proof. "POST /api/v1/leads/intake returns 204 to
+a preflight" is a good criterion -- the command and its output settle it.
+
+A **bare risk category** is not a criterion. "No preflight-to-import TOCTOU",
+"no race conditions", "handles every malformed input" name a hazard with no
+referent -- there is nothing to look at. For a contract authored or materially
+revised after this rule lands, fail the contract authoring and ask for the code
+claim or settling evidence; do not hunt the category on the builder's behalf.
+
+Naming the evidence rescues it. *"No unmasked email addresses in the audit
+export -- settled by `tests/test_audit_export.py::test_masks_email_addresses`"*
+is a perfectly good criterion: it is risk-shaped, but it says where to look, and
+the reviewer marks it met or not from that evidence. The defect is the missing
+referent, not the word "no" and not the hazard framing.
+For concurrency or open-execution criteria, a sampled concurrent test is not
+settling evidence by itself: the criterion names the 3k.4 execution model and
+the property-level invariant that holds across every admitted interleaving, with
+tests used as evidence under that model.
+For open-input criteria, a sampled fixture list is not settling evidence by
+itself: the criterion names the 3k.3 evidence-gated mechanism -- the single
+choke-point decision, safe default for ambiguous/unrecognized/malformed input,
+and bounded recognizer evidence -- with tests used as evidence under that
+mechanism.
+For a hazard-labelled concern, name the code claim it translates into --
+*"the receipt is constructed before any fallible work"* -- and the reviewer has
+a place to look.
+
+This is deliberately the narrow rule. It does **not** require criteria to avoid
+universally-quantified claims: "no path after finalization changes the process
+outcome" quantifies over paths and is perfectly reviewable, because the paths
+are in the diff. The defect is naming a hazard with no referent, not breadth.
+
+**Risk areas are not criteria.** They name the hazards the reviewer probes and
+set probe depth; the completion matrix does not disposition them, so a risk area
+may name a category -- that is what the field is for. Where a slice is genuinely
+open-input or open-execution work, the *criterion* points at the mechanism that
+closes it (3k.3's evidence-gate, 3k.4's execution model) rather than at the
+hazard.
+
+**Legacy contracts.** This binds contracts authored or materially revised after
+it lands; a plan already open is not retroactively invalid, since root `plans/`
+holds other sessions' in-flight slices (3a.1). Do not retroactively
+re-disposition a legacy criterion merely because this new authoring rule would
+have asked for clearer wording. Review the legacy contract as authored: follow
+the evidence and diff it points to, disposition normally when that evidence
+settles it, and record `could-not-determine` only if the criterion still has no
+claim or evidence to settle after that review. What is grandfathered is the
+**authoring** finding -- on a pre-existing contract the reviewer records the
+phrasing as an advisory NIT rather than an R1 against the plan.
 
 ### 1b. PR body
 
@@ -232,7 +305,7 @@ levels:
 | Level | Meaning | Builder action |
 |---|---|---|
 | **BLOCKER** | Correctness, security, contract break, or CI red. Must fix before merge. | Fix or push back with rationale. |
-| **MAJOR** | Architectural / scope / pattern concern. Strong recommendation but not auto-block. | Fix in this PR if the fix is small; otherwise discuss before deferring. |
+| **MAJOR** | Architectural / scope / pattern concern, **or a proven defect whose blast radius does not warrant blocking**. Strong recommendation but not auto-block. | Fix in this PR if the fix is small; otherwise discuss before deferring. |
 | **NIT** | Style, naming, comment polish. Skip-worthy. | Apply if 1-line; skip otherwise. The reviewer should mark NITs as skip-worthy explicitly. |
 | **LGTM** | All gates green, R14 verified, no remaining concerns. | Merge. |
 
@@ -264,11 +337,14 @@ Intentional / Deferred / Verification -- matches AGENTS.md framework.
 Slice phase is named and matches the PR's scope. Parked hardening is
 named in Deferred or explicitly marked none.
 
-**Rule results (triggered rules plus R14, see docs/REVIEWER_RULES.md):**
-- R1 Requirements match: Pass/Fail/N-A
-- R2 Test evidence: Pass/Fail/N-A
-- R3 Security/auth ... R14 Codebase verification: Pass/Fail/N-A
-(List the rules the changed paths trigger, plus R14; cite file:line on any Fail.)
+**Rule results (EVERY rule R1-R14, see docs/REVIEWER_RULES.md):**
+- R1 Requirements match: Pass/Fail/Not-Verified/N-A
+- R2 Test evidence: Pass/Fail/Not-Verified/N-A
+- R3 Security/auth ... R14 Codebase verification: Pass/Fail/Not-Verified/N-A
+(List every rule R1-R14. The path-trigger table sets probe DEPTH, not which
+rules appear -- a rule the table does not trigger is still recorded, as Pass or
+as N-A with a reason. Cite file:line on any Fail. Not-Verified ends the search
+but blocks LGTM.)
 
 **boundary-probe:** <N-A, or what guard-shaped probe applied + result. Required
 before LGTM on guards, validators, caps, classifiers, gates, sanitizers,
@@ -1179,11 +1255,19 @@ the **allowed-files set**, and a **max-files budget**.
 
 ## 4. Reviewer workflow
 
-The reviewer's job is **not** "review the code" -- it is to **prove whether
-the PR satisfies its Review Contract and violates none of the rules in
-`docs/REVIEWER_RULES.md`.** Every finding cites a rule ID (R1-R14) and maps to
-a verdict level (BLOCKER / MAJOR / NIT). The rule matrix and AI reconciliation
-go in the §2a template.
+The reviewer's job is **not** "review the code" -- it is to **disposition the
+review matrix: every acceptance criterion in the PR's Review Contract, and every
+rule in `docs/REVIEWER_RULES.md`.** Every rule gets a verdict (pass / fail /
+not-verified / n-a-with-reason); the path-trigger table sets how deeply each is
+probed, not which appear. Every finding cites a rule ID (R1-R14) and maps to a
+verdict level (BLOCKER / MAJOR / NIT). The rule matrix and AI reconciliation go
+in the §2a template.
+
+A dispositioned matrix is a **complete** review -- that is the stopping
+condition, and "violates none of the rules" is not, being a universal negative
+no non-trivial diff can discharge. Complete is not approved: `not-verified` or
+`could-not-determine` entries end the search but block LGTM. See **Review
+completion** in the pack.
 
 ### 4a. Independent verification
 
@@ -1220,8 +1304,10 @@ reviewer should:
 4. Sweep for missed call sites with grep patterns more reliable than
    the PR's claim (multi-line constructions, kwargs split across
    lines, etc.).
-5. Walk the rules triggered by the changed paths (per the trigger table in
-   `docs/REVIEWER_RULES.md`) and record Pass/Fail/N-A for each.
+5. Walk EVERY rule R1-R14 and record Pass/Fail/Not-Verified/N-A for each. The
+   trigger table in `docs/REVIEWER_RULES.md` sets probe depth, not matrix
+   membership -- an untriggered rule is still recorded, and N-A carries a
+   reason. A Not-Verified entry ends the search but blocks LGTM.
 6. Apply R14: every claim used in the verdict must be backed by checked-out
    code, a caller/test/artifact spot-check, or a "not verified" note with the
    reason. **No LGTM from the PR story alone.**
@@ -1266,9 +1352,11 @@ Before LGTM, the reviewer confirms:
 - [ ] Plan doc has all 7 required sections, including the `### Review
       Contract` block in Scope (acceptance criteria, affected surfaces, risk
       areas, triggered rule IDs).
-- [ ] Every rule triggered by the changed paths (`docs/REVIEWER_RULES.md`)
-      is recorded Pass/Fail/N-A, and every Fail at BLOCKER level cites
-      file:line.
+- [ ] EVERY rule R1-R14 (`docs/REVIEWER_RULES.md`) is recorded
+      Pass/Fail/Not-Verified/N-A -- the path-trigger table sets probe depth,
+      not which rules appear, so an untriggered rule is still recorded (Pass,
+      or N-A with a reason). Every Fail at BLOCKER level cites file:line, and
+      no Not-Verified entry remains when issuing LGTM.
 - [ ] R14 is recorded Pass/Fail/N-A. The verdict names the reviewed head SHA,
       changed code inspected, caller/test/artifact spot-checks, and any claims
       not verified. No LGTM from PR/body/builder claims alone.
@@ -1441,7 +1529,8 @@ repository. A separate builder session opens PRs; you audit them
 and post one consolidated review per push with a verdict at:
 
 - BLOCKER: correctness, security, contract break, or CI red.
-- MAJOR: architectural / scope / pattern concern.
+- MAJOR: architectural / scope / pattern concern, or a proven defect
+  whose blast radius does not warrant blocking.
 - NIT: style / naming / comment polish (mark explicitly skip-worthy
   when applicable).
 - LGTM: all gates green, no remaining concerns.
@@ -1459,8 +1548,11 @@ defines:
 - Anti-patterns that should never appear in a builder PR.
 
 Read `docs/REVIEWER_RULES.md` before your first review. Your job is
-not "review the code" -- it is to prove the PR satisfies its Review
-Contract and violates none of R1-R14. Cite a rule ID on every finding.
+not "review the code" -- it is to disposition the review matrix: every
+acceptance criterion in the Review Contract, and every rule R1-R14, each
+pass / fail / not-verified / n-a-with-reason. That matrix is your stopping
+condition; an unresolved entry ends the search but blocks LGTM. Cite a
+rule ID on every finding.
 
 Read AUDITOR_PROMPT.md for the cross-cutting audit checks
 (canonical / integration / scope / debt). Apply both lenses.
@@ -1485,8 +1577,10 @@ For each PR you review:
 4. Sweep for missed call sites with grep patterns more reliable
    than the PR's claim (multi-line constructions, kwargs split
    across lines).
-5. Record Pass/Fail/N-A for each rule the changed paths trigger and for R14
-   (`docs/REVIEWER_RULES.md`); cite file:line on any Fail.
+5. Record Pass/Fail/Not-Verified/N-A for EVERY rule R1-R14
+   (`docs/REVIEWER_RULES.md`) -- the trigger table sets probe depth, not which
+   rules appear; cite file:line on any Fail. Do not LGTM with a Not-Verified
+   entry outstanding.
 6. Reconcile AI findings: do not LGTM until every Codex/Copilot
    finding is fixed or explicitly waived with a reason in the PR body.
 7. Confirm CI is green (extracted-checks x2 + Vercel) before
