@@ -406,7 +406,11 @@ subsequent review.
 
 **When retirement is considered:** on each addition. Adding a durable mechanism
 is the trigger to examine one existing candidate for removal, so the ratchet
-self-balances and there is no separate cadence, owner, or audit to maintain. All
+self-balances and there is no separate cadence, owner, or audit to maintain.
+**Record which candidate you examined** in `REVIEW_MISSES.md` with the outcome,
+and take the next one that has not been examined since its last firing -- an
+unrecorded pick lets every addition re-examine the same load-bearing mechanism,
+re-state why it stays, and retire nothing while the pack keeps growing. All
 **five** mechanism kinds this section creates are in scope -- `scripts/audit_*`
 checks, rule IDs, path triggers, recurring-lapse lines, and Review Contract
 template additions -- not only the ones that are cheapest to delete.
