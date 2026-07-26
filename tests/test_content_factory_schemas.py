@@ -588,3 +588,71 @@ def test_canonically_equivalent_channels_are_duplicates():
         RepurposingPackage.model_validate(
             _package([_variant(channel=nfc), _variant(channel=nfd)])
         )
+
+
+@pytest.mark.parametrize(
+    "invisible",
+    ["\u200b", "\u200c", "\ufe0f", "\u200b\u200c", "\u00ad", "\u2060"],
+)
+def test_invisible_channel_identifiers_rejected(invisible):
+    """Routing labels need a visible base, not merely non-whitespace bytes."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError):
+        RepurposingPackage.model_validate(
+            _package([_variant(channel=invisible)])
+        )
+
+
+@pytest.mark.parametrize(
+    "invisible",
+    [
+        "\u200b",  # zero-width space (Cf)
+        "\u200c",  # zero-width non-joiner (Cf)
+        "\u00ad",  # soft hyphen (Cf)
+        "\u2060",  # word joiner (Cf)
+        "\ufe0f",  # variation selector (Mn)
+        "\u034f",  # combining grapheme joiner (Mn)
+        "\u180b",  # Mongolian free variation selector (Mn)
+        "\U000e0100",  # supplementary variation selector (Mn)
+    ],
+)
+def test_default_ignorables_cannot_split_duplicate_channels(invisible):
+    """Unicode default-ignorables have no routing identity of their own."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError, match="duplicate channel"):
+        RepurposingPackage.model_validate(
+            _package([
+                _variant(channel="email"),
+                _variant(channel=f"email{invisible}"),
+            ])
+        )
+
+
+@pytest.mark.parametrize(
+    ("composed", "base", "combining_mark"),
+    [
+        ("é", "e", "\u0301"),
+        ("Å", "A", "\u030a"),
+        ("ñ", "n", "\u0303"),
+        ("ö", "o", "\u0308"),
+    ],
+)
+@pytest.mark.parametrize(
+    "invisible",
+    ["\u034f", "\ufe0f", "\u180b", "\U000e0100"],
+)
+def test_default_ignorables_cannot_block_routing_key_composition(
+    composed, base, combining_mark, invisible
+):
+    """Removing an ignorable must happen before canonical composition."""
+    from atlas_brain.schemas.content_factory import RepurposingPackage
+
+    with pytest.raises(ValidationError, match="duplicate channel"):
+        RepurposingPackage.model_validate(
+            _package([
+                _variant(channel=composed),
+                _variant(channel=f"{base}{invisible}{combining_mark}"),
+            ])
+        )

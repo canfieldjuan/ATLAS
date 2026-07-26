@@ -20,13 +20,61 @@ This pack sits **under** the existing verdict ladder, it does not replace it:
 | Verdict | Meaning |
 |---|---|
 | **BLOCKER** | A rule below is failed in a way that breaks correctness, security, a contract, or CI. Must fix before merge. |
-| **MAJOR** | A rule is at risk: architectural / scope / pattern concern. Fix if small; else discuss. |
+| **MAJOR** | A rule is at risk: architectural / scope / pattern concern; **or** a proven defect whose blast radius does not warrant blocking. Fix if small; else discuss. |
 | **NIT** | Style / naming / polish. Apply only if 1-line; reviewer marks skip-worthy. |
 | **LGTM** | Every rule R1-R14 is Pass or a reasoned N-A (no Not-Verified outstanding), R14 is satisfied, and all AI findings are fixed-or-waived. |
 
 A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 **Blockers must cite `file:line`.** A bare "LGTM" with no rule matrix and no
 independent verification is worse than no comment.
+
+**BLOCKER requires a concrete failure path**: the specific input, sequence, or
+state that produces the harm, established by the reviewer. "This could break" is
+not one. Without a failure path the finding is MAJOR at most -- downgrade it, do
+not drop it, and the level can be raised later once the path is shown.
+
+Three carve-outs, because a missing-evidence finding is not a speculative one:
+
+- **Absent mandatory proof is itself the failure path.** Wherever a rule's own
+  **Block if** clause names missing evidence as the defect, the absence IS the
+  blocker and no input sequence is owed. That is general, not a short list: R2's
+  untested new logic and missing regression test, R5's changed contract without
+  contract tests, R4's absent rollback plan, the guard boundary-probe on
+  security / billing / data-deletion / customer-output / CI-release surfaces,
+  a Not-Verified rule, **and a `could-not-determine` acceptance criterion** all
+  qualify. A guard with only happy-path tests blocks on those surfaces whether
+  or not anyone has yet found the bypass -- "no one has exploited it" is not
+  evidence it is safe. The unifying test is simple: if what is missing is the
+  *evidence*, the absence is the failure path; only a speculative claim about
+  code you have read needs an input sequence.
+- **Established, not necessarily published.** For **any category
+  `SECURITY.md` routes privately** -- it names exploitable vulnerabilities,
+  exposed credentials, authentication bypasses, payment or billing issues, data
+  deletion gaps, and report-access bugs, and that policy governs, not this list
+  -- the public finding states the rule, the surface, and the impact and points
+  at the private report; the failure path is recorded there. Routing it
+  privately never downgrades it.
+- **A failure path is necessary, not sufficient.** Severity is blast radius, so
+  a proven but immaterial defect is MAJOR or NIT on the strength of its impact.
+  The ladder above is amended to say so: BLOCKER's "breaks correctness" reads as
+  *material* breakage, and MAJOR now explicitly admits a proven low-impact
+  defect rather than being reserved for architectural concerns. Without that
+  amendment the two would contradict and every proven defect would land at
+  BLOCKER by elimination.
+
+**The escape valve from "do not manufacture NITs" is not filing the finding, not
+promoting it.** That instruction bars padding a review with polish; it is not a
+reason to enter a marginal finding at BLOCKER so it clears the bar. If a finding
+is real but minor, MAJOR and NIT exist for it -- **use them**. A defect you have
+identified is never silently dispositioned: the matrix offers Pass, Fail,
+Not-Verified and reasoned N-A, and none of those honestly represents "I found
+something and said nothing". Report nothing only when you found nothing.
+
+**Why:** across #2195 and #2184 all **68** filed findings are P1/P2 and none is
+lower. Real severity is not distributed that way, and a ladder where everything
+is a blocker carries no information -- the reviewer cannot lead with blockers
+(above) when every finding is one, and the builder cannot tell an exploitable
+gap from an ordering nit.
 
 R14 is universal: it applies to every review verdict, even when no changed path
 specifically triggers it. A reviewer who has not inspected the checked-out PR
@@ -42,10 +90,11 @@ reviewer reviews against it. No contract, nothing to check against.
 
 ```
 ### Review Contract
-- Acceptance criteria:
-  - [ ] Behavior A works
-  - [ ] Edge case B handled
-  - [ ] Existing behavior C unchanged
+- Acceptance criteria (each a code claim, or a hazard plus the evidence that
+  settles it; a BARE risk category with no referent is the defect -- AGENTS.md 1a):
+  - [ ] <entrypoint> returns <observable result> for <input>
+  - [ ] <named boundary input> is rejected with <observable result>
+  - [ ] <existing behavior C> unchanged: <command / CI job that shows it>
 - Reachability proof: real entrypoint + observable output/state, or N/A with reason
 - Affected surfaces: API / DB / auth / frontend / jobs / config / observability / third-party
 - Risk areas: data-loss / security / backcompat / performance / concurrency / migration
@@ -54,6 +103,45 @@ reviewer reviews against it. No contract, nothing to check against.
 
 The contract is optional for one-off scratch, mandatory for non-trivial PRs
 (same threshold as the plan doc itself, per `AGENTS.md`).
+
+**For contracts authored or materially revised after this rule lands, a
+criterion that names a *bare* risk category is a defect in the contract, and the
+reviewer says so.** "No TOCTOU", "no race conditions", "handles every malformed
+input" name a hazard with no referent, so there is nothing to look at.
+
+Naming the evidence rescues it: *"No unmasked email addresses in the audit
+export -- settled by `tests/test_audit_export.py::test_masks_email_addresses`"*
+is valid and the reviewer dispositions it from that evidence. The defect is the
+missing referent, never the hazard framing. For concurrency or open-execution
+criteria, a sampled concurrent test is not settling evidence by itself; require
+the 3k.4 execution model and the property-level invariant that holds across
+every admitted interleaving. For open-input criteria, a sampled fixture list is
+not settling evidence by itself; require the 3k.3 evidence-gated mechanism:
+single choke-point decision, safe default for ambiguous/unrecognized/malformed
+input, and bounded recognizer evidence.
+
+Legacy contracts are different. This rule does not automatically
+re-disposition legacy criteria and does not forbid investigating them. For a
+contract authored before this lands, review against the contract as authored:
+inspect the diff and evidence it points to, disposition normally when that
+evidence settles it, and record `could-not-determine` only if the criterion
+still has no claim or evidence to settle after that review. The legacy phrasing
+is an advisory NIT, not a blocking R1 authoring finding, unless the contract is
+materially revised.
+
+Two things follow, and they are separate:
+
+- **New or materially revised contracts fail authoring review on a bare hazard.**
+  Ask for the code claim the hazard translates into, or the evidence that settles
+  it. Do not silently work around a newly authored bare hazard by hunting the
+  category.
+- **Legacy contracts keep their existing matrix behavior.** Do not mark a legacy
+  criterion `could-not-determine` solely because this authoring rule now exists;
+  use `could-not-determine` only when the actual legacy review still cannot find
+  a claim or evidence to settle.
+
+Risk areas are exempt: they name hazards by design and the matrix does not
+disposition them (`AGENTS.md` 1a).
 
 ---
 
@@ -398,3 +486,64 @@ recur: a new `scripts/audit_*.py`, a new rule ID here, a new path trigger above,
 a line in the recurring-lapse checklist, or a Review Contract template change.
 **No escaped defect is fixed only once.** This is the reviewer-side mirror of
 the builder's `HARDENING.md` + recurring-lapse flywheel.
+
+**The ratchet releases too.** As written this section only ever adds, and the
+reviewer's mandate grows with it -- every added rule is another category to
+disposition on every future PR, forever, which is a cost paid by every
+subsequent review.
+
+**When retirement is considered:** on each addition. Adding a durable mechanism
+is the trigger to examine one existing candidate for removal, so the ratchet
+self-balances and there is no separate cadence, owner, or audit to maintain.
+**Record which candidate you examined** in `REVIEW_MISSES.md` with the outcome.
+The ledger's columns record the original miss, not the retirement pass, so this
+needs its own row shape -- add a **Retirement reviews** table beside the ledger
+with `Date | Mechanism | Last fired | Outcome (kept / removed) | Replacement
+coverage`. **The replacement is itself recorded as a tracked mechanism** in that table: a
+required-check test, its CI enrollment, or a structural or type invariant
+becomes the sole protection for that defect the moment the old gate goes, so it
+inherits the same retirement lifecycle instead of sitting outside the five kinds
+and rotting unreviewed. Retiring a gate onto untracked coverage only moves the
+unreviewed mechanism. Without a durable `Date` and `Mechanism` per pass, the
+least-recently-examined ordering below cannot be computed from repository state
+and the rotation degrades to whatever the current reviewer remembers.
+and take the least-recently-examined mechanism -- when every mechanism has been
+examined once the rotation simply starts again, so a retained one is re-checked
+against fresh evidence rather than becoming permanently ineligible. Keying
+eligibility off "has not fired since it was examined" would exempt exactly the
+quiet mechanisms this section is about, and after one full pass only newly added
+ones would ever be inspected. An unrecorded pick has the opposite failure: every
+addition re-examines the same load-bearing mechanism, re-states why it stays,
+and retires nothing while the pack keeps growing. All
+**five** mechanism kinds this section creates are in scope -- `scripts/audit_*`
+checks, rule IDs, path triggers, recurring-lapse lines, and Review Contract
+template additions -- not only the ones that are cheapest to delete.
+
+Retirement terms:
+
+- **Silence is not evidence of absence.** A mechanism that has not fired may be
+  the reason the failure stopped. So not-firing is a prompt to examine, never a
+  licence to delete: a mechanism that is the sole protection for a defect logged
+  in `REVIEW_MISSES.md` may be removed **only** by naming what now covers that
+  defect, and the replacement has to be able to **stop the escape** -- a broader
+  rule in this pack, a type or structural change that makes the defect
+  unrepresentable, or a test that runs in a **required** check. A test that no
+  required check executes cannot prevent anything, so it is not a replacement.
+  No enforcing replacement named, no removal; state why it stays.
+- **Consistently waived** is the stronger signal, because it means the mechanism
+  fires and reviewers keep judging it wrong. Re-scope it to what actually
+  blocks, or remove it.
+- **Removals are atomic across mirrors.** A rule ID, checklist line, or template
+  entry is referenced from more than one place -- `AGENTS.md` review guidelines,
+  the §2a verification template, the 4d audit checklist, and the completion
+  matrix all enumerate rules. A removal updates every mirror in the same change,
+  or it leaves the matrix demanding a verdict on a rule that no longer exists.
+- **Removals are recorded** in `REVIEW_MISSES.md` beside the defect that
+  prompted the addition, with the replacement coverage named, so a removal is a
+  decision with a paper trail and not an erosion.
+
+Nothing here weakens the "no escaped defect is fixed only once" rule -- an
+escaped defect still converts into mechanism. This governs what happens to that
+mechanism afterwards, so the pack stays the size a reviewer can actually apply.
+A checklist nobody can finish is the failure mode Review completion exists to
+prevent, and an unbounded ratchet recreates it one rule at a time.

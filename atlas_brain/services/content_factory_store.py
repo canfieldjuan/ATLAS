@@ -45,6 +45,12 @@ STAGE_SCHEMAS = {
     # v1 stays admissible: pre-#2136 artifacts and any direct writer keep
     # working; runner-persisted audits are normalized to v2.
     "audit": ("editorial_audit.v1", "editorial_audit.v2", "editorial_audit.v3"),
+    # The runner's second source-bound audit stage. Without an entry here the
+    # store treated it as a CUSTOM stage, which may carry any artifact -- so a
+    # worker returning content_brief.v1 was committed as audit-v2.json, and
+    # because that schema is outside _SOURCE_BOUND_SCHEMAS the dispatch-source
+    # comparison was skipped too (#2201). Same admissible set as "audit".
+    "audit-v2": ("editorial_audit.v1", "editorial_audit.v2", "editorial_audit.v3"),
     "manifest": ("manifest.v1",),
     # Phase 6: channel variants and image prompts derived from an approved
     # draft. Both are gated by the runner exactly like the audit.
@@ -91,49 +97,44 @@ def job_lock(job_id: str, *, root: Path | str = DEFAULT_ROOT) -> Iterator[None]:
     job folder so it never lands in the job's git history.
     """
     safe = _safe_segment(job_id, "job_id")
+    lock_path = (Path(root) / ".locks" / f"{safe}.lock").resolve()
+    lock_key = str(lock_path)
     depth = getattr(_LOCK_STATE, "depth", None)
     if depth is None:
         depth = _LOCK_STATE.depth = {}
-    if depth.get(safe):
-        depth[safe] += 1
+    if depth.get(lock_key):
+        depth[lock_key] += 1
         try:
             yield
         finally:
-            depth[safe] -= 1
+            depth[lock_key] -= 1
         return
 
-    locks = Path(root) / ".locks"
-    locks.mkdir(parents=True, exist_ok=True)
-    handle = open(locks / f"{safe}.lock", "a+")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        handle = open(lock_path, "a+")
+    except OSError as exc:
+        raise ArtifactStoreError(
+            f"cannot open job lock for {safe!r}: {exc}"
+        ) from exc
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        depth[safe] = 1
+        depth[lock_key] = 1
         yield
     finally:
-        depth[safe] = 0
+        depth[lock_key] = 0
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
 
 
 def _restore_artifact(job: Path, path: Path, previous: "bytes | None") -> None:
-    """Undo a failed stage write: put back the previous bytes (or remove the
-    file if the stage had none) and unstage it, so a raised write_artifact
-    leaves no residue for the readiness gate to read as source state.
-
-    Best-effort by design -- this runs while an exception is propagating, and
-    a cleanup failure must not replace the original error.
-    """
-    try:
-        if previous is None:
-            path.unlink(missing_ok=True)
-        else:
-            path.write_bytes(previous)
-        subprocess.run(
-            ["git", "-C", str(job), "reset", "-q", "--", path.name],
-            capture_output=True,
-        )
-    except OSError:
-        pass
+    """Restore the target's previous committed worktree and index state."""
+    if previous is None:
+        path.unlink(missing_ok=True)
+        _git(job, "rm", "--cached", "-q", "--ignore-unmatch", "--", path.name)
+        return
+    path.write_bytes(previous)
+    _git(job, "reset", "-q", "HEAD", "--", path.name)
 
 
 def _git(job: Path, *args: str) -> subprocess.CompletedProcess:
@@ -167,6 +168,38 @@ def _ensure_repo(job: Path) -> None:
     _git(job, "config", "user.name", _GIT_NAME)
     _git(job, "config", "commit.gpgsign", "false")
     _git(job, "config", "core.hooksPath", os.devnull)
+
+
+def read_committed_artifact_bytes(
+    job_id: str,
+    stage: str,
+    *,
+    root: Path | str = DEFAULT_ROOT,
+) -> "bytes | None":
+    """Return ``<stage>.json`` from the job's committed ``HEAD`` tree.
+
+    Git's object database is the canonical store. Mutable worktree/index
+    residue from a failed or interrupted write is intentionally invisible.
+    """
+    stage = _safe_segment(stage, "stage")
+    job = job_dir(job_id, root=root)
+    if not (job / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(job), "show", f"HEAD:{stage}.json"],
+            check=True,
+            capture_output=True,
+        )
+    except FileNotFoundError as exc:
+        raise ArtifactStoreError("git is not available") from exc
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode != 128:
+            raise ArtifactStoreError(
+                f"cannot read committed {stage!r} artifact"
+            ) from exc
+        return None
+    return result.stdout
 
 
 def write_artifact(
@@ -243,14 +276,11 @@ def _write_artifact_locked(
     _ensure_repo(job)
     path = job / f"{stage}.json"
 
-    # Persistence is ALL-OR-NOTHING. A failed commit used to leave the new file
-    # written and staged in the working tree even though write_artifact raised
-    # and no commit recorded the stage -- and the readiness gate reads the
-    # working tree, so that residue was then trusted as approved source state
-    # (#2192 round 9). On any failure the previous content is restored, or the
-    # file removed if the stage had none, before the error propagates.
-    had_previous = path.exists()
-    previous = path.read_bytes() if had_previous else None
+    # Git HEAD, not the mutable worktree/index, is canonical. On an ordinary
+    # raised failure restore the target to that committed state for hygiene;
+    # correctness does not depend on cleanup because readiness readers consume
+    # committed objects only (#2192 round 9).
+    previous = read_committed_artifact_bytes(job_id, stage, root=root)
     try:
         path.write_text(json.dumps(canonical, indent=2, ensure_ascii=False) + "\n")
 
@@ -267,8 +297,14 @@ def _write_artifact_locked(
         if not unchanged:
             _git(job, "commit", "-q", "-m", f"{stage}: {tag}", "--", path.name)
         sha = _git(job, "rev-parse", "HEAD").stdout.strip()
-    except Exception:
-        _restore_artifact(job, path, previous)
+    except Exception as write_error:
+        try:
+            _restore_artifact(job, path, previous)
+        except Exception as restore_error:
+            raise ArtifactStoreError(
+                f"artifact write failed ({write_error}); cleanup also failed "
+                f"({restore_error}); committed Git state remains canonical"
+            ) from write_error
         raise
 
     return {
