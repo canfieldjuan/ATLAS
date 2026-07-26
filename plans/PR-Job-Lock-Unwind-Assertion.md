@@ -106,7 +106,10 @@ as redundant with the two above them.
   FROM the resolved path, so they cannot differ. Recording the withdrawal
   rather than deleting it silently, so the plan is not misleading history.
 
-Parked hardening: none.
+Parked hardening: `job_lock` depth map never deletes released entries
+(`HARDENING.md`, 2026-07-26) -- the per-thread map retains one key per distinct
+(job, root). Parked, not fixed: no demonstrated failure path, and this is a
+test-only slice.
 
 ## Verification
 
@@ -115,8 +118,10 @@ Parked hardening: none.
 
     python -m pytest tests/test_content_factory_runner.py \
         tests/test_content_factory_schemas.py \
-        tests/test_content_factory_store.py -q
-    # -> 1184 passed
+        tests/test_content_factory_store.py \
+        tests/test_content_factory_copy_verification.py -q
+    # -> 1354 passed (the same four suites acceptance criterion 4 names;
+    #    the three-suite subset above it reports 1184, and both were run)
 
 Detection proven by injection, per AGENTS.md 3i. Replacing the release in
 `job_lock`'s `finally` with a leak:
@@ -131,6 +136,6 @@ so the added assertions catch something the previous ones could not.
 | File | LOC |
 |---|---:|
 | `HARDENING.md` | 21 |
-| `plans/PR-Job-Lock-Unwind-Assertion.md` | 135 |
+| `plans/PR-Job-Lock-Unwind-Assertion.md` | 141 |
 | `tests/test_content_factory_runner.py` | 9 |
-| **Total** | **165** |
+| **Total** | **171** |
