@@ -71,7 +71,9 @@ Max files: 3
 - Affected surfaces: CI only.
 - Risk areas: silently running FULL when selection was possible -> bounded by
   criterion 2, which proves the selector still runs when present.
-- Reviewer rules triggered: R1, R12, R14.
+- Reviewer rules triggered: R1, R2, R12, R14. (R2: this diff changes the
+  predicates deciding whether and how the unit gate runs, so the generated
+  behavior needs assertions -- see the fallback and merge-base tests.)
 
 ### Files touched
 
@@ -121,6 +123,6 @@ cannot express "main moved after the branch forked".
 | File | LOC |
 |---|---:|
 | `.github/workflows/unit_gate.yml` | 33 |
-| `plans/PR-Unit-Gate-Selector-Absent-Fallback.md` | 126 |
-| `tests/test_unit_gate_selector_fallback.py` | 171 |
-| **Total** | **330** |
+| `plans/PR-Unit-Gate-Selector-Absent-Fallback.md` | 128 |
+| `tests/test_unit_gate_selector_fallback.py` | 196 |
+| **Total** | **357** |

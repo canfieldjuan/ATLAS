@@ -13,6 +13,7 @@ branch fires rather than only the happy path.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -24,6 +25,17 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO / ".github/workflows/unit_gate.yml"
+
+
+def _load(name: str):
+    """Import a scripts/*.py module by path (they are not an importable package)."""
+    spec = importlib.util.spec_from_file_location(name, REPO / "scripts" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+gate = _load("check_unit_gate")
 
 
 def _select_step_script() -> str:
@@ -169,3 +181,16 @@ def test_growth_guard_resolves_the_merge_base_baseline(tmp_path):
     assert resolved == ["a::t1", "b::t2", "c::t3"], (
         f"growth guard resolved the wrong baseline: {resolved}"
     )
+
+    # Resolving the right file is only half of it -- feed both baselines to the
+    # ratchet predicate the gate actually calls and assert it reports NO growth.
+    # Against current main it would report b::t2 and c::t3 as additions and fail
+    # a PR that added nothing, which is the failure this resolution prevents.
+    branch_baseline = set((work / "tests/unit_gate_baseline.txt")
+                          .read_text(encoding="utf-8").split())
+    assert gate.added_baseline_entries(branch_baseline, set(resolved)) == []
+
+    main_baseline = {"a::t1"}
+    assert gate.added_baseline_entries(branch_baseline, main_baseline) == [
+        "b::t2", "c::t3",
+    ], "the un-fixed comparison must still demonstrate the false growth"
