@@ -20,6 +20,36 @@ the routing-coverage checker's linguistic scope -- a different mechanism from
 the persistence gate, with no PII consequence -- and folding them in would put
 two unrelated decision surfaces behind one review. #2189 stays open for them.
 
+**Diff-budget overage (463 added lines vs the 400 soft cap) -- why this slice
+is indivisible.** The mechanism is 121 lines; the rest is the required review
+artifact and its proofs:
+
+| | added |
+|---|---:|
+| production code (schemas 103 + engine 18) | 121 |
+| the plan document itself | 169 |
+| both-direction proofs and corrected fixtures | 173 |
+
+The two remaining split lines both produce a worse intermediate state:
+
+* **Move vs. bound.** The sentence definition moves into the contracts module
+  ONLY so the locator bound can count sentences exactly as the producer does.
+  Landing the move alone is a refactor with no consumer; landing the bound
+  alone means a second sentence definition -- the precise defect #2201 round 13
+  was filed for.
+* **P1 vs. P2.** Splitting the casing fix out yields a ~3-line change plus its
+  casing cross-product, in the same function family and the same test file, and
+  leaves the P1 slice above the cap regardless.
+
+Tests are not compressible here: the bound's real risk is FALSE REJECTION of
+legitimate producer output, and the only thing that rules that out is the
+generated lockstep corpus. Shipping the guard without it would land a
+persistence gate whose failure mode is silently discarding valid audits.
+
+Diff-budget override: the sentence definition move and the locator bound are one
+decision, and separating either from its generated proof would land a
+persistence gate without the evidence that it cannot false-reject real output.
+
 ### Problem-derived contract
 
 - Root cause (P1): the locator grammar is a SHAPE check with no referent. It
@@ -164,6 +194,6 @@ Detection proven by injection, per AGENTS.md 3i. Neutralizing both fixes
 |---|---:|
 | `atlas_brain/schemas/content_factory.py` | 114 |
 | `atlas_brain/services/content_factory_copy_verification.py` | 61 |
-| `plans/PR-CF-Advisory-Locator-Binding.md` | 169 |
+| `plans/PR-CF-Advisory-Locator-Binding.md` | 199 |
 | `tests/test_content_factory_copy_verification.py` | 186 |
-| **Total** | **530** |
+| **Total** | **560** |
