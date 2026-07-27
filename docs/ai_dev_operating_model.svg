@@ -68,11 +68,11 @@
 
   <!-- 4 Reviewer -->
   <rect x="745" y="150" width="200" height="120" rx="9" fill="#fff" stroke="#7c3aed" stroke-width="1.5"/>
-  <text x="760" y="172" class="box-t">4 · Reviewer session</text>
+  <text x="760" y="172" class="box-t">4 · Codex review</text>
   <text x="760" y="194" class="box-s">INDEPENDENT re-derive</text>
   <text x="760" y="212" class="box-s">re-runs commands</text>
   <text x="760" y="230" class="box-s">checks file:line claims</text>
-  <text x="760" y="248" class="box-s">BLOCKER/MAJOR/NIT/LGTM</text>
+  <text x="760" y="248" class="box-s">Fix/waive threads</text>
   <text x="760" y="264" class="lbl">never rubber-stamps</text>
 
   <!-- 5 CI -->

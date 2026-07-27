@@ -38,11 +38,6 @@ it.
    assigned per the operator's standing autonomous-arc rules -- merge-on-green
    authority for THIS arc's PRs, hardened-path defaults, defer-do-not-ask.
    Plus any per-night limits (files not to touch, stop-after-N-PRs).
-   Trust boundary (AGENTS 3c.1.8): `claude-review` is forgeable by any token
-   with status-write on the repo, so when builder and reviewer share a GitHub
-   identity it is a coordination signal, not a defense -- the operator must
-   not grant merge authority on its strength alone; a distinct reviewer
-   identity is the precondition for treating it as a real gate.
 5. **Mechanics armed:**
    - Fresh session for the arc (one arc per session; long-lived sessions
      degrade -- model fallback, compaction damage).
@@ -84,10 +79,9 @@ overnight deltas:
   reviewer boundary probe BEFORE pushing -- both error directions (fail-open
   AND over-reject), boundary values, at least one negative test. Cheaper than
   a review round.
-- **Merge:** required checks green + 0 unresolved threads + no
-  CHANGES_REQUESTED + `claude-review` status success (both gates, AGENTS
-  3c.1.8) + clean tree + local==remote -> merge, teardown, next slice. Log
-  for the report; do not ping the operator per merge. Exception:
+- **Merge:** required checks green + 0 unresolved Codex threads + no
+  CHANGES_REQUESTED + clean tree + local==remote -> merge, teardown, next
+  slice. Log for the report; do not ping the operator per merge. Exception:
   documentation-only PRs hold for bot review before merging (doc PRs that
   merged on green before the bot pass have burned us).
 - **Compaction recovery:** the `CLAUDE.md` compact instructions preserve the
@@ -138,18 +132,16 @@ there is something to act on:
 - `HEAD-MOVED` -- the branch advanced past the armed SHA; reconcile, re-arm
   on the new head.
 - `ACTIONABLE` -- a red required context, unresolved review threads (counts
-  fail closed when more thread pages exist than fetched), a
-  CHANGES_REQUESTED review decision, or a failed `claude-review` status.
+  fail closed when more thread pages exist than fetched), or a
+  CHANGES_REQUESTED review decision.
   Definite negatives exit on any cycle, including the first.
 - `MERGE-READY` -- readiness is presence-based and fail-closed: EVERY
   required branch-protection context (read at runtime from
   `scripts/check_required_status_checks.py`, so the gate cannot drift from
   the canonical list) must be present and reporting success, plus
-  `claude-review` status success, 0 unresolved threads, no
-  CHANGES_REQUESTED, and mergeable (both merge gates per AGENTS.md 3c.1.8
-  and `docs/REVIEWER_MERGE_GATE.md`). A context that has not started yet
-  keeps readiness false. Run the pre-merge checklist (clean tree,
-  local==remote, threads still 0), merge, alert.
+  0 unresolved Codex threads, no CHANGES_REQUESTED, and mergeable. A context
+  that has not started yet keeps readiness false. Run the pre-merge checklist
+  (clean tree, local==remote, threads still 0), merge, alert.
 
 The watcher itself never merges and never holds merge authority (AGENTS
 3c.1.1); it only reports states.

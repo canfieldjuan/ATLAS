@@ -13,9 +13,9 @@ self-resolvable by the PR author and would be a gameable rigor gate. It catches
 the specific contradiction between a "resolved" body and open reality, which is
 exactly the deferred spec from plans/archive/PR-Reviewer-Reconciliation-Audit.md.
 
-Bot findings stay advisory (operating-model gap (b)): nothing here auto-resolves
-or auto-applies. It only enforces that a human accounted for what the bots
-raised.
+Codex findings are review-gate inputs, not auto-applied commands: nothing here
+auto-resolves or auto-applies. It only enforces that the PR body accounts for
+what Codex/Copilot raised.
 
 Exit codes: 0 = clean (no open bot threads, or the body honestly acknowledges
 open findings); 1 = contradiction (open bot threads + an all-clear/absent

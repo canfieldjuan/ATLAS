@@ -1,19 +1,11 @@
-# Reviewer Rules Pack v1
+# Reviewer Rules Pack v2
 
-> The reviewer's job is **not** to "review the code." It is to **disposition the
-> review matrix: every acceptance criterion in the PR's Review Contract, and
-> every rule below.** Every rule is in the matrix -- the path-trigger table sets
-> how DEEPLY a rule is probed, never whether it appears -- so a rule reaches a
-> verdict of pass / fail / not-verified / n-a, and `n-a` carries a reason.
-> Every review finding cites a rule ID (R1-R14). This pack is the checklist the
-> reviewer runs; the
-> recurring-lapse list in `docs/SESSION_BOOTSTRAP.md` is the same checklist
-> front-loaded into the builder so the repeats stop.
->
-> The standard is *the matrix is dispositioned*, not *the code violates no rule*.
-> "Violates none of the rules" is a universal negative -- undischargeable on any
-> non-trivial diff, so it defines no point at which a review is done. See
-> **Review completion** below, which is what makes a review finishable.
+> Codex connector review is a scoped, code-grounded review gate. It reviews the
+> PR's changed code, direct callers/tests/artifacts, required CI, and the PR's
+> Review Contract. It does not run a whole-repo audit or disposition every rule
+> on every PR. Every finding cites a rule ID (R1-R14), but rules with no
+> changed-path, direct-caller, acceptance-criterion, CI, security, data,
+> migration, or deployment hook are out of scope for that PR.
 
 This pack sits **under** the existing verdict ladder, it does not replace it:
 
@@ -21,8 +13,8 @@ This pack sits **under** the existing verdict ladder, it does not replace it:
 |---|---|
 | **BLOCKER** | A rule below is failed in a way that breaks correctness, security, a contract, or CI. Must fix before merge. |
 | **MAJOR** | A rule is at risk: architectural / scope / pattern concern; **or** a proven defect whose blast radius does not warrant blocking. Fix if small; else discuss. |
-| **NIT** | Style / naming / polish. Apply only if 1-line; reviewer marks skip-worthy. |
-| **LGTM** | Every rule R1-R14 is Pass or a reasoned N-A (no Not-Verified outstanding), R14 is satisfied, and all AI findings are fixed-or-waived. |
+| **NIT** | Style / naming / polish. Suppress by default; file only if it is one-line and materially clarifies changed code. |
+| **LGTM** | Triggered rules pass, R14 is satisfied, required CI is green, and all Codex threads are fixed-or-waived. |
 
 A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 **Blockers must cite `file:line`.** A bare "LGTM" with no rule matrix and no
@@ -65,16 +57,12 @@ Three carve-outs, because a missing-evidence finding is not a speculative one:
 **The escape valve from "do not manufacture NITs" is not filing the finding, not
 promoting it.** That instruction bars padding a review with polish; it is not a
 reason to enter a marginal finding at BLOCKER so it clears the bar. If a finding
-is real but minor, MAJOR and NIT exist for it -- **use them**. A defect you have
-identified is never silently dispositioned: the matrix offers Pass, Fail,
-Not-Verified and reasoned N-A, and none of those honestly represents "I found
-something and said nothing". Report nothing only when you found nothing.
+is real but minor, MAJOR and NIT exist for it. In Codex review, NIT-only issues
+are usually waived or omitted so the thread set stays focused.
 
-**Why:** across #2195 and #2184 all **68** filed findings are P1/P2 and none is
-lower. Real severity is not distributed that way, and a ladder where everything
-is a blocker carries no information -- the reviewer cannot lead with blockers
-(above) when every finding is one, and the builder cannot tell an exploitable
-gap from an ordering nit.
+**Why:** a ladder where everything is a blocker carries no information -- the
+builder cannot tell an exploitable gap from an ordering nit, and the PR turns
+into a thread backlog instead of a review.
 
 R14 is universal: it applies to every review verdict, even when no changed path
 specifically triggers it. A reviewer who has not inspected the checked-out PR
@@ -424,24 +412,10 @@ not one more instance of a decision already reported. A discharge repeatedly
 overturned on unchanged code is evidence the rule was never dischargeable as
 scoped, which is a finding in itself.
 
-**Recording the gate: an unresolved entry is a BLOCKER-level finding.** The
-`claude-review` status has three states and "complete but not approved" is not a
-fourth one -- it maps onto the existing `failure`. A `not-verified` rule or a
-`could-not-determine` criterion is filed as a BLOCKER (`Rxx (BLOCKER) - not
-verified: <what, and why not>`), so `scripts/set_claude_review_status.py` takes
-`failure` and `success` is unreachable while anything is unresolved. This does
-**not** narrow `success` to LGTM: it keeps its established meaning of "no open
-BLOCKER", so a complete review carrying only non-blocking MAJOR/NIT notes is
-still `success`, exactly as `docs/REVIEWER_MERGE_GATE.md` and
-`scripts/set_claude_review_status.py` already define it. `pending` keeps its
-meaning -- a review still in progress -- and is not a parking space for a
-finished review with open questions.
-
-This is deliberately fail-closed. Unverified evidence is exactly what a merge
-gate exists to stop, so the burden is on resolving the entry or waiving it as a
-reasoned `n-a`, never on the gate to guess. The reviewer is still *done*: the
-matrix bounds the search, the verdict reports what it found, and neither forces
-the other.
+**Recording the gate: open Codex threads fail readiness.** A Codex thread stays
+open until the builder fixes it or records an explicit waiver in the PR body.
+`live-reconciliation` compares the live thread state to that record and fails
+closed on unresolved or unaccounted threads.
 
 **Report the class, not the instance.** R13 obliges the *builder* to fix the
 class rather than the cited example. The same duty binds the *reviewer*: when
@@ -468,18 +442,18 @@ what instance-by-instance boundary-shifting produces.
 
 ---
 
-## AI-finding reconciliation (mandatory before LGTM)
+## Codex-thread reconciliation (mandatory before LGTM)
 
-External review bots (Codex, Copilot) post raw comments outside the
-BLOCKER/MAJOR/NIT taxonomy. They are **advisory inputs to a judgment session,
-never auto-applied** - a bot false-positive applied blindly turns correct work
-into incorrect work, so there is no "auto-address all comments" loop.
+Codex connector comments are the review gate, but they are still reconciled by
+execution, not by reflex. A finding is fixed when the code/test/CI evidence
+shows the root issue is gone. A finding is waived when it is duplicate,
+out-of-scope hardening, NIT-only, or speculative without a concrete failure
+path, and the PR body records that reason.
 
-The hard rule: **a reviewer may not issue LGTM until every AI finding is either
-fixed or explicitly waived with a reason recorded in the PR body.** The machine
-catches mechanical issues; the human owns intent mismatch, product logic,
-architecture, risky assumptions, and missing tests. The reviewer compares their
-own rule matrix against the AI output and reconciles the difference.
+The hard rule: **LGTM or merge readiness requires every Codex thread fixed or
+explicitly waived with a reason recorded in the PR body.** `live-reconciliation`
+is the machine check that prevents a stale "all fixed/waived" claim while
+threads remain open.
 
 ---
 

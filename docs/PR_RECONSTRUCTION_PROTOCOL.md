@@ -1,12 +1,10 @@
 # PR Reconstruction Protocol
 
-Every PR review **reconstructs the PR independently from the diff**. Never
-review a PR against its description. This binds every reviewer session that
-reads this contract -- the human/Claude builder and reviewer sessions. External
-review bots (Codex) are advisory inputs, not bound by it; the CI reconciliation
-gate (`ai_reconciliation_live.yml`) is a mechanical bot-finding comparison, not
-a reviewer; and no automated CI review action that would follow this protocol
-exists in the repo today. When one is added, wire it to this protocol then.
+Every PR review **reconstructs the PR from the diff**. Never review a PR against
+its description. This binds builder self-review and Codex connector review:
+the description, commit message, and title are unverified claims; the code is
+ground truth. Codex applies this protocol in scoped form: changed code, direct
+callers/tests/artifacts, required CI, and the PR's Review Contract.
 
 ## Why
 
@@ -51,8 +49,8 @@ below is for the final review write-up, not the investigation order.
 
 ## Composition
 
-- Run this before, and feed it into, the §4a independent-verification pass and
-  the `docs/REVIEWER_RULES.md` rule walk (R1-R14 -> BLOCKER / MAJOR / NIT).
+- Run this before, and feed it into, the §4a scoped-verification pass and the
+  triggered `docs/REVIEWER_RULES.md` rules (R1-R14 -> BLOCKER / MAJOR / NIT).
 - Apply the vertical-progress lens in the same pass: is the slice a vertical
   MVP step, or harness/hardening/polish drift that defers the core?
 - This is the strict-review form of "no evidence lifted from prose": no verdict

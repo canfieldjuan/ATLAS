@@ -245,7 +245,7 @@ echo
 if [ "$failures" -eq 0 ]; then
     echo "local PR review passed"
     echo
-    echo "Next: hand this branch to the local reviewer session for judgment review."
+    echo "Next: open/update the PR; Codex connector review and live-reconciliation own reviewer feedback."
     exit 0
 fi
 
