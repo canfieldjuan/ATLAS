@@ -406,6 +406,33 @@ def test_eom_receivables_runtime_config_accepts_generated_digest_only():
     assert "receivables_service_token" not in EOMInvoicingConfig.model_fields
 
 
+def test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection(
+    monkeypatch,
+):
+    from pydantic import ValidationError
+
+    from atlas_brain.eom_api import auth
+    from atlas_brain.eom_api.config import (
+        EOMInvoicingConfig,
+        RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
+    )
+
+    generated = auth.generate_receivables_service_token()
+    monkeypatch.setenv("ATLAS_INVOICING_RECEIVABLES_API_ENABLED", "true")
+    monkeypatch.setenv(
+        "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256",
+        generated.sha256,
+    )
+    monkeypatch.setenv(RAW_RECEIVABLES_SERVICE_TOKEN_ENV, generated.token)
+
+    with pytest.raises(
+        ValidationError,
+        match="Raw EOM receivables bearer token",
+    ):
+        EOMInvoicingConfig()
+    assert "receivables_service_token" not in EOMInvoicingConfig.model_fields
+
+
 def test_eom_receivables_startup_rejects_unsafe_enabled_runtime_config():
     from atlas_brain.eom_api import auth
     from atlas_brain.eom_api.config import EOMInvoicingConfig
@@ -546,6 +573,21 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
         ).status_code
         == 401
     )
+    nongenerated_token = "operator-supplied-low-entropy-secret"
+    app.dependency_overrides[auth.get_receivables_api_config] = (
+        lambda: EOMInvoicingConfig(
+            receivables_api_enabled=True,
+            receivables_service_token_sha256=auth._token_sha256(nongenerated_token),
+        )
+    )
+    assert (
+        client.get(
+            "/receivables/ready",
+            headers={"Authorization": f"Bearer {nongenerated_token}"},
+        ).status_code
+        == 401
+    )
+    app.dependency_overrides[auth.get_receivables_api_config] = lambda: config
     assert (
         client.get(
             "/receivables/ready",

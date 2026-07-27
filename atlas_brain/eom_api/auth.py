@@ -11,7 +11,12 @@ from typing import Protocol
 
 from fastapi import Depends, Header, HTTPException
 
-from .config import EOMInvoicingConfig, invoicing_settings
+from .config import (
+    EOMInvoicingConfig,
+    RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
+    invoicing_settings,
+    raw_receivables_service_token_env_value,
+)
 
 _GENERATED_TOKEN_PREFIX = "eomrx_v1_"
 _GENERATED_TOKEN_RANDOM_LENGTH = 43
@@ -118,6 +123,13 @@ def validate_receivables_api_config(
     resolved = config or invoicing_settings
     if not resolved.receivables_api_enabled:
         return
+    if raw_receivables_service_token_env_value():
+        raise RuntimeError(
+            "Raw EOM receivables bearer token material must not be configured "
+            f"in {RAW_RECEIVABLES_SERVICE_TOKEN_ENV}; provision only "
+            "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256 on the Atlas API "
+            "service and keep the raw token on the caller side."
+        )
     raw_token = getattr(resolved, "receivables_service_token", "")
     if raw_token is not None and str(raw_token).strip():
         raise RuntimeError(
@@ -157,8 +169,13 @@ async def require_receivables_api(
     scheme, separator, provided = authorization.partition(" ")
     if separator != " " or scheme.lower() != "bearer" or not provided.strip():
         raise HTTPException(status_code=401, detail="Bearer token required")
+    provided_token = provided.strip()
     try:
-        provided_digest = _token_sha256(provided.strip())
+        _validate_generated_token(provided_token)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=401, detail="Invalid bearer token") from exc
+    try:
+        provided_digest = _token_sha256(provided_token)
     except UnicodeEncodeError as exc:
         raise HTTPException(status_code=401, detail="Invalid bearer token") from exc
     expected_digest = config.receivables_service_token_sha256.strip()
