@@ -33,8 +33,10 @@ async def _prepare_schema(conn, schema: str) -> None:
     await conn.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
     for name in (
         "035_contacts.sql",
+        "256_contact_interaction_dedupe.sql",
         "346_contact_lead_pipeline.sql",
         "351_eom_lead_lifecycle_events.sql",
+        "352_eom_inbound_delivery_receipts.sql",
         "353_eom_customer_handoffs.sql",
     ):
         await conn.execute((MIGRATIONS / name).read_text())
@@ -91,55 +93,85 @@ def _approval_key() -> str:
 
 
 @pytest.mark.asyncio
-async def test_eom_profile_migration_set_bootstraps_handoff_schema_on_a_fresh_database():
-    """R4/R12: the deployed EOM profile gets its exact schema before serving."""
+async def test_public_intake_and_handoff_share_the_authoritative_postgres_provider():
+    """A real web lead can be finalized without copying it to another database."""
+    from atlas_brain.api.leads import LeadIntakeRequest, _process_lead_intake
+
     database_url = _database_url_or_skip()
-    schema = f"atlas_eom_profile_bootstrap_{uuid.uuid4().hex}"
-    admin = await asyncpg.connect(database_url)
-    pool = None
+    schema = f"atlas_eom_intake_handoff_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
     try:
-        await admin.execute(f'CREATE SCHEMA "{schema}"')
-        from atlas_brain.main_eom import EOM_PROFILE_MIGRATIONS
-        from atlas_brain.storage.migrations import run_migrations
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
 
-        pool = await asyncpg.create_pool(
-            database_url,
-            min_size=1,
-            max_size=1,
-            server_settings={"search_path": f'"{schema}", public'},
+        async def no_prior_submissions(_email: str, _phone: str) -> int:
+            return 0
+
+        intake = await _process_lead_intake(
+            LeadIntakeRequest(
+                name="Approved Estimate",
+                phone="2175550100",
+                service="Recurring residential cleaning",
+                frequency="Every two weeks",
+                source_page="/request-an-estimate",
+            ),
+            crm=provider,
+            email_provider=object(),
+            daily_count=no_prior_submissions,
         )
-        await run_migrations(pool, only=EOM_PROFILE_MIGRATIONS)
+        assert intake == {"success": True, "email_sent": False}
 
-        async with pool.acquire() as conn:
-            applied = {
-                row["name"]
-                for row in await conn.fetch("SELECT name FROM schema_migrations")
-            }
-            relations = {
-                relation: await conn.fetchval("SELECT to_regclass($1)", relation)
-                for relation in (
-                    "appointments",
-                    "contacts",
-                    "contact_interactions",
-                    "eom_lead_lifecycle_events",
-                    "eom_customer_handoffs",
-                )
-            }
-
-        assert EOM_PROFILE_MIGRATIONS == (
-            "012_appointments",
-            "035_contacts",
-            "346_contact_lead_pipeline",
-            "351_eom_lead_lifecycle_events",
-            "353_eom_customer_handoffs",
+        contact = await conn.fetchrow(
+            """
+            SELECT id, business_context_id, contact_type, lead_stage, status
+            FROM contacts
+            WHERE phone = $1
+            """,
+            "2175550100",
         )
-        assert applied == set(EOM_PROFILE_MIGRATIONS)
-        assert all(relations.values())
+        assert contact is not None
+        assert {
+            key: contact[key]
+            for key in (
+                "business_context_id",
+                "contact_type",
+                "lead_stage",
+                "status",
+            )
+        } == {
+            "business_context_id": "effingham_maids",
+            "contact_type": "lead",
+            "lead_stage": "new",
+            "status": "active",
+        }
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM contact_interactions WHERE contact_id = $1",
+            contact["id"],
+        ) == 1
+
+        handoff = await provider.finalize_eom_customer_handoff(
+            contact_id=str(contact["id"]),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=_approval_key(),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        assert handoff["idempotent"] is False
+        assert await _contact_state(conn, contact["id"]) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
     finally:
-        if pool is not None:
-            await pool.close()
-        await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
-        await admin.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
 
 
 @pytest.mark.asyncio

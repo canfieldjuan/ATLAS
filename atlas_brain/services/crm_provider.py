@@ -320,7 +320,6 @@ class DatabaseCRMProvider:
         merged from extracted/web-form data.
         """
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
-        from ..storage.database import get_db_pool
 
         normalized_email = str(email or "").strip().lower()
         phone_digits = re.sub(r"\D", "", str(phone or ""))
@@ -346,7 +345,7 @@ class DatabaseCRMProvider:
                 f"eom-inbound:relay:{normalized_source}:{normalized_relay_event_id}"
             )
 
-        pool = get_db_pool()
+        pool = self._get_pool()
         result: dict[str, Any] = {}
         interaction_result: Optional[dict[str, Any]] = None
         async with _transaction_connection(pool) as conn:

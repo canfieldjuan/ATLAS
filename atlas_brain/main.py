@@ -106,6 +106,33 @@ def _paid_funnel_stripe_deflection_configured(app_settings: object = settings) -
     return amount_cents in allowed_amounts
 
 
+async def _require_eom_funnel_data_store(
+    config: object,
+    *,
+    database_enabled: bool,
+) -> None:
+    """Fail closed if an enabled handoff cannot use the primary CRM store."""
+    if not bool(getattr(config, "api_enabled", False)):
+        return
+    if not database_enabled:
+        raise RuntimeError("EOM funnel requires the authoritative Atlas database")
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise RuntimeError("EOM funnel requires an initialized Atlas database pool")
+    ready = await pool.fetchval(
+        """
+        SELECT to_regclass('contacts') IS NOT NULL
+           AND to_regclass('eom_lead_lifecycle_events') IS NOT NULL
+           AND to_regclass('eom_customer_handoffs') IS NOT NULL
+        """
+    )
+    if not ready:
+        raise RuntimeError(
+            "EOM funnel requires the authoritative CRM lifecycle and handoff schema"
+        )
+
+
 def _is_absolute_http_url(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
@@ -288,8 +315,11 @@ async def lifespan(app: FastAPI):
     logger.info("Atlas Brain starting up...")
     _enforce_paid_funnel_alert_channel(settings)
     from .api.invoicing.auth import validate_receivables_api_config
+    from .eom_api.config import funnel_settings
+    from .eom_api.funnel_auth import validate_eom_funnel_api_config
 
     validate_receivables_api_config(settings.invoicing)
+    validate_eom_funnel_api_config()
 
     # Initialize database connection pool
     if db_settings.enabled:
@@ -309,6 +339,11 @@ async def lifespan(app: FastAPI):
             logger.error("Failed to initialize database: %s", e, exc_info=True)
             # Continue without database - service can still function
             # but conversation persistence will be unavailable
+
+    await _require_eom_funnel_data_store(
+        funnel_settings,
+        database_enabled=db_settings.enabled,
+    )
 
     # Note: STT/TTS registries not implemented - voice uses Piper TTS directly
     # via voice/pipeline.py. These can be added later if centralized

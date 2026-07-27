@@ -37,23 +37,28 @@ into a customer.
   service scope as a second operational source of truth. A declined estimate,
   reschedule/cancel, additional sites, self-service onboarding, and later
   customer updates are separate commands.
-- Deployment/auth extension: the EOM Render candidate enables the handoff
-  route but leaves its migration switch off, while the inherited full Atlas
-  migration chain is explicitly not fresh-applicable. The route would therefore
-  reach a database without its handoff relation. Separately, the first funnel
-  auth boundary accepts any printable, non-placeholder token of a minimum
-  length; that is not a provisioning invariant and permits human-chosen,
-  guessable credentials.
-- Correct extension: declare the minimal, ordered EOM CRM/lifecycle/handoff
-  migration set at the EOM entrypoint, run that set during profile startup
-  before the lifespan serves requests, and enable that scoped startup path in
-  the Render candidate. The funnel credential must have a generated `eomf_v1_`
-  format with a `secrets.token_urlsafe(32)`-sized random payload; startup and
-  request auth must reject every other format. The only copy remains a
-  Render-injected server secret paired with the tracker server configuration.
-- Must still not change: the full Atlas migration chain; public routes or
-  browser-held credentials; tracker approval authority and Customer/Site
-  behavior; non-EOM CRM migrations/behavior; or operational estimate facts.
+- Deployment/data-authority extension: the public intake is served by the
+  full Atlas application and writes its primary CRM database, while the slim
+  EOM Render candidate is configured with a different managed database. There
+  is no replication path between those stores, so enabling the callback there
+  would make every real web lead appear absent at approval time. Separately,
+  the first funnel auth boundary accepts any printable, non-placeholder token
+  of a minimum length; that is not a provisioning invariant and permits
+  human-chosen, guessable credentials.
+- Correct extension: mount the authenticated handoff router on the same full
+  Atlas API aggregate that mounts public lead intake, so both commands use the
+  canonical `DatabaseCRMProvider` pool. Validate an enabled generated
+  `eomf_v1_` bearer during that full application's startup and reject startup
+  when that enabled route lacks an initialized primary pool or its contacts,
+  lifecycle, and handoff relations; keep the separate EOM Render candidate's
+  funnel switch and migrations disabled. Real PostgreSQL proof must run the
+  actual intake workhorse and finalization on one provider/database; route
+  proof must show both routes are mounted through the full aggregate. The token
+  remains server-only in the full Atlas process and tracker configuration.
+- Must still not change: the existing full Atlas migration behavior, the EOM
+  Render receivables candidate, public intake semantics or browser-held
+  credentials, tracker approval authority and Customer/Site behavior, non-EOM
+  CRM behavior, or operational estimate facts.
 - Replay/closure extension: completion is proven by the immutable handoff row
   plus its matching `customer_approved` lifecycle event, but the first replay
   check also required that the customer's mutable status remain `active`.
@@ -86,10 +91,12 @@ Slice phase: Vertical slice
    tracker links, tracker-first/Atlas-retry recovery, and the invariant that no
    Atlas lifecycle promotion exists without a matching tracker Customer/Site
    identifier.
-3. Make the deployed EOM candidate admit the private route: explicitly enable
-   it and require Render to hold a secret-backed service token matching the
-   time tracker's server-side token. The raw bearer never enters source control
-   or a browser.
+3. Serve the private route through the full Atlas API aggregate that already
+   owns public intake contacts. Its enabled configuration is validated at full
+   Atlas startup and fails closed without the initialized primary contacts,
+   lifecycle, and handoff schema; the separate EOM Render candidate remains
+   unable to serve the handoff route or run its handoff migrations. The raw
+   bearer never enters source control or a browser.
 4. Make the Atlas handoff row a complete, exclusive finalization record: only
    the finalization transaction may insert it; a replay verifies the promoted
    EOM customer plus matching lifecycle event; and each tracker Customer and
@@ -97,10 +104,9 @@ Slice phase: Vertical slice
 5. Record and rerun the merged time-tracker recovery proof: after an Atlas
    failure, the office retry reuses its persisted Customer, Site, and approval
    key rather than creating another operational record.
-6. Give the Render candidate a safe deployment path: the EOM lifespan runs the
-   exact CRM/lifecycle/handoff migration prerequisites before serving the
-   enabled funnel route, and the dedicated service token is generated-format
-   only rather than an arbitrary operator-selected string.
+6. Prove the data-authority boundary with a real PostgreSQL public-intake then
+   finalization path on one injected provider, prove the full API aggregate
+   mounts both routes, and enroll the full-app files in the EOM pipeline gate.
 7. Preserve the idempotent approval result after a later customer deactivation
    or archive without weakening first-time active-lead validation, and bind the
    plan's decision-driving sets to explicit closure declarations.
@@ -141,25 +147,30 @@ Slice phase: Vertical slice
    completed replay, while a first-time inactive lead still fails before writes.
    Cross-repository contract tests and real-PostgreSQL status-transition proof
    settle the recovery rule.
-6. With `ATLAS_EOM_RUN_MIGRATIONS=true`, `atlas_brain.main_eom:lifespan`
-   applies only the ordered EOM contact/lifecycle/handoff prerequisites before
-   yielding; it never attempts the non-fresh-applicable full Atlas chain. A
-   real-PostgreSQL migration-runner test and the real lifespan test settle the
-   schema and ordering. An enabled funnel configuration accepts only a fresh
-   `eomf_v1_` generated bearer with the required random payload; parametrized
-   tests settle malformed, short, repeated, and otherwise non-generated
-   credentials before request handling.
+6. `atlas_brain.main:lifespan` validates any enabled funnel configuration and
+   requires its initialized primary pool to expose contacts, lifecycle, and
+   handoff relations before serving; its `/api/v1` aggregate mounts both the
+   public intake and authenticated handoff routers. The separate EOM Render
+   candidate leaves the funnel and migration switches disabled. A real
+   PostgreSQL fixture runs the actual intake workhorse then finalization on one
+   injected provider; route and configuration tests settle the
+   shared-authority deployment shape. An enabled configuration accepts only a
+   fresh `eomf_v1_` generated bearer with the required random payload;
+   parametrized tests settle malformed, short, repeated, and otherwise
+   non-generated credentials before request handling.
 - Reachability proof: authenticated time-tracker admin request -> configured
   Juan-only guard -> durable tracker Customer/Site operation -> Atlas EOM
-  profile's service-authenticated finalization -> Atlas handoff/lifecycle rows.
-  The `atlas_brain.main_eom:app` route test exercises the deployed Render
-  entrypoint, and the merged time-tracker recovery test exercises the persisted
-  request/key and response contract. A live Render-to-Render smoke is a
+  full application's service-authenticated finalization -> Atlas
+  handoff/lifecycle rows. Public website intake reaches that same full
+  application first, so its contact is directly available to finalization. The
+  aggregate route test, real PostgreSQL intake-to-handoff proof, and merged
+  time-tracker recovery test settle the persisted request/key contract. A live
+  tracker-to-Atlas smoke after setting the full application's secret is a
   post-provisioning deployment verification, not a claim made by this source
   slice.
-- Affected surfaces: Atlas Render candidate, settings/startup validation, EOM
-  funnel router and service auth, CRM lifecycle transition, handoff migration,
-  EOM pipeline CI, and the companion time-tracker admin API/customer-onboarding
+- Affected surfaces: full Atlas API aggregation/startup validation, EOM funnel
+  router and service auth, CRM lifecycle transition, handoff migration, EOM
+  pipeline CI, and the companion time-tracker admin API/customer-onboarding
   flow.
 - Risk areas: mistaken actor authority, credential exposure, contact tenant
   escape, duplicate Customer/Site creation, tracker/Atlas partial failure,
@@ -169,13 +180,17 @@ Slice phase: Vertical slice
 
 ### Closure declarations
 
-- **CLOSED — EOM startup migration stems.** `EOM_PROFILE_MIGRATIONS` is bounded
-  by the runtime dependency chain: `012_appointments` is required by
-  `035_contacts`; `035` supplies contacts; `346` supplies lead stage; `351`
-  supplies lifecycle evidence; and `353` supplies handoffs. The canonical
-  declaration is `atlas_brain.main_eom:EOM_PROFILE_MIGRATIONS`; a later EOM
-  schema dependency is out of this closed slice until it updates that tuple and
-  the fresh-profile proof together.
+- **CLOSED — authoritative lead store.** `atlas_brain.main:app` includes the
+  `atlas_brain.api` aggregate, and that aggregate includes both `leads_router`
+  and `eom_funnel_router`. Their production dependencies resolve the same
+  `DatabaseCRMProvider`/configured Atlas pool; no copy or replication store is
+  admitted by this command.
+- **CLOSED — intake/handoff fixture migration stems.** The real PostgreSQL
+  fixture applies `035_contacts`, `256_contact_interaction_dedupe`, `346` lead
+  pipeline, `351` lifecycle events, `352` inbound delivery receipts, and `353`
+  handoffs. Those are the exact direct tables/trigger prerequisites of the
+  public-intake workhorse plus finalization; production migration ownership
+  remains the existing full Atlas runner.
 - **CLOSED — handoff ownership/lock domains.** The four domains are approval
   key, contact, tracker Customer, and tracker Site, exactly the immutable
   handoff record's four unique ownership columns in migration 353. No other
@@ -190,27 +205,27 @@ Slice phase: Vertical slice
   weak, or novel value rejects before CRM work. The hostile test values are
   representative evidence, not an open allowlist.
 - **CLOSED — EOM pipeline path inventory.** The two workflow `on.paths` lists
-  are the canonical current EOM profile surface: its entrypoint, auth/router,
-  finalizer, exact migration chain, Render candidate, and the test modules run
-  by that workflow's only test command. A new dependency is out of the closed
-  inventory until the same PR adds it to both filters and the profile proof.
+  are the canonical current handoff surface: full entrypoint/API aggregate,
+  public intake, auth/router, finalizer, migration, and the test modules run by
+  that workflow's only test command. A new dependency is out of the closed
+  inventory until the same PR adds it to both filters and the shared-authority
+  proof.
 
 ### Files touched
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
+- `atlas_brain/api/__init__.py`
 - `atlas_brain/eom_api/auth.py`
 - `atlas_brain/eom_api/config.py`
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/eom_api/funnel_auth.py`
-- `atlas_brain/main_eom.py`
+- `atlas_brain/main.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/services/eom_lead_conversion.py`
 - `atlas_brain/storage/migrations/353_eom_customer_handoffs.sql`
 - `plans/PR-EOM-Office-Conversion-Handoff.md`
-- `render.eom.yaml`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
-- `tests/test_eom_render_profile.py`
 
 ## Mechanism
 
@@ -222,27 +237,26 @@ and a per-approval idempotency key make that result recoverable after a retry.
 
 The tracker sends only the opaque contact/customer/site IDs, approval key, and
 trusted actor evidence to Atlas using a dedicated server-side service token.
-The deployed EOM profile receives that route. In one Atlas transaction it takes
-sorted transaction-scoped advisory locks for the approval key, contact, tracker
-Customer, and tracker Site, then reads the canonical handoff rows. A waiting
-callback rechecks the canonical row plus its customer transition and matching
-lifecycle event after the winning transaction commits: it returns an identical
-result only for that completed state or rejects the conflicting/incomplete
-payload. Atlas then validates EOM ownership and `lead/new`, records the
-immutable exclusive handoff, changes the contact to `customer` with no lead
-stage, and appends the matching lifecycle event. Atlas never receives or
-persists the per-visit price, schedule, frequency, or service details.
+The full Atlas API aggregate that already receives `POST /api/v1/leads/intake`
+also receives the handoff route, so both resolve the configured primary CRM
+pool. In one Atlas transaction finalization takes sorted transaction-scoped
+advisory locks for the approval key, contact, tracker Customer, and tracker
+Site, then reads the canonical handoff rows. A waiting callback rechecks the
+canonical row plus its customer transition and matching lifecycle event after
+the winning transaction commits: it returns an identical result only for that
+completed state or rejects the conflicting/incomplete payload. Atlas then
+validates EOM ownership and `lead/new`, records the immutable exclusive
+handoff, changes the contact to `customer` with no lead stage, and appends the
+matching lifecycle event. Atlas never receives or persists the per-visit price,
+schedule, frequency, or service details.
 
-At EOM startup, the profile invokes the migration runner with exactly
-`012_appointments`, `035_contacts`, `346_contact_lead_pipeline`,
-`351_eom_lead_lifecycle_events`, and `353_eom_customer_handoffs`, rather than
-the global migration set. `012` is an inherited prerequisite because `035`
-adds the contact foreign key to appointments. The runner's session-level
-migration lock serializes first starts; the lifespan does not yield until the
-required tables/triggers exist. Funnel startup then accepts only an `eomf_v1_`
-bearer made by the same `secrets.token_urlsafe(32)` provisioning primitive used
-by the existing EOM service credentials. Render holds that generated value as a
-secret and the tracker holds the matching server-only value.
+The full application's startup validates any enabled `eomf_v1_` bearer made by
+the `secrets.token_urlsafe(32)` provisioning primitive and checks its own
+initialized pool for the contacts, lifecycle, and handoff relations before it
+serves the private route. The existing full migration runner owns production
+schema application; the separate EOM Render candidate remains for its deferred
+receivables path and does not enable this funnel or create a second CRM copy.
+The tracker holds the matching server-only bearer value.
 
 The finalization provider defaults to the configured Atlas database pool, but
 accepts a transaction-capable pool only through its constructor. That keeps the
@@ -258,21 +272,17 @@ global storage accessor or changing runtime pool selection.
   time tracker. Atlas additionally accepts only its dedicated server token and
   records the actor evidence, but does not mistake a caller-controlled display
   name for authentication.
-- The handoff route deliberately lives in `atlas_brain.eom_api`, not the full
-  `atlas_brain.api` aggregate: Render starts `atlas_brain.main_eom:app`, and
-  importing the aggregate would violate the slim service profile.
+- The handoff implementation stays in `atlas_brain.eom_api`, but its router is
+  mounted by the full `atlas_brain.api` aggregate. That is the only process
+  that already owns public EOM lead intake and the authoritative CRM database.
 - One initial Site is created on approval. A multi-site customer is an explicit
   later office action, not an estimate-time guess.
-- The Render candidate enables the private route but stores its bearer only as
-  a Render secret. The operator must set that value equal to the time tracker's
-  server-side `ATLAS_FUNNEL_SERVICE_TOKEN`; neither service exposes it to a
-  browser or commits it. The value must be produced by the funnel-token
-  generator, not chosen by hand.
-- The EOM startup set is deliberately narrow rather than setting the inherited
-  `run_migrations()` call loose on the Atlas repository: that full chain is
-  documented by the runner itself as not fresh-applicable. Any future EOM
-  schema dependency must be added to the explicit set with a fresh-profile
-  proof.
+- The EOM Render candidate remains disabled for funnel traffic. The operator
+  enables the generated bearer only on the full Atlas process that handles
+  public intake, with the same server-side value in the tracker. The tracker's
+  `ATLAS_FUNNEL_BASE_URL` must be that process's `/api/v1` base, not the EOM
+  Render candidate; neither service exposes the bearer to a browser or commits
+  it.
 - The provider's injected pool is a test/adapter seam only. Normal EOM request
   handling instantiates `DatabaseCRMProvider()` with no argument and continues
   to resolve the configured Atlas pool.
@@ -295,8 +305,8 @@ Parked hardening: none.
 - Before push: focused Atlas route/service/real-PostgreSQL tests, the matching
   companion recovery proof, plan synchronization, local review, and the
   unit-gate ratchet.
-- The migration integration module ran against the local PostgreSQL test URL —
-  10 passed.
+- Focused full-route, service, real-PostgreSQL, and EOM profile tests ran
+  against the local PostgreSQL test URL — 48 passed.
 - The merged time-tracker recovery proof ran from
   `eom-timetracker@origin/main`: `python -m pytest
   test_office_conversion_handoff.py -k
@@ -305,26 +315,25 @@ Parked hardening: none.
   the retry finalizes that same operation.
 - The exact EOM pipeline command in
   `.github/workflows/atlas_eom_lead_pipeline_checks.yml` ran against the local
-  PostgreSQL test URL — 283 passed.
-- The B2C core-risk maturity ratchet ran with its CI sensitive-glob set —
-  passed with no new brittleness above baseline.
+  PostgreSQL test URL — 263 passed.
+- The exact Atlas API maturity ratchet with its CI sensitive-glob set passed
+  with no new brittleness above baseline.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 29 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 30 |
+| `atlas_brain/api/__init__.py` | 2 |
 | `atlas_brain/eom_api/auth.py` | 45 |
 | `atlas_brain/eom_api/config.py` | 20 |
 | `atlas_brain/eom_api/funnel.py` | 90 |
 | `atlas_brain/eom_api/funnel_auth.py` | 100 |
-| `atlas_brain/main_eom.py` | 33 |
-| `atlas_brain/services/crm_provider.py` | 234 |
+| `atlas_brain/main.py` | 35 |
+| `atlas_brain/services/crm_provider.py` | 237 |
 | `atlas_brain/services/eom_lead_conversion.py` | 44 |
 | `atlas_brain/storage/migrations/353_eom_customer_handoffs.sql` | 62 |
-| `plans/PR-EOM-Office-Conversion-Handoff.md` | 330 |
-| `render.eom.yaml` | 9 |
-| `tests/test_eom_lead_conversion.py` | 247 |
-| `tests/test_eom_lead_conversion_integration.py` | 539 |
-| `tests/test_eom_render_profile.py` | 136 |
-| **Total** | **1918** |
+| `plans/PR-EOM-Office-Conversion-Handoff.md` | 339 |
+| `tests/test_eom_lead_conversion.py` | 313 |
+| `tests/test_eom_lead_conversion_integration.py` | 571 |
+| **Total** | **1888** |

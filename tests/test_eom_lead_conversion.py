@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -58,6 +59,71 @@ def _headers(
         "X-EOM-Actor-ID": actor_id,
         "Idempotency-Key": approval_key or _approval_key(),
     }
+
+
+def test_full_atlas_app_mounts_public_intake_and_private_handoff_together():
+    """The tracker callback is served by the same full app that owns web leads."""
+    from atlas_brain.main import app
+
+    paths = {route.path for route in app.routes}
+
+    assert "/api/v1/leads/intake" in paths
+    assert "/api/v1/eom-funnel/customer-handoffs" in paths
+
+
+@pytest.mark.asyncio
+async def test_enabled_full_atlas_funnel_requires_authoritative_data_store(monkeypatch):
+    from atlas_brain import main
+
+    class _Pool:
+        def __init__(self, *, initialized: bool, schema_ready: bool) -> None:
+            self.is_initialized = initialized
+            self._schema_ready = schema_ready
+
+        async def fetchval(self, _query: str) -> bool:
+            return self._schema_ready
+
+    disabled = SimpleNamespace(api_enabled=False)
+
+    def fail_if_looked_up():
+        pytest.fail("disabled EOM funnel must not require a database pool")
+
+    monkeypatch.setattr(main, "get_db_pool", fail_if_looked_up)
+    await main._require_eom_funnel_data_store(disabled, database_enabled=False)
+
+    enabled = SimpleNamespace(api_enabled=True)
+    monkeypatch.setattr(
+        main,
+        "get_db_pool",
+        lambda: _Pool(initialized=True, schema_ready=True),
+    )
+
+    await main._require_eom_funnel_data_store(enabled, database_enabled=True)
+
+    with pytest.raises(RuntimeError, match="authoritative Atlas database"):
+        await main._require_eom_funnel_data_store(enabled, database_enabled=False)
+
+    monkeypatch.setattr(
+        main,
+        "get_db_pool",
+        lambda: _Pool(initialized=False, schema_ready=True),
+    )
+    with pytest.raises(RuntimeError, match="initialized Atlas database pool"):
+        await main._require_eom_funnel_data_store(
+            enabled,
+            database_enabled=True,
+        )
+
+    monkeypatch.setattr(
+        main,
+        "get_db_pool",
+        lambda: _Pool(initialized=True, schema_ready=False),
+    )
+    with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+        await main._require_eom_funnel_data_store(
+            enabled,
+            database_enabled=True,
+        )
 
 
 @pytest.mark.asyncio
