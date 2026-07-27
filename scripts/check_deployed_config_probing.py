@@ -136,12 +136,39 @@ def file_needs_deployed_config_probe(path: str, added: str) -> bool:
     )
 
 
+# Every settings attribute leaf and literal getattr name inside a fallback.
+# Scoped to the fallback span rather than the whole diff so an unrelated plain
+# settings read does not manufacture a key the plan must then probe.
+_SETTINGS_LEAF_RE = re.compile(
+    r"(?:[A-Za-z_][A-Za-z0-9_]*_)?settings(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
+    r"\.([A-Za-z_][A-Za-z0-9_]*)"
+)
+_GETATTR_LITERAL_RE = re.compile(
+    r"getattr\([^,\n]+,\s*['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]"
+)
+
+
 def config_keys(added: str) -> set[str]:
     keys: set[str] = set()
     for match in CONFIG_KEY_RE.finditer(added):
         for group in match.groups():
             if group:
                 keys.add(group)
+    # A fallback can name several settings operands, and the getattr form names
+    # its key as a literal. Extracting only the first operand -- or none, for
+    # getattr -- left an incomplete key set, and an incomplete set lets
+    # section_covers_config_keys() accept evidence for a key the diff never
+    # touched while the real fallback goes unprobed.
+    for fallback in CONFIG_FALLBACK_RE.finditer(added):
+        span = fallback.group(0)
+        literals = _GETATTR_LITERAL_RE.findall(span)
+        if literals:
+            # getattr names its key as the literal; the settings expression
+            # before it is the container, not a config key, and demanding
+            # evidence for it would be a false warning.
+            keys.update(literals)
+            continue
+        keys.update(_SETTINGS_LEAF_RE.findall(span))
     return keys
 
 

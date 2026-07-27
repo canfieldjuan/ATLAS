@@ -340,3 +340,41 @@ def test_continuation_folding_does_not_swallow_the_next_marker() -> None:
     assert not mod._is_dispositioned_value(
         mod._marker_value(section, "absent value probe"), marker="absent value probe"
     )
+
+
+def test_every_operand_of_a_multi_settings_fallback_is_extracted() -> None:
+    """An incomplete key set lets section_covers_config_keys() accept evidence
+    for one key while the other fallback goes unprobed."""
+    source = "value = settings.embedder_api_key or settings.openai_api_key\n"
+    assert mod.config_keys(source) == {"embedder_api_key", "openai_api_key"}
+
+
+def test_getattr_fallback_yields_its_literal_key_only() -> None:
+    """getattr names the key as a literal; the settings expression before it is
+    the container. Extracting no key at all made coverage vacuously true, and
+    extracting the container would demand evidence for a non-key."""
+    source = 'key = getattr(settings.provider_cost, "openrouter_api_key", "")\n'
+    assert mod.config_keys(source) == {"openrouter_api_key"}
+
+
+def test_plain_settings_read_contributes_no_keys() -> None:
+    """Keys are scoped to fallback spans, so an ordinary settings read nearby
+    cannot manufacture a key the plan is then required to probe."""
+    assert mod.config_keys("x = settings.mcp.unrelated_read\n") == set()
+
+
+def test_multi_operand_fallback_requires_evidence_for_each_key() -> None:
+    """End-to-end: a plan probing only the first operand no longer silences
+    the advisory."""
+    diff = {
+        "atlas_brain/services/guard.py":
+            "value = settings.embedder_api_key or settings.openai_api_key\n"
+    }
+    partial = """### Deployed-config probing
+- Deployed/default config values: embedder_api_key observed as unset from the deployed profile, source render.yaml.
+- Explicit value probe: an explicit embedder_api_key passes.
+- Absent value probe: absent embedder_api_key passes to the next operand.
+- Default-session/default-context probe: default session uses embedder_api_key and passes.
+- Side-effect ordering: no write occurs before the embedder_api_key admission passes.
+"""
+    assert mod.scan_diff(diff, [partial]) != []
