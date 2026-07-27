@@ -23,6 +23,8 @@ services:
           name: atlas-eom-postgres
           property: connectionString
       - key: ATLAS_INVOICING_RECEIVABLES_API_ENABLED
-        value: "false"
+        value: "true"
+      - key: ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256
+        sync: false
       - key: ATLAS_EOM_RUN_MIGRATIONS
         value: "false"

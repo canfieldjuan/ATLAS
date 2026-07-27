@@ -49,6 +49,13 @@ class EOMInvoicingConfig(BaseSettings):
         default=False,
         description="Enable the authenticated EOM receivables service API",
     )
+    receivables_service_token_sha256: str = Field(
+        default="",
+        description=(
+            "SHA-256 digest of the generated EOM receivables bearer token; "
+            "the raw token must live only on the caller side"
+        ),
+    )
 
 
 eom_settings = EOMRuntimeConfig()

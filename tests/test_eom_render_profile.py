@@ -212,7 +212,7 @@ def test_eom_env_loader_preserves_process_env_and_local_precedence(
     assert os.environ[process_interpolated_key] == "process-secret"
 
 
-def test_eom_render_blueprint_maps_database_connection_string():
+def test_eom_render_blueprint_maps_database_and_receivables_auth():
     blueprint = yaml.safe_load(Path("render.eom.yaml").read_text(encoding="utf-8"))
 
     assert blueprint["databases"] == [
@@ -245,12 +245,21 @@ def test_eom_render_blueprint_maps_database_connection_string():
     }
     assert env_vars["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] == {
         "key": "ATLAS_INVOICING_RECEIVABLES_API_ENABLED",
-        "value": "false",
+        "value": "true",
+    }
+    assert env_vars["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"] == {
+        "key": "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256",
+        "sync": False,
     }
     assert env_vars["ATLAS_EOM_RUN_MIGRATIONS"] == {
         "key": "ATLAS_EOM_RUN_MIGRATIONS",
         "value": "false",
     }
+    assert [
+        key
+        for key in env_vars
+        if key.startswith("ATLAS_INVOICING_") and "TOKEN" in key
+    ] == ["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"]
     for split_key in (
         "ATLAS_DB_HOST",
         "ATLAS_DB_PORT",
@@ -379,21 +388,66 @@ def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
     assert calls["closed"] == {}
 
 
-def test_eom_receivables_startup_rejects_operator_enabled_config():
+def test_eom_receivables_runtime_config_accepts_generated_digest_only():
     from atlas_brain.eom_api import auth
     from atlas_brain.eom_api.config import EOMInvoicingConfig
 
-    for config in (
-        SimpleNamespace(
-            receivables_api_enabled=True,
-            receivables_service_token="eomrx_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq",
-            receivables_service_token_sha256=auth._token_sha256("password123"),
+    generated = auth.generate_receivables_service_token()
+    config = EOMInvoicingConfig(
+        receivables_api_enabled=True,
+        receivables_service_token_sha256=generated.sha256,
+    )
+
+    auth.validate_receivables_api_config(config)
+    assert (
+        auth.receivables_service_token_sha256(generated.token)
+        == config.receivables_service_token_sha256
+    )
+    assert "receivables_service_token" not in EOMInvoicingConfig.model_fields
+
+
+def test_eom_receivables_startup_rejects_unsafe_enabled_runtime_config():
+    from atlas_brain.eom_api import auth
+    from atlas_brain.eom_api.config import EOMInvoicingConfig
+
+    generated = auth.generate_receivables_service_token()
+    cases = (
+        (
+            SimpleNamespace(
+                receivables_api_enabled=True,
+                receivables_service_token=generated.token,
+                receivables_service_token_sha256=generated.sha256,
+            ),
+            "Raw EOM receivables bearer token",
         ),
-        EOMInvoicingConfig(
-            receivables_api_enabled=True,
+        (
+            EOMInvoicingConfig(receivables_api_enabled=True),
+            "digest is required",
         ),
-    ):
-        with pytest.raises(RuntimeError, match="cannot be enabled"):
+        (
+            EOMInvoicingConfig(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256="0" * 63,
+            ),
+            "lowercase SHA-256",
+        ),
+        (
+            EOMInvoicingConfig(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256="0" * 64,
+            ),
+            "placeholder",
+        ),
+        (
+            EOMInvoicingConfig(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256=auth._token_sha256("change-me"),
+            ),
+            "placeholder",
+        ),
+    )
+    for config, message in cases:
+        with pytest.raises(RuntimeError, match=message):
             auth.validate_receivables_api_config(config)
 
 
@@ -403,6 +457,7 @@ def test_eom_receivables_trusted_config_rejects_bad_token_digests():
     for token_digest, message in (
         ("", "digest is required"),
         ("0" * 63, "lowercase SHA-256"),
+        ("0" * 64, "placeholder"),
         ("F" * 64, "lowercase SHA-256"),
         ("z" * 64, "lowercase SHA-256"),
         (auth._token_sha256("change-me"), "placeholder"),
@@ -454,6 +509,7 @@ def test_all_eom_receivables_routes_require_service_auth():
 def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
     from atlas_brain.eom_api import auth
     from atlas_brain.eom_api import receivables
+    from atlas_brain.eom_api.config import EOMInvoicingConfig
 
     class _ReadyService:
         async def is_ready(self):
@@ -462,7 +518,10 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
     app = FastAPI()
     app.include_router(receivables.router)
     generated = auth.generate_receivables_service_token()
-    config = auth.trusted_receivables_api_config(generated)
+    config = EOMInvoicingConfig(
+        receivables_api_enabled=True,
+        receivables_service_token_sha256=generated.sha256,
+    )
     valid_token = generated.token
     app.dependency_overrides[auth.get_receivables_api_config] = lambda: config
     monkeypatch.setattr(
@@ -572,13 +631,16 @@ def test_eom_lifespan_initializes_database_without_running_migrations(monkeypatc
 def test_eom_profile_ping_is_database_independent(monkeypatch):
     from atlas_brain import main_eom
     from atlas_brain.main_eom import app
-    from atlas_brain.eom_api.config import invoicing_settings
 
     monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=False))
-    monkeypatch.setattr(invoicing_settings, "receivables_api_enabled", False)
+    original_enabled = main_eom.invoicing_settings.receivables_api_enabled
+    main_eom.invoicing_settings.receivables_api_enabled = False
 
-    with TestClient(app) as client:
-        response = client.get("/api/v1/ping")
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/v1/ping")
+    finally:
+        main_eom.invoicing_settings.receivables_api_enabled = original_enabled
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "profile": "eom"}
@@ -589,14 +651,15 @@ def test_eom_profile_reaches_receivables_ready_through_real_app(monkeypatch):
     from atlas_brain import main_eom
     from atlas_brain.main_eom import app
     from atlas_brain.eom_api import receivables
-    from atlas_brain.eom_api.config import invoicing_settings
+    from atlas_brain.eom_api.config import EOMInvoicingConfig
 
     class _ReadyService:
         async def is_ready(self):
             return True
 
     monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=False))
-    monkeypatch.setattr(invoicing_settings, "receivables_api_enabled", False)
+    original_enabled = main_eom.invoicing_settings.receivables_api_enabled
+    main_eom.invoicing_settings.receivables_api_enabled = False
     generated = auth.generate_receivables_service_token()
     valid_token = generated.token
     monkeypatch.setattr(
@@ -605,7 +668,10 @@ def test_eom_profile_reaches_receivables_ready_through_real_app(monkeypatch):
         lambda: _ReadyService(),
     )
     app.dependency_overrides[auth.get_receivables_api_config] = (
-        lambda: auth.trusted_receivables_api_config(generated)
+        lambda: EOMInvoicingConfig(
+            receivables_api_enabled=True,
+            receivables_service_token_sha256=generated.sha256,
+        )
     )
 
     try:
@@ -615,6 +681,7 @@ def test_eom_profile_reaches_receivables_ready_through_real_app(monkeypatch):
                 headers={"Authorization": f"Bearer {valid_token}"},
             )
     finally:
+        main_eom.invoicing_settings.receivables_api_enabled = original_enabled
         app.dependency_overrides.pop(auth.get_receivables_api_config, None)
 
     assert response.status_code == 200
