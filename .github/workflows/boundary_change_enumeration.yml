@@ -1,0 +1,46 @@
+name: Boundary Change Enumeration
+
+# Advisory-first tripwire for AGENTS.md 3k.5. It emits warnings and exits 0 by
+# default so this arc gathers trust before any required-gate promotion.
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/boundary_change_enumeration.yml"
+      - "AGENTS.md"
+      - "scripts/check_boundary_change_enumeration.py"
+      - "tests/test_check_boundary_change_enumeration.py"
+
+jobs:
+  boundary-change-enumeration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install test runner
+        run: python -m pip install --quiet pytest
+
+      - name: Test the detector
+        run: python -m pytest tests/test_check_boundary_change_enumeration.py -q --noconftest
+
+      - name: Boundary-change enumeration lint (advisory)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          python scripts/check_boundary_change_enumeration.py --base "origin/${{ github.base_ref }}"

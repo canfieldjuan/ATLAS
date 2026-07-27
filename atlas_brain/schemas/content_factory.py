@@ -46,9 +46,18 @@ docs/schemas/ (generated, not hand-written).
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 
 # The canonical "schema" key is the SOLE admission rule for the version tag,
@@ -67,6 +76,247 @@ _BASE_CONFIG = ConfigDict(extra="forbid", serialize_by_alias=True)
 # non-empty result is required. Used for citation fields whose blankness would
 # silently defeat the "every claim is traceable" invariant.
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+# Canonical advisory-warning strings + bounded grammar (#2181 round 5).
+# The schema is the choke point: EVERY persisted v2 warning must be either a
+# known static line or match the deterministic locator grammar (code +
+# sentence number + short alphabetic keyword). Free text -- and therefore
+# anything PII-shaped -- is unrepresentable, no matter which writer produced
+# the artifact.
+ADVISORY_CTA_REMINDER = (
+    "reminder: confirm the CTA matches the channel and offer posture"
+)
+ADVISORY_OWNER_ROUTING_WARNING = (
+    "owner-routing-coverage: draft explains the report shape but omits "
+    "owner routing or who should review the fix"
+)
+_ADVISORY_STATIC_WARNINGS = frozenset(
+    {ADVISORY_CTA_REMINDER, ADVISORY_OWNER_ROUTING_WARNING}
+)
+# Locator bound: up to 10 digits covers any physically possible draft (a
+# sentence needs >= 2 characters, so 10^9 sentences implies a multi-GB
+# body no worker response can carry) -- the producer can never emit a
+# locator this grammar rejects.
+_ADVISORY_GRAMMAR_RE = re.compile(
+    r"^(?:unqualified-answer-claim|unqualified-ownership-claim): "
+    r"sentence (?P<sentence>[1-9]\d{0,9})$"
+)
+
+
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),  # combining grapheme joiner
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),  # Mongolian variation selectors
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),  # variation selectors
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),  # tags and supplementary variation selectors
+)
+
+
+def is_default_ignorable(char: str) -> bool:
+    """True for a Unicode Default_Ignorable_Code_Point.
+
+    THE single definition for every admission view in the content factory --
+    routing keys, the contact-PII scan, and evidence redaction. A partial
+    second copy is how U+034F (category Mn, so a Cf/Cc test misses it) stayed
+    a live bypass after the zero-width class was closed (#2201). Exported, not
+    private, so no caller has a reason to rebuild it.
+    """
+    codepoint = ord(char)
+    return any(start <= codepoint <= end for start, end in _DEFAULT_IGNORABLE_RANGES)
+
+
+# Back-compat alias for existing private callers in this module.
+_is_default_ignorable = is_default_ignorable
+
+
+# --- shared sentence machinery ------------------------------------------
+#
+# Lives HERE, not in the copy-verification engine, because the CONTRACT needs
+# it: an advisory locator names a sentence of the audited body, so validating
+# that locator requires counting sentences exactly the way the producer does.
+# Two implementations would drift, and a locator bound that disagrees with the
+# producer is either a false rejection or an open door (#2189). Same
+# one-definition rule as `is_default_ignorable`.
+
+SENTENCE_BOUNDARY_RE = re.compile(r"[.!?]+\s+(?=[A-Z\"'(])|[.!?]+\s*\Z|\n\s*\n+")
+ABBREVIATIONS = frozenset(
+    {"dr", "mr", "mrs", "ms", "prof", "inc", "ltd", "co", "corp", "dept",
+     "vs", "etc", "jr", "sr", "st", "fig", "approx", "est"}
+)
+# Capitalized words that overwhelmingly START sentences: an abbreviation
+# period followed by one of these is a real terminator ("Acme Inc. We
+# draft ..."), while "Dr. Billing" (a name) stays internal.
+SENTENCE_STARTERS = frozenset(
+    {"we", "the", "our", "this", "these", "those", "it", "they", "a", "an",
+     "i", "he", "she", "you", "all", "each", "no", "if", "when", "after",
+     "before", "there", "here"}
+)
+LAST_WORD_RE = re.compile(r"([A-Za-z][\w'-]*)\s*$")
+
+
+def sentence_spans(text: str) -> "list[tuple[int, int]]":
+    """Sentence spans with abbreviation protection: a period run is not a
+    terminator when the word before it is a known abbreviation or a single
+    initial ("Dr. Billing", "J. Smith") -- locators must count sentences the
+    way the reviewing human does."""
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for match in SENTENCE_BOUNDARY_RE.finditer(text):
+        marks = set(match.group(0).strip()) - set("\n \t")
+        if marks and marks <= {"."}:
+            before = LAST_WORD_RE.search(text[max(0, match.start() - 40) : match.start()])
+            if before is not None:
+                word = before.group(1).lower()
+                if word in ABBREVIATIONS or len(word) == 1:
+                    follower = re.match(r"\s*([A-Za-z][\w'\u2019-]*)", text[match.end() :])
+                    if follower is None or follower.group(1).lower() not in SENTENCE_STARTERS:
+                        continue
+        spans.append((start, match.start()))
+        start = match.end()
+    spans.append((start, len(text)))
+    return spans
+
+
+def sentence_count(text: str) -> int:
+    """The highest sentence number a locator may legitimately reference.
+
+    This is the 1-based index of the LAST span carrying content, not the span
+    count: a terminator at the end of the text yields a trailing empty span,
+    so `len()` would admit a locator naming a sentence that does not exist.
+
+    It is deliberately the last CONTENT index rather than the number of
+    content spans. An empty span can also fall in the MIDDLE (a blank line
+    between sentences), and the producer numbers locators by span position --
+    so counting only non-empty spans would under-count and false-reject a
+    legitimate locator. The last content index can never be smaller than any
+    locator the producer can emit.
+    """
+    last = 0
+    for index, (start, end) in enumerate(sentence_spans(text), start=1):
+        # VISIBLE content, not merely non-whitespace. `str.strip()` leaves a
+        # zero-width character intact, so a body of only U+200B/U+FEFF/U+034F
+        # counted as one sentence and admitted `sentence 1` against a body that
+        # renders blank -- the same open-input hole #2201 closed elsewhere, and
+        # a contradiction of "a blank body admits no locator".
+        if _has_visible_content(text[start:end]):
+            last = index
+    return last
+
+
+def _routing_key(channel: str) -> str:
+    """Comparison key for a routing label.
+
+    DROP Unicode default-ignorables plus format/control characters before
+    NFKC, then normalize canonically equivalent spellings to one reader-visible
+    channel. The order matters: a combining grapheme joiner between a base and
+    combining mark can block composition if it survives until normalization.
+    Zero-width joiners, bidi marks, variation selectors, combining grapheme
+    joiners, and the like occupy no routing identity (#2192 rounds 9-10).
+    """
+    stripped = "".join(
+        ch
+        for ch in channel
+        if unicodedata.category(ch) not in ("Cf", "Cc")
+        and not _is_default_ignorable(ch)
+    )
+    return unicodedata.normalize("NFKC", stripped).strip().casefold()
+
+
+def _has_visible_content(text: str) -> bool:
+    """True when ``text`` contains at least one VISIBLE character.
+
+    ``str.strip()`` only removes ASCII/Unicode whitespace, so a
+    producer-supplied zero-width space, soft hyphen, or bidi control passes
+    a non-blank check while rendering as nothing. Phase 6 artifacts are
+    shippable copy and renderer instructions, so "looks empty" must be
+    treated as empty (#2192 round 4). Categories C* (control/format/
+    surrogate/private-use/unassigned), Z* (separators) and M* (combining
+    marks, e.g. a lone U+FE0F) cannot stand alone as content.
+    """
+    return any(
+        not unicodedata.category(char).startswith(("C", "Z", "M"))
+        and not _is_default_ignorable(char)
+        for char in text
+    )
+
+
+VisibleStr = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+    AfterValidator(
+        lambda value: value
+        if _has_visible_content(value)
+        else _raise_invisible()
+    ),
+]
+
+
+def _raise_invisible():
+    raise ValueError(
+        "value must contain visible characters (invisible/format-only text "
+        "is not content)"
+    )
+
+
+def _validate_advisory_warnings(warnings: "list[str]", body: str = "") -> None:
+    """Persistence choke point for ALL writers (runner or direct) on EVERY
+    artifact that carries advisory warnings.
+
+    A warning must be a known static line or match the deterministic locator
+    grammar -- free-text (and therefore PII-shaped) entries are rejected at
+    validation, before the store persists anything. Kept as one function so
+    the audit, the repurposing variants, and the image prompts cannot drift
+    into three different grammars.
+
+    The locator is also BOUND TO ``body`` (#2189). Grammar alone validated the
+    digit SHAPE, so a direct writer could persist
+    ``unqualified-answer-claim: sentence 2125551234`` against a one-sentence
+    body -- a raw phone number wearing a locator's clothes, which contradicts
+    the contract that PII-shaped producer values are unrepresentable for every
+    writer. A locator may now only name a sentence the audited body actually
+    has, which caps it at the body's own length: a ten-digit locator would
+    need a ten-digit-sentence body, and each sentence needs at least two
+    characters.
+
+    ``body`` defaults to empty, which admits NO locator. That is the correct
+    default for an artifact with no single audited body (an image-prompt set
+    verifies each prompt independently), and it fails closed for any future
+    caller that forgets to pass one.
+    """
+    limit = sentence_count(body)
+    for warning in warnings:
+        if warning in _ADVISORY_STATIC_WARNINGS:
+            continue
+        match = _ADVISORY_GRAMMAR_RE.fullmatch(warning)
+        if match is None:
+            raise ValueError(
+                "advisory_warnings entries must be deterministic checklist "
+                "lines (bounded locator grammar); free-text evidence is not "
+                "representable"
+            )
+        locator = int(match.group("sentence"))
+        if locator > limit:
+            raise ValueError(
+                f"advisory warning locator names sentence {locator}, but the "
+                f"audited body has {limit}; a locator must reference the body "
+                "it was computed from. Repair a pre-existing artifact by "
+                "supplying the edited_body_markdown it was audited against, "
+                "or by dropping the locator warning -- without a body it "
+                "names nothing"
+            )
+
 
 Confidence = Literal["high", "medium", "low"]
 Recommendation = Literal["promote", "revise"]
@@ -178,7 +428,14 @@ class CopyVerification(BaseModel):
 
 
 class EditorialAudit(BaseModel):
-    """audit.json -- voice edit + the verify verdict; the model cannot self-promote."""
+    """audit.json (v1, FROZEN) -- voice edit + the verify verdict.
+
+    Keeps the pre-#2181 class name and shape so existing consumers of
+    ``EditorialAudit.model_validate(v1_payload)`` are unaffected. The v1
+    shape is frozen so artifacts already on disk (and any rolled-back
+    reader) keep validating byte-for-byte; ``advisory_warnings`` lives only
+    on ``EditorialAuditV2`` (#2136 item 2). Do not add fields here.
+    """
 
     model_config = _BASE_CONFIG
 
@@ -204,6 +461,78 @@ class EditorialAudit(BaseModel):
                     "recommendation 'promote' requires copy_verification.verdict == 'pass'"
                 )
         return self
+
+
+class EditorialAuditV2(BaseModel):
+    """audit.json (v2, FROZEN) -- v1 plus the non-blocking advisory checklist.
+
+    Frozen for the same reason as v1: v2 shipped in #2181, so artifacts
+    already on disk and any rolled-back reader must keep validating
+    byte-for-byte. ``extra="forbid"`` makes that symmetric -- a field added
+    here would make every newly written audit UNREADABLE to a v2 consumer,
+    not merely unknown to it. ``source_draft_fingerprint`` therefore lives
+    on ``EditorialAuditV3`` (#2192 round 8). Do not add fields here.
+    """
+
+    model_config = _BASE_CONFIG
+
+    artifact_schema: Literal["editorial_audit.v2"] = Field(alias="schema")
+    schema_version: Literal[2] = 2
+    project_id: str
+    draft_revision: int = 1
+    edited_body_markdown: str = ""
+    voice_pass: bool = False
+    orphan_claims: list[str] = Field(default_factory=list)
+    copy_verification: Optional[CopyVerification] = None
+    # Non-blocking reviewer checklist (#2136 item 2): deterministic advisory
+    # warnings from the copy-verification module. Deliberately NOT referenced
+    # by any validator -- warnings never gate the recommendation.
+    advisory_warnings: list[str] = Field(default_factory=list)
+    recommendation: Recommendation = "revise"
+    prompt_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _advisory_warnings_bounded(self) -> "EditorialAuditV2":
+        _validate_advisory_warnings(self.advisory_warnings, self.edited_body_markdown)
+        return self
+
+    @model_validator(mode="after")
+    def _promote_requires_passing_verdict(self) -> "EditorialAuditV2":
+        # The model cannot self-promote: a 'promote' recommendation is only valid
+        # when the deterministic copy-verification verdict is 'pass'.
+        if self.recommendation == "promote":
+            cv = self.copy_verification
+            if cv is None or cv.verdict != "pass":
+                raise ValueError(
+                    "recommendation 'promote' requires copy_verification.verdict == 'pass'"
+                )
+        return self
+
+
+class EditorialAuditV3(EditorialAuditV2):
+    """audit.json (v3) -- v2 plus the runner-stamped draft content identity.
+
+    v2 cannot express WHICH draft an approval covers. ``draft_revision`` is a
+    producer-supplied label, and a same-revision rerun replaces the body
+    while the number stays 1, so a stale approval carried over to copy
+    nobody reviewed (#2192 round 7). v3 binds approval to content instead.
+
+    A NEW VERSION rather than a v2 field: v2 shipped in #2181 and forbids
+    extras, so adding the key there would make every newly written audit
+    unreadable to a v2 consumer or a rolled-back reader -- the exact
+    breakage v1's freeze note exists to prevent (#2192 round 8).
+
+    Inherits v2's validators by subclassing so the promote-gate and the
+    advisory-warning grammar cannot drift between the two versions.
+    """
+
+    artifact_schema: Literal["editorial_audit.v3"] = Field(alias="schema")
+    schema_version: Literal[3] = 3
+    # Stamped by the runner, never by the worker -- the same self-report
+    # discipline as copy_verification. Optional so a direct writer can still
+    # persist a v3 audit, but the runner's readiness gate REJECTS an
+    # unstamped audit rather than treating absence as approval.
+    source_draft_fingerprint: Optional[str] = None
 
 
 class StageEntry(BaseModel):
@@ -246,12 +575,143 @@ class ArtifactManifest(BaseModel):
     created_at: Optional[str] = None
 
 
+class ChannelVariant(BaseModel):
+    """One channel-specific rewrite of an approved draft.
+
+    A variant is the copy that actually SHIPS, so it carries its own
+    deterministic verdict rather than inheriting the draft's: a rewrite can
+    introduce an overclaim the source never made.
+    """
+
+    model_config = _BASE_CONFIG
+
+    # A channel must be VISIBLE, not merely non-blank: a label made only of
+    # U+200B/U+200C/U+FE0F satisfies "non-empty" while being unroutable, and
+    # several distinct invisible labels also slip past the duplicate check as
+    # different strings. Same class as the body/prompt fix, applied to the
+    # routing identifier (#2192 round 9).
+    channel: VisibleStr
+    body_markdown: VisibleStr
+    # Claim lineage back to the source draft's claims/evidence ids. REQUIRED
+    # and non-empty: a variant with no lineage is an orphan -- it asserts
+    # something the approved draft never established, which is exactly the
+    # "repurposer invents claims" failure this field exists to prevent. A
+    # default would make that orphan representable (review round 1).
+    derived_from_claims: list[NonEmptyStr] = Field(min_length=1)
+    copy_verification: Optional[CopyVerification] = None
+    advisory_warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _advisory_warnings_bounded(self) -> "ChannelVariant":
+        _validate_advisory_warnings(self.advisory_warnings, self.body_markdown)
+        return self
+
+
+class RepurposingPackage(BaseModel):
+    """repurposing.json -- channel variants derived from an approved draft.
+
+    ``ready_to_publish`` is the variant-level analogue of the editorial
+    audit's promote gate: the model cannot declare a package shippable while
+    any variant carries a failing deterministic verdict.
+    """
+
+    model_config = _BASE_CONFIG
+
+    artifact_schema: Literal["repurposing.v1"] = Field(alias="schema")
+    schema_version: Literal[1] = 1
+    project_id: str
+    source_draft_revision: int = 1
+    variants: list[ChannelVariant] = Field(default_factory=list)
+    ready_to_publish: bool = False
+    prompt_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _package_invariants(self) -> "RepurposingPackage":
+        # An empty package is not a repurposing result; it is a no-op that
+        # would otherwise persist as if work had been done.
+        if not self.variants:
+            raise ValueError("repurposing package requires at least one variant")
+        # One channel per variant: two variants on the same channel means an
+        # ambiguous "which one ships?" downstream.
+        # Zero-width/default-ignorable and control characters are dropped
+        # BEFORE NFKC so they cannot block composition. Canonically equivalent
+        # spellings (NFC vs NFD) then become the same channel to a reader.
+        # "email" and "email​" likewise carry one routing identity.
+        channels = [_routing_key(variant.channel) for variant in self.variants]
+        if len(channels) != len(set(channels)):
+            raise ValueError("duplicate channel in repurposing variants")
+        if self.ready_to_publish:
+            for variant in self.variants:
+                verdict = variant.copy_verification
+                if verdict is None or verdict.verdict != "pass":
+                    raise ValueError(
+                        "ready_to_publish requires every variant to carry "
+                        "copy_verification.verdict == 'pass'"
+                    )
+        return self
+
+
+class ImagePrompt(BaseModel):
+    """One text-to-image prompt. TEXT ONLY -- generation is a separate,
+    human-triggered, VRAM-guarded step (epic #2109 Phase 6 keeps the prompt
+    designer and the generator split)."""
+
+    model_config = _BASE_CONFIG
+
+    purpose: NonEmptyStr
+    prompt_text: VisibleStr
+    negative_prompt: str = ""
+    aspect_ratio: str = "1:1"
+
+
+class ImagePromptSet(BaseModel):
+    """image_prompt.json -- image prompts derived from an approved draft.
+
+    Prompt text is gated like body copy: a diffusion model will happily
+    render a banned claim or a contact string INTO the artwork, where no
+    downstream text check would ever see it.
+    """
+
+    model_config = _BASE_CONFIG
+
+    artifact_schema: Literal["image_prompt.v1"] = Field(alias="schema")
+    schema_version: Literal[1] = 1
+    project_id: str
+    source_draft_revision: int = 1
+    prompts: list[ImagePrompt] = Field(default_factory=list)
+    copy_verification: Optional[CopyVerification] = None
+    advisory_warnings: list[str] = Field(default_factory=list)
+    # The generation gate, mirroring RepurposingPackage.ready_to_publish: a
+    # set may not be marked renderable while its deterministic verdict
+    # fails. Recording a verdict nobody gates on is verification, not a gate
+    # (review round 1).
+    ready_to_generate: bool = False
+    prompt_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _prompt_set_invariants(self) -> "ImagePromptSet":
+        if not self.prompts:
+            raise ValueError("image prompt set requires at least one prompt")
+        if self.ready_to_generate:
+            verdict = self.copy_verification
+            if verdict is None or verdict.verdict != "pass":
+                raise ValueError(
+                    "ready_to_generate requires copy_verification.verdict == 'pass'"
+                )
+        _validate_advisory_warnings(self.advisory_warnings)
+        return self
+
+
 ARTIFACT_MODELS: dict[str, type[BaseModel]] = {
     "content_brief.v1": ContentBrief,
     "evidence_packet.v1": EvidencePacket,
     "draft.v1": DraftArtifact,
     "editorial_audit.v1": EditorialAudit,
+    "editorial_audit.v2": EditorialAuditV2,
+    "editorial_audit.v3": EditorialAuditV3,
     "manifest.v1": ArtifactManifest,
+    "repurposing.v1": RepurposingPackage,
+    "image_prompt.v1": ImagePromptSet,
 }
 
 

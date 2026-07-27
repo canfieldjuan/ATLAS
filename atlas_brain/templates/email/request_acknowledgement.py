@@ -24,14 +24,19 @@ with a real person, and we'll get back to you within 24 hours.
 
 {request_line}Here's what happens next:
 
-1. We reach out to ask a few quick questions about your home and which rooms
-   you'd like covered - the whole home or just the spaces you actually use.
-2. You get a free estimate specific to your home. Every home is different,
-   so we don't price from a one-size rate card.
-3. If it works for you, we schedule your first clean. We send a team that
-   works separate areas at once - in and out fast, your space back sooner.
+1. We'll give you a call to book a day and time that works for you for a quick \
+estimate walkthrough. The walkthrough usually takes less than 20 minutes.
 
-There's no obligation and no pressure - the estimate is free either way.
+2. We'll send our estimate team out to look over the spaces you want cleaned. \
+Your two team members will be Mayra Canfield and Tina Gomez.
+
+3. Show them around and tell them what you'd like cleaned and how often.
+
+4. Before Mayra and Tina leave, they'll give you the cost to clean your space. \
+If the pricing works for you, you can schedule your first cleaning right then.
+
+5. Estimates are FREE and there's no obligation. If the pricing isn't right for \
+you, we won't try to talk you into it.
 
 Questions in the meantime? Call us at {business_phone}, or just reply to
 this email.

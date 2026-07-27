@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, AsyncContextManager, Protocol
 
 import httpx
 
@@ -26,6 +26,24 @@ logger = logging.getLogger("atlas.autonomous.tasks.gmail_digest")
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+
+class ScopedGmailCredentialLease(Protocol):
+    """Narrow credential lease used by an injected scoped Gmail client."""
+
+    credentials: Any
+
+    async def persist_refresh_token(self, new_refresh_token: str) -> int:
+        """Persist a rotated refresh token before releasing the lease."""
+
+
+class ScopedGmailCredentialSource(Protocol):
+    """Cross-process credential source for one exact business context."""
+
+    def locked_credentials(
+        self,
+    ) -> AsyncContextManager[ScopedGmailCredentialLease]:
+        """Return a transaction-held credential lease."""
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +332,9 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
     Fail-open: CRM errors never block the digest.
     """
     from ...services.crm_provider import get_crm_provider
+    from ...services.eom_lead_ingress import (
+        resolve_or_create_eom_inbound_lead_and_log_interaction,
+    )
 
     lead_emails = [e for e in emails if e.get("category") == "lead"]
     if not lead_emails:
@@ -331,22 +352,47 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
             submitter_email = reply_to_email or fields.get("email", "")
             submitter_name = fields.get("name", "")
             submitter_phone = fields.get("phone")
+            relay_message_id = str(e.get("id") or "").strip()
 
             if not submitter_email and not submitter_name:
                 logger.debug("Lead email %s: no submitter info found, skipping CRM", e.get("id"))
+                continue
+            if not submitter_email and not submitter_phone and not relay_message_id:
+                logger.debug(
+                    "Lead email %s: name-only relay has no stable message identity, skipping CRM",
+                    e.get("id"),
+                )
                 continue
 
             # Stash lead info for ntfy enrichment
             e["_lead_name"] = submitter_name
             e["_lead_email"] = submitter_email
 
-            contact = await crm.find_or_create_contact(
+            # Web3Forms is the public form's parallel email relay.  It must
+            # share the same EOM lead-safe resolver as the direct Atlas POST:
+            # a relay-only delivery creates lead/new, and a matching contact
+            # is evidence-only rather than mutable enrichment.
+            subject = e.get("subject", "")
+            message_preview = fields.get("message", "")[:200]
+            contact, _interaction = await resolve_or_create_eom_inbound_lead_and_log_interaction(
+                crm,
                 full_name=submitter_name or submitter_email,
                 email=submitter_email or None,
                 phone=submitter_phone,
+                address=None,
                 source="web",
-                contact_type="lead",
+                source_ref=(f"web3forms:{relay_message_id}" if relay_message_id else None),
+                relay_event_id=(
+                    f"web3forms:{relay_message_id}" if relay_message_id else None
+                ),
                 tags=["web3forms"],
+                interaction_type="email",
+                summary=f"Web form submission: {subject}. {message_preview}".strip(),
+                metadata=(
+                    {"gmail_message_id": relay_message_id}
+                    if relay_message_id
+                    else None
+                ),
             )
             if not contact.get("id"):
                 logger.warning("Lead CRM contact has no ID for email %s", e.get("id"))
@@ -355,14 +401,6 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
             contact_id = str(contact["id"])
             e["_contact_id"] = contact_id
 
-            # Log the form submission as an interaction
-            subject = e.get("subject", "")
-            message_preview = fields.get("message", "")[:200]
-            await crm.log_interaction(
-                contact_id=contact_id,
-                interaction_type="email",
-                summary=f"Web form submission: {subject}. {message_preview}".strip(),
-            )
             logger.info("Lead CRM: contact %s linked to email %s", contact_id, e.get("id"))
 
         except Exception as exc:
@@ -376,11 +414,26 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
 class GmailClient:
     """Lightweight Gmail API client with OAuth token refresh."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        credential_source: ScopedGmailCredentialSource | None = None,
+        token_exchange=None,
+    ) -> None:
         self._access_token: str | None = None
         self._token_expires: float = 0.0
         self._client: httpx.AsyncClient | None = None
         self._lock = asyncio.Lock()
+        self._credential_source = credential_source
+        self._credential_generation: int | None = None
+        # Early-refresh margin. A fixed 60s margin exceeds a short issued
+        # lifetime, which makes the cache permanently unusable: every one of the
+        # up to 50 metadata hydrations would take the row lock and exchange
+        # again, turning one read into ~51 serialized refreshes. Never spend
+        # more than half the issued lifetime on the margin.
+        self._token_skew: float = 60.0
+        # Edge seam: tests drive the token endpoint with a double instead of
+        # patching this class's internals.
+        self._token_exchange = token_exchange or self._exchange_refresh_token
 
     async def _ensure_client(self) -> httpx.AsyncClient:
         async with self._lock:
@@ -394,11 +447,51 @@ class GmailClient:
                 await self._client.aclose()
                 self._client = None
 
+    async def assert_credentials_unchanged(self) -> None:  # noqa: D401
+        """Fail closed if the credential row moved under a cached token.
+
+        A successful scoped refresh caches the access token AFTER releasing the
+        ``FOR UPDATE`` lease, and that token stays usable for about an hour. A
+        rebind or revoke committing in between would otherwise be ignored for
+        the rest of the read, delivering data from the old or revoked mailbox
+        with the source reported as present. Callers invoke this before handing
+        results back, so a completed mutation turns into an omitted source
+        rather than stale delivery.
+        """
+        from ...storage.repositories.scoped_mailbox_credential import (
+            ScopedMailboxCredentialUnavailable,
+        )
+
+        source = self._credential_source
+        if source is None or self._credential_generation is None:
+            return
+        current = await source.repository.get_active_gmail(
+            source.business_context_id
+        )
+        if current is None:
+            raise ScopedMailboxCredentialUnavailable(
+                "scoped_gmail_credentials_revoked_during_read"
+            )
+        if current.generation != self._credential_generation:
+            raise ScopedMailboxCredentialUnavailable(
+                "scoped_gmail_credentials_rebound_during_read"
+            )
+
     async def _refresh_token(self) -> str:
         """Refresh OAuth2 access token using the Gmail refresh token."""
         async with self._lock:
-            if self._access_token and time.time() < self._token_expires - 60:
+            if (
+                self._access_token
+                and time.time() < self._token_expires - self._token_skew
+            ):
                 return self._access_token
+
+            if self._credential_source is not None:
+                if self._client is None:
+                    self._client = httpx.AsyncClient(timeout=15.0)
+                return await self._run_scoped_refresh_to_completion(
+                    self._client
+                )
 
             # Load credentials from token store (file first, .env fallback)
             store = get_google_token_store()
@@ -411,31 +504,18 @@ class GmailClient:
 
             if self._client is None:
                 self._client = httpx.AsyncClient(timeout=15.0)
-            client = self._client
-
-            data = {
-                "client_id": creds.client_id,
-                "client_secret": creds.client_secret,
-                "refresh_token": creds.refresh_token,
-                "grant_type": "refresh_token",
-            }
-
-            response = await client.post(TOKEN_URL, data=data)
-            if response.status_code in (400, 401):
-                logger.error(
-                    "Gmail refresh token rejected (HTTP %d). "
-                    "Re-run: python scripts/setup_google_oauth.py",
-                    response.status_code,
-                )
-                raise RuntimeError(
-                    f"Gmail refresh token rejected (HTTP {response.status_code})"
-                )
-            response.raise_for_status()
-            token_data = response.json()
+            token_data = await self._token_exchange(
+                self._client,
+                client_id=creds.client_id,
+                client_secret=creds.client_secret,
+                refresh_token=creds.refresh_token,
+                global_credentials=True,
+            )
 
             self._access_token = token_data["access_token"]
             expires_in = token_data.get("expires_in", 3600)
             self._token_expires = time.time() + expires_in
+            self._token_skew = min(60.0, max(0.0, expires_in / 2))
 
             # Auto-persist rotated refresh token
             new_refresh = token_data.get("refresh_token")
@@ -444,6 +524,117 @@ class GmailClient:
 
             logger.debug("Refreshed Gmail access token")
             return self._access_token
+
+    async def _run_scoped_refresh_to_completion(
+        self,
+        client: httpx.AsyncClient,
+    ) -> str:
+        """Finish a rotation transaction before propagating cancellation.
+
+        A token endpoint can rotate the refresh token as an external side
+        effect. Once the request starts, releasing the row lock or rolling
+        back before the replacement token is durable would lose the only
+        usable credential. The child task therefore owns the whole database
+        lease, HTTP exchange, persistence, and commit.
+        """
+        task = asyncio.create_task(self._refresh_scoped_token(client))
+        cancelled = False
+        child_error: BaseException | None = None
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+            except BaseException as exc:
+                child_error = exc
+
+        if cancelled:
+            if child_error is None:
+                try:
+                    child_error = task.exception()
+                except asyncio.CancelledError as exc:
+                    child_error = exc
+            if child_error is not None:
+                raise asyncio.CancelledError from child_error
+            raise asyncio.CancelledError
+        if child_error is not None:
+            raise child_error
+        return task.result()
+
+    async def _refresh_scoped_token(
+        self,
+        client: httpx.AsyncClient,
+    ) -> str:
+        source = self._credential_source
+        if source is None:  # pragma: no cover - caller guards this invariant
+            raise RuntimeError("Scoped Gmail credential source is unavailable")
+
+        async with source.locked_credentials() as lease:
+            creds = lease.credentials
+            token_data = await self._token_exchange(
+                client,
+                client_id=creds.client_id,
+                client_secret=creds.client_secret,
+                refresh_token=creds.refresh_token,
+                global_credentials=False,
+            )
+            new_refresh = token_data.get("refresh_token")
+            generation = creds.generation
+            if new_refresh and new_refresh != creds.refresh_token:
+                # Rotation advances the row's generation, so the fence must
+                # record the value as of the END of the lease. Capturing
+                # creds.generation here would make every rotating refresh look
+                # like a concurrent rebind and omit its own results.
+                generation = await lease.persist_refresh_token(new_refresh)
+
+            self._access_token = token_data["access_token"]
+            expires_in = token_data.get("expires_in", 3600)
+            self._token_expires = time.time() + expires_in
+            self._token_skew = min(60.0, max(0.0, expires_in / 2))
+            # The generation this access token was minted under. _refresh_token
+            # short-circuits on the cached token for the next ~hour without
+            # touching the database, so a rebind or revoke committing after this
+            # point is invisible to the read unless we fence on it explicitly.
+            self._credential_generation = generation
+
+        logger.debug("Refreshed scoped Gmail access token")
+        return self._access_token
+
+    @staticmethod
+    async def _exchange_refresh_token(
+        client: httpx.AsyncClient,
+        *,
+        client_id: str,
+        client_secret: str,
+        refresh_token: str,
+        global_credentials: bool,
+    ) -> dict[str, Any]:
+        response = await client.post(
+            TOKEN_URL,
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
+        if response.status_code in (400, 401):
+            if global_credentials:
+                logger.error(
+                    "Gmail refresh token rejected (HTTP %d). "
+                    "Re-run: python scripts/setup_google_oauth.py",
+                    response.status_code,
+                )
+            else:
+                logger.warning(
+                    "Scoped Gmail refresh token rejected (HTTP %d)",
+                    response.status_code,
+                )
+            raise RuntimeError(
+                f"Gmail refresh token rejected (HTTP {response.status_code})"
+            )
+        response.raise_for_status()
+        return response.json()
 
     async def _get_headers(self) -> dict[str, str]:
         token = await self._refresh_token()
@@ -491,6 +682,44 @@ class GmailClient:
             "subject": header_map.get("Subject", "(no subject)"),
             "date": header_map.get("Date", ""),
             "snippet": data.get("snippet", ""),
+        }
+
+    async def get_message_envelope(self, msg_id: str) -> dict[str, Any]:
+        """Get scoped metadata without collapsing duplicate From headers."""
+        client = await self._ensure_client()
+        headers = await self._get_headers()
+
+        response = await client.get(
+            f"{GMAIL_API_BASE}/users/me/messages/{msg_id}",
+            headers=headers,
+            params={
+                "format": "metadata",
+                "metadataHeaders": ["From", "Subject", "Date"],
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        raw_headers = data.get("payload", {}).get("headers", [])
+        from_values = [
+            item.get("value", "")
+            for item in raw_headers
+            if str(item.get("name", "")).casefold() == "from"
+            and isinstance(item.get("value"), str)
+        ]
+        first_by_name: dict[str, str] = {}
+        for item in raw_headers:
+            name = str(item.get("name", "")).casefold()
+            value = item.get("value")
+            if name and name not in first_by_name and isinstance(value, str):
+                first_by_name[name] = value
+
+        return {
+            "id": data.get("id", msg_id),
+            "from": from_values[0] if from_values else "",
+            "subject": first_by_name.get("subject", "(no subject)"),
+            "date": first_by_name.get("date", ""),
+            "snippet": data.get("snippet", ""),
+            "_atlas_from_header_values": from_values,
         }
 
     async def get_message_full(self, msg_id: str) -> dict[str, Any]:

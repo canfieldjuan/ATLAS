@@ -57,10 +57,40 @@ Inline hardening is allowed only when it:
 - fixes a real safety/security/privacy/money risk, including standalone
   production-hardening slices where that risk is the reason for the slice;
 - prevents the slice's output from being false or misleading;
-- resolves a reviewer BLOCKER.
+- resolves a reviewer BLOCKER **that independently meets one of the three
+  above**.
 
 Everything else goes to `HARDENING.md` or a GitHub issue with owner/context,
 risk, effort, and the trigger that would promote it.
+
+**A severity badge is not a qualification.** Assess blast radius against the
+severity rubric yourself and state the concrete failure path, or downgrade. An
+automated reviewer that files every finding as P1/BLOCKER otherwise turns the
+fourth clause into "all hardening is inline," and the rule is swallowed by the
+one clause that delegates its own decision. Observed on #2216: nine review
+rounds of bot-badged P1s, each individually real, each qualifying under an
+unqualified fourth clause; the PR grew from +1213/-99 to +3409/-172 during
+review on a core that was proven by round four.
+
+**State the parking predicate at plan time.** Every plan says, before any
+finding arrives, which class of finding the slice parks by default -- for
+example "races narrower than a single request, and findings whose blast radius
+is one recoverable record, are parked." `Parked hardening: none` is then a claim
+earned against a stated predicate rather than a silent default.
+
+Without one, the set of findings the slice owns is an empty set with no default
+for members discovered later: every new finding is in scope by construction, and
+there is no state in which the slice is finishable. That is the scope-level form
+of the closure declaration in `docs/GUARD_CLASS_CLOSURE.md` -- same defect, one
+level up from code.
+
+**A hardening fix that introduces new mechanism is never inline.** If closing a
+parked-class finding needs a new table, migration, subsystem, or dependency, it
+is a separate slice by definition: the new mechanism carries its own surface,
+and that surface generates the next finding inside the same review loop. Park it
+and link the follow-up. (#2216 added a migration and a delivery-receipts
+subsystem at round 8 in response to a hardening finding; the next bot poll found
+a P1 inside the new mechanism.)
 
 ## Product Shape Consent Gate
 

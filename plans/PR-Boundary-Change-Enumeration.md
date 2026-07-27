@@ -1,0 +1,168 @@
+# PR-Boundary-Change-Enumeration
+
+## Why this slice exists
+
+Juan asked this codification session to turn observed builder failure patterns
+into repo-enforced rules that survive context compaction. The first priority is
+boundary-change enumeration: when a guard, validator, normalizer, resolver,
+router/classifier, or admission boundary changes, the plan must enumerate
+replaced-path behaviors, guard-relevant fields, and every caller x input shape
+before code. The evidence claims in the handoff remain claims, but the current
+code confirms there is no existing AGENTS subsection or CI tripwire requiring
+this broader enumeration.
+The qualifying blocker is the observed boundary-ripple class from ATLAS #2216
+rounds 1-7 and Website #70 rounds 1-4: a builder can change a decision seam and
+only discover replaced-path/caller/input-shape fallout after repeated review
+rounds. This detector is open-input work over free-form diffs, so the closure
+mechanism is a bounded recognizer: code suffix filtering is the choke point,
+boundary-shaped paths or declarations warn by default, and tests cover each
+detection branch plus section-scoped plan parsing as bounded evidence rather
+than an exhaustive language parser. This slice is over the 400 LOC target
+because the single rule is required to ship as law, template, tripwire,
+scaffold regression, and both-direction detector tests together; splitting would
+leave either an unenforced rule or a checker without the required authoring
+prompt/evidence.
+
+### Problem-derived contract
+
+- Root cause: Atlas has guard class-closure and open-input method rules, but a
+  boundary rewrite can still reach code review without a plan-time inventory of
+  the behavior it replaces, the fields that affect its verdict, and the callers
+  that feed it.
+- Correct fix must touch/change: add the rule to `AGENTS.md`, add the prompt to
+  the plan scaffold, add an advisory CI tripwire whose warning quotes the rule,
+  and prove the tripwire fires and stays silent with unit fixtures plus the
+  generated scaffold fields.
+- Must not change: product/runtime behavior, reviewer strength, review-round
+  caps, required branch protection checks, existing open PR branches, or
+  EOM/timetracker working copies.
+
+## Scope (this PR)
+
+Ownership lane: dev-workflow/codification
+Slice phase: Workflow/process
+
+1. Add the boundary-change enumeration rule to Atlas builder law.
+2. Add the corresponding plan-template prompt and advisory detector.
+3. Add both-direction detector tests and generated-scaffold coverage.
+
+### Review Contract
+
+- Acceptance criteria:
+  - `AGENTS.md` contains the verbatim boundary-change rule and states that it
+    does not weaken the existing open-input evidence-gate.
+  - `scripts/new_pr_plan.sh` scaffolds a `### Boundary-change enumeration`
+    subsection with changed boundary path/seam, replaced-path behavior,
+    guard-relevant field, and caller x input-shape prompts.
+  - `.github/workflows/boundary_change_enumeration.yml` runs on
+    `pull_request`, has read-only permissions, and runs the detector advisory.
+  - `tests/test_check_boundary_change_enumeration.py` proves a violating
+    boundary-shaped diff warns and a compliant plan stays silent.
+  - `tests/test_new_pr_plan.py` proves the generated scaffold keeps the
+    boundary-change enumeration heading, applicability instruction, and rows.
+- Reachability proof: CI/workflow-only surface; the observable gate is the new
+  workflow invoking python scripts/check_boundary_change_enumeration.py.
+- Affected surfaces: builder workflow docs, plan scaffold, advisory CI,
+  detector tests, and scaffold regression.
+- Risk areas: false positives, silent false negatives, contradiction with
+  open-input 3k.3, accidental required/blocking gate.
+- Reviewer rules triggered: R1, R2, R10, R12, R13.
+
+### Boundary-change enumeration
+
+N/A - this PR adds the boundary-change rule and detector, but it does not change
+an Atlas product guard, validator, normalizer, resolver, router/classifier, or
+admission boundary.
+
+- Replaced-path behaviors: N/A.
+- Guard-relevant fields: N/A.
+- Caller x input shape: N/A.
+
+Set-valued dependency closure for this detector:
+
+| Dependency | Disposition | Closure source/default |
+|---|---|---|
+| `CODE_SUFFIXES` | CLOSED | Finite repo-owned executable/text code suffixes scanned by this advisory: py, js, jsx, ts, tsx, mjs, cjs, sh. Omitted suffixes are out of scope until added with a failing fixture. |
+| Test-file suffix exclusions | DERIVED | Derived from the admitted Python/JS-family suffixes plus repo test naming conventions: test-prefix files, tests directories, Python underscore-test modules, and dot-test/dot-spec files for admitted JS suffixes. Test-only files default to no boundary warning. |
+| Boundary path/name regex alternatives | DEFAULTED | Open recognizer over observed decision-seam vocabulary; omitted semantic names default to no advisory warning and must be added only with a held-out failing fixture. The cheap side is advisory silence, not runtime behavior or reviewer waiver. |
+| Required disposition markers | CLOSED | The rule requires exactly these plan rows: replaced-path behaviors, guard-relevant fields, and caller x input shape. |
+| Placeholder/unresolved marker vocabulary | CLOSED | Explicit unresolved marker strings are rejected by `PLACEHOLDER_VALUES` and `UNRESOLVED_VALUE_RE`; new placeholder words require a failing parser fixture before expansion. |
+| Boundary path/seam matching | DEFAULTED | Exact changed path, detected seam name, or qualified class-method seam only; unmatched names default to warning so same-stem, same bare method name, or unrelated boundary entries cannot cover a distinct changed seam. |
+
+### Files touched
+
+- `AGENTS.md`
+- `scripts/new_pr_plan.sh`
+- `scripts/check_boundary_change_enumeration.py`
+- `tests/test_check_boundary_change_enumeration.py`
+- `tests/test_new_pr_plan.py`
+- `.github/workflows/boundary_change_enumeration.yml`
+- `plans/PR-Boundary-Change-Enumeration.md`
+
+## Mechanism
+
+`AGENTS.md` gains a short imperative §3k.5 rule. `new_pr_plan.sh` adds a
+matching optional subsection so the requirement appears while the plan is being
+written. `check_boundary_change_enumeration.py` scans changed Python,
+JavaScript, TypeScript-family, and shell files for added or removed
+boundary-shaped path/function/method/class signals, including normalizing,
+routing, allowed/allow, classify, eligibility, and TypeScript return-annotated
+method seams, and warns unless the
+`### Boundary-change enumeration` section carries non-placeholder rows for
+replaced-path behaviors, guard-relevant fields, and caller x input shape. A
+reasoned section-level not-applicable statement covers bare `N/A` rows so the
+generated scaffold's own instruction is accepted. Otherwise each changed
+boundary path or seam must be named as an exact boundary entry with its own
+complete disposition group, so one valid inventory cannot hide an unrelated
+second boundary, a same-name file elsewhere, or a second class method that
+shares the same bare method name. Changed plan files are read relative to the
+repository root so invoking the checker from a subdirectory cannot silently
+drop the plan evidence. Every duplicate enumeration row must be independently
+dispositioned so a later TODO/TBD/unknown/pending value cannot hide behind an
+earlier valid row. The self-bootstrap exemption is limited to this detector; other
+checker/admission files still scan. The workflow runs the detector on PRs and
+emits warnings only.
+
+## Intentional
+
+- The detector is heuristic and advisory-first; it exits 0 unless `--strict` is
+  supplied.
+- The detector requires section-scoped, non-placeholder rows and changed-boundary
+  path/seam association rather than attempting to verify the semantic quality of
+  each enumeration row.
+- The rule explicitly preserves 3k.3 so open-input work still needs an
+  evidence-gated/defaulted mechanism.
+
+## Deferred
+
+- Promotion to a required check is deferred to a later operator decision after
+  advisory evidence exists.
+- Porting or enforcing this rule in EOM repos is deferred unless Juan asks for
+  separate law-only repo PRs.
+
+Parked hardening: none.
+
+## Verification
+
+- python -m pytest tests/test_check_boundary_change_enumeration.py tests/test_new_pr_plan.py -q --noconftest - 57 passed.
+- python scripts/check_boundary_change_enumeration.py --base origin/main - OK.
+- python scripts/check_boundary_change_enumeration.py --base origin/main --strict - OK.
+- git diff --check - OK.
+- python scripts/audit_plan_doc.py plans/PR-Boundary-Change-Enumeration.md - OK.
+- python scripts/audit_plan_doc_files_touched.py plans/PR-Boundary-Change-Enumeration.md origin/main - OK.
+- python scripts/audit_plan_doc_diff_size.py plans/PR-Boundary-Change-Enumeration.md origin/main - OK.
+- python scripts/audit_plan_code_consistency.py plans/PR-Boundary-Change-Enumeration.md - OK.
+- python scripts/audit_review_rules_triggered.py origin/main --plan plans/PR-Boundary-Change-Enumeration.md - OK.
+
+## Estimated diff size
+
+| File | LOC |
+|---|---:|
+| `AGENTS.md` | +21 |
+| `scripts/new_pr_plan.sh` | +11 |
+| `scripts/check_boundary_change_enumeration.py` | +418 |
+| `tests/test_check_boundary_change_enumeration.py` | +521 |
+| `tests/test_new_pr_plan.py` | +11 |
+| `.github/workflows/boundary_change_enumeration.yml` | +46 |
+| `plans/PR-Boundary-Change-Enumeration.md` | +170 |
+| **Total** | **~1200** |

@@ -158,13 +158,48 @@ Slice phase: $phase
 
 ### Review Contract
 
-- Acceptance criteria: TODO: List the outcomes the reviewer checks one by one.
+- Acceptance criteria: TODO: List outcomes the reviewer checks one by one. Each
+  names a claim about the code, or the evidence that settles it (a file:line, a
+  command + output, a CI job). Do NOT name a BARE risk category ("no TOCTOU",
+  "no race conditions", "handles every malformed input") -- those name a hazard
+  with nothing to look at, and the reviewer will fail authoring
+  until the builder names the code claim or the evidence that settles it.
+  Naming the evidence rescues it: "no unmasked email addresses in the audit
+  export -- settled by tests/test_audit_export.py::test_masks_email_addresses"
+  is fine. For open-input criteria, reference the 3k.3 evidence-gated mechanism;
+  a sampled fixture list alone is not enough. For concurrency/open-execution
+  criteria, reference the 3k.4 execution model and property-level invariant; a
+  sampled concurrent test alone is not enough. See AGENTS.md 1a.
 - Reachability proof: TODO: Name the real entrypoint and observable effect, or
   N/A with a reason for a surface-free change.
 - Affected surfaces: TODO: Name the modules, workflows, contracts, and callers
   in scope.
 - Risk areas: TODO: Name the regression or boundary risks the reviewer probes.
+  Categories are fine here -- this field sets probe depth and is not
+  dispositioned by the review matrix.
 - Reviewer rules triggered: TODO: List the applicable R1-R14 rule IDs.
+
+### Boundary-change enumeration
+
+Required when this diff changes a guard, validator, normalizer, resolver,
+router/classifier, or admission boundary. Name each changed boundary path or
+seam in the enumeration; otherwise write "N/A - no boundary change."
+
+- Boundary path/seam: TODO/N/A.
+- Replaced-path behaviors: TODO/N/A.
+- Guard-relevant fields: TODO/N/A.
+- Caller x input shape: TODO/N/A.
+
+### Deployed-config probing
+
+Required for guard, validator, resolver, admission-boundary, or env/config
+fallback changes; otherwise write "N/A - no guard/config boundary change."
+
+- Deployed/default config values: TODO/N/A.
+- Explicit value probe: TODO/N/A.
+- Absent value probe: TODO/N/A.
+- Default-session/default-context probe: TODO/N/A.
+- Side-effect ordering: TODO/N/A.
 
 ### Files touched
 

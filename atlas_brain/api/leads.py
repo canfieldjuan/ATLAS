@@ -15,11 +15,14 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from ..services.eom_lead_ingress import (
+    EOM_BUSINESS_CONTEXT_ID,
+    resolve_or_create_eom_inbound_lead_and_log_interaction,
+)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/leads", tags=["leads"])
-
-EOM_BUSINESS_CONTEXT_ID = "effingham_maids"
 
 # Route-scoped CORS: only THIS endpoint is exposed to the marketing site, and
 # without credentials — an app-wide allowlist entry would grant the site's
@@ -103,6 +106,16 @@ class LeadIntakeRequest(BaseModel):
     square_feet: str = Field(default="", max_length=40)
     message: str = Field(default="", max_length=8000)
     source_page: str = Field(default="", max_length=300)
+    utm_source: str = Field(default="", max_length=256)
+    utm_medium: str = Field(default="", max_length=256)
+    utm_campaign: str = Field(default="", max_length=256)
+    utm_term: str = Field(default="", max_length=256)
+    utm_content: str = Field(default="", max_length=256)
+    gclid: str = Field(default="", max_length=512)
+    gbraid: str = Field(default="", max_length=512)
+    wbraid: str = Field(default="", max_length=512)
+    landing_path: str = Field(default="", max_length=500)
+    referrer: str = Field(default="", max_length=500)
     # Honeypot: hidden on the real form; humans leave it empty.
     website: str = Field(default="", max_length=300)
 
@@ -200,6 +213,7 @@ async def _process_lead_intake(
     email_provider: Any,
     daily_count: Optional[Any] = None,
     ack_volume: Optional[Any] = None,
+    email_history: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Core intake flow with injectable providers (unit-testable sans HTTP)."""
     if payload.website.strip():
@@ -218,6 +232,10 @@ async def _process_lead_intake(
             "Provide an email address or a phone number with at least "
             f"{_MIN_PHONE_DIGITS} digits"
         )
+    if not email and len(phone_digits) < 10:
+        raise LeadValidationError(
+            "Provide an email address or a phone number with at least 10 digits"
+        )
     if email and not _EMAIL_RE.match(email):
         raise LeadValidationError("Invalid email address")
 
@@ -227,67 +245,56 @@ async def _process_lead_intake(
         if recent >= MAX_DAILY_SUBMISSIONS:
             raise LeadRateLimitedError("Daily submission limit reached")
 
-    # Resolve an existing EOM contact WITHOUT mutating it: public, untrusted
-    # input must never rewrite a stored identity or downgrade a customer to a
-    # lead (PR #2153 review, R3/R4). Only a brand-new contact gets created.
-    # Phone first: the CRM treats phone as the more unique identity channel,
-    # and a mistyped/shared email must not steal a returning caller's record.
-    # Each channel queries the same-tenant page, then the NULL-context
-    # (legacy, claimable) page directly — exact populations, so foreign
-    # contacts can neither be touched nor page-starve the lookup
-    # (PR #2153 rounds 4-8, R3/R4/R5). Partial numbers (7-9 digits) are a
-    # valid callback channel but are never used for matching: substring
-    # lookups could hit an unrelated contact ahead of an exact email.
-    async def _resolve_readonly(**channel: Any) -> Optional[dict[str, Any]]:
-        scoped = await crm.search_contacts(
-            business_context_id=EOM_BUSINESS_CONTEXT_ID, **channel
-        )
-        if scoped:
-            return scoped[0]
-        legacy = await crm.search_contacts(business_context_id_is_null=True, **channel)
-        return legacy[0] if legacy else None
+    attribution = {
+        key: value.strip()
+        for key, value in {
+            "utm_source": payload.utm_source,
+            "utm_medium": payload.utm_medium,
+            "utm_campaign": payload.utm_campaign,
+            "utm_term": payload.utm_term,
+            "utm_content": payload.utm_content,
+            "gclid": payload.gclid,
+            "gbraid": payload.gbraid,
+            "wbraid": payload.wbraid,
+            "landing_path": payload.landing_path,
+            "referrer": payload.referrer,
+        }.items()
+        if value.strip()
+    }
+    metadata = {
+        "service": payload.service,
+        "frequency": payload.frequency,
+        "square_feet": payload.square_feet,
+        "source_page": payload.source_page,
+        # Submitted channels are recorded even when an existing contact
+        # is resolved read-only, so a new callback number/email is never
+        # lost (PR #2153 round 4, R1/R6).
+        "submitted_email": email,
+        "submitted_phone": phone_digits,
+    }
+    if attribution:
+        metadata["attribution"] = attribution
 
-    contact: Optional[dict[str, Any]] = None
-    if len(phone_digits) >= 10:
-        contact = await _resolve_readonly(phone=phone_digits)
-    if contact is None and email:
-        contact = await _resolve_readonly(email=email)
-
-    if contact is None:
-        contact = await crm.find_or_create_contact(
-            full_name=payload.name.strip(),
-            email=email or None,
-            # A sub-10-digit number must not feed the provider's substring
-            # dedupe (it could merge into an unrelated contact); it stays
-            # available in the interaction summary/metadata (round 8, R3/R4).
-            phone=phone_digits if len(phone_digits) >= 10 else None,
-            contact_type="lead",
-            source="web",
-            source_ref="website_estimate_form",
-            business_context_id=EOM_BUSINESS_CONTEXT_ID,
-            tags=["website", "estimate_request"],
-        )
-    contact_id = contact.get("id")
-    if not contact_id:
-        raise RuntimeError("CRM returned contact without id")
-
-    interaction = await crm.log_interaction(
-        contact_id=str(contact_id),
+    # This is the one shared EOM inbound boundary. The database provider keeps
+    # contact resolution and this interaction in one transaction; lightweight
+    # protocol fakes preserve the same observable fallback for unit coverage.
+    contact, interaction = await resolve_or_create_eom_inbound_lead_and_log_interaction(
+        crm,
+        full_name=payload.name.strip(),
+        email=email or None,
+        phone=phone_digits if len(phone_digits) >= 10 else None,
+        address=None,
+        source="web",
+        source_ref="website_estimate_form",
+        tags=["website", "estimate_request"],
         interaction_type="web_form",
         summary=_summary_with_channels(payload, email, phone_digits),
         intent="estimate_request",
-        metadata={
-            "service": payload.service,
-            "frequency": payload.frequency,
-            "square_feet": payload.square_feet,
-            "source_page": payload.source_page,
-            # Submitted channels are recorded even when an existing contact
-            # is resolved read-only, so a new callback number/email is never
-            # lost (PR #2153 round 4, R1/R6).
-            "submitted_email": email,
-            "submitted_phone": phone_digits,
-        },
+        metadata=metadata,
     )
+    contact_id = contact.get("id")
+    if not contact_id:
+        raise RuntimeError("CRM returned contact without id")
     # log_interaction dedupes identical same-day rows and reports it via the
     # public "inserted" flag; a double-submit must not double-email the lead.
     freshly_logged = bool((interaction or {}).get("inserted", True))
@@ -313,20 +320,55 @@ async def _process_lead_intake(
             logger.warning("lead_intake: global ack volume cap hit; skipping email")
         else:
             try:
-                from ..templates.email import BUSINESS_EMAIL, format_request_acknowledgement
+                from ..templates.email import (
+                    BUSINESS_EMAIL,
+                    BUSINESS_NAME,
+                    format_request_acknowledgement,
+                )
 
                 subject, body = format_request_acknowledgement(
                     client_name=payload.name,
                     service=payload.service,
                     frequency=payload.frequency,
                 )
+                # Route this transactional acknowledgement through Resend so it
+                # comes from the verified brand domain (info@...) rather than
+                # the Gmail account. Other Atlas email is unaffected.
                 result = await email_provider.send(
                     to=[email],
                     subject=subject,
                     body=body,
+                    from_email=f"{BUSINESS_NAME} <{BUSINESS_EMAIL}>",
                     reply_to=BUSINESS_EMAIL,
+                    provider="resend",
                 )
                 email_sent = bool(result.get("success", True)) if isinstance(result, dict) else True
+                if email_sent and email_history is not None:
+                    try:
+                        message_id = None
+                        if isinstance(result, dict):
+                            message_id = result.get("message_id") or result.get("id")
+                        await email_history.create(
+                            to_addresses=[email],
+                            subject=subject,
+                            body=body,
+                            template_type="request_acknowledgement",
+                            resend_message_id=message_id,
+                            metadata={
+                                "source": "website_estimate_form",
+                                "contact_id": str(contact_id),
+                            },
+                            business_context_id=EOM_BUSINESS_CONTEXT_ID,
+                        )
+                    except Exception:
+                        # Delivery already succeeded. History is secondary
+                        # evidence and must not flip the public outcome or
+                        # retry the acknowledgement.
+                        logger.exception(
+                            "lead_intake: acknowledgement history write failed "
+                            "for contact %s",
+                            contact_id,
+                        )
             except Exception:
                 # The acknowledgement must never fail the request: the CRM
                 # write is the source of truth and has already committed.
@@ -360,6 +402,12 @@ def _ack_volume_dependency() -> Any:
     return _hourly_ack_volume
 
 
+def _email_history_dependency() -> Any:
+    from ..storage.repositories.email import get_email_repo
+
+    return get_email_repo()
+
+
 @router.post("/intake")
 async def lead_intake(
     payload: LeadIntakeRequest,
@@ -367,6 +415,7 @@ async def lead_intake(
     email_provider: Any = Depends(_email_dependency),
     daily_count: Any = Depends(_daily_count_dependency),
     ack_volume: Any = Depends(_ack_volume_dependency),
+    email_history: Any = Depends(_email_history_dependency),
 ) -> dict[str, Any]:
     """Receive an estimate-form submission from the public website.
 
@@ -380,6 +429,7 @@ async def lead_intake(
             email_provider=email_provider,
             daily_count=daily_count,
             ack_volume=ack_volume,
+            email_history=email_history,
         )
     except LeadValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
