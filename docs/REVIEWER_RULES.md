@@ -269,6 +269,11 @@ fixture) while the thread history shows the class is open and not converging --
 that is the `AGENTS.md` 3k.2 convergence circuit-breaker, and the next push owes
 a Decision-Seam Analysis, not another example.
 
+**Set-valued dependencies.** When a diff adds or edits a member set that drives a
+decision, or enumerates the behaviors/callers/fields/input shapes a change must
+cover, require the closure declaration defined canonically in
+`docs/GUARD_CLASS_CLOSURE.md`. This is a pointer, not a restatement of that bar.
+
 ### R14 - Verify against the codebase, not the PR story
 Review verdicts must be based on the checked-out PR head and the current
 codebase, not the PR description, issue summary, builder claims, or prior

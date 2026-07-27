@@ -45,23 +45,15 @@ class DatabasePool:
             return
 
         logger.info(
-            "Initializing database pool (host=%s, port=%d, db=%s)",
-            db_settings.host,
-            db_settings.port,
-            db_settings.database,
+            "Initializing database pool (%s)",
+            db_settings.target_label,
         )
 
         try:
             self._pool = await asyncpg.create_pool(
-                host=db_settings.host,
-                port=db_settings.port,
-                database=db_settings.database,
-                user=db_settings.user,
-                password=db_settings.password,
+                **db_settings.connection_kwargs(),
                 min_size=db_settings.min_pool_size,
                 max_size=db_settings.max_pool_size,
-                timeout=db_settings.connect_timeout,
-                command_timeout=db_settings.command_timeout,
             )
             self._initialized = True
             logger.info(
@@ -97,13 +89,7 @@ class DatabasePool:
         if not self.is_initialized:
             raise RuntimeError("Database pool not initialized. Call initialize() first.")
         return await asyncpg.connect(
-            host=db_settings.host,
-            port=db_settings.port,
-            database=db_settings.database,
-            user=db_settings.user,
-            password=db_settings.password,
-            timeout=db_settings.connect_timeout,
-            command_timeout=60,
+            **db_settings.connection_kwargs(command_timeout=60),
         )
 
     async def release(self, connection: asyncpg.Connection) -> None:

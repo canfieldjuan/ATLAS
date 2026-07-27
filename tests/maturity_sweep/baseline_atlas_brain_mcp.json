@@ -147,11 +147,11 @@
   },
   "atlas_brain/mcp/crm_server.py": {
     "counts": {
-      "INTERNAL_MOCK": 1,
+      "INTERNAL_MOCK": 2,
       "SWALLOWED_EXCEPT": 1,
-      "UNGUARDED_INDEX": 4
+      "UNGUARDED_INDEX": 5
     },
-    "score": 15
+    "score": 19
   },
   "atlas_brain/mcp/email_server.py": {
     "counts": {

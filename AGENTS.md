@@ -112,7 +112,7 @@ Required sections, in this order:
 | **Scope (this PR)** | The narrow surface this PR touches. Start with an `Ownership lane: <lane>` line, then a `Slice phase: <phase>` line, then a numbered list of intent and a "Files touched" subsection. |
 | **Mechanism** | Short prose (and code stub if helpful) explaining *how* the change works -- enough that the reviewer doesn't have to reverse-engineer it from the diff. |
 | **Intentional** | Things that look wrong but aren't -- explicit trade-offs and rejected alternatives ("no `warnings.warn` shim because ..."). Saves reviewer cycles. |
-| **Deferred** | Things explicitly punted to a follow-up slice. Each item should name the future PR or describe what would unlock it. Include "Parked hardening: none" or list the `HARDENING.md` entries added by this slice. |
+| **Deferred** | Things explicitly punted to a follow-up slice. Each item should name the future PR or describe what would unlock it. State the slice's **parking predicate** -- which class of finding it parks by default -- then "Parked hardening: none" as a claim against that predicate, or list the `HARDENING.md` entries added by this slice. Bar and rationale: `docs/CURRENT_PRODUCT_DISCIPLINE.md`. |
 | **Verification** | The specific commands the builder ran locally + their pass counts. Reviewer reproduces. |
 | **Estimated diff size** | LOC budget; flag if approaching 400 LOC. |
 
@@ -121,6 +121,10 @@ Contract` subsection): acceptance criteria the reviewer checks one-by-one,
 affected surfaces, risk areas, and the reviewer rule IDs the changed paths
 trigger. The builder codes against it; the reviewer reviews against it. See
 `docs/REVIEWER_RULES.md` for the rule pack and the path-to-rule trigger table.
+If the plan or docs-only PR body adds or edits a decision-driving member set, or
+enumerates the behaviors / callers / fields / input shapes a change must cover,
+it carries the closure declaration defined canonically in
+`docs/GUARD_CLASS_CLOSURE.md`.
 For any new runtime, workflow, UI, report, billing, delivery, or public
 contract surface, the Review Contract must also name the reachability proof:
 the real entrypoint exercised and the observable output/state/artifact/job/gate

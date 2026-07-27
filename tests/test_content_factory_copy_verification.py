@@ -163,10 +163,15 @@ def test_non_string_rejected():
 
 
 def _audit(text, recommendation):
+    # edited_body_markdown carries the SAME text the verdict and any advisory
+    # warnings were computed from. Omitting it let a fixture pair locators with
+    # an empty audited body -- the inconsistency #2189's locator binding
+    # exists to make unrepresentable.
     return {
         "schema": "editorial_audit.v2",
         "project_id": "resolution-audit",
         "recommendation": recommendation,
+        "edited_body_markdown": text,
         "copy_verification": verify_copy(text).model_dump(),
     }
 
@@ -505,6 +510,9 @@ def test_schema_accepts_deterministic_warning_grammar():
         {
             "schema": "editorial_audit.v2",
             "project_id": "p",
+            # A locator names a sentence of THIS body, so the body must have
+            # at least three (#2189).
+            "edited_body_markdown": "One. Two. Three.",
             "advisory_warnings": [
                 "unqualified-answer-claim: sentence 3",
                 ADVISORY_OWNER_ROUTING_WARNING,
@@ -521,15 +529,20 @@ def test_generated_warnings_always_satisfy_schema_grammar():
     from atlas_brain.schemas.content_factory import EditorialAuditV2
     from atlas_brain.services.content_factory_copy_verification import advisory_warnings
 
-    generated = advisory_warnings(
+    body = (
         "The Resolution Audit snapshot ranks repeated tickets. We draft the "
         "answer for every ticket. Billing owns refunds. Really?! Version 2.1 "
         "provides an answer at bob@example.com or 020/7946/0958."
     )
+    generated = advisory_warnings(body)
+    # The audit must carry the SAME body: a locator is only meaningful against
+    # the text it was computed from (#2189), so lockstep is now the stronger
+    # property "warnings from B validate on an audit whose body is B".
     audit = EditorialAuditV2.model_validate(
         {
             "schema": "editorial_audit.v2",
             "project_id": "p",
+            "edited_body_markdown": body,
             "advisory_warnings": generated,
         }
     )
@@ -577,12 +590,14 @@ def test_multiline_claim_keyword_stays_schema_valid():
     from atlas_brain.schemas.content_factory import EditorialAuditV2
     from atlas_brain.services.content_factory_copy_verification import advisory_warnings
 
-    generated = advisory_warnings("Billing\nreally owns refunds.")
+    body = "Billing\nreally owns refunds."
+    generated = advisory_warnings(body)
     assert any(w.startswith("unqualified-ownership-claim:") for w in generated)
     audit = EditorialAuditV2.model_validate(
         {
             "schema": "editorial_audit.v2",
             "project_id": "p",
+            "edited_body_markdown": body,
             "advisory_warnings": generated,
         }
     )
@@ -999,6 +1014,7 @@ def test_invariant_all_outputs_satisfy_schema_grammar():
             {
                 "schema": "editorial_audit.v2",
                 "project_id": "p",
+                "edited_body_markdown": text,
                 "advisory_warnings": generated,
             }
         )
@@ -1106,22 +1122,31 @@ def test_locator_grammar_boundary_probe():
     from atlas_brain.schemas.content_factory import EditorialAuditV2
     from pydantic import ValidationError
 
-    audit = EditorialAuditV2.model_validate(
-        {
-            "schema": "editorial_audit.v2",
-            "project_id": "p",
-            "advisory_warnings": ["unqualified-answer-claim: sentence 1000000"],
-        }
-    )
-    assert audit.advisory_warnings
-    with pytest.raises(ValidationError):
-        EditorialAuditV2.model_validate(
+    # #2189 changed this boundary deliberately. It used to assert that
+    # "sentence 1000000" was admissible against NO body -- grammar alone
+    # validated the digit shape, which is what let a raw phone number pass as
+    # a locator. The boundary is now the audited body's own length.
+    body = "One. Two. Three."
+
+    def _audit_with(locator):
+        return EditorialAuditV2.model_validate(
             {
                 "schema": "editorial_audit.v2",
                 "project_id": "p",
-                "advisory_warnings": ["unqualified-answer-claim: sentence 0"],
+                "edited_body_markdown": body,
+                "advisory_warnings": [f"unqualified-answer-claim: sentence {locator}"],
             }
         )
+
+    # In range: the last sentence the body actually has.
+    assert _audit_with(3).advisory_warnings
+
+    # Out of range on both sides -- one past the body, and the grammar's own
+    # zero floor.
+    with pytest.raises(ValidationError):
+        _audit_with(1000000)
+    with pytest.raises(ValidationError):
+        _audit_with(0)
 
 
 # --- round-15 review fixes ---
@@ -1343,3 +1368,406 @@ def test_repeated_ownership_clause_is_linear():
     started = time.monotonic()
     advisory_warnings(draft)
     assert time.monotonic() - started < 2.5
+
+
+# --- #2189: casing-independent polarity + body-bound locators -------------
+
+_QUALIFIER_NEGATIONS = ["no", "not", "never", "nothing", "none", "zero"]
+
+
+@pytest.mark.parametrize("negation", _QUALIFIER_NEGATIONS)
+@pytest.mark.parametrize("caser", [str.lower, str.upper, str.title])
+def test_negated_qualifier_complement_is_casing_independent(negation, caser):
+    """#2189: the qualifier detector was case-insensitive but its complement
+    polarity check was not, so `NO proof` read as a qualification and
+    suppressed the claim warning. Polarity is not a property of capitalization.
+    """
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    text = f"If the tickets contain {caser(negation)} proof, we draft answers."
+    assert any(
+        w.startswith("unqualified-answer-claim:") for w in advisory_warnings(text)
+    ), text
+
+
+def test_qualified_claim_still_suppressed_across_casings():
+    """The other direction: a genuine qualifier must still qualify, in any
+    casing, or the fix would just make everything warn."""
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    # Forms the engine genuinely qualifies today, exercised across casings.
+    # (The opener/complement pairing is asymmetric on current main -- see the
+    # plan's Deferred note -- so this asserts the CASING invariant, which is
+    # what #2189 is about, not the pairing.)
+    for text in [
+        "If the tickets contain proof, we draft answers.",
+        "IF THE TICKETS CONTAIN PROOF, we draft answers.",
+        "When evidence exists, we draft answers.",
+        "WHEN EVIDENCE EXISTS, we draft answers.",
+    ]:
+        assert not any(
+            w.startswith("unqualified-answer-claim:") for w in advisory_warnings(text)
+        ), text
+
+
+def test_locator_cannot_exceed_the_audited_body():
+    """#2189 P1: the grammar validated the digit SHAPE only, so a direct writer
+    could persist a raw phone number wearing a locator's clothes."""
+    from atlas_brain.schemas.content_factory import EditorialAuditV2
+    from pydantic import ValidationError
+
+    def _audit_with(body, locator):
+        return EditorialAuditV2.model_validate(
+            {
+                "schema": "editorial_audit.v2",
+                "project_id": "p",
+                "edited_body_markdown": body,
+                "advisory_warnings": [f"unqualified-answer-claim: sentence {locator}"],
+            }
+        )
+
+    # The reported case: a ten-digit locator against a one-sentence body.
+    with pytest.raises(ValidationError, match="locator names sentence"):
+        _audit_with("One sentence only.", 2125551234)
+
+    # Boundary, both sides: the body's last sentence is admissible, one past
+    # it is not.
+    assert _audit_with("One. Two. Three.", 3).advisory_warnings
+    with pytest.raises(ValidationError, match="locator names sentence"):
+        _audit_with("One. Two. Three.", 4)
+
+    # A blank body admits no locator at all -- there is nothing to name.
+    with pytest.raises(ValidationError, match="locator names sentence"):
+        _audit_with("", 1)
+
+
+def test_static_warnings_are_not_locator_bound():
+    """Static checklist lines carry no locator, so they stay admissible on a
+    body of any length -- including none."""
+    from atlas_brain.schemas.content_factory import (
+        ADVISORY_CTA_REMINDER,
+        ADVISORY_OWNER_ROUTING_WARNING,
+        EditorialAuditV2,
+    )
+
+    audit = EditorialAuditV2.model_validate(
+        {
+            "schema": "editorial_audit.v2",
+            "project_id": "p",
+            "edited_body_markdown": "",
+            "advisory_warnings": [ADVISORY_CTA_REMINDER, ADVISORY_OWNER_ROUTING_WARNING],
+        }
+    )
+    assert len(audit.advisory_warnings) == 2
+
+
+def test_variant_locators_bind_to_the_variant_body():
+    """Each artifact binds to ITS OWN audited text, not a shared one."""
+    from atlas_brain.schemas.content_factory import ChannelVariant
+    from pydantic import ValidationError
+
+    ok = ChannelVariant.model_validate(
+        {
+            "channel": "email",
+            "body_markdown": "One. Two.",
+            "derived_from_claims": ["e1"],
+            "advisory_warnings": ["unqualified-answer-claim: sentence 2"],
+        }
+    )
+    assert ok.advisory_warnings
+
+    with pytest.raises(ValidationError, match="locator names sentence"):
+        ChannelVariant.model_validate(
+            {
+                "channel": "email",
+                "body_markdown": "One. Two.",
+                "derived_from_claims": ["e1"],
+                "advisory_warnings": ["unqualified-answer-claim: sentence 2125551234"],
+            }
+        )
+
+
+def test_sentence_definition_is_shared_not_duplicated():
+    """The contract and the producer must count sentences identically, or the
+    bound either false-rejects or leaves a door open (#2189)."""
+    from atlas_brain.schemas.content_factory import sentence_spans
+    from atlas_brain.services.content_factory_copy_verification import (
+        _sentence_structure,
+    )
+
+    for text in [
+        "One. Two. Three.",
+        "Dr. Billing owns refunds. We draft answers.",
+        "Acme Inc. We draft answers.",
+        "Intro.\n\nWe draft answers. Really?!",
+        "",
+    ]:
+        assert _sentence_structure(text)[1] == sentence_spans(text), text
+
+
+# --- #2219 review: invisible-only bodies admit no locator ----------------
+
+_INVISIBLE_BODIES = [
+    "\u200b",          # zero width space
+    "\ufeff",          # BOM / zero width no-break space
+    "\u034f",          # combining grapheme joiner (category Mn)
+    "\u00ad",          # soft hyphen
+    "  \u200b  ",      # padded with ordinary whitespace
+    "\u200b\u200c\ufeff",
+]
+
+
+@pytest.mark.parametrize("body", _INVISIBLE_BODIES)
+def test_invisible_only_body_admits_no_locator(body):
+    """`str.strip()` leaves a zero-width character intact, so an
+    invisible-only body counted as one sentence and admitted `sentence 1`
+    even though it renders blank -- fail-open on exactly the input class
+    #2201 closed elsewhere."""
+    from atlas_brain.schemas.content_factory import EditorialAuditV2, sentence_count
+    from pydantic import ValidationError
+
+    assert sentence_count(body) == 0
+    with pytest.raises(ValidationError, match="locator names sentence"):
+        EditorialAuditV2.model_validate(
+            {
+                "schema": "editorial_audit.v2",
+                "project_id": "p",
+                "edited_body_markdown": body,
+                "advisory_warnings": ["unqualified-answer-claim: sentence 1"],
+            }
+        )
+
+
+def test_invisible_span_between_sentences_does_not_undercount():
+    """The other direction: an invisible span in the MIDDLE must not shrink
+    the bound, or a legitimate trailing locator would be rejected. This is
+    why the bound is the last content INDEX, not the count of content spans.
+    """
+    from atlas_brain.schemas.content_factory import EditorialAuditV2, sentence_count
+
+    body = "One.\n\n\u200b\n\nThree."
+    assert sentence_count(body) == 3
+    audit = EditorialAuditV2.model_validate(
+        {
+            "schema": "editorial_audit.v2",
+            "project_id": "p",
+            "edited_body_markdown": body,
+            "advisory_warnings": ["unqualified-answer-claim: sentence 3"],
+        }
+    )
+    assert audit.advisory_warnings
+
+
+# --- #2189 findings 2 and 3: routing-coverage scope ----------------------
+
+_ROUTING = "owner-routing-coverage"
+
+
+def _routing_warns(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    return any(w.startswith(_ROUTING) for w in advisory_warnings(text))
+
+
+# F2: polarity binds to the predicate, not to every negation later in the clause.
+_TRAILING_ADJUNCTS = [
+    "without delay",
+    "without extra cost",
+    "with no delay",
+    "before the review",
+    "after the sync",
+    "for each release",
+]
+
+
+@pytest.mark.parametrize("adjunct", _TRAILING_ADJUNCTS)
+def test_trailing_adjunct_does_not_deny_the_report_surface(adjunct):
+    """#2189: the polarity range ran to the CLAUSE end, so a bounded negation
+    in an unrelated trailing adjunct denied the report surface -- `The
+    Resolution Audit is provided without delay.` affirmatively provides the
+    report with no routing, and must still warn."""
+    assert _routing_warns(f"The Resolution Audit is provided {adjunct}.")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The Resolution Audit is not provided.",
+        "The Resolution Audit is never provided.",
+        "The Resolution Audit cannot be provided.",
+    ],
+)
+def test_genuine_predicate_negation_still_denies_the_surface(text):
+    """The other direction: a negation that DOES govern the product term still
+    denies it, or the fix would just make everything warn."""
+    assert not _routing_warns(text)
+
+
+# F3: a quantified subject must carry a report item, not any noun.
+_QUANTIFIERS = ["Each", "Every", "All"]
+_NON_REPORT_NOUNS = ["invoice", "invoices", "customer", "customers", "vendor"]
+_REPORT_NOUNS = ["issue", "issues", "ticket", "tickets", "finding", "findings"]
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _NON_REPORT_NOUNS)
+def test_quantified_non_report_subject_does_not_cover(quantifier, noun):
+    """`every` alone satisfied the anaphor test, so a statement about invoices
+    covered a report about issues."""
+    assert _routing_warns(
+        f"The report ranks issues. {quantifier} {noun} is assigned to Billing."
+    )
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _REPORT_NOUNS)
+def test_quantified_report_item_subject_still_covers(quantifier, noun):
+    assert not _routing_warns(
+        f"The report ranks issues. {quantifier} {noun} is assigned to Billing."
+    )
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize(
+    "tail", ["is assigned to Billing", "of them is routed to Billing",
+             "one is routed to Billing"]
+)
+def test_bare_and_pro_form_subjects_still_cover(quantifier, tail):
+    """Genuinely bare anaphors and pro-forms keep binding: `Each is assigned`,
+    `Each of them is routed`, `Each one is routed`. A pro-form carries no
+    lexical content, so it continues the reference rather than renaming it."""
+    assert not _routing_warns(f"The report ranks issues. {quantifier} {tail}.")
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _NON_REPORT_NOUNS)
+def test_partitive_does_not_smuggle_a_non_report_subject(quantifier, noun):
+    """Closing the class rather than the example: admitting `of` wholesale
+    would reproduce the same hole one token further out, since `each of the
+    invoices` is about invoices exactly as `each invoice` is."""
+    assert _routing_warns(
+        f"The report ranks issues. {quantifier} of the {noun} is routed to Billing."
+    )
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _REPORT_NOUNS)
+def test_partitive_report_items_still_cover(quantifier, noun):
+    assert not _routing_warns(
+        f"The report ranks issues. {quantifier} of the {noun} is routed to Billing."
+    )
+
+
+# --- #2189 round 2: emphatic polarity + grammatical subject head ---------
+
+
+@pytest.mark.parametrize(
+    "emphatic",
+    ["is not only provided but current",
+     "is not just provided but current",
+     "not only ranks issues but drafts answers"],
+)
+def test_emphatic_not_is_not_a_denial(emphatic):
+    """The scope model already treats `not only/just` as affirmative. A second
+    verbal-negation matcher disagreed with it and dropped the warning, which
+    is the two-definitions failure this module keeps paying for (#2189)."""
+    assert _routing_warns(f"The Resolution Audit {emphatic}.")
+
+
+@pytest.mark.parametrize("noun", ["ticket", "tickets", "issue", "findings"])
+@pytest.mark.parametrize("modifier", ["in the report", "for this month", "from Support"])
+def test_pp_modified_report_subject_still_covers(noun, modifier):
+    """The head is the noun the quantifier BINDS, before any post-modifier.
+    Taking the last pre-predicate token read `each ticket in the REPORT` as
+    being about reports and regressed valid routing."""
+    assert not _routing_warns(
+        f"The report ranks issues. Each {noun} {modifier} is assigned to Billing."
+    )
+
+
+@pytest.mark.parametrize("noun", ["invoice", "invoices", "customer"])
+@pytest.mark.parametrize("modifier", ["for a ticket", "in the issue log", "for each finding"])
+def test_pp_modifier_cannot_smuggle_a_report_item(noun, modifier):
+    """The other side: a report-item noun sitting inside a MODIFIER must not
+    rescue a non-report subject -- `each invoice for a TICKET` is about
+    invoices."""
+    assert _routing_warns(
+        f"The report ranks issues. Each {noun} {modifier} is assigned to Billing."
+    )
+
+
+def test_routing_scope_pass_stays_linear():
+    """Regression guard with a number, not a description: the polarity check
+    was quadratic mid-review (7.1s reported, 4.6s measured) on a clause with
+    many product terms."""
+    import time
+
+    body = "The Resolution Audit " * 3200
+    start = time.perf_counter()
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    advisory_warnings(body)
+    assert time.perf_counter() - start < 1.0
+
+
+# --- #2189 round 3: existence-bound denial, open modifiers, linear scopes ---
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    ["does not include owner assignments", "does not list the owning team",
+     "does not name an owner", "does not contain routing"],
+)
+def test_property_negation_does_not_deny_the_report(predicate):
+    """A verbal negation denies the report SURFACE only when it denies the
+    report's existence. "does not include owner assignments" says the report
+    EXISTS and lacks routing -- suppressing there silenced the checklist
+    exactly when routing was absent (#2189 round 3)."""
+    assert _routing_warns(f"The Resolution Audit {predicate}.")
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    ["is not provided", "is never provided", "cannot be provided",
+     "is not available", "was not delivered"],
+)
+def test_existence_negation_still_denies_the_report(predicate):
+    assert not _routing_warns(f"The Resolution Audit {predicate}.")
+
+
+@pytest.mark.parametrize("modifiers", [
+    "open",
+    "still open",
+    "still currently open high priority",
+    "still currently open high priority unresolved support",
+    "still currently open high priority unresolved escalated customer support",
+])
+def test_subject_head_survives_variable_length_modifiers(modifiers):
+    """Modifier length is open, so a fixed token window is the wrong shape:
+    `tickets` fell outside an eight-token slice and the warning fired on a
+    correctly routed draft."""
+    assert not _routing_warns(
+        f"The report ranks issues. Each of the {modifiers} tickets is assigned to Billing."
+    )
+
+
+def test_scope_lookup_scales_with_negation_scopes_present():
+    """The earlier linearity guard used a body that creates NO negation
+    scopes, so it could not fail -- it measured the one path already fixed.
+    This one generates a scope per repetition."""
+    import time
+
+    from atlas_brain.services.content_factory_copy_verification import (
+        advisory_warnings,
+    )
+
+    def elapsed(reps):
+        body = "Resolution Audit with no delay " * reps
+        start = time.perf_counter()
+        advisory_warnings(body)
+        return time.perf_counter() - start
+
+    # 4x the input at the pre-fix quadratic rate took 1.55s; linear is ~0.13s.
+    # A generous absolute ceiling keeps this stable on shared CI runners while
+    # still failing outright if the scan returns.
+    assert elapsed(12800) < 1.0

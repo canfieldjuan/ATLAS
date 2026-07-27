@@ -1457,6 +1457,7 @@ async def _run_recording_processing(
 
 async def _process_inbound_sms(
     sms_id, from_number: str, to_number: str, body: str, context, media_urls: list,
+    provider_message_id: str | None = None,
 ) -> None:
     """Background task: CRM link, intelligence pipeline, ntfy, auto-reply.
 
@@ -1478,6 +1479,7 @@ async def _process_inbound_sms(
             business_context_id=context.id,
             business_context=context,
             media_urls=media_urls,
+            provider_message_id=provider_message_id,
         )
     except Exception as e:
         logger.error("SMS intelligence pipeline failed for %s: %s", sms_id, e)
@@ -1486,6 +1488,7 @@ async def _process_inbound_sms(
         try:
             await _sms_fallback_crm_and_notify(
                 sms_id, sms_repo, from_number, body, context,
+                provider_message_id=provider_message_id,
             )
         except Exception as e2:
             logger.error("SMS fallback CRM+ntfy also failed: %s", e2)
@@ -1526,6 +1529,8 @@ async def _process_inbound_sms(
 
 async def _sms_fallback_crm_and_notify(
     sms_id, sms_repo, from_number: str, body: str, context,
+    *,
+    provider_message_id: str | None = None,
 ) -> None:
     """Fallback CRM link + ntfy when full intelligence pipeline is unavailable."""
     from ...services.crm_provider import get_crm_provider
@@ -1535,26 +1540,60 @@ async def _sms_fallback_crm_and_notify(
     contact_id = None
     contact_name = from_number
     is_new_lead = False
+    inbound_message_id = str(provider_message_id or "").strip() or (
+        str(sms_id) if sms_id else None
+    )
     try:
         crm = get_crm_provider()
-        contact = await crm.find_or_create_contact(
-            full_name=from_number,
-            phone=from_number,
-            contact_type="customer",
-            source="sms",
-            business_context_id=context.id,
+        from ...services.eom_lead_ingress import (
+            EOM_BUSINESS_CONTEXT_ID,
+            resolve_or_create_eom_inbound_lead_and_log_interaction,
         )
+
+        if context.id == EOM_BUSINESS_CONTEXT_ID:
+            contact, _interaction = await resolve_or_create_eom_inbound_lead_and_log_interaction(
+                crm,
+                full_name=from_number,
+                phone=from_number,
+                email=None,
+                address=None,
+                source="sms",
+                source_ref=inbound_message_id,
+                relay_event_id=inbound_message_id,
+                interaction_type="sms",
+                summary=f"Inbound SMS: {body[:100]}",
+                metadata=(
+                    {"crm_event_id": f"sms:{inbound_message_id}"}
+                    if inbound_message_id
+                    else None
+                ),
+            )
+        else:
+            contact = await crm.find_or_create_contact(
+                full_name=from_number,
+                phone=from_number,
+                contact_type="customer",
+                source="sms",
+                business_context_id=context.id,
+                source_ref=(str(sms_id) if sms_id else inbound_message_id),
+            )
         if contact.get("id"):
             contact_id = str(contact["id"])
             contact_name = contact.get("full_name") or from_number
             is_new_lead = contact.get("_was_created", False)
             if sms_id:
                 await sms_repo.link_contact(sms_id, contact_id)
-            await crm.log_interaction(
-                contact_id=contact_id,
-                interaction_type="sms",
-                summary=f"Inbound SMS: {body[:100]}",
-            )
+            if context.id != EOM_BUSINESS_CONTEXT_ID:
+                await crm.log_interaction(
+                    contact_id=contact_id,
+                    interaction_type="sms",
+                    summary=f"Inbound SMS: {body[:100]}",
+                    metadata=(
+                        {"crm_event_id": f"sms:{inbound_message_id}"}
+                        if inbound_message_id
+                        else None
+                    ),
+                )
     except Exception as e:
         logger.warning("Fallback CRM link failed: %s", e)
 
@@ -1711,7 +1750,15 @@ async def handle_inbound_sms(
 
     # Spawn background task for CRM + intelligence + ntfy + auto-reply
     asyncio.create_task(
-        _process_inbound_sms(sms_id, From, To, Body, context, media_urls)
+        _process_inbound_sms(
+            sms_id,
+            From,
+            To,
+            Body,
+            context,
+            media_urls,
+            provider_message_id=MessageSid,
+        )
     )
 
     # Return empty TwiML immediately
