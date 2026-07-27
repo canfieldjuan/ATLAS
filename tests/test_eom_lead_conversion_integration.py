@@ -237,6 +237,7 @@ async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
             "handoffs": await conn.fetchval("SELECT COUNT(*) FROM eom_customer_handoffs"),
         }
         rows = await provider.list_eom_new_lead_review_items(limit=10)
+        second_page = await provider.list_eom_new_lead_review_items(limit=1, offset=1)
 
         assert rows == [
             {
@@ -257,6 +258,17 @@ async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
                 "source": "web",
                 "created_at": created_at,
             },
+        ]
+        assert second_page == [
+            {
+                "contact_id": eligible_id,
+                "full_name": "Eligible Earlier",
+                "email": "earlier@example.com",
+                "phone": "2175550100",
+                "address": "100 Main St",
+                "source": "web",
+                "created_at": created_at,
+            }
         ]
         assert set(rows[0]) == {
             "contact_id",

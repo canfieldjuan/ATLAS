@@ -1142,6 +1142,7 @@ class DatabaseCRMProvider:
         self,
         *,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Return the closed office-review projection for active EOM new leads.
 
@@ -1167,9 +1168,10 @@ class DatabaseCRMProvider:
               AND contact_type = 'lead'
               AND lead_stage = 'new'
             ORDER BY created_at DESC, id DESC
-            LIMIT $1
+            LIMIT $1 OFFSET $2
             """,
             limit,
+            offset,
         )
         return [dict(row) for row in rows]
 

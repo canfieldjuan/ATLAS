@@ -37,11 +37,13 @@ Customer/Site onboarding surface nor the merged customer-handoff transaction.
   1. Atlas must add one authenticated, read-only route below the existing
      `/eom-funnel` service boundary. It must derive its candidate set directly
      from `contacts`: active, `effingham_maids`, `lead`, `new`; project an
-     explicit bounded identity/readiness field set; require the existing
-     tracker bearer and actor headers; and perform no lifecycle, interaction,
-     appointment, or Customer/Site write. The provider already has the needed
-     scoped lead filters (`atlas_brain/services/crm_provider.py:1064-1139`) and
-     the existing bearer/actor guard is the trust boundary
+     explicit bounded identity/readiness field set; include offset pagination
+     with continuation metadata so the limit is not a hard truncation; require
+     the existing tracker bearer and actor headers; and perform no lifecycle,
+     interaction, appointment, or Customer/Site write. The provider already has
+     the needed scoped lead filters
+     (`atlas_brain/services/crm_provider.py:1064-1139`) and the existing
+     bearer/actor guard is the trust boundary
      (`atlas_brain/eom_api/funnel_auth.py:91-127`).
   2. The tracker must add an admin-session-authenticated review proxy that
      keeps the Atlas bearer server-side, returns the derived lead projection
@@ -98,16 +100,19 @@ Max files: 8
 
 1. With the enabled generated funnel credential plus both actor headers,
    `GET /api/v1/eom-funnel/leads` returns only the explicit public projection
-   for active EOM `lead/new` contacts. HTTP route tests and a real-PostgreSQL
-   provider test settle both the boundary and the query outcome.
+   for active EOM `lead/new` contacts and exposes continuation metadata
+   (`limit`, `offset`, `hasMore`, `nextOffset`) for bounded offset pagination.
+   HTTP route tests and a real-PostgreSQL provider test settle both the
+   boundary and the query outcome.
 2. The projection is closed and explicit: `contactId`, `fullName`, `email`,
    `phone`, `address`, `source`, and `createdAt`. A test proves unrelated
    contact columns and interaction/attribution metadata are absent from the
    response.
 3. EOM customers, inactive/archived contacts, non-EOM contacts, and leads at a
    different stage are absent from the query result; a route request with an
-   absent/malformed actor or invalid/disabled bearer fails before the provider
-   list call. Focused route tests settle those outcomes.
+   absent/malformed actor, invalid/disabled bearer, out-of-range limit, or
+   negative offset fails before the provider list call. Focused route tests
+   settle those outcomes.
 4. The new read route performs no writes: the real-PostgreSQL test observes
    unchanged contacts, lifecycle-event count, and handoff count after a
    successful list request.
@@ -119,8 +124,8 @@ Max files: 8
 - Reachability proof: `tests/test_eom_lead_conversion.py` calls the real FastAPI
   route with its real dependencies overridden only at the database provider;
   `tests/test_eom_lead_conversion_integration.py` runs the provider projection
-  against disposable PostgreSQL and observes the returned rows plus unchanged
-  table counts.
+  against disposable PostgreSQL and observes the returned rows, paged offset
+  result, and unchanged table counts.
 - Affected surfaces: `atlas_brain/eom_api/funnel.py`,
   `atlas_brain/services/crm_provider.py`, the existing funnel-auth dependency,
   its focused route/integration tests, and Atlas plan archival.
@@ -141,10 +146,11 @@ The existing private service route gains a read admission path.
   which holds the bearer server-side. The existing POST handoff route and
   public intake route are preserved.
 - Guard-relevant fields: bearer digest; `X-EOM-Actor`; `X-EOM-Actor-ID`; bounded
-  optional limit; and database `business_context_id`, `status`,
+  optional limit; nonnegative offset; and database `business_context_id`, `status`,
   `contact_type`, and `lead_stage`.
 - Caller x input shape:
-  - tracker proxy + valid bearer/positive actor ID → explicit candidate list;
+  - tracker proxy + valid bearer/positive actor ID → explicit candidate page
+    with continuation metadata;
   - tracker proxy + disabled/invalid bearer → 503/401 before the provider;
   - tracker proxy + absent/malformed actor → 422 before the provider;
   - any row outside the derived candidate predicate → absent, not a fallback;
@@ -152,8 +158,8 @@ The existing private service route gains a read admission path.
 
 Closure declaration: the candidate set is **CLOSED / DERIVED** from the four
 database predicates above, not a maintained name/source list. The response
-field set is **CLOSED / ENUMERATED** in the serializer. Any row or field not
-admitted by those definitions is excluded by default.
+field set and pagination metadata are **CLOSED / ENUMERATED** in the serializer.
+Any row or field not admitted by those definitions is excluded by default.
 
 ### Deployed-config probing
 
@@ -236,29 +242,34 @@ Parked hardening: none.
 ## Verification
 
 - Before implementation: exact route/provider, tracker proxy/retry, portal
-  form/controller, and default-tab code paths read from all three repositories;
-  no code written until this contract is complete.
-- Before push (Atlas): focused route and disposable-PostgreSQL tests; the EOM
-  pipeline test selection; plan synchronization; local review; and the
-  current-head PR/body audit. If unit-gate reports stale baseline entries,
-  remove only the CI-proven stale entries and rerun the focused ratchet check.
-- Before push (tracker): backend FastAPI tests against its PostgreSQL fixture,
-  including authenticated proxy, non-approver, and retry cases.
-- Before push (website): Node/JSDOM controller tests, `npm test`,
-  `node --check` for the new JS, and `node scripts/check_frontend_js.mjs`; run a
-  browser-level normal/failure/retry check against a local portal/API fixture if
-  the portal harness can be started without production credentials.
+  form/controller, and default-tab code paths were read from all three
+  repositories; no code was written until this contract was complete.
+- Atlas focused tests: pytest for the lead-review/funnel selection passed with
+  `8 passed, 1 skipped, 46 deselected`.
+- Atlas syntax/checks: py_compile for the changed Python modules and focused
+  tests passed; `git diff --check` passed.
+- Atlas plan gates: plan shape, files-touched, and diff-size audits passed for
+  `plans/PR-EOM-Office-Lead-Review.md` against `origin/main`.
+- Unit-gate ratchet: current-head CI reported nine stale baseline entries and
+  no regressions; only those nine node IDs were removed. The local growth guard
+  passed against the `origin/main` baseline.
+- Tracker companion verification is recorded in its own PR: backend FastAPI
+  tests against the PostgreSQL fixture cover authenticated proxy, non-approver,
+  and retry cases.
+- Website companion verification is recorded in its own PR: Node/JSDOM
+  controller tests and `node --check` cover the Leads tab and funnel approval
+  form integration.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/eom_api/funnel.py` | 52 |
-| `atlas_brain/services/crm_provider.py` | 35 |
+| `atlas_brain/eom_api/funnel.py` | 69 |
+| `atlas_brain/services/crm_provider.py` | 37 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-EOM-Office-Lead-Review.md` | 255 |
+| `plans/PR-EOM-Office-Lead-Review.md` | 285 |
 | `plans/archive/PR-EOM-Office-Conversion-Handoff.md` | 0 |
 | `tests/unit_gate_baseline.txt` | 9 |
-| `tests/test_eom_lead_conversion.py` | 120 |
-| `tests/test_eom_lead_conversion_integration.py` | 111 |
-| **Total** | **585** |
+| `tests/test_eom_lead_conversion.py` | 174 |
+| `tests/test_eom_lead_conversion_integration.py` | 123 |
+| **Total** | **700** |

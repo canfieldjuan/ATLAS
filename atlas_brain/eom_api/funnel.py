@@ -60,6 +60,13 @@ class EOMLeadReviewResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     leads: list[EOMLeadReviewItem]
+    limit: Annotated[int, Field(ge=1, le=_MAX_LEAD_REVIEW_LIMIT)]
+    offset: Annotated[int, Field(ge=0, le=_MAX_SIGNED_BIGINT)]
+    has_more: bool = Field(serialization_alias="hasMore")
+    next_offset: Annotated[int, Field(ge=0)] | None = Field(
+        default=None,
+        serialization_alias="nextOffset",
+    )
 
 
 def _crm_dependency() -> Any:
@@ -91,6 +98,10 @@ async def list_eom_lead_review_items(
         int,
         Query(ge=1, le=_MAX_LEAD_REVIEW_LIMIT),
     ] = _DEFAULT_LEAD_REVIEW_LIMIT,
+    offset: Annotated[
+        int,
+        Query(ge=0, le=_MAX_SIGNED_BIGINT),
+    ] = 0,
     _actor: dict[str, object] = Depends(require_eom_funnel_actor),
     crm: Any = Depends(_crm_dependency),
 ) -> EOMLeadReviewResponse:
@@ -100,9 +111,15 @@ async def list_eom_lead_review_items(
     route directly. Reading this projection does not alter CRM lifecycle,
     interactions, or customer-handoff state.
     """
-    rows = await crm.list_eom_new_lead_review_items(limit=limit)
+    rows = await crm.list_eom_new_lead_review_items(limit=limit + 1, offset=offset)
+    page_rows = rows[:limit]
+    has_more = len(rows) > limit
     return EOMLeadReviewResponse(
-        leads=[EOMLeadReviewItem.model_validate(row) for row in rows]
+        leads=[EOMLeadReviewItem.model_validate(row) for row in page_rows],
+        limit=limit,
+        offset=offset,
+        has_more=has_more,
+        next_offset=offset + limit if has_more else None,
     )
 
 
