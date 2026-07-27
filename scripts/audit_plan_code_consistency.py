@@ -42,6 +42,10 @@ PATH_HEAD_EXECUTABLE_NAMES = {
 }
 
 
+class DeletedPathInventoryError(RuntimeError):
+    """Raised when the branch-deletion inventory cannot be read from Git."""
+
+
 def _slice_sections(plan_text: str, section_titles: tuple[str, ...]) -> str:
     """Return bodies for exact matching section headings."""
     out: list[str] = []
@@ -168,9 +172,9 @@ def _path_resolves(claim: str, base_ref: str = "origin/main") -> bool:
     direct = REPO_ROOT / claim
     if direct.exists():
         return True
-    if _path_deleted_in_branch_diff(claim, base_ref):
-        return True
     if "/" in claim:
+        if _path_deleted_in_branch_diff(claim, base_ref):
+            return True
         return False
     for root in _candidate_roots():
         if not root.is_dir():
@@ -178,6 +182,8 @@ def _path_resolves(claim: str, base_ref: str = "origin/main") -> bool:
         for match in root.rglob(claim):
             if match.is_file():
                 return True
+    if _path_deleted_in_branch_diff(claim, base_ref):
+        return True
     return False
 
 
@@ -185,7 +191,7 @@ def _path_deleted_in_branch_diff(claim: str, base_ref: str = "origin/main") -> b
     normalized_claim = _normalize_repo_relative_path(claim)
     if "/" not in normalized_claim:
         return any(
-            Path(path).name == normalized_claim
+            _deleted_path_can_satisfy_basename_claim(path, normalized_claim)
             for path in _deleted_paths_in_branch_diff(base_ref)
         )
     return normalized_claim in {
@@ -199,6 +205,16 @@ def _normalize_repo_relative_path(path: str) -> str:
     while normalized.startswith("./"):
         normalized = normalized[2:]
     return normalized
+
+
+def _deleted_path_can_satisfy_basename_claim(path: str, basename: str) -> bool:
+    normalized = _normalize_repo_relative_path(path)
+    if Path(normalized).name != basename:
+        return False
+    if "/" not in normalized:
+        return True
+    root = normalized.split("/", 1)[0]
+    return root in PATH_CLAIM_ROOTS or root.startswith("extracted_")
 
 
 def _deleted_paths_in_branch_diff(base_ref: str = "origin/main") -> list[str]:
@@ -215,10 +231,15 @@ def _deleted_paths_in_branch_diff(base_ref: str = "origin/main") -> list[str]:
         cwd=REPO_ROOT,
         check=False,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
     if result.returncode != 0:
-        return []
+        diagnostic = result.stderr.decode("utf-8", "replace").strip()
+        if not diagnostic:
+            diagnostic = f"git diff exited with status {result.returncode}"
+        raise DeletedPathInventoryError(
+            f"could not inspect deleted paths against {base_ref}: {diagnostic}"
+        )
     deleted: list[str] = []
     parts = [
         item.decode("utf-8", "surrogateescape")
@@ -306,7 +327,11 @@ def main() -> int:
 
     plan_text = plan_path.read_text(encoding="utf-8")
     claimed_paths, claimed_functions = parse_claims(plan_text)
-    missing_paths, missing_functions = audit_claims(plan_text, args.base_ref)
+    try:
+        missing_paths, missing_functions = audit_claims(plan_text, args.base_ref)
+    except DeletedPathInventoryError as exc:
+        print(f"deleted-path inventory failed: {exc}", file=sys.stderr)
+        return 2
 
     print(f"plan doc: {plan_path}")
     print(f"path claims:     {len(claimed_paths)}")

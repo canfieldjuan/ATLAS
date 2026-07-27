@@ -144,7 +144,7 @@ Parked hardening: none.
 
 ## Verification
 
-- python -m pytest tests/test_audit_plan_code_consistency.py tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py -q - 45 passed.
+- python -m pytest tests/test_audit_plan_code_consistency.py tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py -q - 48 passed.
 - python -m py_compile scripts/audit_plan_code_consistency.py tests/test_audit_plan_code_consistency.py - passed.
 - python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-Plan-Code-Consistency-Deleted-Paths.md - passed.
 - python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**' - passed; ratchet gate reported no new brittleness above baseline.
@@ -155,8 +155,8 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/pre_push_audit.yml` | 4 |
 | `plans/PR-Plan-Code-Consistency-Deleted-Paths.md` | 162 |
-| `scripts/audit_plan_code_consistency.py` | 192 |
+| `scripts/audit_plan_code_consistency.py` | 217 |
 | `scripts/local_pr_review.sh` | 4 |
-| `tests/test_audit_plan_code_consistency.py` | 154 |
+| `tests/test_audit_plan_code_consistency.py` | 240 |
 | `tests/test_local_pr_review.py` | 23 |
-| **Total** | **539** |
+| **Total** | **650** |

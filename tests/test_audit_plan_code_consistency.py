@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+from types import SimpleNamespace
 import textwrap
 
 import pytest
@@ -203,6 +204,91 @@ def test_audit_claims_accepts_deleted_branch_path_and_basename(
         "renamed-source.py",
     }
     assert missing_functions == []
+
+
+def test_deleted_basename_claim_stays_within_candidate_roots(
+    auditor, monkeypatch, tmp_path
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    unrelated = repo / "unrelated"
+    unrelated.mkdir()
+    retired = unrelated / "retired.py"
+    retired.write_text("print('out of scope')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "branch", "-M", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "branch", "origin/main"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    retired.unlink()
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "delete unrelated file"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+
+    plan = textwrap.dedent("""\
+        # Example
+
+        ## Scope (this PR)
+
+        `retired.py`
+        `unrelated/retired.py`
+    """)
+
+    monkeypatch.setattr(auditor, "REPO_ROOT", repo)
+
+    missing_paths, missing_functions = auditor.audit_claims(plan)
+
+    assert missing_paths == ["retired.py"]
+    assert missing_functions == []
+
+
+def test_deleted_path_inventory_failure_is_not_suppressed(auditor, monkeypatch):
+    def failed_git_diff(*_args, **_kwargs):
+        return SimpleNamespace(
+            returncode=128,
+            stdout=b"",
+            stderr=b"fatal: invalid symmetric difference",
+        )
+
+    monkeypatch.setattr(auditor.subprocess, "run", failed_git_diff)
+
+    with pytest.raises(auditor.DeletedPathInventoryError) as excinfo:
+        auditor._deleted_paths_in_branch_diff("missing-base")
+
+    assert "missing-base" in str(excinfo.value)
+    assert "fatal: invalid symmetric difference" in str(excinfo.value)
+
+
+def test_main_reports_deleted_path_inventory_failure(
+    auditor, monkeypatch, tmp_path, capsys
+):
+    plan = tmp_path / "plan.md"
+    plan.write_text(
+        textwrap.dedent("""\
+            # Example
+
+            ## Scope (this PR)
+
+            `scripts/deleted.py`
+        """),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(auditor.sys, "argv", ["audit", "--base-ref", "missing-base", str(plan)])
+    monkeypatch.setattr(
+        auditor,
+        "_deleted_paths_in_branch_diff",
+        lambda _base_ref: (_ for _ in ()).throw(
+            auditor.DeletedPathInventoryError("missing-base is not fetchable")
+        ),
+    )
+
+    assert auditor.main() == 2
+    captured = capsys.readouterr()
+    assert "deleted-path inventory failed" in captured.err
+    assert "missing-base is not fetchable" in captured.err
 
 
 def test_audit_claims_ignores_gitignored_local_session_state(auditor):
