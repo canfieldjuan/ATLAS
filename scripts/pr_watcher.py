@@ -618,9 +618,6 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         allowed_codes={0},
         expected_type=dict,
     )
-    unresolved_threads, thread_pages, threads_complete, threads_error = _fetch_threads(
-        int(pr_text), repo, cwd=repo_dir
-    )
     reconciliation_command = [
         sys.executable,
         str(TRUSTED_RECONCILIATION_CHECKER),
@@ -629,7 +626,6 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         "--repo",
         repo,
     ]
-    reconciliation_code, reconciliation_out, reconciliation_err = _run(reconciliation_command, cwd=repo_dir)
     pr_final, final_error = _run_json(
         _pr_view_command(pr_text, repo), cwd=repo_dir, allowed_codes={0}, expected_type=dict
     )
@@ -694,17 +690,39 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         if final_head
         else (0, 0, False, "PR head SHA missing before Codex review pagination")
     )
+    unresolved_threads, thread_pages, threads_complete, threads_error = _fetch_threads(
+        int(pr_text), repo, cwd=repo_dir
+    )
+    reconciliation_code, reconciliation_out, reconciliation_err = _run(reconciliation_command, cwd=repo_dir)
+    pr_after_reviews, post_review_error = _run_json(
+        _pr_view_command(pr_text, repo), cwd=repo_dir, allowed_codes={0}, expected_type=dict
+    )
+    pr_after_reviews = pr_after_reviews if isinstance(pr_after_reviews, dict) else {}
+    post_review_shape_error = (
+        _validate_pr_metadata(pr_after_reviews, label="post-review")
+        if pr_after_reviews
+        else None
+    )
+    post_review_head = str(pr_after_reviews.get("headRefOid") or "")
     initial_base = str(pr_initial.get("baseRefName") or "")
     final_base = str(pr.get("baseRefName") or "")
+    post_review_base = str(pr_after_reviews.get("baseRefName") or "")
     head_mismatch = (
         not expected_head
         or not initial_head
         or initial_head != expected_head
         or final_head != initial_head
+        or not post_review_head
+        or post_review_head != final_head
     )
     base_mismatch_error = (
         "base branch changed during watcher observation"
-        if not initial_base or final_base != initial_base
+        if (
+            not initial_base
+            or final_base != initial_base
+            or not post_review_base
+            or post_review_base != final_base
+        )
         else None
     )
     unsafe_auto_merge = config.get("AUTO_MERGE", "0").lower() not in {"0", "false", "no", "off", ""}
@@ -715,8 +733,10 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             previous_error,
             initial_error,
             final_error,
+            post_review_error,
             initial_shape_error,
             final_shape_error,
+            post_review_shape_error,
             base_mismatch_error,
             checks_error,
             reviews_error,
@@ -776,8 +796,10 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             for item in (
                 initial_error,
                 final_error,
+                post_review_error,
                 initial_shape_error,
                 final_shape_error,
+                post_review_shape_error,
                 base_mismatch_error,
             )
             if item

@@ -143,11 +143,13 @@ Wake-source rules:
   `scheduled-ready` only when the snapshot carries a version-1 readiness proof
   for the same open, non-draft head: at least one required check, all required
   checks complete/green, complete review-thread pagination, zero unresolved
-  threads (including outdated threads), no changes-requested decision, and a
-  clean merge state. Missing or contradictory proof becomes `attention` and
-  lists its blockers. `scheduled-ready` is still only permission to run the
-  AGENTS merge guards; the resumed builder also needs explicit standing merge
-  authorization in this session's state file before merging.
+  non-outdated Codex connector threads, complete Codex review pagination with
+  at least one current-head Codex connector review, no changes-requested
+  decision, and a clean merge state. Missing or contradictory proof becomes
+  `attention` and lists its blockers. `scheduled-ready` is still only
+  permission to run the AGENTS merge guards; the resumed builder also needs
+  explicit standing merge authorization in this session's state file before
+  merging.
 - Pending states write a handoff but do not run the optional command by default.
   Do not replace the watcher timer with an in-chat polling loop.
 
@@ -165,6 +167,9 @@ The version-1 snapshot proof is:
     "review_threads_complete": true,
     "review_thread_pages_fetched": 1,
     "unresolved_review_threads": [],
+    "codex_reviews_complete": true,
+    "codex_review_pages_fetched": 1,
+    "codex_head_review_count": 1,
     "review_decision": "<same as pr.reviewDecision>",
     "merge_state_status": "CLEAN"
   }
@@ -319,16 +324,19 @@ systemctl --user disable --now "atlas-pr-watch@${SESSION_ID}.timer"
 | `pending` | At least one check is still pending and no new review/comment activity was observed | Record the next poll; do not ask the operator to babysit CI |
 | `attention` | Red/canceled check, failed AI reconciliation, or status details such as `head_mismatch: true` | Inspect the owned PR, fix the root cause in-scope, push, update watcher config head SHA. If `head_mismatch` is true, follow the stop/fetch/inspect branch before any force-push or merge |
 | `review_changed` | New review/comment activity since last poll, including while checks are pending | Inspect comments before any merge decision |
-| `ready_for_human_merge` | The snapshot label and version-1 proof agree: same open/non-draft head, required checks complete/green, all thread pages fetched, zero unresolved threads, no changes requested, clean merge state | Run `scripts/report_pr_watcher_state.py`; missing/contradictory proof is reported as attention. Otherwise report readiness or perform the active-builder guarded merge only when explicitly authorized and after fresh live guards |
+| `ready_for_human_merge` | The snapshot label and version-1 proof agree: same open/non-draft head, required checks complete/green, all thread pages fetched, zero unresolved non-outdated Codex connector threads, complete Codex review pagination, at least one current-head Codex connector review, no changes requested, clean merge state | Run `scripts/report_pr_watcher_state.py`; missing/contradictory proof is reported as attention. Otherwise report readiness or perform the active-builder guarded merge only when explicitly authorized and after fresh live guards |
 
 The installed producer reads branch protection's required-context inventory,
 compares it with `gh pr checks --required`, fetches every GraphQL
-`reviewThreads` page, and reads PR metadata again after those calls. This
-prevents a required context that has not reported yet from disappearing from
-the observed set. A changed head, empty/malformed required policy, unreported
-required context, incomplete pagination, unresolved thread (including
-outdated), or GitHub read error cannot produce a ready proof. The JSON snapshot
-is replaced atomically so the bridge/reporter cannot consume a partial file.
+`reviewThreads` page, fetches every current-head Codex connector review page,
+and reads PR metadata again after those calls. This prevents a required context
+that has not reported yet from disappearing from the observed set and prevents
+review pagination from proving readiness for a head that is no longer current.
+A changed head, empty/malformed required policy, unreported required context,
+incomplete pagination, unresolved non-outdated Codex connector thread, missing
+current-head Codex connector review, or GitHub read error cannot produce a
+ready proof. The JSON snapshot is replaced atomically so the bridge/reporter
+cannot consume a partial file.
 Live AI reconciliation runs from the exact checker and parser sources installed
 beside the watcher; it never executes the watched PR worktree's checker.
 

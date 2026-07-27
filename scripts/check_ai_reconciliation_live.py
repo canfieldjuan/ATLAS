@@ -168,6 +168,12 @@ def _gh(args: Sequence[str], gh: str) -> str:
     return proc.stdout
 
 
+def _expect_mapping(value: object, label: str) -> dict:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"GitHub GraphQL response malformed: {label} is missing or not an object")
+    return value
+
+
 def fetch_threads(pr: int, owner: str, name: str, gh: str) -> list[dict]:
     """Fetch ALL review threads, paginating so a PR with >100 threads cannot
 
@@ -175,7 +181,7 @@ def fetch_threads(pr: int, owner: str, name: str, gh: str) -> list[dict]:
     """
     nodes: list[dict] = []
     cursor: str | None = None
-    for _ in range(_MAX_THREAD_PAGES):
+    for page_number in range(1, _MAX_THREAD_PAGES + 1):
         args = [
             "api", "graphql",
             "-f", f"query={_THREADS_QUERY}",
@@ -186,15 +192,35 @@ def fetch_threads(pr: int, owner: str, name: str, gh: str) -> list[dict]:
         if cursor:
             args += ["-F", f"cursor={cursor}"]
         data = json.loads(_gh(args, gh))
-        threads = (
-            (((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
-            .get("reviewThreads") or {}
-        )
-        nodes.extend(threads.get("nodes") or [])
-        page = threads.get("pageInfo") or {}
-        if not page.get("hasNextPage"):
+        if data.get("errors"):
+            raise RuntimeError(f"GitHub GraphQL returned errors on reviewThreads page {page_number}")
+
+        envelope = _expect_mapping(data.get("data"), "data")
+        repository = _expect_mapping(envelope.get("repository"), "repository")
+        pull_request = _expect_mapping(repository.get("pullRequest"), "pullRequest")
+        threads = _expect_mapping(pull_request.get("reviewThreads"), "reviewThreads")
+        page = _expect_mapping(threads.get("pageInfo"), "reviewThreads.pageInfo")
+
+        page_nodes = threads.get("nodes")
+        if not isinstance(page_nodes, list):
+            raise RuntimeError("GitHub GraphQL response malformed: reviewThreads.nodes is missing or not a list")
+        nodes.extend(page_nodes)
+
+        has_next = page.get("hasNextPage")
+        if not isinstance(has_next, bool):
+            raise RuntimeError(
+                "GitHub GraphQL response malformed: reviewThreads.pageInfo.hasNextPage is missing or not a bool"
+            )
+        if not has_next:
             break
-        cursor = page.get("endCursor")
+        next_cursor = page.get("endCursor")
+        if not isinstance(next_cursor, str) or not next_cursor:
+            raise RuntimeError(
+                "GitHub GraphQL response malformed: reviewThreads.pageInfo.endCursor is required for pagination"
+            )
+        cursor = next_cursor
+    else:
+        raise RuntimeError(f"reviewThreads pagination exceeded {_MAX_THREAD_PAGES} pages")
     return nodes
 
 

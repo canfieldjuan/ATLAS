@@ -34,7 +34,7 @@ threads block only until each in-scope finding is fixed or explicitly waived.
 Ownership lane: workflow/codex-review-scope-reset
 Slice phase: Workflow/process
 
-Max files: 31
+Max files: 32
 
 1. Make Codex connector the only reviewer gate in active workflow docs and
    readiness tooling.
@@ -107,6 +107,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `docs/ai_dev_operating_model.svg`
 - `docs/ci_cd_autonomous_coding_map.md`
 - `docs/long_running_agent_monitoring_spec.md`
+- `docs/long_running_session_watcher_handoff.md`
 - `plans/PR-Codex-Review-Scope-Reset.md`
 - `scripts/audit_ai_reconciliation.py`
 - `scripts/check_ai_reconciliation_live.py`
@@ -169,14 +170,14 @@ Parked hardening: none under that predicate.
 ## Verification
 
 - `python scripts/codex_review_scope_policy.py --self-test` - passed, 9 fixtures.
-- `python -m pytest tests/test_codex_wake_bridge.py tests/test_codex_review_scope_policy.py tests/test_check_ai_reconciliation_live.py tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_audit_ai_reconciliation.py tests/test_audit_plan_code_consistency.py tests/test_pr_watcher.py tests/test_watch_owned_pr.py tests/test_report_pr_watcher_state.py -q` - 209 passed.
+- `python -m pytest tests/test_codex_wake_bridge.py tests/test_codex_review_scope_policy.py tests/test_check_ai_reconciliation_live.py tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_audit_ai_reconciliation.py tests/test_audit_plan_code_consistency.py tests/test_pr_watcher.py tests/test_watch_owned_pr.py tests/test_report_pr_watcher_state.py -q` - 214 passed.
 - `bash -n scripts/watch_owned_pr.sh scripts/local_pr_review.sh` - passed.
 - `python -m py_compile scripts/check_ai_reconciliation_live.py scripts/codex_review_scope_policy.py scripts/audit_ai_reconciliation.py scripts/pr_watcher.py scripts/codex_wake_bridge.py` - passed.
 - `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-Codex-Review-Scope-Reset.md` - passed.
 - `python scripts/sync_pr_plan.py plans/PR-Codex-Review-Scope-Reset.md origin/main --check` - passed.
 - `python scripts/audit_plan_doc.py plans/PR-Codex-Review-Scope-Reset.md` - passed.
 - `python scripts/audit_plan_doc_files_touched.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed.
-- `python scripts/audit_plan_doc_diff_size.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed, estimate 2769 actual 2769.
+- `python scripts/audit_plan_doc_diff_size.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed, estimate 2996 actual 2951.
 - `git diff --check -- . ':!node_modules'` - passed.
 
 ## Estimated diff size
@@ -194,24 +195,25 @@ Parked hardening: none under that predicate.
 | `docs/ai_dev_operating_model.svg` | 12 |
 | `docs/ci_cd_autonomous_coding_map.md` | 4 |
 | `docs/long_running_agent_monitoring_spec.md` | 2 |
-| `plans/PR-Codex-Review-Scope-Reset.md` | 217 |
+| `docs/long_running_session_watcher_handoff.md` | 32 |
+| `plans/PR-Codex-Review-Scope-Reset.md` | 219 |
 | `scripts/audit_ai_reconciliation.py` | 6 |
-| `scripts/check_ai_reconciliation_live.py` | 36 |
+| `scripts/check_ai_reconciliation_live.py` | 80 |
 | `scripts/check_review_body_r14.py` | 202 |
 | `scripts/codex_review_scope_policy.py` | 206 |
 | `scripts/codex_wake_bridge.py` | 17 |
 | `scripts/local_pr_review.sh` | 17 |
-| `scripts/pr_watcher.py` | 175 |
+| `scripts/pr_watcher.py` | 207 |
 | `scripts/set_claude_review_status.py` | 150 |
 | `scripts/watch_owned_pr.sh` | 49 |
 | `tests/maturity_sweep/baseline_scripts.json` | 7 |
-| `tests/test_check_ai_reconciliation_live.py` | 31 |
+| `tests/test_check_ai_reconciliation_live.py` | 83 |
 | `tests/test_check_review_body_r14.py` | 195 |
 | `tests/test_codex_review_scope_policy.py` | 73 |
 | `tests/test_codex_wake_bridge.py` | 6 |
 | `tests/test_local_pr_review.py` | 28 |
-| `tests/test_pr_watcher.py` | 211 |
+| `tests/test_pr_watcher.py` | 276 |
 | `tests/test_report_pr_watcher_state.py` | 3 |
 | `tests/test_set_claude_review_status.py` | 175 |
 | `tests/test_watch_owned_pr.py` | 190 |
-| **Total** | **2769** |
+| **Total** | **2996** |

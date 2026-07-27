@@ -172,3 +172,55 @@ def test_fetch_threads_paginates(monkeypatch):
     nodes = c.fetch_threads(1431, "owner", "name", "gh")
     assert len(nodes) == 2  # both pages collected, not just the first 100
     assert seen["n"] == 2 and seen["cursors"] == [False, True]
+
+
+def test_fetch_threads_graphql_errors_fail_closed(monkeypatch):
+    c = load_check()
+
+    monkeypatch.setattr(
+        c,
+        "_gh",
+        lambda args, gh: json.dumps({"errors": [{"message": "denied"}], "data": {"repository": None}}),
+    )
+
+    try:
+        c.fetch_threads(1431, "owner", "name", "gh")
+    except RuntimeError as exc:
+        assert "GraphQL returned errors" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("GraphQL errors must not look like an empty thread list")
+
+
+def test_fetch_threads_malformed_page_info_fails_closed(monkeypatch):
+    c = load_check()
+
+    monkeypatch.setattr(
+        c,
+        "_gh",
+        lambda args, gh: json.dumps(
+            {"data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {},
+                "nodes": [],
+            }}}}}
+        ),
+    )
+
+    try:
+        c.fetch_threads(1431, "owner", "name", "gh")
+    except RuntimeError as exc:
+        assert "hasNextPage" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("malformed pageInfo must not look like an empty thread list")
+
+
+def test_fetch_threads_page_cap_exhaustion_fails_closed(monkeypatch):
+    c = load_check()
+    monkeypatch.setattr(c, "_MAX_THREAD_PAGES", 1)
+    monkeypatch.setattr(c, "_gh", lambda args, gh: _page([], has_next=True, cursor="C1"))
+
+    try:
+        c.fetch_threads(1431, "owner", "name", "gh")
+    except RuntimeError as exc:
+        assert "pagination exceeded 1 pages" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("pagination cap exhaustion must fail closed")

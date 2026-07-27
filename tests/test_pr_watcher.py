@@ -125,7 +125,8 @@ class FakeRun:
         reconciliation: tuple[int, str, str] = (0, "clean", ""),
         git_status: tuple[int, str, str] = (0, "", ""),
     ) -> None:
-        self.pr_responses = list(pr_responses or [_response(_pr()), _response(_pr())])
+        self.pr_responses = list(pr_responses or [_response(_pr()), _response(_pr()), _response(_pr())])
+        self.last_pr_response = self.pr_responses[-1] if self.pr_responses else _response(_pr())
         self.all_checks = all_checks or _response([_check("required-a"), _check("optional-a")])
         self.required_checks = required_checks or _response([_check("required-a")])
         self.required_policy = required_policy or _response(
@@ -145,7 +146,9 @@ class FakeRun:
         args = list(command)
         self.commands.append(args)
         if args[:3] == ["gh", "pr", "view"] and "--comments" not in args:
-            return self.pr_responses.pop(0)
+            if self.pr_responses:
+                self.last_pr_response = self.pr_responses.pop(0)
+            return self.last_pr_response
         if args[:3] == ["gh", "pr", "checks"]:
             return self.required_checks if "--required" in args else self.all_checks
         if args[:2] == ["gh", "api"] and args[2] != "graphql":
@@ -243,6 +246,43 @@ def test_valid_snapshot_is_ready_and_accepted_by_consumer(tmp_path: Path, monkey
         ]
     ]
     assert watcher.TRUSTED_RECONCILIATION_CHECKER.parent.name == watcher.RECONCILIATION_LIB_DIR
+
+
+def test_thread_snapshot_is_collected_after_codex_review_pagination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRun(thread_pages=[_response(_thread_page([_thread()]))])
+
+    status = _produce(tmp_path, monkeypatch, fake)
+
+    assert status["state"] == "attention"
+    assert status["readiness"]["codex_head_review_count"] == 1
+    assert status["readiness"]["unresolved_review_threads"] == [
+        {
+            "id": "thread-1",
+            "is_outdated": False,
+            "path": "scripts/pr_watcher.py",
+            "line": 12,
+        }
+    ]
+    graphql_kinds = [
+        "reviews" if "reviews(first:100" in " ".join(command) else "threads"
+        for command in fake.commands
+        if command[:3] == ["gh", "api", "graphql"]
+    ]
+    assert graphql_kinds == ["reviews", "threads"]
+    reconciliation_index = next(
+        i
+        for i, command in enumerate(fake.commands)
+        if len(command) > 1 and Path(command[1]).name == watcher.RECONCILIATION_CHECKER_NAME
+    )
+    thread_index = next(
+        i
+        for i, command in enumerate(fake.commands)
+        if command[:3] == ["gh", "api", "graphql"] and "reviews(first:100" not in " ".join(command)
+    )
+    assert thread_index < reconciliation_index
 
 
 def test_invalid_repo_config_raises_before_transport(tmp_path: Path) -> None:
@@ -564,6 +604,27 @@ def test_head_change_during_collection_is_attention(tmp_path: Path, monkeypatch:
     assert status["pr"]["headRefOid"] == "head-b"
     assert status["readiness"]["evaluated_head_sha"] == "head-a"
     assert "evaluated head SHA does not match PR head" in wake_bridge.readiness_blockers(status)
+
+
+def test_head_change_after_codex_review_pagination_is_attention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRun(
+        pr_responses=[
+            _response(_pr(head="head-a")),
+            _response(_pr(head="head-a")),
+            _response(_pr(head="head-b")),
+        ]
+    )
+
+    status = _produce(tmp_path, monkeypatch, fake)
+
+    assert status["state"] == "attention"
+    assert status["head_mismatch"] is True
+    assert status["pr"]["headRefOid"] == "head-a"
+    assert status["readiness"]["evaluated_head_sha"] == "head-a"
+    assert "head_mismatch" in wake_bridge.readiness_blockers(status)
 
 
 def test_base_change_during_collection_invalidates_required_policy(
